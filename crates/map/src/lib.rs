@@ -791,11 +791,12 @@ impl Map {
         id
     }
 
-    /// Keeps streamed layers up with a view (longitude/latitude; see [`Layer::sync_source`]).
-    /// Only visible layers read. Returns whether a read is still running.
-    pub fn sync_sources(&mut self, view: &Extent, block: bool) -> bool {
+    /// Keeps streamed layers up with a view (longitude/latitude; see [`Layer::sync_source`]) at a
+    /// scale denominator. Only layers drawn there read: visible and in their zoom range. Returns
+    /// whether a read is still running.
+    pub fn sync_sources(&mut self, view: &Extent, scale: f64, block: bool) -> bool {
         let mut pending = false;
-        for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible) {
+        for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale)) {
             pending |= l.sync_source(view, block);
         }
         pending

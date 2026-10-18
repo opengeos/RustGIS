@@ -989,13 +989,21 @@ const LABEL_MIN_DEPTH_SCALE: f64 = 0.3;
 /// lower zoom), then each screen pixel takes its colour from the band under it, fading into fog
 /// and the sky past the view's reach. Labels are placed in the tilted view, upright.
 fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
-    let data_pending = map.sync_sources(&view_lonlat(map, view), full_res_rasters);
+    let bands_of = view.camera.tilt_bands(view.width, view.height);
+    // One read of the whole view for every layer drawn in some band (each is drawn at its own
+    // scale, coarser far away); a layer drawn in two bands reads once.
+    let lonlat = view_lonlat(map, view);
+    let mut data_pending = false;
+    for b in &bands_of {
+        let scale = map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M;
+        data_pending |= map.sync_sources(&lonlat, scale, full_res_rasters);
+    }
     // Labels are placed in the tilted view: a lock on a flat view's labels doesn't apply.
     let lock = map.label_lock.take();
     let mut candidates = Vec::new();
     let mut bands = Vec::new();
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
-    for b in view.camera.tilt_bands(view.width, view.height) {
+    for b in bands_of {
         let v = View { width: b.width, height: b.height, camera: b.camera, ..*view };
         if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates)) {
             for a in r.attribution {
@@ -1140,10 +1148,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
     // Streamed layers read the view: in the background for the screen, in place for an export
-    // (the full-resolution render), which waits for them. A tilted view's bands share its read.
+    // (the full-resolution render), which waits for them; only the layers drawn at the view's
+    // scale read. A tilted view's bands share its read.
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     let data_pending = match labels_to {
         Labels::Tilted(..) => false,
-        _ => map.sync_sources(&view_lonlat(map, view), full_res_rasters),
+        _ => map.sync_sources(&view_lonlat(map, view), scale, full_res_rasters),
     };
     let globe = map.projection.is_globe().then(|| Globe::new(&view.camera, view.width, view.height));
     let (flat, key) = (map.flat(), map.projection.code());
@@ -1157,7 +1167,6 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         globe,
         sprites: Default::default(),
     };
-    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
     let gpu = matches!(backend, Backend::Gpu)
         && globe.is_none()

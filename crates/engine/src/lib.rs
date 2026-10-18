@@ -155,6 +155,8 @@ pub enum Tool {
     CreatePoint,
     CreateLine,
     CreatePolygon,
+    /// Moves, inserts and deletes the vertices of the selected features.
+    EditVertices,
     /// Draws a graphic: the shape is one of [`GRAPHIC_TOOLS`]' shapes.
     Graphic(&'static str),
 }
@@ -185,6 +187,7 @@ impl Tool {
             Tool::CreatePoint => "createPoint",
             Tool::CreateLine => "createLine",
             Tool::CreatePolygon => "createPolygon",
+            Tool::EditVertices => "editVertices",
             Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("graphicPoint", |g| g.1),
         }
     }
@@ -201,6 +204,7 @@ impl Tool {
             Tool::CreatePoint,
             Tool::CreateLine,
             Tool::CreatePolygon,
+            Tool::EditVertices,
         ]
         .into_iter()
         .find(|t| t.code().eq_ignore_ascii_case(s.trim()))
@@ -215,6 +219,7 @@ impl Tool {
             Tool::CreatePoint => "Create Point",
             Tool::CreateLine => "Create Line",
             Tool::CreatePolygon => "Create Polygon",
+            Tool::EditVertices => "Edit Vertices",
             Tool::Graphic(shape) => GRAPHIC_TOOLS.iter().find(|g| g.0 == shape).map_or("Point", |g| g.2),
         }
     }

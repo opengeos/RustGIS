@@ -178,6 +178,160 @@ impl Geometry {
     }
 }
 
+/// One vertex of a geometry: its part (a line's part, a polygon's polygon; 0 for points), its
+/// ring (a polygon's ring; 0 otherwise) and its place along the part or ring (a multipoint's
+/// points are one part). A closed ring's repeated last point is not a vertex of its own: it
+/// follows the first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VertexId {
+    pub part: usize,
+    pub ring: usize,
+    pub index: usize,
+}
+
+impl VertexId {
+    pub fn new(part: usize, ring: usize, index: usize) -> VertexId {
+        VertexId { part, ring, index }
+    }
+}
+
+/// How many vertices a path has: a closed ring's repeated last point doesn't count.
+fn open_len(path: &[Coord], ring: bool) -> usize {
+    match (path.first(), path.last()) {
+        (Some(a), Some(b)) if ring && path.len() > 1 && a == b => path.len() - 1,
+        _ => path.len(),
+    }
+}
+
+impl Geometry {
+    /// The paths vertices lie on, with their part and ring and whether each is a polygon ring.
+    fn paths(&self) -> Vec<(usize, usize, &[Coord], bool)> {
+        match self {
+            Geometry::Point(c) => vec![(0, 0, std::slice::from_ref(c), false)],
+            Geometry::MultiPoint(v) => vec![(0, 0, v.as_slice(), false)],
+            Geometry::Line(parts) => parts.iter().enumerate().map(|(i, p)| (i, 0, p.as_slice(), false)).collect(),
+            Geometry::Polygon(polys) => polys
+                .iter()
+                .enumerate()
+                .flat_map(|(i, rings)| rings.iter().enumerate().map(move |(j, r)| (i, j, r.as_slice(), true)))
+                .collect(),
+        }
+    }
+
+    /// Calls `f` with every vertex, a closed ring's repeated last point left out.
+    pub fn for_each_vertex(&self, mut f: impl FnMut(VertexId, Coord)) {
+        for (part, ring, path, closed) in self.paths() {
+            for (index, c) in path.iter().take(open_len(path, closed)).enumerate() {
+                f(VertexId { part, ring, index }, *c);
+            }
+        }
+    }
+
+    /// Every vertex, a closed ring's repeated last point left out.
+    pub fn vertices(&self) -> Vec<(VertexId, Coord)> {
+        let mut out = Vec::new();
+        self.for_each_vertex(|v, c| out.push((v, c)));
+        out
+    }
+
+    /// Calls `f` with every edge of a line or polygon: the vertex it starts at and its two ends
+    /// (a ring's last edge comes back to its first vertex). A vertex inserted on an edge goes
+    /// after its start.
+    pub fn for_each_edge(&self, mut f: impl FnMut(VertexId, Coord, Coord)) {
+        if matches!(self, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+            return;
+        }
+        for (part, ring, path, closed) in self.paths() {
+            let n = open_len(path, closed);
+            let count = if closed && n > 2 { n } else { n.saturating_sub(1) };
+            for index in 0..count {
+                if let (Some(a), Some(b)) = (path.get(index), path.get((index + 1) % n.max(1))) {
+                    f(VertexId { part, ring, index }, *a, *b);
+                }
+            }
+        }
+    }
+
+    /// Every edge of a line or polygon (see [`Geometry::for_each_edge`]).
+    pub fn edges(&self) -> Vec<(VertexId, Coord, Coord)> {
+        let mut out = Vec::new();
+        self.for_each_edge(|v, a, b| out.push((v, a, b)));
+        out
+    }
+
+    /// The vertex's position, if it has one.
+    pub fn vertex(&self, v: VertexId) -> Option<Coord> {
+        let (_, _, path, closed) = self.paths().into_iter().find(|p| p.0 == v.part && p.1 == v.ring)?;
+        (v.index < open_len(path, closed)).then(|| path.get(v.index).copied()).flatten()
+    }
+
+    /// The path a vertex lies on, mutably, and whether it is a polygon ring.
+    fn path_mut(&mut self, part: usize, ring: usize) -> Option<(&mut Vec<Coord>, bool)> {
+        match self {
+            Geometry::Point(_) => None,
+            Geometry::MultiPoint(v) => (part == 0 && ring == 0).then_some((v, false)),
+            Geometry::Line(parts) => parts.get_mut(part).filter(|_| ring == 0).map(|p| (p, false)),
+            Geometry::Polygon(polys) => polys.get_mut(part).and_then(|rings| rings.get_mut(ring)).map(|r| (r, true)),
+        }
+    }
+
+    /// A copy with a vertex moved to `c` (a ring's closing point goes with its first vertex).
+    pub fn move_vertex(&self, v: VertexId, c: Coord) -> Option<Geometry> {
+        self.vertex(v)?;
+        let mut g = self.clone();
+        if let Geometry::Point(p) = &mut g {
+            *p = c;
+            return Some(g);
+        }
+        let (path, ring) = g.path_mut(v.part, v.ring)?;
+        let closed = ring && open_len(path, true) < path.len();
+        *path.get_mut(v.index)? = c;
+        if closed && v.index == 0 {
+            *path.last_mut()? = c;
+        }
+        Some(g)
+    }
+
+    /// A copy with a vertex at `c` inserted after `after`, on the edge it starts (lines and
+    /// polygons only).
+    pub fn insert_vertex(&self, after: VertexId, c: Coord) -> Option<Geometry> {
+        if matches!(self, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+            return None;
+        }
+        self.vertex(after)?;
+        let mut g = self.clone();
+        let (path, _) = g.path_mut(after.part, after.ring)?;
+        path.insert(after.index + 1, c);
+        Some(g)
+    }
+
+    /// A copy without a vertex, refused when a line would keep fewer than two vertices, a
+    /// polygon ring fewer than three or a multipoint none.
+    pub fn delete_vertex(&self, v: VertexId) -> Result<Geometry, &'static str> {
+        self.vertex(v).ok_or("no such vertex")?;
+        let mut g = self.clone();
+        let kind = g.kind();
+        let multi = matches!(g, Geometry::MultiPoint(_));
+        let Some((path, ring)) = g.path_mut(v.part, v.ring) else {
+            return Err("a point has only one vertex");
+        };
+        let n = open_len(path, ring);
+        let closed = ring && n < path.len();
+        match kind {
+            GeometryType::Point if multi && n <= 1 => return Err("a multipoint keeps at least one point"),
+            GeometryType::Polyline if n <= 2 => return Err("a line keeps at least two vertices"),
+            GeometryType::Polygon if n <= 3 => return Err("a polygon ring keeps at least three vertices"),
+            _ => {}
+        }
+        path.remove(v.index);
+        if closed && v.index == 0 {
+            let first = *path.first().ok_or("no such vertex")?;
+            *path.last_mut().ok_or("no such vertex")? = first;
+        }
+        Ok(g)
+    }
+}
+
 fn dist2(a: Coord, b: Coord) -> f64 {
     (a.x - b.x).powi(2) + (a.y - b.y).powi(2)
 }
@@ -349,6 +503,47 @@ mod tests {
         assert!(segment_intersects_extent(Coord::new(-5.0, 10.0), Coord::new(15.0, 10.0), &Extent::new(0.0, 0.0, 10.0, 10.0)));
         // Segment outside box
         assert!(!segment_intersects_extent(Coord::new(-5.0, 12.0), Coord::new(15.0, 12.0), &Extent::new(0.0, 0.0, 10.0, 10.0)));
+    }
+
+    #[test]
+    fn vertex_editing() {
+        // A closed square ring: four vertices, the closing point following the first.
+        let g = Geometry::Polygon(vec![vec![square(0.0, 0.0, 10.0), square(4.0, 4.0, 2.0)]]);
+        assert_eq!(g.vertices().len(), 8);
+        assert_eq!(g.edges().len(), 8);
+        let first = VertexId::new(0, 0, 0);
+        let moved = g.move_vertex(first, Coord::new(-1.0, -1.0)).unwrap();
+        let Geometry::Polygon(p) = &moved else { panic!("not a polygon") };
+        assert_eq!(p[0][0][0], Coord::new(-1.0, -1.0));
+        assert_eq!(p[0][0][4], Coord::new(-1.0, -1.0), "the ring stays closed");
+        // Inserting on the ring's last edge (back to the first vertex) keeps it closed.
+        let ins = g.insert_vertex(VertexId::new(0, 1, 3), Coord::new(3.0, 5.0)).unwrap();
+        let Geometry::Polygon(p) = &ins else { panic!("not a polygon") };
+        assert_eq!(p[0][1].len(), 6);
+        assert_eq!(p[0][1][4], Coord::new(3.0, 5.0));
+        assert_eq!(p[0][1].first(), p[0][1].last());
+        // Deleting the first vertex re-closes the ring; a triangle can't lose one.
+        let del = g.delete_vertex(first).unwrap();
+        let Geometry::Polygon(p) = &del else { panic!("not a polygon") };
+        assert_eq!(p[0][0].len(), 4);
+        assert_eq!(p[0][0].first(), p[0][0].last());
+        assert!(del.delete_vertex(first).is_err());
+        // Lines keep two vertices; points can't lose theirs.
+        let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(2.0, 0.0)]]);
+        assert_eq!(line.edges().len(), 2);
+        let two = line.delete_vertex(VertexId::new(0, 0, 1)).unwrap();
+        assert!(two.delete_vertex(VertexId::new(0, 0, 0)).is_err());
+        assert!(Geometry::Point(Coord::new(0.0, 0.0)).delete_vertex(VertexId::new(0, 0, 0)).is_err());
+        assert!(Geometry::Point(Coord::new(0.0, 0.0)).insert_vertex(VertexId::new(0, 0, 0), Coord::new(1.0, 1.0)).is_none());
+        let mp = Geometry::MultiPoint(vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]);
+        assert_eq!(mp.delete_vertex(VertexId::new(0, 0, 1)).unwrap(), Geometry::MultiPoint(vec![Coord::new(0.0, 0.0)]));
+        // Vertices that aren't there.
+        for v in [VertexId::new(0, 0, 9), VertexId::new(3, 0, 0), VertexId::new(0, 0, 4), VertexId::new(0, 5, 0)] {
+            assert!(g.move_vertex(v, Coord::new(0.0, 0.0)).is_none(), "{v:?}");
+            assert!(g.insert_vertex(v, Coord::new(0.0, 0.0)).is_none(), "{v:?}");
+            assert!(g.delete_vertex(v).is_err(), "{v:?}");
+        }
+        assert!(line.move_vertex(VertexId::new(0, 1, 0), Coord::new(0.0, 0.0)).is_none());
     }
 
     #[test]

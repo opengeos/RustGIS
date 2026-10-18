@@ -49,6 +49,7 @@ mod table;
 pub mod theme;
 mod tilt_drape;
 mod update;
+mod vertexedit;
 mod widgets;
 mod workspacepanes;
 mod zarrui;
@@ -1189,6 +1190,10 @@ impl RustGisApp {
             self.ui.web_file = None;
             // A deletion asked for in the old project never reaches a namesake in the new one.
             self.map.deleting = None;
+        }
+        // Undo and redo can move vertices: an index chosen before may now name another vertex.
+        if r.is_ok() && matches!(id, "edit.undo" | "edit.redo") {
+            self.map.vertex = None;
         }
         self.note_last_project();
         // Sources added, saved or made favourites are kept with the preferences.
@@ -2755,5 +2760,33 @@ mod service_text_tests {
         }
         let valid = "{\"title\":\"Café\"}";
         assert!(super::service_text(valid.as_bytes().to_vec()).is_ok_and(|text| text == valid));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod vertex_undo_tests {
+    use super::RustGisApp;
+    use rustgis_engine::data::VertexId;
+    use serde_json::{Value, json};
+
+    /// An undone vertex insertion leaves no vertex chosen: its index would name the next vertex,
+    /// and Delete would remove that one (#428).
+    #[test]
+    fn undo_and_redo_clear_the_chosen_vertex() {
+        let mut app = RustGisApp::with_sample();
+        app.run("layer.template", json!({"template": "lines", "name": "Paths"})).unwrap();
+        app.run("edit.enable", json!({"on": true})).unwrap();
+        let geometry = json!({"type": "LineString", "coordinates": [[0, 0], [1, 0], [2, 0]]});
+        let row = app.run("edit.addFeature", json!({"layer": "Paths", "geometry": geometry})).unwrap()["row"].as_u64().unwrap() as usize;
+        let id = app.session.map().layer_by_name("Paths").unwrap().id;
+        let insert = json!({"layer": id, "row": row, "action": "insert", "index": 0, "lon": 0.5, "lat": 0});
+        app.run("edit.vertex", insert).unwrap();
+        app.map.vertex = Some((id, row, VertexId::new(0, 0, 1)));
+        app.run("edit.undo", Value::Null).unwrap();
+        assert_eq!(app.map.vertex, None, "undo");
+        app.map.vertex = Some((id, row, VertexId::new(0, 0, 1)));
+        app.run("edit.redo", Value::Null).unwrap();
+        assert_eq!(app.map.vertex, None, "redo");
     }
 }

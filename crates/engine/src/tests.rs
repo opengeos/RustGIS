@@ -1759,6 +1759,32 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     assert!(s.run("edit.setGeometry", &json!({"layer": "Paths", "row": 0, "geometry": {"type": "Point", "coordinates": [0, 0]}})).is_err());
     s.run("edit.setGeometry", &json!({"layer": "Paths", "row": 0, "geometry": {"type": "LineString", "coordinates": [[0, 0], [0, 1]]}}))
         .unwrap();
+    // Vertex editing (the Edit Vertices tool): insert, move and delete, one undo step each.
+    let line = |s: &Session| match s.map().layer_by_name("Paths").unwrap().dataset.features[0].geometry.as_ref().unwrap() {
+        rustgis_data::Geometry::Line(p) => p[0].iter().map(|c| [c.x, c.y]).collect::<Vec<_>>(),
+        _ => panic!("not a line"),
+    };
+    let r = s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "insert", "index": 0, "lon": 0.5, "lat": 0.5})).unwrap();
+    assert_eq!(r["index"], 1, "the new vertex");
+    assert_eq!(line(&s), [[0.0, 0.0], [0.5, 0.5], [0.0, 1.0]]);
+    s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "index": 2, "lon": 1, "lat": 1})).unwrap();
+    assert_eq!(line(&s), [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]);
+    s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "delete", "index": 1})).unwrap();
+    assert_eq!(line(&s), [[0.0, 0.0], [1.0, 1.0]]);
+    assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "delete", "index": 1})).is_err(), "a line keeps two");
+    assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "index": 7, "lon": 1, "lat": 1})).is_err());
+    assert!(s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "index": 0, "lon": 1e9, "lat": 1})).is_err());
+    for bad in [json!(-1), json!("2"), json!(0.5)] {
+        assert!(
+            s.run("edit.vertex", &json!({"layer": "Paths", "row": 0, "action": "move", "part": bad, "index": 0, "lon": 1, "lat": 1}))
+                .is_err(),
+            "part {bad}"
+        );
+    }
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(line(&s), [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], "undo brings the deleted vertex back");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(line(&s), [[0.0, 0.0], [0.5, 0.5], [0.0, 1.0]]);
     // Traverse: two legs from a start, ground to grid off and on.
     s.run("layer.select", &json!({"layer": "Paths"})).unwrap();
     let r = s
@@ -1784,6 +1810,13 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     let on = s.run("edit.snap", &json!({"lon": 20.0001, "lat": 0.0001})).unwrap();
     assert_eq!(on["snapped"], true);
     assert!((on["lon"].as_f64().unwrap() - 20.0).abs() < 1e-9 && on["lat"].as_f64().unwrap().abs() < 1e-9, "{on}");
+    // A dragged vertex doesn't snap to the feature it belongs to.
+    s.run("map.goToXY", &json!({"lon": 0.5, "lat": 0.5, "scale": 50_000})).unwrap();
+    let paths = s.map().layer_by_name("Paths").unwrap().id;
+    let near = rustgis_geom::Coord::new(0.5001, 0.5001);
+    let own = crate::cmd::design::snap_except(&mut s, near, None).map(|(c, _)| c);
+    assert!(own.is_some_and(|c| (c.x - 0.5).abs() < 1e-9 && (c.y - 0.5).abs() < 1e-9), "the line's own vertex: {own:?}");
+    assert_eq!(crate::cmd::design::snap_except(&mut s, near, Some((paths, 0))), None);
     // Topology: overlapping countries? Lakes inside countries? Dangling paths.
     s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Paths"}})).unwrap();
     s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
@@ -3155,12 +3188,13 @@ fn large_sources_stream_a_view_at_a_time() {
     let small = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
     let v = view_of(&mut s, small);
     let lonlat = crate::render::view_lonlat(s.map(), &v);
+    let scale = s.map().scale();
     // Read in the background, as the screen does, then wait for it.
-    let mut pending = s.map_mut().sync_sources(&lonlat, false);
+    let mut pending = s.map_mut().sync_sources(&lonlat, scale, false);
     let start = std::time::Instant::now();
     while pending && start.elapsed() < std::time::Duration::from_secs(30) {
         std::thread::sleep(std::time::Duration::from_millis(5));
-        pending = s.map_mut().sync_sources(&lonlat, false);
+        pending = s.map_mut().sync_sources(&lonlat, scale, false);
     }
     assert!(!pending);
     let l = layer(&s);
@@ -5062,6 +5096,43 @@ fn s3_connections_listings_and_objects() {
     assert!(crate::cmd::plugins::user_only("s3.connect"));
 }
 
+/// A streamed layer outside its zoom range reads nothing for the view, as if hidden: it is not
+/// drawn there, so its features are not fetched (#412). Back in range, it reads again.
+#[test]
+fn streamed_layer_outside_its_zoom_range_reads_nothing() {
+    use rustgis_data::{Dataset, Feature, Field, FieldType, Geometry, GeometryType, Value};
+    let mut ds = Dataset::new("grid", GeometryType::Point, vec![Field::new("n", FieldType::Integer)]);
+    for i in 0..200u32 {
+        for j in 0..200u32 {
+            let c = rustgis_geom::Coord::new(-179.0 + 1.79 * f64::from(i), -80.0 + 0.8 * f64::from(j));
+            let n = u64::from(i * 200 + j);
+            ds.features.push(Feature { id: n + 1, geometry: Some(Geometry::Point(c)), attrs: vec![Value::Int(n as i64)] });
+        }
+    }
+    let (base, sent) = serve_ranges(rustgis_data::source::fgb::write(&ds).unwrap());
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/grid.fgb")})).unwrap();
+    assert_eq!(r["streamed"], true, "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    // Drawn only when zoomed in beyond 1:10,000,000.
+    s.run("layer.scaleRange", &json!({"layer": id, "min": 1e7})).unwrap();
+    let before = sent.load(std::sync::atomic::Ordering::Relaxed);
+    // Zoomed out (an export, which waits for its reads): not drawn, so not read.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(-60.0, -40.0, 60.0, 40.0));
+    assert!(s.map().scale() > 1e7);
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert!(l.dataset.features.is_empty() && l.source.as_ref().unwrap().window().is_none());
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), before);
+    // Zoomed in, inside the range: read and drawn.
+    let v = view_of(&mut s, rustgis_geom::Extent::new(10.0, 10.0, 12.0, 11.0));
+    assert!(s.map().scale() < 1e7);
+    crate::render::render_png(s.map_mut(), &v).unwrap();
+    let l = s.map().layer(id).unwrap();
+    assert!(!l.dataset.features.is_empty(), "{:?}", l.source.as_ref().unwrap().error);
+    assert!(sent.load(std::sync::atomic::Ordering::Relaxed) > before);
+}
+
 /// A FlatGeobuf and a GeoParquet by their address are read in place, by range: a view fetches a
 /// small part of the file; the project keeps the address and reads it again; asked to, a file is
 /// downloaded whole instead.
@@ -5086,11 +5157,12 @@ fn flatgeobuf_and_geoparquet_by_address_are_read_in_place() {
     // A view: read as the screen reads, in the background.
     let view = rustgis_geom::Extent::new(10.0, 10.0, 14.0, 13.0);
     let sync = |s: &mut Session| {
-        let mut pending = s.map_mut().sync_sources(&view, false);
+        let scale = s.map().scale();
+        let mut pending = s.map_mut().sync_sources(&view, scale, false);
         let start = std::time::Instant::now();
         while pending && start.elapsed() < std::time::Duration::from_secs(30) {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            pending = s.map_mut().sync_sources(&view, false);
+            pending = s.map_mut().sync_sources(&view, scale, false);
         }
         assert!(!pending);
     };

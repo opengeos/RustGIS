@@ -2057,6 +2057,20 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             app.map.cancel_sketch();
         }
         big(ui, app, "delete", "Delete", "Delete the selected features.", "edit.delete", Value::Null, false, false);
+        let r = big(
+            ui,
+            app,
+            "vertices",
+            "Edit\nVertices",
+            "Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.",
+            "tool.set",
+            json!({"tool": "editVertices"}),
+            app.session.tool == Tool::EditVertices,
+            false,
+        );
+        if r.clicked() {
+            app.map.cancel_sketch();
+        }
         big(
             ui,
             app,
@@ -2085,6 +2099,7 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 app.map.split_mode = true;
                 ui.close();
             }
+            menu_item(ui, app, "vertices", "Edit Vertices", "tool.set", json!({"tool": "editVertices"}));
             menu_item(ui, app, "calc_geom", "Move, Rotate, Scale…", "ui.pane.editing", Value::Null);
         });
     });
