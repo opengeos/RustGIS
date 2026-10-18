@@ -102,6 +102,22 @@ is ticked. The session is the project you have open, so an attached agent can't 
 are refused, with or without `--yes`. `edit.undo` and `edit.redo` work, in the same history as
 your own steps.
 
+### MCP over HTTP
+
+While **Let your Agents Control RustGIS** is on, the app also serves MCP over HTTP ("Streamable
+HTTP", stateless, JSON replies) on `http://127.0.0.1:8768/mcp`, beside the relay. The
+`RUSTGIS_MCP_HTTP_PORT` environment variable names another port. Clients that speak HTTP connect
+without `rustgis-cli`. Every request needs `Authorization: Bearer <token>`. The token is made once
+and kept in `mcp-http.token` in the settings folder (readable by you only), so a client registered
+with it keeps working across launches; delete the file to make a new one. Requests that name
+another host, or that come from a web page (an `Origin` header), are refused before the token is
+read. Calls go through the same queue, refusals and one-at-a-time rule as the relay's.
+
+`rustgis-cli mcp-register --client claude` registers it with Claude Code (`claude mcp add
+--transport http rustgis-live http://127.0.0.1:8768/mcp --header "Authorization: Bearer …"`), and
+the settings section shows that command. Without `--client` it prints the configuration for any
+HTTP client. `--name` and `--port` change the registration's name and port.
+
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
 permission, and the app revokes it when it's done with the agent; that closes its connections and
@@ -171,6 +187,9 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- MCP over HTTP with the token: `relay::http::tests::http_clients_with_the_token_drive_the_session`
+- HTTP refusals (no token, other host, web page, method, size): `relay::http::tests::http_refuses_requests_without_the_token_or_from_elsewhere`
+- Stable, private HTTP token: `relay::http::tests::http_token_is_stable_and_private`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`

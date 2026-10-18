@@ -88,4 +88,11 @@ VS Code, which then run commands, look at the map and search the documentation t
 claude mcp add rustgis -- rustgis-cli mcp --sample
 ```
 
+`mcp-register --client claude` registers the open desktop app's MCP over HTTP with Claude Code,
+for when agents are turned on in the app (without `--client`, it prints the configuration):
+
+```sh
+rustgis-cli mcp-register --client claude
+```
+
 See [MCP Server](mcp.md).

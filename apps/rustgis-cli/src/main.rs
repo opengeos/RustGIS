@@ -16,6 +16,7 @@
 //! rustgis-cli ask --logout
 //! rustgis-cli mcp [--sample | --project p.rgis | --data f.geojson …] [--yes]   # an MCP server on stdio
 //! rustgis-cli mcp --attach [PORT] [--yes]   # the same, on the desktop app already open (its MCP Relay)
+//! rustgis-cli mcp-register [--client claude] [--name N] [--port P]   # register the open app's MCP over HTTP
 //! rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id>
 //!                      | browse | get <id> | prepare <id>] [--registry URL]
 //! ```
@@ -40,7 +41,7 @@ use serde_json::{Value, json};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id> | prepare <id>] [--registry URL]\n  rustgis-cli skills [add <SKILL.md|folder|.zip> | remove <name> | enable <name> | disable <name>]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli ask --login [--another-account] [--account CLIENT_ID] | --logout\n  rustgis-cli ask --accounts | --account CLIENT_ID\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes] [--attach [PORT] [--token-file FILE]]"
+        "usage:\n  rustgis-cli commands | tools\n  rustgis-cli plugins [install <file|folder> | uninstall <id> | enable <id> | disable <id> | browse | get <id> | prepare <id>] [--registry URL]\n  rustgis-cli skills [add <SKILL.md|folder|.zip> | remove <name> | enable <name> | disable <name>]\n  rustgis-cli info <data>\n  rustgis-cli logo <out.png|out.ico|out.bmp> [--size N] [--canvas WxH --at X,Y (.bmp only)]\n  rustgis-cli render <data|project> <out.png> [--basemap NAME] [--tiles URL] [--width N] [--height N] [--dpi N] [--worldview auto|default|china]\n  rustgis-cli run [--sample] [--project P] [--data F]… --cmd 'id={{json}}'… [--save P] [--worldview auto|default|china]\n  rustgis-cli ask [--sample] [--project P] [--data F]… \"request\" [--provider P] [--model M] [--base-url URL] [--yes] [--save P]\n  rustgis-cli ask --models [--provider P]\n  rustgis-cli ask --login [--another-account] [--account CLIENT_ID] | --logout\n  rustgis-cli ask --accounts | --account CLIENT_ID\n  rustgis-cli mcp [--sample] [--project P] [--data F]… [--yes] [--attach [PORT] [--token-file FILE]]\n  rustgis-cli mcp-register [--client claude] [--name NAME] [--port PORT]"
     );
     ExitCode::from(2)
 }
@@ -402,6 +403,46 @@ fn attach(port: u16, allow_access: bool, token_file: Option<&str>) -> Result<(),
     Ok(())
 }
 
+/// `mcp-register`: registers the desktop app's MCP over HTTP with an agent. The address is the
+/// app's HTTP port (`--port`, else `RUSTGIS_MCP_HTTP_PORT` or 8768), the token the stable one in
+/// the settings folder, the same file the app reads. `--client claude` runs `claude mcp add`;
+/// without it the configuration is printed for any client.
+fn mcp_register(args: &[String]) -> Result<(), String> {
+    use rustgis_assistant::relay::{HTTP_PATH, default_http_port, http_token, http_token_path};
+    let port = match opt(args, "--port") {
+        Some(p) => p.parse::<u16>().map_err(|_| format!("mcp-register --port {p}: expected a port number"))?,
+        None => default_http_port(),
+    };
+    let name = opt(args, "--name").unwrap_or("rustgis-live");
+    let url = format!("http://127.0.0.1:{port}{HTTP_PATH}");
+    let token = http_token()?;
+    let header = format!("Authorization: Bearer {token}");
+    match opt(args, "--client") {
+        Some("claude") => {
+            let status = std::process::Command::new("claude")
+                .args(["mcp", "add", "--transport", "http", name, &url, "--header", &header])
+                .status()
+                .map_err(|e| format!("running claude: {e} (is Claude Code installed?)"))?;
+            if !status.success() {
+                return Err(format!("claude mcp add failed ({status})"));
+            }
+            eprintln!("rustgis-cli: registered {name} ({url}) with Claude Code; RustGIS serves it while agents are turned on in the app");
+            Ok(())
+        }
+        Some(other) => {
+            Err(format!("mcp-register --client {other}: only claude is run for you; leave --client out to print the configuration"))
+        }
+        None => {
+            print(&json!({"mcpServers": {name: {"type": "http", "url": url, "headers": {"Authorization": format!("Bearer {token}")}}}}));
+            eprintln!(
+                "rustgis-cli: the token is kept in {}; deleting it makes a new one (re-register then)",
+                http_token_path().map(|p| p.display().to_string()).unwrap_or_default()
+            );
+            Ok(())
+        }
+    }
+}
+
 /// The complaint for a message that could not be read: the protocol's own words about the
 /// message, or the failing reader named by its caller (the framing helper's I/O text is
 /// neutral and names no source).
@@ -527,6 +568,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         "skills" => skills(&args),
+        "mcp-register" => mcp_register(&args),
         "commands" => {
             print(&run(&mut s, "info.commands", Value::Null)?);
             Ok(())

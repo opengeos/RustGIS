@@ -31,6 +31,9 @@ use serde_json::Value;
 use crate::framing::{self, MAX_LINE, Oversize, read_message_max};
 use crate::mcp::{Server, expects_reply};
 
+mod http;
+pub use http::{HTTP_PATH, HTTP_PORT, HTTP_PORT_ENV, default_http_port, http_token, http_token_path};
+
 /// The port `rustgis-cli mcp --attach` connects to unless it names another. (GeoLibre's runner
 /// is 8766; the relay takes the next one.)
 pub const DEFAULT_PORT: u16 = 8767;
@@ -134,6 +137,8 @@ struct Shared {
     /// This run's own id (random, not secret), naming its grants' files: a grant left over from an
     /// earlier run on the same port can't remove a file of this one.
     run_id: String,
+    /// The port of MCP over HTTP beside the relay, while it runs ([`Relay::serve_http`]).
+    http_port: Mutex<Option<u16>>,
 }
 
 impl Shared {
@@ -161,6 +166,7 @@ impl Shared {
             let _ = req.state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst);
         }
         let _ = std::fs::remove_file(&self.token_file);
+        *lock(&self.http_port) = None;
         for (_, (_, file)) in lock(&self.grants).drain() {
             let _ = std::fs::remove_file(&file);
         }
@@ -455,6 +461,7 @@ impl Relay {
             granted: Mutex::new(HashMap::new()),
             grant_ids: AtomicU64::new(0),
             run_id: random_token()?.chars().take(8).collect(),
+            http_port: Mutex::new(None),
         });
         let owner = Arc::new(Owner { shared, port });
         let accepting = Arc::clone(&owner.shared);
