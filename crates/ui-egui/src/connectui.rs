@@ -128,6 +128,10 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             save(PREF, if on { "on" } else { "off" });
         }
         let started = if on { app.run("ui.mcpRelay", json!({})) } else { app.run("ui.mcpRelay", json!({"stop": true})) };
+        // Access as the box says before HTTP opens, as for the relay.
+        if let Some(relay) = &app.relay {
+            relay.set_allow_access(on);
+        }
         if on && started.is_ok() {
             start_http(app);
         }

@@ -26,8 +26,13 @@ const MAX_BODY: usize = 16 * 1024 * 1024;
 /// How long a client may take to send its whole request (head and body), and the reply to be
 /// written: a client trickling bytes can't hold a request slot past it.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
-/// Requests in progress at once.
+/// Requests not yet authenticated at once.
 const MAX_HTTP_CONNECTIONS: usize = 8;
+/// Authenticated requests in progress at once (each holds a thread while it waits for the app).
+const MAX_HTTP_IN_FLIGHT: usize = 16;
+
+/// Authenticated requests in progress, across the listener.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// The port the HTTP listener takes: [`HTTP_PORT_ENV`] when it holds a port number, else
 /// [`HTTP_PORT`].
@@ -74,13 +79,16 @@ fn token_at(path: &Path) -> Result<String, String> {
             let _ = std::fs::remove_file(&tmp);
             return Err(format!("{}: {e}", tmp.display()));
         }
-        // Someone else's made it meanwhile: theirs is read on the next round.
-        if std::fs::symlink_metadata(path).is_ok() {
-            let _ = std::fs::remove_file(&tmp);
-            continue;
+        // Published only if there is none yet, in one step (a hard link fails when the name is
+        // taken), so two writers never end up holding different tokens: the loser reads the
+        // winner's on the next round.
+        let linked = std::fs::hard_link(&tmp, path);
+        let _ = std::fs::remove_file(&tmp);
+        match linked {
+            Ok(()) => return Ok(token),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("{}: {e}", path.display())),
         }
-        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
-        return Ok(token);
     }
     Err(format!("{}: the token file kept changing; try again", path.display()))
 }
@@ -238,6 +246,15 @@ impl Drop for Slot {
     }
 }
 
+/// An authenticated request's place among [`MAX_HTTP_IN_FLIGHT`], given back when it ends.
+struct InFlight;
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, SeqCst);
+    }
+}
+
 /// One HTTP request: checked, queued for the app, answered with its reply. `io` bounds the whole
 /// request's arrival and the reply's writing.
 fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Duration, mut slot: Slot) {
@@ -290,8 +307,13 @@ fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16, io: Du
         return respond(&mut out, "401 Unauthorized", &[("WWW-Authenticate", "Bearer")], &problem("a valid bearer token is required"));
     }
     // Authenticated: its place among the unauthenticated goes back, so idle connections can't
-    // keep a real client out while it waits for the app.
+    // keep a real client out while it waits for the app; it takes one among the in-flight.
     slot.release();
+    if IN_FLIGHT.fetch_add(1, SeqCst) >= MAX_HTTP_IN_FLIGHT {
+        IN_FLIGHT.fetch_sub(1, SeqCst);
+        return respond(&mut out, "503 Service Unavailable", &[("Retry-After", "1")], &problem("too many requests at once"));
+    }
+    let _in_flight = InFlight;
     let path = target.split('?').next().unwrap_or("");
     if path != HTTP_PATH && path != "/" {
         return respond(&mut out, "404 Not Found", &[], &problem("post MCP messages to /mcp"));
