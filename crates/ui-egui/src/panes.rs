@@ -512,7 +512,9 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             })
             .response;
         // The map's row takes copied layers (#491), at the top: there is one even with no layers.
-        let header = ui.interact(header.rect, egui::Id::new("layers_map_header"), Sense::click());
+        // Across the pane, like the layer rows, not just its name.
+        let row = Rect::from_min_max(header.rect.min, pos2(ui.max_rect().max.x, header.rect.max.y));
+        let header = ui.interact(row, egui::Id::new("layers_map_header"), Sense::click());
         header.context_menu(|ui| {
             if paste_layers_button(app, ui) {
                 ui.close();

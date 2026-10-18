@@ -7512,7 +7512,10 @@ fn layers_are_copied_and_pasted_between_maps() {
     let group = second.groups.iter().find(|g| g.name == "Places").unwrap();
     let top = second.layers.iter().find(|l| group.children.contains(&l.id)).map(|l| l.name.as_str());
     assert_eq!((group.children.len(), top), (3, Some("Cities copy 2")));
-    for bad in [json!({"group": "Places", "to": 0}), json!({"map": "Nowhere"}), json!({"group": "Nowhere"}), json!({"to": -1})] {
+    // A group and a position at once is refused as such (Second has the group).
+    let both = s.run("layer.paste", &json!({"map": "Second", "group": "Places", "to": 0})).unwrap_err();
+    assert!(both.contains("not both"), "{both}");
+    for bad in [json!({"map": "Nowhere"}), json!({"group": "Nowhere"}), json!({"to": -1})] {
         assert!(s.run("layer.paste", &json!(bad)).is_err(), "{bad}");
     }
     for bad in [json!({"layer": "Nowhere"}), json!({"group": "Nowhere"}), json!({"layer": [1, "Nowhere"]}), json!({"layer": []})] {
