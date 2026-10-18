@@ -498,6 +498,15 @@ impl Relay {
         self.owner.shared.attached.load(SeqCst)
     }
 
+    /// Writes a request and how it went to the audit log, if there is one.
+    fn audit(&self, line: &str, reply: Option<&str>, took: Duration) {
+        // Out of the lock first, so changing the folder never waits on the disk.
+        let dir = lock(&self.owner.audit).clone();
+        if let Some(dir) = dir {
+            crate::audit::record(&dir, "mcp", line, reply, took);
+        }
+    }
+
     /// Writes every tool call agents make to the audit log in `dir` ([`crate::audit`]), or to
     /// none. The desktop app keeps it in [`crate::audit::dir`].
     pub fn set_audit_dir(&self, dir: Option<PathBuf>) {
@@ -582,7 +591,9 @@ impl Relay {
             };
             if req.decision.load(SeqCst) == CANCELLED {
                 if req.state.compare_exchange(PENDING, RUNNING, SeqCst, SeqCst).is_ok() {
-                    let _ = req.reply.send(Some(declined_reply(&req.line)));
+                    let declined = declined_reply(&req.line);
+                    self.audit(&req.line, Some(&declined), Duration::ZERO);
+                    let _ = req.reply.send(Some(declined));
                     ran += 1;
                 }
                 continue;
@@ -613,7 +624,9 @@ impl Relay {
                         }
                         CANCELLED => {
                             if req.state.compare_exchange(PENDING, RUNNING, SeqCst, SeqCst).is_ok() {
-                                let _ = req.reply.send(Some(declined_reply(&req.line)));
+                                let declined = declined_reply(&req.line);
+                                self.audit(&req.line, Some(&declined), Duration::ZERO);
+                                let _ = req.reply.send(Some(declined));
                                 ran += 1;
                             }
                             continue;
@@ -647,11 +660,7 @@ impl Relay {
             let started = Instant::now();
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
-            // Out of the lock first, so changing the folder never waits on the disk.
-            let audit = lock(&self.owner.audit).clone();
-            if let Some(dir) = audit {
-                crate::audit::record(&dir, "mcp", &req.line, out.as_deref(), started.elapsed());
-            }
+            self.audit(&req.line, out.as_deref(), started.elapsed());
             if let Some(a) = action(&req.line, out.as_deref()) {
                 *lock(&self.owner.last) = Some(a);
             }

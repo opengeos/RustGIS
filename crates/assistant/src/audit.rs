@@ -88,7 +88,14 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
                     .and_then(|r| r.pointer("/error/message").or_else(|| r.pointer("/result/content/0/text")))
                     .and_then(Value::as_str)
                     .unwrap_or("no reply");
-                crate::tools::clip(&rustgis_engine::sources::redact(text), 2000)
+                let text = rustgis_engine::sources::redact(text);
+                // Free text can name a credential the redaction can't find (`token abc123`):
+                // such an error is withheld, not kept.
+                if mentions_secret(&text) {
+                    "[the error text mentions a credential; withheld]".to_string()
+                } else {
+                    crate::tools::clip(&text, 2000)
+                }
             });
             let mut line = json!({
                 "ts": crate::chatgpt::rfc3339(secs),
@@ -122,17 +129,54 @@ pub fn entries(source: &str, request: &str, reply: Option<&str>, took: Duration,
         .collect()
 }
 
+/// The words that name a secret, in keys and in free text.
+const SECRET_WORDS: &[&str] = &[
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "apikey",
+    "api_key",
+    "key",
+    "authorization",
+    "credential",
+    "signature",
+    "cookie",
+    "sas",
+];
+
+/// Whether free text names a secret. Narrower than [`SECRET_WORDS`]: a plain "key" in an error
+/// ("primary key") isn't one.
+fn mentions_secret(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    ["password", "passwd", "pwd", "secret", "token", "apikey", "api_key", "api key", "authorization", "bearer", "credential", "cookie"]
+        .iter()
+        .any(|w| lower.contains(w))
+}
+
 /// A script (`run`'s, one `command-id {json}` per line) with each line's parameters redacted as
-/// a call's are. A script that doesn't parse is kept only as far as addresses can be redacted.
+/// a call's are, line by line, so one line that doesn't parse leaves the others redacted. A line
+/// whose parameters aren't JSON keeps only its command id.
 fn redact_script(script: &str) -> String {
-    match rustgis_engine::cmd::workflows::script_commands(script) {
-        Ok(lines) => lines
-            .into_iter()
-            .map(|(_, id, params)| if params.is_null() { id } else { format!("{id} {}", redact(params, 0)) })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Err(_) => script.lines().map(rustgis_engine::sources::redact).collect::<Vec<_>>().join("\n"),
-    }
+    script
+        .lines()
+        .map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return line.to_string();
+            }
+            let (id, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
+            if rest.trim().is_empty() {
+                return id.to_string();
+            }
+            match serde_json::from_str::<Value>(rest.trim()) {
+                Ok(params) => format!("{id} {}", redact(params, 0)),
+                Err(_) => format!("{id} [parameters not JSON; withheld]"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `v` without what would give someone else the user's access: values under keys that name a
@@ -141,7 +185,7 @@ fn redact_script(script: &str) -> String {
 fn redact(v: Value, depth: usize) -> Value {
     let secret = |k: &str| {
         let k = k.to_ascii_lowercase();
-        ["password", "passwd", "secret", "token", "apikey", "api_key", "key", "authorization"].iter().any(|s| k == *s || k.ends_with(s))
+        SECRET_WORDS.iter().any(|s| k == *s || k.ends_with(s))
     };
     match v {
         Value::String(s) => Value::String(rustgis_engine::sources::redact(&s)),
@@ -160,6 +204,22 @@ fn redact(v: Value, depth: usize) -> Value {
     }
 }
 
+/// Whether `name` is a day file of the log: `YYYY-MM-DD.jsonl`, a real month and day.
+fn is_day_file(name: &str) -> bool {
+    let Some(day) = name.strip_suffix(".jsonl") else { return false };
+    let b = day.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b.get(r).is_some_and(|s| s.iter().all(u8::is_ascii_digit));
+    let num = |r: std::ops::Range<usize>| day.get(r).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    b.len() == 10
+        && digits(0..4)
+        && b.get(4) == Some(&b'-')
+        && digits(5..7)
+        && b.get(7) == Some(&b'-')
+        && digits(8..10)
+        && (1..=12).contains(&num(5..7))
+        && (1..=31).contains(&num(8..10))
+}
+
 /// Removes day files in `dir` older than [`KEEP_DAYS`] before `secs`.
 fn prune(dir: &Path, secs: i64) {
     let oldest = file_for(dir, secs - i64::try_from(KEEP_DAYS * 86_400).unwrap_or(0));
@@ -168,8 +228,7 @@ fn prune(dir: &Path, secs: i64) {
     for e in read.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         // Only our own day files: `YYYY-MM-DD.jsonl`, compared as text.
-        let ours = name.len() == oldest.len() && name.ends_with(".jsonl") && name.chars().take(10).all(|c| c.is_ascii_digit() || c == '-');
-        if ours && name < oldest {
+        if is_day_file(&name) && name < oldest {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -220,6 +279,16 @@ mod tests {
         let text = lines[0].to_string();
         assert!(!text.contains("hunter2") && !text.contains("s3cret") && text.contains("db.example.com"), "{text}");
         assert!(lines[0].get("batch").is_none());
+        // One line that isn't JSON doesn't leave the others' secrets in the log.
+        let broken = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "run", "arguments": {
+            "script": "sql.connect {\"password\": \"hunter2\"}\nmap.zoomIn {oops token=abc"}}});
+        let text = entries("mcp", &broken.to_string(), None, Duration::ZERO, 0)[0].to_string();
+        assert!(!text.contains("hunter2") && !text.contains("abc") && text.contains("map.zoomIn"), "{text}");
+        // An error that names a credential in free text is withheld.
+        let call = json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "list_layers"}});
+        let err = json!({"jsonrpc": "2.0", "id": 6, "result": {"isError": true, "content": [{"type": "text", "text": "authentication failed: token abc123"}]}});
+        let lines = entries("mcp", &call.to_string(), Some(&err.to_string()), Duration::ZERO, 0);
+        assert!(!lines[0]["error"].as_str().unwrap_or("").contains("abc123"), "{}", lines[0]);
     }
 
     /// Lines go to the day's file; old days are removed, other files are left.
@@ -231,6 +300,8 @@ mod tests {
         std::fs::write(&old, "{}\n").unwrap();
         std::fs::write(&recent, "{}\n").unwrap();
         std::fs::write(dir.path().join("notes.txt"), "mine").unwrap();
+        // Not a day file, though its first ten characters are digits.
+        std::fs::write(dir.path().join("0000000000.jsonl"), "{}\n").unwrap();
         let call =
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_layers", "arguments": {}}}).to_string();
         let ok = json!({"jsonrpc": "2.0", "id": 1, "result": {"isError": false, "content": []}}).to_string();
@@ -247,5 +318,7 @@ mod tests {
             assert_eq!(mode & 0o077, 0, "the log is this user's alone: {mode:o}");
         }
         assert!(recent.exists() && dir.path().join("notes.txt").exists());
+        assert!(dir.path().join("0000000000.jsonl").exists(), "only day files are pruned");
+        assert!(is_day_file("2026-10-18.jsonl") && !is_day_file("2026-13-01.jsonl") && !is_day_file("2026-10-18.json"));
     }
 }
