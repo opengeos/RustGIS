@@ -1028,6 +1028,12 @@ fn snap(s: &mut Session, p: &Json) -> CmdResult {
 /// Where a point at `c` (longitude/latitude) snaps to, and to what, if anywhere. Read-only, for
 /// drawing the snap marker without running a command (projected shapes are cached on the way).
 pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
+    snap_except(s, c, None)
+}
+
+/// [`snap_at`], leaving out one feature (layer id, row): a vertex being dragged doesn't snap to
+/// the shape it is changing.
+pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Option<(Coord, &'static str)> {
     let sn = s.map().editing.snapping;
     if !sn.enabled {
         return None;
@@ -1048,7 +1054,9 @@ pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
         if !l.in_scale_range(scale) {
             continue;
         }
-        for g in l.projected_in(&flat, &key).iter().flatten() {
+        let id = l.id;
+        for (row, g) in l.projected_in(&flat, &key).iter().enumerate() {
+            let Some(g) = g.as_ref().filter(|_| skip != Some((id, row))) else { continue };
             if !g.extent().padded(0.0, tol).contains(m) {
                 continue;
             }

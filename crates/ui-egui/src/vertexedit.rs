@@ -76,7 +76,18 @@ fn nearest_on(a: Pos2, b: Pos2, p: Pos2) -> Pos2 {
 
 /// The handle under a screen point: a vertex first, then a midpoint, then an edge.
 fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
-    let ts = targets(app);
+    // Features nowhere near the pointer aren't searched: their extents (in degrees) padded by
+    // the reach of a handle around it.
+    let near = screen_to_lonlat(app, rect, p).map(|c| {
+        let reach = [vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(-1.0, 0.0), vec2(0.0, -1.0)]
+            .iter()
+            .filter_map(|d| screen_to_lonlat(app, rect, p + *d * (VERTEX_PX + MID_PX)))
+            .map(|q| (q.x - c.x).abs().max((q.y - c.y).abs()))
+            .fold(0.0_f64, f64::max);
+        (c, reach * 2.0)
+    });
+    let ts: Vec<_> =
+        targets(app).into_iter().filter(|(_, _, g)| near.is_none_or(|(c, reach)| g.extent().padded(0.0, reach).contains(c))).collect();
     let mut best: Option<(f32, Handle)> = None;
     for &(layer, row, g) in &ts {
         g.for_each_vertex(|v, c| {
@@ -126,8 +137,11 @@ pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
 /// The dragged vertex follows the pointer, snapping when snapping is on.
 pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
     let Some(c) = screen_to_lonlat(app, rect, p) else { return };
+    let Some(d) = app.map.vertex_drag else { return };
     // Asked directly, not as a command: commands mark the map changed, redrawing it every frame.
-    let c = rustgis_engine::cmd::design::snap_at(&mut app.session, c).map_or(c, |(at, _)| at);
+    // The feature being changed isn't a snap target: its old vertex and edges would hold the
+    // vertex in place.
+    let c = rustgis_engine::cmd::design::snap_except(&mut app.session, c, Some((d.layer, d.row))).map_or(c, |(at, _)| at);
     if let Some(d) = &mut app.map.vertex_drag {
         d.at = c;
     }
@@ -135,7 +149,12 @@ pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
 
 /// Letting go commits the move or insertion as one edit.
 pub fn drag_stop(app: &mut RustGisApp) {
-    if let Some(d) = app.map.vertex_drag.take() {
+    let Some(d) = app.map.vertex_drag.take() else { return };
+    // A vertex let go where it was is no edit (and no undo step).
+    let at_start = targets(app).iter().any(|(l, r, g)| {
+        *l == d.layer && *r == d.row && g.vertex(d.vertex).is_some_and(|c| (c.x - d.at.x).abs() < 1e-9 && (c.y - d.at.y).abs() < 1e-9)
+    });
+    if d.insert || !at_start {
         commit(app, d);
     }
 }

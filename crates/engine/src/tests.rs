@@ -1801,6 +1801,13 @@ fn modify_tools_snapping_topology_relationships_and_elevation() {
     let on = s.run("edit.snap", &json!({"lon": 20.0001, "lat": 0.0001})).unwrap();
     assert_eq!(on["snapped"], true);
     assert!((on["lon"].as_f64().unwrap() - 20.0).abs() < 1e-9 && on["lat"].as_f64().unwrap().abs() < 1e-9, "{on}");
+    // A dragged vertex doesn't snap to the feature it belongs to.
+    s.run("map.goToXY", &json!({"lon": 0.5, "lat": 0.5, "scale": 50_000})).unwrap();
+    let paths = s.map().layer_by_name("Paths").unwrap().id;
+    let near = rustgis_geom::Coord::new(0.5001, 0.5001);
+    let own = crate::cmd::design::snap_except(&mut s, near, None).map(|(c, _)| c);
+    assert!(own.is_some_and(|c| (c.x - 0.5).abs() < 1e-9 && (c.y - 0.5).abs() < 1e-9), "the line's own vertex: {own:?}");
+    assert_eq!(crate::cmd::design::snap_except(&mut s, near, Some((paths, 0))), None);
     // Topology: overlapping countries? Lakes inside countries? Dangling paths.
     s.run("topology.rules", &json!({"add": {"rule": "mustNotHaveDangles", "layer": "Paths"}})).unwrap();
     s.run("topology.rules", &json!({"add": {"rule": "mustBeCoveredBy", "layer": "Cities", "by": "Countries"}})).unwrap();
