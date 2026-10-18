@@ -168,9 +168,13 @@ removes its file.
   still has not come, the client gets error `-32003` (`its outcome is unknown`), and the command
   may still complete later.
 - **Busy app.** When the app has drawn no frame for 10 seconds since a request was queued (a file
-  dialog is open, or a long tool is running), the request is cancelled at once and the client gets
+  dialog is open, a long tool is running, or the window is minimized or hidden and the system has
+  stopped drawing it), the request is cancelled at once and the client gets
   error `-32004` saying RustGIS is busy (apart from the full queue's `-32001`). It never runs, and the connection stays open. An app that
-  was only idle before the request isn't busy: the request wakes it.
+  was only idle before the request isn't busy: the request wakes it. This comes before a long
+  `timeout_s`: a stalled app answers after 10 seconds whatever the client's wait, and a client
+  waiting less than 10 seconds gets `-32002` instead. A `timeout_s` outside 5 to 600 is clamped to
+  that range, and one that isn't a number is ignored (the 60-second default).
 - **Stop.** Stopping the relay, or dropping its last owner, closes the listener and every
   client, drops queued messages unrun, and removes the token file. A waiting request ends at
   once, checked every 25 milliseconds.

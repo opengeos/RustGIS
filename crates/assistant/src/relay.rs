@@ -1141,7 +1141,7 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
             && app_busy(&shared, asked_at)
             && state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst).is_ok()
         {
-            let busy = "RustGIS is busy (a dialog is open, or a long task is running); the request was not run, try again when it is done";
+            let busy = "RustGIS isn't drawing (a dialog is open, a long task is running, or its window is hidden); the request was not run, try again when it is back";
             if !send_line(&mut output, &error_reply(&id, BUSY_CODE, busy)) {
                 return;
             }
@@ -1668,7 +1668,7 @@ mod tests {
         let r = reply(&client);
         assert!(asked.elapsed() < Duration::from_secs(10), "the busy reply took {:?}", asked.elapsed());
         assert_eq!(r["error"]["code"], BUSY_CODE, "{r}");
-        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("busy")), "{r}");
+        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("isn't drawing")), "{r}");
         assert_eq!(relay.poll(&mut s), 0, "a request told the app was busy never runs");
         assert_eq!(s.map().layers.len(), layers + 1);
         // The connection still works once the app is back.
