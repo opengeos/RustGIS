@@ -3093,6 +3093,8 @@ impl RustGisApp {
                 mapview::show(self, ui);
             });
         }
+        // Text typed into a layout element's field the Format pane no longer shows.
+        layoutview::save_drafts(self);
         dialogs::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         pluginsui::show(self, &ctx);
