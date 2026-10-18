@@ -279,8 +279,8 @@ pub struct Session {
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
     /// A MapLibre style tile layer (by its address) whose own view the map goes to once it loads
-    /// (`map.addTiles` with `"view": true`).
-    pub style_view: Option<String>,
+    /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
+    pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]).
     notices_given: u64,

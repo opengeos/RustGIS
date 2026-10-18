@@ -3539,7 +3539,7 @@ fn map_links() {
     let hash = s.run("map.link", &Value::Null).unwrap()["hash"].as_str().unwrap().to_string();
     assert_eq!(hash, "#0/0/0");
     s.run("map.goToLink", &json!({"url": hash})).unwrap();
-    assert!(rustgis_engine_is_map_link("#map=4/10/20") && !rustgis_engine_is_map_link("#about"));
+    assert!(crate::cmd::navigate::is_map_link("#map=4/10/20") && !crate::cmd::navigate::is_map_link("#about"));
     let before = s.map().camera;
     for bad in [
         json!({"url": "https://example.com/#about"}),
@@ -3564,16 +3564,12 @@ fn map_links() {
     assert_eq!(s.map().camera, before);
 }
 
-fn rustgis_engine_is_map_link(text: &str) -> bool {
-    crate::cmd::navigate::is_map_link(text)
-}
-
 /// A MapLibre style added with `"view": true` takes the map to its root center, zoom, bearing
 /// and pitch once it has loaded; without it the map stays where it is.
 #[test]
 fn style_root_view_moves_the_map() {
     const STYLE: &[u8] = br#"{"version": 8, "center": [2.2945, 48.8584], "zoom": 16, "bearing": -20, "pitch": 55, "sources": {}, "layers": [{"id": "bg", "type": "background"}]}"#;
-    let base = serve(STYLE, 4);
+    let base = serve(STYLE, 5);
     let mut s = world();
     let before = s.map().camera;
     s.run("map.addTiles", &json!({"url": format!("{base}/plain/style.json")})).unwrap();
@@ -3602,6 +3598,14 @@ fn style_root_view_moves_the_map() {
     }
     assert!(s.style_view.is_none());
     assert!(s.notices.iter().any(|n| n.error && n.text.contains("missing")), "{:?}", s.notices);
+    // Moved while the style loads: the map stays where it was put.
+    s.run("map.addTiles", &json!({"url": format!("{base}/moved/style.json"), "view": true})).unwrap();
+    assert!(s.style_view.is_some());
+    let panned = rustgis_geom::lonlat_to_merc(rustgis_geom::Coord::new(10.0, 20.0));
+    s.map_mut().camera.center = panned;
+    crate::cmd::tiles::follow_style_view(&mut s, web_time::Duration::from_secs(5));
+    assert!(s.style_view.is_none());
+    assert_eq!(s.map().camera.center, panned);
     // A style still loading when another project opens doesn't move that one.
     s.run("map.addTiles", &json!({"url": "https://tiles.example.invalid/style.json", "view": true})).unwrap();
     assert!(s.style_view.is_some());

@@ -132,7 +132,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     let out = json!({"name": t.name, "kind": t.kind.code(), "index": at});
     m.tiles.insert(at, t);
     if view {
-        s.style_view = Some(url);
+        s.style_view = Some((url, s.map().camera));
         follow_style_view(s, web_time::Duration::ZERO);
     }
     Ok(out)
@@ -142,10 +142,15 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
 const STYLE_WAITS: usize = 8;
 
 /// Moves the map to the view in the root properties of the style added with `"view": true`
-/// once it has loaded, waiting up to `wait` for it (natively; the browser loads between
-/// frames). True when the map moved.
+/// once it has loaded, unless the map has moved since, waiting up to `wait` for it (natively; the
+/// browser loads between frames). True when the map moved.
 pub(crate) fn follow_style_view(s: &mut Session, wait: web_time::Duration) -> bool {
-    let Some(url) = s.style_view.clone() else { return false };
+    let Some((url, camera)) = s.style_view.clone() else { return false };
+    if s.map().camera != camera {
+        // Moved (panned, a bookmark) while the style loaded: the map stays where it was put.
+        s.style_view = None;
+        return false;
+    }
     let Some(t) = s.map().tiles.iter().find(|t| t.kind == TileKind::Style && t.url == url).cloned() else {
         // Removed, or another map is active: nothing to follow.
         s.style_view = None;
