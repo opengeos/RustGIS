@@ -1478,3 +1478,37 @@ fn right_panes_open_as_tabs() {
         assert_eq!(h.state().ui.left, None, "a left pane's close never opens one");
     }
 }
+
+#[test]
+fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
+    // Clicked through accesskit: the group may be scrolled out of the window.
+    let mut h = harness();
+    h.state_mut().ui.tab = "Edit".into();
+    h.step();
+    h.get_by_label("Dynamic Text").click_accesskit();
+    h.step();
+    h.get_by_label("Map scale  {scale}").click_accesskit();
+    h.step();
+    assert_eq!(h.state().session.tool.code(), "graphicText");
+    assert_eq!(h.state().ui.dynamic_text, Some("{scale}"));
+    // The dialog the map's click opens starts with the value.
+    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 0.0, "lat": 0.0, "text": "{scale}"})).unwrap();
+    assert_eq!(h.state().dialogs.text, "{scale}");
+    h.state_mut().dialogs.open = None;
+    // Text starts with "Text" again.
+    h.get_by_label("Text").click_accesskit();
+    h.step();
+    assert_eq!(h.state().ui.dynamic_text, None);
+    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 0.0, "lat": 0.0})).unwrap();
+    assert_eq!(h.state().dialogs.text, "Text");
+    h.state_mut().dialogs.open = None;
+    // Another tool forgets the value.
+    h.get_by_label("Dynamic Text").click_accesskit();
+    h.step();
+    h.get_by_label("Current date  {date}").click_accesskit();
+    h.step();
+    assert_eq!(h.state().ui.dynamic_text, Some("{date}"));
+    h.state_mut().run("tool.set", json!({"tool": "explore"})).unwrap();
+    h.step();
+    assert_eq!(h.state().ui.dynamic_text, None);
+}

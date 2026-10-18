@@ -787,6 +787,9 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     let hover = resp.hover_pos();
     app.map.pointer_lonlat = hover.and_then(|p| screen_to_lonlat(app, rect, p));
     let tool = app.session.tool;
+    if tool != Tool::Graphic("text") {
+        app.ui.dynamic_text = None;
+    }
 
     // A map tool aims with a crosshair, only over the map: the ribbon and panes keep their cursor.
     // A finished measurement keeps its points on show but waits for a new one.
@@ -1115,7 +1118,11 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             }
             Tool::Graphic("point") => finish_graphic(app, "point", vec![c]),
             Tool::Graphic("text") => {
-                let _ = app.run("ui.dialog", json!({"name": "graphicText", "lon": c.x, "lat": c.y}));
+                let mut params = json!({"name": "graphicText", "lon": c.x, "lat": c.y});
+                if let Some(t) = app.ui.dynamic_text {
+                    params["text"] = json!(t);
+                }
+                let _ = app.run("ui.dialog", params);
             }
             // Dragged shapes ignore plain clicks.
             Tool::Graphic(s) if !vertex_shape(Tool::Graphic(s)) => {}

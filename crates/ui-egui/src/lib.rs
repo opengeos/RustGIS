@@ -474,6 +474,9 @@ pub struct UiState {
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
     pub pending_picture: Option<Vec<rustgis_engine::geom::Coord>>,
+    /// The value picked under Edit › Dynamic Text (a token such as `{scale}`): the text tool's
+    /// dialog starts with it. Cleared when the tool changes.
+    pub dynamic_text: Option<&'static str>,
     /// Text to put on the system clipboard at the end of the frame.
     pub copy_out: Option<String>,
     /// A web page to open at the end of the frame.
@@ -575,6 +578,7 @@ impl Default for UiState {
             layer_filter_map: String::new(),
             layer_filter_hid: None,
             layers_view: LayersView::DrawingOrder,
+            dynamic_text: None,
         }
     }
 }
@@ -2222,6 +2226,10 @@ impl RustGisApp {
                 if which == "graphicText" {
                     self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
                     self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
+                    // Dynamic Text starts it with the value picked.
+                    if let Some(t) = p.get("text").and_then(Value::as_str) {
+                        self.dialogs.text = t.chars().take(2000).collect();
+                    }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
                 // one in view), so renaming another from the Browser leaves the view alone.
