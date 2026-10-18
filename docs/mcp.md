@@ -82,7 +82,15 @@ it stops the relay.
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
 rustgis-cli mcp --attach 9000 --yes      # another port, with file and network access
+rustgis-cli mcp --attach --timeout 300   # wait up to 5 minutes for each call (long tools)
 ```
+
+The port is 8767 unless the `RUSTGIS_MCP_PORT` environment variable names another, for the app
+and for `--attach` alike (a second copy of RustGIS, or a port another program holds). When the
+port is taken, the relay's error says so and names that variable. While the relay runs, the app
+publishes `endpoint.json` in the relay's private folder: `schema`, `host`, `port`, `url`, `pid`,
+`started_at`, the app `version`, the `token_file` path (not the token) and the `attach` command.
+Setup scripts can read it instead of hard-coding the port. It's removed when the relay stops.
 
 ```json
 {
@@ -145,11 +153,16 @@ removes its file.
   connection beyond either cap is dropped without a reply.
 - **Queue cap.** At most 64 messages wait for the app's frame. A request beyond that gets error
   `-32001` (`the app is busy; try again`) if it expects a reply.
-- **Bounded request waits.** A request waits up to 60 seconds for the app to run it. If it is
-  still pending then, it is cancelled and never runs; the client gets error `-32002`. If it is
-  already running, the client waits one more 60-second interval. If the reply still has not
-  come, the client gets error `-32003` (`its outcome is unknown`), and the command may still
-  complete later.
+- **Bounded request waits.** A request waits up to 60 seconds for the app to run it, or as long
+  as the client's attach asks (`timeout_s`, 5 to 600 seconds; `--timeout` on the command line).
+  If it is still pending then, it is cancelled and never runs; the client gets error `-32002`. If
+  it is already running, the client waits one more interval of the same length. If the reply
+  still has not come, the client gets error `-32003` (`its outcome is unknown`), and the command
+  may still complete later.
+- **Busy app.** When the app has drawn no frame for 10 seconds since a request was queued (a file
+  dialog is open, or a long tool is running), the request is cancelled at once and the client gets
+  error `-32001` saying RustGIS is busy. It never runs, and the connection stays open. An app that
+  was only idle before the request isn't busy: the request wakes it.
 - **Stop.** Stopping the relay, or dropping its last owner, closes the listener and every
   client, drops queued messages unrun, and removes the token file. A waiting request ends at
   once, checked every 25 milliseconds.
@@ -171,6 +184,9 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Busy app: `relay_says_the_app_is_busy_early`
+- Client-chosen waits: `relay_waits_as_long_as_the_client_asks`
+- Endpoint file and port variable: `relay_publishes_its_endpoint_and_names_the_port_variable`
 - The open project stays the user's: `relay_keeps_project_commands_for_the_user`
 - Timed-out command never runs: `relay_cancels_a_timed_out_command_so_it_never_runs`
 - Stop cleanup: `relay_stop_closes_clients_and_removes_the_token`

@@ -30,7 +30,7 @@ pub fn enabled(app: &RustGisApp) -> bool {
 
 /// At launch, starts the relay when the user had agents turned on.
 pub fn resume(app: &mut RustGisApp) {
-    resume_on(app, rustgis_assistant::relay::DEFAULT_PORT);
+    resume_on(app, rustgis_assistant::relay::default_port());
 }
 
 fn resume_on(app: &mut RustGisApp, port: u16) {

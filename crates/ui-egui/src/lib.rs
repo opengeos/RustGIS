@@ -1655,8 +1655,12 @@ impl RustGisApp {
                         .get("port")
                         .and_then(Value::as_u64)
                         .and_then(|n| u16::try_from(n).ok())
-                        .unwrap_or(rustgis_assistant::relay::DEFAULT_PORT);
+                        .unwrap_or_else(rustgis_assistant::relay::default_port);
                     let relay = rustgis_assistant::relay::Relay::start(port)?;
+                    // Where it is, for clients and setup scripts; the relay works without it.
+                    if let Err(e) = relay.publish_endpoint() {
+                        log::warn!("MCP relay: could not publish its endpoint file: {e}");
+                    }
                     // With agents turned on in the assistant settings, they may use files and the
                     // network without asking (--yes); otherwise what each asks for decides.
                     relay.set_allow_access(connectui::enabled(self));
