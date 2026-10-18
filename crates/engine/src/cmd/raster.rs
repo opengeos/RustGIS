@@ -403,10 +403,12 @@ fn mask(s: &mut Session, p: &Value) -> CmdResult {
         }
         // Class breaks worked out from the pixels shown are worked out again; breaks edited by
         // hand are kept.
-        if let RasterRenderer::Classify { band, method, ramp, breaks } = &rl.style.renderer
-            && classify_masked(r, *band, breaks.len().max(1), *method, ramp.clone(), &rl.style.mask) == rl.style.renderer
-        {
-            rl.style.renderer = classify_masked(r, *band, breaks.len().max(1), *method, ramp.clone(), &m);
+        if let RasterRenderer::Classify { band, method, ramp, breaks, classes } = &rl.style.renderer {
+            let n = if *classes > 0 { *classes } else { breaks.len().max(1) };
+            let auto = classify_masked(r, *band, n, *method, ramp.clone(), &rl.style.mask);
+            if matches!(&auto, RasterRenderer::Classify { breaks: b, .. } if b == breaks) {
+                rl.style.renderer = classify_masked(r, *band, n, *method, ramp.clone(), &m);
+            }
         }
         rl.style.mask = m;
         Ok(())

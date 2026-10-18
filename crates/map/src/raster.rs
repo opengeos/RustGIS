@@ -269,7 +269,16 @@ pub enum RasterRenderer {
     /// Three bands as red, green and blue.
     Rgb { red: usize, green: usize, blue: usize },
     /// Class breaks over one band.
-    Classify { band: usize, method: ClassMethod, ramp: Ramp, breaks: Vec<f64> },
+    Classify {
+        band: usize,
+        method: ClassMethod,
+        ramp: Ramp,
+        breaks: Vec<f64>,
+        /// The classes asked for: there can be fewer breaks, as repeated ones are dropped. 0 (a
+        /// project from before it was kept) is as many as there are breaks.
+        #[serde(default)]
+        classes: usize,
+    },
     /// A colour per whole-number value.
     UniqueValues { band: usize, ramp: Ramp, values: Vec<(f64, Rgba)> },
     /// The file's own colour table.
@@ -530,7 +539,8 @@ pub fn classify(r: &Raster, band: usize, classes: usize, method: ClassMethod, ra
 /// [`classify`] over the pixels `mask` leaves.
 pub fn classify_masked(r: &Raster, band: usize, classes: usize, method: ClassMethod, ramp: Ramp, mask: &RasterMask) -> RasterRenderer {
     let sorted = sorted_sample_masked(r, band, 50_000, mask);
-    RasterRenderer::Classify { band, method, ramp, breaks: class_breaks(&sorted, classes.clamp(1, 32), method) }
+    let classes = classes.clamp(1, 32);
+    RasterRenderer::Classify { band, method, ramp, breaks: class_breaks(&sorted, classes, method), classes }
 }
 
 /// A Unique Values renderer over a band's distinct whole numbers (at most [`MAX_UNIQUE_VALUES`]).

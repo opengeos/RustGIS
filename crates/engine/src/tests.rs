@@ -686,6 +686,18 @@ fn raster_masks_hide_values() {
     assert!(top(&s) <= (lo + hi) / 2.0, "{}", top(&s));
     s.run("raster.mask", &json!({"max": null})).unwrap();
     assert!(top(&s) > (lo + hi) / 2.0, "worked out again without the bound");
+    // Masking down to one value collapses the classes; clearing the mask brings back the 4 asked for.
+    let classes = |s: &Session| match style(s).renderer {
+        rustgis_map::RasterRenderer::Classify { breaks, .. } => breaks.len(),
+        _ => 0,
+    };
+    s.run("raster.mask", &json!({"min": lo, "max": lo})).unwrap();
+    assert_eq!(classes(&s), 1);
+    s.run("raster.mask", &json!({"clear": true})).unwrap();
+    assert_eq!(classes(&s), 4);
+    // Undo the clear and the one-value range.
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
     // Breaks edited by hand are kept.
     let mut edited = style(&s);
     if let rustgis_map::RasterRenderer::Classify { breaks, .. } = &mut edited.renderer {
@@ -695,8 +707,9 @@ fn raster_masks_hide_values() {
     s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().style = edited.clone();
     s.run("raster.mask", &json!({"values": [lo]})).unwrap();
     assert_eq!(style(&s).renderer, edited.renderer);
+    // Undo that mask.
     s.run("edit.undo", &Value::Null).unwrap();
-    // Undone, saved and drawn.
+    // Undo removing the max bound; then saved and drawn.
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(style(&s).mask.max, Some((lo + hi) / 2.0));
     let dir = std::env::temp_dir().join(format!("rustgis-mask-{}", std::process::id()));

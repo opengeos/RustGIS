@@ -3380,8 +3380,9 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 band_combo(app, ui, label, cur, &|i| ("raster.bands".into(), json!({ key: i + 1 })));
             }
         }
-        RasterRenderer::Classify { band, method, ramp, breaks } => {
-            let (m, k, r) = (*method, breaks.len(), ramp.name().to_string());
+        RasterRenderer::Classify { band, method, ramp, breaks, classes } => {
+            let k = if *classes > 0 { *classes } else { breaks.len() };
+            let (m, r) = (*method, ramp.name().to_string());
             band_combo(app, ui, "Band", *band, &|i| {
                 ("raster.symbology".into(), json!({"type": "classify", "band": i + 1, "classes": k, "method": format!("{m:?}")}))
             });
