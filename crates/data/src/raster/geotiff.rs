@@ -1038,6 +1038,17 @@ mod tests {
         let p = read(std::io::Cursor::new(tests_support::matrix_tiff(m, true)), "rot").unwrap();
         assert_eq!((p.transform.origin_x, p.transform.origin_y), (400_000.0 - 17.5, 5_000_060.0 - 1.5 + 15.0));
 
+        // Read every 4th pixel (a small limit): the matrix's steps scale, so the box stays put.
+        let file = tests_support::matrix_tiff(m, false);
+        let d = read_limited(reader(std::io::Cursor::new(&file)).unwrap(), "rot", 50, None).unwrap();
+        assert_eq!(d.overview, Some((20, 10)));
+        assert!(d.width as usize * d.height as usize <= 50);
+        let dg = d.transform;
+        assert_eq!((dg.origin_x, dg.origin_y), (400_000.0, 5_000_060.0));
+        let (right, bottom) = (dg.origin_x + dg.pixel_width * f64::from(d.width), dg.origin_y + dg.pixel_height * f64::from(d.height));
+        assert!((400_650.0..400_650.0 + dg.pixel_width).contains(&right), "{right}");
+        assert!((4_999_700.0 + dg.pixel_height..=4_999_700.0).contains(&bottom), "{bottom}");
+
         // A degenerate matrix (no area) is refused, not divided by.
         let flat = [30.0, 60.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
         assert!(read(std::io::Cursor::new(tests_support::matrix_tiff(flat, false)), "flat").is_err());

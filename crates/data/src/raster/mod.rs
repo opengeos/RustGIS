@@ -501,7 +501,8 @@ fn north_up(bands: Vec<Vec<f32>>, w: u32, h: u32, affine: [f64; 6], max: usize) 
     let mut cell = det.abs().sqrt();
     let size = |cell: f64| (((max_x - min_x) / cell).ceil().max(1.0), ((max_y - min_y) / cell).ceil().max(1.0));
     let (mut ow, mut oh) = size(cell);
-    // A strong skew spreads the image over a much larger box: coarser pixels keep it in bounds.
+    // A strong skew spreads the image over a much larger box: coarser pixels keep it in bounds,
+    // each step at least 1% coarser so a box rounded up past the limit still shrinks.
     for _ in 0..64 {
         let n = ow * oh * nbands as f64;
         if n <= max as f64 && ow <= f64::from(u32::MAX) && oh <= f64::from(u32::MAX) {
