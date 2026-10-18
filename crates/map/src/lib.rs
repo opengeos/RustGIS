@@ -875,6 +875,9 @@ impl Map {
     /// drawing order; `None` takes it out of its group (above the group when it was between two
     /// of its layers).
     pub fn set_group(&mut self, layer: u32, group: Option<u32>) {
+        if group.is_some() && self.group_of(layer).map(|g| g.id) == group {
+            return;
+        }
         for g in &mut self.groups {
             g.children.retain(|c| *c != layer);
         }

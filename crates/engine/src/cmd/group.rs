@@ -19,7 +19,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"group": name|id, "on"?: bool (toggles when omitted)}"#)
             .view(),
         C::new("group.scaleRange", "Group Visibility Range", "Layers", scale_range).params(
-            r#"{"group": name|id, "min"?: scale (out beyond), "max"?: scale (in beyond); its layers draw only within it and their own}"#,
+            r#"{"group": name|id, "min"?: scale (out beyond), "max"?: scale (in beyond); both set on each call, one left out is cleared; its layers draw only within it and their own}"#,
         ),
         C::new("group.move", "Move Group", "Layers", move_group).params(
             r#"{"group": name|id, "to": position among the other layers, counted in layers (0 = top; past the end, the bottom; never inside another group: above it)}"#,
@@ -125,8 +125,13 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
 
 fn scale_range(s: &mut Session, p: &Value) -> CmdResult {
     let id = group_id(s, p)?;
-    let min = f(p, "min").filter(|v| v.is_finite() && *v > 0.0);
-    let max = f(p, "max").filter(|v| v.is_finite() && *v > 0.0);
+    // Like layer.scaleRange: each call sets both bounds (one left out is cleared), but a bound
+    // given must be a positive scale.
+    let bound = |k: &str| match p.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => f(p, k).filter(|v| v.is_finite() && *v > 0.0).map(Some).ok_or_else(|| format!("{k} must be a scale greater than 0")),
+    };
+    let (min, max) = (bound("min")?, bound("max")?);
     let g = s.map_mut().groups.iter_mut().find(|g| g.id == id).ok_or("no such group")?;
     g.min_scale = min;
     g.max_scale = max;

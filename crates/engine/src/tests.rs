@@ -7171,6 +7171,15 @@ fn a_layer_leaving_a_group_never_splits_it() {
     assert_eq!(names(&s), ["Cities", "Lakes", "Rivers", "Countries"]);
     s.run("layer.group", &json!({"layer": "Lakes", "group": "A", "before": "Countries"})).unwrap();
     assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    // Into the group it is in: nothing moves.
+    s.run("layer.group", &json!({"layer": "Lakes", "group": "A"})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    // A bad scale is an error, not a cleared bound.
+    s.run("group.scaleRange", &json!({"group": "A", "min": 1e6, "max": 1e3})).unwrap();
+    for bad in [json!({"group": "A", "min": -4}), json!({"group": "A", "max": "big"})] {
+        assert!(s.run("group.scaleRange", &bad).is_err());
+    }
+    assert_eq!(s.map().groups[0].min_scale, Some(1e6));
     // Into an empty group, and into a new group: the same.
     s.run("group.add", &json!({"name": "Empty"})).unwrap();
     s.run("layer.group", &json!({"layer": "Lakes", "group": "Empty"})).unwrap();
