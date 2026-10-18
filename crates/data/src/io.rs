@@ -349,6 +349,15 @@ pub fn project(ds: &Dataset, crs: Crs) -> Result<Dataset> {
     Ok(out)
 }
 
+/// Refuses a system without an EPSG code for a GeoPackage or FlatGeobuf: their readers (RustGIS's
+/// among them) go by the code, and would read the file as longitude/latitude.
+fn check_projected(ext: &str, crs: Crs) -> Result<()> {
+    if crs.epsg() == 0 && matches!(ext, "gpkg" | "fgb") {
+        return Err(DataError::Unsupported(format!(".{ext} in {}: give the system as an EPSG code", crs.label())));
+    }
+    Ok(())
+}
+
 /// As [`write_bytes`], in the coordinate system `crs`: a GeoPackage, Shapefile or FlatGeobuf (see
 /// [`PROJECTED_FORMATS`]) says it; any other format is written only in longitude/latitude.
 pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)> {
@@ -357,6 +366,7 @@ pub fn write_bytes_in(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usi
         if !PROJECTED_FORMATS.contains(&ext.as_str()) {
             return Err(DataError::Unsupported(format!(".{ext} in {} (it holds longitude/latitude only)", crs.label())));
         }
+        check_projected(&ext, crs)?;
         return projected_bytes(&project(ds, crs)?, &ext, crs);
     }
     projected_bytes(ds, &ext, crs)
@@ -404,6 +414,7 @@ pub fn write_path_in(ds: &Dataset, path: &Path, crs: Crs) -> Result<usize> {
     let ds = if crs == Crs::LonLat || !PROJECTED_FORMATS.contains(&ext.as_str()) {
         ds
     } else {
+        check_projected(&ext, crs)?;
         projected = project(ds, crs)?;
         &projected
     };

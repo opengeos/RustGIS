@@ -2500,6 +2500,9 @@ impl RustGisApp {
                 if left_out > 0 {
                     self.session.notify(format!("{name}: {left_out} features without drawable geometry were left out"), false);
                 }
+                if ext == "zip" && rustgis_engine::data::raster::wkt::to_wkt(crs).is_none() {
+                    self.session.notify(format!("{name}: no .prj written, as {} has no WKT form", crs.label()), false);
+                }
                 self.download(&name, bytes);
             }
             "ui.exportRaster" if self.services.download.is_some() => {

@@ -1093,6 +1093,10 @@ fn exports_are_written_in_the_system_the_layer_was_read_in() {
     ds.crs = Some(custom);
     assert_eq!(crate::io::default_export_crs(&ds, "shp"), custom);
     assert_eq!(crate::io::default_export_crs(&ds, "fgb"), Crs::LonLat);
+    // Asked for, it goes into a Shapefile, but not a file that would read back as longitude/latitude.
+    assert!(crate::io::write_path_in(&ds, &d.join("custom.shp"), custom).is_ok());
+    assert!(crate::io::write_path_in(&ds, &d.join("custom.gpkg"), custom).is_err());
+    assert!(crate::io::write_bytes_in(&ds, "fgb", custom).is_err());
     // GeoJSON is longitude/latitude only.
     let ds = utm_squares(25832);
     assert!(crate::io::write_path_in(&ds, &d.join("squares.geojson"), Crs::from_epsg(25832).unwrap()).is_err());

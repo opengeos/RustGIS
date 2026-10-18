@@ -864,7 +864,7 @@ pub fn to_wkt(crs: Crs) -> Option<String> {
         .unwrap_or_default();
     // A prime meridian by name (`+pm=paris`), a grid shift or axes other than east and north have
     // no plain WKT1 form.
-    if text("pm").is_some() && get("pm").is_none() || flag("nadgrids") || text("axis").is_some_and(|a| a != "enu") {
+    if (text("pm").is_some() && get("pm").is_none()) || flag("nadgrids") || text("axis").is_some_and(|a| a != "enu") {
         return None;
     }
     let pm = get("pm").unwrap_or(0.0);
