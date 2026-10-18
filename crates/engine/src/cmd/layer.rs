@@ -313,18 +313,23 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
         let num = |k: &str| -> Result<Option<f32>, String> {
             match o.get(k) {
                 None | Some(Value::Null) => Ok(None),
-                Some(v) => {
-                    v.as_f64().filter(|x| x.is_finite()).map(|x| Some(x as f32)).ok_or_else(|| format!("stroke {}: {k} is a number", i + 1))
-                }
+                // Brought into range before narrowing, so 1e300 is the largest width, not infinity.
+                Some(v) => v
+                    .as_f64()
+                    .filter(|x| x.is_finite())
+                    .map(|x| Some(x.clamp(-1e6, 1e6) as f32))
+                    .ok_or_else(|| format!("stroke {}: {k} is a number", i + 1)),
             }
         };
-        let cap = match o.get("cap").and_then(Value::as_str) {
-            Some(c) => LineCap::from_code(c).ok_or_else(|| format!("stroke {}: unknown cap '{c}'", i + 1))?,
-            None => LineCap::default(),
+        let cap = match o.get("cap") {
+            None | Some(Value::Null) => LineCap::default(),
+            Some(Value::String(c)) => LineCap::from_code(c).ok_or_else(|| format!("stroke {}: unknown cap '{c}'", i + 1))?,
+            Some(_) => return Err(format!("stroke {}: cap is \"round\", \"flat\" or \"square\"", i + 1)),
         };
-        let join = match o.get("join").and_then(Value::as_str) {
-            Some(j) => LineJoin::from_code(j).ok_or_else(|| format!("stroke {}: unknown join '{j}'", i + 1))?,
-            None => LineJoin::default(),
+        let join = match o.get("join") {
+            None | Some(Value::Null) => LineJoin::default(),
+            Some(Value::String(j)) => LineJoin::from_code(j).ok_or_else(|| format!("stroke {}: unknown join '{j}'", i + 1))?,
+            Some(_) => return Err(format!("stroke {}: join is \"round\", \"miter\" or \"bevel\"", i + 1)),
         };
         strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join }.clamped());
     }

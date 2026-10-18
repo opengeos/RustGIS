@@ -330,11 +330,16 @@ fn line_strokes_stack_and_survive_save_and_undo() {
     s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1e9, "offset": -1e9}]})).unwrap();
     let st = s.map().layer_by_name("Rivers").unwrap().line_strokes.clone();
     assert_eq!((st[0].width, st[0].offset), (Some(50.0), -100.0));
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"width": 1e300, "offset": 1e300}]})).unwrap();
+    let st = s.map().layer_by_name("Rivers").unwrap().line_strokes.clone();
+    assert_eq!((st[0].width, st[0].offset), (Some(50.0), 100.0));
     let depth = s.undo_depth();
     for bad in [
         json!({"layer": "Rivers"}),
         json!({"layer": "Rivers", "strokes": [{"cap": "pointy"}]}),
         json!({"layer": "Rivers", "strokes": [{"join": "zigzag"}]}),
+        json!({"layer": "Rivers", "strokes": [{"cap": 5}]}),
+        json!({"layer": "Rivers", "strokes": [{"join": true}]}),
         json!({"layer": "Rivers", "strokes": [{"color": "orange"}]}),
         json!({"layer": "Rivers", "strokes": [{"width": "wide"}]}),
         json!({"layer": "Rivers", "strokes": [7]}),

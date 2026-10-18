@@ -545,15 +545,21 @@ impl Ctx<'_> {
             self.ring_path(&mut pb, part, false);
         }
         let Some(path) = pb.finish() else { return };
+        // Shifted once per offset: a casing and its core usually share one.
+        let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
         for st in strokes {
             let (c, w) = st.resolve(s);
             if w.is_nan() || w <= 0.0 || c.a() == 0 {
                 continue;
             }
-            let shifted = if st.offset != 0.0 { offset_path(&path, st.offset * self.ppp) } else { None };
-            if st.offset != 0.0 && shifted.is_none() {
-                continue;
+            if st.offset != 0.0 && !shifted.iter().any(|(o, _)| *o == st.offset) {
+                shifted.push((st.offset, offset_path(&path, st.offset * self.ppp)));
             }
+            let drawn = match st.offset {
+                0.0 => Some(&path),
+                o => shifted.iter().find(|(x, _)| *x == o).and_then(|(_, p)| p.as_ref()),
+            };
+            let Some(drawn) = drawn else { continue };
             let stroke = Stroke {
                 width: (w * self.ppp).max(0.5),
                 line_cap: match st.cap {
@@ -568,7 +574,7 @@ impl Ctx<'_> {
                 },
                 ..Stroke::default()
             };
-            pm.stroke_path(shifted.as_ref().unwrap_or(&path), &paint(c, 1.0), &stroke, Transform::identity(), None);
+            pm.stroke_path(drawn, &paint(c, 1.0), &stroke, Transform::identity(), None);
         }
     }
 
@@ -732,6 +738,8 @@ fn offset_path(path: &tiny_skia::Path, d: f32) -> Option<tiny_skia::Path> {
 /// it left). Corners are mitred, and cut back to a bevel where the mitre would reach beyond
 /// four times the offset (a sharp turn). Repeated points are skipped; fewer than two distinct
 /// points give nothing.
+/// Like any offset that moves each vertex on its own, an offset larger than the segments on the
+/// inside of a bend can fold back into a small loop there.
 fn offset_polyline(pts: &[(f32, f32)], d: f32) -> Vec<(f32, f32)> {
     let mut p: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
     for &q in pts.iter().filter(|q| q.0.is_finite() && q.1.is_finite()) {
