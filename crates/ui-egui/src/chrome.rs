@@ -388,6 +388,16 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                                 let _ = app.run("ui.mcpRelay", json!({"stop": true}));
                             }
                             sep(ui, &t);
+                        } else if app.file_bridge.is_some() {
+                            // Agents on with the relay down (its port taken): the file bridge alone.
+                            let resp = ui.add(
+                                egui::Label::new(egui::RichText::new(tl!("File bridge only")).size(11.5).color(t.amber)).sense(Sense::click()),
+                            );
+                            let hover = tl!("The MCP relay couldn't start; agents can still use the file bridge. Click to turn agents off");
+                            if resp.on_hover_text(hover).clicked() {
+                                let _ = app.run("ui.mcpRelay", json!({"stop": true}));
+                            }
+                            sep(ui, &t);
                         }
                     }
                     // Cut to the room left (the whole notice on hover), so a long one doesn't run

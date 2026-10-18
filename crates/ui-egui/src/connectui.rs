@@ -21,6 +21,9 @@ pub struct ConnectState {
     resumed: bool,
     /// Why the relay couldn't start, when it couldn't.
     error: Option<String>,
+    /// The folder the file bridge uses instead of the relay's private one (tests).
+    #[cfg(test)]
+    bridge_dir: Option<std::path::PathBuf>,
 }
 
 /// Whether the user lets agents control RustGIS.
@@ -73,7 +76,14 @@ fn start_bridge(app: &mut RustGisApp) -> Result<(), String> {
     if app.file_bridge.is_some() {
         return Ok(());
     }
-    let bridge = rustgis_assistant::filebridge::FileBridge::start().inspect_err(|e| app.session.notify(e.clone(), true))?;
+    #[cfg(test)]
+    let started = match app.connect.bridge_dir.clone() {
+        Some(dir) => rustgis_assistant::filebridge::FileBridge::start_in(dir),
+        None => rustgis_assistant::filebridge::FileBridge::start(),
+    };
+    #[cfg(not(test))]
+    let started = rustgis_assistant::filebridge::FileBridge::start();
+    let bridge = started.inspect_err(|e| app.session.notify(e.clone(), true))?;
     bridge.set_allow_access(true);
     app.file_bridge = Some(bridge);
     Ok(())
@@ -198,6 +208,8 @@ mod tests {
         app.services.save_pref = Some(Box::new(move |key: &str, value: &str| {
             sink.lock().unwrap().push((key.into(), value.into()));
         }));
+        let bridge_dir = tempfile::tempdir().unwrap();
+        app.connect.bridge_dir = Some(bridge_dir.path().to_path_buf());
         let mark = app.session.notice_mark();
         resume_on(&mut app, port);
         assert!(app.relay.is_none());
@@ -260,6 +272,8 @@ mod tests {
                 *write.lock().unwrap() = value.into();
             }
         }));
+        let bridge_dir = tempfile::tempdir().unwrap();
+        app.connect.bridge_dir = Some(bridge_dir.path().to_path_buf());
         resume_on(&mut app, 0);
         assert!(app.relay.is_some());
         assert!(enabled(&app));

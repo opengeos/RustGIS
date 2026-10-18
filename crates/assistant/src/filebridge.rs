@@ -46,8 +46,8 @@ struct Inner {
     stopped: AtomicBool,
     /// The command file changed since it was last run.
     changed: AtomicBool,
-    /// The command file's modification time and size when last seen.
-    seen: Mutex<Option<(SystemTime, u64)>>,
+    /// The command file's [`Stamp`] when last seen.
+    seen: Mutex<Option<Stamp>>,
     allow_access: AtomicBool,
     wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     /// The locked [`LOCK`] file, held until the bridge stops (the system releases it if the app
@@ -82,10 +82,23 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The command file's modification time and size, if it is a regular file.
-fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
+fn stamp(path: &Path) -> Option<Stamp> {
     let meta = std::fs::symlink_metadata(path).ok().filter(|m| m.is_file())?;
-    Some((meta.modified().ok()?, meta.len()))
+    // The change time too where there is one: it moves on every write, to the nanosecond, so a
+    // rewrite of the same length within the modification time's resolution is still seen.
+    #[cfg(unix)]
+    let changed = {
+        use std::os::unix::fs::MetadataExt;
+        (meta.ctime(), meta.ctime_nsec(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let changed = (0, 0, 0);
+    Some((meta.modified().ok()?, meta.len(), changed))
 }
+
+/// What says the command file changed: its modification time, size, and (on Unix) change time
+/// and inode.
+type Stamp = (SystemTime, u64, (i64, i64, u64));
 
 fn shutdown(inner: &Inner) {
     if !inner.stopped.swap(true, SeqCst) {
@@ -112,8 +125,12 @@ impl FileBridge {
             .write(true)
             .open(&lock_path)
             .map_err(|e| format!("{}: {e}", lock_path.display()))?;
-        if lock_file.try_lock().is_err() {
-            return Err("another RustGIS is running the file bridge; close it to use the bridge here".into());
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err("another RustGIS is running the file bridge; close it to use the bridge here".into());
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(format!("{}: {e}", lock_path.display())),
         }
         let inner = Arc::new(Inner {
             lock: Mutex::new(Some(lock_file)),
@@ -207,6 +224,8 @@ impl FileBridge {
         if self.inner.stopped.load(SeqCst) || !self.inner.changed.swap(false, SeqCst) {
             return None;
         }
+        // The last run's outcome goes first, so an agent waiting for this run's never reads it.
+        let _ = std::fs::remove_file(self.result_path());
         let started = Instant::now();
         let mut outcome = match read_script(&self.command_path()) {
             Ok(script) => {
@@ -236,14 +255,23 @@ impl FileBridge {
 
 /// The command file's script: a regular file of at most [`MAX_SCRIPT`] bytes, as UTF-8.
 fn read_script(path: &Path) -> Result<String, String> {
-    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if !meta.is_file() {
+    use std::io::Read;
+    let err = |e: std::io::Error| format!("{}: {e}", path.display());
+    // Not a link (the check), then the file opened is checked again and read to the limit only,
+    // however it changes in between.
+    if !std::fs::symlink_metadata(path).map_err(err)?.is_file() {
         return Err(format!("{}: not a file", path.display()));
     }
-    if meta.len() > MAX_SCRIPT {
+    let file = std::fs::File::open(path).map_err(err)?;
+    if !file.metadata().map_err(err)?.is_file() {
+        return Err(format!("{}: not a file", path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_SCRIPT + 1).read_to_end(&mut bytes).map_err(err)?;
+    if bytes.len() as u64 > MAX_SCRIPT {
         return Err(format!("{}: larger than {MAX_SCRIPT} bytes", path.display()));
     }
-    std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
+    String::from_utf8(bytes).map_err(|_| format!("{}: not UTF-8 text", path.display()))
 }
 
 /// The result file's JSON from the `run` tool's reply: `{success, result, error, notices,
@@ -343,6 +371,15 @@ mod tests {
         assert_eq!(r["success"], true, "{r}");
         assert!(r["timestamp"].as_str().is_some_and(|t| t.ends_with('Z')) && r["error"].is_null(), "{r}");
 
+        // A new script takes the last outcome away until its own is written.
+        std::fs::write(b.command_path(), "map.zoomIn\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !b.inner.changed.load(SeqCst) {
+            assert!(Instant::now() < deadline, "the change was never seen");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(b.result_path().exists(), "kept until the run");
+        assert!(run_next(&b, &mut s).success);
         // A failing line: nothing kept, the error names it.
         write_command(&b, "layer.addSample {\"name\": \"countries\"}\nmap.basemap {\"name\": \"nowhere\"}\n");
         let o = run_next(&b, &mut s);
