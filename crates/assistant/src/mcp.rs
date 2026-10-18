@@ -269,9 +269,9 @@ fn initialize(params: &Value) -> Value {
 /// The tools this server adds to the assistant's.
 const TOOL_NAMES: &[&str] = &["view_map", "snapshot"];
 
-/// Tools that only look: list, search, read, view.
+/// Tools that only look: list, search, read, view. A snapshot can be saved over a file.
 fn read_only(name: &str) -> bool {
-    !matches!(name, "run_command" | "run_tool")
+    !matches!(name, "run_command" | "run_tool" | "snapshot")
 }
 
 fn tool_list() -> Vec<Value> {

@@ -700,7 +700,7 @@ fn mcp_initializes_and_lists_tools() {
     for t in tools["tools"].as_array().unwrap() {
         assert_eq!(t["inputSchema"]["type"], "object", "{}", t["name"]);
         assert!(t["description"].as_str().is_some_and(|d| !d.is_empty()));
-        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool"));
+        let runs = matches!(t["name"].as_str(), Some("run_command" | "run_tool" | "snapshot"));
         assert_eq!(t["annotations"]["readOnlyHint"], !runs, "{}", t["name"]);
         assert_eq!(t["annotations"]["destructiveHint"], runs, "{}", t["name"]);
     }

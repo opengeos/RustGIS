@@ -10,6 +10,10 @@ use crate::RustGisApp;
 /// A screenshot not back this long after the wait is given up, and the map drawn offscreen.
 const SCREENSHOT_GRACE: f64 = 10.0;
 
+/// The tag on the screenshot this asks egui for, so only that one is taken as the snapshot.
+#[derive(Debug)]
+struct RelayShotTag;
+
 /// A screen snapshot under way.
 #[derive(Debug, Clone, Copy)]
 pub struct Shot {
@@ -58,7 +62,11 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
         Some(was_settled) => {
             let image = ctx.input(|i| {
                 i.events.iter().find_map(|e| match e {
-                    egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                    egui::Event::Screenshot { image, user_data, .. }
+                        if user_data.data.as_ref().is_some_and(|d| d.downcast_ref::<RelayShotTag>().is_some()) =>
+                    {
+                        Some(image.clone())
+                    }
                     _ => None,
                 })
             });
@@ -90,7 +98,7 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
             // overlays are already hidden when asked).
             if now > shot.started && (done || now - shot.started >= shot.wait) {
                 app.relay_shot = Some(Shot { asked: Some(done), ..shot });
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(RelayShotTag)));
             }
         }
     }
