@@ -9,7 +9,7 @@ for the conventions.
 4. Open a pull request. CI runs on Linux, and the docs build a preview. A maintainer can label it
    `ci:windows`, `ci:macos` or `ci:full` to test those platforms before merging; `main` and the
    nightly run test all three. A maintainer's `automerge` label approves it and squash-merges it
-   once CI passes; pushing again removes the label.
+   once CI passes; pushing again removes the label, and removing it cancels the merge.
 
 ## Test data
 
