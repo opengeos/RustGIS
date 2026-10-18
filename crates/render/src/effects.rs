@@ -208,7 +208,7 @@ pub(crate) fn extrusion_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
 
 /// The light of a tilted view's extrusions, as MapLibre's default: from the view's upper left,
 /// mostly overhead (toward it: right, down the screen and up, in ground px).
-const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
+pub const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
 
 /// The part of the polygon `pts` (ground px) down the view no farther than `v_max`: what stands
 /// in front of the eye ([`rustgis_map::Camera::near_v`]). Sutherland–Hodgman against one edge.

@@ -15,7 +15,9 @@ struct CmdUniforms {
     /// Physical pixel size of the map view (scales marker pixel offsets), 1 when tilted, and
     /// the reach's depth.
     viewport: vec4f,
-    _pad: vec4f,
+    /// Extrusions: the light's direction (map units) and how far a shadow falls per map unit
+    /// of height.
+    light: vec4f,
 };
 
 struct VOut {
@@ -117,6 +119,55 @@ fn fs_marker(in: VOut) -> @location(0) vec4f {
     }
     if u_mark.viewport.z > 0.5 {
         return tilted(in.color, in.depth, u_mark);
+    }
+    return in.color;
+}
+
+// ---- extrusions (roofs and walls standing up in a tilted view, and their shadows) ----
+
+struct ExtrudeIn {
+    @location(0) position: vec3f,
+    @location(1) normal: vec2f,
+    @location(2) color: vec4f,
+    /// Up the wall (0 foot, 1 top), the part (0 roof, 1 wall, 2 shadow), 1 when lit, and how
+    /// far a shadow's corner falls (its feature's height).
+    @location(3) info: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> u_ext: CmdUniforms;
+
+@vertex
+fn vs_extrude(in: ExtrudeIn) -> VOut {
+    var p = in.position;
+    if in.info.y > 1.5 {
+        // A shadow on the ground, away from the light.
+        p = vec3f(p.xy + u_ext.light.zw * in.info.w, 0.0);
+    }
+    let world = vec4f(p, 1.0);
+    var out: VOut;
+    out.clip = u_ext.view_proj * world;
+    var c = in.color;
+    if in.info.y > 0.5 && in.info.y < 1.5 {
+        // A wall, lit by the way it faces and darker toward its foot (as `render::tilted_walls`).
+        var shade = 0.8;
+        if in.info.z > 0.5 {
+            let lit = max(dot(in.normal, u_ext.light.xy), 0.0);
+            shade = (0.6 + 0.4 * lit) * mix(0.72, 1.0, in.info.x);
+        }
+        c = vec4f(c.rgb * shade, c.a);
+    }
+    out.color = c;
+    out.depth = vec2f(out.clip.w, dot(u_ext.scene_depth, world));
+    return out;
+}
+
+@fragment
+fn fs_extrude(in: VOut) -> @location(0) vec4f {
+    if !kept(in.depth, u_ext) {
+        discard;
+    }
+    if u_ext.viewport.z > 0.5 {
+        return tilted(in.color, in.depth, u_ext);
     }
     return in.color;
 }

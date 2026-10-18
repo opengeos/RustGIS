@@ -1068,11 +1068,6 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
     if map.projection.is_globe() || !map.view.effects.is_none() || map.view.color_vision != rustgis_map::view::ColorVision::Normal {
         return None;
     }
-    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
-    // Extrusions stand up over a tilted view on the CPU.
-    if view.camera.pitch != 0.0 && map.layers.iter().any(|l| l.visible && l.extrusion.is_some() && l.in_scale_range(scale)) {
-        return None;
-    }
     let pictures = |cmds: &[DrawCmd]| cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. }));
     let (sky, fog) = tilt_sky(map);
     let tilt = Some(SceneTilt { camera: view.camera, sky: mesh::premul(sky), fog: mesh::premul(fog) });
@@ -1140,6 +1135,11 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
         return None;
     }
     let origin = [view.camera.center.x, view.camera.center.y];
+    // Extruded features stand up over the ground, their shadows under them.
+    for cmd in extrusion_cmds(&extruded_shapes(map, view), origin) {
+        cmds.push(cmd);
+        clips.push(CmdClip::ALL);
+    }
     let ppp = view.pixels_per_point as f32;
     let instances: Vec<gpu_scene::PointInstance> = upright_markers(map, view, 0.0)
         .iter()
@@ -1265,7 +1265,71 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     out
 }
 
+pub use effects::LIGHT as EXTRUSION_LIGHT;
 pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilted_walls};
+
+/// Extruded features as GPU commands, relative to `origin`: the shadows they cast (when any
+/// do), then their roofs and walls, which the depth buffer sorts out. Walls carry their outward
+/// normals, lit in the shader so they stay lit right as the map turns.
+fn extrusion_cmds(shapes: &[ExtrudedShape], origin: [f64; 2]) -> Vec<gpu_scene::DrawCmd> {
+    use gpu_scene::{EXTRUDE_ROOF, EXTRUDE_SHADOW, EXTRUDE_WALL, ExtrudeVertex};
+    let rel = |c: Coord, z: f64| [(c.x - origin[0]) as f32, (c.y - origin[1]) as f32, z as f32];
+    let vertex =
+        |position: [f32; 3], normal: [f32; 2], color: [f32; 4], info: [f32; 4]| ExtrudeVertex { position, normal, color, info, _pad: 0.0 };
+    let (mut solid, mut solid_i) = (Vec::new(), Vec::<u32>::new());
+    let (mut shade, mut shade_i) = (Vec::new(), Vec::<u32>::new());
+    let shadow = mesh::premul(Rgba::new(0, 0, 0, 60));
+    for s in shapes {
+        let h = s.height.clamp(0.0, 1e9);
+        let color = mesh::premul(s.fill);
+        let lit = if s.lighting { 1.0 } else { 0.0 };
+        let roof_at = |p: &[f32; 2]| Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1]));
+        // The roof.
+        let base = solid.len() as u32;
+        solid.extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), h), [0.0; 2], color, [1.0, EXTRUDE_ROOF, lit, 0.0])));
+        solid_i.extend(s.roof_indices.iter().map(|i| base + i));
+        if s.shadows {
+            // The footprint moved away from the light (in the shader).
+            let base = shade.len() as u32;
+            shade.extend(s.roof.iter().map(|p| vertex(rel(roof_at(p), 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, h as f32])));
+            shade_i.extend(s.roof_indices.iter().map(|i| base + i));
+        }
+        // The walls; a hole's face into it (a courtyard).
+        for (r, hole) in s.rings.iter().map(|r| (r, false)).chain(s.holes.iter().map(|r| (r, true))) {
+            let edges = || (0..r.len()).filter_map(|i| Some((*r.get(i)?, *r.get((i + 1) % r.len())?)));
+            let area2: f64 = edges().map(|(a, b)| a.x * b.y - b.x * a.y).sum();
+            for (a, b) in edges() {
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let len = dx.hypot(dy);
+                if !(len > 0.0 && len.is_finite()) {
+                    continue;
+                }
+                let n =
+                    if (area2 > 0.0) != hole { [(dy / len) as f32, (-dx / len) as f32] } else { [(-dy / len) as f32, (dx / len) as f32] };
+                let k = solid.len() as u32;
+                for (c, z, t) in [(a, 0.0, 0.0), (b, 0.0, 0.0), (b, h, 1.0), (a, h, 1.0)] {
+                    solid.push(vertex(rel(c, z), n, color, [t, EXTRUDE_WALL, lit, 0.0]));
+                }
+                solid_i.extend([k, k + 1, k + 2, k, k + 2, k + 3]);
+                if s.shadows && !hole {
+                    let k = shade.len() as u32;
+                    for (c, fall) in [(a, 0.0), (b, 0.0), (b, h), (a, h)] {
+                        shade.push(vertex(rel(c, 0.0), [0.0; 2], shadow, [0.0, EXTRUDE_SHADOW, 0.0, fall as f32]));
+                    }
+                    shade_i.extend([k, k + 1, k + 2, k, k + 2, k + 3]);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if !shade_i.is_empty() {
+        out.push(gpu_scene::DrawCmd::Extrusion { origin, vertices: shade, indices: shade_i, shadows: true });
+    }
+    if !solid_i.is_empty() {
+        out.push(gpu_scene::DrawCmd::Extrusion { origin, vertices: solid, indices: solid_i, shadows: false });
+    }
+    out
+}
 
 /// Point layers with at most this many features stand their markers up in a tilted view; a
 /// bigger one keeps them drawn on the ground.
@@ -2941,6 +3005,7 @@ mod tests {
             .map(|c| match c {
                 gpu_scene::DrawCmd::Mesh { .. } => "mesh",
                 gpu_scene::DrawCmd::Points { .. } => "points",
+                gpu_scene::DrawCmd::Extrusion { .. } => "extrusion",
                 gpu_scene::DrawCmd::Image { .. } => "image",
             })
             .collect()

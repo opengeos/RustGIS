@@ -249,5 +249,6 @@ smooth on large datasets. It is off by default, and the setting is remembered ac
 view effects and the colour-vision simulator always render on the CPU, and exports are
 unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
 the GPU too, in perspective with its fog and sky, when it needs no pictures drawn on the CPU
-(tiles, rasters, see-through, masked or blended layers, icons, or extrusions on a tilted map);
-otherwise it stays on the CPU.
+(tiles, rasters, see-through, masked or blended layers, or icons); otherwise it stays on the
+CPU. Extruded layers stand up on a tilted GPU map with a depth buffer, as MapLibre's fill
+extrusions do, so features that interlock or overlap are drawn right.
