@@ -53,9 +53,10 @@ pub struct LayoutView {
     zoom: f32,
     pan: egui::Vec2,
     pub selected: Option<u32>,
-    /// The selection the Format pane last opened for: a new one opens it again, so closing the
-    /// pane keeps the selection without the pane coming back by itself.
-    formatted: Option<u32>,
+    /// The selection the Format pane last opened for, by layout and element (ids are per layout):
+    /// a new one opens it again, so closing the pane keeps the selection without the pane coming
+    /// back by itself.
+    formatted: Option<(usize, u32)>,
     drag: Option<Drag>,
     /// The page rectangle and points per millimetre the drag last saw.
     drag_page: Option<(Rect, f32)>,
@@ -380,9 +381,10 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     save_drafts(app, li);
     // Selecting an element shows its properties in the Format pane (#516). The pane is drawn
     // before the page, so it shows them from the next frame.
-    if app.layout.selected != app.layout.formatted {
-        app.layout.formatted = app.layout.selected;
-        if app.layout.selected.is_some() {
+    let selected = app.layout.selected.map(|id| (li, id));
+    if selected != app.layout.formatted {
+        app.layout.formatted = selected;
+        if selected.is_some() {
             app.ui.open_right(crate::RightPane::Format);
             ui.ctx().request_repaint();
         }
@@ -691,7 +693,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
     {
         app.layout.selected = layout.hit(p.0, p.1);
         // A click on the element already selected brings back the pane closed over it.
-        if app.layout.selected.is_some() && app.layout.selected == app.layout.formatted {
+        if app.layout.selected.is_some_and(|id| app.layout.formatted == Some((li, id))) {
             app.ui.open_right(crate::RightPane::Format);
         }
     }
@@ -1778,6 +1780,15 @@ mod tests {
         h.run_steps(2);
         assert!(hint(&h), "on the map");
         assert_eq!(h.state().ui.right, Some(Format), "the pane stays, as other panes do");
+        // Closed, then the element of the same id selected in another layout: that is another
+        // element, so the pane opens for it.
+        h.state_mut().run("ui.pane.format", json!({})).unwrap();
+        h.state_mut().run("layout.new", json!({"name": "Other"})).unwrap();
+        let other = h.state().session.active_layout.unwrap();
+        assert!(h.state().session.project.layouts[other].element(ids[1]).is_some(), "the id exists there too");
+        h.state_mut().layout.selected = ids.get(1).copied();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.right, Some(Format));
     }
 
     /// Element ids are per layout: opening another layout ends the selection, so Delete or
