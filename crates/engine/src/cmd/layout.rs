@@ -85,7 +85,7 @@ pub fn commands() -> Vec<C> {
             r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, northArrow), "width"?: outline width (rectangle) or line width in points (grid), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
-            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "grid"?: {grid options as in layout.addElement} | false (map frame), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
+            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"?, "bold"?, "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
         ),
         C::new("layout.guides", "Guides", "Publish › Page Setup", guides).params(
             r#"{"layout"?, "x"?: [mm] (vertical guides, from the page's left edge), "y"?: [mm] (horizontal guides, from its top edge), "clear"?: bool (remove every guide first)}"#,
@@ -100,7 +100,7 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"layout"?, "element": id}"#),
         C::new("layout.frameZoom", "Zoom Frame", "Publish › Map Frame", frame_zoom).params(
-            r#"{"layout"?, "element"?: frame id, "frame"?: (as element), "to"?: "view" (the map view's extent, the default)|"full"|"selection"|"layer", "layer"?}"#,
+            r#"{"layout"?, "element"?: frame id, "frame"?: (as element), "to"?: "view" (the map view's extent, bearing and pitch; the default)|"full"|"selection"|"layer", "layer"?}"#,
         ),
         C::new("layout.series", "Map Series", "Publish › Map Frames", series).params(
             r#"{"layout"?, "layer": index layer, "nameField"?: string, "frame"?: id, "margin"?: 0..1, "off"?: bool}"#,
@@ -221,9 +221,17 @@ fn view_frame(s: &Session, w_mm: f64) -> (Coord, f64) {
     (m.center_lonlat(), (ground_w / (w_mm / 1000.0)).clamp(100.0, 1e10))
 }
 
+/// The active map's bearing and pitch, for a frame showing its view (the globe neither turns
+/// nor tilts).
+fn view_turn(s: &Session) -> (f64, f64) {
+    let m = s.map();
+    if m.projection.is_globe() { (0.0, 0.0) } else { (m.camera.bearing, m.camera.pitch) }
+}
+
 fn frame_kind(s: &Session, map: &str, w: f64, shape: FrameShape) -> ElementKind {
     let (center, scale) = view_frame(s, w);
-    ElementKind::MapFrame { map: map.to_string(), center, scale, shape, grid: None, extent_of: None }
+    let (bearing, pitch) = view_turn(s);
+    ElementKind::MapFrame { map: map.to_string(), center, scale, shape, grid: None, extent_of: None, bearing, pitch }
 }
 
 pub(crate) fn new_layout(s: &mut Session, p: &Value) -> CmdResult {
@@ -689,6 +697,11 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         }
         None => None,
     };
+    for k in ["bearing", "pitch"] {
+        if p.get(k).is_some_and(|v| !v.is_null()) && f(p, k).is_none() {
+            return Err(format!("{k} must be a number of degrees"));
+        }
+    }
     // A new layer (tables and charts) or field (charts) must exist in the frame's map.
     let li = index(s, p)?;
     let checked = {
@@ -863,9 +876,15 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
                 *reverse = v;
             }
         }
-        ElementKind::MapFrame { map, center, scale, grid, .. } => {
+        ElementKind::MapFrame { map, center, scale, grid, bearing, pitch, .. } => {
             if let Some(m) = map_name {
                 *map = m;
+            }
+            if let Some(v) = f(p, "bearing") {
+                *bearing = rustgis_map::camera::normalize_bearing(v);
+            }
+            if let Some(v) = f(p, "pitch") {
+                *pitch = rustgis_map::camera::normalize_pitch(v);
             }
             if let Some(g) = new_grid {
                 *grid = g;
@@ -932,11 +951,13 @@ fn frame_zoom(s: &mut Session, p: &Value) -> CmdResult {
             let w = l.element(frame).map(|e| e.w).unwrap_or(100.0);
             let ground_w = s.view_size.0 * m.ground_res();
             let (c, sc) = (m.center_lonlat(), (ground_w / (w / 1000.0)).clamp(100.0, 1e10));
-            if let Some(ElementKind::MapFrame { center, scale, .. }) =
+            let (b, t) = view_turn(s);
+            if let Some(ElementKind::MapFrame { center, scale, bearing, pitch, .. }) =
                 s.project.layouts.get_mut(li).and_then(|l| l.element_mut(frame)).map(|e| &mut e.kind)
             {
                 *center = c;
                 *scale = sc;
+                (*bearing, *pitch) = (b, t);
             }
         }
         "full" => {

@@ -282,7 +282,8 @@ pub struct Session {
     /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
     pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
-    /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]).
+    /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
+    /// less those a failed command withdrew.
     notices_given: u64,
     /// Layer whose attribute table is open.
     pub table_layer: Option<u32>,
@@ -403,6 +404,11 @@ fn edited_streamed(before: &Project, after: &Project) -> Option<String> {
         }
     }
     None
+}
+
+/// Why command `label` can't edit streamed layer `layer`, refused up front or undone after.
+fn streamed_refusal(label: &str, layer: &str) -> String {
+    format!("{label}: {layer} is read in place from its file; Load All Features (layer.loadAll) to edit it")
 }
 
 /// Commands that change a layer's features or fields, refused on streamed layers (whose features
@@ -602,11 +608,10 @@ impl Session {
             return Err(format!("{}: {why}", spec.label));
         }
         let (run, mutates, label) = (spec.run, spec.mutates, spec.label);
-        if mutates && edits_features(id) {
-            let target = named.or(active).and_then(|l| self.map().layer(l));
-            if let Some(l) = target.filter(|l| l.is_streamed()) {
-                return Err(format!("{label}: {} is read in place from its file; Load All Features (layer.loadAll) to edit it", l.name));
-            }
+        if let Some(e) = self.streamed_edit(id, mutates, label, named.or(active)) {
+            // Said, as a failure in `guarded` is: this returns before it (#468).
+            self.notify(e.clone(), true);
+            return Err(e);
         }
         let res = self.guarded(label, mutates, |s| run(s, params));
         // What was added, for the Data Sources pane's Recent list.
@@ -616,6 +621,16 @@ impl Session {
             self.sources.note(src);
         }
         res
+    }
+
+    /// Why a command can't run on `layer`: it edits features, and the layer is read in place from
+    /// its file, whose next read would lose the edit.
+    pub(crate) fn streamed_edit(&self, id: &str, mutates: bool, label: &str, layer: Option<u32>) -> Option<String> {
+        if !(mutates && edits_features(id)) {
+            return None;
+        }
+        let l = layer.and_then(|l| self.map().layer(l)).filter(|l| l.is_streamed())?;
+        Some(streamed_refusal(label, &l.name))
     }
 
     /// Runs `f` as the command `label`: when it `mutates`, the project is snapshotted for undo
@@ -629,13 +644,14 @@ impl Session {
         self.quiet_failure = false;
         // Requests a failed command left for the front end go with its other changes.
         let requests = self.url_requests.len();
+        let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
         // A command that changed a streamed layer's features or fields (not by reading its
         // source) would lose the change at the next read: undone, with a way to edit it instead.
         let res = match (&res, &snapshot) {
             (Ok(_), Some(snap)) => match edited_streamed(snap, &self.project) {
-                Some(name) => Err(format!("{label}: {name} is read in place from its file; Load All Features (layer.loadAll) to edit it")),
+                Some(name) => Err(streamed_refusal(label, &name)),
                 None => res,
             },
             _ => res,
@@ -663,6 +679,13 @@ impl Session {
                 if let Some(c) = counts {
                     self.edit_counts = c;
                 }
+                // What it said it had done ("Deleted 3 features") didn't happen: those notices
+                // go; its errors stay.
+                let new = usize::try_from(self.notices_given.saturating_sub(said)).unwrap_or(usize::MAX).min(self.notices.len());
+                let start = self.notices.len() - new;
+                let errors: Vec<Notice> = self.notices.drain(start..).filter(|n| n.error).collect();
+                self.notices_given -= (new - errors.len()) as u64;
+                self.notices.extend(errors);
             }
             _ => {}
         }

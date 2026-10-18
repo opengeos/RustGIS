@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use rustgis_data::{GeometryType, photo};
-use rustgis_map::symbology::{ClassRef, ClassStyle};
-use rustgis_map::{ClassMethod, Marker, Ramp, Renderer, Rgba};
+use rustgis_map::symbology::{ClassRef, ClassStyle, MAX_STROKES};
+use rustgis_map::{ClassMethod, LineCap, LineJoin, LineStroke, Marker, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
@@ -145,6 +145,11 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: number}"##),
+        C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
+            .when(need_lines)
+            .params(
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel"}] (drawn bottom first; [] goes back to the single stroke)}"##,
+            ),
         C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
@@ -278,6 +283,63 @@ impl Session {
             None => Ok(None),
         }
     }
+}
+
+/// A line layer is active.
+fn need_lines(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if l.geometry_type() == GeometryType::Polyline && !l.graphics => None,
+        Some(_) => Some("this works on line layers"),
+        None => Some("select a layer in the Layers pane first"),
+    }
+}
+
+/// `layer.lineStrokes`: sets a line layer's stacked strokes.
+fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
+    let list = p.get("strokes").and_then(Value::as_array).ok_or("strokes is a list of strokes ([] for the single stroke)")?;
+    if list.len() > MAX_STROKES {
+        return Err(format!("at most {MAX_STROKES} strokes"));
+    }
+    let mut strokes = Vec::with_capacity(list.len());
+    for (i, v) in list.iter().enumerate() {
+        let o = v.as_object().ok_or_else(|| format!("stroke {} is not an object", i + 1))?;
+        let color = match o.get("color") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(c)) => {
+                Some(Rgba::from_hex(c).ok_or_else(|| format!("stroke {}: color must be #RRGGBB or #RRGGBBAA", i + 1))?)
+            }
+            Some(_) => return Err(format!("stroke {}: color must be #RRGGBB or #RRGGBBAA", i + 1)),
+        };
+        let num = |k: &str| -> Result<Option<f32>, String> {
+            match o.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                // Brought into range before narrowing, so 1e300 is the largest width, not infinity.
+                Some(v) => v
+                    .as_f64()
+                    .filter(|x| x.is_finite())
+                    .map(|x| Some(x.clamp(-1e6, 1e6) as f32))
+                    .ok_or_else(|| format!("stroke {}: {k} is a number", i + 1)),
+            }
+        };
+        let cap = match o.get("cap") {
+            None | Some(Value::Null) => LineCap::default(),
+            Some(Value::String(c)) => LineCap::from_code(c).ok_or_else(|| format!("stroke {}: unknown cap '{c}'", i + 1))?,
+            Some(_) => return Err(format!("stroke {}: cap is \"round\", \"flat\" or \"square\"", i + 1)),
+        };
+        let join = match o.get("join") {
+            None | Some(Value::Null) => LineJoin::default(),
+            Some(Value::String(j)) => LineJoin::from_code(j).ok_or_else(|| format!("stroke {}: unknown join '{j}'", i + 1))?,
+            Some(_) => return Err(format!("stroke {}: join is \"round\", \"miter\" or \"bevel\"", i + 1)),
+        };
+        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join }.clamped());
+    }
+    let id = s.layer_id(p)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if l.geometry_type() != GeometryType::Polyline || l.graphics {
+        return Err("this works on line layers".into());
+    }
+    l.line_strokes = strokes;
+    Ok(json!({"strokes": l.line_strokes.len()}))
 }
 
 fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {

@@ -53,6 +53,28 @@ layer.classStyle={"layer":"Countries","other":true,"label":"No data"}
 keeps its own transparency (the layer's, as a colour scheme leaves it), so the `AA` of a
 `#RRGGBBAA` colour applies to points and lines only.
 
+### Line strokes
+
+A line layer draws one stroke by default. The **Strokes** section of the Symbology pane stacks
+several in one symbol, for road casings, parallel lines and offsets: **Add Stroke** puts one on
+top, and each stroke has its own **Color**, **Width**, **Offset**, **Cap** (round, flat or square)
+and **Join** (round, miter or bevel), with buttons to move it up or down or remove it. The list
+shows the top stroke first, and the preview above it shows the symbol along a line drawn left to
+right. A colour or width set to **From symbol** follows the renderer, so the strokes take each
+Unique Values or Graduated Colors class's colour. **Use a Single Stroke** goes back to one.
+
+Widths and offsets are in points: they keep their size on screen at every scale, and the features
+keep their coordinates. A positive offset shifts the stroke to the right of the line's direction
+(the order of its vertices) and a negative one to the left, so two copies of an edge drawn in
+opposite directions land on opposite sides of it. Strokes are saved with the project and drawn in
+exports. By command, bottom stroke first (`[]` goes back to the single stroke):
+
+```text
+layer.lineStrokes={"layer":"Rivers","strokes":[{"color":"#000000","width":11.5,"offset":8.5},{"color":"#FF8C00","width":7,"offset":8.5,"cap":"round","join":"round"}]}
+```
+
+A stroke without `color` or `width` takes the renderer's.
+
 ### Custom color ramps
 
 Besides the built-in color schemes, a project can hold your own color ramps: an organization's
