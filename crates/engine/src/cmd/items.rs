@@ -470,8 +470,9 @@ fn safe(name: &str) -> String {
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
-        let hidden = m.hidden_by_group();
-        m.layers.retain(|l| l.visible && !hidden.contains(&l.id));
+        // Groups folded into their layers: a hidden group's layers are dropped with the others.
+        m.bake_groups();
+        m.layers.retain(|l| l.visible);
         for l in &mut m.layers {
             if l.is_raster() || tol <= 0.0 {
                 continue;

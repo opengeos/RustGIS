@@ -63,6 +63,9 @@ fn groupable(s: &Session, id: u32) -> Result<u32, String> {
 }
 
 fn name_of(p: &Value) -> Result<Option<String>, String> {
+    if p.get("name").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("name must be text".into());
+    }
     match ps(p, "name") {
         Some(n) => {
             let n: String = n.trim().chars().take(200).collect();

@@ -7011,6 +7011,7 @@ fn layer_groups_hold_related_layers_together() {
     assert_eq!(s.undo_depth(), before);
     assert!(!s.map().group(g).unwrap().expanded);
     assert!(s.run("group.set", &json!({"group": g, "visible": "no"})).is_err());
+    assert!(s.run("group.set", &json!({"group": g, "name": 5})).is_err());
     assert!(s.map().group(g).unwrap().visible);
     // Identify and the map's selection skip a hidden group's layers.
     s.run("group.set", &json!({"group": g, "visible": false})).unwrap();

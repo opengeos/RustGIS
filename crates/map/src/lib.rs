@@ -847,11 +847,6 @@ impl Map {
         self.groups.iter().filter(|g| !g.visible || !g.in_scale_range(scale)).flat_map(|g| g.children.iter().copied()).collect()
     }
 
-    /// Ids of the layers whose group is hidden.
-    pub fn hidden_by_group(&self) -> std::collections::HashSet<u32> {
-        self.groups.iter().filter(|g| !g.visible).flat_map(|g| g.children.iter().copied()).collect()
-    }
-
     /// Folds each group's visibility, transparency and scale range into its children and drops
     /// the groups: for exports that know only layers.
     pub fn bake_groups(&mut self) {
