@@ -7455,6 +7455,91 @@ fn layout_names_keep_to_200_characters_with_their_number() {
     assert_eq!((name.chars().count(), name.ends_with(" 3")), (200, true), "{name}");
 }
 
+/// Layers › Copy and Paste (#491): whole layers and groups, into another map or the same one.
+#[test]
+fn layers_are_copied_and_pasted_between_maps() {
+    let mut s = world();
+    let first = s.map().name.clone();
+    let names = |m: &rustgis_map::Map| m.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    assert!(s.run("layer.paste", &Value::Null).is_err(), "nothing copied yet");
+    // A group of two styled layers, one masked by the other, with features selected.
+    s.run("group.add", &json!({"name": "Places", "layers": ["Cities", "Countries"]})).unwrap();
+    s.run("layer.mask", &json!({"layer": "Cities", "mask": "Countries"})).unwrap();
+    s.run("layer.definitionQuery", &json!({"layer": "Cities", "where": "pop_max > 1000000"})).unwrap();
+    s.map_mut().layers.iter_mut().find(|l| l.name == "Cities").unwrap().transparency = 40.0;
+    s.run("select.byAttributes", &json!({"layer": "Cities", "where": "name = 'Paris'"})).unwrap();
+    let r = s.run("layer.copy", &json!({"group": "Places"})).unwrap();
+    assert_eq!(r["layers"], json!(["Cities", "Countries"]), "in drawing order");
+    // Pasted into an empty map: the same order, group, mask and style, no selection; one undo step.
+    s.run("map.new", &json!({"name": "Second"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((names(s.map()), r["unmasked"].clone()), (vec!["Cities".to_string(), "Countries".into()], json!([])));
+    assert_eq!(s.active_layer, s.map().layers.first().map(|l| l.id));
+    let m = s.map();
+    let cities = m.layer_by_name("Cities").unwrap();
+    assert_eq!((cities.mask.as_deref(), cities.transparency, cities.selection.len()), (Some("Countries"), 40.0, 0));
+    assert_eq!(cities.definition_query.as_deref(), Some("pop_max > 1000000"));
+    assert_eq!((m.groups.len(), m.group_of(cities.id).map(|g| g.name.as_str())), (1, Some("Places")));
+    assert!(cities.dataset.features.shares(&s.project.maps[0].layer_by_name("Cities").unwrap().dataset.features), "shared until edited");
+    // Again into the same map: unique names, the mask follows its pasted layer, on top.
+    s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!(names(s.map()), ["Cities copy", "Countries copy", "Cities", "Countries"]);
+    let m = s.map();
+    let copy = m.layer_by_name("Cities copy").unwrap();
+    assert_eq!((copy.mask.as_deref(), m.group_of(copy.id).map(|g| g.name.as_str())), (Some("Countries copy"), Some("Places copy")));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!((s.map().layers.len(), s.map().groups.len()), (2, 1));
+    // One layer, into a map out of view (the view stays), then into a map without its mask.
+    s.run("map.activate", &json!({"name": first})).unwrap();
+    s.run("layer.copy", &json!({"layer": "Cities"})).unwrap();
+    s.run("layer.paste", &json!({"map": "Second"})).unwrap();
+    assert_eq!(s.map().name, first);
+    let second = &s.project.maps[1];
+    let copy = second.layer_by_name("Cities copy").unwrap();
+    assert_eq!((copy.mask.as_deref(), second.group_of(copy.id).is_none()), (Some("Countries"), true));
+    s.run("map.new", &json!({"name": "Third"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((r["unmasked"].clone(), s.map().layers[0].mask.clone()), (json!(["Cities"]), None));
+    // Only a polygon layer masks (as the renderer finds it): a point layer of that name doesn't.
+    s.run("layer.rename", &json!({"layer": "Cities", "name": "Countries"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((r["unmasked"].clone(), s.map().layers[0].mask.clone()), (json!(["Cities"]), None));
+    s.run("edit.undo", &Value::Null).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    // Into a group, at its top.
+    s.run("layer.paste", &json!({"map": "Second", "group": "Places"})).unwrap();
+    let second = &s.project.maps[1];
+    let group = second.groups.iter().find(|g| g.name == "Places").unwrap();
+    let top = second.layers.iter().find(|l| group.children.contains(&l.id)).map(|l| l.name.as_str());
+    assert_eq!((group.children.len(), top), (3, Some("Cities copy 2")));
+    // A group and a position at once is refused as such (Second has the group).
+    let both = s.run("layer.paste", &json!({"map": "Second", "group": "Places", "to": 0})).unwrap_err();
+    assert!(both.contains("not both"), "{both}");
+    for bad in [json!({"map": "Nowhere"}), json!({"group": "Nowhere"}), json!({"to": -1})] {
+        assert!(s.run("layer.paste", &json!(bad)).is_err(), "{bad}");
+    }
+    for bad in [json!({"layer": "Nowhere"}), json!({"group": "Nowhere"}), json!({"layer": [1, "Nowhere"]}), json!({"layer": []})] {
+        assert!(s.run("layer.copy", &bad).is_err(), "{bad}");
+    }
+    // A copy that fails, an empty one included, keeps the last copy.
+    let kept: Vec<String> = s.layer_clipboard.as_ref().map(|c| c.layers.iter().map(|l| l.name.clone()).collect()).unwrap_or_default();
+    assert_eq!(kept, ["Cities"]);
+    // All or nothing: a failure after the layers went in (a later step of a task) takes them back.
+    let (layers, groups) = (names(&s.project.maps[1]), s.project.maps[1].groups.len());
+    let r = s.guarded("Task", true, |s| {
+        s.run("layer.paste", &json!({"map": "Second"}))?;
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert_eq!((names(&s.project.maps[1]), s.project.maps[1].groups.len()), (layers, groups));
+    // An empty group is copied too, and its paste is said as a group (no layers came with it).
+    s.run("group.add", &json!({"name": "Empty"})).unwrap();
+    s.run("layer.copy", &json!({"group": "Empty"})).unwrap();
+    let r = s.run("layer.paste", &Value::Null).unwrap();
+    assert_eq!((r["layers"].clone(), r["groups"].as_array().map(Vec::len)), (json!([]), Some(1)));
+    assert_eq!(s.notices.last().map(|n| n.text.as_str()), Some("Pasted 1 group into Third"));
+}
+
 #[test]
 fn map_duplicate_copies_a_map_beside_it_and_leaves_layouts_alone() {
     use rustgis_map::layout::ElementKind;

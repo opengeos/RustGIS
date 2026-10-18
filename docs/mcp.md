@@ -82,10 +82,29 @@ hovering shows `Stop MCP relay` and the last call with its parameters, and click
 relay. Agents attached through the relay are told, when they connect, that this is the project you
 have open and that you watch the map change as they work.
 
+Under it, **Full access** (off unless you tick it, for this session only) lifts every refusal for
+agents attached with the relay's own token. They may then also run scripts, tasks and models, and
+install, remove and run plugins: what you could do yourself in RustGIS. It isn't remembered: it's
+off again at the next launch, and when agents are turned off. While it's on, the status bar reads
+`MCP relay · full access · n attached` in red. Agents the app starts itself keep their own grants'
+rules.
+
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
 rustgis-cli mcp --attach 9000 --yes      # another port, with file and network access
+rustgis-cli mcp --attach --timeout 300   # wait up to 5 minutes for each call (5 to 600 seconds)
 ```
+
+The port is 8767 unless the `RUSTGIS_MCP_PORT` environment variable names another, for the app
+and for `--attach` alike (a second copy of RustGIS, or a port another program holds). When the
+port is taken, the relay's error says so and names that variable; a value that isn't a port number
+is an error too, not a quiet fall back to 8767. While the relay runs, the app
+publishes `endpoint.json` in the relay's private folder: `schema`, `host`, `port`, `url`, `pid`,
+`started_at`, the app `version`, the `token_file` path (not the token), the `attach` command, and
+once MCP over HTTP runs, its `http_url` and `http_token_file`.
+Setup scripts can read it instead of hard-coding the port. It's removed when the relay stops. With
+two copies of RustGIS on different ports it describes the one started last, and a crash can leave
+it behind: check that its `pid` is still running before trusting it.
 
 ```json
 {
@@ -134,6 +153,30 @@ An agent the app starts itself gets a run-scoped token instead of the relay's ow
 permission, and the app revokes it when it's done with the agent; that closes its connections and
 removes its file.
 
+### The file bridge
+
+For an agent that can't use MCP, or when the relay's port is taken, the app also runs scripts
+written to a file. It's on while **Let your Agents Control RustGIS** is ticked, even if the relay
+couldn't start: agents then stay on, and the status bar says only the file bridge is running.
+
+1. Write a script to `bridge-command.txt` in the relay's private folder
+   (`$XDG_RUNTIME_DIR/rustgis` on Linux, a `rustgis-mcp-<user>` folder in the temporary folder
+   elsewhere). The settings section shows the full path. The script is in the `script.run` format:
+   one `command-id {json}` per line, `#` for comments.
+2. Once the file has stopped changing for half a second, RustGIS runs it on the open project. (To be
+   sure a half-written script never runs, write it to another file in the folder and rename it to
+   `bridge-command.txt`.) It runs as one undo step, with
+   the same rules as the `run` tool: a refused or failing line stops it, and nothing it did to the
+   project is kept.
+3. The outcome is written to `bridge-result.json` in the same folder: `{success, result, lines,
+   layersAdded, notices, error, duration_s, timestamp}`. The status bar says whether it worked.
+
+Only one RustGIS at a time runs the bridge: a second copy's is refused while the first's runs
+(it holds `bridge.lock`). The bridge runs a script each time the file changes. Whatever the file held when the bridge started
+isn't run. While the bridge is on, `bridge-ready.json` there holds its `pid`, the two files' paths,
+`started_at`, the app `version` and a `schema` number. The folder is readable by this user only,
+like the relay's token.
+
 ### Relay requirements
 
 - **Off until asked.** Only `ui.mcpRelay` starts a listener: run directly, or by ticking **Let your
@@ -172,11 +215,20 @@ removes its file.
   connection beyond either cap is dropped without a reply.
 - **Queue cap.** At most 64 messages wait for the app's frame. A request beyond that gets error
   `-32001` (`the app is busy; try again`) if it expects a reply.
-- **Bounded request waits.** A request waits up to 60 seconds for the app to run it. If it is
-  still pending then, it is cancelled and never runs; the client gets error `-32002`. If it is
-  already running, the client waits one more 60-second interval. If the reply still has not
-  come, the client gets error `-32003` (`its outcome is unknown`), and the command may still
-  complete later.
+- **Bounded request waits.** A request waits up to 60 seconds for the app to run it, or as long
+  as the client's attach asks (`timeout_s`, 5 to 600 seconds; `--timeout` on the command line).
+  If it is still pending then, it is cancelled and never runs; the client gets error `-32002`. If
+  it is already running, the client waits one more interval of the same length. If the reply
+  still has not come, the client gets error `-32003` (`its outcome is unknown`), and the command
+  may still complete later.
+- **Busy app.** When the app has drawn no frame for 10 seconds since a request was queued (a file
+  dialog is open, a long tool is running, or the window is minimized or hidden and the system has
+  stopped drawing it), the request is cancelled at once and the client gets
+  error `-32004` saying RustGIS is busy (apart from the full queue's `-32001`). It never runs, and the connection stays open. An app that
+  was only idle before the request isn't busy: the request wakes it. This comes before a long
+  `timeout_s`: a stalled app answers after 10 seconds whatever the client's wait, and a client
+  waiting less than 10 seconds gets `-32002` instead. A `timeout_s` outside 5 to 600 is clamped to
+  that range, and one that isn't a number is ignored (the 60-second default).
 - **Stop.** Stopping the relay, or dropping its last owner, closes the listener and every
   client, drops queued messages unrun, and removes the token file. A waiting request ends at
   once, checked every 25 milliseconds.
@@ -198,6 +250,10 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 - Token required: `relay_drops_connections_without_the_token`
 - Parse error after attach: `relay_returns_parse_error_after_attach_and_stays_usable`
 - File commands need `--yes`: `relay_refuses_file_commands_without_yes`
+- Busy app: `relay_says_the_app_is_busy_early`
+- Client-chosen waits: `relay_waits_as_long_as_the_client_asks`
+- Endpoint file and port variable: `relay_publishes_its_endpoint_and_names_the_port_variable`
+- Full access, for the relay's own token only: `relay_full_access_lifts_the_refusals_for_its_own_token_only`
 - Screen snapshots go to the app: `relay_hands_screen_snapshots_to_the_app`
 - Snapshots without the screen: `relay_draws_snapshots_offscreen_without_the_screen`
 - Saved snapshots need access: `relay_refuses_a_saved_snapshot_without_access`
@@ -250,7 +306,9 @@ Your agent asks you before each tool call, and the server adds its own limits:
   text (it could bring in web layers). Without it, the agent can still work with the data you
   gave the server and with the built-in sample, basemaps and geoprocessing. `view_map` draws
   the web tile layers the project you opened already has, fetching their tiles.
-- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here.
+- Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here,
+  unless you turned on **Full access** for agents in the desktop app. That applies only to agents
+  attached to it with the relay's own token.
 - In private-server mode, opening, replacing and undoing in the project are allowed: the project
   is the agent's own. With `--attach`, these operations affect the project open in the desktop app.
 

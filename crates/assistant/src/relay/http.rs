@@ -203,6 +203,11 @@ impl Relay {
             })
             .map_err(|e| format!("MCP over HTTP could not start: {e}"))?;
         *lock(&self.owner.shared.http_port) = Some(port);
+        // An endpoint file already published now names the HTTP address too.
+        let published = lock(&self.owner.shared.endpoint).as_ref().and_then(|p| p.file_name()).and_then(|n| n.to_str()).map(str::to_string);
+        if let Some(name) = published {
+            let _ = self.publish_endpoint_as(&name);
+        }
         Ok(port)
     }
 }
@@ -538,6 +543,21 @@ mod tests {
                 })
                 .map_or(true, |t| !t.contains("200 OK"))
         );
+    }
+
+    /// The endpoint file names the HTTP address once HTTP starts.
+    #[test]
+    fn http_is_named_in_the_endpoint_file() {
+        let relay = Relay::start(0).unwrap();
+        let name = format!("endpoint-http-test-{}.json", std::process::id());
+        let path = relay.publish_endpoint_as(&name).unwrap();
+        let before: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(before["http_url"].is_null(), "{before}");
+        let port = relay.serve_http_with(0, "e".repeat(32)).unwrap();
+        let after: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(after["http_url"], format!("http://127.0.0.1:{port}/mcp"), "{after}");
+        relay.stop();
+        assert!(!path.exists());
     }
 
     /// A client that trickles its request is cut off at the request's deadline, not kept for as

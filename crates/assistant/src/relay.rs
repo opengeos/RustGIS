@@ -38,6 +38,42 @@ pub use http::{HTTP_PATH, HTTP_PORT, HTTP_PORT_ENV, default_http_port, http_toke
 /// is 8766; the relay takes the next one.)
 pub const DEFAULT_PORT: u16 = 8767;
 
+/// The environment variable that changes the relay's default port, for the app and
+/// `rustgis-cli mcp --attach` alike (a second app, or a port another program holds).
+pub const PORT_ENV: &str = "RUSTGIS_MCP_PORT";
+
+/// The port the relay listens on, and `--attach` connects to, unless one is named:
+/// [`PORT_ENV`] when it's set, else [`DEFAULT_PORT`]. A value that isn't a port is an error
+/// naming the variable, not a quiet fall back to the default (which may be another app's).
+pub fn default_port() -> Result<u16, String> {
+    port_from(std::env::var(PORT_ENV).ok().as_deref())
+}
+
+/// The port [`PORT_ENV`]'s value names, or [`DEFAULT_PORT`] when it's unset or empty.
+fn port_from(value: Option<&str>) -> Result<u16, String> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => Ok(DEFAULT_PORT),
+        Some(v) => v
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or_else(|| format!("{PORT_ENV}={v} is not a port number (1 to 65535); fix or unset it")),
+    }
+}
+
+/// The shortest and longest a client may ask a request to wait for the app (`timeout_s` in its
+/// attach).
+const MIN_WAIT: Duration = Duration::from_secs(5);
+const MAX_WAIT: Duration = Duration::from_secs(600);
+/// A request waiting while the app has run no frame this long gets an early "busy" reply instead
+/// of waiting out its timeout: a modal dialog (a file picker) or a long tool holds the app.
+const BUSY_AFTER: Duration = Duration::from_secs(10);
+/// The error code of that early reply: apart from -32001 (the queue is full, try again soon), so
+/// a client can tell a stalled app from a busy queue.
+const BUSY_CODE: i64 = -32004;
+/// The endpoint file the app publishes for clients and setup scripts ([`Relay::publish_endpoint`]).
+pub const ENDPOINT: &str = "endpoint.json";
+
 /// The most bytes in a line before the token is checked: an attach is far smaller than this.
 const MAX_PREAUTH_LINE: u64 = 4096;
 /// Open connections, authenticated or not.
@@ -119,13 +155,22 @@ struct Shared {
     preauth: AtomicUsize,
     /// Authenticated connections.
     attached: AtomicUsize,
-    /// How long a request waits for the app before it is cancelled.
+    /// How long a request waits for the app before it is cancelled, unless its client asked for
+    /// another time.
     reply_wait: Duration,
+    /// After how long without a frame a waiting request is told the app is busy.
+    busy_after: Duration,
+    /// When the app last ran [`Relay::poll`].
+    last_poll: Mutex<Instant>,
+    /// The endpoint file this relay published, removed when it stops.
+    endpoint: Mutex<Option<PathBuf>>,
     /// The port, naming the grants' token files.
     port: u16,
     /// The app lets agents attached with the relay's own token use files and the network, whether
     /// or not they asked (`--yes`): the user turned agents on in the app ([`Relay::set_allow_access`]).
     allow_access: AtomicBool,
+    /// Agents attached with the relay's own token may run any command ([`Relay::set_full_access`]).
+    full_access: AtomicBool,
     /// Run-scoped tokens and what each allows ([`Relay::grant`]), by token.
     grants: Mutex<HashMap<String, (bool, PathBuf)>>,
     /// Local-agent grants require RustGIS approval unless their explicit auto setting is on.
@@ -194,6 +239,16 @@ impl Shared {
         }
         let _ = std::fs::remove_file(&self.token_file);
         *lock(&self.http_port) = None;
+        if let Some(path) = lock(&self.endpoint).take() {
+            // Only if it is still this relay's: another app may have published its own since.
+            let ours = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).is_some_and(|v| {
+                v.get("port").and_then(Value::as_u64) == Some(u64::from(self.port))
+                    && v.get("pid").and_then(Value::as_u64) == Some(u64::from(std::process::id()))
+            });
+            if ours {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
         for (_, (_, file)) in lock(&self.grants).drain() {
             let _ = std::fs::remove_file(&file);
         }
@@ -376,8 +431,8 @@ pub fn read_token_file(path: &std::path::Path) -> Result<String, String> {
 
 /// Makes sure [`token_dir`] exists as a private folder owned by the user running this process,
 /// and returns it. A folder that is a symlink, is not a folder, belongs to another user or is
-/// readable by anyone else is refused, not repaired.
-fn private_dir() -> Result<PathBuf, String> {
+/// readable by anyone else is refused, not repaired. The file bridge keeps its files here too.
+pub(crate) fn private_dir() -> Result<PathBuf, String> {
     let dir = token_dir();
     // Only Unix sets a mode on the builder; elsewhere it stays as created.
     #[cfg_attr(not(unix), allow(unused_mut))]
@@ -464,7 +519,7 @@ impl Relay {
     /// Binds `addr`. Anything but a loopback address is refused before a socket is opened, so a
     /// relay can never be reached from another computer.
     pub fn bind(addr: SocketAddr) -> Result<Self, String> {
-        Self::bind_with(addr, REPLY_WAIT)
+        Self::bind_with(addr, REPLY_WAIT, BUSY_AFTER)
     }
 
     /// Binds 127.0.0.1:`port`; 0 asks the system for a free port.
@@ -473,11 +528,17 @@ impl Relay {
     }
 
     /// [`Relay::bind`] with the time a request waits for the app before it is cancelled.
-    fn bind_with(addr: SocketAddr, reply_wait: Duration) -> Result<Self, String> {
+    fn bind_with(addr: SocketAddr, reply_wait: Duration, busy_after: Duration) -> Result<Self, String> {
         if !addr.ip().is_loopback() {
             return Err(format!("{addr}: the MCP relay listens on the loopback interface only"));
         }
-        let listener = TcpListener::bind(addr).map_err(|e| format!("{addr}: {e}"))?;
+        let listener = TcpListener::bind(addr).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AddrInUse {
+                format!("{addr}: the port is in use (another RustGIS, or another program); set {PORT_ENV} to another port")
+            } else {
+                format!("{addr}: {e}")
+            }
+        })?;
         let port = listener.local_addr().map_err(|e| format!("{addr}: {e}"))?.port();
         listener.set_nonblocking(true).map_err(|e| format!("{addr}: {e}"))?;
         // The token is written before the accept loop starts, so no client can attach before it
@@ -495,8 +556,12 @@ impl Relay {
             preauth: AtomicUsize::new(0),
             attached: AtomicUsize::new(0),
             reply_wait,
+            busy_after,
+            last_poll: Mutex::new(Instant::now()),
+            endpoint: Mutex::new(None),
             port,
             allow_access: AtomicBool::new(false),
+            full_access: AtomicBool::new(false),
             grants: Mutex::new(HashMap::new()),
             reviewed: Mutex::new(HashMap::new()),
             approvals: Mutex::new(Vec::new()),
@@ -530,6 +595,47 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// Publishes where the relay is, for clients and setup scripts: [`ENDPOINT`] in the private
+    /// folder, written whole (a temporary file renamed) and removed when the relay stops. It holds
+    /// the host, port, process id, start time, app version, a schema number and the token file's
+    /// path (not the token). Returns its path.
+    pub fn publish_endpoint(&self) -> Result<PathBuf, String> {
+        self.publish_endpoint_as(ENDPOINT)
+    }
+
+    /// [`Relay::publish_endpoint`] under another file name (tests, beside a running app's).
+    fn publish_endpoint_as(&self, name: &str) -> Result<PathBuf, String> {
+        let shared = &self.owner.shared;
+        let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let text = serde_json::json!({
+            "schema": 1,
+            "host": "127.0.0.1",
+            "port": shared.port,
+            "url": format!("tcp://127.0.0.1:{}", shared.port),
+            "pid": std::process::id(),
+            "started_at": crate::chatgpt::rfc3339(i64::try_from(started).unwrap_or(0)),
+            "version": env!("CARGO_PKG_VERSION"),
+            "token_file": shared.token_file,
+            "attach": format!("rustgis-cli mcp --attach {}", shared.port),
+            // MCP over HTTP, once it runs (the file is written again when it starts).
+            "http_url": lock(&shared.http_port).map(|p| format!("http://127.0.0.1:{p}{}", http::HTTP_PATH)),
+            "http_token_file": lock(&shared.http_port).and(http_token_path()),
+        })
+        .to_string();
+        let tmp = write_private(&format!(".{name}.{}", std::process::id()), &text)?;
+        let path = tmp.with_file_name(name);
+        std::fs::rename(&tmp, &path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("{}: {e}", path.display())
+        })?;
+        *lock(&shared.endpoint) = Some(path.clone());
+        if shared.stopped.load(SeqCst) {
+            let _ = std::fs::remove_file(&path);
+            return Err("the MCP relay has stopped".into());
+        }
+        Ok(path)
     }
 
     /// Tells the relay whether the app shows the map now, so a snapshot can capture the screen.
@@ -595,6 +701,19 @@ impl Relay {
         self.owner.shared.allow_access.store(allow, SeqCst);
     }
 
+    /// Lets agents attached with the relay's own token run any command, the user's own automation
+    /// included (scripts, tasks, models, plugins), or goes back to the usual refusals. The user's
+    /// explicit opt-in in the app; agents the app starts itself keep their grants' rules. It
+    /// applies to their next call.
+    pub fn set_full_access(&self, on: bool) {
+        self.owner.shared.full_access.store(on, SeqCst);
+    }
+
+    /// Whether agents have full access ([`Relay::set_full_access`]).
+    pub fn full_access(&self) -> bool {
+        self.owner.shared.full_access.load(SeqCst)
+    }
+
     /// A run-scoped token for an agent the app starts itself: connections that attach with it may
     /// use files and the network only if `access`. Dropping the [`Grant`] revokes it.
     pub fn grant(&self, access: bool) -> Result<Grant, String> {
@@ -632,6 +751,7 @@ impl Relay {
     /// calls go through [`Session::run`], so each is one undo step as everywhere else. A message
     /// whose connection already gave up is skipped, never run.
     pub fn poll(&self, s: &mut Session) -> usize {
+        *lock(&self.owner.shared.last_poll) = Instant::now();
         // One request at a time: a screen snapshot being captured holds the rest back.
         if lock(&self.owner.shared.shot).is_some() {
             return 0;
@@ -709,7 +829,8 @@ impl Relay {
                 continue;
             };
             // The session is the user's open project: commands that replace it stay theirs.
-            let mut server = Server { users_project: true, ..Server::new(allow_access) };
+            let full_access = self.owner.shared.full_access.load(SeqCst) && same_token(&req.token, &self.owner.shared.token);
+            let mut server = Server { users_project: true, full_access, ..Server::new(allow_access) };
             if asks_for_skills(&req.line) {
                 server.skills = skills.get_or_insert_with(crate::skills::installed).clone();
             }
@@ -924,6 +1045,8 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
     // up for each call, so the app's setting and a revoked grant apply at once.
     let mut asked = false;
     let mut token = String::new();
+    // How long this client's requests wait for the app (`timeout_s` in its attach).
+    let mut wait = shared.reply_wait;
     loop {
         let max = if slot.attached { MAX_LINE } else { MAX_PREAUTH_LINE };
         let line = match read_message_max(&mut input, max, Oversize::Stop) {
@@ -973,6 +1096,9 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
                     }
                 }
                 asked = msg.get("params").and_then(|p| p.get("access")).and_then(Value::as_bool).unwrap_or(false);
+                if let Some(secs) = msg.get("params").and_then(|p| p.get("timeout_s")).and_then(Value::as_f64).filter(|s| s.is_finite()) {
+                    wait = Duration::from_secs_f64(secs.clamp(MIN_WAIT.as_secs_f64(), MAX_WAIT.as_secs_f64()));
+                }
                 if !slot.attached {
                     slot.attached = true;
                     slot.preauth = false;
@@ -1034,14 +1160,27 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
             continue;
         }
         let asked_at = Instant::now();
-        let mut answer = wait_reply(&rx, &shared, shared.reply_wait);
+        let mut answer = wait_or_busy(&rx, &shared, wait, asked_at, &state, &held);
+        // The app ran no frame for a while (a dialog, a long tool): said at once, not after the
+        // whole wait.
+        if matches!(answer, Err(RecvTimeoutError::Timeout))
+            && !held.load(SeqCst)
+            && app_busy(&shared, asked_at)
+            && state.compare_exchange(PENDING, CANCELLED, SeqCst, SeqCst).is_ok()
+        {
+            let busy = "RustGIS isn't drawing (a dialog is open, a long task is running, or its window is hidden); the request was not run, try again when it is back";
+            if !send_line(&mut output, &error_reply(&id, BUSY_CODE, busy)) {
+                return;
+            }
+            continue;
+        }
         // Waiting for the user's approval: the user takes their time, within a limit of its own.
         while matches!(answer, Err(RecvTimeoutError::Timeout))
             && held.load(SeqCst)
             && state.load(SeqCst) == PENDING
             && asked_at.elapsed() < APPROVAL_WAIT
         {
-            answer = wait_reply(&rx, &shared, shared.reply_wait.min(APPROVAL_WAIT.saturating_sub(asked_at.elapsed())));
+            answer = wait_reply(&rx, &shared, wait.min(APPROVAL_WAIT.saturating_sub(asked_at.elapsed())));
         }
         let reply = match answer {
             Ok(reply) => reply,
@@ -1062,7 +1201,7 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
                 }
                 // Already running on the app's frame: wait one more bounded interval for its reply.
                 // If it still has not come, its outcome is unknown; say so instead of waiting on.
-                match wait_reply(&rx, &shared, shared.reply_wait) {
+                match wait_reply(&rx, &shared, wait) {
                     Ok(reply) => reply,
                     Err(RecvTimeoutError::Timeout) => {
                         send_line(&mut output, &error_reply(&id, -32003, "the app is still running the command; its outcome is unknown"));
@@ -1082,6 +1221,38 @@ fn connection(stream: TcpStream, slot: &mut Slot) {
             }
             // No reply to this message.
             None => return,
+        }
+    }
+}
+
+/// Whether the app has run no frame since a request queued at `asked_at` for the relay's
+/// `busy_after`. (An app that was idle before the request is not busy: the request wakes it.)
+fn app_busy(shared: &Shared, asked_at: Instant) -> bool {
+    asked_at.elapsed() >= shared.busy_after && lock(&shared.last_poll).elapsed() >= shared.busy_after
+}
+
+/// [`wait_reply`], returning early (as a timeout) when the request is still waiting to run, not
+/// for the user's approval, and the app is busy ([`app_busy`]).
+fn wait_or_busy(
+    rx: &Receiver<Option<String>>,
+    shared: &Shared,
+    wait: Duration,
+    asked_at: Instant,
+    state: &AtomicU8,
+    held: &AtomicBool,
+) -> Result<Option<String>, RecvTimeoutError> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(RecvTimeoutError::Timeout);
+        }
+        match wait_reply(rx, shared, left.min(Duration::from_millis(250))) {
+            Err(RecvTimeoutError::Timeout) => {}
+            done => return done,
+        }
+        if app_busy(shared, asked_at) && state.load(SeqCst) == PENDING && !held.load(SeqCst) {
+            return Err(RecvTimeoutError::Timeout);
         }
     }
 }
@@ -1121,7 +1292,7 @@ fn request_id(msg: &Value) -> Value {
 fn approval_summary(s: &Session, line: &str) -> Option<String> {
     let msg: Value = serde_json::from_str(line).ok()?;
     let messages = msg.as_array().map(Vec::as_slice).unwrap_or_else(|| std::slice::from_ref(&msg));
-    let server = Server { allow_access: true, skills: Vec::new(), users_project: true };
+    let server = Server { allow_access: true, skills: Vec::new(), users_project: true, full_access: false };
     let mut summaries = Vec::new();
     for msg in messages {
         if msg.get("method").and_then(Value::as_str) != Some("tools/call") || msg.get("id").is_none() {
@@ -1502,6 +1673,121 @@ mod tests {
         relay.stop();
     }
 
+    /// A request waiting while the app runs no frame (a dialog is open) is told the app is busy
+    /// well before its timeout, and never runs; an app that was merely idle before is not busy.
+    #[test]
+    fn relay_says_the_app_is_busy_early() {
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(30), Duration::from_millis(1500)).unwrap();
+        let mut s = sample();
+        let layers = s.map().layers.len();
+        // Idle before the request: the request wakes the app, which runs it.
+        std::thread::sleep(Duration::from_millis(2000));
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        writeln!(client, "{}", add_sample_call(1)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        assert_eq!(reply(&client)["result"]["isError"], false);
+        // Now the app runs no frame: busy, early, and the request never runs.
+        let asked = Instant::now();
+        writeln!(client, "{}", add_sample_call(2)).unwrap();
+        client.flush().unwrap();
+        let r = reply(&client);
+        assert!(asked.elapsed() < Duration::from_secs(10), "the busy reply took {:?}", asked.elapsed());
+        assert_eq!(r["error"]["code"], BUSY_CODE, "{r}");
+        assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("isn't drawing")), "{r}");
+        assert_eq!(relay.poll(&mut s), 0, "a request told the app was busy never runs");
+        assert_eq!(s.map().layers.len(), layers + 1);
+        // The connection still works once the app is back.
+        writeln!(client, "{}", add_sample_call(3)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        assert_eq!(reply(&client)["result"]["isError"], false);
+        relay.stop();
+    }
+
+    /// A client's `timeout_s` sets how long its requests wait for the app, within the limits.
+    #[test]
+    fn relay_waits_as_long_as_the_client_asks() {
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(60), Duration::from_secs(60)).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        let hello =
+            json!({"jsonrpc": "2.0", "method": "rustgis/attach", "params": {"access": false, "token": token(&relay), "timeout_s": 1}});
+        writeln!(client, "{hello}").unwrap();
+        writeln!(client, "{}", add_sample_call(1)).unwrap();
+        client.flush().unwrap();
+        let asked = Instant::now();
+        let r = reply(&client);
+        let took = asked.elapsed();
+        // Asked for 1 s, given the shortest allowed: 5 s, not the relay's 60.
+        assert!(took >= MIN_WAIT - Duration::from_millis(200) && took < Duration::from_secs(20), "{took:?}");
+        assert_eq!(r["error"]["code"], -32002, "{r}");
+        relay.stop();
+    }
+
+    /// The endpoint file says where the relay is and goes when it stops; the port can be named
+    /// in the environment, and a busy port's error says how.
+    #[test]
+    fn relay_publishes_its_endpoint_and_names_the_port_variable() {
+        let relay = Relay::start(0).unwrap();
+        let name = format!("endpoint-test-{}.json", std::process::id());
+        let path = relay.publish_endpoint_as(&name).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((v["port"].clone(), v["pid"].clone(), v["schema"].clone()), (json!(relay.port()), json!(std::process::id()), json!(1)));
+        assert_eq!(v["token_file"], token_path(relay.port()).display().to_string());
+        assert!(v.get("token").is_none(), "the token stays in its own file");
+        relay.stop();
+        assert!(!path.exists(), "the endpoint file goes with the relay");
+
+        assert_eq!(port_from(None), Ok(DEFAULT_PORT));
+        assert_eq!(port_from(Some("  ")), Ok(DEFAULT_PORT));
+        assert_eq!(port_from(Some(" 9123 ")), Ok(9123));
+        for bad in ["0", "70000", "not a port"] {
+            assert!(port_from(Some(bad)).is_err_and(|e| e.contains(PORT_ENV)), "{bad}");
+        }
+        let taken = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let e = Relay::start(taken.local_addr().unwrap().port()).unwrap_err();
+        assert!(e.contains(PORT_ENV), "{e}");
+    }
+
+    /// With full access on, an agent attached with the relay's own token may run the user's own
+    /// automation (a script here); without it, or through a grant, that stays refused.
+    #[test]
+    fn relay_full_access_lifts_the_refusals_for_its_own_token_only() {
+        let relay = Relay::start(0).unwrap();
+        let mut s = sample();
+        let script = |id: u64| {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "run_command",
+                "arguments": {"command": "script.run", "params": {"script": "layer.addSample {\"name\": \"countries\"}"}}}})
+        };
+        let ask = |client: &mut TcpStream, s: &mut Session, id: u64| {
+            writeln!(client, "{}", script(id)).unwrap();
+            client.flush().unwrap();
+            settle(&relay, s);
+            reply(client)
+        };
+        let layers = s.map().layers.len();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, true);
+        let r = ask(&mut client, &mut s, 1);
+        assert!(r["result"]["isError"] == true && r["result"]["content"][0]["text"].as_str().unwrap().contains("reserved"), "{r}");
+        relay.set_full_access(true);
+        assert!(relay.full_access());
+        let r = ask(&mut client, &mut s, 2);
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        assert_eq!(s.map().layers.len(), layers + 1);
+        // A grant (an agent the app started) keeps its own rules.
+        let grant = relay.grant(true).unwrap();
+        let mut other = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach_with(&mut other, &read_token_file(grant.token_file()).unwrap(), true);
+        let r = ask(&mut other, &mut s, 3);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        relay.set_full_access(false);
+        let r = ask(&mut client, &mut s, 4);
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        relay.stop();
+    }
+
     fn snapshot_call(id: u64, args: Value) -> Value {
         json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "snapshot", "arguments": args}})
     }
@@ -1798,7 +2084,7 @@ mod tests {
     fn approval_held_requests_wait_for_the_user() {
         // Once allowed, the export runs on this thread while the client waits at most two reply
         // waits: render once first (fonts load on the first render), and give the run a second.
-        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(1)).unwrap();
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(1), BUSY_AFTER).unwrap();
         let grant = relay.grant_reviewed(false).unwrap();
         let root = tempfile::tempdir().unwrap();
         let out = root.path().join("held.png");
@@ -1831,7 +2117,7 @@ mod tests {
     /// next frame does not run it.
     #[test]
     fn relay_cancels_a_timed_out_command_so_it_never_runs() {
-        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_millis(100)).unwrap();
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_millis(100), BUSY_AFTER).unwrap();
         let mut s = sample();
         let layers = s.map().layers.len();
         let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
@@ -2026,7 +2312,7 @@ mod tests {
     /// cancelled, and the wait still ends.
     #[test]
     fn relay_reports_a_running_command_past_its_wait_as_unknown() {
-        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(1)).unwrap();
+        let relay = Relay::bind_with(SocketAddr::from(([127, 0, 0, 1], 0)), Duration::from_secs(1), BUSY_AFTER).unwrap();
         let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
         attach(&mut client, &relay, false);
         writeln!(client, "{}", add_sample_call(5)).unwrap();

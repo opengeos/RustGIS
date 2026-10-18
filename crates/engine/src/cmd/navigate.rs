@@ -229,7 +229,7 @@ fn s_name(p: &Value) -> Result<&str, String> {
 
 /// The map `map` names (default: the active one). A `map` that isn't a name is an error, never
 /// the active map.
-fn map_at(s: &Session, p: &Value) -> Result<usize, String> {
+pub(crate) fn map_at(s: &Session, p: &Value) -> Result<usize, String> {
     match p.get("map") {
         None | Some(Value::Null) => Ok(s.project.active_map),
         Some(Value::String(m)) => s.project.maps.iter().position(|x| x.name.eq_ignore_ascii_case(m)).ok_or_else(|| format!("no map '{m}'")),
