@@ -252,6 +252,10 @@ const HALF: f64 = std::f64::consts::PI * rustgis_geom::MERCATOR_R;
 fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64, f64) -> Option<Coord>, to_merc: &dyn Fn(Coord) -> Coord) {
     let (w, h) = (pm.width() as usize, pm.height() as usize);
     let (mw, mh) = (mosaic.width() as usize, mosaic.height() as usize);
+    // The latitudes past the Web Mercator limit, clamped to it, land a hair outside the mosaic
+    // (the poles' caps), and its last row can hang past the world's south edge, where no tile
+    // draws: the row above it is the edge then.
+    let (fw, fh) = (mw as f64, (mh as f64).min(((frame.top + HALF) / frame.m_per_px).floor().max(1.0)));
     let src = mosaic.data();
     let dst = pm.data_mut();
     for y in 0..h {
@@ -259,11 +263,7 @@ fn warp(pm: &mut Pixmap, mosaic: &Pixmap, frame: &Frame, to_lonlat: &dyn Fn(f64,
             let Some(c) = to_lonlat(x as f64 + 0.5, y as f64 + 0.5) else { continue };
             let m = to_merc(c);
             let (mx, my) = ((m.x - frame.left) / frame.m_per_px, (frame.top - m.y) / frame.m_per_px);
-            // Within a pixel of the mosaic's edge takes the edge: the latitudes past the Web
-            // Mercator limit, clamped to it, land a hair outside (the poles' caps). Its last row
-            // can hang past the world's south edge, where no tile draws: the row above it is
-            // the edge then.
-            let (fw, fh) = (mw as f64, (mh as f64).min(((frame.top + HALF) / frame.m_per_px).floor().max(1.0)));
+            // Within a pixel of the mosaic's edge takes the edge (`fw`, `fh`).
             if !(mx > -1.0 && my > -1.0 && mx < fw + 1.0 && my < fh + 1.0) {
                 continue;
             }
