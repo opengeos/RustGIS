@@ -1016,15 +1016,22 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
             }
             tiles_pending |= r.tiles_pending;
             // Into the view at once, nearest band first, so only one band is held at a time.
-            warp.band(&mut pm, &v, &r.pixmap);
+            warp.band(&mut pm, &v, &r.pixmap, view.camera.depth_y(b.depth.1, view.height), view.camera.depth_y(b.depth.0, view.height));
         }
     }
     map.label_lock = lock;
     warp.finish(&mut pm);
+    extrusions_tilted(map, view, &mut pm);
     // A feature drawn in two bands offers its label twice: the nearer band's (offered first) is
-    // kept.
+    // kept. Tile labels (keyed by their place in a band's list) are told apart by their text and
+    // where they land, to a few points.
     let mut seen = std::collections::HashSet::new();
-    candidates.retain(|c| c.2.0 == u32::MAX || seen.insert(c.2));
+    let mut seen_tile = std::collections::HashSet::new();
+    candidates.retain(|c| match c.2.0 {
+        u32::MAX => seen_tile.insert((c.0.text.clone(), (c.0.x / 4.0).round() as i64, (c.0.y / 4.0).round() as i64)),
+        _ => seen.insert(c.2),
+    });
+    raise_labels(map, view, &mut candidates);
     let placed = place_labels(candidates, Vec::new(), view.width as f32, view.height as f32, false);
     for l in &placed.labels {
         if let Some(icon) = &l.icon {
@@ -1037,14 +1044,126 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
 
 /// The colours of a tilted view's sky (at the top) and of the fog it fades into at the
 /// horizon, from the basemap.
-fn sky_colors(map: &Map) -> (Rgba, Rgba) {
+pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
     let (water, land, _, _) = map.basemap.palette();
     let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
     let sky = water.lerp(white, 0.35);
     (sky, sky.lerp(land, 0.5).lerp(white, 0.3))
 }
 
-/// The most pixels a side of a tilted view's band is drawn with: past it, coarser.
+/// Lifts the labels of extruded features onto their roofs in a tilted view (as MapLibre
+/// does), where the extrusions drawn over the ground would otherwise hide them.
+fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
+    let m_per_px = map_ground_res(view, &map.flat());
+    let cam = view.camera;
+    let (w, h) = (view.width, view.height);
+    for (l, _, (id, row)) in candidates.iter_mut() {
+        let Some(layer) = map.layer(*id).filter(|l| l.geometry_type() == GeometryType::Polygon) else { continue };
+        let Some(x) = &layer.extrusion else { continue };
+        let up = (effects::extrusion_metres(&layer.dataset, x, *row) / m_per_px.max(1e-9)).clamp(0.0, 1e7);
+        let Some(m) = cam.try_to_map(f64::from(l.x), f64::from(l.y), w, h) else { continue };
+        let (u, v) = cam.ground_px(m);
+        let Some((sx, sy)) = cam.project_raised(u, v, up, w, h) else { continue };
+        let (dx, dy) = (sx as f32 - l.x, sy as f32 - l.y);
+        (l.x, l.y) = (sx as f32, sy as f32);
+        if let Some(i) = &mut l.icon {
+            (i.x, i.y) = (i.x + dx, i.y + dy);
+        }
+    }
+}
+
+/// An extruded feature tessellated once, for a moving tilted view to stand up in perspective
+/// every frame (as MapLibre's fill extrusions are built once and only re-projected).
+pub struct ExtrudedShape {
+    /// The point (the camera's coordinates) the roof's triangles are relative to.
+    pub origin: Coord,
+    /// The roof's triangles: vertices relative to `origin` (map units) and their indices.
+    pub roof: Vec<[f32; 2]>,
+    pub roof_indices: Vec<u32>,
+    /// The outer rings the walls stand on (the camera's coordinates).
+    pub rings: Vec<Vec<Coord>>,
+    /// Its height (metres).
+    pub metres: f64,
+    pub fill: Rgba,
+    pub stroke: Rgba,
+}
+
+/// The extruded features of a tilted `view` of `map`, tessellated for [`ExtrudedShape`]s, from
+/// geometry thinned for the view's scale, bottom layer first.
+pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let (flat, key) = (map.flat(), map.projection.code());
+    let tol = view.camera.res * rustgis_map::lod::THIN_PX;
+    let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
+    order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
+    let mut out = Vec::new();
+    for li in order {
+        let Some(layer) = map.layers.get_mut(li) else { continue };
+        if map.projection.is_globe()
+            || !layer.visible
+            || !layer.in_scale_range(scale)
+            || layer.raster.is_some()
+            || layer.geometry_type() != GeometryType::Polygon
+        {
+            continue;
+        }
+        let Some(x) = layer.extrusion.clone() else { continue };
+        let rows = layer.drawn_rows(scale);
+        layer.thinned_in(&flat, &key, tol);
+        let layer: &rustgis_map::Layer = layer;
+        for (row, g) in layer.thinned_cache(tol).iter().enumerate() {
+            let Some(Geometry::Polygon(polys)) = g else { continue };
+            if rows.get(row) != Some(&true) {
+                continue;
+            }
+            let Some(origin) = polys.iter().flatten().flatten().find(|c| c.is_finite()).copied() else { continue };
+            let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5);
+            let Ok(Some((verts, indices))) = roof else { continue };
+            let sym = layer.symbol(row);
+            out.push(ExtrudedShape {
+                origin,
+                roof: verts.iter().map(|v| v.position).collect(),
+                roof_indices: indices,
+                rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
+                metres: effects::extrusion_metres(&layer.dataset, &x, row),
+                fill: sym.fill.with_alpha(255),
+                stroke: sym.stroke,
+            });
+        }
+    }
+    out
+}
+
+/// The light of a tilted view's extrusions (toward it: right, down the screen and up, in ground
+/// px), as [`effects`] lights them.
+pub const EXTRUSION_LIGHT: (f64, f64, f64) = effects::LIGHT;
+
+/// The extruded layers of a tilted view, stood up in perspective over its ground, bottom layer
+/// first (a drape of the moving view shows them flat).
+fn extrusions_tilted(map: &mut Map, view: &View, pm: &mut Pixmap) {
+    let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let (flat, key) = (map.flat(), map.projection.code());
+    let m_per_px = map_ground_res(view, &flat);
+    let (_, fog) = tilt_sky(map);
+    let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
+    order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
+    for li in order {
+        let Some(layer) = map.layers.get_mut(li) else { continue };
+        if !layer.visible || !layer.in_scale_range(scale) || layer.raster.is_some() || layer.geometry_type() != GeometryType::Polygon {
+            continue;
+        }
+        let Some(x) = layer.extrusion.clone() else { continue };
+        let rows = layer.drawn_rows(scale);
+        // Refreshes the projected copy for this projection.
+        layer.thinned_in(&flat, &key, view.camera.res * rustgis_map::lod::THIN_PX);
+        let layer: &rustgis_map::Layer = layer;
+        let geoms: Vec<Option<&Geometry>> = layer.projected_cache().iter().map(Option::as_ref).collect();
+        effects::extrude_tilted(pm, view, &layer.dataset, &geoms, &rows, &x, m_per_px, fog, |r| layer.symbol(r));
+    }
+}
+
+/// The most physical pixels a side of a tilted view's band is drawn with: past it, at a lower
+/// pixel density. (`Camera::tilt_bands` limits a band's logical size the same way.)
 const MAX_BAND_PX: f64 = 4096.0;
 
 /// The view a band of a tilted `view` is drawn with: at the view's pixel density, or coarser
@@ -1056,7 +1175,8 @@ fn band_view(view: &View, b: &rustgis_map::camera::Band) -> View {
 
 /// Reads the streamed layers once for a tilted `view`: every layer drawn in one of its `bands`
 /// (each drawn at its own scale, coarser far away). Reads are kept per extent, so a layer drawn
-/// in two bands asks for the same extent twice and reads once. Whether a read is still running.
+/// in two bands asks for the same extent twice and reads once. Returns whether a read is still
+/// running.
 fn sync_tilted(map: &mut Map, view: &View, bands: &[rustgis_map::camera::Band], block: bool) -> bool {
     let lonlat = view_lonlat(map, view);
     let mut pending = false;
@@ -1084,7 +1204,7 @@ struct Warp {
 impl Warp {
     fn new(view: &View, map: &Map) -> Warp {
         let (pw, ph) = view.pixel_size();
-        let (sky, fog) = sky_colors(map);
+        let (sky, fog) = tilt_sky(map);
         let rgba = |c: Rgba| [f32::from(c.r()), f32::from(c.g()), f32::from(c.b()), 255.0];
         Warp {
             look: view.camera.ground_lookup(view.width, view.height),
@@ -1101,12 +1221,17 @@ impl Warp {
         ((px as f64 + 0.5) / self.k.0, (py as f64 + 0.5) / self.k.1)
     }
 
-    /// Colours the pixels still empty that band picture `pic` (drawn for `v`) has under them.
-    fn band(&mut self, pm: &mut Pixmap, v: &View, pic: &Pixmap) {
-        let pw = pm.width() as usize;
+    /// Colours the pixels still empty that band picture `pic` (drawn for `v`) has under them,
+    /// on the screen rows between `top` and `bottom` (logical points) where its ground lies.
+    fn band(&mut self, pm: &mut Pixmap, v: &View, pic: &Pixmap, top: f64, bottom: f64) {
+        let (pw, ph) = (pm.width() as usize, pm.height() as usize);
         let far = rustgis_map::camera::FAR;
+        // A row's worth of slack each way for sampling at the edges.
+        let row = |y: f64| ((y * self.k.1).floor().max(0.0) as usize).min(ph);
+        let (r0, r1) = (row(top - 1.0 / self.k.1), (row(bottom + 2.0 / self.k.1)).min(ph));
         let out = pm.pixels_mut();
-        for (i, filled) in self.filled.iter_mut().enumerate() {
+        let span = r0 * pw..r1.max(r0) * pw;
+        for (i, filled) in self.filled.iter_mut().enumerate().take(span.end).skip(span.start) {
             if *filled {
                 continue;
             }
@@ -1470,7 +1595,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             let extrude = layer.extrusion.as_ref().filter(|_| layer.geometry_type() == GeometryType::Polygon && globe.is_none());
             if let Some(a) = aggregate {
                 effects::aggregate(dest, &ctx, &geoms, &rows, a, &layer.symbol(0));
-            } else if let Some(x) = extrude {
+            } else if extrude.is_some() && matches!(labels_to, Labels::Tilted(..)) {
+                // Stood up in perspective over the tilted view (`render_tilted`); its labels still
+                // come from here.
+            } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                 let px_per_m = view.pixels_per_point / map_ground_res(view, &flat);
                 effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
             } else {
@@ -2107,18 +2235,12 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
         let v = View { width: w, height: h, pixels_per_point: ppp, camera, sky: false };
         // The bands share the read above.
         if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, false, Backend::Cpu, Labels::Shared) {
-            out.push(TiltPatch { pixmap: r.pixmap, band: rustgis_map::camera::Band { camera, width: w, height: h } });
+            out.push(TiltPatch { pixmap: r.pixmap, band: rustgis_map::camera::Band { camera, width: w, height: h, depth: b.depth } });
         }
     }
     map.label_display = display;
     map.label_lock = lock;
     out
-}
-
-/// The colours of a tilted view's sky (at the top) and of the fog at its horizon, for the map's
-/// basemap.
-pub fn tilt_sky(map: &Map) -> (Rgba, Rgba) {
-    sky_colors(map)
 }
 
 /// A halo that contrasts with the text colour.
@@ -2775,7 +2897,7 @@ mod tests {
         // Steeper, the sky shows at the top in the sky colour, and the ground at the bottom.
         let steep = View { camera: Camera { pitch: 80.0, ..camera }, ..view };
         let r = render(&mut m, &steep).unwrap();
-        let (sky, _) = sky_colors(&m);
+        let (sky, _) = tilt_sky(&m);
         let top = r.pixmap.pixel(400, 0).unwrap();
         assert!((i32::from(top.red()) - i32::from(sky.r())).abs() <= 2 && (i32::from(top.blue()) - i32::from(sky.b())).abs() <= 2);
         assert!(r.pixmap.pixels().iter().all(|p| p.alpha() == 255));
@@ -2784,6 +2906,44 @@ mod tests {
         let flat = render(&mut m, &View { camera: Camera { pitch: 0.0, ..camera }, ..view }).unwrap();
         let nan = render(&mut m, &View { camera: Camera { pitch: f64::NAN, ..camera }, ..view }).unwrap();
         assert_eq!(nan.pixmap.data(), flat.pixmap.data());
+    }
+
+    #[test]
+    fn extrusions_stand_up_in_a_tilted_view() {
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("blocks", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+        // A square about 200 km a side at the centre.
+        let s = 0.9;
+        let ring = vec![Coord::new(-s, -s), Coord::new(s, -s), Coord::new(s, s), Coord::new(-s, s), Coord::new(-s, -s)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Text("Block".into())]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.labels.enabled = true;
+            l.extrusion = Some(rustgis_map::effects::Extrusion {
+                field: None,
+                height: 100_000.0,
+                factor: 1.0,
+                face_culling: true,
+                lighting: true,
+                shadows: true,
+            });
+        }
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 2000.0, bearing: 30.0, pitch: 60.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        // The square on the ground spans these rows; its roof stands well above them.
+        let (_, ground_top) = camera.to_screen(lonlat_to_merc(Coord::new(0.0, s)), 400.0, 300.0);
+        let r = render(&mut m, &view).unwrap();
+        let bg = r.pixmap.pixel(5, 295).unwrap();
+        let top_ink = (0..300u32).find(|&y| (150..250).any(|x| r.pixmap.pixel(x, y).is_some_and(|p| p != bg))).unwrap();
+        assert!(f64::from(top_ink) < ground_top - 15.0, "roof from row {top_ink}, ground from {ground_top}");
+        // Its label is lifted onto the roof, above the ground under it.
+        let l = r.labels.iter().find(|l| l.text == "Block").expect("placed");
+        assert!(f64::from(l.y) < 150.0 - 15.0, "label at {}", l.y);
+        // The moving view's tessellation holds the square, roof and walls, at its height.
+        let shapes = extruded_shapes(&mut m, &view);
+        assert_eq!(shapes.len(), 1);
+        assert!(shapes[0].roof_indices.len() >= 6 && shapes[0].rings.len() == 1 && shapes[0].metres == 100_000.0);
     }
 
     #[test]

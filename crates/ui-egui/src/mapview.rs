@@ -431,7 +431,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let cam = app.session.map().camera;
     let globe_view = app.session.map().projection == Projection::Globe;
     let dragging = app.map.drag.is_some_and(|(_, k)| k == DragKind::Pan);
-    let moving = dragging || time - app.map.last_interaction < 0.18;
+    // A tilted map waits longer before its exact (slower) frame: its drape already shows it in
+    // perspective, so a short pause in a gesture doesn't stop to draw it.
+    let settle = if !globe_view && cam.pitch != 0.0 { 0.4 } else { 0.18 };
+    let moving = dragging || time - app.map.last_interaction < settle;
     let draped = if globe_view && moving {
         let key = crate::globe_drape::DrapeKey { rev: app.session.revision, sources: rustgis_engine::map::source::generation() };
         let tiles = if app.session.map().tiles.is_empty() { 0 } else { rustgis_engine::render::rustgis_tiles::cache::generation() };

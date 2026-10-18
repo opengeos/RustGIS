@@ -113,6 +113,46 @@ impl Camera {
         Coord::new(self.center.x + ux * self.res, self.center.y - uy * self.res)
     }
 
+    /// A Mercator point's ground offsets from the view's centre (logical px at the centre's
+    /// scale; x right and y down in the view turned to the bearing): the frame
+    /// [`Camera::project_raised`] works in.
+    pub fn ground_px(&self, p: Coord) -> (f64, f64) {
+        self.ground(p)
+    }
+
+    /// Where the eye of a `h` px tall view is, in the frame of [`Camera::ground_px`] and the
+    /// height above the ground (logical px): straight above the centre in a flat view, behind
+    /// and above it in a tilted one.
+    pub fn eye(&self, h: f64) -> (f64, f64, f64) {
+        let t = self.tilt_or_flat(h);
+        (0.0, t.d * t.s, t.d * t.c)
+    }
+
+    /// The screen point (logical px) of a point at ground offsets (u, v) raised `up` px above the
+    /// ground, seen in perspective by the view's eye; `None` behind the camera.
+    pub fn project_raised(&self, u: f64, v: f64, up: f64, w: f64, h: f64) -> Option<(f64, f64)> {
+        let t = self.tilt_or_flat(h);
+        let z = t.d - v * t.s - up * t.c;
+        (z > t.d * NEAR).then(|| (w / 2.0 + u * t.d / z, h / 2.0 + (v * t.c - up * t.s) * t.d / z))
+    }
+
+    /// The view's perspective, also for a flat view (seen from straight above).
+    fn tilt_or_flat(&self, h: f64) -> Tilt {
+        self.tilt(h).unwrap_or(Tilt { c: 1.0, s: 0.0, d: h.max(1.0) / 2.0 / TAN_HALF_FOV })
+    }
+
+    /// The screen y (logical px) of the ground at `depth` (a multiple of the camera's distance
+    /// from the centre) in a tilted `h` px tall view; the centre's in a flat one.
+    pub fn depth_y(&self, depth: f64, h: f64) -> f64 {
+        match self.tilt(h) {
+            Some(t) if t.s > 0.0 && depth > 0.0 => {
+                let z = depth * t.d;
+                h / 2.0 + (t.d - z) / t.s * t.c * t.d / z
+            }
+            _ => h / 2.0,
+        }
+    }
+
     /// The screen y (logical px) above which a tilted `h` px tall view shows sky: where its reach
     /// ([`FAR`]) ends, or the horizon. `None` when no sky shows.
     pub fn sky_y(&self, h: f64) -> Option<f64> {
@@ -291,7 +331,7 @@ impl Camera {
     /// fetched) coarser. A flat view is one band: itself.
     pub fn tilt_bands(&self, w: f64, h: f64) -> Vec<Band> {
         let Some(t) = self.tilt(h) else {
-            return vec![Band { camera: *self, width: w, height: h }];
+            return vec![Band { camera: *self, width: w, height: h, depth: (1.0, 1.0) }];
         };
         let z_of = |v: f64| t.d - v * t.s;
         let v_of = |z: f64| (t.d - z) / t.s;
@@ -314,13 +354,24 @@ impl Camera {
                 e.expand(self.ground_to_map(u, v));
             }
             let mut res = self.res * k;
+            // A band squeezed on screen (far ground at a steep pitch is foreshortened up and
+            // down) needs no more pixels than a few times the screen it covers: coarser
+            // instead. Drawn at its near edge's scale it would take many screens' worth.
+            let sy = |v: f64| h / 2.0 + v * t.c * t.d / z_of(v);
+            let screen = w * (sy(v_of(z0)).min(h) - sy(v_of(z1)).max(0.0)).max(1.0);
+            let pixels = (e.width() / res) * (e.height() / res);
+            if pixels > BAND_SCREENS * screen {
+                res *= (pixels / (BAND_SCREENS * screen)).sqrt();
+            }
             // No band past a texture's size: coarser instead.
             let side = (e.width().max(e.height()) / res).max(1.0);
             if side > MAX_BAND_SIDE {
                 res *= side / MAX_BAND_SIDE;
             }
             let camera = Camera { center: e.center(), res, bearing: 0.0, pitch: 0.0 };
-            bands.push(Band { camera, width: (e.width() / res).ceil().max(1.0), height: (e.height() / res).ceil().max(1.0) });
+            let (width, height) = ((e.width() / res).ceil().max(1.0), (e.height() / res).ceil().max(1.0));
+            let depth = (z_of(v0) / t.d, z_of(v1) / t.d);
+            bands.push(Band { camera, width, height, depth });
             z0 = z1;
         }
         bands
@@ -400,6 +451,10 @@ impl GroundLookup {
     }
 }
 
+/// The most area a band of a tilted view is drawn with, as a multiple of the screen area it
+/// covers.
+const BAND_SCREENS: f64 = 3.0;
+
 /// The longest side (logical px) of a band of a tilted view.
 const MAX_BAND_SIDE: f64 = 4096.0;
 
@@ -410,6 +465,9 @@ pub struct Band {
     pub camera: Camera,
     pub width: f64,
     pub height: f64,
+    /// The nearest and farthest ground it holds, as multiples of the tilted camera's distance
+    /// from the view's centre.
+    pub depth: (f64, f64),
 }
 
 /// A bearing in (-180, 180]; a non-finite one is north (0).
@@ -523,6 +581,27 @@ mod tests {
     }
 
     #[test]
+    fn raised_points_stand_up_in_a_tilted_view() {
+        let (w, h) = (800.0, 600.0);
+        let mut c = Camera::new(Coord::new(0.0, 0.0), 10.0);
+        c.set_pitch(60.0);
+        c.set_bearing(25.0);
+        // On the ground, a raised projection is the plain one.
+        let p = Coord::new(300.0, -200.0);
+        let (u, v) = c.ground_px(p);
+        let (x, y) = c.project_raised(u, v, 0.0, w, h).unwrap();
+        let (sx, sy) = c.to_screen(p, w, h);
+        assert!((x - sx).abs() < 1e-9 && (y - sy).abs() < 1e-9);
+        // Raised, it stands up the screen.
+        let (_, top) = c.project_raised(u, v, 50.0, w, h).unwrap();
+        assert!(top < y - 20.0, "{top} vs {y}");
+        // The eye is behind and above the centre; a point at the eye is behind the camera.
+        let (eu, ev, eh) = c.eye(h);
+        assert!(eu == 0.0 && ev > 0.0 && eh > 0.0);
+        assert!(c.project_raised(eu, ev, eh, w, h).is_none());
+    }
+
+    #[test]
     fn tilted_bands_cover_the_ground_nearest_and_sharpest_first() {
         let (w, h) = (800.0, 600.0);
         let mut c = Camera::new(Coord::new(1_000_000.0, 5_000_000.0), 500.0);
@@ -533,6 +612,11 @@ mod tests {
             assert!(!bands.is_empty() && bands.len() <= 8, "{pitch}: {}", bands.len());
             assert!(bands.windows(2).all(|b| b[0].camera.res < b[1].camera.res), "{pitch}: coarser away");
             assert!(bands.iter().all(|b| b.width <= MAX_BAND_SIDE && b.height <= MAX_BAND_SIDE));
+            // A band's ground lies between the screen rows of its depths.
+            for b in &bands {
+                let (near, far) = (c.depth_y(b.depth.0, h), c.depth_y(b.depth.1, h));
+                assert!(far < near, "{pitch}: rows {far}..{near}");
+            }
             // The fast lookup agrees with the camera.
             let look = c.ground_lookup(w, h);
             for (sx, sy) in [(5.0, 7.0), (400.0, 300.0), (700.0, 550.0), (400.0, 0.0)] {
@@ -555,7 +639,7 @@ mod tests {
         }
         // A flat view is one band: itself.
         c.set_pitch(0.0);
-        assert_eq!(c.tilt_bands(w, h), vec![Band { camera: c, width: w, height: h }]);
+        assert_eq!(c.tilt_bands(w, h), vec![Band { camera: c, width: w, height: h, depth: (1.0, 1.0) }]);
     }
 
     #[test]

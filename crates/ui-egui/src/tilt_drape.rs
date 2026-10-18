@@ -1,14 +1,16 @@
 //! The moving tilted map. While a tilted map pans, zooms, turns or tilts, its ground drawn flat
 //! once in bands (`render::render_tilt_drape`) is laid over the tilted ground as textured meshes,
 //! so a frame only moves vertices, as the globe's drape does; the sky above the horizon is a
-//! gradient. The exact frame is drawn again once the map settles.
+//! gradient. Extruded layers stand up over it in perspective as MapLibre's fill extrusions do:
+//! tessellated once, then projected, lit and ordered far to near every frame. The exact frame is
+//! drawn again once the map settles.
 
 use egui::epaint::Vertex;
 use egui::{Color32, Mesh, Painter, Rect, Shape, TextureFilter, TextureHandle, TextureOptions, pos2};
 use rustgis_engine::geom::{Coord, Extent};
 use rustgis_engine::map::camera::{Band, FAR};
 use rustgis_engine::map::{Camera, Map};
-use rustgis_engine::render::{self, View};
+use rustgis_engine::render::{self, ExtrudedShape, View};
 
 use crate::globe_drape::DrapeKey;
 use crate::theme::c32;
@@ -33,6 +35,8 @@ struct Drape {
     built: f64,
     /// Each band and its picture.
     bands: Vec<(Band, TextureHandle)>,
+    /// The extruded features, tessellated.
+    shapes: Vec<ExtrudedShape>,
 }
 
 /// The drape of the moving tilted map, kept between frames while the map doesn't change.
@@ -90,7 +94,8 @@ impl TiltDrape {
                 (p.band, tex)
             })
             .collect();
-        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands });
+        let shapes = render::extruded_shapes(map, &view);
+        self.drape = Some(Drape { key, ppp: drape_ppp, res: cam.res, tiles, built: time, bands, shapes });
         true
     }
 
@@ -114,6 +119,99 @@ impl TiltDrape {
         for mesh in self.meshes(rect, &cam, w, h) {
             painter.add(Shape::mesh(mesh));
         }
+        if let Some(mesh) = self.extrusions(rect, &cam, map.ground_res_at(&cam), fog) {
+            painter.add(Shape::mesh(mesh));
+        }
+    }
+
+    /// The extruded features standing on the drape in perspective, as one mesh: features far to
+    /// near, each one's walls (facing the eye, lit by their facing and darker toward their foot,
+    /// far first) then its roof; fading into `fog` with distance. `m_per_px` is metres per
+    /// logical px of ground at the centre.
+    fn extrusions(&self, rect: Rect, cam: &Camera, m_per_px: f64, fog: rustgis_engine::map::Rgba) -> Option<Mesh> {
+        let d = self.drape.as_ref()?;
+        let (w, h) = (rect.width() as f64, rect.height() as f64);
+        let (eu, ev, _) = cam.eye(h);
+        let light = render::EXTRUSION_LIGHT;
+        let light_len = light.0.hypot(light.1).max(1e-9);
+        let at = |u: f64, v: f64, up: f64| {
+            cam.project_raised(u, v, up, w, h)
+                .filter(|p| p.0.is_finite() && p.1.is_finite())
+                .map(|(x, y)| pos2(rect.min.x + x as f32, rect.min.y + y as f32))
+        };
+        // Far (up the screen) first; past the view's reach is sky.
+        let mut order: Vec<(f64, f64, usize)> = d
+            .shapes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let depth = 1.0 / cam.depth_scale(s.origin, h)?.max(1e-9);
+                (depth <= FAR).then(|| (cam.ground_px(s.origin).1, depth, i))
+            })
+            .collect();
+        order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut mesh = Mesh::default();
+        for (_, depth, i) in order {
+            let Some(s) = d.shapes.get(i) else { continue };
+            let up = (s.metres / m_per_px.max(1e-9)).clamp(0.0, 1e7);
+            let t = ((depth - FAR * 0.5) / (FAR * 0.5)).clamp(0.0, 1.0);
+            let base = s.fill.lerp(fog, t * t * (3.0 - 2.0 * t));
+            let mut walls: Vec<(f64, [egui::Pos2; 4], f64)> = Vec::new();
+            for ring in &s.rings {
+                let g: Vec<(f64, f64)> = ring.iter().map(|c| cam.ground_px(*c)).collect();
+                let area2: f64 =
+                    (0..g.len()).filter_map(|k| Some((g.get(k)?, g.get((k + 1) % g.len())?))).map(|(a, b)| a.0 * b.1 - b.0 * a.1).sum();
+                for k in 0..g.len() {
+                    let (Some(&a), Some(&b)) = (g.get(k), g.get((k + 1) % g.len())) else { continue };
+                    let (du, dv) = (b.0 - a.0, b.1 - a.1);
+                    let len = du.hypot(dv);
+                    if len <= 0.0 {
+                        continue;
+                    }
+                    let n = if area2 > 0.0 { (dv / len, -du / len) } else { (-dv / len, du / len) };
+                    let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+                    if n.0 * (eu - mid.0) + n.1 * (ev - mid.1) <= 0.0 {
+                        continue;
+                    }
+                    let (Some(fa), Some(fb), Some(tb), Some(ta)) =
+                        (at(a.0, a.1, 0.0), at(b.0, b.1, 0.0), at(b.0, b.1, up), at(a.0, a.1, up))
+                    else {
+                        continue;
+                    };
+                    walls.push((mid.1, [fa, fb, tb, ta], ((n.0 * light.0 + n.1 * light.1) / light_len).max(0.0)));
+                }
+            }
+            walls.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (_, [fa, fb, tb, ta], lit) in walls {
+                let top = base.shade(0.6 + 0.4 * lit);
+                let (top, foot) = (c32(top), c32(top.shade(0.72)));
+                let k = mesh.vertices.len() as u32;
+                for (p, c) in [(fa, foot), (fb, foot), (tb, top), (ta, top)] {
+                    mesh.colored_vertex(p, c);
+                }
+                mesh.add_triangle(k, k + 1, k + 2);
+                mesh.add_triangle(k, k + 2, k + 3);
+            }
+            let roof: Option<Vec<egui::Pos2>> = s
+                .roof
+                .iter()
+                .map(|p| {
+                    let (u, v) = cam.ground_px(Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1])));
+                    at(u, v, up)
+                })
+                .collect();
+            if let Some(roof) = roof {
+                let k = mesh.vertices.len() as u32;
+                let color = c32(base);
+                for p in roof {
+                    mesh.colored_vertex(p, color);
+                }
+                for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
+                    mesh.add_triangle(k + a, k + b, k + c);
+                }
+            }
+        }
+        (!mesh.indices.is_empty()).then_some(mesh)
     }
 
     /// The drape's meshes for `cam` in `rect`, farthest band first. A band with nothing in front
@@ -188,6 +286,42 @@ mod tests {
         m
     }
 
+    fn fog() -> rustgis_engine::map::Rgba {
+        rustgis_engine::map::Rgba::rgb(200, 210, 220)
+    }
+
+    #[test]
+    fn extrusions_stand_up_on_the_drape() {
+        use rustgis_engine::data::{Dataset, Geometry, GeometryType};
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(55.0);
+        let mut ds = Dataset::new("blocks", GeometryType::Polygon, vec![]);
+        let ring =
+            vec![Coord::new(9.0, 47.0), Coord::new(11.0, 47.0), Coord::new(11.0, 49.0), Coord::new(9.0, 49.0), Coord::new(9.0, 47.0)];
+        ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let id = m.add_dataset(ds);
+        if let Some(l) = m.layer_mut(id) {
+            l.extrusion = Some(rustgis_engine::map::effects::Extrusion {
+                field: None,
+                height: 100_000.0,
+                factor: 1.0,
+                face_culling: true,
+                lighting: true,
+                shadows: false,
+            });
+        }
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let mesh = d.extrusions(rect, &m.camera, m.ground_res_at(&m.camera), fog()).expect("the block stands up");
+        assert!(mesh.is_valid() && mesh.indices.len() > 6);
+        // Its roof stands above its foot on screen.
+        let foot = m.camera.to_screen(rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 47.0)), 800.0, 600.0).1 as f32;
+        let top = mesh.vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+        assert!(top < foot - 20.0, "{top} vs {foot}");
+    }
+
     #[test]
     fn the_drape_covers_the_view_and_is_kept_while_it_does() {
         let ctx = egui::Context::default();
@@ -201,6 +335,8 @@ mod tests {
         m.camera.pan_px(30.0, 20.0);
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1));
         assert_eq!(d.drape.as_ref().map(|d| d.built), built);
+        // No extruded layer, no extrusion mesh.
+        assert!(d.extrusions(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0)), &m.camera, 2_000.0, fog()).is_none());
         // Every band in front of the camera gives a valid mesh.
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
         let meshes = d.meshes(rect, &m.camera, 800.0, 600.0);
