@@ -31,8 +31,9 @@ pub fn split_password(s: &str) -> Option<(String, Option<String>)> {
         .or_else(|| {
             let q = rest.find('?')?;
             let tail = rest.get(q + 1..)?;
-            let i = tail.find(['@', '=', '&', '/'])?;
-            (tail.get(i..i + 1) == Some("@")).then_some(q + 1 + i)
+            // The last `@` before them: the password may hold another.
+            let head = tail.get(..tail.find(['=', '&', '/']).unwrap_or(tail.len()))?;
+            head.rfind('@').map(|i| q + 1 + i)
         });
     let (user, password, after) = match at {
         Some(at) => {
@@ -98,6 +99,7 @@ mod tests {
         assert_eq!(s("mysql://u:12#x@h:3306/gis"), ("mysql://u@h:3306/gis".into(), Some("12#x".into())));
         assert_eq!(s("mysql://h:3306/gis"), ("mysql://h:3306/gis".into(), None));
         assert_eq!(s("mysql://u:12?x@h/gis"), ("mysql://u@h/gis".into(), Some("12?x".into())));
+        assert_eq!(s("mysql://u:12?part@secret@h/gis"), ("mysql://u@h/gis".into(), Some("12?part@secret".into())));
         assert_eq!(s("mysql://h/gis?ssl-ca=/a@b.pem"), ("mysql://h/gis?ssl-ca=/a@b.pem".into(), None));
         assert_eq!(s("mysql://me:p#w?x@h:3306/gis#f"), ("mysql://me@h:3306/gis".into(), Some("p#w?x".into())));
         assert_eq!(s("mysql://me@h/gis?pass=a%26b&ssl-mode=DISABLED"), ("mysql://me@h/gis?ssl-mode=DISABLED".into(), Some("a&b".into())));

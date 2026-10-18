@@ -252,7 +252,14 @@ impl Conn {
         let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
         for attempt in 0..2 {
             if guard.is_none() {
-                *guard = Some(open_client(&self.config, self.password.as_deref())?.0.0);
+                let ((client, _), plain) = open_client(&self.config, self.password.as_deref())?;
+                // A connection that was encrypted isn't continued in the clear.
+                if plain && !self.plain {
+                    return Err(DataError::Format(
+                        "the server no longer offers TLS: connect again with Add Data › Database… to accept that".into(),
+                    ));
+                }
+                *guard = Some(client);
             }
             let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
             match f(client) {
@@ -838,8 +845,15 @@ impl MysqlSource {
     /// the whole table, or can't be converted (the read then filters nothing on the server).
     fn native_window(&self, req: &Request) -> Option<String> {
         let e = req.extent?;
+        // (Only an extent measured from every row: a sample's can miss some.)
         let all = self.info.extent;
-        if !all.is_empty() && e.min_x <= all.min_x && e.min_y <= all.min_y && e.max_x >= all.max_x && e.max_y >= all.max_y {
+        if self.info.count.is_some_and(|n| n <= EXTENT_SAMPLE as u64)
+            && !all.is_empty()
+            && e.min_x <= all.min_x
+            && e.min_y <= all.min_y
+            && e.max_x >= all.max_x
+            && e.max_y >= all.max_y
+        {
             return None;
         }
         box_text(&self.reproject.extent_from_lonlat(&e), self.reproject.is_lonlat())
