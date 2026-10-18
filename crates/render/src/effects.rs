@@ -210,6 +210,38 @@ pub(crate) fn extrusion_metres(ds: &Dataset, x: &Extrusion, row: usize) -> f64 {
 /// mostly overhead (toward it: right, down the screen and up, in ground px).
 const LIGHT: (f64, f64, f64) = (-0.25, -0.43, 0.87);
 
+/// The part of the polygon `pts` (ground px) down the view no farther than `v_max`: what stands
+/// in front of the eye ([`rustgis_map::Camera::near_v`]). Sutherland–Hodgman against one edge.
+pub fn clip_near(pts: &[(f64, f64)], v_max: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(pts.len() + 2);
+    for i in 0..pts.len() {
+        let (Some(&a), Some(&b)) = (pts.get(i), pts.get((i + 1) % pts.len())) else { continue };
+        let (ina, inb) = (a.1 <= v_max, b.1 <= v_max);
+        if ina {
+            out.push(a);
+        }
+        if ina != inb {
+            let t = (v_max - a.1) / (b.1 - a.1);
+            out.push((a.0 + (b.0 - a.0) * t, v_max));
+        }
+    }
+    out
+}
+
+/// The part of the segment a–b (ground px) no farther down the view than `v_max`.
+fn clip_segment(a: (f64, f64), b: (f64, f64), v_max: f64) -> Option<((f64, f64), (f64, f64))> {
+    let at = |p: (f64, f64), q: (f64, f64)| {
+        let t = (v_max - p.1) / (q.1 - p.1);
+        (p.0 + (q.0 - p.0) * t, v_max)
+    };
+    match (a.1 <= v_max, b.1 <= v_max) {
+        (true, true) => Some((a, b)),
+        (true, false) => Some((a, at(a, b))),
+        (false, true) => Some((at(b, a), b)),
+        (false, false) => None,
+    }
+}
+
 /// A wall of an extruded feature in a tilted view ([`tilted_walls`]).
 pub struct TiltedWall {
     /// How far up the view it stands (ground px; smaller is farther).
@@ -237,6 +269,8 @@ pub fn tilted_walls(
     let (eu, ev, _) = cam.eye(h);
     let light_len = LIGHT.0.hypot(LIGHT.1).max(1e-9);
     let at = |u: f64, v: f64, up: f64| cam.project_raised(u, v, up, w, h).filter(|p| p.0.is_finite() && p.1.is_finite());
+    // Walls reaching behind the eye are cut where they still stand in front of it.
+    let v_max = cam.near_v(up, h);
     let mut walls = Vec::new();
     for r in rings {
         let area2: f64 =
@@ -254,6 +288,8 @@ pub fn tilted_walls(
             if culling && nrm.0 * (eu - mid.0) + nrm.1 * (ev - mid.1) <= 0.0 {
                 continue;
             }
+            let Some((a, b)) = clip_segment(a, b, v_max) else { continue };
+            let mid = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
             let (Some(fa), Some(fb), Some(tb), Some(ta)) = (at(a.0, a.1, 0.0), at(b.0, b.1, 0.0), at(b.0, b.1, up), at(a.0, a.1, up))
             else {
                 continue;
@@ -273,18 +309,23 @@ pub fn shadow_shift(up: f64) -> (f64, f64) {
     (-LIGHT.0 / LIGHT.2 * up, -LIGHT.1 / LIGHT.2 * up)
 }
 
-/// The sides of the shadow a feature raised `up` px casts on the ground in a tilted view: a quad
-/// (screen, logical px) between each edge of its outer `rings` (ground px) and the edge moved by
-/// [`shadow_shift`]. Its footprint moved by the same shift completes it.
-pub fn tilted_shadow_quads(cam: &rustgis_map::Camera, w: f64, h: f64, rings: &[Vec<(f64, f64)>], up: f64) -> Vec<[(f64, f64); 4]> {
+/// The sides of the shadow a feature raised `up` px casts on the ground in a tilted view: a
+/// convex polygon (screen, logical px) between each edge of its outer `rings` (ground px) and the
+/// edge moved by [`shadow_shift`], cut where it reaches behind the eye. Its footprint moved by
+/// the same shift completes it.
+pub fn tilted_shadow_quads(cam: &rustgis_map::Camera, w: f64, h: f64, rings: &[Vec<(f64, f64)>], up: f64) -> Vec<Vec<(f64, f64)>> {
     let (du, dv) = shadow_shift(up);
-    let at = |u: f64, v: f64| cam.project_raised(u, v, 0.0, w, h).filter(|p| p.0.is_finite() && p.1.is_finite());
+    let at = |p: (f64, f64)| cam.project_raised(p.0, p.1, 0.0, w, h).filter(|p| p.0.is_finite() && p.1.is_finite());
+    let v_max = cam.near_v(0.0, h);
     let mut out = Vec::new();
     for r in rings {
         for i in 0..r.len() {
             let (Some(&a), Some(&b)) = (r.get(i), r.get((i + 1) % r.len())) else { continue };
-            if let (Some(p), Some(q), Some(s), Some(t)) = (at(a.0, a.1), at(b.0, b.1), at(b.0 + du, b.1 + dv), at(a.0 + du, a.1 + dv)) {
-                out.push([p, q, s, t]);
+            // On the ground, cut where it reaches behind the eye.
+            let side = clip_near(&[a, b, (b.0 + du, b.1 + dv), (a.0 + du, a.1 + dv)], v_max);
+            let pts: Option<Vec<_>> = side.into_iter().map(at).collect();
+            if let Some(pts) = pts.filter(|p| p.len() >= 3) {
+                out.push(pts);
             }
         }
     }
@@ -293,8 +334,8 @@ pub fn tilted_shadow_quads(cam: &rustgis_map::Camera, w: f64, h: f64, rings: &[V
 
 /// Polygons extruded in perspective in a tilted view, as MapLibre's fill extrusions: each
 /// feature's walls stand on its outline and its roof is raised by its height (converted at
-/// the feature's place by `m_per_unit`, the ground metres per map unit there). Features and walls are drawn far to near;
-/// walls facing away from the eye are culled, walls are lit by the way they face the light and
+/// the feature's place by `m_per_unit`, the ground metres per map unit there). Features and
+/// walls are drawn far to near; walls facing away from the eye are culled, walls are lit by the way they face the light and
 /// shade darker toward their base, and features fade into `fog` with distance as the ground
 /// does.
 #[allow(clippy::too_many_arguments)]
@@ -323,6 +364,8 @@ pub(crate) fn extrude_tilted(
         // Thinned on screen: a point closer than about a pixel to the last kept adds a sliver.
         let mut rings = Vec::new();
         let (mut sum, mut n) = (rustgis_geom::Coord::new(0.0, 0.0), 0.0);
+        // Drawn while any of its outline is in front of the eye and within the view's reach.
+        let mut in_reach = false;
         for r in polys.iter().filter_map(|p| p.first()) {
             let mut kept: Vec<(f64, f64)> = Vec::new();
             let mut last: Option<(f64, f64)> = None;
@@ -339,23 +382,20 @@ pub(crate) fn extrude_tilted(
                 }
                 sum = rustgis_geom::Coord::new(sum.x + c.x, sum.y + c.y);
                 n += 1.0;
+                in_reach |= cam.depth_scale(*c, h).is_some_and(|k| k * far >= 1.0);
             }
             if kept.len() >= 3 {
                 rings.push(kept);
             }
         }
-        if rings.is_empty() || n == 0.0 {
+        if rings.is_empty() || n == 0.0 || !in_reach {
             continue;
         }
         let centroid = rustgis_geom::Coord::new(sum.x / n, sum.y / n);
         // At the feature's own scale (Web Mercator stretches the ground toward the poles).
         let up = (extrusion_metres(ds, x, row) / m_per_unit(centroid).max(1e-9) / cam.res.max(1e-9)).clamp(0.0, 1e7);
-        // Past the view's reach is sky; on the way there, fog.
-        let Some(k) = cam.depth_scale(centroid, h) else { continue };
-        let depth = 1.0 / k.max(1e-9);
-        if depth > far {
-            continue;
-        }
+        // Fog on the way to the view's reach, by the middle of the feature.
+        let depth = cam.depth_scale(centroid, h).map_or(1.0, |k| 1.0 / k.max(1e-9));
         let t = ((depth - far * 0.5) / (far * 0.5)).clamp(0.0, 1.0);
         shapes.push((cam.ground_px(centroid).1, rings, up, t * t * (3.0 - 2.0 * t), row));
     }
@@ -376,13 +416,15 @@ pub(crate) fn extrude_tilted(
         let shade = paint(Rgba::new(0, 0, 0, 60), 1.0);
         for (_, rings, up, _, _) in &shapes {
             for q in tilted_shadow_quads(&cam, w, h, rings, *up) {
-                if let Some(p) = path(&q.map(px)) {
+                let q: Vec<_> = q.into_iter().map(px).collect();
+                if let Some(p) = path(&q) {
                     pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
             }
             let (du, dv) = shadow_shift(*up);
             for r in rings {
-                let shifted: Option<Vec<_>> = r.iter().map(|&(u, v)| at(u + du, v + dv, 0.0)).collect();
+                let moved: Vec<_> = r.iter().map(|&(u, v)| (u + du, v + dv)).collect();
+                let shifted: Option<Vec<_>> = clip_near(&moved, cam.near_v(0.0, h)).into_iter().map(|(u, v)| at(u, v, 0.0)).collect();
                 if let Some(p) = shifted.as_deref().and_then(path) {
                     pm.fill_path(&p, &shade, FillRule::Winding, Transform::identity(), None);
                 }
@@ -421,7 +463,9 @@ pub(crate) fn extrude_tilted(
         // The roof, over its walls.
         let mut pb = PathBuilder::new();
         for r in rings {
-            let pts: Option<Vec<_>> = r.iter().map(|&(u, v)| at(u, v, *up)).collect();
+            // Cut where it reaches behind the eye.
+            let pts: Option<Vec<_>> = clip_near(r, cam.near_v(*up, h)).into_iter().map(|(u, v)| at(u, v, *up)).collect();
+            let pts = pts.filter(|p| p.len() >= 3);
             let Some(pts) = pts else { continue };
             for (i, p) in pts.iter().enumerate() {
                 if i == 0 { pb.move_to(p.0, p.1) } else { pb.line_to(p.0, p.1) }

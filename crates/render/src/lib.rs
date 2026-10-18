@@ -1079,6 +1079,8 @@ fn raise_labels(map: &Map, view: &View, candidates: &mut [Candidate]) {
 pub struct ExtrudedShape {
     /// The point (the camera's coordinates) the roof's triangles are relative to.
     pub origin: Coord,
+    /// The middle of its outline (the camera's coordinates): where it is, for ordering and fog.
+    pub center: Coord,
     /// The roof's triangles: vertices relative to `origin` (map units) and their indices.
     pub roof: Vec<[f32; 2]>,
     pub roof_indices: Vec<u32>,
@@ -1128,8 +1130,12 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
             let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5);
             let Ok(Some((verts, indices))) = roof else { continue };
             let sym = layer.symbol(row);
+            let pts: Vec<Coord> = polys.iter().filter_map(|p| p.first()).flatten().copied().filter(|c| c.is_finite()).collect();
+            let n = pts.len().max(1) as f64;
+            let center = Coord::new(pts.iter().map(|c| c.x).sum::<f64>() / n, pts.iter().map(|c| c.y).sum::<f64>() / n);
             out.push(ExtrudedShape {
                 origin,
+                center,
                 roof: verts.iter().map(|v| v.position).collect(),
                 roof_indices: indices,
                 rings: polys.iter().filter_map(|p| p.first()).filter(|r| r.len() >= 3).cloned().collect(),
@@ -1146,7 +1152,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     out
 }
 
-pub use effects::{TiltedWall, shadow_shift, tilted_shadow_quads, tilted_walls};
+pub use effects::{TiltedWall, clip_near, shadow_shift, tilted_shadow_quads, tilted_walls};
 
 /// The extruded layers of a tilted view, stood up in perspective over its ground, bottom layer
 /// first (a drape of the moving view shows them flat).
@@ -2959,6 +2965,27 @@ mod tests {
         // is a Web Mercator unit, at 60°N two (#433 review; a view centred near a pole stood
         // features elsewhere up several times too tall).
         assert!((shapes[0].height / 100_000.0 - 1.0).abs() < 0.01, "{}", shapes[0].height);
+        // A long block reaching from behind the eye into view stands up where it is in front (it
+        // was dropped whole when its middle or a corner was out of reach).
+        let long =
+            vec![Coord::new(-0.5, -40.0), Coord::new(0.5, -40.0), Coord::new(0.5, 0.5), Coord::new(-0.5, 0.5), Coord::new(-0.5, -40.0)];
+        assert!(camera.try_to_screen(lonlat_to_merc(Coord::new(0.0, -40.0)), 400.0, 300.0).is_none(), "behind the eye");
+        let mut flat_map = m.clone();
+        if let Some(l) = m.layers.first_mut() {
+            l.dataset.features.clear();
+            l.dataset.push(Some(Geometry::Polygon(vec![vec![long.clone()]])), vec![Value::Text("Long".into())]);
+            l.touch_geometry();
+        }
+        if let Some(l) = flat_map.layers.first_mut() {
+            l.dataset.features.clear();
+            l.dataset.push(Some(Geometry::Polygon(vec![vec![long]])), vec![Value::Text("Long".into())]);
+            l.touch_geometry();
+            l.extrusion = None;
+        }
+        let up = render(&mut m, &view).unwrap();
+        let down = render(&mut flat_map, &view).unwrap();
+        let changed = up.pixmap.pixels().iter().zip(down.pixmap.pixels()).filter(|(a, b)| a != b).count();
+        assert!(changed > 2000, "the long block stands up: {changed} px");
         if let Some(l) = m.layers.first_mut() {
             let north =
                 vec![Coord::new(-1.0, 59.0), Coord::new(1.0, 59.0), Coord::new(1.0, 61.0), Coord::new(-1.0, 61.0), Coord::new(-1.0, 59.0)];

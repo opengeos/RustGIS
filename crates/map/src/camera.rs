@@ -140,6 +140,17 @@ impl Camera {
         (z > t.d * NEAR).then(|| (w / 2.0 + u * t.d / z, h / 2.0 + (v * t.c - up * t.s) * t.d / z))
     }
 
+    /// How far down the view (ground offset v, see [`Camera::ground_px`]) a point raised `up` px
+    /// can be and still stand safely in front of the eye of a `h` px tall view: geometry nearer
+    /// than this is clipped away. Unbounded in a flat view.
+    pub fn near_v(&self, up: f64, h: f64) -> f64 {
+        let t = self.tilt_or_flat(h);
+        if t.s <= 0.0 {
+            return f64::INFINITY;
+        }
+        (t.d * (1.0 - 2.0 * NEAR) - up * t.c) / t.s
+    }
+
     /// The view's perspective, also for a flat view (seen from straight above).
     fn tilt_or_flat(&self, h: f64) -> Tilt {
         self.tilt(h).unwrap_or(Tilt { c: 1.0, s: 0.0, d: h.max(1.0) / 2.0 / TAN_HALF_FOV })

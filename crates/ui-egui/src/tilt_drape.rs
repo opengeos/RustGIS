@@ -134,14 +134,16 @@ impl TiltDrape {
         let pos = |p: (f64, f64)| pos2(rect.min.x + p.0 as f32, rect.min.y + p.1 as f32);
         let ground =
             |s: &ExtrudedShape, p: &[f32; 2]| cam.ground_px(Coord::new(s.origin.x + f64::from(p[0]), s.origin.y + f64::from(p[1])));
-        // Far (up the screen) first; past the view's reach is sky.
+        // Far (up the screen) first. A feature is drawn while any of its outline is in front of
+        // the eye and within the view's reach (past it is sky); its middle places it and fogs it.
         let mut order: Vec<(f64, f64, usize)> = d
             .shapes
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| {
-                let depth = 1.0 / cam.depth_scale(s.origin, h)?.max(1e-9);
-                (depth <= FAR).then(|| (cam.ground_px(s.origin).1, depth, i))
+            .filter(|(_, s)| s.rings.iter().flatten().any(|c| cam.depth_scale(*c, h).is_some_and(|k| k * FAR >= 1.0)))
+            .map(|(i, s)| {
+                let depth = cam.depth_scale(s.center, h).map_or(1.0, |k| 1.0 / k.max(1e-9));
+                (cam.ground_px(s.center).1, depth, i)
             })
             .collect();
         order.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -158,31 +160,16 @@ impl TiltDrape {
         let shade = Color32::from_black_alpha(60);
         for (s, _, up, rings) in shapes.iter().filter(|x| x.0.shadows) {
             for q in render::tilted_shadow_quads(cam, w, h, rings, *up) {
-                let k = mesh.vertices.len() as u32;
-                for p in q {
-                    mesh.colored_vertex(pos(p), shade);
-                }
-                mesh.add_triangle(k, k + 1, k + 2);
-                mesh.add_triangle(k, k + 2, k + 3);
+                fan(&mut mesh, q.into_iter().map(|p| Some(pos(p))), shade);
             }
             // The footprint moved away from the light: the roof's triangles on the ground.
             let (du, dv) = render::shadow_shift(*up);
-            let foot: Option<Vec<egui::Pos2>> = s
-                .roof
-                .iter()
-                .map(|p| {
-                    let (u, v) = ground(s, p);
-                    cam.project_raised(u + du, v + dv, 0.0, w, h).map(pos)
-                })
-                .collect();
-            if let Some(foot) = foot {
-                let k = mesh.vertices.len() as u32;
-                for p in foot {
-                    mesh.colored_vertex(p, shade);
-                }
-                for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
-                    mesh.add_triangle(k + a, k + b, k + c);
-                }
+            for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
+                let tri: Option<Vec<(f64, f64)>> =
+                    [a, b, c].iter().map(|&&k| s.roof.get(k as usize).map(|p| ground(s, p)).map(|(u, v)| (u + du, v + dv))).collect();
+                let Some(tri) = tri else { continue };
+                let cut = render::clip_near(&tri, cam.near_v(0.0, h));
+                fan(&mut mesh, cut.into_iter().map(|(u, v)| cam.project_raised(u, v, 0.0, w, h).map(pos)), shade);
             }
         }
         for (s, depth, up, rings) in &shapes {
@@ -198,23 +185,14 @@ impl TiltDrape {
                 mesh.add_triangle(k, k + 1, k + 2);
                 mesh.add_triangle(k, k + 2, k + 3);
             }
-            let roof: Option<Vec<egui::Pos2>> = s
-                .roof
-                .iter()
-                .map(|p| {
-                    let (u, v) = ground(s, p);
-                    cam.project_raised(u, v, *up, w, h).filter(|q| q.0.is_finite() && q.1.is_finite()).map(pos)
-                })
-                .collect();
-            if let Some(roof) = roof {
-                let k = mesh.vertices.len() as u32;
-                let color = c32(base);
-                for p in roof {
-                    mesh.colored_vertex(p, color);
-                }
-                for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
-                    mesh.add_triangle(k + a, k + b, k + c);
-                }
+            // The roof's triangles, each cut where it reaches behind the eye.
+            let color = c32(base);
+            let v_max = cam.near_v(*up, h);
+            for [a, b, c] in s.roof_indices.as_chunks::<3>().0 {
+                let tri: Option<Vec<(f64, f64)>> = [a, b, c].iter().map(|&&k| s.roof.get(k as usize).map(|p| ground(s, p))).collect();
+                let Some(tri) = tri else { continue };
+                let cut = render::clip_near(&tri, v_max);
+                fan(&mut mesh, cut.into_iter().map(|(u, v)| cam.project_raised(u, v, *up, w, h).map(pos)), color);
             }
         }
         (!mesh.indices.is_empty()).then_some(mesh)
@@ -261,6 +239,20 @@ impl TiltDrape {
                 (!mesh.indices.is_empty()).then_some(mesh)
             })
             .collect()
+    }
+}
+
+/// Adds a convex polygon (screen points, `None` where one couldn't be placed) to `mesh` as a fan
+/// of triangles in one colour; nothing when a point is missing or there are fewer than three.
+fn fan(mesh: &mut Mesh, pts: impl Iterator<Item = Option<egui::Pos2>>, color: Color32) {
+    let pts: Option<Vec<egui::Pos2>> = pts.map(|p| p.filter(|p| p.x.is_finite() && p.y.is_finite())).collect();
+    let Some(pts) = pts.filter(|p| p.len() >= 3) else { return };
+    let k = mesh.vertices.len() as u32;
+    for p in &pts {
+        mesh.colored_vertex(*p, color);
+    }
+    for i in 1..pts.len() as u32 - 1 {
+        mesh.add_triangle(k, k + i, k + i + 1);
     }
 }
 
@@ -322,6 +314,25 @@ mod tests {
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
         let mesh = d.extrusions(rect, &m.camera, fog()).expect("the block stands up");
         assert!(mesh.is_valid() && mesh.indices.len() > 6);
+        // A long block whose first point is behind the eye still stands up where it reaches into
+        // view (it was kept or dropped by that point alone, and vanished while moving).
+        if let Some(l) = m.layer_mut(id) {
+            let long = vec![
+                Coord::new(10.0, 20.0),
+                Coord::new(11.0, 20.0),
+                Coord::new(11.0, 48.5),
+                Coord::new(10.0, 48.5),
+                Coord::new(10.0, 20.0),
+            ];
+            l.dataset.features.clear();
+            l.dataset.push(Some(Geometry::Polygon(vec![vec![long]])), vec![]);
+            l.touch_geometry();
+        }
+        let behind = rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 20.0));
+        assert!(m.camera.try_to_screen(behind, 800.0, 600.0).is_none(), "the first point is behind the eye");
+        let mut d2 = TiltDrape::default();
+        assert!(d2.prepare(&ctx, &mut m, DrapeKey { rev: 1, sources: 0 }, 0, 800.0, 600.0, 1.0, 0.0));
+        assert!(d2.extrusions(rect, &m.camera, fog()).is_some_and(|mesh| mesh.is_valid() && !mesh.indices.is_empty()));
         // Its roof stands above its foot on screen.
         let foot = m.camera.to_screen(rustgis_engine::geom::lonlat_to_merc(Coord::new(10.0, 47.0)), 800.0, 600.0).1 as f32;
         let top = mesh.vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
