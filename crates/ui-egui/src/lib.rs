@@ -1691,6 +1691,8 @@ impl RustGisApp {
                     // With agents turned on in the assistant settings, they may use files and the
                     // network without asking (--yes); otherwise what each asks for decides.
                     relay.set_allow_access(connectui::enabled(self));
+                    // What agents do to the user's project is kept, for review.
+                    relay.set_audit_dir(rustgis_assistant::audit::dir());
                     relay.set_full_access(connectui::full_access(self));
                     // The relay only queues; the frame runs the messages, so a queued message
                     // asks for the frame that will run it. Before the first frame there is no

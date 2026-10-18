@@ -336,6 +336,8 @@ impl Drop for Grant {
 struct Owner {
     shared: Arc<Shared>,
     port: u16,
+    /// The folder of the audit log the calls are written to ([`Relay::set_audit_dir`]).
+    audit: Mutex<Option<PathBuf>>,
     /// The last tool call an attached agent ran ([`Relay::last_action`]).
     last: Mutex<Option<Action>>,
 }
@@ -578,7 +580,7 @@ impl Relay {
             screen: AtomicBool::new(false),
             shot: Mutex::new(None),
         });
-        let owner = Arc::new(Owner { shared, port, last: Mutex::new(None) });
+        let owner = Arc::new(Owner { shared, port, audit: Mutex::new(None), last: Mutex::new(None) });
         let accepting = Arc::clone(&owner.shared);
         std::thread::Builder::new()
             .name("rustgis-mcp-relay".into())
@@ -601,6 +603,21 @@ impl Relay {
     /// not counted.
     pub fn attached_clients(&self) -> usize {
         self.owner.shared.attached.load(SeqCst)
+    }
+
+    /// Writes a request and how it went to the audit log, if there is one.
+    fn audit(&self, line: &str, reply: Option<&str>, took: Duration) {
+        // Out of the lock first, so changing the folder never waits on the disk.
+        let dir = lock(&self.owner.audit).clone();
+        if let Some(dir) = dir {
+            crate::audit::record(&dir, "mcp", line, reply, took);
+        }
+    }
+
+    /// Writes every tool call agents make to the audit log in `dir` ([`crate::audit`]), or to
+    /// none. The desktop app keeps it in [`crate::audit::dir`].
+    pub fn set_audit_dir(&self, dir: Option<PathBuf>) {
+        *lock(&self.owner.audit) = dir;
     }
 
     /// Publishes where the relay is, for clients and setup scripts: [`ENDPOINT`] in the private
@@ -675,6 +692,7 @@ impl Relay {
         if let Some(a) = action(&shot.req.line, Some(&reply)) {
             *lock(&self.owner.last) = Some(a);
         }
+        self.audit(&shot.req.line, Some(&reply), Duration::ZERO);
         let _ = shot.req.reply.send(Some(reply));
         self.owner.shared.notify();
     }
@@ -776,7 +794,9 @@ impl Relay {
             };
             if req.decision.load(SeqCst) == CANCELLED {
                 if req.state.compare_exchange(PENDING, RUNNING, SeqCst, SeqCst).is_ok() {
-                    let _ = req.reply.send(Some(declined_reply(&req.line)));
+                    let declined = declined_reply(&req.line);
+                    self.audit(&req.line, Some(&declined), Duration::ZERO);
+                    let _ = req.reply.send(Some(declined));
                     ran += 1;
                 }
                 continue;
@@ -807,7 +827,9 @@ impl Relay {
                         }
                         CANCELLED => {
                             if req.state.compare_exchange(PENDING, RUNNING, SeqCst, SeqCst).is_ok() {
-                                let _ = req.reply.send(Some(declined_reply(&req.line)));
+                                let declined = declined_reply(&req.line);
+                                self.audit(&req.line, Some(&declined), Duration::ZERO);
+                                let _ = req.reply.send(Some(declined));
                                 ran += 1;
                             }
                             continue;
@@ -857,11 +879,13 @@ impl Relay {
             // The agent works with its own active layer and is named in the undo history; the
             // user's selection is theirs again afterwards.
             let layers = self.enter_agent(s, &req.token);
+            let started = Instant::now();
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| server.handle(s, &req.line)))
                 .unwrap_or_else(|_| Some(internal_error(&req.line)));
             // A layer.select that failed (an unknown layer, a refusal) chose nothing.
             let picked = selects_layer(&req.line) && reply_ok(out.as_deref());
             self.leave_agent(s, &req.token, layers, picked);
+            self.audit(&req.line, out.as_deref(), started.elapsed());
             if let Some(a) = action(&req.line, out.as_deref()) {
                 *lock(&self.owner.last) = Some(a);
             }
@@ -1872,6 +1896,36 @@ mod tests {
         assert!(s.run("edit.undo", &json!({})).is_ok());
         assert!(s.map().layer_by_name("Rivers").is_some());
         assert_eq!(s.actor, None);
+        relay.stop();
+    }
+
+    /// Every tool call through the relay goes to the audit log, with how it went.
+    #[test]
+    fn relay_writes_each_call_to_the_audit_log() {
+        let relay = Relay::start(0).unwrap();
+        let log = tempfile::tempdir().unwrap();
+        relay.set_audit_dir(Some(log.path().to_path_buf()));
+        let mut s = sample();
+        let mut client = TcpStream::connect(("127.0.0.1", relay.port())).unwrap();
+        attach(&mut client, &relay, false);
+        writeln!(client, "{}", add_sample_call(1)).unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let ping = json!({"jsonrpc": "2.0", "id": 2, "method": "ping"});
+        writeln!(client, "{ping}").unwrap();
+        client.flush().unwrap();
+        settle(&relay, &mut s);
+        reply(&client);
+        let files: Vec<_> = std::fs::read_dir(log.path()).unwrap().flatten().collect();
+        assert_eq!(files.len(), 1);
+        let text = std::fs::read_to_string(files[0].path()).unwrap();
+        let lines: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(lines.len(), 1, "only tool calls are logged: {text}");
+        assert_eq!(
+            (lines[0]["command"].clone(), lines[0]["success"].clone(), lines[0]["source"].clone()),
+            (json!("layer.addSample"), json!(true), json!("mcp"))
+        );
         relay.stop();
     }
 
