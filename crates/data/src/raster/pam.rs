@@ -54,11 +54,12 @@ impl Pam {
         self.bands.iter().find(|b| b.band == band)
     }
 
-    /// The no-data value of the first band that has one.
+    /// The no-data value the bands that give one agree on. A raster holds one no-data value for
+    /// all its bands, so bands giving different ones give none.
     pub fn nodata(&self) -> Option<f64> {
-        let mut bands: Vec<&PamBand> = self.bands.iter().collect();
-        bands.sort_by_key(|b| b.band);
-        bands.iter().find_map(|b| b.nodata)
+        let mut values = self.bands.iter().filter_map(|b| b.nodata);
+        let first = values.next()?;
+        values.all(|v| v == first).then_some(first)
     }
 }
 
@@ -149,6 +150,9 @@ mod tests {
         assert_eq!(pam.band(2).unwrap().description.as_deref(), Some("Green"));
         assert_eq!((pam.band(3).unwrap().description.as_ref(), pam.band(3).unwrap().nodata), (None, None));
         assert_eq!(pam.nodata(), Some(-9999.0));
+        let mut differ = pam.clone();
+        differ.bands.push(PamBand { band: 4, nodata: Some(0.0), ..Default::default() });
+        assert_eq!(differ.nodata(), None, "bands disagree");
     }
 
     #[test]
