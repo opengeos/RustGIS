@@ -42,6 +42,9 @@ const CACHE_BYTES: usize = 16 << 20;
 /// run again for its fetches (a chain of documents, one a run) before it is given up.
 pub const MAX_PENDING: usize = 8;
 pub const MAX_RETRIES: u32 = 64;
+/// The browser: how long a fetch is waited for before it is taken as lost (a request that
+/// never answers), so the commands waiting for it run again and it can be fetched again.
+const IN_FLIGHT_FOR: Duration = Duration::from_secs(2 * 60);
 /// Plugin commands waiting for their fetches.
 const MAX_WAITING: usize = 8;
 /// The longest address accepted.
@@ -57,8 +60,8 @@ struct Entry {
 #[derive(Default)]
 struct Cache {
     entries: VecDeque<Entry>,
-    /// Addresses being fetched off the frame (the browser).
-    in_flight: Vec<String>,
+    /// Addresses being fetched off the frame (the browser), and since when.
+    in_flight: Vec<(String, Instant)>,
 }
 
 impl Cache {
@@ -75,22 +78,24 @@ impl Cache {
     }
 
     fn keep(&mut self, url: &str, answer: Result<Value, String>) {
+        // About the bytes kept: an answer holds its text twice, as `text` and parsed as `json`.
         let size = url.len() + answer.as_ref().map_or_else(String::len, |v| v.get("text").and_then(Value::as_str).map_or(0, str::len) * 2);
-        self.in_flight.retain(|u| u != url);
+        self.in_flight.retain(|(u, _)| u != url);
         self.entries.retain(|e| e.url != url);
         self.entries.push_back(Entry { url: url.to_string(), at: Instant::now(), size, answer });
-        while self.entries.len() > CACHE_ENTRIES || self.entries.iter().map(|e| e.size).sum::<usize>() > CACHE_BYTES {
-            if self.entries.pop_front().is_none() {
-                break;
-            }
+        let mut bytes: usize = self.entries.iter().map(|e| e.size).sum();
+        while self.entries.len() > CACHE_ENTRIES || bytes > CACHE_BYTES {
+            let Some(e) = self.entries.pop_front() else { break };
+            bytes = bytes.saturating_sub(e.size);
         }
     }
 
     /// Whether `url` is no longer being fetched, so a command waiting for it can run again. Its
     /// answer is usually kept by then; one already dropped (evicted, or an error expired while
     /// frames were throttled) is fetched again by the run, so a waiting command never sticks.
+    /// Nor does one whose fetch never answers: after [`IN_FLIGHT_FOR`] it counts as landed.
     fn landed(&self, url: &str) -> bool {
-        !self.in_flight.iter().any(|u| u == url)
+        !self.in_flight.iter().any(|(u, at)| u == url && at.elapsed() < IN_FLIGHT_FOR)
     }
 }
 
@@ -179,10 +184,12 @@ fn key(plugin: &str, url: &str) -> String {
 fn start(key: &str, url: &str) {
     {
         let mut c = cache();
-        if c.in_flight.iter().any(|u| u == key) {
+        if !c.landed(key) {
             return;
         }
-        c.in_flight.push(key.to_string());
+        // A fetch taken as lost is started again.
+        c.in_flight.retain(|(u, _)| u != key);
+        c.in_flight.push((key.to_string(), Instant::now()));
     }
     let (key, url) = (key.to_string(), url.to_string());
     crate::render::rustgis_tiles::cache::download_limited(
@@ -377,8 +384,13 @@ mod tests {
         assert!(c.get("https://cache.test/0").is_none(), "the oldest went first");
         assert!(c.get(&format!("https://cache.test/{}", CACHE_ENTRIES + 9)).is_some());
         assert!(c.entries.len() <= CACHE_ENTRIES);
-        c.in_flight.push("https://cache.test/err".into());
+        c.in_flight.push(("https://cache.test/err".into(), Instant::now()));
         assert!(!c.landed("https://cache.test/err"));
+        // A fetch that never answers is taken as lost after a while.
+        if let Some(lost) = Instant::now().checked_sub(IN_FLIGHT_FOR) {
+            c.in_flight.push(("https://cache.test/lost".into(), lost));
+            assert!(c.landed("https://cache.test/lost"));
+        }
         c.keep("https://cache.test/err", Err("HTTP 500".into()));
         assert!(c.landed("https://cache.test/err"));
         // An address no longer fetched counts as landed even once its answer is gone: the

@@ -702,6 +702,8 @@ mod native {
             .timeout_global(Some(timeout))
             .user_agent(concat!("RustGIS/", env!("CARGO_PKG_VERSION"), " (+https://rustgis.app)"))
             .max_redirects(0)
+            // A proxy would resolve the address itself, past `PublicOnly`.
+            .proxy(None)
             .build();
         ureq::Agent::with_parts(config, ureq::unversioned::transport::DefaultConnector::default(), PublicOnly::default())
     }
