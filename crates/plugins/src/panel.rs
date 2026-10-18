@@ -9,6 +9,7 @@
 //! engine keeps a [`PanelState`] per plugin in its session, and the front end draws it.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -202,9 +203,10 @@ pub struct PanelState {
     pub values: BTreeMap<String, Value>,
     /// Every widget's state, by id.
     pub items: BTreeMap<String, ItemState>,
-    /// The declaration this state was made from, to tell when the plugin was updated.
+    /// The declaration this state was made from, to tell when the plugin was updated (shared:
+    /// the panel's front end copies the state every frame it shows).
     #[serde(skip)]
-    origin: PanelDecl,
+    origin: Arc<PanelDecl>,
 }
 
 impl PanelState {
@@ -212,7 +214,7 @@ impl PanelState {
     /// widgets, a slider's range or a default) doesn't match. A plain comparison: it runs on every
     /// command of a panel plugin and every frame the panel shows.
     pub fn matches(&self, decl: &PanelDecl) -> bool {
-        self.origin == *decl
+        *self.origin == *decl
     }
 
     /// The state a panel starts in: what `plugin.json` declares.
@@ -244,7 +246,7 @@ impl PanelState {
                 },
             );
         }
-        PanelState { values, items, origin: decl.clone() }
+        PanelState { values, items, origin: Arc::new(decl.clone()) }
     }
 
     /// A checkbox's value.

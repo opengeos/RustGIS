@@ -319,8 +319,9 @@ Any command can answer the panel's new state, beside the rest of its answer:
   labels to 200, and a slider has at most 2,000 labels of 80 characters.
 - A plugin words what it sets in the request's `lang`; RustGIS translates only what the
   manifest declares.
-- A command that fails leaves the values as they were. A command that changes nothing in the
-  project (a state command that only reads the map) is no undo step.
+- A command that fails leaves the values as they were. The panel's state command is no undo
+  step when it changes nothing in the project (it only reads the map); other commands keep
+  theirs.
 - RustGIS asks for the state only when the panel opens, and takes in what the plugin's own
   commands answer. It doesn't run the plugin when the map changes in other ways: undo, another
   plugin, a project opened. A state command that reads what it shows from the map (which

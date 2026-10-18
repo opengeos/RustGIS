@@ -46,11 +46,16 @@ fn panel(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("the plugin {} is disabled", plugin.manifest.name));
     }
     let decl = plugin.manifest.panel.clone().ok_or_else(|| format!("{} has no panel", plugin.manifest.name))?;
+    let before = s.panel_state(id, &decl).clone();
     if let Some(values) = p.get("values") {
         s.panel_state(id, &decl).set_values(&decl, values);
     }
     if b(p, "refresh").unwrap_or(false) && !decl.state.is_empty() {
-        s.run_plugin(&rustgis_plugins::command_id(id, &decl.state), &json!({}))?;
+        // A failed refresh leaves the values as they were, as a failed command does.
+        if let Err(e) = s.run_plugin(&rustgis_plugins::command_id(id, &decl.state), &json!({})) {
+            *s.panel_state(id, &decl) = before;
+            return Err(e);
+        }
     }
     let state = s.plugin_panel(id).ok_or("the panel is unavailable")?;
     serde_json::to_value(state).map_err(|e| e.to_string())
@@ -522,12 +527,13 @@ impl Session {
             }
             None => (None, None),
         };
+        // The panel's state command runs each time the panel opens: when nothing it asked for
+        // could change the project, it is no undo step. Other commands keep theirs.
+        let state_command = panel.as_ref().is_some_and(|d| !d.state.is_empty() && d.state == cmd.decl.id);
         let res = self.guarded(label, mutates, |s| {
             let mut bridge = Bridge { s, plugin, changed: false };
             let res = rustgis_plugins::run_command_with_panel(&cmd, &mut bridge, params, request);
-            // Nothing it asked for could change the project: no undo step (a panel's state
-            // command runs each time the panel opens, and a checkbox may only refresh it).
-            if res.is_ok() && !bridge.changed {
+            if res.is_ok() && state_command && !bridge.changed {
                 s.request_only = true;
             }
             res

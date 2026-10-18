@@ -2632,17 +2632,42 @@ fn plugin_panels_keep_their_state_between_calls() {
     rustgis_plugins::unload("eng-nopanel");
 }
 
+/// Loads the panel test plugin with `edit`, its panel's state command being `state`.
+fn panel_plugin(id: &str, state: &str) {
+    let mut m: Value = serde_json::from_str(&rustgis_plugins::testing::panel_manifest(id)).unwrap();
+    m["permissions"] = json!(["edit"]);
+    m["panel"]["state"] = json!(state);
+    let zip =
+        rustgis_plugins::testing::zip_of(&[("plugin.json", m.to_string().as_bytes()), ("plugin.wasm", &rustgis_plugins::testing::wasm())]);
+    rustgis_plugins::load(rustgis_plugins::Package::from_zip(&zip).unwrap(), "test").unwrap();
+}
+
 #[test]
-fn plugin_commands_that_change_nothing_are_no_undo_step() {
+fn panel_state_commands_that_change_nothing_are_no_undo_step() {
     let mut s = world();
-    plugin("eng-noop", &["edit"]);
-    assert_eq!(s.run("plugin:eng-noop/h", &Value::Null).unwrap(), json!({"hello": "world"}));
-    forward(&mut s, "eng-noop", "host.layers", json!({})).unwrap();
-    forward(&mut s, "eng-noop", "map.zoomIn", json!({})).unwrap();
-    assert!(!s.can_undo(), "it only read the map and moved the view");
-    forward(&mut s, "eng-noop", "layer.rename", json!({"layer": "Rivers", "name": "Streams"})).unwrap();
-    assert_eq!(s.undo_label(), Some("Forward"));
+    panel_plugin("eng-noop", "h");
+    s.run("plugin.panel", &json!({"id": "eng-noop", "refresh": true})).unwrap();
+    s.run("plugin:eng-noop/h", &Value::Null).unwrap();
+    assert!(!s.can_undo(), "its state command changed nothing");
+    // Its other commands keep their undo step, as plugins without a panel do.
+    s.run("plugin:eng-noop/q", &Value::Null).unwrap();
+    assert_eq!(s.undo_label(), Some("Echo"));
     rustgis_plugins::unload("eng-noop");
+    plugin("eng-nopanel-noop", &["edit"]);
+    s.undo.clear();
+    s.run("plugin:eng-nopanel-noop/h", &Value::Null).unwrap();
+    assert_eq!(s.undo_label(), Some("Hello"));
+    rustgis_plugins::unload("eng-nopanel-noop");
+}
+
+#[test]
+fn a_failed_panel_refresh_leaves_the_values() {
+    let mut s = world();
+    panel_plugin("eng-badstate", "e");
+    let e = s.run("plugin.panel", &json!({"id": "eng-badstate", "values": {"local": true}, "refresh": true}));
+    assert!(e.is_err());
+    assert!(!s.plugin_panels["eng-badstate"].checked("local"), "the values it set are undone");
+    rustgis_plugins::unload("eng-badstate");
 }
 
 #[test]

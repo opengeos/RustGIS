@@ -8,7 +8,7 @@
 //! the keys), never while it is dragged: until then the pane shows the value it would take.
 
 use egui::{Align2, CornerRadius, RichText, Sense, Stroke, Ui, pos2, vec2};
-use rustgis_engine::plugins::{PanelItemDecl, PanelState, command_id};
+use rustgis_engine::plugins::{Manifest, PanelItemDecl, PanelState, command_id};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
@@ -50,7 +50,10 @@ pub fn open(app: &mut RustGisApp, p: &Value) -> Result<Value, String> {
         return Ok(Value::Null);
     }
     let plugin = rustgis_engine::plugins::get(id).ok_or_else(|| format!("no plugin '{id}'"))?;
-    if !plugin.enabled || plugin.manifest.panel.is_none() {
+    if !plugin.enabled {
+        return Err(format!("the plugin {} is disabled", plugin.manifest.name));
+    }
+    if plugin.manifest.panel.is_none() {
         return Err(format!("{} has no panel", plugin.manifest.name));
     }
     app.ui.plugin_panel = State { plugin: Some(id.to_string()), dragging: None };
@@ -114,7 +117,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let n = items.iter().skip(i).take_while(|d| d.kind == "button").count();
             ui.horizontal_wrapped(|ui| {
                 for b in items.iter().skip(i).take(n) {
-                    button(app, ui, &pid, b, &state, &tr);
+                    button(app, ui, &pid, m, b, &state, &tr);
                 }
             });
             ui.add_space(8.0);
@@ -163,9 +166,16 @@ fn checkbox(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, 
     }
 }
 
-fn button(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, state: &PanelState, tr: &dyn Fn(&str) -> String) {
-    let m = rustgis_engine::plugins::get(pid);
-    let cmd = m.as_ref().and_then(|p| p.manifest.commands.iter().find(|c| c.id == item.command).cloned());
+fn button(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    pid: &str,
+    m: &Manifest,
+    item: &PanelItemDecl,
+    state: &PanelState,
+    tr: &dyn Fn(&str) -> String,
+) {
+    let cmd = m.commands.iter().find(|c| c.id == item.command);
     let label = state
         .items
         .get(item.key())
