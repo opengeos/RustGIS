@@ -119,7 +119,12 @@ read. Calls go through the same queue, refusals and one-at-a-time rule as the re
 `rustgis-cli mcp-register --client claude` registers it with Claude Code (`claude mcp add
 --transport http rustgis-live http://127.0.0.1:8768/mcp --header "Authorization: Bearer …"`), and
 the settings section shows that command. Without `--client` it prints the configuration for any
-HTTP client. `--name` and `--port` change the registration's name and port.
+HTTP client. `--name` and `--port` change the registration's name and port. Either way the token
+leaves its file: `claude mcp add` takes it as an argument (other users of the computer can see a
+running program's arguments for the moment it runs), and the printed configuration shows it, so
+keep it out of shared logs. Delete `mcp-http.token` to make a new one if it leaks; each registered
+client then needs registering again. On Windows the token file is protected by your user profile's
+permissions, not by a mode of its own.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network

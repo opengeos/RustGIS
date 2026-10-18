@@ -23,7 +23,8 @@ pub const HTTP_PATH: &str = "/mcp";
 /// The largest request head and body read.
 const MAX_HEAD: usize = 16 * 1024;
 const MAX_BODY: usize = 16 * 1024 * 1024;
-/// How long a client may take to send its request, and the reply to be written.
+/// How long a client may take to send its whole request (head and body), and the reply to be
+/// written: a client trickling bytes can't hold a request slot past it.
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Requests in progress at once.
 const MAX_HTTP_CONNECTIONS: usize = 8;
@@ -48,6 +49,10 @@ pub fn http_token() -> Result<String, String> {
 
 /// The token in `path`, made when the file doesn't exist.
 fn token_at(path: &Path) -> Result<String, String> {
+    // A file left empty (a write that never finished) is no token: a new one is made.
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == 0) {
+        let _ = std::fs::remove_file(path);
+    }
     if std::fs::symlink_metadata(path).is_ok() {
         let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
         if !meta.is_file() || meta.len() > 1024 {
@@ -70,13 +75,27 @@ fn token_at(path: &Path) -> Result<String, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let token = random_token()?;
+    // Written beside it and renamed into place, so no reader ever sees half a token. Another
+    // process (the app, `mcp-register`) making one at the same time wins or loses whole: the
+    // file that ends up there is read back.
+    let tmp = path.with_file_name(format!(".mcp-http.token.{}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    let mut f = o.open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    f.write_all(format!("{token}\n").as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(token)
+    let written = o.open(&tmp).and_then(|mut f| f.write_all(format!("{token}\n").as_bytes()));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", tmp.display()));
+    }
+    if std::fs::symlink_metadata(path).is_ok() {
+        let _ = std::fs::remove_file(&tmp);
+    } else {
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok(token);
+    }
+    token_at(path)
 }
 
 impl Relay {
@@ -106,7 +125,6 @@ impl Relay {
         })?;
         let port = listener.local_addr().map_err(|e| format!("{addr}: {e}"))?.port();
         listener.set_nonblocking(true).map_err(|e| format!("{addr}: {e}"))?;
-        *lock(&shared.http_port) = Some(port);
         let token = Arc::new(token);
         let active = Arc::new(AtomicUsize::new(0));
         std::thread::Builder::new()
@@ -114,17 +132,26 @@ impl Relay {
             .spawn(move || {
                 while !shared.stopped.load(SeqCst) {
                     match listener.accept() {
-                        Ok((stream, _)) => {
+                        Ok((mut stream, _)) => {
                             if active.fetch_add(1, SeqCst) >= MAX_HTTP_CONNECTIONS {
                                 active.fetch_sub(1, SeqCst);
+                                // Said, not dropped silently.
+                                respond(
+                                    &mut stream,
+                                    "503 Service Unavailable",
+                                    &[("Retry-After", "1")],
+                                    &problem("too many requests at once"),
+                                );
                                 continue;
                             }
-                            let (shared, token, active) = (Arc::clone(&shared), Arc::clone(&token), Arc::clone(&active));
+                            let (request_shared, request_token, request_active) =
+                                (Arc::clone(&shared), Arc::clone(&token), Arc::clone(&active));
                             let spawned = std::thread::Builder::new().name("rustgis-mcp-http-request".into()).spawn(move || {
-                                serve(stream, &shared, &token, port);
-                                active.fetch_sub(1, SeqCst);
+                                serve(stream, &request_shared, &request_token, port);
+                                request_active.fetch_sub(1, SeqCst);
                             });
                             if let Err(e) = spawned {
+                                active.fetch_sub(1, SeqCst);
                                 log::warn!("MCP over HTTP: {e}");
                             }
                         }
@@ -137,7 +164,26 @@ impl Relay {
                 }
             })
             .map_err(|e| format!("MCP over HTTP could not start: {e}"))?;
+        *lock(&self.owner.shared.http_port) = Some(port);
         Ok(port)
+    }
+}
+
+/// A request's reads under one deadline for the whole request: each read waits only for the time
+/// left, so a client sending a byte at a time is cut off when it runs out.
+struct Deadline {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the request took too long"));
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
     }
 }
 
@@ -162,10 +208,9 @@ fn problem(message: &str) -> String {
 /// One HTTP request: checked, queued for the app, answered with its reply.
 fn serve(stream: TcpStream, shared: &Arc<Shared>, token: &str, port: u16) {
     let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
     let Ok(mut out) = stream.try_clone() else { return };
-    let mut input = BufReader::new(stream);
+    let mut input = BufReader::new(Deadline { stream, until: Instant::now() + IO_TIMEOUT });
     // The head: the request line and headers, bounded.
     let mut lines = Vec::new();
     let mut read = 0;
@@ -254,6 +299,10 @@ fn submit(shared: &Arc<Shared>, line: String) -> Submitted {
     let (tx, rx) = sync_channel(1);
     {
         let mut queue = lock(&shared.requests);
+        // Checked under the lock `shutdown` drains, as for an attached client.
+        if shared.stopped.load(SeqCst) {
+            return Submitted::Failed("503 Service Unavailable", "the MCP relay has stopped".into());
+        }
         if queue.len() >= MAX_QUEUE {
             return Submitted::Failed("503 Service Unavailable", "the app is busy; try again".into());
         }
@@ -396,6 +445,28 @@ mod tests {
         );
     }
 
+    /// A client that trickles its request is cut off at the request's deadline, not kept for as
+    /// long as it sends a byte now and then.
+    #[test]
+    fn http_cuts_off_a_trickling_request() {
+        let relay = Relay::start(0).unwrap();
+        let port = relay.serve_http_with(0, "d".repeat(32)).unwrap();
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let started = Instant::now();
+        let mut closed = false;
+        for b in "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n".bytes().cycle().take(40) {
+            if c.write_all(&[b]).is_err() {
+                closed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        let mut rest = String::new();
+        let _ = c.read_to_string(&mut rest);
+        assert!(closed || started.elapsed() < IO_TIMEOUT + Duration::from_secs(8), "the trickling client was kept");
+        relay.stop();
+    }
+
     /// The token is made once and kept, readable by this user only; deleting the file makes a new one.
     #[test]
     fn http_token_is_stable_and_private() {
@@ -414,5 +485,8 @@ mod tests {
         }
         std::fs::remove_file(&path).unwrap();
         assert_ne!(token_at(&path).unwrap(), first, "deleting the file rotates the token");
+        // A file left empty by a write that never finished is replaced, not refused.
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(token_at(&path).unwrap().len(), 32);
     }
 }
