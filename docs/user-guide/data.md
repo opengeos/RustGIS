@@ -407,7 +407,10 @@ open; a browser upload is kept in the project.
 Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app
 by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it (as a Shapefile does);
 otherwise, and always in the web app, which only sees the one file, it must be in
-longitude/latitude degrees. Exporting a raster opened from an overview writes that overview.
+longitude/latitude degrees. On the desktop, a GDAL `.aux.xml` file next to a raster (`dem.tif.aux.xml`
+or `dem.aux.xml`) names its bands from their descriptions, gives the no-data value when the file
+has none, and supplies the band statistics when only an overview of the raster is read.
+Exporting a raster opened from an overview writes that overview.
 GeoTIFFs may be regular or cloud-optimised: grey, RGB(A), palette (coloured by the file's colour
 table, as land cover such as the NLCD is) or multiband, of any pixel type, tiled or striped, and
 compressed with Deflate, LZW, PackBits, JPEG or Zstandard. The coordinate system is an EPSG code,
