@@ -34,7 +34,7 @@ const SNAPSHOT_WAIT: f64 = 5.0;
 /// What the model is told about the server when it connects.
 const INSTRUCTIONS: &str = "RustGIS is a desktop GIS. This server holds one RustGIS project in memory and acts on it.\n\
 - list_layers shows the map. view_map shows it as an image: look after changing it. snapshot adds the view's extent and scale, and can save the image.\n\
-- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…).\n\
+- Every action is a command: search_commands finds one, run_command runs it (navigation, layers, symbology, labels, selection, editing, layouts, export…). run runs several commands at once, as one undo step.\n\
 - Geoprocessing: search_tools, then describe_tool for its parameters, then run_tool; its output is a new layer.\n\
 - read_features reads attribute rows, with a where clause.\n\
 - search_docs and read_doc look things up in the RustGIS documentation.\n\
@@ -226,6 +226,16 @@ impl Server {
                 format!("snapshot was not saved to '{path}': it writes a file on this computer. The server allows that only when started with --yes (rustgis-cli mcp --yes).")
             });
         }
+        // A script is refused when any of its lines would be, before any of it runs. A script
+        // that doesn't parse runs to say so.
+        if call.name == "run" {
+            let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
+            let lines = rustgis_engine::cmd::workflows::script_commands(script).ok()?;
+            return lines.into_iter().find_map(|(n, id, params)| {
+                let line = ToolCall { id: String::new(), name: "run_command".into(), args: json!({"command": id, "params": params}) };
+                self.refusal(s, &line).map(|why| format!("line {n}: {why}"))
+            });
+        }
         let (id, params) = tools::target(call)?;
         let project = PROJECT_COMMANDS.contains(&id.as_str());
         if project && self.users_project {
@@ -267,11 +277,11 @@ fn initialize(params: &Value) -> Value {
 }
 
 /// The tools this server adds to the assistant's.
-const TOOL_NAMES: &[&str] = &["view_map", "snapshot"];
+const TOOL_NAMES: &[&str] = &["view_map", "run", "snapshot"];
 
 /// Tools that only look: list, search, read, view. A snapshot can be saved over a file.
 fn read_only(name: &str) -> bool {
-    !matches!(name, "run_command" | "run_tool" | "snapshot")
+    !matches!(name, "run_command" | "run_tool" | "run" | "snapshot")
 }
 
 fn tool_list() -> Vec<Value> {
@@ -289,6 +299,16 @@ fn tool_list() -> Vec<Value> {
             json!({"name": d.name, "description": description, "inputSchema": d.schema, "annotations": annotations(d.name)})
         })
         .collect();
+    out.push(json!({
+        "name": "run",
+        "description": "Run several RustGIS commands in one call, as one undo step: a script with one `command-id {json}` per line (# starts a comment), e.g. `map.basemap {\"name\": \"ocean\"}`. A failing line stops the script, nothing it did to the project is kept (a file an earlier line wrote stays written), and the error names the line. Returns {success, result (the last command's), lines, layersAdded, notices, error, duration_s}. Each line follows the same rules as run_command.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"script": {"type": "string", "description": "One command per line: id {json}"}},
+            "required": ["script"]
+        },
+        "annotations": annotations("run"),
+    }));
     out.push(json!({
         "name": "snapshot",
         "description": "The map as a PNG image with JSON metadata (mode, size, lon/lat extent, centre, scale, projection, render_settled). mode \"screen\" is exactly what the user sees in the RustGIS window, after waiting up to wait_s for drawing and tiles to finish (desktop app relay only); \"render\" draws the same layers, view and styling offscreen at max_width, which works while the window is hidden; \"auto\" (default) captures the screen when the map is on it. save_path also writes the PNG to a file (needs --yes).",

@@ -164,6 +164,19 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
             .filter(|p| !p.trim().is_empty())
             .map(|_| "it writes a file on this computer".into());
     }
+    // A script asks once, for every line that needs it, each named.
+    if call.name == "run" {
+        let script = call.args.get("script").and_then(Value::as_str).unwrap_or("");
+        let reasons: Vec<String> = rustgis_engine::cmd::workflows::script_commands(script)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(n, id, params)| {
+                let line = ToolCall { id: String::new(), name: "run_command".into(), args: json!({"command": id, "params": params}) };
+                gate(s, &line).map(|why| format!("line {n} ({id}): {why}"))
+            })
+            .collect();
+        return (!reasons.is_empty()).then(|| reasons.join("; "));
+    }
     let (id, params) = target(call)?;
     if id.starts_with(rustgis_engine::plugins::PREFIX) {
         return Some("it runs a plugin's command".into());
@@ -267,6 +280,8 @@ pub fn run_with_budget(s: &mut Session, call: &ToolCall, tokens: usize) -> Resul
             with_notices(with_new_layers(r, s, &before), s, mark)
         }
         "read_features" => read_features(s, a)?,
+        // MCP's `run` (not offered to the in-app assistant): a script in one call.
+        "run" => return run_script(s, a, tokens),
         "search_docs" => crate::docs::search(&str_arg(a, "query").unwrap_or_default(), limit_arg(a, 8, 30))?,
         "read_doc" => {
             return crate::docs::read_with_budget(
@@ -414,6 +429,42 @@ fn with_new_layers(r: Value, s: &Session, before: &[(String, Vec<u32>)]) -> Valu
         return if r.is_null() { json!({"ok": true}) } else { r };
     }
     json!({"result": r, "layersAdded": added})
+}
+
+/// Runs a script (`script.run`'s format: one `command-id {json}` per line, `#` comments) in one
+/// call and one undo step. A failing line stops the script and nothing it did to the project is
+/// kept (files it wrote stay). The answer is `{success, result, lines, layersAdded, notices,
+/// error, duration_s}`, where `result`
+/// is the last command's; a failure is an `Err` holding the same JSON.
+fn run_script(s: &mut Session, a: &Value, tokens: usize) -> Result<String, String> {
+    // Untrimmed, so errors name the same lines the caller wrote.
+    let script = a
+        .get("script")
+        .and_then(Value::as_str)
+        .filter(|t| !t.trim().is_empty())
+        .ok_or("script is required: one `command-id {json}` per line")?;
+    let start = web_time::Instant::now();
+    let (before, mark) = (layer_snap(s), s.notice_mark());
+    let r = s.run("script.run", &json!({"script": script}));
+    let secs = (start.elapsed().as_secs_f64() * 1000.0).round() / 1000.0;
+    let notices: Vec<&str> = s.notices_since(mark).iter().map(|n| n.text.as_str()).collect();
+    match r {
+        Ok(v) => {
+            let ran = v.get("ran").and_then(Value::as_array);
+            let last = ran.and_then(|r| r.last()).and_then(|l| l.get("result")).cloned().unwrap_or(Value::Null);
+            let added = with_new_layers(json!({}), s, &before).get("layersAdded").cloned().unwrap_or_else(|| json!([]));
+            let out = json!({"success": true, "result": last, "lines": ran.map_or(0, Vec::len), "layersAdded": added,
+                "notices": notices, "error": null, "duration_s": secs});
+            Ok(bounded_json(&out, tokens))
+        }
+        Err(e) => {
+            // Nothing was kept, so no line ran and no layer was added.
+            let said: Vec<&&str> = notices.iter().filter(|t| **t != e).collect();
+            let out = json!({"success": false, "result": null, "lines": 0, "layersAdded": [], "notices": said,
+                "error": clip(&e, 8000), "duration_s": secs});
+            Err(bounded_json(&out, tokens))
+        }
+    }
 }
 
 /// A run's result with what it said beside it (a notice that only the first tables of a GeoPackage

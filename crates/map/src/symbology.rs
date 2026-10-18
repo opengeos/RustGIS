@@ -83,6 +83,129 @@ impl Symbol {
     }
 }
 
+/// How a stroke's open ends are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LineCap {
+    #[default]
+    Round,
+    Butt,
+    Square,
+}
+
+impl LineCap {
+    pub const ALL: [LineCap; 3] = [LineCap::Round, LineCap::Butt, LineCap::Square];
+    pub fn code(self) -> &'static str {
+        match self {
+            LineCap::Round => "round",
+            LineCap::Butt => "butt",
+            LineCap::Square => "square",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            LineCap::Round => "Round",
+            LineCap::Butt => "Flat",
+            LineCap::Square => "Square",
+        }
+    }
+    pub fn from_code(s: &str) -> Option<LineCap> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("flat") {
+            return Some(LineCap::Butt);
+        }
+        LineCap::ALL.into_iter().find(|c| c.code().eq_ignore_ascii_case(s))
+    }
+}
+
+/// How a stroke turns at a vertex.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LineJoin {
+    #[default]
+    Round,
+    Miter,
+    Bevel,
+}
+
+impl LineJoin {
+    pub const ALL: [LineJoin; 3] = [LineJoin::Round, LineJoin::Miter, LineJoin::Bevel];
+    pub fn code(self) -> &'static str {
+        match self {
+            LineJoin::Round => "round",
+            LineJoin::Miter => "miter",
+            LineJoin::Bevel => "bevel",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            LineJoin::Round => "Round",
+            LineJoin::Miter => "Miter",
+            LineJoin::Bevel => "Bevel",
+        }
+    }
+    pub fn from_code(s: &str) -> Option<LineJoin> {
+        let s = s.trim();
+        LineJoin::ALL.into_iter().find(|j| j.code().eq_ignore_ascii_case(s))
+    }
+}
+
+/// The most strokes one line symbol stacks.
+pub const MAX_STROKES: usize = 16;
+/// The widest stroke and the farthest offset, in points.
+pub const MAX_STROKE_WIDTH: f32 = 50.0;
+pub const MAX_STROKE_OFFSET: f32 = 100.0;
+
+/// One stroke of a line layer's stacked symbol (`Layer::line_strokes`). Widths and offsets are
+/// in points, so they keep their size on screen at every scale; the geometry is left as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineStroke {
+    /// The colour; `None` takes the feature's line colour from the renderer, so the strokes
+    /// follow Unique Values and Graduated Colors classes.
+    #[serde(default)]
+    pub color: Option<Rgba>,
+    /// The width in points; `None` takes the feature's line width from the renderer.
+    #[serde(default)]
+    pub width: Option<f32>,
+    /// The sideways shift in points: positive to the right of the line's direction (the order
+    /// of its vertices), negative to the left. Two copies of a line drawn in opposite
+    /// directions land on opposite sides.
+    #[serde(default)]
+    pub offset: f32,
+    #[serde(default)]
+    pub cap: LineCap,
+    #[serde(default)]
+    pub join: LineJoin,
+}
+
+impl Default for LineStroke {
+    fn default() -> Self {
+        LineStroke { color: None, width: None, offset: 0.0, cap: LineCap::Round, join: LineJoin::Round }
+    }
+}
+
+impl LineStroke {
+    /// The colour and width it draws a feature whose renderer symbol is `s` with.
+    pub fn resolve(&self, s: &Symbol) -> (Rgba, f32) {
+        (self.color.unwrap_or(s.stroke), self.width.unwrap_or(s.stroke_width))
+    }
+
+    /// Brought into range: finite, width 0 to [`MAX_STROKE_WIDTH`], offset within
+    /// ±[`MAX_STROKE_OFFSET`].
+    pub fn clamped(mut self) -> LineStroke {
+        self.width = self.width.map(|w| if w.is_finite() { w.clamp(0.0, MAX_STROKE_WIDTH) } else { 1.0 });
+        self.offset = if self.offset.is_finite() { self.offset.clamp(-MAX_STROKE_OFFSET, MAX_STROKE_OFFSET) } else { 0.0 };
+        self
+    }
+}
+
+/// Reads a layer's strokes as the command would leave them: at most [`MAX_STROKES`], each
+/// [`LineStroke::clamped`]. A project file is hostile input, and every stroke is drawn per
+/// feature per frame.
+pub fn de_strokes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<LineStroke>, D::Error> {
+    let mut v: Vec<LineStroke> = Vec::deserialize(d)?;
+    v.truncate(MAX_STROKES);
+    Ok(v.into_iter().map(LineStroke::clamped).collect())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassMethod {
     #[default]
