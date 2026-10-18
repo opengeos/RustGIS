@@ -57,7 +57,8 @@ port, start the app command with `ui.mcpRelay {"port": 9000}` and use
 ## Operate through RustGIS's tools
 
 1. **Inspect:** `list_layers` supplies layer names, fields, feature counts,
-   selections and the current view. Use `read_features` for attribute rows and
+   selections, web tile layers (including WMS) and the current view. Use
+   `read_features` for attribute rows and
    `view_map` for a PNG of the current map.
 2. **Discover:** use `search_commands` before choosing a command id; use
    `search_tools` and `describe_tool` before geoprocessing. Use `search_docs`

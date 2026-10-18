@@ -172,6 +172,13 @@ fn parse_tool(p: &Value) -> Result<Tool, String> {
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let m = s.map();
+    // list_layers sends this to the AI provider: tile addresses go without their keys.
+    let mut tiles = super::tiles::list(s);
+    for u in tiles.as_array_mut().into_iter().flatten().filter_map(|t| t.get_mut("url")) {
+        if let Some(r) = u.as_str().map(crate::sources::redact) {
+            *u = r.into();
+        }
+    }
     Ok(json!({
         "name": s.project.name,
         "path": s.path.as_ref().map(|p| p.display().to_string()),
@@ -193,7 +200,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
                 "fields": l.dataset.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),
             }),
         }).collect::<Vec<_>>(),
-        "tiles": super::tiles::list(s),
+        "tiles": tiles,
         "tables": s.project.tables.iter().map(|t| json!({
             "id": t.id, "name": t.name, "rows": t.features.len(),
             "fields": t.fields.iter().map(|f| format!("{} ({})", f.name, f.ty.label())).collect::<Vec<_>>(),

@@ -749,16 +749,16 @@ fn mcp_expects_reply_matches_the_server() {
 fn list_layers_includes_web_tiles() {
     let (server, mut s) = (mcp::Server::default(), sample());
     let layers = s.run("info.project", &Value::Null).unwrap()["layers"].clone();
-    for (name, url, overlay) in
-        [("Basemap", "https://example.com/{z}/{x}/{y}.png", false), ("WMS overlay", "https://example.com/wms?bbox={bbox-epsg-3857}", true)]
-    {
+    for (name, url, overlay) in [
+        ("Basemap", "https://example.com/{z}/{x}/{y}.png", false),
+        ("WMS overlay", "https://example.com/wms?bbox={bbox-epsg-3857}&key=secret", true),
+    ] {
         s.run("map.addTiles", &json!({"name": name, "url": url, "overlay": overlay})).unwrap();
     }
     let (err, text) = call_tool(&server, &mut s, "list_layers", json!({}));
     assert!(!err, "{text}");
     let info: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(info["layers"], layers);
-    assert_eq!(info["tiles"], s.run("map.tiles", &Value::Null).unwrap());
     assert_eq!(info["tiles"][0]["name"], "WMS overlay");
     assert_eq!(info["tiles"][0]["kind"], "raster");
     assert_eq!(info["tiles"][0]["overlay"], true);
