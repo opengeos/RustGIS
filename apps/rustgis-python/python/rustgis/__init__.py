@@ -652,7 +652,8 @@ class _Api:
         except TypeError:
             items = []
         if items and all(isinstance(item, Layer) for item in items):
-            boxes = [box for box in (self._find_layer(item).get("extent") for item in items) if box]
+            extents = (self._find_layer(item).get("extent") for item in items)
+            boxes = [box for box in extents if box]
             if not boxes:
                 raise RustGISError("the layers have no features to zoom to")
             extent = [
