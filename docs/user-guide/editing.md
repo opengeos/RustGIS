@@ -16,7 +16,9 @@ read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest
 
 - **Modify**: move the selected features by metres east and north, rotate them, scale them,
   merge them (polygons are unioned), explode multipart features, split a line where you click,
-  and flip line direction. Edit › Tools lists every editing tool.
+  and flip line direction. A single point turns and scales on itself, so Rotate and Scale leave
+  points (text graphics included) as they are: with only points selected they change nothing,
+  say so, and add no undo step. Edit › Tools lists every editing tool.
 - **Edit Vertices** (Edit › Features): reshape the selected features on the map. Their vertices
   show as square handles and each edge has a round midpoint handle. Drag a vertex to move it;
   drag a midpoint, or click an edge, to insert a vertex; click a vertex and press ++delete++ to
