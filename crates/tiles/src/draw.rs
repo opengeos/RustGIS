@@ -695,9 +695,25 @@ fn boxes_of(known: &mut Boxes, it: &Item, layer: &StyleLayer) -> Arc<Vec<[f32; 4
     b
 }
 
-/// How far past the pixmap a line or circle may lie and still be drawn into it, in points: its
-/// half width.
+/// How far past the pixmap a line or circle may lie and still be drawn into it, in points, at
+/// least: its half width.
 const OVERHANG: f32 = 16.0;
+
+/// How far a layer's shapes reach past their geometry at `zoom`, in points: a line's half width
+/// (twice its width at a mitred corner), a circle's radius and outline. Widths that depend on
+/// the feature are taken at the layer's own, and never less than [`OVERHANG`].
+pub(crate) fn overhang(layer: &StyleLayer, zoom: f32) -> f32 {
+    let ctx = FeatureCtx::zoom_only(zoom);
+    let reach = match layer.kind {
+        LayerKind::Line => {
+            let k = if layer.line_join(&ctx) == crate::style::LineJoin::Miter { 2.0 } else { 0.75 };
+            layer.line_width(&ctx) * k
+        }
+        LayerKind::Circle => layer.circle_radius(&ctx) + layer.circle_stroke_width(&ctx),
+        _ => 0.0,
+    };
+    if reach.is_finite() { reach.clamp(OVERHANG, 512.0) } else { OVERHANG }
+}
 
 fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zoom: f32, sheet: Option<&Sprite>, boxes: &[[f32; 4]]) {
     let Payload::Vector(tile) = &*it.payload else { return };
@@ -713,7 +729,7 @@ fn draw_vector(pm: &mut Pixmap, it: &Item, layer: &StyleLayer, frame: &Frame, zo
     let (x0, y0) = frame.px(it.at.min_x, it.at.max_y);
     let k = (TileId::span(it.z) / frame.m_per_px) as f32 / l.extent.max(1) as f32;
     // A fill reaches past its shape only by its outline.
-    let pad = if matches!(layer.kind, LayerKind::Fill | LayerKind::FillExtrusion) { 2.0 } else { OVERHANG * ppp };
+    let pad = if matches!(layer.kind, LayerKind::Fill | LayerKind::FillExtrusion) { 2.0 } else { overhang(layer, zoom) * ppp };
     let (pw, ph) = (pm.width() as f32, pm.height() as f32);
     // Shapes are cut a little past the pixmap too (in pixels, by `pad`), so a long road or a
     // large park reaching far past it costs no more than the part in it.
@@ -1439,6 +1455,31 @@ mod tests {
         }
         assert_eq!(got.iter().map(|p| p.source_layer.as_str()).collect::<Vec<_>>(), vec!["pois"]);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wide_lines_reach_in_from_past_the_pixmap() {
+        // The top-left 64 pixels of a tile drawn 256 across; a road 120 points wide runs 100
+        // pixels down, its edge 40 pixels down: in the pixmap, though its line isn't.
+        let road = crate::mvt::Feature {
+            id: None,
+            kind: GeomKind::LineString,
+            geometry: vec![vec![[0.0, 1600.0], [4096.0, 1600.0]]],
+            props: Vec::new(),
+        };
+        let layer = StyleLayer::parse(&serde_json::json!({"id": "r", "type": "line", "source": "s", "source-layer": "l",
+            "layout": {"line-join": "round"}, "paint": {"line-color": "#f00", "line-width": 120}}))
+        .unwrap();
+        assert_eq!(overhang(&layer, 0.0), 90.0);
+        let it = item(vec![road]);
+        let half = crate::template::HALF_WORLD;
+        let frame = Frame { left: -half, top: half, m_per_px: 2.0 * half / 256.0, ppp: 1.0 };
+        let mut pm = Pixmap::new(64, 64).unwrap();
+        let mut boxes = HashMap::new();
+        let b = boxes_of(&mut boxes, &it, &layer);
+        draw_vector(&mut pm, &it, &layer, &frame, 0.0, None, &b);
+        assert_eq!(pm.pixel(32, 60).unwrap().red(), 255);
+        assert_eq!(pm.pixel(32, 30).unwrap().alpha(), 0);
     }
 
     #[test]

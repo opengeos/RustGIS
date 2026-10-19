@@ -7,10 +7,10 @@
 //! with the camera on the GPU. Labels aren't in them: they are collected every time, for the
 //! renderer to place with the map's own.
 //!
-//! A picture is drawn at the map's zoom rounded to [`STEPS`] steps a level, so zooming draws the
-//! squares again a few times a level rather than every frame, and it is stretched (by at most
-//! 2 %) to the zoom in between. Its square is a tile a level or more below the vector tiles drawn
-//! there, from 256 to 512 pixels a side.
+//! A picture is drawn at the map's zoom rounded to a [`STEPS`]th of a level and its side to whole
+//! pixels, so it is put in place stretched by a fraction of a percent at most (and copied pixel
+//! for pixel). Its square is a tile a level or more below the vector tiles drawn there: 256 to
+//! 512 pixels a side at one or two pixels a point, about as much at others (192 to 384 at 1.5).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
@@ -19,7 +19,7 @@ use rustgis_geom::Extent;
 use tiny_skia::Pixmap;
 
 use crate::cache::{self, Payload};
-use crate::draw::{Drawn, Frame, Item, Pass, draw_layers};
+use crate::draw::{Drawn, Frame, Item, Pass, draw_layers, overhang};
 use crate::source::Resolved;
 use crate::style::{LayerKind, Source};
 use crate::template::{self, Placed, TileId};
@@ -32,10 +32,6 @@ const BUDGET: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 384 <<
 
 /// The largest side of a picture, pixels.
 const MAX_SIDE: f32 = 2048.0;
-
-/// How far past its square a picture looks for shapes, in points: a line or circle drawn from a
-/// neighbouring tile reaches into it by up to half its width.
-const REACH: f64 = 16.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Key {
@@ -135,7 +131,10 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
         }
     }
     let todo: Vec<Placed> = missing.iter().filter_map(|&i| found.get(i).map(|f| f.0)).collect();
-    let drawn = draw_all(r, &todo, side, m_per_px, ppp);
+    // How far past its square a picture looks for shapes, in points: a line or circle drawn from
+    // a neighbouring tile reaches into it by up to half its width.
+    let reach = r.style.layers.iter().filter(|l| l.visible_at(zoom)).map(|l| overhang(l, zoom)).fold(0.0f32, f32::max);
+    let drawn = draw_all(r, &todo, side, m_per_px, ppp, f64::from(reach));
     {
         let mut s = lock();
         let tick = s.tick;
@@ -179,8 +178,8 @@ fn evict(s: &mut Store) {
 
 /// Draws the pictures of `squares`: each a `side`-pixel pixmap and whether some of it is still
 /// on its way. Natively the squares are shared among threads.
-fn draw_all(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f32) -> Vec<Option<(Pixmap, bool)>> {
-    let one = |p: &Placed| draw_one(r, p, side, m_per_px, ppp);
+fn draw_all(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f32, reach: f64) -> Vec<Option<(Pixmap, bool)>> {
+    let one = |p: &Placed| draw_one(r, p, side, m_per_px, ppp, reach);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(squares.len()).min(16);
@@ -207,13 +206,13 @@ fn draw_all(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f32
     squares.iter().map(one).collect()
 }
 
-/// Draws the shapes of one square.
-fn draw_one(r: &Resolved, p: &Placed, side: u32, m_per_px: f64, ppp: f32) -> Option<(Pixmap, bool)> {
+/// Draws the shapes of one square, with those of the tiles around it out to `reach` points.
+fn draw_one(r: &Resolved, p: &Placed, side: u32, m_per_px: f64, ppp: f32, reach: f64) -> Option<(Pixmap, bool)> {
     let mut pm = Pixmap::new(side, side)?;
     let e = p.extent();
     let frame = Frame { left: e.min_x, top: e.max_y, m_per_px, ppp };
     // Shapes from the tiles next to it too, where they reach into it.
-    let pad = REACH * f64::from(ppp) * m_per_px;
+    let pad = reach * f64::from(ppp) * m_per_px;
     let view = Extent::new(e.min_x - pad, e.min_y - pad, e.max_x + pad, e.max_y + pad);
     let mut d = Drawn::default();
     draw_layers(Some(&mut pm), (side, side), &view, r, &frame, Pass::Shapes, &mut d);

@@ -1,4 +1,4 @@
-//! Times map renders of a vector tile style (OpenFreeMap Liberty) while panning and zooming:
+//! Times map renders (for the GPU, building its scene: the draw itself isn't timed) of a vector tile style (OpenFreeMap Liberty) while panning and zooming:
 //! `cargo run --release -p rustgis-render --example vector_tile_bench`. Needs the network.
 use rustgis_geom::{Coord, lonlat_to_merc};
 use rustgis_map::{Camera, Map, TileKind, TileLayer};
