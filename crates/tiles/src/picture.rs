@@ -106,7 +106,16 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
     let m_per_px = TileId::span(z) / f64::from(side);
     let key = |tile| Key { style: Arc::as_ptr(r) as usize, tile, step: step as i32, ppp: ppp.to_bits() };
     let generation = cache::generation();
-    let squares = reach.map(|e| template::covering(e, z)).filter(|s| !s.is_empty()).unwrap_or_else(|| template::covering(view, z));
+    // A view of more squares than a covering holds (a huge window) is drawn straight instead;
+    // a reach of more keeps to the view.
+    let span = TileId::span(z);
+    if ((view.width() / span).ceil() + 1.0) * ((view.height() / span).ceil() + 1.0) > template::MAX_TILES as f64 {
+        return None;
+    }
+    let squares = reach
+        .map(|e| template::covering(e, z))
+        .filter(|s| !s.is_empty() && s.len() < template::MAX_TILES)
+        .unwrap_or_else(|| template::covering(view, z));
     let mut found: Vec<(Placed, Option<Arc<Payload>>)> = Vec::with_capacity(squares.len());
     let mut missing = Vec::new();
     {
@@ -382,6 +391,11 @@ mod tests {
         let mut pending = false;
         let world = Extent::new(-template::HALF_WORLD * 1.5, -1e6, template::HALF_WORLD * 1.5, 1e6);
         assert!(cover(&r, &f, &world, None, &mut pending).is_none());
+        // More squares than a covering holds: drawn straight too, not left blank.
+        let near = frame(12.0, 1.0);
+        let huge = near.extent(20_000, 10_000);
+        assert!(huge.width() < template::HALF_WORLD);
+        assert!(cover(&r, &near, &huge, None, &mut pending).is_none());
         for m_per_px in [0.0, f64::NAN, f64::INFINITY] {
             assert!(cover(&r, &Frame { m_per_px, ..f }, &view, None, &mut pending).is_none());
         }
