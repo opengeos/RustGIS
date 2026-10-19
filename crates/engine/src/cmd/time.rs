@@ -208,9 +208,6 @@ pub(crate) fn set(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(u) = unit {
         t.unit = u;
-        if start.is_none() && !fresh {
-            t.start = time::floor(t.start, u);
-        }
     }
     if let Some(n) = uint(p, "interval") {
         t.interval = n.clamp(1, 10_000) as u32;

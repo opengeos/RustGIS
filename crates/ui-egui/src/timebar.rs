@@ -18,8 +18,9 @@ pub struct TimeBarState {
     pub hidden: bool,
     /// Playing: the milliseconds since the last step.
     pub playing: Option<f64>,
-    /// The features of each step, and what they were counted for.
-    counts: Option<(String, Vec<u32>)>,
+    /// The features of each step, and what they were counted for: the map and steps, and each
+    /// bound layer's rows and fields (shared until an edit changes them).
+    counts: Option<(String, Vec<Bound>, Vec<u32>)>,
     /// The slider's steps, and the slider they were listed for.
     steps: Option<(TimeSlider, std::sync::Arc<Vec<f64>>)>,
 }
@@ -137,30 +138,40 @@ fn advance(app: &mut RustGisApp, ui: &Ui) {
 
 /// The features of the bound layers in each step's own span (a step, whatever the window);
 /// worked out again only when the layers or steps change.
+/// A bound layer as its counts were made from.
+type Bound = (u32, String, rustgis_engine::data::Features, Vec<rustgis_engine::data::Field>);
+
 fn counts(app: &mut RustGisApp, t: &TimeSlider, steps: &[f64]) -> Vec<u32> {
     let m = app.session.map();
-    let bound: Vec<_> = m.layers.iter().filter_map(|l| l.time.as_ref().map(|b| (l, b.field.clone()))).collect();
+    let bound: Vec<Bound> = m
+        .layers
+        .iter()
+        .filter_map(|l| l.time.as_ref().map(|b| (l.id, b.field.clone(), l.dataset.features.clone(), l.dataset.fields.clone())))
+        .collect();
     let key = format!(
-        "{}|{}|{}|{:?}|{}",
+        "{}|{}|{:?}",
         app.session.opened,
-        app.session.changes,
         app.session.project.active_map,
-        (steps.first(), steps.last(), steps.len(), t.unit, t.interval),
-        bound.iter().map(|(l, f)| format!("{}:{f}:{}:{};", l.id, l.dataset.features.len(), l.geometry_rev)).collect::<String>(),
+        (steps.first(), steps.last(), steps.len(), t.unit, t.interval)
     );
-    if let Some((k, c)) = &app.time.counts
+    let same = |a: &[Bound]| {
+        a.len() == bound.len() && a.iter().zip(&bound).all(|(x, y)| x.0 == y.0 && x.1 == y.1 && x.2.shares(&y.2) && x.3 == y.3)
+    };
+    if let Some((k, b, c)) = &app.time.counts
         && *k == key
+        && same(b)
     {
         return c.clone();
     }
     let mut out = vec![0u32; steps.len()];
-    for (l, field) in &bound {
+    for (id, field, ..) in &bound {
+        let Some(l) = app.session.map().layer(*id) else { continue };
         let h = histogram(instants(&l.dataset, field).into_iter().flatten(), steps, t.unit, t.interval);
         for (o, c) in out.iter_mut().zip(h) {
             *o = o.saturating_add(c);
         }
     }
-    app.time.counts = Some((key, out.clone()));
+    app.time.counts = Some((key, bound, out.clone()));
     out
 }
 

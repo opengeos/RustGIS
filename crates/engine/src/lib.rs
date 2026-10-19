@@ -277,9 +277,6 @@ pub struct Session {
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
-    /// Bumped when the project's contents change (a command that changes it, undo, redo), not
-    /// when only the view does: views of the data cache by it.
-    pub changes: u64,
     /// Bumped each time another project replaces this one (new, open, sample, template), however
     /// the command came (the app, an agent, a script): the interface drops what it kept for the
     /// old one.
@@ -457,7 +454,6 @@ impl Session {
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
-            changes: 0,
             opened: 0,
             tool: Tool::Explore,
             active_layer: None,
@@ -693,7 +689,6 @@ impl Session {
             // session's own flag says so, not the answer, which a plugin's command could forge.
             (Ok(_), Some(_)) if std::mem::take(&mut self.request_only) => {}
             (Ok(_), Some(mut snap)) => {
-                self.changes = self.changes.wrapping_add(1);
                 // An edit may change the dates the time slider's window filters on: bound layers
                 // whose features or fields the command changed (features are shared with the
                 // snapshot until written) take the window again.
@@ -830,7 +825,6 @@ impl Session {
 
     pub(crate) fn undo(&mut self) -> bool {
         let Some((p, saved, label, actor)) = self.undo.pop() else { return false };
-        self.changes = self.changes.wrapping_add(1);
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
@@ -842,7 +836,6 @@ impl Session {
 
     pub(crate) fn redo(&mut self) -> bool {
         let Some((p, saved, label, actor)) = self.redo.pop() else { return false };
-        self.changes = self.changes.wrapping_add(1);
         let (open, was) = (self.open_layout_name(), self.active_layout);
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
