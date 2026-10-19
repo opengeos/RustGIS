@@ -17,3 +17,18 @@
   height: 2rem;
   width: auto;
 }
+
+/* Screenshot captions: right under their image (the figure's Markdown leaves a line break
+   between them), as wide as it, at most two lines in the home page's two-column tour. */
+.md-typeset figure > br {
+  display: none;
+}
+
+.md-typeset figure img {
+  display: block;
+}
+
+.md-typeset figure figcaption {
+  max-width: none;
+  margin: 0.4em auto 0;
+}

@@ -73,7 +73,7 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?: name|id (default: the active layer, which need not be the layer last selected in)}"#)
         .when(need_selection),
         C::new("identify", "Identify", "Home › Inspect", identify).view().params(
-            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted; the mode picks the layers, and every feature under the point in them, up to 100, is in "results")}"#,
+            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted; the mode picks the layers, and every feature under the point in them, up to 100, is in "results"; topmost and visible take vector tile layers' features too, with "tileLayer" and "sourceLayer", from the tiles drawn there: one not loaded yet is asked for, and its features come on a later identify)}"#,
         ),
         C::new("map.popupMode", "Pop-up Mode", "Home › Navigate", popup_mode)
             .params(r#"{"mode": "topmost"|"visible"|"selectable"|"selectedInContents"|"none"}"#),
@@ -200,7 +200,8 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     }
     let lon = f(p, "lon").ok_or("lon is required")?;
     let lat = f(p, "lat").ok_or("lat is required")?;
-    let tol = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0) * s.map().camera.res;
+    let tol_px = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0);
+    let tol = tol_px * s.map().camera.res;
     let scale = s.scale();
     let active = s.active_layer;
     let keep = |l: &rustgis_map::Layer| match mode {
@@ -215,7 +216,12 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
         None => Vec::new(),
     };
     let map = s.map();
-    let results: Vec<Value> = hits.iter().filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
+    let mut results: Vec<Value> = hits.iter().filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
+    // Then the features of vector tile layers, beneath the layers; tiles are never selectable.
+    if matches!(mode, PopupMode::Topmost | PopupMode::Visible) && !(first_layer && !results.is_empty()) {
+        let room = MAX_IDENTIFIED.saturating_sub(results.len());
+        results.extend(tile_features(s, lon, lat, tol_px, first_layer, room));
+    }
     let Some(first) = results.first().cloned() else {
         // No feature: report the pixel of the topmost raster instead.
         if mode == PopupMode::SelectedInContents && active.and_then(|id| map.layer(id)).is_some_and(|l| !l.is_raster()) {
@@ -228,6 +234,57 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
         o.insert("results".into(), Value::Array(results));
     }
     Ok(out)
+}
+
+/// The features of the vector tile layers drawn under a point, topmost layer first (only the
+/// first layer with any when `first_layer`): archives, vector tiles and overlays added as data,
+/// not basemaps from the catalog or MapLibre styles. The tiles looked at are those drawn there.
+fn tile_features(s: &Session, lon: f64, lat: f64, tol_px: f64, first_layer: bool, limit: usize) -> Vec<Value> {
+    use rustgis_map::tiles::TileKind;
+    use rustgis_render::rustgis_tiles::{draw, mvt};
+    let map = s.map();
+    if !(lon.is_finite() && lat.is_finite()) || limit == 0 {
+        return Vec::new();
+    }
+    let at = rustgis_geom::lonlat_to_merc(Coord::new(lon, lat.clamp(-85.06, 85.06)));
+    // Web Mercator metres per point at the click, as tiles are drawn in other projections (in
+    // Web Mercator, the camera's resolution).
+    let res = map.camera.res;
+    let m_per_px = map
+        .to_map(Coord::new(lon, lat))
+        .and_then(|m| map.to_lonlat(Coord::new(m.x + res, m.y)))
+        .map(|c| rustgis_geom::lonlat_to_merc(Coord::new(c.x, c.y.clamp(-85.06, 85.06))))
+        .map(|b| (b.x - at.x).hypot(b.y - at.y))
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(res);
+    let mut out = Vec::new();
+    for t in &map.tiles {
+        let data = matches!(t.kind, TileKind::PmTiles | TileKind::MbTiles | TileKind::Vector) && (t.id.is_empty() || t.overlay);
+        if !data || !t.visible || t.opacity <= 0.0 {
+            continue;
+        }
+        let picked = draw::pick(&rustgis_render::tile_spec(t), at.x, at.y, m_per_px, tol_px as f32, limit - out.len());
+        for p in &picked {
+            let attrs: serde_json::Map<String, Value> = p
+                .props
+                .iter()
+                .map(|(k, v)| {
+                    let text = match v {
+                        mvt::Value::String(t) => t.clone(),
+                        mvt::Value::Number(n) if mvt::is_whole(*n) => format!("{}", *n as i64),
+                        mvt::Value::Number(n) => n.to_string(),
+                        mvt::Value::Bool(b) => b.to_string(),
+                    };
+                    (k.clone(), json!(text))
+                })
+                .collect();
+            out.push(json!({"layer": format!("{} › {}", t.name, p.source_layer), "tileLayer": t.name, "sourceLayer": p.source_layer, "attributes": attrs}));
+        }
+        if out.len() >= limit || (first_layer && !picked.is_empty()) {
+            break;
+        }
+    }
+    out
 }
 
 fn popup_mode(s: &mut Session, p: &Value) -> CmdResult {

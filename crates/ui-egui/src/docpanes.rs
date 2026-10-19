@@ -371,7 +371,7 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-/// Shared items (Publish › Status › Jobs) with their Manage tools, and the data stores.
+/// Shared items (Publish › Share As › Jobs) with their Manage tools, and the data stores.
 pub fn shares(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     message(app, ui, t);
     let items = app.session.project.shared.clone();

@@ -16,7 +16,7 @@ Packages and project item files are described under [Project items](data.md#proj
 ## Sharing as open formats
 
 **Publish › Share As** writes open-format files that work without a server, to a chosen file or the
-first **data store** (a folder registered under **Publish › Manage › Data Stores**):
+first **data store** (a folder added with **Add Data Store…** in the Shared Items pane):
 
 - **Web Map**: a self-contained HTML page with the map's layers (rasters as images), pan and zoom,
   a layer list and pop-ups.
@@ -31,6 +31,6 @@ first **data store** (a folder registered under **Publish › Manage › Data St
   with a camera that looks at the map's centre from its bearing and pitch.
 - **Web Link Chart**: the features joined by the map's relationships, as a node-link page.
 
-**Status › Jobs** (the Shared Items pane) lists every share; **Save Web Map**, **Replace Web
+**Publish › Share As › Jobs** (the Shared Items pane) lists every share; **Save Web Map**, **Replace Web
 Layer**, **Save Web Scene** and **Save Web Link Chart** update a share in place, and **Upload File**
 copies a file into a data store.

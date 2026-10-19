@@ -33,11 +33,15 @@ licence, and the two read and write the same open formats.
 
 The same World Atlas data, styled the same way, in each app.
 
-[![RustGIS with the World Atlas on the globe: the ribbon, the Layers pane and the AI Assistant](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-*RustGIS: the ribbon, the Layers pane and the AI Assistant.*
+<figure markdown="span">
+  [![RustGIS with the World Atlas on the globe: the ribbon, the Layers pane and the AI Assistant](https://assets.rustgis.app/images/hero.webp)](https://assets.rustgis.app/images/hero.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+  <figcaption>RustGIS: the ribbon, the Layers pane and the AI Assistant.</figcaption>
+</figure>
 
-[![QGIS with the same World Atlas data on an orthographic globe: toolbars, the Browser and Layers panels](https://assets.rustgis.app/images/qgis-world-atlas.webp)](https://assets.rustgis.app/images/qgis-world-atlas.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-*QGIS with the same data and styling: toolbars and the Browser and Layers panels.*
+<figure markdown="span">
+  [![QGIS with the same World Atlas data on an orthographic globe: toolbars, the Browser and Layers panels](https://assets.rustgis.app/images/qgis-world-atlas.webp)](https://assets.rustgis.app/images/qgis-world-atlas.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+  <figcaption>QGIS with the same data and styling: toolbars and the Browser and Layers panels.</figcaption>
+</figure>
 
 ## Where RustGIS is stronger
 
@@ -150,8 +154,8 @@ Most QGIS ideas have a counterpart under a different name:
 | In QGIS | In RustGIS |
 |---|---|
 | Layers panel | Layers pane (left) |
-| Browser panel, Data Source Manager | Catalog pane, **Home › Add Data**, the Data Sources pane |
-| Processing Toolbox | Geoprocessing pane (**Analyze › Tools**), or Command Search (++ctrl+k++) |
+| Browser panel, Data Source Manager | Browser pane, **Home › Add Data**, the Data Sources pane |
+| Processing Toolbox | Tools pane (**Analyze › Tools**), or Command Search (++ctrl+k++) |
 | Graphical Modeler | ModelBuilder: a node canvas of inputs, tools and outputs, which can also build a model from your history |
 | `qgis_process` | `rustgis-cli run --cmd 'gp.run={…}'` |
 | Python console, PyQGIS | The Script pane and notebooks inside the app; the `rustgis` Python package outside it |

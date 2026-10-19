@@ -9,7 +9,22 @@ layers. **Select By Attributes** takes a SQL clause and checks it as you type; *
 picks features that touch another layer's features or lie within a search distance of them (or,
 inverted, those that don't). Selected features draw in
 cyan and are highlighted in the attribute table, and the selection is synced both ways. Switch,
-clear or zoom to the selection, or make a new layer from it.
+clear or zoom to the selection, or make a new layer from it (**Make Layer From Selected
+Features**, `select.layerFromSelection`).
+
+### The attribute table
+
+++ctrl+t++ (or **Home › Selection › Attributes**) docks the active layer's table under the map.
+Click a column header to sort by it (a second click reverses the order, a third unsorts), click a row to select it (++ctrl++ or
+++shift++ adds it to the selection), and double-click a cell to change its value. **Selected only**
+keeps to the selected rows and **Filter rows…** to the rows with a value containing the words typed.
+The toolbar opens Select By Attributes and zooms to, switches, clears or deletes the selection,
+and adds or calculates a field.
+
+<figure markdown="span">
+  ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
+  <figcaption>The attribute table, with a selection highlighted on the map and in the table.</figcaption>
+</figure>
 
 Select By Attributes and definition queries use SQL `WHERE` clauses:
 
@@ -23,7 +38,10 @@ gdp_md IS NULL
 
 ## Geoprocessing tools
 
-![The Analyze tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+<figure markdown="span">
+  ![The Analyze tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+  <figcaption>The Analyze tab's tool gallery and the Tools pane running Buffer.</figcaption>
+</figure>
 
 Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
@@ -78,16 +96,21 @@ cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines
 contribute their vertices. Leave the extent empty to use the input's, or give it as
 `xmin,ymin,xmax,ymax` in degrees. The result is a Float32 GeoTIFF layer.
 
+<figure markdown="span">
+  ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
+  <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>
+</figure>
+
 **Tissot's Indicatrix** shows what the map's projection does to the Earth. It draws the same small circle repeated over a grid: by default circles of 500 km radius every 30° over the whole world. With **Area: Map Extent** it fills the view instead (the whole Earth on the globe), for a country or a state with a smaller spacing and radius.
 
 - **The circles are geodesic,** in longitude/latitude. The map draws each one as the ellipse its projection makes of it, and redraws them when you change the projection: growing circles in Web Mercator, flattened ellipses of equal area in Mollweide.
 - **On a flat map, each circle also records Tissot's parameters at its centre** for the projection the map had when the tool ran:
-  - `h` and `k`: scale along the meridian and the parallel;
-  - `a` and `b`: the ellipse's semi-axes;
-  - `area_scale`: `a·b`, which is 1 on an equal-area projection;
-  - `max_angle`: the largest angular distortion ω in degrees, 0 on a conformal projection.
+    - `h` and `k`: scale along the meridian and the parallel;
+    - `a` and `b`: the ellipse's semi-axes;
+    - `area_scale`: `a·b`, which is 1 on an equal-area projection;
+    - `max_angle`: the largest angular distortion ω in degrees, 0 on a conformal projection.
 
-  They are measured against the WGS 84 ellipsoid. For a world projection the map draws on a sphere (Mollweide, Robinson…), they can be off by a few tenths of a percent.
+    They are measured against the WGS 84 ellipsoid. For a world projection the map draws on a sphere (Mollweide, Robinson…), they can be off by a few tenths of a percent.
 - **Making a distortion map:** color the circles by `area_scale` or `max_angle`.
 
 ## GeoLibre tools
@@ -183,6 +206,11 @@ text, one per line (`id {json}`).
 
 ## ModelBuilder
 
+<figure markdown="span">
+  ![ModelBuilder after a run: Cities buffered by 300 km clip the Rivers into "Rivers near cities", and Countries are dissolved by continent; every node is ticked and the results are on the map](https://assets.rustgis.app/images/modelbuilder.webp)
+  <figcaption>A model after its run: each node is ticked, and its outputs are layers on the map.</figcaption>
+</figure>
+
 **Analyze › Model Builder** opens a model in a view of its own, a tab beside the maps and
 layouts. A model is a graph of three kinds of node: **inputs** (blue) name layers of the map,
 **tools** (amber) are geoprocessing tools, and **outputs** (green) keep a result as a layer of
@@ -251,7 +279,7 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
 
 **Analyze › Deep Learning Tools** trains a neural network (a multilayer perceptron) on the pixels
 under training polygons and classifies every pixel, adding a class raster with a confidence band
-and reporting the accuracy on held-back pixels. Trained models stay in the project; **Share ›
-Package › Deep Learning** saves one as a package to apply in other projects. **Analyze › Create
+and reporting the accuracy on held-back pixels. Trained models stay in the project; **Publish ›
+Share As › Deep Learning** saves one as a package to apply in other projects. **Analyze › Create
 Hosted Imagery** cuts a raster into XYZ web map tiles (PNG, transparent outside the raster) with
 a TileJSON file and a viewer page.

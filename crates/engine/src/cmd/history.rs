@@ -65,7 +65,9 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
         match replay(r) {
             Ok((cmd, params)) if r.ok => text.push_str(&format!("\n{}\n", python(&cmd, &params))),
             Ok((cmd, params)) => {
-                let why = r.messages.first().map(|m| line(&crate::sources::redact_text(m))).unwrap_or_default();
+                // An error may quote a connection, password and all: redacted as a parameter's
+                // value is, not for its addresses only.
+                let why = r.messages.first().map(|m| line(&redacted_text(m))).unwrap_or_default();
                 text.push_str(&format!(": failed when it ran ({why})\n"));
                 for l in python(&cmd, &params).lines() {
                     text.push_str(&format!("# {l}\n"));
@@ -139,7 +141,61 @@ fn redacted(v: &Value) -> Value {
 fn redacted_text(t: &str) -> String {
     let r = if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) };
     // After `redact` too: a prefix it knows may come in a form it doesn't (GDAL's `MYSQL:`).
-    secret_pairs_emptied(&private_keys_removed(&r))
+    query_pairs_emptied(&private_keys_removed(&r))
+}
+
+/// `t` with its secret pairs emptied (`secret_pairs_emptied`), parted first at each `&` that
+/// starts another `name=` pair, as a query string's do (`a=1&password=…`, with no `://` for
+/// `redact` to read it by). An `&` inside a value (`password=ab&cd`), or in a value quoted or
+/// braced from its start, stays in it, so the whole value goes. A quote inside a word
+/// (`O'Reilly`, `can't`) opens nothing; one that opens a value and never closes is taken for a
+/// stray one, and the text is parted at every such `&`, quotes aside (the safe way).
+fn query_pairs_emptied(t: &str) -> String {
+    pairs_parted(t, true).or_else(|| pairs_parted(t, false)).unwrap_or_default()
+}
+
+/// [`query_pairs_emptied`]'s work, honouring quotes and braces that open a value or not: `None`
+/// when one opened and never closed.
+fn pairs_parted(t: &str, quotes: bool) -> Option<String> {
+    let mut out = String::with_capacity(t.len());
+    let mut from = 0;
+    let mut open: Option<char> = None;
+    // Right after a `=` (spaces aside): where a value, and so a quote or a brace, can start.
+    let mut value_start = false;
+    let mut chars = t.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match open {
+            Some(close) if c == '\\' && close != '}' => {
+                chars.next();
+            }
+            // ODBC writes a `}` in a braced value as `}}`.
+            Some('}') if c == '}' && chars.peek().is_some_and(|&(_, n)| n == '}') => {
+                chars.next();
+            }
+            Some(close) if c == close => open = None,
+            Some(_) => {}
+            None if quotes && value_start && (c == '\'' || c == '"') => open = Some(c),
+            None if quotes && value_start && c == '{' => open = Some('}'),
+            None if c == '&' && starts_pair(t.get(i + 1..).unwrap_or("")) => {
+                out.push_str(&secret_pairs_emptied(t.get(from..i).unwrap_or("")));
+                out.push('&');
+                from = i + 1;
+            }
+            None => {}
+        }
+        value_start = open.is_none() && (c == '=' || (value_start && c == ' '));
+    }
+    if open.is_some() {
+        return None;
+    }
+    out.push_str(&secret_pairs_emptied(t.get(from..).unwrap_or("")));
+    Some(out)
+}
+
+/// Whether `s` starts with a pair's name and its `=`.
+fn starts_pair(s: &str) -> bool {
+    let n = s.find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or(s.len());
+    n > 0 && s.get(n..).is_some_and(|r| r.trim_start().starts_with('='))
 }
 
 /// `t` without the PEM private keys pasted in it (`-----BEGIN … PRIVATE KEY-----` to its
@@ -233,12 +289,18 @@ fn secret_pairs_emptied(t: &str) -> String {
 /// (`\'`, as libpq writes one in a quoted value), which doesn't close it.
 fn closer(v: &str, c: char) -> Option<usize> {
     let mut escaped = false;
-    for (i, ch) in v.char_indices().skip(1) {
+    let mut chars = v.char_indices().skip(1).peekable();
+    while let Some((i, ch)) = chars.next() {
         if escaped {
             escaped = false;
         } else if ch == '\\' && c != '}' {
             escaped = true;
         } else if ch == c {
+            // ODBC writes a `}` in a braced value as `}}`: it doesn't close it.
+            if c == '}' && chars.peek().is_some_and(|&(_, n)| n == '}') {
+                chars.next();
+                continue;
+            }
             return Some(i);
         }
     }

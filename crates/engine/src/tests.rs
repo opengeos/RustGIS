@@ -4735,6 +4735,61 @@ fn pmtiles_archives_become_tile_layers() {
     assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
 }
 
+/// Identify reports the features of a vector PMTiles archive under the point (topmost and
+/// visible modes), with their tile and source layers; hidden layers and the selectable mode don't.
+#[test]
+fn identify_reports_vector_tile_features() {
+    use crate::render::rustgis_tiles::{mvt, pmtiles};
+    let park = mvt::Feature {
+        id: Some(3),
+        kind: mvt::GeomKind::Polygon,
+        geometry: vec![vec![[1024.0, 1024.0], [3072.0, 1024.0], [3072.0, 3072.0], [1024.0, 3072.0], [1024.0, 1024.0]]],
+        props: vec![("name".into(), mvt::Value::String("Central".into())), ("visitors".into(), mvt::Value::Number(1200.0))],
+    };
+    let tile = mvt::encode(&mvt::Tile { layers: vec![mvt::Layer { name: "parks".into(), extent: 4096, features: vec![park] }] });
+    let new = pmtiles::NewArchive {
+        tile_type: pmtiles::TileType::Mvt,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({"vector_layers": [{"id": "parks"}]}),
+    };
+    let dir = std::env::temp_dir().join(format!("rustgis-identify-tiles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("parks.pmtiles");
+    std::fs::write(&path, pmtiles::write(vec![(0, 0, 0, tile)], &new).unwrap()).unwrap();
+
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    // Zoom 0, the park in the middle of the world.
+    s.map_mut().camera.center = rustgis_geom::Coord::new(0.0, 0.0);
+    s.map_mut().camera.res = 2.0 * 20_037_508.342_789_244 / 256.0;
+    let identify = |s: &mut Session, p: Value| {
+        // The archive and its tile arrive in the background.
+        for _ in 0..500 {
+            let r = s.run("identify", &p).unwrap();
+            if !r.is_null() {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Value::Null
+    };
+    let r = identify(&mut s, json!({"lon": 1.0, "lat": 1.0}));
+    assert_eq!(r["tileLayer"], "parks", "{r}");
+    assert_eq!(r["sourceLayer"], "parks");
+    assert_eq!(r["layer"], "parks › parks");
+    assert_eq!(r["attributes"]["name"], "Central");
+    assert_eq!(r["attributes"]["visitors"], "1200");
+    assert!(r.get("layerId").is_none(), "{r}");
+    assert_eq!(r["results"].as_array().map(Vec::len), Some(1));
+    // Outside the park, in the selectable mode, or hidden: nothing.
+    assert!(s.run("identify", &json!({"lon": 150.0, "lat": -70.0})).unwrap().is_null());
+    assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0, "mode": "selectable"})).unwrap().is_null());
+    s.run("map.setTiles", &json!({"index": 0, "visible": false})).unwrap();
+    assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0})).unwrap().is_null());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A tile-less PMTiles archive (an empty root directory) whose header gives these bounds
 /// (west, south, east, north).
 fn empty_pmtiles(bounds: [f64; 4]) -> Vec<u8> {
@@ -8192,6 +8247,44 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert_eq!(out["fileName"], "A_B__C_D__E_history.py");
     s.project.gp_history.clear();
     assert!(s.run("gp.historyScript", &Value::Null).is_err(), "nothing to save");
+}
+
+/// A secret in a query string joined by `&`, or in a failed run's error quoting a connection,
+/// is left out of the copied code and the history script; so is one with an `&` in it, or an
+/// ODBC braced one with an escaped `}}`.
+#[test]
+fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
+    let mut s = world();
+    s.project.gp_history.push(crate::GpRecord {
+        tool: "Buffer".into(),
+        id: "buffer".into(),
+        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2", "amp": "password=pw1&zz9", "quoted": "password='q1&b=c2'", "odbc": "PWD={abc}}def;tail};UID=me", "apostrophe": "a=O'Reilly&password=ap1&b=2", "stray": "a='x&password=ap2"}),
+        command: None,
+        at: 0,
+        ok: false,
+        messages: vec!["can't connect: host=db password=mp a=1&token=mp3".into()],
+        millis: 0,
+        outputs: Vec::new(),
+    });
+    let py = s.run("gp.historyCode", &json!({"run": 0})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(py.contains("a=1&password=&b=2") && !py.contains("qp"), "{py}");
+    // An `&` in a value, or in quotes, isn't another pair: the whole value goes. So does an ODBC
+    // braced value with an escaped `}}` in it.
+    for secret in ["pw1", "zz9", "q1", "c2", "abc", "def", "tail"] {
+        assert!(!py.contains(secret), "{secret} in {py}");
+    }
+    assert!(py.contains("\"PWD=;UID=me\""), "{py}");
+    // A quote inside a word opens nothing; one that opens a value and never closes doesn't hide
+    // the pairs after it.
+    assert!(!py.contains("ap1") && !py.contains("ap2"), "{py}");
+    assert!(py.contains("a=O'Reilly&password=&b=2") && py.contains("a='x&password="), "{py}");
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(
+        text.contains("failed when it ran (can't connect: host=db password= a=1&token=)")
+            && !text.contains("password=mp")
+            && !text.contains("mp3"),
+        "{text}"
+    );
 }
 
 #[path = "../../../tests/support/ogc_server.rs"]

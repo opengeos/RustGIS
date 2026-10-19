@@ -27,7 +27,8 @@ cargo run --release -p rustgis -- lesson.rgispkg   # a project package, opened u
    result is added as a new layer, and the run is listed under **Analyze › History**.
 5. **Change the view.** **View › Globe** turns the map into a 3D globe; **View › Projection**
    offers Equal Earth, Robinson and other projections. **Home › Add › Basemap** switches the basemap or
-   adds a web tile layer.
+   adds a web tile layer, and its **Celestial Bodies** take the map to the Moon or Mars.
+   Right-drag (or ++ctrl++-drag) turns and tilts the map.
 6. **Share.** **Publish › Export Map** saves a PNG with labels and a scale bar. **Home › New
    Layout** makes a printable page with a legend and north arrow. **Project › Save As** writes a
    `.rgis` project.
@@ -39,7 +40,9 @@ cargo run --release -p rustgis -- lesson.rgispkg   # a project package, opened u
 
 **Home › Add Data** (or drop files on the window) opens GeoJSON, CSV with longitude and latitude
 columns, GeoParquet, FlatGeobuf, GeoTIFFs and ASCII grids, and on the desktop also Shapefiles and
-GeoPackages. **Project › New › Map** starts from a blank map.
+GeoPackages. **Project › New › Map** starts from a blank map. **Home › Web Data** finds public
+data on the web: satellite imagery from STAC catalogs, Overture Maps, OpenStreetMap, NASA
+Earthdata, open-data portals and more (see [Web Data](user-guide/web-data.md)).
 See [Data](user-guide/data.md) for the details of each format.
 
 ## Ask the AI Assistant

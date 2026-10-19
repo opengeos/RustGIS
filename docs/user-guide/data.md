@@ -47,7 +47,7 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
 **Home › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
-and **Insert › Layer Templates** adds empty layers with ready-made schemas to draw into.
+and **Data › Layer Templates** adds empty layers with ready-made schemas to draw into.
 
 Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. GeoPackage,
 GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are converted as they
@@ -326,7 +326,10 @@ open; a browser upload is kept in the project.
 
 ## Rasters
 
-![A shaded-relief elevation raster of the Sierra Nevada with the Style tab open](https://assets.rustgis.app/images/raster.webp)
+<figure markdown="span">
+  ![A shaded-relief elevation raster of the Sierra Nevada with the Style tab open](https://assets.rustgis.app/images/raster.webp)
+  <figcaption>An elevation raster of the Sierra Nevada with shaded-relief symbology.</figcaption>
+</figure>
 
 Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app
 by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it (as a Shapefile does);
