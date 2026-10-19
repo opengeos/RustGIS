@@ -250,6 +250,10 @@ pub(crate) fn set(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Renders every step (or those from `from` to `to`) and writes them as a GIF or a zip of PNGs.
 fn export(s: &mut Session, p: &Value) -> CmdResult {
+    // Files are written by the desktop app; the browser's go through its services.
+    if cfg!(target_arch = "wasm32") {
+        return Err("exporting time animations needs the desktop app".into());
+    }
     let path = ps(p, "path").ok_or("path is required (a .gif, or a .zip of PNG frames)")?.to_string();
     let lower = path.to_ascii_lowercase();
     let gif = lower.ends_with(".gif");

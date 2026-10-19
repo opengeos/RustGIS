@@ -20,6 +20,21 @@ pub struct TimeBarState {
     pub playing: Option<f64>,
     /// The features of each step, and what they were counted for.
     counts: Option<(String, Vec<u32>)>,
+    /// The slider's steps, and the slider they were listed for.
+    steps: Option<(TimeSlider, std::sync::Arc<Vec<f64>>)>,
+}
+
+/// The slider's steps, listed again only when its span or steps change (not when it moves).
+fn steps(app: &mut RustGisApp, t: &TimeSlider) -> std::sync::Arc<Vec<f64>> {
+    let same = |a: &TimeSlider| (a.start, a.end, a.unit, a.interval, &a.dates) == (t.start, t.end, t.unit, t.interval, &t.dates);
+    if let Some((k, s)) = &app.time.steps
+        && same(k)
+    {
+        return s.clone();
+    }
+    let s = std::sync::Arc::new(t.steps());
+    app.time.steps = Some((t.clone(), s.clone()));
+    s
 }
 
 /// A window preset (`time.set`'s `show`), as the Show menu names it.
@@ -77,7 +92,8 @@ pub fn toggle(app: &mut RustGisApp) -> Result<Value, String> {
 pub fn play(app: &mut RustGisApp) -> Result<Value, String> {
     let Some(t) = app.session.map().time.clone() else { return Err("the time slider is off".into()) };
     if app.time.playing.take().is_none() {
-        if t.at_end() && !t.looping {
+        let all = steps(app, &t);
+        if t.index_in(&all) + 1 >= all.len() && !t.looping {
             app.run("time.goTo", json!({"step": 0}))?;
         }
         app.time.playing = Some(0.0);
@@ -164,8 +180,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         let mut h = ui.new_child(
             egui::UiBuilder::new().max_rect(hr.shrink2(vec2(10.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        // The steps, listed once a frame.
-        let steps = t.steps();
+        let steps = steps(app, &t);
         let cur = t.index_in(&steps);
         header(app, &mut h, &t, &steps, &tk);
         // Transport and timeline.
