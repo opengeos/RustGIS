@@ -2514,8 +2514,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let text = v.to_string();
                 let is_point = g.kind() == GeometryType::Point;
                 let marker = if is_point { layer.symbol(row).size } else { 0.0 };
-                let (dx, dy) =
-                    labels.placement.offset(text::measure(&text, labels.size, labels.bold), labels.size * 1.25, marker, is_point);
+                let (dx, dy) = labels.placement.offset(
+                    text::measure(&text, labels.size, labels.bold),
+                    labels.size * 1.25 * text::line_count(&text) as f32,
+                    marker,
+                    is_point,
+                );
                 // Bigger polygons get priority.
                 let pri = match g {
                     Geometry::Polygon(_) => {
@@ -3103,7 +3107,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
     // The text's box and its icon's, together.
     let bbox = |l: &PlacedLabel| {
         let tw = text::measure(&l.text, l.size, l.bold);
-        let th = l.size * 1.25;
+        let th = l.size * 1.25 * text::line_count(&l.text) as f32;
         let cx = l.center_x();
         let text = (!l.text.is_empty()).then(|| [cx - tw / 2.0 - 2.0, l.y - th / 2.0, cx + tw / 2.0 + 2.0, l.y + th / 2.0]);
         let icon = l.icon.as_ref().map(|i| [i.x - i.w / 2.0, i.y - i.h / 2.0, i.x + i.w / 2.0, i.y + i.h / 2.0]);
@@ -3387,6 +3391,60 @@ mod tests {
         let edge = (200.0 - text::measure("Selected text", 14.0, false) / 2.0 - 3.0).round() as u32;
         let cyan = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|c| c.alpha() > 200 && c.red() < 60 && c.green() > 180 && c.blue() > 200);
         assert!((0..300).any(|y| (edge - 1..=edge + 1).any(|x| cyan(x, y))), "no frame at x = {edge}");
+    }
+
+    /// A text of several lines is drawn in an image (an export) on as many lines, as the map
+    /// view shows it, not run together on one (#577); its box and frame hold every line.
+    #[test]
+    fn a_text_of_several_lines_is_drawn_on_as_many() {
+        let at = |text: &str, framed: bool| PlacedLabel {
+            text: text.into(),
+            x: 200.0,
+            y: 150.0,
+            size: 20.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo: None,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed,
+        };
+        // The rows and columns with ink.
+        let ink = |l: &PlacedLabel| {
+            let mut pm = Pixmap::new(400, 300).unwrap();
+            text::draw(&mut pm, l, 1.0);
+            let dark = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|c| c.alpha() > 128 && c.red() < 60);
+            let rows: Vec<u32> = (0..300).filter(|y| (0..400).any(|x| dark(x, *y))).collect();
+            let cols: Vec<u32> = (0..400).filter(|x| (0..300).any(|y| dark(*x, y))).collect();
+            (rows, cols)
+        };
+        let (rows, cols) = ink(&at("Atlantic\nOcean", false));
+        let (one_rows, one_cols) = ink(&at("AtlanticOcean", false));
+        // Two bands of ink with a gap between, each the height of one line.
+        let bands = rows.windows(2).filter(|w| w[1] > w[0] + 1).count() + 1;
+        assert_eq!(bands, 2, "rows with ink: {rows:?}");
+        let span = |v: &[u32]| v.last().copied().unwrap_or(0).saturating_sub(v.first().copied().unwrap_or(0));
+        assert!(span(&rows) > span(&one_rows) * 3 / 2, "taller than one line");
+        assert!(span(&cols) < span(&one_cols) * 3 / 4, "narrower than the lines run together");
+        // Lines start at the block's left, the block centred on the point.
+        let (_, alone) = ink(&at("Atlantic", false));
+        assert!(cols.first().zip(alone.first()).is_some_and(|(a, b)| a.abs_diff(*b) <= 2), "the longer line keeps its place");
+        // As wide as the widest line, as tall as its lines; a trailing newline is an empty line.
+        assert_eq!(text::measure("ab\ncdef", 10.0, false), text::measure("cdef", 10.0, false));
+        assert_eq!((text::line_count("a"), text::line_count("a\nb"), text::line_count("a\n")), (1, 2, 2));
+        assert_eq!(text::line_count(&"\n".repeat(10_000)), 200, "lines are bounded");
+        // The collision box holds both lines: a label just below the first line's box but
+        // overlapping the second line is left out.
+        let below = PlacedLabel { y: 150.0 + 20.0 * 1.25, ..at("Below", false) };
+        let p = place_labels(vec![(below, 0.0, (1, 0))], vec![at("Atlantic\nOcean", false)], 400.0, 300.0, false);
+        assert!(p.labels.iter().all(|l| l.text != "Below"), "placed over the second line");
+        // The selection frame goes round both lines.
+        let mut pm = Pixmap::new(400, 300).unwrap();
+        text::draw(&mut pm, &at("Atlantic\nOcean", true), 1.0);
+        let cyan = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|c| c.alpha() > 200 && c.red() < 60 && c.green() > 180 && c.blue() > 200);
+        let framed: Vec<u32> = (0..300).filter(|y| (0..400).any(|x| cyan(x, *y))).collect();
+        assert!(framed.first().zip(rows.first()).is_some_and(|(f, r)| f < r), "frame above the first line");
+        assert!(framed.last().zip(rows.last()).is_some_and(|(f, r)| f > r), "frame below the last line");
     }
 
     #[test]

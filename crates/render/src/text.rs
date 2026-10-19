@@ -95,12 +95,27 @@ fn shape(text: &str, px: f32, bold: bool) -> (Vec<(&'static FontRef<'static>, Gl
     (out, x)
 }
 
-/// Text width in points at `size` (font px ≈ size × 1.33 for point sizes).
+/// Most lines a label draws: its text comes from files and attributes.
+const MAX_LINES: usize = 200;
+
+/// The lines of a label, split as the map view splits them (#577): at each `\n`, a trailing one
+/// making an empty last line.
+pub fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.split('\n').take(MAX_LINES)
+}
+
+/// How many lines a label draws.
+pub fn line_count(text: &str) -> usize {
+    lines(text).count()
+}
+
+/// Text width in points at `size` (font px ≈ size × 1.33 for point sizes): its widest line.
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
-    if font(bold).is_none() {
-        return text.chars().count() as f32 * size * 0.6;
-    }
-    shape(text, size * 1.33, bold).1
+    let one = |line: &str| match font(bold) {
+        Some(_) => shape(line, size * 1.33, bold).1,
+        None => line.chars().count() as f32 * size * 0.6,
+    };
+    lines(text).map(one).fold(0.0, f32::max)
 }
 
 fn blend(pm: &mut Pixmap, x: i32, y: i32, c: Rgba, cov: f32) {
@@ -199,21 +214,35 @@ pub fn styled_at(pm: &mut Pixmap, text: &str, left: f32, cy: f32, px: f32, color
 pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     let px = l.size * 1.33 * ppp;
     let (cx, cy) = (l.center_x() * ppp, l.y * ppp);
+    // Several lines (#577) as the map view draws them: each from the left of a block as wide as
+    // the widest, the block centred on the label's point.
+    let (n, line_h) = (line_count(&l.text), px * 1.25);
+    let w = measure(&l.text, l.size, l.bold) * ppp;
     if l.framed {
-        let (w, h, pad) = (measure(&l.text, l.size, l.bold) * ppp, px * 1.2, 3.0 * ppp);
+        let (h, pad) = (px * 1.2 + n.saturating_sub(1) as f32 * line_h, 3.0 * ppp);
         if let Some(r) = Rect::from_xywh(cx - w / 2.0 - pad, cy - h / 2.0 - pad, w + 2.0 * pad, h + 2.0 * pad) {
             frame(pm, r, ppp);
         }
     }
+    let top = cy - n.saturating_sub(1) as f32 * line_h / 2.0;
+    let placed: Vec<(&str, f32, f32)> = lines(&l.text)
+        .enumerate()
+        .map(|(i, line)| (line, cx - w / 2.0 + measure(line, l.size, l.bold) * ppp / 2.0, top + i as f32 * line_h))
+        .collect();
+    // Every line's halo first, so none covers the line above it.
     if let Some(h) = l.halo {
         let r = 1.2 * ppp;
-        for (dx, dy) in
-            [(-r, 0.0), (r, 0.0), (0.0, -r), (0.0, r), (-r * 0.7, -r * 0.7), (r * 0.7, r * 0.7), (-r * 0.7, r * 0.7), (r * 0.7, -r * 0.7)]
-        {
-            draw_text(pm, &l.text, cx, cy, px, h, l.bold, (dx, dy));
+        let ring =
+            [(-r, 0.0), (r, 0.0), (0.0, -r), (0.0, r), (-r * 0.7, -r * 0.7), (r * 0.7, r * 0.7), (-r * 0.7, r * 0.7), (r * 0.7, -r * 0.7)];
+        for (line, x, y) in &placed {
+            for offset in ring {
+                draw_text(pm, line, *x, *y, px, h, l.bold, offset);
+            }
         }
     }
-    draw_text(pm, &l.text, cx, cy, px, l.color, l.bold, (0.0, 0.0));
+    for (line, x, y) in &placed {
+        draw_text(pm, line, *x, *y, px, l.color, l.bold, (0.0, 0.0));
+    }
 }
 
 /// The selection's frame: a light fill and an outline in the selection colour.
