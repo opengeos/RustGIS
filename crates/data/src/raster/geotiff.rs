@@ -930,6 +930,8 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     // whose bands are stored apart, read whole (issue #544): such an image is read a tile at a
     // time, which can't be done below 8 bits a sample.
     let planar_tiles = planar && nbands > 1 && tiled && bits(&mut dec) >= 8;
+    // Only padding at the bottom: the decoder places a tile's right-edge padding by its column,
+    // which is right in every band.
     let padded = tile_rows.is_none_or(|t| t == 0 || h % t != 0);
     if planar && nbands > 1 && tiled && !planar_tiles && decimate_by == 1 && padded {
         return Err(err("tiled bands stored apart at fewer than 8 bits a sample aren't supported"));
@@ -1711,17 +1713,18 @@ mod tests {
         check(&r, 2);
     }
 
-    /// A `w` × `h` RGB image in `tile`-pixel tiles, uncompressed, its bands stored apart
-    /// (planar configuration 2): every tile of band 0, then of band 1, then of band 2.
-    fn planar_tiled(w: u32, h: u32, tile: u32, pixel: impl Fn(u32, u32, u32) -> u8) -> Vec<u8> {
+    /// A `w` × `h` RGB image in `tw` × `th` tiles, uncompressed, its bands stored apart
+    /// (planar configuration 2): every tile of band 0, then of band 1, then of band 2. The
+    /// samples are bytes whatever `bits` says.
+    fn planar_tiled(w: u32, h: u32, (tw, th): (u32, u32), bits: u16, pixel: impl Fn(u32, u32, u32) -> u8) -> Vec<u8> {
         let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
-        let (across, down) = (w.div_ceil(tile), h.div_ceil(tile));
+        let (across, down) = (w.div_ceil(tw), h.div_ceil(th));
         let mut offsets = Vec::new();
         for b in 0..3 {
             for t in 0..across * down {
                 offsets.push(out.len() as u32);
-                for p in 0..tile * tile {
-                    let (x, y) = ((t % across) * tile + p % tile, (t / across) * tile + p / tile);
+                for p in 0..tw * th {
+                    let (x, y) = ((t % across) * tw + p % tw, (t / across) * th + p / tw);
                     out.push(if x < w && y < h { pixel(b, x, y) } else { 0 });
                 }
             }
@@ -1729,17 +1732,17 @@ mod tests {
         let shorts = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
         let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
         let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
-        let counts = vec![tile * tile; offsets.len()];
+        let counts = vec![tw * th; offsets.len()];
         let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
             (256, 4, 1, longs(&[w])),
             (257, 4, 1, longs(&[h])),
-            (258, 3, 3, shorts(&[8; 3])),
+            (258, 3, 3, shorts(&[bits; 3])),
             (259, 3, 1, shorts(&[1])),
             (262, 3, 1, shorts(&[2])),
             (277, 3, 1, shorts(&[3])),
             (284, 3, 1, shorts(&[2])),
-            (322, 4, 1, longs(&[tile])),
-            (323, 4, 1, longs(&[tile])),
+            (322, 4, 1, longs(&[tw])),
+            (323, 4, 1, longs(&[th])),
             (324, 4, offsets.len() as u32, longs(&offsets)),
             (325, 4, counts.len() as u32, longs(&counts)),
             (33550, 12, 3, doubles(&[30.0, 30.0, 0.0])),
@@ -1776,8 +1779,9 @@ mod tests {
         // whole, panicked in the tiff crate on the padded bottom tiles of its later bands; read a
         // tile at a time (as a large file is), those tiles' rows came out skewed.
         let pixel = |b: u32, x: u32, y: u32| ((x + 3 * y + 60 * b) % 250 + 1) as u8;
-        for (w, h, tile) in [(40, 24, 16), (32, 32, 16), (17, 9, 16), (24, 40, 16)] {
-            let bytes = planar_tiled(w, h, tile, pixel);
+        // Padded right, bottom, both and neither; a tile wider than tall, padded both ways.
+        for (w, h, tile) in [(40, 24, (16, 16)), (32, 32, (16, 16)), (17, 9, (16, 16)), (24, 40, (16, 16)), (40, 20, (16, 8))] {
+            let bytes = planar_tiled(w, h, tile, 8, pixel);
             // The whole image, and every 2nd pixel of it (a limit it doesn't fit).
             for (k, max) in [(1, MAX_SAMPLES), (2, (w * h) as usize)] {
                 let r = read_limited(reader(std::io::Cursor::new(&bytes)).unwrap(), "planar", max, None).unwrap();
@@ -1793,6 +1797,14 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn padded_planar_tiles_below_8_bits_are_refused() {
+        // They can't be read a tile at a time, and the decoder panics reading them whole.
+        let bytes = planar_tiled(40, 24, (16, 16), 4, |_, _, _| 0);
+        let e = read(std::io::Cursor::new(&bytes), "planar").unwrap_err();
+        assert!(e.to_string().contains("fewer than 8 bits"), "{e}");
     }
 
     #[test]
