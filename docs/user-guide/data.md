@@ -326,7 +326,10 @@ open; a browser upload is kept in the project.
 
 ## Rasters
 
-![A shaded-relief elevation raster of the Sierra Nevada with the Style tab open](https://assets.rustgis.app/images/raster.webp)
+<figure markdown="span">
+  ![A shaded-relief elevation raster of the Sierra Nevada with the Style tab open](https://assets.rustgis.app/images/raster.webp)
+  <figcaption>An elevation raster of the Sierra Nevada with shaded-relief symbology.</figcaption>
+</figure>
 
 Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app
 by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it (as a Shapefile does);

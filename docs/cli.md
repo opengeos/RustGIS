@@ -51,7 +51,10 @@ rustgis-cli run --data dem.tif \
   --cmd 'share.exportMap={"path":"relief.png","dpi":192}'
 ```
 
-![A map of Europe exported by rustgis-cli](https://assets.rustgis.app/images/cli-export.webp)
+<figure markdown="span">
+  ![A map of Europe exported by rustgis-cli](https://assets.rustgis.app/images/cli-export.webp)
+  <figcaption>A map exported by <code>rustgis-cli</code>, with no window open.</figcaption>
+</figure>
 
 ## Asking the AI assistant
 

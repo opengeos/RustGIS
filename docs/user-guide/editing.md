@@ -11,7 +11,10 @@ coordinates. Every edit is one undo step.
 
 ## Modifying features
 
-![Edit Vertices on Lake Victoria: square vertex handles and round midpoint handles around the selected lake](https://assets.rustgis.app/images/editing.webp)
+<figure markdown="span">
+  ![Edit Vertices on Lake Victoria: square vertex handles and round midpoint handles around the selected lake](https://assets.rustgis.app/images/editing.webp)
+  <figcaption>Edit Vertices: drag a square handle to move a vertex, a round one to add a vertex.</figcaption>
+</figure>
 
 The Edit tab's **Edit** button turns editing on or off for the map; with it off, the map is
 read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest:

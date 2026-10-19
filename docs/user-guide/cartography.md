@@ -2,7 +2,10 @@
 
 ## Symbology
 
-![The Style tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
+<figure markdown="span">
+  ![The Style tab and the Symbology pane with graduated colours; the larger African countries are selected on the map and in the attribute table](https://assets.rustgis.app/images/symbology-table.webp)
+  <figcaption>Graduated colours in the Symbology pane, with a selection synced between map and table.</figcaption>
+</figure>
 
 Select a layer in Layers and open **Style › Symbology** (or the Symbology pane):
 
@@ -149,7 +152,10 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
 
-![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)
+<figure markdown="span">
+  ![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)
+  <figcaption>City labels placed above and to the right of their points, beside the country labels.</figcaption>
+</figure>
 
 ## Layer effects
 

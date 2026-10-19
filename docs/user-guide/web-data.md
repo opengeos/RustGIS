@@ -119,7 +119,10 @@ others) are listed, and **Add** adds the one chosen (`visual` first, often a PMT
 
 ### Sentinel-2 Explorer
 
-![The Sentinel-2 Explorer in the Web Data pane over Bern: the clearest recent scenes as cards with previews, and their footprints drawn on the map](https://assets.rustgis.app/images/web-data.webp)
+<figure markdown="span">
+  ![The Sentinel-2 Explorer in the Web Data pane over Bern: the clearest recent scenes as cards with previews, and their footprints drawn on the map](https://assets.rustgis.app/images/web-data.webp)
+  <figcaption>The Sentinel-2 Explorer: the clearest recent scenes where the map is, with their footprints.</figcaption>
+</figure>
 
 **Home › Web Data › Sentinel-2 Explorer…** searches Earth Search's Sentinel-2 Collection 1 Level-2A
 scenes (`sentinel-2-c1-l2a`) where the map is, over the last 90 days and with at most 20 % cloud

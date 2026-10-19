@@ -17,3 +17,13 @@
   height: 2rem;
   width: auto;
 }
+
+/* Screenshot captions: close under their image (the figure's Markdown leaves a line break
+   between them). */
+figure > br {
+  display: none;
+}
+
+figure figcaption {
+  margin-top: 0.6em;
+}

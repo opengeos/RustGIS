@@ -21,7 +21,10 @@ keeps to the selected rows and **Filter rows…** to the rows with a value conta
 The toolbar opens Select By Attributes and zooms to, switches, clears or deletes the selection,
 and adds or calculates a field.
 
-![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
+<figure markdown="span">
+  ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
+  <figcaption>The attribute table, with the countries a SQL clause selected highlighted on the map and in the table.</figcaption>
+</figure>
 
 Select By Attributes and definition queries use SQL `WHERE` clauses:
 
@@ -35,7 +38,10 @@ gdp_md IS NULL
 
 ## Geoprocessing tools
 
-![The Analyze tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+<figure markdown="span">
+  ![The Analyze tab's tool gallery and the Tools pane with Buffer open; 300 km dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)
+  <figcaption>The Analyze tab's tool gallery and the Tools pane running Buffer.</figcaption>
+</figure>
 
 Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
 which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
@@ -71,7 +77,10 @@ cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines
 contribute their vertices. Leave the extent empty to use the input's, or give it as
 `xmin,ymin,xmax,ymax` in degrees. The result is a Float32 GeoTIFF layer.
 
-![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
+<figure markdown="span">
+  ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
+  <figcaption>Tissot's indicatrix on Robinson: equal circles on the Earth, stretched and sheared by the projection.</figcaption>
+</figure>
 
 **Tissot's Indicatrix** shows what the map's projection does to the Earth. It draws the same small circle repeated over a grid: by default circles of 500 km radius every 30° over the whole world. With **Area: Map Extent** it fills the view instead (the whole Earth on the globe), for a country or a state with a smaller spacing and radius.
 
@@ -178,7 +187,10 @@ text, one per line (`id {json}`).
 
 ## ModelBuilder
 
-![ModelBuilder after a run: Cities buffered by 300 km clip the Rivers into "Rivers near cities", and Countries are dissolved by continent; every node is ticked and the results are on the map](https://assets.rustgis.app/images/modelbuilder.webp)
+<figure markdown="span">
+  ![ModelBuilder after a run: Cities buffered by 300 km clip the Rivers into "Rivers near cities", and Countries are dissolved by continent; every node is ticked and the results are on the map](https://assets.rustgis.app/images/modelbuilder.webp)
+  <figcaption>A model after its run: each node is ticked, and its outputs are layers on the map.</figcaption>
+</figure>
 
 **Analyze › Model Builder** opens a model in a view of its own, a tab beside the maps and
 layouts. A model is a graph of three kinds of node: **inputs** (blue) name layers of the map,
