@@ -7766,6 +7766,24 @@ fn a_failed_command_reopens_the_layout_open_before_it() {
     assert_eq!(s.active_layout.and_then(|i| s.project.layouts.get(i)).map(|l| l.name.as_str()), Some("A"));
 }
 
+/// A command that opens another project part way and then fails (a plugin's command through its
+/// bridge) leaves the project before it open, counted as it was: the interface keeps what it
+/// holds for it.
+#[test]
+fn a_failed_command_keeps_the_project_open_before_it() {
+    let mut s = world();
+    let (name, opened) = (s.project.name.clone(), s.opened);
+    let r = s.guarded("Plugin Command", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert_eq!((s.project.name.as_str(), s.opened), (name.as_str(), opened));
+    // Opened for good, it counts.
+    s.run("project.new", &json!({"name": "Other"})).unwrap();
+    assert_eq!(s.opened, opened + 1);
+}
+
 #[path = "../../../tests/support/ogc_server.rs"]
 mod ogc_server;
 

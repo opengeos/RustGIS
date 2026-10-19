@@ -662,6 +662,9 @@ impl Session {
     pub(crate) fn guarded(&mut self, label: &'static str, mutates: bool, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let snapshot = mutates.then(|| self.project.clone());
         let open_layout = self.active_layout;
+        // The project's generation rolls back with it: a project opened part way (a plugin's
+        // command through its bridge) and then undone is the one before, still open.
+        let opened = self.opened;
         // Edit counts roll back with the project when a command fails part way.
         let counts = mutates.then(|| self.edit_counts.clone());
         self.request_only = false;
@@ -700,6 +703,7 @@ impl Session {
                 // the command opened on the way (a task's steps).
                 self.project = snap;
                 self.active_layout = open_layout;
+                self.opened = opened;
                 if let Some(c) = counts {
                     self.edit_counts = c;
                 }
