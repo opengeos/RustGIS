@@ -592,7 +592,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 && let Some(r) = done.rendered
             {
                 app.map.render_ms = done.ms;
-                app.map.motion_cost = done.ms as f64;
+                app.map.motion_cost = full_cost(done.ms as f64, &done.view, (w, h), ppp);
                 match r {
                     rustgis_engine::render::RenderOutput::Cpu(r) => {
                         app.map.gpu_frame = None;
@@ -777,10 +777,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
         app.map.render_ms = t0.elapsed().as_millis() as u64;
-        // What the frame would have cost at full resolution over the view: drawing grows with
-        // its pixels.
-        let pixels = (vw * vh) / (w * h).max(1.0) * f64::from(vppp / ppp.max(0.01)).powi(2);
-        app.map.motion_cost = t0.elapsed().as_secs_f64() * 1000.0 / pixels.max(0.01);
+        let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
+        app.map.motion_cost = full_cost(t0.elapsed().as_secs_f64() * 1000.0, &view, (w, h), ppp);
         if motion.is_some() {
             ui.ctx().request_repaint();
         } else if app.map.camera_moved {
@@ -990,6 +988,13 @@ fn motion_resolution(full_ms: f64, area: f64) -> f64 {
         return 1.0;
     }
     (MOTION_BUDGET_MS / cost).sqrt().clamp(0.5, 1.0)
+}
+
+/// What a frame drawn for `view` in `ms` would have cost at full resolution over the `w × h`
+/// map view: drawing grows with its pixels.
+fn full_cost(ms: f64, view: &View, (w, h): (f64, f64), ppp: f32) -> f64 {
+    let pixels = (view.width * view.height) / (w * h).max(1.0) * (view.pixels_per_point / f64::from(ppp).max(0.01)).powi(2);
+    ms / pixels.max(0.01)
 }
 
 /// The least time (s) between frames drawn mid-motion, for frames taking `ms` to draw: quick
@@ -2712,6 +2717,11 @@ mod tests {
         assert_eq!(motion_resolution(10_000.0, 4.0), 0.5, "never below half");
         assert_eq!(motion_resolution(f64::NAN, 1.0), 1.0);
         assert_eq!(motion_resolution(f64::INFINITY, 1.0), 0.5);
+        // A gap frame over 1.5 times the view at full resolution costs 2.25 views.
+        let gap = View { width: 1200.0, height: 900.0, pixels_per_point: 2.0, camera: Camera::world(), sky: true };
+        assert!((full_cost(45.0, &gap, (800.0, 600.0), 2.0) - 20.0).abs() < 1e-9);
+        let coarse = View { pixels_per_point: 1.0, ..gap };
+        assert!((full_cost(45.0, &coarse, (800.0, 600.0), 2.0) - 80.0).abs() < 1e-9);
     }
 
     /// The GPU fast path moves the last frame's meshes only while they cover the view: zooming
