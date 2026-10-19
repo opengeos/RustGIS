@@ -35,8 +35,13 @@ enum DragKind {
     Sketch,
     /// Moving or inserting a vertex with the Edit Vertices tool.
     Vertex,
-    /// Moving the selected text graphic, grabbed by its text (#516).
-    Text,
+    /// Moving the selected text graphic, grabbed by its text (#516): its layer id and row, and
+    /// where the press was. Held by the drag itself, so it ends with it, however it ends.
+    Text {
+        layer: u32,
+        row: usize,
+        origin: Pos2,
+    },
 }
 
 /// Graphic shapes drawn by dragging rather than clicking.
@@ -103,8 +108,6 @@ pub struct MapView {
     label_camera: Camera,
     last_interaction: f64,
     drag: Option<(Pos2, DragKind)>,
-    /// The text graphic being dragged (layer id, row) and where the press was.
-    text_drag: Option<(u32, usize, Pos2)>,
     sketch: Vec<Coord>,
     /// A finished measurement stays on screen until the next click.
     sketch_done: bool,
@@ -196,7 +199,6 @@ impl Default for MapView {
             label_camera: Camera::world(),
             last_interaction: -10.0,
             drag: None,
-            text_drag: None,
             sketch: Vec::new(),
             sketch_done: false,
             split_mode: false,
@@ -1284,9 +1286,8 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             .then(|| text_graphic_at(app, ui.ctx(), rect, origin))
             .flatten()
             .filter(|hit| crate::graphicformat::selected(app) == Some(*hit));
-        app.map.text_drag = grabbed.map(|(layer, row)| (layer, row, origin));
-        let kind = if grabbed.is_some() {
-            DragKind::Text
+        let kind = if let Some((layer, row)) = grabbed {
+            DragKind::Text { layer, row, origin }
         } else if middle {
             DragKind::Pan
         } else if tool == Tool::EditVertices && crate::vertexedit::drag_start(app, rect, origin) {
@@ -1329,14 +1330,13 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         }
     }
     // A dragged text shows where it will land; it is placed there, as one undo step, on release.
-    if let (Some((_, DragKind::Text)), Some((layer, row, origin))) = (app.map.drag, app.map.text_drag) {
+    if let Some((_, DragKind::Text { layer, row, origin })) = app.map.drag {
         let end = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()));
         let map = app.session.map();
         let tokens = rustgis_engine::map::graphics::TokenValues::of(map, app.session.scale());
         let shown = map.layer(layer).and_then(|l| text_shown(app, rect, &tokens, l, row));
         if resp.drag_stopped() {
             app.map.drag = None;
-            app.map.text_drag = None;
             let to = shown.zip(end).and_then(|((at, ..), end)| screen_to_lonlat(app, rect, at + (end - origin)));
             if let Some(c) = to {
                 let _ = app.run("graphics.edit", json!({"layer": layer, "row": row, "points": [[c.x, c.y]]}));
