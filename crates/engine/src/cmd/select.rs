@@ -247,13 +247,23 @@ fn tile_features(s: &Session, lon: f64, lat: f64, tol_px: f64, first_layer: bool
         return Vec::new();
     }
     let at = rustgis_geom::lonlat_to_merc(Coord::new(lon, lat.clamp(-85.06, 85.06)));
+    // Web Mercator metres per point at the click, as tiles are drawn in other projections (in
+    // Web Mercator, the camera's resolution).
+    let res = map.camera.res;
+    let m_per_px = map
+        .to_map(Coord::new(lon, lat))
+        .and_then(|m| map.to_lonlat(Coord::new(m.x + res, m.y)))
+        .map(|c| rustgis_geom::lonlat_to_merc(Coord::new(c.x, c.y.clamp(-85.06, 85.06))))
+        .map(|b| (b.x - at.x).hypot(b.y - at.y))
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(res);
     let mut out = Vec::new();
     for t in &map.tiles {
         let data = matches!(t.kind, TileKind::PmTiles | TileKind::MbTiles | TileKind::Vector) && (t.id.is_empty() || t.overlay);
         if !data || !t.visible || t.opacity <= 0.0 {
             continue;
         }
-        let picked = draw::pick(&rustgis_render::tile_spec(t), at.x, at.y, map.camera.res, tol_px as f32, limit - out.len());
+        let picked = draw::pick(&rustgis_render::tile_spec(t), at.x, at.y, m_per_px, tol_px as f32, limit - out.len());
         for p in &picked {
             let attrs: serde_json::Map<String, Value> = p
                 .props

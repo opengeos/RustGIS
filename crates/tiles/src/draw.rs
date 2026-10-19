@@ -245,8 +245,9 @@ pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usiz
             items.insert(src_id.to_string(), tiles_for(src, &view, &frame, zoom, &mut pending));
         }
         let Some(list) = items.get(src_id) else { continue };
-        // The real tile under the point last (stand-ins come first), so it is looked at first.
-        for (ti, it) in list.iter().enumerate().rev().filter(|(_, it)| it.clip.contains(rustgis_geom::Coord::new(x, y))) {
+        // Every tile within reach (a feature near a tile's edge may be in its neighbour), the real
+        // ones (after the stand-ins) first.
+        for (ti, it) in list.iter().enumerate().rev().filter(|(_, it)| it.clip.intersects(&view)) {
             let Payload::Vector(tile) = &*it.payload else { continue };
             let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { continue };
             // The point and tolerance in the tile's units.
@@ -1060,6 +1061,51 @@ mod tests {
         for (x, y, m) in [(f64::NAN, 0.0, m_per_px), (0.0, 0.0, 0.0), (0.0, 0.0, f64::INFINITY)] {
             assert!(pick(&spec, x, y, m, 3.0, 10).is_empty());
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn picks_a_feature_across_a_tile_edge() {
+        // Zoom 1: a point at the right edge of the western tile (1/0/0); the click is just over
+        // the edge, in the eastern one (1/1/0).
+        let tile = crate::mvt::encode(&crate::mvt::Tile { layers: vec![mvt_layer("pois", GeomKind::Point, &[[4094.0, 2048.0]], "Edge")] });
+        let new = crate::pmtiles::NewArchive {
+            tile_type: crate::pmtiles::TileType::Mvt,
+            gzipped_tiles: false,
+            bounds: [-180.0, -85.0, 180.0, 85.0],
+            metadata: serde_json::json!({"vector_layers": [{"id": "pois"}]}),
+        };
+        let tiles = vec![(1, 0, 0, tile), (1, 1, 0, crate::mvt::encode(&crate::mvt::Tile::default()))];
+        let dir = std::env::temp_dir().join(format!("rustgis-pick-edge-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("edge.pmtiles");
+        std::fs::write(&path, crate::pmtiles::write(tiles, &new).unwrap()).unwrap();
+        let spec = Spec {
+            kind: crate::source::Kind::PmTiles,
+            url: path.display().to_string(),
+            subdomains: Vec::new(),
+            min_zoom: 0,
+            max_zoom: 14,
+            tile_size: 512,
+            tms: false,
+            attribution: String::new(),
+            layers: Vec::new(),
+            style_layers: String::new(),
+        };
+        let half = 20_037_508.342_789_244;
+        // Just inside zoom 1 (the archive has no other).
+        let m_per_px = half / 512.0 * 0.9;
+        // 4094 of 4096 units: under a pixel west of the edge at this scale; the click a pixel east of it.
+        let (x, y) = (m_per_px, half / 2.0);
+        let mut got = Vec::new();
+        for _ in 0..500 {
+            got = pick(&spec, x, y, m_per_px, 3.0, 10);
+            if !got.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(got.iter().map(|p| p.source_layer.as_str()).collect::<Vec<_>>(), vec!["pois"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

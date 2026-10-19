@@ -121,17 +121,19 @@ fn put_uint(out: &mut Vec<u8>, field: u64, v: u64) {
 fn encode_layer(l: &Layer) -> Vec<u8> {
     let mut keys: Vec<&str> = Vec::new();
     let mut values: Vec<Vec<u8>> = Vec::new();
+    let mut key_at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut value_at: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
     let mut features = Vec::new();
     for f in &l.features {
         let Some(geom) = encode_geometry(f.kind, &f.geometry) else { continue };
         let mut tags = Vec::new();
         for (k, v) in &f.props {
-            let ki = keys.iter().position(|x| *x == k).unwrap_or_else(|| {
+            let ki = *key_at.entry(k.as_str()).or_insert_with(|| {
                 keys.push(k);
                 keys.len() - 1
             });
             let bytes = encode_value(v);
-            let vi = values.iter().position(|x| *x == bytes).unwrap_or_else(|| {
+            let vi = *value_at.entry(bytes.clone()).or_insert_with(|| {
                 values.push(bytes);
                 values.len() - 1
             });
@@ -198,7 +200,8 @@ fn encode_geometry(kind: GeomKind, parts: &[Vec<[f32; 2]>]) -> Option<Vec<u8>> {
     let mut cmds: Vec<u32> = Vec::new();
     let (mut cx, mut cy) = (0i64, 0i64);
     let mut step = |cmds: &mut Vec<u32>, p: &[f32; 2]| {
-        let (x, y) = (p[0].round() as i64, p[1].round() as i64);
+        // Within what a zigzag 32-bit delta holds (tile units are far smaller).
+        let (x, y) = (p[0].round().clamp(-1e9, 1e9) as i64, p[1].round().clamp(-1e9, 1e9) as i64);
         let zz = |d: i64| ((d << 1) ^ (d >> 63)) as u32;
         cmds.push(zz(x - cx));
         cmds.push(zz(y - cy));
