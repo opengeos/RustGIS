@@ -9471,6 +9471,12 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
         let e = off.run("layer.addUrl", &json!({"url": url, "start": 2000})).unwrap_err();
         assert!(e.contains("dated addresses"), "{e}");
     }
+    // A later check failing (here the blend) takes back the slider the span turned on: the
+    // session restores the project when a command fails.
+    assert!(
+        off.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}/{z}/{x}/{y}.png", "start": 2000, "blend": "nope"})).is_err()
+    );
+    assert!(off.map().tiles.is_empty() && off.map().time.is_none());
     // Three days of daily imagery step by the day the address names, not by the hour.
     let mut short = timed_events();
     short

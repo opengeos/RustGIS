@@ -234,7 +234,8 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// The date a dated tile layer starts at: the time slider's step. Its `start` (and `end`,
-/// `unit`, `interval` or `dates`) set the slider up, turning it on when it is off.
+/// `unit`, `interval` or `dates`) set the slider up, turning it on when it is off. Should a later
+/// check of the layer fail, the session restores the project, the slider with it (tested).
 fn dated_start(s: &mut Session, p: &Value) -> Result<f64, String> {
     let keys = ["start", "end", "unit", "interval", "dates"];
     let mut given: serde_json::Map<String, Value> = keys.iter().filter_map(|k| p.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
