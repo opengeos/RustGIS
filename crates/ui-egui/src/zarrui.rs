@@ -139,8 +139,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         }
         Phase::Labels => {
             if let Some(store) = &st.store {
-                st.info = Some(zarr::info(store, &st.got));
-                st.variable = 0;
+                let info = zarr::info(store, &st.got);
+                // A Web Data dataset opens on its air temperature when it has one (a weather
+                // model's most looked-at variable), else its first.
+                st.variable = if st.title.is_some() { first_temperature(&info) } else { 0 };
+                st.info = Some(info);
                 st.steps.clear();
             }
             st.got.clear();
@@ -209,6 +212,14 @@ pub(crate) fn connect(app: &mut RustGisApp) {
     }
 }
 
+/// The first variable named for temperature (`temperature_2m`), or the first.
+fn first_temperature(info: &Value) -> usize {
+    info["variables"]
+        .as_array()
+        .and_then(|vs| vs.iter().position(|v| v["name"].as_str().is_some_and(|n| n.starts_with("temperature"))))
+        .unwrap_or(0)
+}
+
 /// The dialog. Returns whether it should close.
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     ui.label(
@@ -242,7 +253,11 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 /// The store's variables and their other dimensions' steps, and Add to Map: the dialog's body, and
 /// the Web Data pane's for a dataset it opens (Dynamical).
 pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    let wide = (ui.available_width() - 120.0).clamp(160.0, 380.0);
+    // Beside the dimensions' names.
+    let wide = (ui.available_width() - 230.0).clamp(120.0, 380.0);
+    // A Web Data dataset (a forecast or analysis archive) opens on its latest complete time (the
+    // newest may still be being written), as GeoLibre's does; a store added by hand on its first.
+    let latest = app.ui.zarr.title.is_some();
     let busy = app.ui.zarr.busy();
     if busy {
         ui.horizontal(|ui| {
@@ -274,7 +289,7 @@ pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
     };
     egui::Grid::new("zarr").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(crate::tl!("Variable"));
-        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(wide).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(wide).truncate().show_ui(ui, |ui| {
             for (i, v) in vars.iter().enumerate() {
                 if ui.selectable_value(&mut st.variable, i, title(v)).changed() {
                     st.steps.clear();
@@ -286,7 +301,8 @@ pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
         for d in var["dims"].as_array().into_iter().flatten().filter(|d| d["map"] != json!(true)) {
             let (name, size) = (d["name"].as_str().unwrap_or("").to_string(), d["size"].as_u64().unwrap_or(1).max(1));
             ui.label(name.clone());
-            let step = st.steps.entry(name).or_insert(0);
+            let timely = name.contains("time") && !name.contains("lead");
+            let step = st.steps.entry(name).or_insert(if latest && timely { size.saturating_sub(2) } else { 0 });
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(step, 0..=size - 1).show_value(true));
                 let label = d["labels"]

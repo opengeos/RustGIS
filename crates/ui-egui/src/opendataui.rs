@@ -555,10 +555,12 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     // A dataset's Zarr store, open to pick its variable and steps.
     let mut close_zarr = false;
     if let Some((_, title)) = st.zarr_open.clone() {
+        // The frame's margins and border are outside its contents: they're kept within the pane.
+        let inner = ui.available_width() - 18.0;
         egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.accent)).corner_radius(6).inner_margin(egui::Margin::same(8)).show(
             ui,
             |ui| {
-                ui.set_width(ui.available_width());
+                ui.set_width(inner);
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new(egui::RichText::new(&title).strong()).wrap());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -658,10 +660,12 @@ fn card(
     busy: bool,
 ) -> Option<Act> {
     let mut act = None;
+    // The frame's margins and border are outside its contents: they're kept within the pane.
+    let inner = ui.available_width() - 18.0;
     egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(6).inner_margin(egui::Margin::same(8)).show(
         ui,
         |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(inner);
             ui.horizontal_top(|ui| {
                 if let Some(tex) = &thumb {
                     let size = tex.size_vec2();
