@@ -818,9 +818,13 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                         ui.label(d);
                         ui.end_row();
                     }
-                    let (copy, cut, paste) =
-                        if cfg!(target_os = "macos") { ("⌘C", "⌘X", "⌘V") } else { ("Ctrl+C", "Ctrl+X", "Ctrl+V") };
-                    let clipboard = format!("{copy} / {cut} / {paste}");
+                    // Clipboard keys are events, outside the keymap.
+                    let clipboard: Vec<String> = crate::keymap::CLIPBOARD
+                        .iter()
+                        .filter_map(|(keys, _)| crate::keymap::Chord::parse(keys))
+                        .map(|c| c.text())
+                        .collect();
+                    let clipboard = clipboard.join(" / ");
                     for (k, d) in [
                         (clipboard.as_str(), "Copy / Cut / Paste features"),
                         ("Mouse wheel", "Zoom about the pointer"),

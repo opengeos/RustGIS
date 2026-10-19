@@ -33,6 +33,10 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ("Mod+D", "layout.duplicateElement", ""),
 ];
 
+/// The clipboard keys: (keys, command). They arrive as copy, cut and paste events rather than key
+/// presses, so they are shown but never bound.
+pub const CLIPBOARD: &[(&str, &str)] = &[("Mod+C", "edit.copy"), ("Mod+X", "edit.cut"), ("Mod+V", "edit.paste")];
+
 /// The map tools a shortcut can pick (`tool.set` with this tool): (tool, label).
 pub const MAP_TOOLS: &[(&str, &str)] = &[
     ("explore", "Explore"),
@@ -192,6 +196,7 @@ impl Keymap {
         for spec in &registry.commands {
             if let Some(chord) = Chord::parse(spec.shortcut)
                 && map.command_for(chord).is_none()
+                && !is_clipboard(chord)
             {
                 map.bindings.push(Binding { chord, command: spec.id.to_string(), params: Value::Null });
             }
@@ -231,9 +236,16 @@ impl Keymap {
     }
 }
 
-/// The first shortcut of `command` with `params` as shown to the user, or empty for none.
+/// Whether a key combination is one of the [`CLIPBOARD`] keys.
+pub fn is_clipboard(chord: Chord) -> bool {
+    CLIPBOARD.iter().any(|(keys, _)| Chord::parse(keys) == Some(chord))
+}
+
+/// The first shortcut of `command` with `params` as shown to the user (a clipboard command's
+/// fixed key included), or empty for none.
 pub fn shortcut_text(app: &RustGisApp, command: &str, params: &Value) -> String {
-    app.ui.keymap.keys_for(command, params).next().map(Chord::text).unwrap_or_default()
+    let clipboard = || CLIPBOARD.iter().find(|(_, c)| *c == command).and_then(|(keys, _)| Chord::parse(keys));
+    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(Chord::text).unwrap_or_default()
 }
 
 /// What a binding runs, translated: the command's label, or the map tool it picks.
@@ -300,6 +312,16 @@ mod tests {
         let pos = |keys: &str| Chord::parse(keys).and_then(|c| order.iter().position(|b| b.chord == c));
         assert!(pos("Mod+Shift+Z") < pos("Mod+Z"));
         assert!(pos("Mod+Shift+S") < pos("Mod+S"));
+    }
+
+    #[test]
+    fn clipboard_keys_stay_events() {
+        // Copy, Cut and Paste declare Mod+C/X/V: binding them too would run each twice.
+        let app = RustGisApp::with_sample();
+        assert!(app.ui.keymap.bindings.iter().all(|b| !is_clipboard(b.chord)));
+        assert!(!shortcut_text(&app, "edit.copy", &Value::Null).is_empty(), "but Copy still shows its key");
+        // A command's own key joins the defaults only where it is free.
+        assert_eq!(app.ui.keymap.keys_for("layer.remove", &Value::Null).count(), 0, "Delete deletes features");
     }
 
     #[test]
