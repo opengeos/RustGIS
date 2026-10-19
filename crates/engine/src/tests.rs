@@ -10121,3 +10121,11 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
     assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-12");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn zoom_level_matches_the_map_link() {
+    let mut s = Session::new(Project::default());
+    s.run("map.goToLink", &json!({"url": "#7.5/48/10"})).unwrap();
+    let z = s.zoom().unwrap();
+    assert!((z - 7.5).abs() < 0.01, "{z}");
+}

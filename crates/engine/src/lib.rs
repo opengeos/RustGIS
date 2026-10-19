@@ -1226,6 +1226,12 @@ impl Session {
         self.map().scale()
     }
 
+    /// The map's zoom level, as web maps count it (512-pixel tiles, MapLibre's zoom); None when
+    /// the map's centre is no place on Earth.
+    pub fn zoom(&self) -> Option<f64> {
+        cmd::navigate::view_of(self.map()).map(|(_, z)| z)
+    }
+
     /// Fits the camera to a lon/lat extent in the current view size.
     pub fn zoom_to(&mut self, e: &rustgis_geom::Extent) {
         let (w, h) = self.view_size;

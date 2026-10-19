@@ -276,13 +276,18 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                         }
                     }
                 });
-                // The map's bearing and pitch; clicking them on a turned or tilted map faces north
-                // and looks straight down again.
+                // The map's zoom level, bearing and pitch; clicking them on a turned or tilted map
+                // faces north and looks straight down again.
                 let cam = app.session.map().camera;
+                let zoom = app.session.zoom().map_or_else(|| "—".to_string(), |z| format!("{z:.1}"));
                 let text = crate::i18n::fmt(
-                    "Bearing {b}° · Pitch {p}°",
+                    "Zoom {z} · Bearing {b}° · Pitch {p}°",
                     // Rounded first, then + 0.0: a bearing just below zero reads 0, not -0.
-                    &[("b", &format!("{:.0}", cam.bearing.round() + 0.0)), ("p", &format!("{:.0}", cam.pitch.round() + 0.0))],
+                    &[
+                        ("z", &zoom),
+                        ("b", &format!("{:.0}", cam.bearing.round() + 0.0)),
+                        ("p", &format!("{:.0}", cam.pitch.round() + 0.0)),
+                    ],
                 );
                 let level = cam.bearing.round() == 0.0 && cam.pitch.round() == 0.0;
                 let resp = ui.add(
@@ -290,7 +295,7 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                         .sense(Sense::click()),
                 );
                 let resp = resp.on_hover_text(tl!(
-                    "Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both."
+                    "Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset bearing and pitch."
                 ));
                 if resp.clicked() && !level {
                     let _ = app.run("map.resetNorth", json!({}));

@@ -421,18 +421,22 @@ pub(crate) fn ground_at_zoom(zoom: f64, lat: f64) -> f64 {
     std::f64::consts::TAU * rustgis_geom::MERCATOR_R / (512.0 * zoom.exp2()) * lat.to_radians().cos().abs()
 }
 
-/// The map's view as a MapLibre link fragment (`#zoom/lat/lon/bearing/pitch`, the last two left
-/// out while zero); None when its centre is no place on Earth.
-pub(crate) fn link_of(map: &Map) -> Option<String> {
+/// The map's centre (lon/lat) and MapLibre zoom (512-pixel tiles), whatever its projection;
+/// None when its centre is no place on Earth.
+pub(crate) fn view_of(map: &Map) -> Option<(Coord, f64)> {
     let flat = map.flat();
     let c = flat.inverse(map.camera.center)?;
     let ground = map.camera.res * flat.ground_per_unit(map.camera.center);
     let merc = ground / c.y.clamp(-rustgis_geom::MAX_LAT, rustgis_geom::MAX_LAT).to_radians().cos().abs().max(1e-9);
     // Within what a link is read back with (a large window shows the world below zoom 0).
     let zoom = (std::f64::consts::TAU * rustgis_geom::MERCATOR_R / (512.0 * merc)).log2().clamp(0.0, 30.0);
-    if !(zoom.is_finite() && c.x.is_finite() && c.y.is_finite()) {
-        return None;
-    }
+    (zoom.is_finite() && c.x.is_finite() && c.y.is_finite()).then_some((c, zoom))
+}
+
+/// The map's view as a MapLibre link fragment (`#zoom/lat/lon/bearing/pitch`, the last two left
+/// out while zero); None when its centre is no place on Earth.
+pub(crate) fn link_of(map: &Map) -> Option<String> {
+    let (c, zoom) = view_of(map)?;
     let (bearing, pitch) = (map.camera.bearing, map.camera.pitch);
     let round = |v: f64, places: i32| {
         let k = 10f64.powi(places);

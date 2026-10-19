@@ -69,7 +69,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   tab to close it, the others or all; the **✕** at the header's end closes every pane. Tabs that
   don't fit are listed under **»**. A ribbon button for a pane shows it when it is open but not in view,
   and closes it when it is. **Pane Sets** keep the tabs open.
-- **Status bar**: the scale (type one, or pick from the list), the coordinate system (click it to
+- **Status bar**: the scale (type one, or pick from the list), the zoom level, bearing and pitch
+  (click them to face north and look straight down again), the coordinate system (click it to
   change the projection), the pointer's coordinates (click them to switch between decimal
   degrees and DMS), the selection count and the draw time.
 
