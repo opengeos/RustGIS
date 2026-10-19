@@ -655,9 +655,17 @@ type Boxes = HashMap<(usize, String), Arc<Vec<[f32; 4]>>>;
 
 /// The boxes of the features `layer` draws from `it`, from those known (`known`, for this draw)
 /// or those kept for every draw.
+type Kept = HashMap<(usize, String), (std::sync::Weak<Payload>, Arc<Vec<[f32; 4]>>)>;
+static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
+
+/// Forgets the features' boxes kept for every draw (with [`crate::cache::clear`]).
+pub(crate) fn forget_boxes() {
+    if let Some(k) = KEPT.get() {
+        k.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
 fn boxes_of(known: &mut Boxes, it: &Item, layer: &StyleLayer) -> Arc<Vec<[f32; 4]>> {
-    type Kept = HashMap<(usize, String), (std::sync::Weak<Payload>, Arc<Vec<[f32; 4]>>)>;
-    static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
     let (Payload::Vector(tile), Some(name)) = (&*it.payload, layer.source_layer.as_deref()) else { return Arc::default() };
     let key = (Arc::as_ptr(&it.payload) as usize, name.to_string());
     if let Some(b) = known.get(&key) {
@@ -685,7 +693,7 @@ fn boxes_of(known: &mut Boxes, it: &Item, layer: &StyleLayer) -> Arc<Vec<[f32; 4
         let b = Arc::new(b);
         let mut k = lock();
         // Those of tiles the cache let go go too.
-        if k.len() > 4096 {
+        if k.len() > 1024 {
             k.retain(|_, (p, _)| p.strong_count() > 0);
         }
         k.insert(key.clone(), (Arc::downgrade(&it.payload), b.clone()));
