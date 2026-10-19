@@ -74,11 +74,19 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({"fileName": file, "text": text}))
 }
 
+/// The commands other than `gp.run` a run is copied as. The history comes from the project file,
+/// which may say anything: only these are written into code, so a crafted file can't pass any
+/// other command off as a geoprocessing run (and an id is never text to escape).
+const REPLAYED: &[&str] = &["gp.bufferPoint"];
+
 /// The command that runs `r` again, with its parameters: `gp.run` with the tool, or the command
 /// that ran it (a point buffered where the map was clicked, `gp.bufferPoint`).
 pub fn replay(r: &GpRecord) -> Result<(String, Value), String> {
     if let Some((cmd, params)) = &r.command {
-        return Ok((cmd.clone(), redacted(params)));
+        let Some(cmd) = REPLAYED.iter().find(|c| **c == cmd.as_str()) else {
+            return Err(format!("{} can't be run again: the history names a command that isn't a geoprocessing one", r.tool));
+        };
+        return Ok((cmd.to_string(), redacted(params)));
     }
     let id = tool_of(r).ok_or_else(|| format!("{} can't be run again: the history doesn't say which tool it was", r.tool))?;
     Ok(("gp.run".into(), json!({"tool": id, "params": redacted(&r.params)})))

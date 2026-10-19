@@ -7887,8 +7887,13 @@ fn a_run_is_copied_from_the_history_as_code() {
     // A libpq connection keeps its words but its password, though spaces part them.
     assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
     // Nothing tells which tool an unknown name was.
-    s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old });
+    s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old.clone() });
     assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
+    // A project file passing another command off as a run: not written into code.
+    let forged = crate::GpRecord { command: Some(("file.delete\nproject.new".into(), json!({}))), ..old };
+    s.project.gp_history.push(forged.clone());
+    assert!(code(&mut s, 4, "command").is_err());
+    assert_eq!(crate::cmd::history::tool_of(&forged), None);
     // The whole history: the project opened, each run in order; a failed run commented out, as
     // is one that can't be run again.
     let out = s.run("gp.historyScript", &Value::Null).unwrap();
@@ -7897,6 +7902,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("UTC)\ns.run(\n    \"gp.run\""), "{text}");
     assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
     assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
+    assert!(text.contains("# 5. Buffer: Buffer can't be run again") && !text.contains("file.delete"), "{text}");
     assert!(!text.contains("s3cr3t") && !text.contains("hunter2"));
     assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
     // A file name every system takes, whatever the project is called.
