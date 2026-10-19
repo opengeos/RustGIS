@@ -430,17 +430,16 @@ fn fields_add(s: &mut Session, p: &Value) -> CmdResult {
         (false, _) => format!("Fields of the World {year} fields"),
         (true, false) => format!("Fields of the World {year} density"),
     };
-    // Looks that would draw over one another: the year's both, or the same part, goes.
     let url = fields_url(year);
     let both = format!("Fields of the World {year}");
-    // The same part again is replaced by `tiles::add` (same name); once the new layer is in, both
-    // and its parts, which draw over one another, don't stay together.
     let mut r = super::tiles::add(
         s,
         &json!({"url": url, "kind": "pmtiles", "name": name, "overlay": true, "maxZoom": 16,
             "attribution": "Fields of the World (CC BY 4.0)", "styleLayers": fields_style(density, fields, min_score)}),
     )?;
-    // Only the year's own looks go: another overlay of the archive, named by the user, stays.
+    // The same look again was replaced by `tiles::add` (same name). Once the new layer is in, the
+    // year's both and its parts, which draw over one another, don't stay together; another
+    // overlay of the archive, named by the user, stays.
     let parts = [format!("{both} fields"), format!("{both} density")];
     s.map_mut()
         .tiles

@@ -1295,7 +1295,11 @@ fn arcgis_name(n: &str) -> Option<&str> {
 /// (`Folder/Name`), so their addresses start at the directory's root, not at the folder.
 fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
     let lower = b.to_ascii_lowercase();
-    let root = lower.find("/rest/services").and_then(|i| b.get(..i + "/rest/services".len())).unwrap_or(b);
+    let found = lower.find("/rest/services").and_then(|i| b.get(..i + "/rest/services".len()));
+    // Without `/rest/services` (a proxy's own path) the address is taken as where the listing
+    // is, so a folder's services (`Folder/Name`) go under it by their own names.
+    let rooted = found.is_some();
+    let root = found.unwrap_or(b);
     let here = b.get(root.len()..).unwrap_or("").trim_matches('/');
     let title = if here.is_empty() { "ArcGIS services".to_string() } else { here.to_string() };
     let mut service = Service { kind: "ArcGIS Services Directory".into(), title, ..Service::default() };
@@ -1339,7 +1343,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
         service.layers.push(ServiceLayer {
             name: format!("{name}/{kind}"),
             title: format!("{short} ({kind})"),
-            offer: Offer::Service { url: format!("{root}/{name}/{kind}") },
+            offer: Offer::Service { url: format!("{root}/{}/{kind}", if rooted { name } else { short }) },
             bbox: None,
             tilesets: None,
             time: None,
@@ -1910,6 +1914,10 @@ mod tests {
         assert_eq!(s.title, "Hydro");
         assert_eq!(s.layers[0].title, "Rivers (MapServer)");
         assert_eq!(s.layers[0].offer, Offer::Service { url: "https://x.org/arcgis/rest/services/Hydro/Rivers/MapServer".into() });
+        // A proxy's path without `/rest/services`: the folder's services go under the address.
+        let proxied = folder.replace(r#"{"folders""#, r#"{"currentVersion": 11, "folders""#);
+        let s = parse("https://proxy.example.org/gis/Hydro?f=json", proxied.as_bytes()).unwrap();
+        assert_eq!(s.layers[0].offer, Offer::Service { url: "https://proxy.example.org/gis/Hydro/Rivers/MapServer".into() });
         assert!(
             parse("https://x.org/arcgis/rest/services/A/FeatureServer", br#"{"error": {"code": 499, "message": "Token Required"}}"#)
                 .unwrap_err()
