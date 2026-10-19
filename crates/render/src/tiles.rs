@@ -344,12 +344,24 @@ mod tests {
     use crate::View;
 
     /// Serves tiles and documents for `https://tiles.test/…` without a network.
+    /// Requests that are never answered: their tiles stay on their way.
+    static PARKED: std::sync::Mutex<Vec<rustgis_tiles::cache::Done>> = std::sync::Mutex::new(Vec::new());
+
+    /// Serves tiles and documents for `https://tiles.test/…` without a network. Under `split/`,
+    /// zoom 11 is red, zoom 13 blue, and zoom 12 never arrives.
     fn serve() {
         rustgis_tiles::cache::set_fetcher(|url, done| {
-            if url.starts_with("https://tiles.test/red/") {
+            let color = |r, g, b| {
                 let mut pm = tiny_skia::Pixmap::new(256, 256).unwrap();
-                pm.fill(tiny_skia::Color::from_rgba8(220, 20, 20, 255));
-                done(Ok(pm.encode_png().unwrap()));
+                pm.fill(tiny_skia::Color::from_rgba8(r, g, b, 255));
+                pm.encode_png().unwrap()
+            };
+            if url.starts_with("https://tiles.test/red/") || url.starts_with("https://tiles.test/split/11/") {
+                done(Ok(color(220, 20, 20)));
+            } else if url.starts_with("https://tiles.test/split/13/") {
+                done(Ok(color(20, 20, 220)));
+            } else if url.starts_with("https://tiles.test/split/12/") {
+                PARKED.lock().unwrap().push(done);
             } else if url == "https://tiles.test/style.json" {
                 let style = r##"{"version": 8, "sources": {}, "layers": [{"id": "bg", "type": "background", "paint": {"background-color": "#2050e0"}}]}"##;
                 done(Ok(style.as_bytes().to_vec()));
@@ -522,6 +534,57 @@ mod tests {
         let kinds: Vec<bool> = scene.cmds.iter().map(|c| matches!(c, DrawCmd::Tiles { .. })).collect();
         // The red tiles under the style's picture, in order.
         assert_eq!(kinds, [true, false], "{kinds:?}");
+    }
+
+    /// A tile on its way is stood in for by its parent and, over that, by its children already
+    /// in the cache, which are sharper: zooming in, the tiles of the zoom passed through are
+    /// missing while those of the zoom it ends at are often here (#568).
+    #[test]
+    fn children_in_the_cache_stand_in_over_the_parent() {
+        use crate::gpu_scene::DrawCmd;
+        use crate::{Backend, RenderOutput};
+        serve();
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.tiles.push(TileLayer::new("Split", TileKind::Raster, "https://tiles.test/split/{z}/{x}/{y}.png"));
+        // Zoom 12's own resolution, nudged off the tile grid.
+        let res = 2.0 * std::f64::consts::PI * rustgis_geom::MERCATOR_R / 256.0 / 4096.0;
+        let center = lonlat_to_merc(Coord::new(2.3417, 48.8571));
+        let view = |res: f64| View {
+            width: 200.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center, res, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        // The parents and the children, fetched.
+        crate::render_png(&mut m, &View { width: 400.0, height: 200.0, ..view(res * 2.0) }).unwrap();
+        crate::render_png(&mut m, &View { width: 800.0, height: 400.0, ..view(res / 2.0) }).unwrap();
+        let v = view(res);
+        let r = crate::render(&mut m, &v).unwrap();
+        let p = r.pixmap.pixel(100, 50).unwrap();
+        let Some(RenderOutput::Gpu(scene)) = crate::render_backend(&mut m, &v, Backend::Gpu) else { panic!("a gpu scene") };
+        let Some(DrawCmd::Tiles { origin, tiles }) = scene.cmds.iter().find(|c| matches!(c, DrawCmd::Tiles { .. })) else {
+            panic!("tiles")
+        };
+        let over_centre: Vec<_> = tiles
+            .iter()
+            .filter(|q| {
+                let (x, y) = (center.x - origin[0], center.y - origin[1]);
+                f64::from(q.rect[0]) <= x && x <= f64::from(q.rect[2]) && f64::from(q.rect[1]) <= y && y <= f64::from(q.rect[3])
+            })
+            .map(|q| q.pixmap().and_then(|pm| pm.pixel(5, 5)).map(|c| c.blue()))
+            .collect();
+        let pending = r.tiles_pending;
+        // Answered now: other tests' renders wait for every fetch under way.
+        for done in std::mem::take(&mut *PARKED.lock().unwrap()) {
+            done(Err("404".into()));
+        }
+        assert!(pending, "zoom 12 is on its way");
+        assert_eq!([p.red(), p.green(), p.blue()], [20, 20, 220], "the children over the parent");
+        assert_eq!(over_centre.first(), Some(&Some(20)), "the parent first: {over_centre:?}");
+        assert_eq!(over_centre.last(), Some(&Some(220)), "a child last: {over_centre:?}");
     }
 
     #[test]

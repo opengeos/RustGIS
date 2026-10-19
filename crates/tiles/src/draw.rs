@@ -284,6 +284,21 @@ fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, 
     };
     let mut exact = Vec::new();
     let mut stand_ins = Vec::new();
+    // A missing tile is stood in for by its nearest ancestor in the cache and, for raster tiles,
+    // by its children in the cache drawn over it: zooming in, the tiles of the zoom being passed
+    // through are often missing while those of the zoom it ends at are already here, and they
+    // are sharper than the ancestor.
+    let stand_in = |out: &mut Vec<Item>, p: &Placed| {
+        out.extend(ancestor(p, min_z, &url));
+        if want == Want::Image && p.id.z < max_z {
+            for c in p.id.children() {
+                let cp = Placed { id: c, wx: p.wx * 2 + i64::from(c.x & 1) };
+                if let Some(payload) = url(c).and_then(|u| cache::peek(&u)) {
+                    out.push(Item { payload, at: cp.extent(), z: c.z, clip: cp.extent() });
+                }
+            }
+        }
+    };
     let mut placed = reach.map(|e| template::covering(e, z)).unwrap_or_default();
     if placed.is_empty() {
         placed = template::covering(view, z);
@@ -297,7 +312,7 @@ fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, 
             match cache::peek(&u) {
                 Some(payload) => State::Ready(payload),
                 None => {
-                    stand_ins.extend(ancestor(&p, min_z, &url));
+                    stand_in(&mut stand_ins, &p);
                     continue;
                 }
             }
@@ -307,16 +322,7 @@ fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, 
             State::Failed(_) => {}
             State::Pending => {
                 *pending = true;
-                if let Some(it) = ancestor(&p, min_z, &url) {
-                    stand_ins.push(it);
-                } else if want == Want::Image && p.id.z < max_z {
-                    for c in p.id.children() {
-                        let cp = Placed { id: c, wx: p.wx * 2 + i64::from(c.x & 1) };
-                        if let Some(payload) = url(c).and_then(|u| cache::peek(&u)) {
-                            stand_ins.push(Item { payload, at: cp.extent(), z: c.z, clip: cp.extent() });
-                        }
-                    }
-                }
+                stand_in(&mut stand_ins, &p);
             }
         }
     }

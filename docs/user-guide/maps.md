@@ -300,20 +300,20 @@ the pointer. On the Home tab, **First-Person** navigation walks with W A S D and
 with Q and E. The interface follows the system's light or dark setting; **View › Display › Dark
 Mode** switches it by hand.
 
-**View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU:
-vector layers are tessellated once and re-projected per frame, so panning and zooming stay
-smooth on large datasets. Raster tile layers (XYZ, TMS and WMS tiles, and raster PMTiles,
-MBTiles and styles) are drawn there as one texture per tile, moved with the camera like the
-vector layers, so a map with a basemap stays sharp while it pans and zooms; zoomed in past the
-tiles' own zoom, the next zoom's tiles are placed at once, their parents standing in until they
-arrive. Vector tile styles and blended tile layers are still drawn as a picture of the view,
-shifted and scaled while the map moves. GPU Rendering is off by default, and the setting is
-remembered across sessions (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
-view effects and the colour-vision simulator always render on the CPU, and exports are
-unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
-the GPU too, in perspective with its fog and sky, when everything it shows is drawn there: no
-tiles, rasters, see-through, masked, swiped or blended layers, aggregations, graphics, stacked
-line strokes, labels with icons, view effects or colour-vision simulation, and extrusions only on
-a tilted map; otherwise it stays on the CPU. Extruded layers stand up on a tilted GPU map with a
-depth buffer, as MapLibre's fill extrusions do, so features that interlock or overlap are drawn
-right.
+**View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU: vector
+layers are tessellated once and re-projected per frame, so panning and zooming stay smooth on
+large datasets. Raster tile layers (XYZ, TMS and WMS tiles, and raster PMTiles, MBTiles and
+styles) are drawn there as one texture per tile, moved with the camera like the vector layers,
+rather than as a picture of the view stretched until the map settles; zoomed in a little past the
+tiles' own zoom, the next zoom's tiles are placed, their parents and cached children standing in
+until they arrive. Vector tile styles and blended tile layers are still drawn as a picture of the
+view, shifted and scaled while the map moves. GPU Rendering is off by default, and the setting is
+remembered across sessions (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for
+development). The globe, view effects and the colour-vision simulator always render on the CPU,
+and exports are unaffected — the choice only changes the on-screen flat map. A turned or tilted
+map is drawn on the GPU too, in perspective with its fog and sky, when everything it shows is
+drawn there: no tiles, rasters, see-through, masked, swiped or blended layers, aggregations,
+graphics, stacked line strokes, labels with icons, view effects or colour-vision simulation, and
+extrusions only on a tilted map; otherwise it stays on the CPU. Extruded layers stand up on a
+tilted GPU map with a depth buffer, as MapLibre's fill extrusions do, so features that interlock
+or overlap are drawn right.

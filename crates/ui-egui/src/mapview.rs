@@ -684,8 +684,11 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
         && gf.fits(&cam)
-        // Tiles zoomed in past their own zoom would blur: the tiles for the new one are placed.
-        && !(gf.has_tiles && cam.res < app.map.tex_camera.res / TILE_STRETCH)
+        // Tiles zoomed in past their own zoom blur: the tiles for the new one are placed, as
+        // often as a stretched CPU frame is sharpened below.
+        && !(gf.has_tiles
+            && cam.res < app.map.tex_camera.res / MOTION_STRETCH
+            && time - app.map.last_render >= motion_gap(app.map.motion_cost))
     {
         gf.set_camera(&rs.queue, &cam);
         fast_engaged = true;
@@ -713,7 +716,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 (w * GAP_SPAN, h * GAP_SPAN, motion_resolution(full, GAP_SPAN * GAP_SPAN))
             } else {
                 let k = motion_resolution(full, 1.0);
-                if stretch <= 1.1 || time - app.map.last_render < motion_gap(full * k * k) {
+                if stretch <= MOTION_STRETCH || time - app.map.last_render < motion_gap(full * k * k) {
                     return None;
                 }
                 (w, h, k)
@@ -2657,9 +2660,9 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
     enabled && resp.clicked()
 }
 
-/// How far a GPU scene's raster tiles are zoomed in, while the map moves, before the tiles for
-/// the new zoom are placed (each zoom level doubles it).
-const TILE_STRETCH: f64 = 1.5;
+/// How far the map's last frame is zoomed in, while the map moves, before it is sharpened: a
+/// CPU frame drawn again, or a GPU scene's raster tiles placed for the new zoom.
+const MOTION_STRETCH: f64 = 1.1;
 
 /// Whether a flat GPU frame drawn with `scene` holds every feature `cam` shows in a `w`×`h`
 /// view: the view lies inside the extent its meshes were tessellated for, so moving them leaves

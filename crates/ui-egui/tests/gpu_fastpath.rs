@@ -261,7 +261,7 @@ fn raster_tiles_move_with_the_camera_on_the_gpu() {
             h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 300.0)));
             h.input_mut().events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, 2.0),
+                delta: egui::vec2(0.0, 0.5),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
             });
@@ -269,14 +269,14 @@ fn raster_tiles_move_with_the_camera_on_the_gpu() {
         }
     };
     // A little: the same tiles, moved by the camera.
-    wheel(&mut h, 2);
+    wheel(&mut h, 1);
     let res = h.state().session.map().camera.res;
-    assert!(res < before.res && res > before.res / 1.5, "zoomed in a little: {} to {res}", before.res);
+    assert!(res < before.res && res > before.res / 1.1, "zoomed in a little: {} to {res}", before.res);
     assert_eq!(h.state().map.full_frame_camera(), before, "the tiles move with the camera, not drawn again");
     assert_gpu_picture_matches_cpu(&mut h);
     // Further: the tiles for the new zoom, before the motion settles.
     for _ in 0..200 {
-        if h.state().session.map().camera.res < before.res / 1.6 {
+        if h.state().session.map().camera.res < before.res / 1.3 {
             break;
         }
         wheel(&mut h, 1);
