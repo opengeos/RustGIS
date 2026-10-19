@@ -2994,11 +2994,14 @@ pub struct DrapePatch {
 }
 
 /// Draws the longitude/latitude `boxes` (from `Globe::drape_extents`) of a globe map flat, at
-/// the view's scale, each picture at most `max_side` pixels a side (coarser beyond that). The
-/// globe view then drapes them over the sphere ([`rustgis_map::Globe::drape_mesh`]) while it
-/// turns, with no drawing per frame. Labels are left out (the view hides them while it moves).
+/// the view's scale, each picture at most `max_side` pixels a side (fewer pixels per point
+/// beyond that). The globe view then drapes them over the sphere
+/// ([`rustgis_map::Globe::drape_mesh`]) while it turns, with no drawing per frame. Labels are
+/// left out (the view hides them while it moves).
 pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side: u32) -> Vec<DrapePatch> {
-    let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(0.25, 4.0) } else { 1.0 };
+    // A coarse drape may have far fewer pixels than points: it shows the map blurrier, but at
+    // the view's scale.
+    let ppp = if view.pixels_per_point.is_finite() { view.pixels_per_point.clamp(1.0 / 64.0, 4.0) } else { 1.0 };
     let res = view.camera.res;
     if !(res.is_finite() && res > 0.0) {
         return Vec::new();
@@ -3013,10 +3016,11 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         if merc.is_empty() || !(merc.width() > 0.0 && merc.height() > 0.0) {
             continue;
         }
-        // Metres per point: the view's, or coarser to fit the size limit.
-        let res = res.max(merc.width().max(merc.height()) * ppp / max_side);
-        // Whole points, rounded down so the picture never passes the size limit.
+        // Whole points at the view's scale. Fitting the size limit lowers the pixels per point,
+        // never the scale: symbols and strokes are sized in points, so a coarser scale would
+        // draw them larger on the ground than the settled frame does.
         let (w, h) = ((merc.width() / res).floor().max(1.0), (merc.height() / res).floor().max(1.0));
+        let ppp = ppp.min(max_side / w.max(h));
         if w * ppp < 2.0 || h * ppp < 2.0 {
             continue;
         }
@@ -3561,6 +3565,43 @@ mod tests {
         );
         let (water, ..) = m.basemap.palette();
         assert_eq!(scene.clear, mesh::premul(water), "the clear colour is the basemap's water");
+    }
+
+    #[test]
+    fn a_coarse_globe_drape_keeps_point_symbols_their_size() {
+        // A drape over its size limit gets fewer pixels, not a coarser scale: a marker sized in
+        // points covers as much ground as in a full-density drape, so it doesn't grow on the
+        // globe while it moves.
+        let mut m = Map::new("Map");
+        m.projection = rustgis_map::Projection::Globe;
+        let mut d = Dataset::new("pts", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let id = m.add_dataset(d);
+        if let Some(l) = m.layer_mut(id) {
+            l.renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol {
+                fill: Rgba::rgb(0, 255, 0),
+                stroke: Rgba::rgb(0, 255, 0),
+                stroke_width: 0.0,
+                size: 20.0,
+                marker: rustgis_map::Marker::Circle,
+            });
+        }
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 20_000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera, sky: true };
+        let boxes = [Extent::new(-60.0, -60.0, 60.0, 60.0)];
+        // The marker's width in metres along the equator.
+        let mut width = |max_side: u32| {
+            let p = render_globe_drape(&mut m, &view, &boxes, max_side);
+            let p = p.first().expect("a picture");
+            let row = p.pixmap.height() / 2;
+            let green = (0..p.pixmap.width()).filter(|&x| p.pixmap.pixel(x, row).is_some_and(|c| c.green() > 200 && c.red() < 100)).count();
+            (green as f64 * p.merc.width() / f64::from(p.pixmap.width()), p.merc.width() / f64::from(p.pixmap.width()))
+        };
+        let (sharp, _) = width(4096);
+        let (coarse, px) = width(128);
+        assert!(px > 4.0 * 20_000.0, "the size limit should coarsen the picture ({px} m per pixel)");
+        assert!(sharp > 0.0 && (coarse - sharp).abs() <= 2.0 * px, "a coarse drape drew the marker {coarse} m wide, not {sharp} m");
+        assert_eq!(m.projection, rustgis_map::Projection::Globe);
     }
 
     #[test]
