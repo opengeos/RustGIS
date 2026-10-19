@@ -312,6 +312,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         egui::Frame::NONE.inner_margin(egui::Margin::same(16)).show(ui, |ui| crate::workspacepanes::catalog_view(app, ui, &t));
         return;
     }
+    // A text selected on the map opens the Format pane (#516).
+    crate::graphicformat::follow(app, ui.ctx());
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
     if let Some(other) = split_map(app).filter(|i| *i != app.session.project.active_map) {
@@ -1070,7 +1072,8 @@ pub(crate) fn text_graphic_at(app: &RustGisApp, ctx: &egui::Context, rect: Rect,
             }
             let text = graphics::expand(graphics::label(&l.dataset, row)?, &tokens);
             let at = lonlat_to_screen(app, rect, g.label_point()?)?;
-            let font = regular(graphics::font_size(&l.dataset, row) * 1.33);
+            let size = graphics::font_size(&l.dataset, row) * 1.33;
+            let font = if graphics::bold(&l.dataset, row) { crate::theme::semibold(size) } else { regular(size) };
             let size = ctx.fonts_mut(|f| f.layout_no_wrap(text, font, Color32::WHITE).size());
             Rect::from_center_size(at, size).expand(3.0).contains(p).then_some((l.id, row))
         })
@@ -1401,12 +1404,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else if tool == Tool::EditVertices {
             // Its two clicks chose a vertex or a feature; zooming would lose the place.
         } else if let Some(p) = resp.interact_pointer_pos() {
-            // A double-click on a text graphic edits it; elsewhere it zooms in.
+            // A double-click on a text graphic edits it in the Format pane; elsewhere it zooms in.
             if matches!(tool, Tool::Explore | Tool::Select)
                 && let Some((layer, row)) = text_graphic_at(app, ui.ctx(), rect, p)
             {
                 app.map.popup = None;
-                let _ = app.run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row}));
+                let _ = crate::graphicformat::edit(app, layer, row);
                 return;
             }
             zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
@@ -1446,6 +1449,21 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         if app.map.split_mode {
             app.map.split_mode = false;
             let _ = app.run("edit.split", json!({"lon": c.x, "lat": c.y}));
+            return;
+        }
+        // A click anywhere on a text graphic's text selects it, not only on its anchor; on the
+        // one already selected, it brings back the Format pane closed over it (#516). Shift and
+        // Ctrl (Cmd) clicks add to or take from the selection as usual.
+        if matches!(tool, Tool::Explore | Tool::Select)
+            && !ui.input(|i| i.modifiers.shift || i.modifiers.command)
+            && let Some((layer, row)) = text_graphic_at(app, ui.ctx(), rect, p)
+        {
+            app.map.popup = None;
+            if crate::graphicformat::selected(app) == Some((layer, row)) {
+                app.ui.open_right(crate::RightPane::Format);
+            } else {
+                let _ = app.run("select.rows", json!({"layer": layer, "rows": [row]}));
+            }
             return;
         }
         // Sketch vertices snap to features when snapping is on.

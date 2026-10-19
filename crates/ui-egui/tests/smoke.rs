@@ -1034,10 +1034,12 @@ fn delimited_text_dialog_lists_the_picked_files_columns() {
     assert_eq!((h.state().dialogs.a.as_str(), h.state().dialogs.b.as_str()), ("Lon", "Lat"));
 }
 
-/// Edit Text (#420) opens with a placed text's text and size, and Save changes that text only,
-/// whatever is selected, as one undo step.
+/// Edit Text (#420) on a placed text opens the Format pane on it (#516): it is selected alone, and
+/// the text typed there is saved for that text only, as one undo step.
 #[test]
-fn a_placed_text_is_edited_in_its_dialog() {
+fn a_placed_text_is_edited_in_the_format_pane() {
+    use egui::accesskit::Role;
+    use rustgis_ui_egui::RightPane;
     use rustgis_ui_egui::rustgis_engine::map::graphics;
     let mut h = harness();
     let first = h.state_mut().run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "First", "fontSize": 20})).unwrap();
@@ -1045,65 +1047,58 @@ fn a_placed_text_is_edited_in_its_dialog() {
     let (layer, row) = (first["layer"].clone(), second["row"].clone());
     h.state_mut().run("select.rows", json!({"layer": layer, "rows": [first["row"]]})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
-    let d = &h.state().dialogs;
-    assert_eq!((d.open, d.mode, d.text.as_str(), d.size), (Some("graphicText"), "edit", "Second", 14.0));
+    assert_eq!((h.state().dialogs.open, h.state().ui.right), (None, Some(RightPane::Format)), "the pane, not the dialog");
+    let selection = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+        h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().selection.clone()
+    };
+    assert_eq!(selection(&h), [row.as_u64().unwrap() as usize]);
     h.step();
-    (h.state_mut().dialogs.text, h.state_mut().dialogs.size) = ("Second, edited".into(), 24.0);
     h.step();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Second")).unwrap().focus();
+    h.step();
+    h.event(egui::Event::Text(", edited".into()));
+    h.step();
+    h.key_press(egui::Key::Enter);
     h.step();
     h.step();
-    assert_eq!(h.state().dialogs.open, None);
     let s = &h.state().session;
     let ds = &s.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    let text = |r: &serde_json::Value| {
-        let r = r.as_u64().unwrap() as usize;
-        (graphics::label(ds, r).unwrap().to_string(), graphics::font_size(ds, r))
-    };
-    assert_eq!(text(&row), ("Second, edited".into(), 24.0));
-    assert_eq!(text(&first["row"]), ("First".into(), 20.0), "the selected text is left alone");
+    let text = |r: &serde_json::Value| graphics::label(ds, r.as_u64().unwrap() as usize).unwrap().to_string();
+    assert!(text(&row).contains(", edited"), "{}", text(&row));
+    assert_eq!(text(&first["row"]), "First", "the other text is left alone");
     assert_eq!(s.undo_label(), Some("Edit Graphic"));
-    // The size is kept within what text graphics draw (#457).
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
-    h.step();
-    h.state_mut().dialogs.size = 500.0;
-    h.step();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
-    h.step();
-    h.step();
-    assert_eq!(h.state().dialogs.open, None);
-    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    assert_eq!(graphics::font_size(ds, row.as_u64().unwrap() as usize), *graphics::FONT_SIZE.end() as f32);
     // A row that isn't a text graphic opens nothing.
     assert!(h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": 99})).is_err());
     assert_eq!(h.state().dialogs.open, None);
 }
 
-/// In the text dialog, sharing its form with a layout's text (#516) kept its keys: Shift+Enter
-/// starts a new line, Enter saves.
+/// Add Text, sharing its form with a layout's text (#516): Shift+Enter starts a new line, Enter
+/// adds the text, with the colour and boldness picked.
 #[test]
-fn enter_saves_the_text_dialog_and_shift_enter_breaks_the_line() {
+fn enter_adds_the_text_and_shift_enter_breaks_the_line() {
     use egui::accesskit::Role;
     use rustgis_ui_egui::rustgis_engine::map::graphics;
     let mut h = harness();
-    let added = h.state_mut().run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
-    let (layer, row) = (added["layer"].clone(), added["row"].clone());
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 10, "lat": 50})).unwrap();
     h.step();
-    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+    h.get_by_role_and_label(Role::CheckBox, "Bold").click();
+    h.step();
+    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Text")).unwrap().focus();
     h.step();
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
     h.event(egui::Event::Text("Line".into()));
     h.step();
-    assert_eq!(h.state().dialogs.open, Some("graphicText"), "Shift+Enter doesn't save");
+    assert_eq!(h.state().dialogs.open, Some("graphicText"), "Shift+Enter doesn't add");
     assert!(h.state().dialogs.text.contains('\n'), "{:?}", h.state().dialogs.text);
     h.key_press(egui::Key::Enter);
     h.step();
     h.step();
-    assert_eq!(h.state().dialogs.open, None, "Enter saves");
-    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    let saved = graphics::label(ds, row.as_u64().unwrap() as usize).unwrap_or_default();
-    assert!(saved.contains('\n') && saved.contains("Line") && saved.contains("Old"), "{saved:?}");
+    assert_eq!(h.state().dialogs.open, None, "Enter adds");
+    let l = h.state().session.map().layers.iter().find(|l| l.graphics).unwrap();
+    let row = l.dataset.features.len() - 1;
+    let saved = graphics::label(&l.dataset, row).unwrap_or_default();
+    assert!(saved.contains('\n') && saved.contains("Line") && saved.contains("Text"), "{saved:?}");
+    assert!(graphics::bold(&l.dataset, row), "bold, as picked");
 }
 
 /// Add Data From URL downloads off the frame and adds the file when it lands; a failed download

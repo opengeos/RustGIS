@@ -18,6 +18,9 @@ pub struct Dialogs {
     pub c: String,
     /// Add/Edit Text's font size, in points: a number, so it can't be mistyped (#457).
     pub size: f64,
+    /// Add Text's colour and boldness.
+    pub color: egui::Color32,
+    pub bold: bool,
     pub mode: &'static str,
     pub flag: bool,
     pub error: Option<String>,
@@ -105,6 +108,7 @@ impl Dialogs {
             "graphicText" => {
                 self.text = "Text".into();
                 self.size = 14.0;
+                self.color = crate::theme::c32(rustgis_engine::map::graphics::TEXT_COLOR);
             }
             "addField" => self.b = "Double".into(),
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
@@ -136,7 +140,6 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "calculateField" => "Calculate Field",
         "definitionQuery" => "Definition Query",
         "coordinateSystem" => "Coordinate System",
-        "graphicText" if app.dialogs.mode == "edit" => "Edit Text",
         "graphicText" => "Add Text",
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
@@ -232,20 +235,18 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "graphicText" => {
-                // The form a layout's text has too (#516); colour and boldness aren't kept by text
-                // graphics yet. What it settles is saved by the dialog's button.
+                // Adds a text where the map was clicked (`a` and `b`: its longitude and latitude), with
+                // the form a layout's text has too (#516); a placed text is edited in the Format
+                // pane. What the form settles is saved by the dialog's button.
                 let d = &mut app.dialogs;
-                let fields = crate::textform::Fields { text: &mut d.text, size: &mut d.size, color: None, bold: None };
+                let fields = crate::textform::Fields { text: &mut d.text, size: &mut d.size, color: Some(&mut d.color), bold: Some(&mut d.bold) };
                 crate::textform::show(ui, "graphic_text", &[rustgis_engine::map::graphics::TOKENS], fields, |_| {});
-                // Editing a placed text: `a` and `b` hold its layer id and row.
-                let editing = app.dialogs.mode == "edit";
-                close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {
-                    if editing {
-                        let (layer, row) = (app.dialogs.a.parse::<u64>().unwrap_or(u64::MAX), app.dialogs.b.parse::<u64>().unwrap_or(u64::MAX));
-                        return app.run("graphics.edit", json!({"layer": layer, "row": row, "text": app.dialogs.text, "fontSize": app.dialogs.size})).map(|_| ());
-                    }
+                close = buttons(app, ui, "Add", |app| {
                     let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
-                    let r = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": app.dialogs.text, "fontSize": app.dialogs.size}));
+                    let d = &app.dialogs;
+                    let fill = crate::theme::rgba(d.color).hex8();
+                    let p = json!({"shape": "text", "points": [[lon, lat]], "text": d.text, "fontSize": d.size, "fill": fill, "bold": d.bold});
+                    let r = app.run("graphics.add", p);
                     if r.is_ok() && !app.session.keep_tool {
                         app.session.tool = rustgis_engine::Tool::Explore;
                     }

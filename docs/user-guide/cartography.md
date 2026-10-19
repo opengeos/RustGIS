@@ -167,9 +167,11 @@ the map, and the text starts with its token (`{map}`, `{scale}`, `{date}`, `{tim
 `{layers}` or `{center}`); the dialog's **Insert Dynamic Text** menu adds more. Picture: drag a rectangle,
 then pick a PNG or JPEG image to stretch over it. Tools return to Explore after each graphic
 unless Keep Tool is on. Each graphic keeps its own fill, outline, width and text size in the
-layer's attributes, so you can edit them in the attribute table or with `graphics.style`. To
-change a text once it is placed, double-click it (with Explore or Select) or right-click it ›
-**Edit Text…**: the dialog opens with its text and size, and **Save** changes that graphic's text
-and size only, as one undo step (`graphics.edit` does the same by layer and row). Text sizes go
-from 2 to 400 points, on the map as on a layout page, and the dialog's form is the one a layout's
-text has in the Format pane.
+layer's attributes, so you can edit them in the attribute table or with `graphics.style`. The
+Add Text dialog sets a text's size, colour and bold as it is placed. To change a text once it is
+placed, click anywhere on it (with Explore or Select): selected alone, it opens in the **Format**
+pane, beside the other right-hand panes, with the same form a layout's text has there. Each
+change there is one undo step on that text only (`graphics.edit` does the same by layer and row,
+with `text`, `fontSize`, `fill` for the colour and `bold`). Closing the pane keeps the text
+selected; double-clicking it or right-clicking it › **Edit Text…** opens the pane again. Text sizes
+go from 2 to 400 points, on the map as on a layout page.

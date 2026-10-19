@@ -22,6 +22,8 @@ pub const FIELDS: &[(&str, FieldType)] = &[
     ("size", FieldType::Double),
     ("font_size", FieldType::Double),
     ("image", FieldType::Text),
+    // Last: graphics layers made before it lack it, and read it as false (#516).
+    ("bold", FieldType::Boolean),
 ];
 
 /// Tokens dynamic text expands: (token, description).
@@ -71,9 +73,18 @@ pub fn font_size(ds: &Dataset, row: usize) -> f32 {
     num(ds, row, "font_size").unwrap_or(14.0).clamp(*FONT_SIZE.start(), *FONT_SIZE.end()) as f32
 }
 
+/// Whether a text graphic is drawn bold; false where the layer has no `bold` field (graphics
+/// layers made before it).
+pub fn bold(ds: &Dataset, row: usize) -> bool {
+    num(ds, row, "bold").is_some_and(|v| v != 0.0)
+}
+
+/// The colour text graphics are drawn in when their `fill` doesn't say.
+pub const TEXT_COLOR: Rgba = Rgba::rgb(0x20, 0x20, 0x20);
+
 /// The text colour of a text graphic.
 pub fn text_color(ds: &Dataset, row: usize) -> Rgba {
-    text(ds, row, "fill").and_then(Rgba::from_hex).unwrap_or(Rgba::rgb(0x20, 0x20, 0x20))
+    text(ds, row, "fill").and_then(Rgba::from_hex).unwrap_or(TEXT_COLOR)
 }
 
 /// The symbol a graphic draws with.

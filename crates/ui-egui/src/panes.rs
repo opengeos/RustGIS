@@ -159,7 +159,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Shares => crate::docpanes::shares(app, ui, t),
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
-            RightPane::Format => crate::layoutview::format(app, ui, t),
+            RightPane::Format => crate::graphicformat::show(app, ui, t),
             RightPane::Plugin => crate::pluginpanel::show(app, ui, t),
             RightPane::WebData => web_data(app, ui),
         });

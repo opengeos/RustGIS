@@ -26,6 +26,7 @@ mod editpanes;
 mod failureui;
 mod geocodeui;
 mod globe_drape;
+mod graphicformat;
 pub mod icons;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -640,6 +641,8 @@ pub struct RustGisApp {
     pub gp: panes::GpForm,
     pub table: table::TableState,
     pub layout: layoutview::LayoutView,
+    /// The text graphic the Format pane edits (#516).
+    pub(crate) graphic_format: graphicformat::GraphicFormat,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
     /// ModelBuilder's view: the model on its canvas.
@@ -720,6 +723,7 @@ impl RustGisApp {
             gp: panes::GpForm::default(),
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
+            graphic_format: graphicformat::GraphicFormat::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
             mb: modelbuilder::ModelBuilder::default(),
@@ -2618,19 +2622,11 @@ impl RustGisApp {
                     if let Some(t) = p.get("text").and_then(Value::as_str) {
                         self.dialogs.text = t.chars().take(2000).collect();
                     }
-                    // A placed text to edit (its layer and row), starting from its text and size.
+                    // A placed text (its layer and row) is edited in the Format pane, not here (#516).
                     if let (Some(layer), Some(row)) = (p.get("layer").and_then(Value::as_u64), p.get("row").and_then(Value::as_u64)) {
-                        use rustgis_engine::map::graphics;
-                        let l = u32::try_from(layer).ok().and_then(|id| self.session.map().layer(id)).filter(|l| l.graphics);
-                        let found = l
-                            .zip(usize::try_from(row).ok())
-                            .and_then(|(l, r)| Some((graphics::label(&l.dataset, r)?.to_string(), graphics::font_size(&l.dataset, r))));
-                        let Some((text, size)) = found else {
-                            self.dialogs.open = None;
-                            return Err(tl!("no text graphic there").to_string());
-                        };
-                        (self.dialogs.mode, self.dialogs.a, self.dialogs.b) = ("edit", layer.to_string(), row.to_string());
-                        (self.dialogs.text, self.dialogs.size) = (text, f64::from(size));
+                        self.dialogs.open = None;
+                        let (layer, row) = (u32::try_from(layer).unwrap_or(u32::MAX), usize::try_from(row).unwrap_or(usize::MAX));
+                        return graphicformat::edit(self, layer, row).map(|()| Value::Null);
                     }
                 }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
@@ -3112,8 +3108,10 @@ impl RustGisApp {
                 mapview::show(self, ui);
             });
         }
-        // Text typed into a layout element's field the Format pane no longer shows.
+        // Text typed into a layout element's field, or a text graphic's, the Format pane no
+        // longer shows.
         layoutview::save_drafts(self);
+        graphicformat::save_draft(self);
         dialogs::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         pluginsui::show(self, &ctx);
