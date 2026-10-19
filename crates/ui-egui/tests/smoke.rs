@@ -1079,6 +1079,33 @@ fn a_placed_text_is_edited_in_its_dialog() {
     assert_eq!(h.state().dialogs.open, None);
 }
 
+/// In the text dialog, sharing its form with a layout's text (#516) kept its keys: Shift+Enter
+/// starts a new line, Enter saves.
+#[test]
+fn enter_saves_the_text_dialog_and_shift_enter_breaks_the_line() {
+    use egui::accesskit::Role;
+    use rustgis_ui_egui::rustgis_engine::map::graphics;
+    let mut h = harness();
+    let added = h.state_mut().run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+    let (layer, row) = (added["layer"].clone(), added["row"].clone());
+    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
+    h.step();
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+    h.step();
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
+    h.event(egui::Event::Text("Line".into()));
+    h.step();
+    assert_eq!(h.state().dialogs.open, Some("graphicText"), "Shift+Enter doesn't save");
+    assert!(h.state().dialogs.text.contains('\n'), "{:?}", h.state().dialogs.text);
+    h.key_press(egui::Key::Enter);
+    h.step();
+    h.step();
+    assert_eq!(h.state().dialogs.open, None, "Enter saves");
+    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
+    let saved = graphics::label(ds, row.as_u64().unwrap() as usize).unwrap_or_default();
+    assert!(saved.contains('\n') && saved.contains("Line") && saved.contains("Old"), "{saved:?}");
+}
+
 /// Add Data From URL downloads off the frame and adds the file when it lands; a failed download
 /// is said.
 #[test]
