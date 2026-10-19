@@ -69,16 +69,20 @@ pub fn parse_children(bytes: &[u8], from: &str) -> Result<Vec<Child>, String> {
     Ok(out)
 }
 
-/// Every link of a relation, resolved against `from`: (address, title).
+/// The links of a relation, resolved against `from`: (address, title), the first
+/// [`MAX_LINKS`] of them (counted among that relation's alone).
 fn links(v: &Value, rel: &str, from: &str) -> Vec<(String, String)> {
-    v.get("links")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .take(MAX_LINKS)
-        .filter(|l| l.get("rel").and_then(Value::as_str) == Some(rel))
-        .filter_map(|l| Some((resolve(from, l.get("href")?.as_str()?)?, text(l.get("title")))))
-        .collect()
+    of_rel(v, rel).take(MAX_LINKS).filter_map(|l| Some((resolve(from, l.get("href")?.as_str()?)?, text(l.get("title"))))).collect()
+}
+
+/// A document's links of a relation.
+fn of_rel<'a>(v: &'a Value, rel: &'a str) -> impl Iterator<Item = &'a Value> {
+    v.get("links").and_then(Value::as_array).into_iter().flatten().filter(move |l| l.get("rel").and_then(Value::as_str) == Some(rel))
+}
+
+/// Whether a document has more links of a relation than a walk follows.
+fn too_many(v: &Value, rel: &str) -> bool {
+    of_rel(v, rel).nth(MAX_LINKS).is_some()
 }
 
 /// What a walk keeps of the items it finds.
@@ -134,9 +138,10 @@ impl Filter {
     /// Whether an item is kept (`phase` is its `phase` property, if it has one).
     fn keeps(&self, item: &Item, phase: Option<&str>) -> bool {
         if let (Some([w, s, e, n]), Some([iw, is, ie, inn])) = (self.bbox, item.bbox) {
-            let across = |a: f64, b: f64| ie >= a && iw <= b;
-            // A box over the antimeridian (west east of east) is two: up to 180° and from -180°.
-            let meets = if w <= e { across(w, e) } else { across(w, 180.0) || across(-180.0, e) };
+            // A box over the antimeridian (west east of east), the filter's or the item's, is two:
+            // up to 180° and from -180°.
+            let spans = |w: f64, e: f64| if w <= e { vec![(w, e)] } else { vec![(w, 180.0), (-180.0, e)] };
+            let meets = spans(w, e).iter().any(|(a, b)| spans(iw, ie).iter().any(|(c, d)| d >= a && c <= b));
             if !meets || is > n || inn < s {
                 return false;
             }
@@ -333,6 +338,8 @@ impl Walk {
                     return;
                 }
                 for (rel, queue) in [("item", true), ("child", false)] {
+                    // Links past the most followed leave the walk incomplete, and say so.
+                    self.cut |= too_many(&v, rel);
                     for (u, _) in links(&v, rel, url) {
                         // A document on the web can't send the walk into the local network.
                         if !is_web(&u) || self.visited.contains(&u) || crate::address::check(&u, Some(url)).is_err() {
@@ -570,6 +577,20 @@ mod tests {
             fiji.keeps(&crate::stac::item_from_json(&v, Some("https://x.org/f.json")).unwrap(), None)
         };
         assert!(at(178.0, 179.0) && at(-179.0, -178.0) && !at(0.0, 1.0));
+        // An item over the antimeridian, with a filter on either side of it or over it too.
+        assert!(at(179.0, -179.0));
+        let east = Filter { bbox: Some([-179.5, -20.0, -170.0, -10.0]), ..Default::default() };
+        let west = Filter { bbox: Some([0.0, -20.0, 10.0, -10.0]), ..Default::default() };
+        let over = crate::stac::item_from_json(&feature("o", [179.0, -18.0, -179.0, -17.0], "", ""), Some("https://x.org/o.json")).unwrap();
+        assert!(east.keeps(&over, None) && !west.keeps(&over, None));
+        // Links past the most followed are counted among their own relation, and cut the walk.
+        let many: Vec<Value> = (0..MAX_LINKS + 3).map(|i| json!({"rel": "license", "href": format!("l{i}.txt")})).collect();
+        let mut doc = json!({"type": "Catalog", "links": many});
+        if let Some(l) = doc["links"].as_array_mut() {
+            l.push(json!({"rel": "item", "href": "a.json"}));
+        }
+        assert_eq!(links(&doc, "item", "https://x.org/c.json").len(), 1, "other relations don't hide items");
+        assert!(too_many(&doc, "license") && !too_many(&doc, "item"));
         for bad in ["", "2024", "2024-13-01", "2024-04-31", "2024-06-02T25:00:00Z", "2024-06-02T10:30:00+0200", "yesterday", "2024-06-02X"]
         {
             assert_eq!(instant(bad), None, "{bad}");
