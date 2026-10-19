@@ -146,12 +146,22 @@ fn redacted_text(t: &str) -> String {
 
 /// `t` with its secret pairs emptied (`secret_pairs_emptied`), parted first at each `&` that
 /// starts another `name=` pair, as a query string's do (`a=1&password=…`, with no `://` for
-/// `redact` to read it by). An `&` inside a value (`password=ab&cd`), or in quotes or braces,
-/// stays in it, so the whole value goes.
+/// `redact` to read it by). An `&` inside a value (`password=ab&cd`), or in a value quoted or
+/// braced from its start, stays in it, so the whole value goes. A quote inside a word
+/// (`O'Reilly`, `can't`) opens nothing; one that opens a value and never closes is taken for a
+/// stray one, and the text is parted at every such `&`, quotes aside (the safe way).
 fn query_pairs_emptied(t: &str) -> String {
+    pairs_parted(t, true).or_else(|| pairs_parted(t, false)).unwrap_or_default()
+}
+
+/// [`query_pairs_emptied`]'s work, honouring quotes and braces that open a value or not: `None`
+/// when one opened and never closed.
+fn pairs_parted(t: &str, quotes: bool) -> Option<String> {
     let mut out = String::with_capacity(t.len());
     let mut from = 0;
     let mut open: Option<char> = None;
+    // Right after a `=` (spaces aside): where a value, and so a quote or a brace, can start.
+    let mut value_start = false;
     let mut chars = t.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         match open {
@@ -164,8 +174,8 @@ fn query_pairs_emptied(t: &str) -> String {
             }
             Some(close) if c == close => open = None,
             Some(_) => {}
-            None if c == '\'' || c == '"' => open = Some(c),
-            None if c == '{' => open = Some('}'),
+            None if quotes && value_start && (c == '\'' || c == '"') => open = Some(c),
+            None if quotes && value_start && c == '{' => open = Some('}'),
             None if c == '&' && starts_pair(t.get(i + 1..).unwrap_or("")) => {
                 out.push_str(&secret_pairs_emptied(t.get(from..i).unwrap_or("")));
                 out.push('&');
@@ -173,9 +183,13 @@ fn query_pairs_emptied(t: &str) -> String {
             }
             None => {}
         }
+        value_start = open.is_none() && (c == '=' || (value_start && c == ' '));
+    }
+    if open.is_some() {
+        return None;
     }
     out.push_str(&secret_pairs_emptied(t.get(from..).unwrap_or("")));
-    out
+    Some(out)
 }
 
 /// Whether `s` starts with a pair's name and its `=`.

@@ -8140,11 +8140,11 @@ fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
     s.project.gp_history.push(crate::GpRecord {
         tool: "Buffer".into(),
         id: "buffer".into(),
-        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2", "amp": "password=pw1&zz9", "quoted": "password='q1&b=c2'", "odbc": "PWD={abc}}def;tail};UID=me"}),
+        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2", "amp": "password=pw1&zz9", "quoted": "password='q1&b=c2'", "odbc": "PWD={abc}}def;tail};UID=me", "apostrophe": "a=O'Reilly&password=ap1&b=2", "stray": "a='x&password=ap2"}),
         command: None,
         at: 0,
         ok: false,
-        messages: vec!["could not connect: host=db password=mp".into()],
+        messages: vec!["can't connect: host=db password=mp a=1&token=mp3".into()],
         millis: 0,
         outputs: Vec::new(),
     });
@@ -8156,8 +8156,17 @@ fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
         assert!(!py.contains(secret), "{secret} in {py}");
     }
     assert!(py.contains("\"PWD=;UID=me\""), "{py}");
+    // A quote inside a word opens nothing; one that opens a value and never closes doesn't hide
+    // the pairs after it.
+    assert!(!py.contains("ap1") && !py.contains("ap2"), "{py}");
+    assert!(py.contains("a=O'Reilly&password=&b=2") && py.contains("a='x&password="), "{py}");
     let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
-    assert!(text.contains("failed when it ran (could not connect: host=db password=)") && !text.contains("=mp"), "{text}");
+    assert!(
+        text.contains("failed when it ran (can't connect: host=db password= a=1&token=)")
+            && !text.contains("password=mp")
+            && !text.contains("mp3"),
+        "{text}"
+    );
 }
 
 #[path = "../../../tests/support/ogc_server.rs"]
