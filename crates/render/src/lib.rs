@@ -2516,7 +2516,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                 let (dx, dy) = labels.placement.offset(
                     text::block_width(&text, labels.size, labels.bold),
-                    labels.size * 1.25 * text::line_count(&text) as f32,
+                    text::block_height(&text, labels.size),
                     marker,
                     is_point,
                 );
@@ -3107,7 +3107,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
     // The text's box and its icon's, together.
     let bbox = |l: &PlacedLabel| {
         let tw = text::block_width(&l.text, l.size, l.bold);
-        let th = l.size * 1.25 * text::line_count(&l.text) as f32;
+        let th = text::block_height(&l.text, l.size);
         let cx = l.center_x();
         let text = (!l.text.is_empty()).then(|| [cx - tw / 2.0 - 2.0, l.y - th / 2.0, cx + tw / 2.0 + 2.0, l.y + th / 2.0]);
         let icon = l.icon.as_ref().map(|i| [i.x - i.w / 2.0, i.y - i.h / 2.0, i.x + i.w / 2.0, i.y + i.h / 2.0]);
@@ -3427,7 +3427,11 @@ mod tests {
         assert_eq!(text::line_count(&"\n".repeat(10_000)), 200, "lines are bounded");
         // The collision box holds both lines: a label just below the first line's box but
         // overlapping the second line is left out.
-        let below = PlacedLabel { y: 150.0 + 20.0 * 1.25, ..at("Below", false) };
+        // Its lines are as far apart there as drawn: a line pitch each, not one line's height.
+        assert!((text::block_height("a\nb\nc", 20.0) - text::block_height("a", 20.0) - 2.0 * text::line_pitch(20.0)).abs() < 1e-3);
+        // Just below where two lines' height would end (2 × 1.25 × 20 = 50 points), but over
+        // the drawn second line: left out.
+        let below = PlacedLabel { y: 150.0 + 25.0 + 2.0 + 12.5, ..at("Below", false) };
         let p = place_labels(vec![(below, 0.0, (1, 0))], vec![at("Atlantic\nOcean", false)], 400.0, 300.0, false);
         assert!(p.labels.iter().all(|l| l.text != "Below"), "placed over the second line");
         // The selection frame goes round both lines.

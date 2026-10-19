@@ -123,6 +123,26 @@ pub fn block_width(text: &str, size: f32, bold: bool) -> f32 {
     lines(text).map(|line| measure(line, size, bold)).fold(0.0, f32::max)
 }
 
+/// The distance between a label's lines in points, as [`draw`] sets them: 1.25 × the font's
+/// pixel size, as a layout's text.
+pub fn line_pitch(size: f32) -> f32 {
+    size * 1.33 * 1.25
+}
+
+/// A label's height in points, for its collision box: one line as labels have always taken, and
+/// a line pitch more for each further line.
+pub fn block_height(text: &str, size: f32) -> f32 {
+    size * 1.25 + line_count(text).saturating_sub(1) as f32 * line_pitch(size)
+}
+
+/// The selection frame [`draw`] puts round a label, in points: [left, top, right, bottom].
+fn frame_box(l: &PlacedLabel) -> [f32; 4] {
+    let (w, pad) = (block_width(&l.text, l.size, l.bold), 3.0);
+    let h = l.size * 1.33 * 1.2 + line_count(&l.text).saturating_sub(1) as f32 * line_pitch(l.size);
+    let cx = l.center_x();
+    [cx - w / 2.0 - pad, l.y - h / 2.0 - pad, cx + w / 2.0 + pad, l.y + h / 2.0 + pad]
+}
+
 fn blend(pm: &mut Pixmap, x: i32, y: i32, c: Rgba, cov: f32) {
     let (w, h) = (pm.width() as i32, pm.height() as i32);
     if x < 0 || y < 0 || x >= w || y >= h || cov <= 0.0 {
@@ -223,11 +243,11 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     // the widest, the block centred on the label's point.
     // Each line measured once: its width places it, the widest sizes the block.
     let widths: Vec<(&str, f32)> = lines(&l.text).map(|line| (line, measure(line, l.size, l.bold) * ppp)).collect();
-    let (n, line_h) = (widths.len(), px * 1.25);
+    let (n, line_h) = (widths.len(), line_pitch(l.size) * ppp);
     let w = widths.iter().map(|(_, lw)| *lw).fold(0.0, f32::max);
     if l.framed {
-        let (h, pad) = (px * 1.2 + n.saturating_sub(1) as f32 * line_h, 3.0 * ppp);
-        if let Some(r) = Rect::from_xywh(cx - w / 2.0 - pad, cy - h / 2.0 - pad, w + 2.0 * pad, h + 2.0 * pad) {
+        let [x0, y0, x1, y1] = frame_box(l).map(|v| v * ppp);
+        if let Some(r) = Rect::from_ltrb(x0, y0, x1, y1) {
             frame(pm, r, ppp);
         }
     }
