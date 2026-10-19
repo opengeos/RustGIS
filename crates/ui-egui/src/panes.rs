@@ -3703,7 +3703,7 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Tools you run appear here.")).color(t.text_dim));
         return;
     }
-    for h in hist.iter().rev() {
+    for (i, h) in hist.iter().enumerate().rev() {
         egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
             ui,
             |ui| {
@@ -3711,11 +3711,21 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(r.center(), 4.5, if h.ok { t.green } else { t.red });
-                    ui.label(egui::RichText::new(tl!(&h.tool)).font(semibold(12.5)));
+                    // Right-clicking the tool's name, or its ⋯, gives the run as code (#539).
+                    let name = ui.add(egui::Label::new(egui::RichText::new(tl!(&h.tool)).font(semibold(12.5))).sense(Sense::click()));
+                    name.context_menu(|ui| history_menu(app, ui, i, h));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("⋯", |ui| history_menu(app, ui, i, h))
+                            .response
+                            .on_hover_text(tl!("Copy this run as code, or open it in its tool"));
                         ui.label(egui::RichText::new(format!("{} ms", h.millis)).size(11.0).color(t.text_dim));
                     });
                 });
+                // When it ran, as ArcGIS Pro's history says (UTC: the app has no time zone).
+                if h.at > 0 {
+                    let (date, time) = rustgis_engine::map::graphics::civil(h.at);
+                    ui.label(egui::RichText::new(format!("{date} {time} UTC")).size(11.0).color(t.text_dim));
+                }
                 for m in &h.messages {
                     ui.label(egui::RichText::new(m).size(11.0).color(t.text_dim));
                 }
@@ -3723,8 +3733,61 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         ui.add_space(4.0);
     }
-    if ui.button(tl!("Clear History")).clicked() {
-        let _ = app.run("gp.clearHistory", Value::Null);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tl!("Save as Python Script…")).on_hover_text(tl!("Every run, in order, as a script that opens the project")).clicked()
+        {
+            save_history_script(app);
+        }
+        if ui.button(tl!("Clear History")).clicked() {
+            let _ = app.run("gp.clearHistory", Value::Null);
+        }
+    });
+}
+
+/// What can be done with run `i` of the history (`h`): copy it as code, or open it in its tool.
+/// A run the history can't tell how to run again has them greyed out, saying why.
+fn history_menu(app: &mut RustGisApp, ui: &mut Ui, i: usize, h: &rustgis_engine::GpRecord) {
+    let replay = rustgis_engine::cmd::history::replay(h);
+    let why = replay.as_ref().err().cloned().unwrap_or_default();
+    for (label, kind) in [("Copy as Python", "python"), ("Copy as Command", "command"), ("Copy as CLI Command", "cli")] {
+        if ui.add_enabled(replay.is_ok(), egui::Button::new(tl!(label))).on_disabled_hover_text(why.as_str()).clicked() {
+            match app.run("gp.historyCode", json!({"run": i, "as": kind})) {
+                Ok(v) => ui.ctx().copy_text(v["code"].as_str().unwrap_or("").to_string()),
+                Err(e) => app.session.notify(e, true),
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    // A tool run with `gp.run` opens in its form; a point buffered on the map has no layer to
+    // give it.
+    let tool = replay.as_ref().ok().filter(|(cmd, _)| cmd == "gp.run").map(|(_, p)| p.clone());
+    let r = ui.add_enabled(tool.is_some(), egui::Button::new(tl!("Open in Tool")));
+    if r.on_disabled_hover_text(tl!("This run has no tool form to open")).clicked() {
+        if let Some(p) = tool {
+            let _ = app.run("ui.gp.open", json!({"tool": p["tool"], "values": p["params"]}));
+        }
+        ui.close();
+    }
+}
+
+/// Saves the history as a Python script (#539): downloaded in the browser, else where the user
+/// picks.
+fn save_history_script(app: &mut RustGisApp) {
+    match app.run("gp.historyScript", Value::Null) {
+        Ok(v) => {
+            let name = v["fileName"].as_str().unwrap_or("history.py").to_string();
+            let bytes = v["text"].as_str().unwrap_or("").as_bytes().to_vec();
+            if app.services.download.is_some() {
+                app.download_bytes(&name, bytes);
+            } else if let Some(path) = crate::dialogs::pick_save(&name, &["py"], tl!("Python script")) {
+                match rustgis_engine::data::io::write_atomic(std::path::Path::new(&path), &bytes) {
+                    Ok(()) => app.session.notify(crate::i18n::fmt("Saved {path}", &[("path", &path)]), false),
+                    Err(e) => app.session.notify(e.to_string(), true),
+                }
+            }
+        }
+        Err(e) => app.session.notify(e, true),
     }
 }
 

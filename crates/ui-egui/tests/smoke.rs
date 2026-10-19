@@ -1869,6 +1869,27 @@ fn plugin_panels_run_their_commands_when_a_slider_is_let_go() {
     rp::unload("ui-panel");
 }
 
+/// A run in the History pane opens again in its tool with the values it ran with (#539), from
+/// its ⋯ menu; the pane says when it ran.
+#[test]
+fn a_run_opens_again_in_its_tool_from_the_history() {
+    use rustgis_ui_egui::RightPane;
+    let mut h = harness();
+    h.state_mut().run("gp.run", json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).unwrap();
+    h.state_mut().run("ui.pane.history", json!({})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.query_all_by_label_contains(" UTC").next().is_some(), "when it ran");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "⋯").click_accesskit();
+    h.step();
+    h.get_by_label("Open in Tool").click_accesskit();
+    h.step();
+    let app = h.state();
+    assert_eq!((app.ui.right, app.gp.tool), (Some(RightPane::Geoprocessing), Some("buffer")));
+    assert_eq!(app.gp.values.get("distance").map(String::as_str), Some("100"));
+    assert_eq!(app.gp.values.get("input").map(String::as_str), Some("Cities"));
+}
+
 /// A primary click in the middle of the map.
 fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     let at = egui::pos2(700.0, 500.0);

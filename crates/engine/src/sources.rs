@@ -346,6 +346,25 @@ pub fn holds_plain_key(params: &serde_json::Value) -> bool {
     walk(params, 0)
 }
 
+/// Text with every web address in it redacted (`sources::redact`): an error's text may quote the
+/// address asked for, or one a redirect led to, keys and all. Each address is redacted alone, so
+/// the words around it stay; punctuation that ends a sentence isn't taken as part of it.
+pub fn redact_text(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end();
+            let Some(at) = word.find("://") else { return piece.to_string() };
+            // The address starts at its scheme, after any quote or bracket before it.
+            let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
+            let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
+            let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
+            let (before, address, after) =
+                (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
+            format!("{before}{}{after}{}", redact(address), piece.get(word.len()..).unwrap_or(""))
+        })
+        .collect()
+}
+
 /// An address without what would give someone else the user's access: the user and password of
 /// a web address, query parameters that are keys, tokens or signatures (a signed blob's SAS, an
 /// S3 presigned URL), and a PostgreSQL connection string's password. A MySQL or MariaDB address

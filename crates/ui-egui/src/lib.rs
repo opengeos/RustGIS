@@ -1581,6 +1581,18 @@ impl RustGisApp {
             "ui.gp.open" => {
                 let tool = p.get("tool").and_then(Value::as_str).and_then(rustgis_engine::analysis::tool);
                 self.gp.open(tool.map(|t| t.id), &self.session);
+                // The values to start from, by parameter name (a run opened again from the History
+                // pane, #539): over the form's own.
+                if let (Some(spec), Some(given)) = (tool, p.get("values").and_then(Value::as_object)) {
+                    for param in spec.params {
+                        let text = match given.get(param.name) {
+                            Some(Value::String(t)) => t.clone(),
+                            None | Some(Value::Null) => continue,
+                            Some(other) => other.to_string(),
+                        };
+                        self.gp.values.insert(param.name, text);
+                    }
+                }
                 // A standalone table to run the tool on, by its id.
                 if let Some(id) = p.get("table").and_then(Value::as_u64).and_then(|id| u32::try_from(id).ok()) {
                     self.gp.pick_table(id, &self.session);

@@ -7838,6 +7838,64 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     assert_eq!(s.opened, opened + 1);
 }
 
+/// A run from the history as code (#539): a Python call, a Script pane line, a CLI command. A
+/// point buffered where the map was clicked goes by the command that ran it, with the point; keys
+/// are left out; a run from before the tool's id was kept is found by its name.
+#[test]
+fn a_run_is_copied_from_the_history_as_code() {
+    let mut s = world();
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).unwrap();
+    let r = &s.project.gp_history[0];
+    assert!((r.id.as_str(), r.at > 0) == ("buffer", true), "the id and when it ran are kept");
+    let code = |s: &mut Session, run: usize, kind: &str| -> Result<String, String> {
+        s.run("gp.historyCode", &json!({"run": run, "as": kind})).map(|v| v["code"].as_str().unwrap_or("").to_string())
+    };
+    let py = code(&mut s, 0, "python").unwrap();
+    assert!(py.starts_with("s.run(\n    \"gp.run\",\n    tool=\"buffer\",\n    params={\n"), "{py}");
+    assert!(py.contains("\"distance\": 100,") && py.contains("\"input\": \"Cities\",") && py.ends_with(")"), "{py}");
+    assert_eq!(code(&mut s, 0, "command").unwrap(), r#"gp.run {"params":{"distance":100,"input":"Cities"},"tool":"buffer"}"#);
+    let cli = code(&mut s, 0, "cli").unwrap();
+    assert!(
+        cli.starts_with("rustgis-cli run --project '")
+            && cli.ends_with(r#"--cmd 'gp.run={"params":{"distance":100,"input":"Cities"},"tool":"buffer"}'"#),
+        "{cli}"
+    );
+    // A point buffer: by its command, with the point.
+    s.run("gp.bufferPoint", &json!({"lon": 10, "lat": 50, "distance": 5})).unwrap();
+    let py = code(&mut s, 1, "python").unwrap();
+    assert!(py.contains("\"gp.bufferPoint\"") && py.contains("lon=10") && py.contains("lat=50") && py.contains("distance=5"), "{py}");
+    // From an older project: no id, found by its name; its address without the key.
+    let old = crate::GpRecord {
+        tool: "Buffer".into(),
+        id: String::new(),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1}),
+        command: None,
+        at: 0,
+        ok: false,
+        messages: vec!["no layer https://h.example/a?token=s3cr3t".into()],
+        millis: 0,
+        outputs: Vec::new(),
+    };
+    s.project.gp_history.push(old.clone());
+    let py = code(&mut s, 2, "python").unwrap();
+    assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
+    // Nothing tells which tool an unknown name was.
+    s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old });
+    assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
+    // The whole history: the project opened, each run in order; a failed run commented out, as
+    // is one that can't be run again.
+    let out = s.run("gp.historyScript", &Value::Null).unwrap();
+    let text = out["text"].as_str().unwrap();
+    assert!(text.contains("import rustgis\n\ns = rustgis.Session(") && text.contains("# 1. Buffer ("), "{text}");
+    assert!(text.contains("UTC)\ns.run(\n    \"gp.run\""), "{text}");
+    assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
+    assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
+    assert!(!text.contains("s3cr3t"));
+    assert!(out["fileName"].as_str().unwrap().ends_with(" history.py"));
+    s.project.gp_history.clear();
+    assert!(s.run("gp.historyScript", &Value::Null).is_err(), "nothing to save");
+}
+
 #[path = "../../../tests/support/ogc_server.rs"]
 mod ogc_server;
 
