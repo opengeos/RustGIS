@@ -251,14 +251,14 @@ pub fn write(tiles: Vec<(u8, u32, u32, Vec<u8>)>, a: &NewArchive) -> Result<Vec<
     };
     // Clustered; directories uncompressed; tiles as given.
     h.extend_from_slice(&[1, 1, if a.gzipped_tiles { 2 } else { 1 }, tile_type, min_zoom, max_zoom]);
-    let e7 = |v: f64| ((v.clamp(-180.0, 180.0) * 1e7).round() as i32).to_le_bytes();
+    let e7 = |v: f64, max: f64| ((v.clamp(-max, max) * 1e7).round() as i32).to_le_bytes();
     let [w, so, e, n] = a.bounds;
-    for v in [w, so, e, n] {
-        h.extend_from_slice(&e7(v));
+    for (v, max) in [(w, 180.0), (so, 90.0), (e, 180.0), (n, 90.0)] {
+        h.extend_from_slice(&e7(v, max));
     }
     h.push(min_zoom);
-    h.extend_from_slice(&e7((w + e) / 2.0));
-    h.extend_from_slice(&e7((so + n) / 2.0));
+    h.extend_from_slice(&e7((w + e) / 2.0, 180.0));
+    h.extend_from_slice(&e7((so + n) / 2.0, 90.0));
     Ok([h, root, meta, leaves, data].concat())
 }
 
@@ -810,6 +810,10 @@ pub(crate) mod tests {
         let (info, _, _) = parse_head(&bytes).unwrap();
         assert_eq!((info.tile_type, info.min_zoom, info.max_zoom), (TileType::Mvt, 0, 1));
         assert_eq!(info.bounds, [-10.0, -5.0, 10.0, 5.0]);
+        // Latitudes past the poles are clamped to them.
+        let far = NewArchive { bounds: [-200.0, -95.0, 200.0, 95.0], ..new(TileType::Mvt) };
+        let (info, _, _) = parse_head(&write(vec![(0, 0, 0, b"t".to_vec())], &far).unwrap()).unwrap();
+        assert_eq!(info.bounds, [-180.0, -90.0, 180.0, 90.0]);
         let a = p.display().to_string();
         assert_eq!(get(&format!("pmtiles:0/0/0@{a}")).unwrap(), b"zero");
         assert_eq!(get(&format!("pmtiles:1/0/0@{a}")).unwrap(), b"same");

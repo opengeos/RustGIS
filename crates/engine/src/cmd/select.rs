@@ -261,7 +261,7 @@ fn tile_features(s: &Session, lon: f64, lat: f64, tol_px: f64, first_layer: bool
                 .map(|(k, v)| {
                     let text = match v {
                         mvt::Value::String(t) => t.clone(),
-                        mvt::Value::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+                        mvt::Value::Number(n) if mvt::is_whole(*n) => format!("{}", *n as i64),
                         mvt::Value::Number(n) => n.to_string(),
                         mvt::Value::Bool(b) => b.to_string(),
                     };

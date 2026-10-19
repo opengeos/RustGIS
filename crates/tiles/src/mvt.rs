@@ -170,12 +170,17 @@ fn encode_layer(l: &Layer) -> Vec<u8> {
     out
 }
 
+/// Whether a number is whole and small enough to be written (and shown) as an integer exactly.
+pub fn is_whole(n: f64) -> bool {
+    n.fract() == 0.0 && n.abs() < 9.0e15
+}
+
 fn encode_value(v: &Value) -> Vec<u8> {
     let mut out = Vec::new();
     match v {
         Value::String(s) => put_bytes(&mut out, 1, s.as_bytes()),
         // Whole numbers as zigzag integers, the rest as doubles.
-        Value::Number(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => {
+        Value::Number(n) if is_whole(*n) => {
             let i = *n as i64;
             put_uint(&mut out, 6, ((i << 1) ^ (i >> 63)) as u64);
         }
