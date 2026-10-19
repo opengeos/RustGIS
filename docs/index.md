@@ -30,7 +30,7 @@ script from the command line, a notebook or the AI Assistant.
     globe or in any projection, on the desktop and in the browser; STAC catalogs, Overture
     Maps, OpenStreetMap, open-data portals and S3 buckets; SQL, DuckDB and live PostGIS,
     MySQL and MariaDB databases on the desktop.
-    [Data](user-guide/data.md) · [Formats](user-guide/data-formats.md) · [Maps](user-guide/maps.md)
+    [Data](user-guide/data.md) · [Web Data](user-guide/web-data.md) · [Formats](user-guide/data-formats.md) · [Maps](user-guide/maps.md)
 
 -   **Cartography**
 

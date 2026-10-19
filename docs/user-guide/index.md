@@ -5,6 +5,7 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
 | Page | What it covers |
 | --- | --- |
 | [Data](data.md) | Vector and raster formats, adding data, large files, raster display, project items |
+| [Web Data](web-data.md) | Public web services and catalogs: STAC, Overture Maps, OpenStreetMap, NASA, open-data portals, satellite embeddings |
 | [Supported Data Formats](data-formats.md) | Every format RustGIS reads and writes, how to add it, and its limits |
 | [Maps and Basemaps](maps.md) | Basemaps and web tile layers, projections, the 3D globe, view effects and navigation |
 | [Cartography](cartography.md) | Symbology, labeling, layer effects and graphics |

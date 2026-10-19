@@ -25,6 +25,7 @@ pub const PAGES: &[Page] = pages![
     "getting-started.md",
     "user-guide/index.md",
     "user-guide/data.md",
+    "user-guide/web-data.md",
     "user-guide/data-formats.md",
     "user-guide/maps.md",
     "user-guide/cartography.md",
