@@ -8035,7 +8035,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     let old = crate::GpRecord {
         tool: "Buffer".into(),
         id: String::new(),
-        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "odbc": "DRIVER=x;UID=me;PWD=odbcpw", "libpq": "host=db user=me password=libpqpw dbname=x", "gdal": "MYSQL:db,user=me,password=gdalpw", "password": "pa55word", "api_token": "abc123", "lookup": {"key": "NAME"}, "where": "key=5 AND sig=2", "quoted": "user=me password='top secret' dbname=x", "braced": "UID=me;PWD={a;b c};X=1", "pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpemsecret\n-----END RSA PRIVATE KEY-----\nafter", "service": {"url": "https://api.example.com", "key": "shortk"}}),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "odbc": "DRIVER=x;UID=me;PWD=odbcpw", "libpq": "host=db user=me password=libpqpw dbname=x", "gdal": "MYSQL:db,user=me,password=gdalpw", "password": "pa55word", "api_token": "abc123", "lookup": {"key": "NAME"}, "where": "key=5 AND sig=2", "quoted": "user=me password='top secret' dbname=x", "braced": "UID=me;PWD={a;b c};X=1", "pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpemsecret\n-----END RSA PRIVATE KEY-----\nafter", "service": {"url": "https://api.example.com", "key": "shortk"}, "escaped": "password='esc1\\' esc2' dbname=y"}),
         command: None,
         at: 0,
         ok: false,
@@ -8063,10 +8063,14 @@ fn a_run_is_copied_from_the_history_as_code() {
     );
     // A quoted or braced value goes whole; a private key pasted in goes; a plain `key` beside
     // an address is that service's key.
-    for secret in ["top", "secret'", "b c", "pemsecret", "shortk"] {
+    // An escaped quote (libpq's `\'`) doesn't close a quoted value.
+    for secret in ["top", "secret'", "b c", "pemsecret", "shortk", "esc1", "esc2"] {
         assert!(!py.contains(secret), "{secret} in {py}");
     }
-    assert!(py.contains("password= dbname=x") && py.contains("PWD=;X=1") && py.contains("after"), "{py}");
+    assert!(
+        py.contains("password= dbname=x") && py.contains("PWD=;X=1") && py.contains("after") && py.contains("password= dbname=y"),
+        "{py}"
+    );
     // A bare `key` in an expression is a field, kept.
     assert!(py.contains("key=5 AND sig=2"), "{py}");
     // A key is redacted as a value is.
