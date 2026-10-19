@@ -337,7 +337,8 @@ pub struct Session {
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
     /// A MapLibre style tile layer (by its address) whose own view the map goes to once it loads
-    /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
+    /// (`map.addTiles` with `"view": true`), or a PMTiles archive whose bounds it goes to, and the
+    /// camera then: moved since, the map stays.
     pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
@@ -648,8 +649,9 @@ impl Session {
         self.project.map_mut()
     }
 
-    /// Moves the map to the view of a style added with `"view": true` once the style has loaded
-    /// (the UI asks each frame). True when the map moved.
+    /// Moves the map to the view of a style added with `"view": true` once the style has loaded,
+    /// or to an archive's bounds once its header is read (the UI asks each frame). True when the
+    /// map moved.
     pub fn follow_style_view(&mut self) -> bool {
         cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
     }

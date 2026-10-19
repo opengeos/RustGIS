@@ -12,7 +12,7 @@ use rustgis_engine::map::symbology::{
     ClassRef, ClassStyle, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
     normalize_label,
 };
-use rustgis_engine::map::tiles::TileLayer;
+use rustgis_engine::map::tiles::{TileKind, TileLayer};
 use rustgis_engine::map::{
     ClassMethod, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
 };
@@ -1307,7 +1307,7 @@ fn visibility_box(ui: &Ui, cb: Rect, visible: bool, t: &Tokens) {
 }
 
 /// A web tile layer's row (index `i` of `count`, top first as the map lists them): its checkbox
-/// shows or hides it; right-click sets its opacity, moves it up or down (not with `reorder` off:
+/// shows or hides it; right-click zooms to it (an archive or GeoTIFF), sets its opacity, moves it up or down (not with `reorder` off:
 /// the list is filtered), or removes it.
 fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: bool, tile: &TileLayer, t: &Tokens) {
     let shown = if tile.overlay { format!("{} · {}", tile.name, tl!("overlay")) } else { tile.name.clone() };
@@ -1334,6 +1334,14 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
     }
     let resp = resp.on_hover_text(if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() });
     resp.context_menu(|ui| {
+        // An archive or GeoTIFF says what it covers.
+        if matches!(tile.kind, TileKind::PmTiles | TileKind::Cog) {
+            if ui.button(tl!("Zoom To Layer")).clicked() {
+                action = Some(("map.zoomToTiles", json!({"index": i})));
+                ui.close();
+            }
+            ui.separator();
+        }
         ui.horizontal(|ui| {
             ui.label(tl!("Opacity"));
             let mut o = tile.opacity * 100.0;

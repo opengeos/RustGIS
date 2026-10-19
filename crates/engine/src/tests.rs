@@ -4735,6 +4735,67 @@ fn pmtiles_archives_become_tile_layers() {
     assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
 }
 
+/// A tile-less PMTiles archive (an empty root directory) whose header gives these bounds
+/// (west, south, east, north).
+fn empty_pmtiles(bounds: [f64; 4]) -> Vec<u8> {
+    let mut h = b"PMTiles".to_vec();
+    h.push(3);
+    // Root directory (one byte: no entries), no metadata, leaves or tiles.
+    for v in [127u64, 1, 128, 0, 128, 0, 128, 0, 0, 0, 0] {
+        h.extend_from_slice(&v.to_le_bytes());
+    }
+    h.extend_from_slice(&[1, 1, 1, 1, 0, 6]); // clustered, no compression, vector tiles, zooms 0–6
+    for v in bounds {
+        h.extend_from_slice(&((v * 1e7) as i32).to_le_bytes());
+    }
+    h.extend_from_slice(&[0u8; 9]);
+    h.push(0);
+    h
+}
+
+/// An archive added frames the map on its bounds once its header is read, unless it covers the
+/// whole world; Zoom To Tile Layer goes there again, and a layer that can't say is refused.
+#[test]
+fn pmtiles_archives_frame_the_map_on_their_bounds() {
+    let dir = std::env::temp_dir().join(format!("rustgis-pmtiles-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let iceland = dir.join("iceland.pmtiles");
+    std::fs::write(&iceland, empty_pmtiles([-24.5, 63.3, -13.5, 66.6])).unwrap();
+    let world = dir.join("world.pmtiles");
+    std::fs::write(&world, empty_pmtiles([-180.0, -85.0, 180.0, 85.0])).unwrap();
+    let center = |s: &Session| rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    let wait = |s: &mut Session| {
+        let start = std::time::Instant::now();
+        while s.style_view.is_some() && start.elapsed() < std::time::Duration::from_secs(20) {
+            crate::cmd::tiles::follow_style_view(s, web_time::Duration::from_secs(5));
+        }
+    };
+
+    let mut s = Session::new(Project::default());
+    // A file's header is read as it is added: the next command sees the map moved.
+    s.run("layer.addData", &json!({"path": iceland.display().to_string()})).unwrap();
+    assert!(s.style_view.is_none());
+    let c = center(&s);
+    assert!((c.x + 19.0).abs() < 0.5 && (c.y - 65.0).abs() < 1.5, "{c:?}");
+
+    // A world archive leaves the map where it is.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera.center;
+    s.run("map.addTiles", &json!({"url": world.display().to_string()})).unwrap();
+    wait(&mut s);
+    assert_eq!(s.map().camera.center, before);
+
+    // Zoom To Tile Layer goes back to the first; a layer with no bounds is refused.
+    let r = s.run("map.zoomToTiles", &json!({"name": "iceland"})).unwrap();
+    assert_eq!(r["bounds"][0].as_f64().map(|w| (w + 24.5).abs() < 1e-6), Some(true), "{r}");
+    let c = center(&s);
+    assert!((c.x + 19.0).abs() < 0.5, "{c:?}");
+    s.run("map.addTiles", &json!({"url": "https://tile.example.com/{z}/{x}/{y}.png", "name": "xyz"})).unwrap();
+    assert!(s.run("map.zoomToTiles", &json!({"name": "xyz"})).is_err());
+    assert!(s.run("map.zoomToTiles", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// An MBTiles file of one red picture tile: added by path or as an upload, it is a tile layer that
 /// draws, survives a project round trip (by path), and a file that isn't an archive is refused.
 #[test]

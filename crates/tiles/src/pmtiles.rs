@@ -64,8 +64,8 @@ pub struct Info {
     leaf_length: u64,
     data_offset: u64,
     data_length: u64,
-    internal_gzip: bool,
-    tile_gzip: bool,
+    internal: Compression,
+    tile: Compression,
 }
 
 impl Info {
@@ -81,6 +81,40 @@ impl Info {
     /// The metadata's attribution, if any.
     pub fn attribution(&self) -> String {
         self.metadata.get("attribution").and_then(Value::as_str).unwrap_or_default().to_string()
+    }
+}
+
+/// How directories, metadata or tiles are compressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Compression {
+    None,
+    Gzip,
+    Brotli,
+    Zstd,
+}
+
+impl Compression {
+    /// Decompresses bytes (bounded, as gzip is).
+    fn decode(self, b: Vec<u8>) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let limit = MAX_BYTES as u64 * 4;
+        let bounded = |r: &mut dyn Read, what: &str| {
+            let mut out = Vec::new();
+            r.take(limit + 1).read_to_end(&mut out).map_err(|e| format!("{what}: {e}"))?;
+            if out.len() as u64 > limit {
+                return Err(format!("{what}: too large once decompressed"));
+            }
+            Ok(out)
+        };
+        match self {
+            Compression::None => Ok(b),
+            Compression::Gzip => gunzip(&b),
+            Compression::Brotli => bounded(&mut brotli_decompressor::Decompressor::new(b.as_slice(), 4096), "Brotli"),
+            Compression::Zstd => {
+                let mut d = ruzstd::decoding::StreamingDecoder::new(b.as_slice()).map_err(|e| format!("Zstandard: {e}"))?;
+                bounded(&mut d, "Zstandard")
+            }
+        }
     }
 }
 
@@ -245,7 +279,7 @@ fn load(archive: String) {
                         Box::new(move |m| {
                             // Unreadable metadata only loses the layer names and credits.
                             if let Ok(m) = m {
-                                let m = if info.internal_gzip { gunzip(&m).unwrap_or_default() } else { m };
+                                let m = info.internal.decode(m).unwrap_or_default();
                                 info.metadata = serde_json::from_slice(&m).unwrap_or(Value::Null);
                             }
                             finish(&a2, Ok(info));
@@ -313,14 +347,14 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
         return;
     };
     if e.run_length > 0 {
-        let gz = info.tile_gzip;
+        let tile = info.tile;
         // Within the tile data section (when the header gives its length).
         let inside = info.data_length == 0 || e.offset.saturating_add(e.length) <= info.data_length;
         let Some(at) = info.data_offset.checked_add(e.offset).filter(|_| inside) else {
             done(Err("a tile outside the archive".into()));
             return;
         };
-        read(&archive, at, e.length, Box::new(move |b| done(b.and_then(|b| if gz { gunzip(&b) } else { Ok(b) }))));
+        read(&archive, at, e.length, Box::new(move |b| done(b.and_then(|b| tile.decode(b)))));
         return;
     }
     // A leaf directory.
@@ -372,7 +406,7 @@ fn find(archive: String, info: Arc<Info>, id: u64, dir: Arc<Vec<Entry>>, depth: 
         at,
         e.length,
         Box::new(move |b| {
-            let leaf = b.and_then(|b| if info.internal_gzip { gunzip(&b) } else { Ok(b) }).and_then(|b| parse_dir(&b)).map(Arc::new);
+            let leaf = b.and_then(|b| info.internal.decode(b)).and_then(|b| parse_dir(&b)).map(Arc::new);
             let waiting = {
                 let mut l = leaves().lock().unwrap_or_else(|e| e.into_inner());
                 let w = match &leaf {
@@ -468,14 +502,14 @@ fn parse_head(b: &[u8]) -> Result<(Info, u64, u64), String> {
     let (leaf_offset, leaf_length, data_offset, data_length) = (g(40)?, g(48)?, g(56)?, g(64)?);
     let byte = |i: usize| b.get(i).copied().ok_or("a truncated PMTiles header");
     let compression = |c: u8, what: &str| match c {
-        0 | 1 => Ok(false),
-        2 => Ok(true),
-        3 => Err(format!("{what} compressed with Brotli isn't read")),
-        4 => Err(format!("{what} compressed with Zstandard isn't read")),
+        0 | 1 => Ok(Compression::None),
+        2 => Ok(Compression::Gzip),
+        3 => Ok(Compression::Brotli),
+        4 => Ok(Compression::Zstd),
         c => Err(format!("unknown {what} compression {c}")),
     };
-    let internal_gzip = compression(byte(97)?, "directories")?;
-    let tile_gzip = compression(byte(98)?, "tiles")?;
+    let internal = compression(byte(97)?, "directories")?;
+    let tile = compression(byte(98)?, "tiles")?;
     let tile_type = match byte(99)? {
         1 => TileType::Mvt,
         2 => TileType::Png,
@@ -492,7 +526,7 @@ fn parse_head(b: &[u8]) -> Result<(Info, u64, u64), String> {
     let raw = b
         .get(usize::try_from(root_at).map_err(|_| "bad offset")?..usize::try_from(root_end).map_err(|_| "bad offset")?)
         .ok_or("bad offset")?;
-    let raw = if internal_gzip { gunzip(raw)? } else { raw.to_vec() };
+    let raw = internal.decode(raw.to_vec())?;
     let root = parse_dir(&raw)?;
     let info = Info {
         tile_type,
@@ -505,8 +539,8 @@ fn parse_head(b: &[u8]) -> Result<(Info, u64, u64), String> {
         leaf_length,
         data_offset,
         data_length,
-        internal_gzip,
-        tile_gzip,
+        internal,
+        tile,
     };
     Ok((info, meta_at, meta_len.min(MAX_BYTES as u64)))
 }
@@ -606,6 +640,12 @@ mod tests {
         for n in 0..b.len() {
             let _ = parse_dir(&b[..n]);
         }
+        // Junk that claims to be compressed fails rather than panics.
+        for c in [Compression::Gzip, Compression::Brotli, Compression::Zstd] {
+            for junk in [&b""[..], b"\x1f\x8b", b"\xff\xff\xff\xff", b"\x28\xb5\x2f\xfd\x00"] {
+                let _ = c.decode(junk.to_vec());
+            }
+        }
         assert!(parse_head(b"PMTiles\x02").is_err());
         assert!(parse_head(b"nope").is_err());
         assert!(parse_url("pmtiles:3/1/2@https://x/a.pmtiles").is_some());
@@ -646,6 +686,35 @@ mod tests {
 
     /// A PMTiles archive of `tiles` (uncompressed), its directory in the root or in a leaf.
     pub(crate) fn archive(tiles: &[(u8, u32, u32, Vec<u8>)], tile_type: u8, leaf: bool, metadata: &str) -> Vec<u8> {
+        archive_with(tiles, tile_type, leaf, metadata, 1)
+    }
+
+    /// Compresses bytes as the header's compression code says (1 none, 2 gzip, 3 Brotli, 4 Zstandard).
+    fn compress(b: &[u8], code: u8) -> Vec<u8> {
+        use std::io::Write;
+        match code {
+            2 => {
+                let mut gz = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
+                gz.extend(miniz_oxide::deflate::compress_to_vec(b, 6));
+                gz.extend([0u8; 8]);
+                gz
+            }
+            3 => {
+                let mut out = Vec::new();
+                let mut w = brotli::CompressorWriter::new(&mut out, 4096, 5, 22);
+                w.write_all(b).unwrap();
+                drop(w);
+                out
+            }
+            4 => ruzstd::encoding::compress_to_vec(b, ruzstd::encoding::CompressionLevel::Fastest),
+            _ => b.to_vec(),
+        }
+    }
+
+    /// An archive whose directories, metadata and tiles are compressed with `code`.
+    fn archive_with(tiles: &[(u8, u32, u32, Vec<u8>)], tile_type: u8, leaf: bool, metadata: &str, code: u8) -> Vec<u8> {
+        let tiles: Vec<(u8, u32, u32, Vec<u8>)> = tiles.iter().map(|(z, x, y, b)| (*z, *x, *y, compress(b, code))).collect();
+        let dir = |e: &[Entry]| compress(&dir(e), code);
         let mut tiles: Vec<(u64, &Vec<u8>)> = tiles.iter().map(|(z, x, y, b)| (tile_id(*z, *x, *y), b)).collect();
         tiles.sort_by_key(|t| t.0);
         let mut data = Vec::new();
@@ -660,7 +729,8 @@ mod tests {
         } else {
             (dir(&entries), Vec::new())
         };
-        let meta = metadata.as_bytes();
+        let meta = compress(metadata.as_bytes(), code);
+        let meta = meta.as_slice();
         let root_at = 127u64;
         let meta_at = root_at + root.len() as u64;
         let leaf_at = meta_at + meta.len() as u64;
@@ -672,7 +742,7 @@ mod tests {
         }
         h.extend_from_slice(&[0u8; 24]);
         h.push(1); // clustered
-        h.extend_from_slice(&[1, 1, tile_type, 0, 2]); // no compression; type; zooms 0–2
+        h.extend_from_slice(&[code, code, tile_type, 0, 2]); // compression; type; zooms 0–2
         for v in [-1_800_000_000i32, -850_000_000, 1_800_000_000, 850_000_000] {
             h.extend_from_slice(&v.to_le_bytes());
         }
@@ -693,9 +763,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rustgis-pmtiles-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let tiles = vec![(0u8, 0u32, 0u32, b"zero".to_vec()), (1, 1, 0, b"one-one-zero".to_vec()), (2, 3, 3, b"two".to_vec())];
-        for leaf in [false, true] {
-            let p = dir.join(format!("t{leaf}.pmtiles"));
-            std::fs::write(&p, archive(&tiles, 1, leaf, r#"{"vector_layers":[{"id":"roads"}],"attribution":"Test"}"#)).unwrap();
+        // Uncompressed, gzip, Brotli and Zstandard archives.
+        for (leaf, code) in [false, true].into_iter().flat_map(|l| (1..=4).map(move |c| (l, c))) {
+            let p = dir.join(format!("t{leaf}{code}.pmtiles"));
+            std::fs::write(&p, archive_with(&tiles, 1, leaf, r#"{"vector_layers":[{"id":"roads"}],"attribution":"Test"}"#, code)).unwrap();
             let a = p.display().to_string();
             let mut i = info(&a).unwrap();
             for _ in 0..200 {
@@ -711,7 +782,7 @@ mod tests {
             assert_eq!(i.vector_layers(), vec!["roads".to_string()]);
             assert_eq!(i.attribution(), "Test");
             for (z, x, y, b) in &tiles {
-                assert_eq!(&get(&format!("pmtiles:{z}/{x}/{y}@{a}")).unwrap(), b, "{z}/{x}/{y} leaf={leaf}");
+                assert_eq!(&get(&format!("pmtiles:{z}/{x}/{y}@{a}")).unwrap(), b, "{z}/{x}/{y} leaf={leaf} compression={code}");
             }
             // Not in the archive, outside its zooms, or not a tile of its zoom: no tile.
             assert!(get(&format!("pmtiles:1/0/0@{a}")).unwrap().is_empty());

@@ -20,6 +20,9 @@ tiny-skia = { workspace = true }
 image = { workspace = true, features = ["jpeg", "webp"] }
 # Vector tiles are sometimes served gzipped without saying so.
 miniz_oxide = { workspace = true }
+# PMTiles archives may be compressed with Brotli or Zstandard instead of gzip.
+brotli-decompressor = { workspace = true }
+ruzstd = { workspace = true }
 # S3 requests are signed (Signature Version 4) and its listings are XML.
 sha2 = { workspace = true }
 roxmltree = { workspace = true }
@@ -27,3 +30,7 @@ roxmltree = { workspace = true }
 # Fetching tiles on worker threads. The browser fetches them itself (see `set_fetcher`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+
+[dev-dependencies]
+# Tests write Brotli-compressed PMTiles archives.
+brotli = { version = "~9.0.0", default-features = false, features = ["std"] }
