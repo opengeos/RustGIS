@@ -440,7 +440,11 @@ fn fields_add(s: &mut Session, p: &Value) -> CmdResult {
         &json!({"url": url, "kind": "pmtiles", "name": name, "overlay": true, "maxZoom": 16,
             "attribution": "Fields of the World (CC BY 4.0)", "styleLayers": fields_style(density, fields, min_score)}),
     )?;
-    s.map_mut().tiles.retain(|t| !(t.url == url && t.overlay && t.name != name && (t.name == both || (density && fields))));
+    // Only the year's own looks go: another overlay of the archive, named by the user, stays.
+    let parts = [format!("{both} fields"), format!("{both} density")];
+    s.map_mut()
+        .tiles
+        .retain(|t| !(t.url == url && t.overlay && t.name != name && (t.name == both || (density && fields && parts.contains(&t.name)))));
     // The view's Web Mercator zoom (known on the Web Mercator map and the globe, whose camera
     // counts Web Mercator metres; another projection's units differ).
     let mercator = matches!(s.map().projection, rustgis_map::globe::Projection::WebMercator | rustgis_map::globe::Projection::Globe);

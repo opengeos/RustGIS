@@ -5145,9 +5145,12 @@ fn fields_of_the_world_looks() {
     let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, ["Fields of the World 2024 fields", "Fields of the World 2024 density"]);
     assert!(s.map().tiles[0].style_layers.contains("50"));
-    // Both replaces the parts; a part then replaces both.
+    // Both replaces the parts (not another overlay of the archive); a part then replaces both.
+    let url = crate::cmd::webdata::fields_url(2024);
+    s.run("map.addTiles", &json!({"url": url, "kind": "pmtiles", "name": "My fields", "overlay": true})).unwrap();
     s.run("fieldsOfTheWorld.add", &json!({"year": 2024})).unwrap();
-    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024"]);
+    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024", "My fields"]);
+    s.run("map.removeTiles", &json!({"name": "My fields"})).unwrap();
     s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "density"})).unwrap();
     assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024 density"]);
 }
