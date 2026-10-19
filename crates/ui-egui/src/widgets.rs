@@ -15,17 +15,10 @@ pub fn text_w(ui: &Ui, s: &str, font: egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|f| f.layout_no_wrap(s.to_string(), font, egui::Color32::WHITE).size().x)
 }
 
-/// Shortcut text (`⌘S` on macOS, `Ctrl+S` elsewhere).
+/// The shortcut of a command run without parameters (`⌘S` on macOS, `Ctrl+S` elsewhere), or
+/// empty for none.
 pub fn shortcut_text(app: &RustGisApp, id: &str) -> String {
-    let Some(spec) = app.session.registry.get(id) else { return String::new() };
-    if spec.shortcut.is_empty() {
-        return String::new();
-    }
-    if cfg!(target_os = "macos") {
-        spec.shortcut.replace("Mod+", "⌘").replace("Shift+", "⇧")
-    } else {
-        spec.shortcut.replace("Mod+", "Ctrl+")
-    }
+    crate::keymap::shortcut_text(app, id, &Value::Null)
 }
 
 /// Whether a command exists and is enabled now.
@@ -40,9 +33,10 @@ pub fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
     app.session.registry.get(id).and_then(|s| (s.enabled)(&app.session))
 }
 
-/// A rich tooltip: title (with shortcut), description and why it's disabled.
-pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &str) -> Response {
-    let sc = shortcut_text(app, id);
+/// A rich tooltip: title (with the shortcut of `id` with `params`), description and why it's
+/// disabled.
+pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &str, params: &Value) -> Response {
+    let sc = crate::keymap::shortcut_text(app, id, params);
     let why = why_disabled(app, id);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
@@ -116,7 +110,7 @@ pub fn big(
         }
         y += 13.5;
     }
-    let resp = tooltip(app, resp, &label.replace('\n', " "), desc, id);
+    let resp = tooltip(app, resp, &label.replace('\n', " "), desc, id, &params);
     crate::showme::ring(ui, app, r, id, &params);
     if resp.clicked() && on && !menu {
         let _ = app.run(id, params);
@@ -146,7 +140,7 @@ pub fn small(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &
         );
     }
     let title = if label.is_empty() { desc } else { label };
-    let resp = tooltip(app, resp, title, if label.is_empty() { "" } else { desc }, id);
+    let resp = tooltip(app, resp, title, if label.is_empty() { "" } else { desc }, id, &params);
     crate::showme::ring(ui, app, r, id, &params);
     if resp.clicked() && on {
         let _ = app.run(id, params);
@@ -208,7 +202,7 @@ fn small_menu_with(
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(18.0, 18.0)), icon, t.icon, t.accent);
     ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.5), t.text);
     caret(ui.painter(), pos2(r.max.x - 9.0, r.center().y), t.text);
-    let resp = tooltip(app, resp, label, desc, "ui.menu");
+    let resp = tooltip(app, resp, label, desc, "ui.menu", &Value::Null);
     egui::Popup::menu(&resp).close_behavior(close).show(|ui| {
         ui.set_min_width(200.0);
         menu(ui, app);
@@ -234,7 +228,7 @@ const MENU_ICON_W: f32 = 22.0;
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
     let on = enabled(app, id);
-    let shortcut = shortcut_text(app, id);
+    let shortcut = crate::keymap::shortcut_text(app, id, &params);
     if menu_row(ui, icon, tl!(label), &shortcut, on).clicked() {
         let _ = app.run(id, params);
         ui.close();

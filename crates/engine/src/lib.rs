@@ -35,7 +35,8 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Where it lives in the UI: `Home › Navigate`, `Analyze › Geoprocessing`…
     pub location: &'static str,
-    /// Default shortcut (`Mod+S`, `F5`); `Mod` = Ctrl, or ⌘ on macOS.
+    /// Default shortcut (`Mod+S`, `F5`); `Mod` = Ctrl, or ⌘ on macOS. The UI's keymap adds it
+    /// to its own defaults when the key is free.
     pub shortcut: &'static str,
     /// Parameter description for scripts and agents.
     pub params: &'static str,

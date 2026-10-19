@@ -117,12 +117,17 @@ Every change is a command, and every command can be undone (++ctrl+z++) and redo
 | --- | --- |
 | ++ctrl+k++ | Command search |
 | ++ctrl+n++ / ++ctrl+o++ / ++ctrl+s++ | New / Open / Save project |
-| ++ctrl+z++ / ++ctrl+y++ | Undo / Redo |
+| ++ctrl+shift+s++ | Save project as |
+| ++ctrl+z++ | Undo |
+| ++ctrl+y++ / ++ctrl+shift+z++ | Redo |
 | ++ctrl+t++ | Attribute table |
 | ++ctrl+f1++ | Collapse or expand the ribbon |
+| ++ctrl+equal++ / ++ctrl+minus++ | Zoom in / out |
 | ++home++ | Full extent |
 | ++esc++ | Back to Explore; cancel a sketch |
 | ++delete++ | Delete selected features |
+| ++ctrl+d++ | Duplicate the selected layout element |
 | ++ctrl+c++ / ++ctrl+x++ / ++ctrl+v++ | Copy / Cut / Paste features |
 
-**Help › Shortcuts** lists them all in the app.
+On macOS, ++cmd++ takes the place of ++ctrl++. **Help › Shortcuts** lists them all in the app,
+from the same table the app runs them from.

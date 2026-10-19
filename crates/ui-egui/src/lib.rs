@@ -30,6 +30,7 @@ mod geocodeui;
 mod globe_drape;
 mod graphicformat;
 pub mod icons;
+mod keymap;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
 mod localagents;
@@ -455,6 +456,8 @@ pub struct UiState {
     pub show_me: Option<showme::ShowMe>,
     pub about: bool,
     pub shortcuts: bool,
+    /// The keyboard shortcuts.
+    pub keymap: keymap::Keymap,
     pub tab_strip_rect: Option<egui::Rect>,
     /// Tabs hidden from the ribbon (Settings › Customize › Ribbon).
     pub hidden_tabs: Vec<String>,
@@ -615,6 +618,7 @@ impl Default for UiState {
             show_me: None,
             about: false,
             shortcuts: false,
+            keymap: keymap::Keymap::default(),
             tab_strip_rect: None,
             copy_out: None,
             open_url: None,
@@ -750,9 +754,10 @@ impl RustGisApp {
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
         }
+        let ui = UiState { keymap: keymap::Keymap::new(&s.registry), ..UiState::default() };
         RustGisApp {
             session: s,
-            ui: UiState::default(),
+            ui,
             map: mapview::MapView::default(),
             dialogs: dialogs::Dialogs::default(),
             gp: panes::GpForm::default(),

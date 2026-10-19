@@ -471,56 +471,42 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     // The search box was typed in until egui took its focus away on Escape: that Escape clears
     // the box, not the tool.
     let typing = ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, ctx.cumulative_pass_nr());
-    let cmd = Modifiers::COMMAND;
     // An element selected in the open layout, for the layout's own keys.
     let element = app.session.active_layout.is_some() && app.layout.selected.is_some();
-    let mut run: Vec<(&str, Value)> = Vec::new();
+    let mut run: Vec<(String, Value)> = Vec::new();
+    let keymap = &app.ui.keymap;
     ctx.input_mut(|i| {
-        for (m, k, id) in [
-            (cmd, Key::Z, "edit.undo"),
-            (cmd, Key::Y, "edit.redo"),
-            (cmd | Modifiers::SHIFT, Key::Z, "edit.redo"),
-            (cmd, Key::S, "ui.save"),
-            (cmd | Modifiers::SHIFT, Key::S, "ui.saveAs"),
-            (cmd, Key::O, "ui.open"),
-            (cmd, Key::N, "project.new"),
-            (cmd, Key::K, "ui.commandSearch"),
-            (cmd, Key::F1, "ui.ribbon"),
-            (cmd, Key::T, "table.open"),
-            (cmd, Key::Equals, "map.zoomIn"),
-            (cmd, Key::Plus, "map.zoomIn"),
-            (cmd, Key::Minus, "map.zoomOut"),
-        ] {
-            if i.consume_shortcut(&KeyboardShortcut::new(m, k)) {
-                run.push((id, Value::Null));
+        for b in keymap.match_order() {
+            // Keys without Ctrl (⌘) type text while a text field has focus.
+            if typing && !b.chord.command {
+                continue;
+            }
+            // Duplicating needs a selected layout element; without one the key is left alone.
+            if b.command == "layout.duplicateElement" && !element {
+                continue;
+            }
+            if i.consume_shortcut(&KeyboardShortcut::new(b.chord.modifiers(), b.chord.key)) {
+                run.push((b.command.clone(), b.params.clone()));
             }
         }
         if !typing {
-            if i.consume_key(Modifiers::NONE, Key::Escape) {
-                run.push(("tool.set", json!({"tool": "explore"})));
-            }
             // A Mac keyboard's delete key is Backspace: it deletes a layout element too.
-            if i.consume_key(Modifiers::NONE, Key::Delete) || (element && i.consume_key(Modifiers::NONE, Key::Backspace)) {
-                run.push(("edit.delete", Value::Null));
-            }
-            if element && i.consume_shortcut(&KeyboardShortcut::new(cmd, Key::D)) {
-                run.push(("layout.duplicateElement", Value::Null));
-            }
-            if i.consume_key(Modifiers::NONE, Key::Home) {
-                run.push(("map.zoomFull", Value::Null));
+            if element && i.consume_key(Modifiers::NONE, Key::Backspace) {
+                run.push(("edit.delete".into(), Value::Null));
             }
             // Clipboard keys arrive as events, not key presses.
             for e in &i.events {
                 match e {
-                    egui::Event::Copy => run.push(("ui.copy", Value::Null)),
-                    egui::Event::Cut => run.push(("ui.cut", Value::Null)),
-                    egui::Event::Paste(text) => run.push(("edit.paste", json!({"text": text}))),
+                    egui::Event::Copy => run.push(("ui.copy".into(), Value::Null)),
+                    egui::Event::Cut => run.push(("ui.cut".into(), Value::Null)),
+                    egui::Event::Paste(text) => run.push(("edit.paste".into(), json!({"text": text}))),
                     _ => {}
                 }
             }
         }
     });
-    for (id, p) in run {
+    for (id, p) in &run {
+        let (id, p) = (id.as_str(), p.clone());
         if id == "tool.set" {
             app.map.cancel_sketch();
             app.layout.cancel_tool();
@@ -578,6 +564,34 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         let _ = app.run(id, p);
     }
 }
+
+/// The `ui.*` commands Command Search lists: (id, label, ribbon location).
+pub(crate) const UI_COMMANDS: &[(&str, &str, &str)] = &[
+    ("ui.addData", "Add Data…", "Home › Add"),
+    ("ui.addDelimited", "Add Delimited Text…", "Home › Add"),
+    ("ui.addUrl", "Add Data From URL…", "Home › Add"),
+    ("ui.addZarr", "Add Zarr Variable…", "Home › Add"),
+    ("ui.addService", "Add From Service…", "Home › Add"),
+    ("ui.searchOpenData", "Search Open Data…", "Home › Web Data"),
+    ("ui.stac.planet", "Planet Open Data…", "Home › Web Data"),
+    ("ui.stac.portolan", "Portolan…", "Home › Web Data"),
+    ("ui.stac.sentinel2", "Sentinel-2 Explorer…", "Home › Web Data"),
+    ("ui.stac.vantor", "Vantor…", "Home › Web Data"),
+    ("ui.stac.usgsLidar", "USGS LiDAR…", "Home › Web Data › United States"),
+    ("ui.pane.sources", "Data Sources Pane", "View › Windows"),
+    ("ui.plugins", "Plugin Manager…", "Plugins"),
+    ("ui.mcpRelay", "MCP Relay", "Help › Help"),
+    ("ui.pane.geoprocessing", "Tools Pane", "View › Windows"),
+    ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
+    ("ui.pane.assistant", "AI Assistant", "Analyze › AI"),
+    ("ui.pane.sql", "SQL Pane", "Analyze › Workflows"),
+    ("ui.pane.directions", "Directions", "Home › Navigate"),
+    ("ui.pane.bookmarks", "Bookmarks Pane", "Home › Navigate › Bookmarks"),
+    ("ui.theme", "Toggle Dark Mode", "View"),
+    ("ui.map.gpu", "Toggle GPU Rendering", "View"),
+    ("ui.exportMap", "Export Map…", "Publish › Output"),
+    ("ui.checkUpdate", "Check for Updates…", "Help › Help"),
+];
 
 /// The command palette: type to filter every command, Enter runs the first.
 pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -671,32 +685,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 hits.push((format!("panel:{}", m.id), label, format!("{} › {}", tl!("Plugins"), m.translate(lang, &m.name))));
             }
         }
-        for (id, label, loc) in [
-            ("ui.addData", "Add Data…", "Home › Add"),
-            ("ui.addDelimited", "Add Delimited Text…", "Home › Add"),
-            ("ui.addUrl", "Add Data From URL…", "Home › Add"),
-            ("ui.addZarr", "Add Zarr Variable…", "Home › Add"),
-            ("ui.addService", "Add From Service…", "Home › Add"),
-            ("ui.searchOpenData", "Search Open Data…", "Home › Web Data"),
-            ("ui.stac.planet", "Planet Open Data…", "Home › Web Data"),
-            ("ui.stac.portolan", "Portolan…", "Home › Web Data"),
-            ("ui.stac.sentinel2", "Sentinel-2 Explorer…", "Home › Web Data"),
-            ("ui.stac.vantor", "Vantor…", "Home › Web Data"),
-            ("ui.stac.usgsLidar", "USGS LiDAR…", "Home › Web Data › United States"),
-            ("ui.pane.sources", "Data Sources Pane", "View › Windows"),
-            ("ui.plugins", "Plugin Manager…", "Plugins"),
-            ("ui.mcpRelay", "MCP Relay", "Help › Help"),
-            ("ui.pane.geoprocessing", "Tools Pane", "View › Windows"),
-            ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
-            ("ui.pane.assistant", "AI Assistant", "Analyze › AI"),
-            ("ui.pane.sql", "SQL Pane", "Analyze › Workflows"),
-            ("ui.pane.directions", "Directions", "Home › Navigate"),
-            ("ui.pane.bookmarks", "Bookmarks Pane", "Home › Navigate › Bookmarks"),
-            ("ui.theme", "Toggle Dark Mode", "View"),
-            ("ui.map.gpu", "Toggle GPU Rendering", "View"),
-            ("ui.exportMap", "Export Map…", "Publish › Output"),
-            ("ui.checkUpdate", "Check for Updates…", "Help › Help"),
-        ] {
+        for &(id, label, loc) in UI_COMMANDS {
             // The web app always serves the latest release (no Check for Updates button) and is
             // one process a loopback relay could not reach (`ui.mcpRelay` is desktop only).
             if matches!(id, "ui.checkUpdate" | "ui.mcpRelay") && cfg!(target_arch = "wasm32") {
@@ -721,8 +710,15 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 // Unavailable commands stay listed, greyed out, with the reason on hover.
                 let on = id.starts_with("gp:") || id.starts_with("panel:") || enabled(app, id);
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
-                if show_loc {
-                    b = b.right_text(egui::RichText::new(loc).size(11.0).weak());
+                // The command's shortcut after its location.
+                let keys = if id.contains(':') { String::new() } else { crate::keymap::shortcut_text(app, id, &Value::Null) };
+                let right = match (show_loc, keys.is_empty()) {
+                    (true, false) => format!("{loc}   {keys}"),
+                    (true, true) => loc.clone(),
+                    (false, _) => keys,
+                };
+                if !right.is_empty() {
+                    b = b.right_text(egui::RichText::new(right).size(11.0).weak());
                 }
                 // The scroll area would clip a fill wider than the row.
                 let mut resp = row_button(ui, on, b, 0.0);
@@ -806,23 +802,34 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
                 egui::Grid::new("keys").striped(true).spacing(vec2(24.0, 6.0)).show(ui, |ui| {
+                    // The keys that run now, from the keymap.
+                    let rows: Vec<(String, String)> = app
+                        .ui
+                        .keymap
+                        .grouped()
+                        .into_iter()
+                        .map(|(command, params, keys)| {
+                            let keys: Vec<String> = keys.into_iter().map(crate::keymap::Chord::text).collect();
+                            (keys.join(" / "), crate::keymap::label(app, command, params))
+                        })
+                        .collect();
+                    for (k, d) in &rows {
+                        ui.label(egui::RichText::new(k).monospace());
+                        ui.label(d);
+                        ui.end_row();
+                    }
+                    let (copy, cut, paste) =
+                        if cfg!(target_os = "macos") { ("⌘C", "⌘X", "⌘V") } else { ("Ctrl+C", "Ctrl+X", "Ctrl+V") };
+                    let clipboard = format!("{copy} / {cut} / {paste}");
                     for (k, d) in [
-                        ("Ctrl+K", "Command Search"),
-                        ("Ctrl+N / O / S", "New / Open / Save project"),
-                        ("Ctrl+Z / Ctrl+Y", "Undo / Redo"),
-                        ("Ctrl+T", "Attribute table"),
-                        ("Ctrl+F1", "Collapse or expand the ribbon"),
-                        ("Ctrl+= / Ctrl+-", "Zoom in / out"),
-                        ("Home", "Full extent"),
-                        ("Esc", "Back to Explore; cancel a sketch"),
-                        ("Delete", "Delete selected features"),
+                        (clipboard.as_str(), "Copy / Cut / Paste features"),
                         ("Mouse wheel", "Zoom about the pointer"),
                         ("Drag / middle-drag", "Pan (Explore) · any tool"),
                         ("Shift+drag", "Zoom to a box (Explore)"),
                         ("Double-click", "Zoom in · finish a sketch"),
                     ] {
-                        ui.label(egui::RichText::new(k).monospace());
-                        ui.label(d);
+                        ui.label(egui::RichText::new(tl!(k)).monospace());
+                        ui.label(tl!(d));
                         ui.end_row();
                     }
                 });

@@ -2064,3 +2064,34 @@ fn a_shortcut_that_cannot_run_says_why() {
     h.step();
     assert!(h.state().session.notices_since(mark).is_empty());
 }
+
+#[test]
+fn ctrl_shift_z_redoes_rather_than_undoing() {
+    let mut h = harness();
+    h.step();
+    let rows =
+        |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer_by_name("Countries").map(|l| l.dataset.features.len());
+    let before = rows(&h);
+    h.state_mut().run("select.rows", json!({"layer": "Countries", "rows": [0]})).unwrap();
+    h.state_mut().run("edit.delete", json!(null)).unwrap();
+    let deleted = rows(&h);
+    assert_ne!(deleted, before);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.step();
+    assert_eq!(rows(&h), before, "Ctrl+Z undoes");
+    // egui ignores an extra Shift when matching: the more specific key has to be tried first.
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
+    h.step();
+    assert_eq!(rows(&h), deleted, "Ctrl+Shift+Z redoes");
+}
+
+#[test]
+fn help_shortcuts_lists_the_keymap() {
+    let mut h = harness();
+    h.step();
+    h.state_mut().run("ui.shortcuts", json!(null)).unwrap();
+    h.step();
+    let undo = if cfg!(target_os = "macos") { "⌘Z" } else { "Ctrl+Z" };
+    assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
+    assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
+}
