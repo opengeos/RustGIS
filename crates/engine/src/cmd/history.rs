@@ -107,21 +107,26 @@ pub fn tool_of(r: &GpRecord) -> Option<String> {
 
 /// `v` without what would give someone else the user's access: an address's keys, tokens and
 /// passwords, a connection's password, and a value under a name that says it is a secret (a
-/// `password`, an `api_token`; a plain `key` only when it reads as one), left empty. An
-/// object's keys too: the file may put anything there.
+/// `password`, an `api_token`; a plain `key` when it reads as one or sits beside a web address,
+/// as `sources::holds_secret` judges it), left empty. An object's keys too: the file may put
+/// anything there.
 fn redacted(v: &Value) -> Value {
     use crate::sources::{looks_like_a_key, secret_key};
-    let secret = |k: &str, v: &Value| {
-        secret_key(k)
-            && !matches!(v, Value::Bool(_) | Value::Null)
-            && (!k.eq_ignore_ascii_case("key") || v.as_str().is_some_and(looks_like_a_key))
-    };
     match v {
         Value::String(t) => Value::String(redacted_text(t)),
         Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
-        Value::Object(o) => Value::Object(
-            o.iter().map(|(k, v)| (redacted_text(k), if secret(k, v) { Value::String(String::new()) } else { redacted(v) })).collect(),
-        ),
+        Value::Object(o) => {
+            let web = |v: &Value| v.as_str().is_some_and(|t| t.trim_start().get(..4).is_some_and(|p| p.eq_ignore_ascii_case("http")));
+            let beside_address = |k: &str| o.iter().any(|(sibling, v)| sibling != k && web(v));
+            let secret = |k: &str, v: &Value| {
+                secret_key(k)
+                    && !matches!(v, Value::Bool(_) | Value::Null)
+                    && (!k.eq_ignore_ascii_case("key") || v.as_str().is_some_and(looks_like_a_key) || beside_address(k))
+            };
+            Value::Object(
+                o.iter().map(|(k, v)| (redacted_text(k), if secret(k, v) { Value::String(String::new()) } else { redacted(v) })).collect(),
+            )
+        }
         other => other.clone(),
     }
 }
@@ -134,24 +139,65 @@ fn redacted(v: &Value) -> Value {
 fn redacted_text(t: &str) -> String {
     let r = if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) };
     // After `redact` too: a prefix it knows may come in a form it doesn't (GDAL's `MYSQL:`).
-    secret_pairs_emptied(&r)
+    secret_pairs_emptied(&private_keys_removed(&r))
+}
+
+/// `t` without the PEM private keys pasted in it (`-----BEGIN … PRIVATE KEY-----` to its
+/// `-----END … PRIVATE KEY-----`, or to the end of the text when it has none).
+fn private_keys_removed(t: &str) -> String {
+    const TAIL: &str = "PRIVATE KEY-----";
+    let mut out = String::new();
+    let mut rest = t;
+    while let Some(tail) = rest.find(TAIL) {
+        // Where this marker's line starts: its `-----BEGIN`.
+        let begin = rest.get(..tail).and_then(|b| b.rfind("-----BEGIN")).unwrap_or(tail);
+        out.push_str(rest.get(..begin).unwrap_or(""));
+        let after = rest.get(tail + TAIL.len()..).unwrap_or("");
+        rest = match after.find("-----END").and_then(|e| after.get(e..)?.find(TAIL).map(|t| e + t + TAIL.len())) {
+            Some(end) => after.get(end..).unwrap_or(""),
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `t` with the value of each `name=value` pair whose name says it's a secret
 /// (`sources::secret_key`) left empty, pairs being parted by spaces, commas or semicolons. A
-/// value quoted with a space in it (`password='a b'`) loses its first word only.
+/// value in quotes or braces (`password='a b'`, ODBC's `PWD={a;b}`) goes whole, to its closer
+/// (to the end of the text when it has none).
 fn secret_pairs_emptied(t: &str) -> String {
     let parts = |c: char| c.is_whitespace() || c == ',' || c == ';';
-    t.split_inclusive(parts)
-        .map(|piece| {
-            let item = piece.trim_end_matches(parts);
-            let sep = piece.get(item.len()..).unwrap_or("");
-            match item.split_once('=') {
-                Some((k, _)) if crate::sources::secret_key(k.trim()) => format!("{k}={sep}"),
-                _ => piece.to_string(),
-            }
-        })
-        .collect()
+    let mut out = String::new();
+    let mut rest = t;
+    while !rest.is_empty() {
+        let end = rest.find(parts).unwrap_or(rest.len());
+        let item = rest.get(..end).unwrap_or(rest);
+        let Some((k, v)) = item.split_once('=').filter(|(k, _)| crate::sources::secret_key(k.trim())) else {
+            // Not a secret: the item and the separator after it, as they are.
+            let next = rest.get(end..).and_then(|r| r.chars().next()).map_or(end, |c| end + c.len_utf8());
+            out.push_str(rest.get(..next).unwrap_or(rest));
+            rest = rest.get(next..).unwrap_or("");
+            continue;
+        };
+        out.push_str(k);
+        out.push('=');
+        // Past the value: to its closer when it opens with a quote or a brace, then to the next
+        // separator.
+        let value = rest.get(k.len() + 1..).unwrap_or("");
+        let close = match v.chars().next() {
+            Some(q @ ('\'' | '"')) => Some(q),
+            Some('{') => Some('}'),
+            _ => None,
+        };
+        let from = match close {
+            Some(c) => value.get(1..).and_then(|r| r.find(c)).map_or(value.len(), |i| i + 2),
+            None => 0,
+        };
+        let tail = value.get(from..).unwrap_or("");
+        rest = tail.get(tail.find(parts).unwrap_or(tail.len())..).unwrap_or("");
+    }
+    out
 }
 
 /// Whether `t` is a database connection `sources::redact` reads as one: PostgreSQL's (a URI, or
