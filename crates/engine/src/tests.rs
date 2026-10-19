@@ -7788,7 +7788,7 @@ fn locked_layout_elements_take_no_change_until_unlocked() {
         assert!(err.contains("locked"), "{bad}: {err}");
     }
     assert_eq!(s.project.layouts[li].element(title), Some(&before));
-    assert!(s.run("layout.removeElement", &json!({"element": title})).is_err());
+    assert!(s.run("layout.removeElement", &json!({"element": title})).is_err_and(|e| e.contains("locked")));
     assert!(s.project.layouts[li].element(title).is_some());
     // Locking it again, or a null value, changes nothing and isn't refused.
     s.run("layout.update", &json!({"element": title, "locked": true, "x": null})).unwrap();
@@ -7810,11 +7810,13 @@ fn locked_layout_elements_take_no_change_until_unlocked() {
     // A locked map frame keeps its extent and gets no grid or extent indicator…
     s.run("layout.update", &json!({"element": frame, "locked": true})).unwrap();
     let kind = s.project.layouts[li].element(frame).unwrap().kind.clone();
-    assert!(s.run("layout.frameZoom", &json!({"element": frame, "to": "full"})).is_err());
-    assert!(s.run("layout.update", &json!({"element": frame, "scale": 1_000_000})).is_err());
-    assert!(s.run("layout.addElement", &json!({"kind": "grid", "frame": frame})).is_err());
+    assert!(s.run("layout.frameZoom", &json!({"element": frame, "to": "full"})).is_err_and(|e| e.contains("locked")));
+    assert!(s.run("layout.update", &json!({"element": frame, "scale": 1_000_000})).is_err_and(|e| e.contains("locked")));
+    assert!(s.run("layout.addElement", &json!({"kind": "grid", "frame": frame})).is_err_and(|e| e.contains("locked")));
     let inset = s.run("layout.addFrame", &json!({"x": 150, "y": 150, "w": 40, "h": 40})).unwrap()["element"].as_u64().unwrap() as u32;
-    assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": frame, "of": inset})).is_err());
+    assert!(
+        s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": frame, "of": inset})).is_err_and(|e| e.contains("locked"))
+    );
     assert_eq!(s.project.layouts[li].element(frame).unwrap().kind, kind);
     // …but a map series still turns its pages.
     s.run("layout.update", &json!({"element": frame, "locked": false})).unwrap();

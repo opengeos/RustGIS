@@ -2591,8 +2591,10 @@ fn layout_groups(app: &mut RustGisApp, ui: &mut Ui) {
         if let Some(f) = frame {
             p["frame"] = json!(f);
         }
-        if let Ok(v) = app.run("layout.addElement", p) {
-            app.layout.selected = v["element"].as_u64().map(|v| v as u32);
+        match app.run("layout.addElement", p) {
+            Ok(v) => app.layout.selected = v["element"].as_u64().map(|v| v as u32),
+            // A locked frame takes no grid or extent indicator: say so rather than nothing (#536).
+            Err(e) => app.session.notify(e, true),
         }
     };
     group(ui, "Page", |ui| {
