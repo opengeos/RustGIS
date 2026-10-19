@@ -1060,3 +1060,9 @@ pub const LOCAL: &[Set] = &[
         }],
     },
 ];
+
+/// Tennessee's own GIS portal (its GeoData hub), searched alone (also among [`STATE`]'s).
+pub const TENNESSEE: &[Set] = &[Set {
+    name: "Tennessee",
+    catalogs: &[Catalog { name: "Tennessee GeoData", url: "https://geodata.tn.gov", search: Search::ArcGis("YuVBSS7Y1of2Qud1") }],
+}];

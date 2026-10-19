@@ -527,29 +527,43 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
 /// Services covering one country go in a submenu named after it.
 fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     let svc = |id: &str| json!({"service": id});
+    let pane = |name: &str| json!({"name": name});
     menu_item(ui, app, "", "ArcGIS Portal…", "ui.searchOpenData", svc("arcgis-portal"));
-    menu_item(ui, app, "", "Boundaries…", "ui.dialog", json!({"name": "boundaries"}));
+    menu_item(ui, app, "", "Boundaries…", "ui.dialog", pane("boundaries"));
+    menu_item(ui, app, "", "Dynamical…", "ui.searchOpenData", svc("dynamical"));
     menu_item(ui, app, "", "Earthdata GIS…", "ui.searchOpenData", svc("earthdata-gis"));
+    menu_item(ui, app, "", "Fields of the World…", "ui.dialog", pane("fieldsOfTheWorld"));
     menu_item(ui, app, "", "GeoLens…", "ui.searchOpenData", svc("geolens"));
     menu_item(ui, app, "", "Hugging Face…", "ui.searchOpenData", svc("huggingface"));
-    menu_item(ui, app, "", "NASA Earthaccess…", "ui.dialog", json!({"name": "earthaccess"}));
+    menu_item(ui, app, "", "NASA Earthaccess…", "ui.dialog", pane("earthaccess"));
+    menu_item(ui, app, "", "NASA Earthdata…", "ui.dialog", pane("nasaEarthdata"));
+    menu_item(ui, app, "", "Natural Earth…", "ui.dialog", pane("naturalEarth"));
     menu_item(ui, app, "", "Ocean Data Platform…", "ui.searchOpenData", svc("ocean-data"));
     menu_item(ui, app, "", "OpenAerialMap…", "ui.searchOpenData", svc("openaerialmap"));
-    menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
-    menu_item(ui, app, "", "Overture Maps…", "ui.dialog", json!({"name": "overture"}));
+    menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", pane("osm"));
+    menu_item(ui, app, "", "Overture Maps…", "ui.dialog", pane("overture"));
+    menu_item(ui, app, "", "Planet Open Data…", "ui.stac.planet", Value::Null);
+    menu_item(ui, app, "", "Portolan…", "ui.stac.portolan", Value::Null);
     menu_item(ui, app, "", "Search Open Data…", "ui.searchOpenData", Value::Null);
-    menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", json!({"name": "sourcecoop"}));
-    menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
+    menu_item(ui, app, "", "Sentinel-2 Explorer…", "ui.stac.sentinel2", Value::Null);
+    menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", pane("sourcecoop"));
+    menu_item(ui, app, "", "STAC Search…", "ui.stac", Value::Null);
+    menu_item(ui, app, "", "Vantor…", "ui.stac.vantor", Value::Null);
     ui.separator();
     submenu_row(ui, "", tl!("France"), |ui| {
         menu_item(ui, app, "", "IGN LiDAR HD…", "ui.searchOpenData", svc("ign-lidar"));
     });
     submenu_row(ui, "", tl!("United States"), |ui| {
+        menu_item(ui, app, "", "EnviroAtlas…", "ui.dialog", pane("enviroAtlas"));
+        menu_item(ui, app, "", "FEMA NFHL…", "ui.dialog", pane("femaNfhl"));
+        menu_item(ui, app, "", "Tennessee GIS…", "ui.searchOpenData", svc("tennessee"));
+        menu_item(ui, app, "", "The National Map…", "ui.dialog", pane("nationalMap"));
         menu_item(ui, app, "", "US Federal GIS…", "ui.searchOpenData", svc("us-federal"));
         menu_item(ui, app, "", "US Local GIS…", "ui.searchOpenData", svc("us-local"));
         menu_item(ui, app, "", "US State GIS…", "ui.searchOpenData", svc("us-state"));
         menu_item(ui, app, "", "USGS 3DEP DEM…", "ui.searchOpenData", svc("usgs-dem"));
-        menu_item(ui, app, "", "USGS NLDI…", "ui.dialog", json!({"name": "nldi"}));
+        menu_item(ui, app, "", "USGS LiDAR…", "ui.stac.usgsLidar", Value::Null);
+        menu_item(ui, app, "", "USGS NLDI…", "ui.dialog", pane("nldi"));
     });
 }
 

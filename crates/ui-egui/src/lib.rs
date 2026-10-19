@@ -61,6 +61,7 @@ mod tilt_settle;
 mod timebar;
 mod update;
 mod vertexedit;
+mod webdataui;
 mod widgets;
 mod workspacepanes;
 mod zarrui;
@@ -287,6 +288,17 @@ pub struct ServiceConn {
     pub describing: Option<(Value, Slot<Result<Vec<u8>, String>>)>,
 }
 
+/// How Add From Service's list is browsed.
+#[derive(Default)]
+pub struct ServiceBrowse {
+    /// Words the listed layers' titles or names contain.
+    pub filter: String,
+    /// The date time-enabled layers are added at (their default when empty).
+    pub time: String,
+    /// The directories (and their types) opened before the one shown, the last most recent.
+    pub back: Vec<(String, &'static str)>,
+}
+
 /// Reading an OGC API layer's tile template from its tileset list (and tileset), off the frame.
 pub struct TilesResolve {
     /// `service.add`'s parameters, given the template as `"tiles"` once read.
@@ -484,6 +496,12 @@ pub struct UiState {
     pub link_zoomed: bool,
     /// The service Add From Service is connected (or connecting) to.
     pub service: Option<ServiceConn>,
+    /// Add From Service's list: its filter, a time-enabled layer's date, and the directories
+    /// opened on the way to the service shown (Back returns to them).
+    pub service_browse: ServiceBrowse,
+    /// The Web Data panels of single services (NASA Earthdata, EnviroAtlas, FEMA NFHL, The
+    /// National Map, Fields of the World): their documents, searches and choices.
+    pub web_services: webdataui::State,
     pub service_import: Option<serviceui::Import>,
     pub service_group_name: String,
     /// Add From Service › Catalogue: the search and the records found.
@@ -608,6 +626,8 @@ impl Default for UiState {
             cog_probes: Vec::new(),
             link_zoomed: false,
             service: None,
+            service_browse: ServiceBrowse::default(),
+            web_services: Default::default(),
             service_import: None,
             service_group_name: "My OGC Layer".into(),
             csw: Default::default(),
@@ -1849,6 +1869,15 @@ impl RustGisApp {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 stacui::open_link(self, url)?;
             }
+            // STAC Search (`ui.stac`), or a Web Data service that is STAC Search on one API or
+            // catalog (`ui.stac.planet`, `ui.stac.portolan`, `ui.stac.sentinel2`, `ui.stac.vantor`,
+            // `ui.stac.usgsLidar`); `{"search": true}` finds items at once.
+            "ui.stac" => stacui::open_preset(self, None, p)?,
+            other if other.starts_with("ui.stac.") => {
+                let preset =
+                    other.strip_prefix("ui.stac.").and_then(stacui::Preset::from_id).ok_or_else(|| format!("unknown command '{other}'"))?;
+                stacui::open_preset(self, Some(preset), p)?;
+            }
             // Search Open Data: the dialog, then (with a query) the search, off the frame.
             "ui.searchOpenData" => {
                 self.run("ui.dialog", json!({"name": "opendata"}))?;
@@ -1946,6 +1975,15 @@ impl RustGisApp {
                     "arcgis" => "arcgis",
                     _ => "auto",
                 };
+                // Opened from a menu (Home › Web Data): the dialog with it.
+                if self.dialogs.open != Some("addService") {
+                    self.run("ui.dialog", json!({"name": "addService"}))?;
+                }
+                // The Type shown is the connection's.
+                self.dialogs.mode = kind;
+                // Another service: its own list, unfiltered (Open keeps the way back).
+                self.ui.service_browse.filter.clear();
+                self.ui.service_browse.back.clear();
                 let caps = rustgis_engine::data::ogc::capabilities_url(url, (kind != "auto").then_some(kind));
                 // A refusal is told with what the server said (#509).
                 let slot = fetch_detailed_into(&caps);
@@ -2602,6 +2640,7 @@ impl RustGisApp {
                 self.dialogs.open("zarr", &self.session)?;
                 if let Some(a) = p.get("address").and_then(Value::as_str) {
                     self.ui.zarr.address = a.to_string();
+                    self.ui.zarr.title = None;
                     zarrui::connect(self);
                 }
             }
@@ -2620,6 +2659,19 @@ impl RustGisApp {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 // A Web Data service opens in the right pane, beside the map it searches.
                 if let Some(name) = panes::web_data_name(which) {
+                    // A Web Data panel opened on a search.
+                    if let Some(words) = p.get("search").and_then(Value::as_str) {
+                        webdataui::set_search(self, which, words);
+                    }
+                    // Natural Earth is Source Cooperative's browser locked to its product; Source
+                    // Cooperative opened after it starts from the products again.
+                    // A panel reopened asks again for what failed.
+                    webdataui::forget_failed(self);
+                    if which == "naturalEarth" {
+                        catalogsui::natural_earth(self);
+                    } else if which == "sourcecoop" && self.ui.catalogs.locked {
+                        catalogsui::unlock(self);
+                    }
                     self.ui.web_data = name;
                     self.ui.open_right(RightPane::WebData);
                     return Ok(Value::Null);

@@ -22,6 +22,36 @@ pub enum Offer {
     /// A WCS coverage, added as a raster from GetCoverage (a GeoTIFF of the view, or of its
     /// bounds).
     Coverage(Coverage),
+    /// Another service or a folder that an ArcGIS services directory lists: opened (its own
+    /// layers listed) rather than added.
+    Service { url: String },
+}
+
+/// A layer's time dimension (a WMTS `Dimension` named `Time`): its tile template has `{Time}`,
+/// which takes the default unless a time is asked for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerTime {
+    /// The time the service draws when none is given (`default` is GIBS's latest day).
+    pub default: String,
+    /// The times or ranges it lists (`2000-02-24/2026-10-19/P1D`), the first few.
+    pub values: Vec<String>,
+}
+
+/// Most time values kept for a layer.
+const MAX_TIME_VALUES: usize = 64;
+
+/// A time given for a layer's `{Time}`: an ISO 8601 date or date-time (or `default`), never
+/// anything else, since it goes into tile addresses.
+pub fn checked_time(t: &str) -> Result<String, String> {
+    let t = t.trim();
+    // A date starts with a digit, so `.` and `..` (path segments, in a tile address) never pass.
+    let dated = t.as_bytes().first().is_some_and(u8::is_ascii_digit);
+    if (dated || t == "default") && t.len() <= 40 && t.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'.' | b'+'))
+    {
+        Ok(t.to_string())
+    } else {
+        Err(format!("'{}': a time is a date like 2024-06-01", t.chars().take(60).collect::<String>()))
+    }
 }
 
 /// A layer a service offers.
@@ -36,6 +66,8 @@ pub struct ServiceLayer {
     /// An OGC API tileset list (JSON) whose WebMercatorQuad tileset advertises the tile template:
     /// the offer's template is the standard path, used when the advertised one can't be read.
     pub tilesets: Option<String>,
+    /// Its time dimension, when its tiles change with time (the template then has `{Time}`).
+    pub time: Option<LayerTime>,
 }
 
 /// A service's capabilities: its kind (`WMS`, `WMTS`, `WFS`, `OGC API Features`), title, the
@@ -406,7 +438,7 @@ fn wms(url: &str, root: &Node) -> Service {
             ),
         );
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time: None });
     }
     service.layers.reverse();
     if skipped > 0 {
@@ -497,10 +529,38 @@ fn wmts(url: &str, root: &Node) -> Service {
             continue;
         };
         let matrix = format!("{prefix}{{z}}");
-        let resource = children(&layer, "ResourceURL").find(|r| r.attribute("resourceType") == Some("tile")).and_then(|r| {
-            let f = r.attribute("format").unwrap_or("");
-            (!f.contains("pbf") && !f.contains("mvt")).then(|| r.attribute("template").filter(|t| is_web(t)).map(str::to_string)).flatten()
-        });
+        // A time dimension: the template with `{Time}` is preferred, which takes the time asked
+        // for (its default otherwise); without one, a template with no `{Time}` is.
+        // Its default: the one given, else the last time its values list (a range's end); with
+        // neither, the layer is drawn without a time.
+        let time = children(&layer, "Dimension")
+            .find(|d| child_text(d, "Identifier").is_some_and(|i| i.eq_ignore_ascii_case("time")))
+            .and_then(|d| {
+                // Every listed value is read for the latest; the first few are kept.
+                let all: Vec<String> = children(&d, "Value").take(MAX_LAYERS).map(|v| text_of(&v)).filter(|v| v.len() <= 100).collect();
+                let listed = all.iter().rev().find_map(|v| {
+                    let mut parts = v.split('/');
+                    let first = parts.next().unwrap_or("");
+                    checked_time(parts.next().unwrap_or(first)).ok()
+                });
+                let default = child_text(&d, "Default").and_then(|t| checked_time(&t).ok()).or(listed)?;
+                let values = all.into_iter().take(MAX_TIME_VALUES).collect();
+                Some(LayerTime { default, values })
+            });
+        let templates: Vec<String> = children(&layer, "ResourceURL")
+            .filter(|r| r.attribute("resourceType") == Some("tile"))
+            .filter(|r| {
+                let f = r.attribute("format").unwrap_or("");
+                !f.contains("pbf") && !f.contains("mvt")
+            })
+            .filter_map(|r| r.attribute("template").filter(|t| is_web(t)).map(str::to_string))
+            .collect();
+        let timed = |t: &&String| t.contains("{Time}");
+        let resource =
+            if time.is_some() { templates.iter().find(timed).or_else(|| templates.first()) } else { templates.iter().find(|t| !timed(t)) }
+                .cloned();
+        // A `{Time}` the layer has no dimension for can't be filled.
+        let time = time.filter(|_| resource.as_ref().is_none_or(|t| t.contains("{Time}")));
         let template = match resource {
             Some(t) => t
                 .replace("{TileMatrixSet}", set)
@@ -511,7 +571,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             None => {
                 let format =
                     children(&layer, "Format").map(|f| text_of(&f)).find(|f| f.starts_with("image/")).unwrap_or_else(|| "image/png".into());
-                with_query(
+                let get = with_query(
                     &kvp,
                     &format!(
                         "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER={}&STYLE={}&TILEMATRIXSET={}&TILEMATRIX={matrix}&TILEROW={{y}}&TILECOL={{x}}&FORMAT={}",
@@ -520,7 +580,8 @@ fn wmts(url: &str, root: &Node) -> Service {
                         encode(set),
                         encode(&format)
                     ),
-                )
+                );
+                if time.is_some() { format!("{get}&TIME={{Time}}") } else { get }
             }
         };
         let bbox = child(&layer, "WGS84BoundingBox").and_then(|b| {
@@ -528,7 +589,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
             lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
         });
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time });
     }
     if skipped > 0 {
         service.notes.push(format!("{skipped} layers have no Web Mercator tile matrix set RustGIS can draw and are left out"));
@@ -627,7 +688,7 @@ fn wfs(url: &str, root: &Node) -> Service {
             )
         };
         let url = with_query(&get, &query);
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Features { url }, bbox, tilesets: None });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Features { url }, bbox, tilesets: None, time: None });
     }
     service
 }
@@ -702,6 +763,7 @@ fn wcs(url: &str, root: &Node) -> Service {
             offer: Offer::Coverage(coverage),
             bbox,
             tilesets: None,
+            time: None,
         });
     };
     let mut n = 0;
@@ -1081,14 +1143,12 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         .to_string();
     let full = v.get("fullExtent").or_else(|| v.get("extent")).and_then(arcgis_extent);
     let mut service = Service { kind: "ArcGIS".into(), title: title.clone(), ..Service::default() };
-    // A directory of services: say which to open.
-    if v.get("services").is_some() && !lower.ends_with("server") {
-        let names: Vec<String> = v
-            .get("services")
-            .and_then(|s| s.as_array())
-            .map(|a| a.iter().filter_map(|s| Some(format!("{}/{}", s.get("name")?.as_str()?, s.get("type")?.as_str()?))).take(30).collect())
-            .unwrap_or_default();
-        return Err(format!("an ArcGIS services directory: open one of its services ({})", names.join(", ")));
+    // A directory of services: its folders and the services RustGIS can add, each to open. Known
+    // by its answer (services or folders, and no layers or capabilities of a service's own), not
+    // its address: a folder may be named like a service.
+    let service_answer = ["layers", "capabilities", "serviceDescription", "tileInfo"].iter().any(|k| v.get(k).is_some());
+    if (v.get("services").is_some() || v.get("folders").is_some()) && !service_answer {
+        return Ok(arcgis_directory(&b, v));
     }
     // Feature layers (FeatureServer, and a MapServer's layers): queried as GeoJSON, so only from a
     // service that allows queries: "Query", or "Data" on a MapServer (a cached basemap's
@@ -1117,6 +1177,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 offer: Offer::Features { url },
                 bbox: full,
                 tilesets: None,
+                time: None,
             });
         }
     };
@@ -1137,8 +1198,29 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             offer: Offer::Tiles { template },
             bbox: full,
             tilesets: None,
+            time: None,
         });
         features(&mut service);
+        // A dynamic map's layers, each drawn alone (`layers=show:<id>`): a national layer is
+        // seen whole this way, where its features would stop at the server's record limit.
+        if !template_is_cache(&service) {
+            for l in v.get("layers").and_then(|l| l.as_array()).into_iter().flatten().take(MAX_LAYERS) {
+                let (Some(id), Some(name)) = (l.get("id").and_then(|i| i.as_i64()), l.get("name").and_then(|n| n.as_str())) else {
+                    continue;
+                };
+                let template = format!(
+                    "{b}/export?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png32&transparent=true&f=image&layers=show:{id}"
+                );
+                service.layers.push(ServiceLayer {
+                    name: format!("map:{id}"),
+                    title: format!("{name} (map)"),
+                    offer: Offer::Tiles { template },
+                    bbox: full,
+                    tilesets: None,
+                    time: None,
+                });
+            }
+        }
     } else if lower.ends_with("/imageserver") {
         service.kind = "ArcGIS ImageServer".into();
         let template = format!("{b}/exportImage?bbox={{bbox-epsg-3857}}&bboxSR=3857&imageSR=3857&size=256,256&format=png&f=image");
@@ -1148,6 +1230,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             offer: Offer::Tiles { template },
             bbox: full,
             tilesets: None,
+            time: None,
         });
     } else if lower.ends_with("/vectortileserver") {
         service.kind = "ArcGIS VectorTileServer".into();
@@ -1162,6 +1245,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             offer: Offer::Style { url: style },
             bbox: full,
             tilesets: None,
+            time: None,
         });
     } else {
         return Err("an ArcGIS address, but not a FeatureServer, MapServer, ImageServer or VectorTileServer".into());
@@ -1181,11 +1265,100 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 | Offer::Features { url: u }
                 | Offer::Style { url: u }
                 | Offer::VectorTiles { template: u, .. }
+                | Offer::Service { url: u }
                 | Offer::Coverage(Coverage { endpoint: u, .. }) => *u = with_query(u, &format!("token={token}")),
             }
         }
     }
     Ok(service)
+}
+
+/// Whether a MapServer's whole map was offered as its tile cache (which draws no layer alone).
+fn template_is_cache(service: &Service) -> bool {
+    service.layers.first().is_some_and(|l| matches!(&l.offer, Offer::Tiles { template } if template.contains("/tile/{z}/")))
+}
+
+/// The ArcGIS service types a directory lists that RustGIS can add.
+const ARCGIS_TYPES: [&str; 4] = ["MapServer", "FeatureServer", "ImageServer", "VectorTileServer"];
+
+/// A name an ArcGIS directory gives a folder or service, checked: it goes into addresses, so only
+/// letters, digits, `_`, `-`, `.` and `/` between non-empty parts that aren't `.` or `..`.
+fn arcgis_name(n: &str) -> Option<&str> {
+    let ok = !n.is_empty()
+        && n.len() <= 200
+        && n.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/'))
+        && n.split('/').all(|part| !part.is_empty() && part != "." && part != "..");
+    ok.then_some(n)
+}
+
+/// An ArcGIS services directory (`…/rest/services`, or a folder of it): its folders and the
+/// services RustGIS can add, each offered to open. Services are named with their folder
+/// (`Folder/Name`), so their addresses start at the directory's root, not at the folder.
+fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
+    let lower = b.to_ascii_lowercase();
+    let found = lower.find("/rest/services").and_then(|i| b.get(..i + "/rest/services".len()));
+    // Without `/rest/services` (a proxy's own path) the address is taken as where the listing
+    // is, so a folder's services (`Folder/Name`) go under it by their own names.
+    let rooted = found.is_some();
+    let root = found.unwrap_or(b);
+    let here = b.get(root.len()..).unwrap_or("").trim_matches('/');
+    let title = if here.is_empty() { "ArcGIS services".to_string() } else { here.to_string() };
+    let mut service = Service { kind: "ArcGIS Services Directory".into(), title, ..Service::default() };
+    let mut skipped = 0;
+    // Names RustGIS won't put into an address (spaces, `?`, `..`): counted in a note.
+    let mut unnamed = 0;
+    // ArcGIS's own system folder holds geometry and printing tools, never maps.
+    for f in v.get("folders").and_then(|f| f.as_array()).into_iter().flatten().take(MAX_LAYERS) {
+        let Some(name) = f.as_str().and_then(|n| {
+            let ok = arcgis_name(n);
+            unnamed += usize::from(ok.is_none());
+            ok
+        }) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("Utilities") {
+            continue;
+        }
+        let path = if here.is_empty() { name.to_string() } else { format!("{here}/{name}") };
+        service.layers.push(ServiceLayer {
+            name: format!("{path}/"),
+            title: format!("{name}/"),
+            offer: Offer::Service { url: format!("{root}/{path}") },
+            bbox: None,
+            tilesets: None,
+            time: None,
+        });
+    }
+    for s in v.get("services").and_then(|s| s.as_array()).into_iter().flatten().take(MAX_LAYERS) {
+        let Some(kind) = s.get("type").and_then(|t| t.as_str()) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(name) = s.get("name").and_then(|n| n.as_str()).and_then(arcgis_name) else {
+            unnamed += 1;
+            continue;
+        };
+        let Some(kind) = ARCGIS_TYPES.iter().find(|t| t.eq_ignore_ascii_case(kind)) else {
+            skipped += 1;
+            continue;
+        };
+        let short = name.rsplit('/').next().unwrap_or(name);
+        service.layers.push(ServiceLayer {
+            name: format!("{name}/{kind}"),
+            title: format!("{short} ({kind})"),
+            offer: Offer::Service { url: format!("{root}/{}/{kind}", if rooted { name } else { short }) },
+            bbox: None,
+            tilesets: None,
+            time: None,
+        });
+    }
+    if skipped > 0 {
+        service.notes.push(format!("{skipped} services of other or unknown types (geoprocessing, geometry, …) are left out"));
+    }
+    if unnamed > 0 {
+        service.notes.push(format!("{unnamed} folders or services with names RustGIS can't put in an address are left out"));
+    }
+    service
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1208,6 +1381,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 offer: Offer::Tiles { template: t },
                 bbox: None,
                 tilesets: Some(list),
+                time: None,
             });
         }
         if !service.layers.is_empty() || service.collections_url.is_some() {
@@ -1246,6 +1420,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 offer: Offer::Tiles { template: t.clone() },
                 bbox,
                 tilesets: Some(list.clone()),
+                time: None,
             });
         }
         if let Some((t, list)) = &vector {
@@ -1255,6 +1430,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 offer: Offer::VectorTiles { template: t.clone(), layers: vec![id.chars().take(200).collect()] },
                 bbox,
                 tilesets: Some(list.clone()),
+                time: None,
             });
         }
         if map.is_some() || vector.is_some() {
@@ -1284,7 +1460,14 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
         let items = if query_value(&items, "limit").is_some() { items } else { with_query(&items, &format!("limit={OGC_API_LIMIT}")) };
         // GeoJSON asked for unless the link says it is already.
         let items = if declared_geojson || query_value(&items, "f").is_some() { items } else { with_query(&items, "f=json") };
-        service.layers.push(ServiceLayer { name: id.to_string(), title, offer: Offer::Features { url: items }, bbox, tilesets: None });
+        service.layers.push(ServiceLayer {
+            name: id.to_string(),
+            title,
+            offer: Offer::Features { url: items },
+            bbox,
+            tilesets: None,
+            time: None,
+        });
     }
     if unreadable > 0 {
         service.notes.push(format!("{unreadable} collections link to their items with an address RustGIS doesn't fetch and are left out"));
@@ -1653,16 +1836,17 @@ mod tests {
         assert_eq!(s.title, "World_Street_Map");
         assert_eq!(s.layers[0].title, "World_Street_Map (map)");
         assert_eq!(s.layers[1].title, "World Street Map");
-        // Its capabilities are "Map,Tilemap": no queries, so only the map is offered.
+        // Its capabilities are "Map,Tilemap": no queries, so only the map (and its layer drawn
+        // alone) is offered.
         let cached = street.replace(r#""mapName""#, r#""capabilities": "Map,Tilemap", "mapName""#);
         let s = parse("https://services.arcgisonline.com/arcgis/rest/services/World_Street_Map/MapServer", cached.as_bytes()).unwrap();
-        assert_eq!(s.layers.len(), 1);
-        assert!(matches!(&s.layers[0].offer, Offer::Tiles { .. }));
+        assert_eq!(s.layers.len(), 2);
+        assert!(s.layers.iter().all(|l| matches!(&l.offer, Offer::Tiles { .. })));
         assert!(s.notes.iter().any(|n| n.contains("doesn't allow queries")), "{:?}", s.notes);
         let queried = street.replace(r#""mapName""#, r#""capabilities": "Map,Query,Data", "mapName""#);
-        assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", queried.as_bytes()).unwrap().layers.len(), 2);
+        assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", queried.as_bytes()).unwrap().layers.len(), 3);
         let data = street.replace(r#""mapName""#, r#""capabilities": "Map,Data", "mapName""#);
-        assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", data.as_bytes()).unwrap().layers.len(), 2);
+        assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", data.as_bytes()).unwrap().layers.len(), 3);
         // A title of its own is kept; one that is HTML is not.
         let titled = r#"{"mapName": "Layers", "documentInfo": {"Title": "Street Map"}, "layers": []}"#;
         assert_eq!(parse("https://x.org/arcgis/rest/services/S/MapServer", titled.as_bytes()).unwrap().title, "Street Map");
@@ -1698,6 +1882,13 @@ mod tests {
         let s = parse("https://x.org/arcgis/rest/services/Dyn/MapServer", dynamic.as_bytes()).unwrap();
         assert!(matches!(&s.layers[0].offer, Offer::Tiles { template } if template.contains("/export?bbox={bbox-epsg-3857}")));
         assert!(matches!(&s.layers[1].offer, Offer::Features { url } if url.contains("/MapServer/3/query?")));
+        // Each layer of a dynamic map is also drawn alone.
+        assert_eq!(s.layers[2].name, "map:3");
+        assert!(matches!(&s.layers[2].offer, Offer::Tiles { template } if template.ends_with("&layers=show:3")));
+        // A cached map draws no layer alone.
+        let tiled_layers = tiled.replace(r#""layers": []"#, r#""layers": [{"id": 0, "name": "Roads"}]"#);
+        let s = parse("https://x.org/arcgis/rest/services/World/MapServer", tiled_layers.as_bytes()).unwrap();
+        assert!(!s.layers.iter().any(|l| l.name.starts_with("map:")));
         let vts = r#"{"currentVersion": 11, "name": "Basemap", "defaultStyles": "resources/styles"}"#;
         let s = parse("https://x.org/arcgis/rest/services/B/VectorTileServer", vts.as_bytes()).unwrap();
         assert!(
@@ -1706,8 +1897,30 @@ mod tests {
         let img = r#"{"currentVersion": 11, "name": "Elev"}"#;
         let s = parse("https://x.org/arcgis/rest/services/E/ImageServer", img.as_bytes()).unwrap();
         assert!(matches!(&s.layers[0].offer, Offer::Tiles { template } if template.contains("/exportImage?")));
-        let dir = r#"{"currentVersion": 11, "folders": [], "services": [{"name": "A", "type": "FeatureServer"}]}"#;
-        assert!(parse("https://x.org/arcgis/rest/services", dir.as_bytes()).unwrap_err().contains("A/FeatureServer"));
+        let dir = r#"{"currentVersion": 11, "folders": ["Hydro", "Utilities", "../x", "a b"], "services": [{"name": "A", "type": "FeatureServer"},
+            {"name": "Geo", "type": "GPServer"}, {"name": "B?f=x", "type": "MapServer"}]}"#;
+        let s = parse("https://x.org/arcgis/rest/services", dir.as_bytes()).unwrap();
+        assert_eq!(s.kind, "ArcGIS Services Directory");
+        let offers: Vec<_> = s.layers.iter().map(|l| (l.name.as_str(), &l.offer)).collect();
+        assert_eq!(
+            offers,
+            [
+                ("Hydro/", &Offer::Service { url: "https://x.org/arcgis/rest/services/Hydro".into() }),
+                ("A/FeatureServer", &Offer::Service { url: "https://x.org/arcgis/rest/services/A/FeatureServer".into() })
+            ]
+        );
+        assert!(s.notes.iter().any(|n| n.contains("1 services")));
+        assert!(s.notes.iter().any(|n| n.starts_with("3 folders or services")), "{:?}", s.notes);
+        // A folder lists its services by their full names, which start at the root.
+        let folder = r#"{"folders": [], "services": [{"name": "Hydro/Rivers", "type": "MapServer"}]}"#;
+        let s = parse("https://x.org/arcgis/rest/services/Hydro?f=json", folder.as_bytes()).unwrap();
+        assert_eq!(s.title, "Hydro");
+        assert_eq!(s.layers[0].title, "Rivers (MapServer)");
+        assert_eq!(s.layers[0].offer, Offer::Service { url: "https://x.org/arcgis/rest/services/Hydro/Rivers/MapServer".into() });
+        // A proxy's path without `/rest/services`: the folder's services go under the address.
+        let proxied = folder.replace(r#"{"folders""#, r#"{"currentVersion": 11, "folders""#);
+        let s = parse("https://proxy.example.org/gis/Hydro?f=json", proxied.as_bytes()).unwrap();
+        assert_eq!(s.layers[0].offer, Offer::Service { url: "https://proxy.example.org/gis/Hydro/Rivers/MapServer".into() });
         assert!(
             parse("https://x.org/arcgis/rest/services/A/FeatureServer", br#"{"error": {"code": 499, "message": "Token Required"}}"#)
                 .unwrap_err()
@@ -1939,6 +2152,65 @@ mod tests {
         assert_eq!(template, "https://tiles.example.org/normal/gm/EPSG:3857:{z}/{y}/{x}.jpg");
         assert_eq!(s.layers[0].bbox, Some([5.0, 45.0, 11.0, 48.0]));
         assert!(s.notes.iter().any(|n| n.contains("1 layers")));
+    }
+
+    /// A GIBS-like WMTS: a time-enabled layer takes its `{Time}` template, a timeless one its
+    /// template without `{Time}`.
+    const GIBS: &str = r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0">
+<ows:ServiceIdentification><ows:Title>GIBS</ows:Title></ows:ServiceIdentification><Contents>
+<Layer><ows:Title>True Color</ows:Title><ows:Identifier>TC</ows:Identifier><Style isDefault="true"><ows:Identifier>default</ows:Identifier></Style>
+ <Dimension><ows:Identifier>Time</ows:Identifier><Default>2024-06-02</Default><Value>2000-02-24/2024-06-02/P1D</Value></Dimension>
+ <TileMatrixSetLink><TileMatrixSet>GoogleMapsCompatible_Level9</TileMatrixSet></TileMatrixSetLink><Format>image/jpeg</Format>
+ <ResourceURL resourceType="tile" format="image/jpeg" template="https://gibs.example.org/TC/default/{Time}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.jpeg"/>
+ <ResourceURL resourceType="tile" format="image/jpeg" template="https://gibs.example.org/TC/default/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.jpeg"/></Layer>
+<Layer><ows:Title>Coastlines</ows:Title><ows:Identifier>Coast</ows:Identifier>
+ <TileMatrixSetLink><TileMatrixSet>GoogleMapsCompatible_Level9</TileMatrixSet></TileMatrixSetLink><Format>image/png</Format>
+ <ResourceURL resourceType="tile" format="image/png" template="https://gibs.example.org/Coast/default/{Time}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.png"/>
+ <ResourceURL resourceType="tile" format="image/png" template="https://gibs.example.org/Coast/default/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.png"/></Layer>
+<Layer><ows:Title>Bad time</ows:Title><ows:Identifier>Bad</ows:Identifier>
+ <Dimension><ows:Identifier>time</ows:Identifier><Default>../../x?y</Default></Dimension>
+ <TileMatrixSetLink><TileMatrixSet>GoogleMapsCompatible_Level9</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://gibs.example.org/Bad/{Time}/{TileMatrix}/{TileRow}/{TileCol}.png"/></Layer>
+<TileMatrixSet><ows:Identifier>GoogleMapsCompatible_Level9</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG:6.18:3:3857</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>559082264.0287178</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+ <TileMatrix><ows:Identifier>1</ows:Identifier><ScaleDenominator>279541132.0143589</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+</TileMatrixSet></Contents></Capabilities>"#;
+
+    #[test]
+    fn wmts_time_dimensions() {
+        let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", GIBS.as_bytes()).unwrap();
+        assert_eq!(s.layers.len(), 3, "{:?}", s.notes);
+        let tc = &s.layers[0];
+        assert_eq!(
+            tc.offer,
+            Offer::Tiles { template: "https://gibs.example.org/TC/default/{Time}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpeg".into() }
+        );
+        let time = tc.time.as_ref().unwrap();
+        assert_eq!(time.default, "2024-06-02");
+        assert_eq!(time.values, ["2000-02-24/2024-06-02/P1D"]);
+        let coast = &s.layers[1];
+        assert_eq!(coast.time, None);
+        assert_eq!(
+            coast.offer,
+            Offer::Tiles { template: "https://gibs.example.org/Coast/default/GoogleMapsCompatible_Level9/{z}/{y}/{x}.png".into() }
+        );
+        // A default that isn't a time never reaches an address: with no time listed either, the
+        // layer has no time.
+        assert_eq!(s.layers[2].time, None);
+        let listed = GIBS.replace("<Default>../../x?y</Default>", "<Default>?</Default><Value>2020-01-01/2020-02-01/P1D</Value>");
+        let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", listed.as_bytes()).unwrap();
+        assert_eq!(s.layers[2].time.as_ref().map(|t| t.default.as_str()), Some("2020-02-01"));
+        // The latest of many listed times, past the few kept.
+        let many: String = (0..100).map(|i| format!("<Value>{}-01-01</Value>", 1900 + i)).collect();
+        let late = GIBS.replace("<Default>../../x?y</Default>", &many);
+        let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", late.as_bytes()).unwrap();
+        let t = s.layers[2].time.as_ref().unwrap();
+        assert_eq!((t.default.as_str(), t.values.len()), ("1999-01-01", MAX_TIME_VALUES));
+        assert!(checked_time("2024-06-01").is_ok() && checked_time("2024-06-01T10:00:00Z").is_ok());
+        assert!(checked_time("default").is_ok());
+        for bad in ["", "..", ".", "../x", "2024-06-01/../..", "a b", "x?y=1", "latest", &"9".repeat(50)] {
+            assert!(checked_time(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -168,13 +168,19 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
 
 /// The Web Data services shown in the Web Data pane, by the `ui.dialog` name that opens them, and
 /// their titles.
-const WEB_DATA: [(&str, &str); 8] = [
+const WEB_DATA: [(&str, &str); 14] = [
     ("opendata", "Search Open Data"),
     ("stac", "STAC Search"),
     ("osm", "OpenStreetMap"),
     ("boundaries", "Administrative Boundaries"),
     ("overture", "Overture Maps"),
     ("sourcecoop", "Source Cooperative"),
+    ("naturalEarth", "Natural Earth"),
+    ("nationalMap", "The National Map"),
+    ("nasaEarthdata", "NASA Earthdata"),
+    ("enviroAtlas", "EnviroAtlas"),
+    ("femaNfhl", "FEMA NFHL"),
+    ("fieldsOfTheWorld", "Fields of the World"),
     ("earthaccess", "NASA Earthaccess"),
     ("nldi", "USGS NLDI"),
 ];
@@ -188,6 +194,7 @@ pub fn web_data_name(name: &str) -> Option<&'static str> {
 fn web_data_title(app: &RustGisApp) -> &'static str {
     match app.ui.web_data {
         "opendata" => app.ui.opendata.title(),
+        "stac" => crate::stacui::title(app),
         n => WEB_DATA.iter().find(|(k, _)| *k == n).map(|(_, t)| *t).unwrap_or("Web Data"),
     }
 }
@@ -200,7 +207,12 @@ fn web_data(app: &mut RustGisApp, ui: &mut Ui) {
         "osm" => crate::portalsui::osm(app, ui),
         "boundaries" => crate::portalsui::boundaries(app, ui),
         "overture" => crate::catalogsui::overture(app, ui),
-        "sourcecoop" => crate::catalogsui::sourcecoop(app, ui),
+        "sourcecoop" | "naturalEarth" => crate::catalogsui::sourcecoop(app, ui),
+        "nationalMap" => crate::webdataui::national_map(app, ui),
+        "nasaEarthdata" => crate::webdataui::nasa_earthdata(app, ui),
+        "enviroAtlas" => crate::webdataui::enviroatlas(app, ui),
+        "femaNfhl" => crate::webdataui::fema_nfhl(app, ui),
+        "fieldsOfTheWorld" => crate::webdataui::fields_of_the_world(app, ui),
         "earthaccess" => crate::earthaccessui::pane(app, ui),
         "nldi" => crate::nldiui::pane(app, ui),
         _ => crate::opendataui::dialog(app, ui),

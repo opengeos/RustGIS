@@ -1063,7 +1063,11 @@ fn crs_of(store: &Store, a: &Array) -> Option<Crs> {
         }
         None
     };
-    from(a).or_else(|| attr_str(a, "grid_mapping").and_then(|g| store.coordinate(a, g).or_else(|| store.array(g))).and_then(from))
+    from(a)
+        .or_else(|| attr_str(a, "grid_mapping").and_then(|g| store.coordinate(a, g).or_else(|| store.array(g))).and_then(from))
+        // A store that doesn't name its grid mapping may still hold rioxarray's `spatial_ref` (or a
+        // `crs`) array beside its variables.
+        .or_else(|| ["spatial_ref", "crs"].iter().filter_map(|n| store.array(n)).find_map(from))
 }
 
 /// One axis from its coordinates: the first cell's outer edge and the cell size, if the

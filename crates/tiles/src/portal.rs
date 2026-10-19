@@ -22,6 +22,9 @@ pub const IGN_WFS: &str = "https://data.geopf.fr/wfs";
 pub const GEOLENS: &str = "https://datasets.geolibre.app";
 pub const HUGGING_FACE: &str = "https://huggingface.co";
 pub const OCEAN_DATA: &str = "https://api.hubocean.earth";
+pub const DYNAMICAL: &str = "https://stac.dynamical.org";
+/// Where dynamical.org keeps its datasets' Zarr stores.
+const DYNAMICAL_DATA: &str = "https://data.dynamical.org";
 
 /// The USGS 3DEP elevation models a search can ask for: a label and The National Map's name.
 pub const DEM_DATASETS: [(&str, &str); 5] = [
@@ -68,6 +71,8 @@ pub enum Kind {
     HuggingFace,
     /// HUB Ocean's Ocean Data Platform (its STAC catalogue, read as OGC API Features).
     OceanData,
+    /// dynamical.org's weather and climate datasets (its STAC catalogue): Zarr stores.
+    Dynamical,
 }
 
 /// A portal: its kind, its address, and (Socrata) the site searched.
@@ -89,6 +94,8 @@ pub struct Portal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Use {
     File,
+    /// A Zarr store, whose variable and steps are picked.
+    Zarr,
     /// `wms`, `wfs` or `arcgis`, and the layer an address names (an ArcGIS layer's number).
     Service {
         kind: &'static str,
@@ -227,9 +234,10 @@ impl Portal {
                     "ign-lidar" | "lidar-hd" => (Kind::IgnLidar, IGN_WFS),
                     "huggingface" | "hugging-face" => (Kind::HuggingFace, HUGGING_FACE),
                     "ocean-data" | "odp" => (Kind::OceanData, OCEAN_DATA),
+                    "dynamical" => (Kind::Dynamical, DYNAMICAL),
                     other => {
                         return Err(format!(
-                            "unknown portal '{other}' (ckan, socrata, arcgis-hub, arcgis-portal, earthdata-gis, openaerialmap, usgs-dem, ign-lidar, geolens, huggingface or ocean-data)"
+                            "unknown portal '{other}' (ckan, socrata, arcgis-hub, arcgis-portal, earthdata-gis, openaerialmap, usgs-dem, ign-lidar, geolens, huggingface, ocean-data or dynamical)"
                         ));
                     }
                 };
@@ -330,6 +338,7 @@ impl Portal {
             (Kind::IgnLidar, _) => "IGN LiDAR HD".into(),
             (Kind::HuggingFace, _) => "Hugging Face".into(),
             (Kind::OceanData, _) => "Ocean Data Platform".into(),
+            (Kind::Dynamical, _) => "dynamical.org".into(),
             _ => host_of(&self.base).to_string(),
         }
     }
@@ -431,6 +440,8 @@ impl Portal {
             },
             // Its whole catalogue (a few hundred datasets), searched here.
             Kind::OceanData => format!("{}/api/stac/search?limit=1000", self.base),
+            // Its catalogue (a few dozen datasets), searched here.
+            Kind::Dynamical => format!("{}/catalog.json", self.base),
         }
     }
 
@@ -499,6 +510,10 @@ impl Portal {
                     _ => return Err(self.not_portal()),
                 };
                 list.into_iter().filter_map(|d| hf_dataset(&self.base, d)).collect()
+            }
+            Kind::Dynamical => {
+                let r = v.get("links").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
+                r.iter().take(500).filter_map(dynamical_dataset).filter(|d| has_words(d)).take(MAX_RESULTS).collect()
             }
             Kind::OceanData => {
                 let r = v.get("features").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
@@ -1162,6 +1177,41 @@ fn ocean_dataset(base: &str, f: &Value) -> Option<Dataset> {
     })
 }
 
+/// A dynamical.org dataset (a catalogue's child link): its Zarr store, `data.dynamical.org`'s
+/// provider/model/kind path. The virtual datasets, GRIB read through Icechunk, are left out.
+fn dynamical_dataset(l: &Value) -> Option<Dataset> {
+    if l.get("rel").and_then(Value::as_str) != Some("child") {
+        return None;
+    }
+    let href = text(l, "href", 500);
+    let id = href.trim_end_matches("/collection.json").rsplit('/').next().unwrap_or("").to_string();
+    if !id_ok(&id) || id.ends_with("-virtual") {
+        return None;
+    }
+    // `noaa-gfs-forecast-35-day` → `noaa/gfs/forecast-35-day`: the provider, the model up to
+    // the kind (forecast or analysis), the rest.
+    let parts: Vec<&str> = id.split('-').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
+    let k = parts.iter().position(|p| *p == "forecast" || *p == "analysis").filter(|k| *k >= 2)?;
+    let path = format!("{}/{}/{}", parts.first()?, parts.get(1..k)?.join("-"), parts.get(k..)?.join("-"));
+    let provider = parts.first().map(|p| p.to_uppercase()).unwrap_or_default();
+    Some(Dataset {
+        title: Some(text(l, "title", 300)).filter(|t| !t.is_empty()).unwrap_or_else(|| id.clone()),
+        description: String::new(),
+        organization: provider,
+        page: Some(format!("https://dynamical.org/catalog/{id}/")),
+        bbox: None,
+        resources: vec![Resource { format: "Zarr".into(), url: format!("{DYNAMICAL_DATA}/{path}/latest.zarr"), using: Use::Zarr }],
+        listing: None,
+        kind: if parts.contains(&"forecast") { "Forecast".into() } else { "Analysis".into() },
+        date: String::new(),
+        thumbnail: None,
+        id,
+    })
+}
+
 /// How many features an Ocean Data Platform dataset is read with at most.
 pub const OCEAN_FEATURES: usize = 10_000;
 /// The relay the browser reads Ocean Data Platform features through.
@@ -1500,6 +1550,25 @@ mod tests {
         assert_eq!(day_of_ms(951_782_400_000.0), "2000-02-29");
         assert_eq!(day_of_ms(f64::NAN), "");
         assert_eq!(replace_param("https://x.org/s?a=1&start=1&b=2", "start", "41"), "https://x.org/s?a=1&b=2&start=41");
+    }
+
+    #[test]
+    fn dynamical_datasets() {
+        let p = Portal::new(Some("dynamical"), None).unwrap();
+        assert!(!p.needs_query() && !p.needs_place());
+        assert_eq!(p.search_url("", None, 20), "https://stac.dynamical.org/catalog.json");
+        let c = br#"{"links":[{"rel":"root","href":"https://stac.dynamical.org/catalog.json"},{"rel":"child","href":"https://stac.dynamical.org/noaa-gfs-forecast/collection.json","title":"NOAA GFS forecast"},{"rel":"child","href":"https://stac.dynamical.org/noaa-gfs-forecast-virtual/collection.json","title":"virtual"},{"rel":"child","href":"https://stac.dynamical.org/ecmwf-ifs-ens-forecast-15-day-0-25-degree/collection.json"},{"rel":"child","href":"https://stac.dynamical.org/odd/collection.json"}]}"#;
+        let ds = p.parse("https://stac.dynamical.org/catalog.json", c, None, "").unwrap();
+        assert_eq!(
+            ds.iter().map(|d| d.resources[0].url.as_str()).collect::<Vec<_>>(),
+            vec![
+                "https://data.dynamical.org/noaa/gfs/forecast/latest.zarr",
+                "https://data.dynamical.org/ecmwf/ifs-ens/forecast-15-day-0-25-degree/latest.zarr"
+            ]
+        );
+        assert_eq!((ds[0].title.as_str(), ds[0].organization.as_str(), ds[0].kind.as_str()), ("NOAA GFS forecast", "NOAA", "Forecast"));
+        assert_eq!(ds[0].resources[0].using, Use::Zarr);
+        assert_eq!(p.parse("https://stac.dynamical.org/catalog.json", c, None, "ecmwf").unwrap().len(), 1);
     }
 
     #[test]

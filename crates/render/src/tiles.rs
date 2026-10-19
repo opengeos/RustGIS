@@ -45,6 +45,7 @@ pub fn spec(t: &TileLayer) -> Spec {
         tms: t.tms,
         attribution: t.attribution.clone(),
         layers: t.layers.clone(),
+        style_layers: t.style_layers.clone(),
     }
 }
 

@@ -2258,7 +2258,7 @@ fn picture_texture(app: &mut RustGisApp, ctx: &egui::Context, value: &str) -> Re
 /// A picture kept with a feature, decoded for the identify popup. A project's value is hostile:
 /// its size is checked before anything is decoded, so a small compressed picture can't unpack
 /// into a huge one.
-fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+pub(crate) fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(2048);

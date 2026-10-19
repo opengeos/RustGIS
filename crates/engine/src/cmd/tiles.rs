@@ -38,6 +38,8 @@ pub const NETWORK: &[&str] = &[
     "sourcecoop.list",
     "portal.search",
     "portal.add",
+    "nationalMap.add",
+    "fieldsOfTheWorld.add",
     "portal.files",
     "earthdata.collections",
     "earthdata.granules",
@@ -51,7 +53,7 @@ pub const NETWORK: &[&str] = &[
 pub fn commands() -> Vec<C> {
     vec![
         C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).params(
-            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id, "view"?: bool (a MapLibre style: go to the place, zoom, bearing and pitch its root properties give, once it loads), "start"?, "end"?: dates a url with date placeholders ({date:YYYY-MM-DD}, {YYYY}) spans, turning the time slider on (or, when it is on, setting its span), "unit"?, "interval"?, "dates"?: its steps (as in time.set)}"#,
+            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "styleLayers"?: [MapLibre style layers drawing vector tiles instead (their source is the tiles')], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "overlay"?: bool (a transparent layer kept on top; one with the same address and role is replaced when it has the same name or the same look), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id, "view"?: bool (a MapLibre style: go to the place, zoom, bearing and pitch its root properties give, once it loads), "start"?, "end"?: dates a url with date placeholders ({date:YYYY-MM-DD}, {YYYY}) spans, turning the time slider on (or, when it is on, setting its span), "unit"?, "interval"?, "dates"?: its steps (as in time.set)}"#,
         ),
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
@@ -179,6 +181,13 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(names) = p.get("layers").and_then(Value::as_array) {
         t.layers = names.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
+    // The tiles' own look: MapLibre style layers, as a JSON array or its text.
+    match p.get("styleLayers") {
+        Some(Value::String(text)) => t.style_layers = rustgis_map::tiles::checked_style_layers(text)?,
+        Some(v @ Value::Array(_)) => t.style_layers = rustgis_map::tiles::checked_style_layers(&v.to_string())?,
+        Some(Value::Null) | None => {}
+        Some(_) => return Err("styleLayers is a JSON array of MapLibre style layers".into()),
+    }
     if let Some(subs) = p.get("subdomains") {
         t.subdomains = match subs {
             Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
@@ -201,7 +210,11 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         m.tiles.retain(|o| o.overlay);
     }
     // The same address and role again replaces the old one; overlays survive basemap changes.
-    m.tiles.retain(|o| !(o.url == t.url && o.kind == t.kind && o.overlay == t.overlay));
+    // Two looks of one archive (Fields of the World's fields and density) are told apart by
+    // their names: the same look, or the same name, replaces.
+    m.tiles.retain(|o| {
+        !(o.url == t.url && o.kind == t.kind && o.overlay == t.overlay && (o.style_layers == t.style_layers || o.name == t.name))
+    });
     if m.tiles.len() >= MAX_TILE_LAYERS {
         return Err(format!("a map holds at most {MAX_TILE_LAYERS} tile layers"));
     }

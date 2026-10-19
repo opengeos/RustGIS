@@ -34,6 +34,9 @@ enum Phase {
 #[derive(Default)]
 pub struct State {
     pub address: String,
+    /// What the store is called in its layers' names, when it has a better name than its file's
+    /// (a Web Data dataset's title).
+    pub title: Option<String>,
     pub crs: String,
     /// The store's root: a web address or a folder, as connected.
     root: String,
@@ -136,8 +139,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         }
         Phase::Labels => {
             if let Some(store) = &st.store {
-                st.info = Some(zarr::info(store, &st.got));
-                st.variable = 0;
+                let info = zarr::info(store, &st.got);
+                // A Web Data dataset opens on its air temperature when it has one (a weather
+                // model's most looked-at variable), else its first.
+                st.variable = if st.title.is_some() { first_temperature(&info) } else { 0 };
+                st.info = Some(info);
                 st.steps.clear();
             }
             st.got.clear();
@@ -206,6 +212,14 @@ pub(crate) fn connect(app: &mut RustGisApp) {
     }
 }
 
+/// The first variable named for temperature (`temperature_2m`), or the first.
+fn first_temperature(info: &Value) -> usize {
+    info["variables"]
+        .as_array()
+        .and_then(|vs| vs.iter().position(|v| v["name"].as_str().is_some_and(|n| n.starts_with("temperature"))))
+        .unwrap_or(0)
+}
+
 /// The dialog. Returns whether it should close.
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     ui.label(
@@ -228,8 +242,24 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         go |= ui.add_enabled(!app.ui.zarr.busy(), egui::Button::new(crate::tl!("Connect"))).clicked();
     });
     if go {
+        app.ui.zarr.title = None;
         connect(app);
     }
+    picker(app, ui);
+    // The dialog stays open, to add other steps.
+    false
+}
+
+/// The store's variables and their other dimensions' steps, and Add to Map: the dialog's body, and
+/// the Web Data pane's for a dataset it opens (Dynamical).
+pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
+    // Beside the dimensions' names.
+    let wide = (ui.available_width() - 230.0).clamp(120.0, 380.0);
+    // A Web Data dataset (a forecast or analysis archive: `title` is set while the Web Data pane
+    // has it open, cleared when it closes) opens on its latest complete time, as GeoLibre's does:
+    // the step before the newest, which may still be being written (an archive whose newest is
+    // complete opens one step early). A store added by hand opens on its first.
+    let latest = app.ui.zarr.title.is_some();
     let busy = app.ui.zarr.busy();
     if busy {
         ui.horizontal(|ui| {
@@ -241,11 +271,11 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     if let Some(e) = &app.ui.zarr.error {
         ui.label(egui::RichText::new(e).color(ui.visuals().error_fg_color));
     }
-    let Some(info) = app.ui.zarr.info.clone() else { return false };
+    let Some(info) = app.ui.zarr.info.clone() else { return };
     let vars: Vec<Value> = info["variables"].as_array().cloned().unwrap_or_default();
     if vars.is_empty() {
         ui.label(crate::tl!("The store has no variables with two or more dimensions."));
-        return false;
+        return;
     }
     let st = &mut app.ui.zarr;
     st.variable = st.variable.min(vars.len() - 1);
@@ -261,7 +291,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     };
     egui::Grid::new("zarr").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(crate::tl!("Variable"));
-        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(380.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(wide).truncate().show_ui(ui, |ui| {
             for (i, v) in vars.iter().enumerate() {
                 if ui.selectable_value(&mut st.variable, i, title(v)).changed() {
                     st.steps.clear();
@@ -273,7 +303,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         for d in var["dims"].as_array().into_iter().flatten().filter(|d| d["map"] != json!(true)) {
             let (name, size) = (d["name"].as_str().unwrap_or("").to_string(), d["size"].as_u64().unwrap_or(1).max(1));
             ui.label(name.clone());
-            let step = st.steps.entry(name).or_insert(0);
+            let timely = name.contains("time") && !name.contains("lead");
+            let step = st.steps.entry(name).or_insert(if latest && timely { size.saturating_sub(2) } else { 0 });
             ui.horizontal(|ui| {
                 ui.add(egui::Slider::new(step, 0..=size - 1).show_value(true));
                 let label = d["labels"]
@@ -314,15 +345,16 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             add(app, zarr::Selection { variable: var.clone(), index }, &labels);
         }
     });
-    // The dialog stays open, to add other steps.
-    false
 }
 
 /// Adds the slice: through the command for a folder, or fetches its chunks first for a web store.
 fn add(app: &mut RustGisApp, sel: zarr::Selection, labels: &[String]) {
     let st = &mut app.ui.zarr;
     st.error = None;
-    let name = rustgis_engine::cmd::zarr::layer_name(&st.root, &sel, labels);
+    let name = match &st.title {
+        Some(t) => format!("{t} {}", rustgis_engine::cmd::zarr::layer_name("", &sel, labels)),
+        None => rustgis_engine::cmd::zarr::layer_name(&st.root, &sel, labels),
+    };
     if !st.web {
         let index: serde_json::Map<String, Value> = sel.index.iter().map(|(d, i)| (d.clone(), json!(i))).collect();
         let mut p = json!({"path": st.root, "variable": sel.variable, "index": index, "name": name});
