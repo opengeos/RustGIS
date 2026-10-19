@@ -342,6 +342,19 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     if look.is_some() && t.kind != TileKind::Cog {
         return Err("bands, range and dequantize are for a cloud-optimised GeoTIFF's layer".into());
     }
+    let new_url = match look {
+        Some(look) => {
+            let new = look(cog::split(&t.url).1);
+            // Bands the file hasn't (when its header is in): said, not shown as its own look.
+            if let Ok(Some(info)) = cog::info(&t.url)
+                && let Some(b) = new.bands.iter().find(|b| **b >= info.layout.bands)
+            {
+                return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b + 1));
+            }
+            Some(cog::with_look(&t.url, &new))
+        }
+        None => None,
+    };
     if let Some(v) = b(p, "visible") {
         t.visible = v;
     }
@@ -354,9 +367,8 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(r) = ps(p, "rename").map(str::trim).filter(|r| !r.is_empty()) {
         t.name = r.chars().take(120).collect();
     }
-    if let Some(look) = look {
-        let (_, old) = cog::split(&t.url);
-        t.url = cog::with_look(&t.url, &look(old));
+    if let Some(url) = new_url {
+        t.url = url;
     }
     if let Some(mv) = ps(p, "move") {
         let to = match mv {

@@ -28,6 +28,8 @@ struct Request {
     bands: [usize; 3],
     /// The session's download it is handed over as (dropped when another project opens).
     id: u64,
+    /// Set when the read took only part of the view (Tessera's window around its centre).
+    cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The pane's choices, the read under way and what it found.
@@ -155,7 +157,13 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                         p["bands"] = json!(req.bands.map(|b| b + 1));
                     }
                     match app.run("embeddings.add", p) {
-                        Ok(_) => app.map.invalidate(),
+                        Ok(_) => {
+                            app.map.invalidate();
+                            if req.cut.load(std::sync::atomic::Ordering::Relaxed) {
+                                app.ui.embeddings.info =
+                                    Some(tl!("The view is larger than one read: its centre was read (zoom in for the rest)").to_string());
+                            }
+                        }
                         Err(e) => app.ui.embeddings.error = Some(e),
                     }
                 }
@@ -253,7 +261,7 @@ fn add(app: &mut RustGisApp, i: usize) {
                 }),
             );
             let id = app.session.download_started();
-            let req = Request { name, dataset: "earth-index", year: emb::EARTH_INDEX_YEAR, bands: [0; 3], id };
+            let req = Request { name, dataset: "earth-index", year: emb::EARTH_INDEX_YEAR, bands: [0; 3], id, cut: Default::default() };
             app.ui.embeddings.reading = Some(Read::Data(slot, req));
         }
         _ => {
@@ -266,12 +274,15 @@ fn add(app: &mut RustGisApp, i: usize) {
             let zone = tessera::zone_of((bbox[0] + bbox[2]) / 2.0);
             let name = format!("Tessera {year} ({})", bands.map(|b| (b + 1).to_string()).join(", "));
             let (slot, land) = data_slot();
+            let cut: std::sync::Arc<std::sync::atomic::AtomicBool> = Default::default();
+            let cut_set = cut.clone();
             cache::download(
                 &tessera::group_url(zone),
                 Box::new(move |r| {
                     let plan = r.and_then(|b| tessera::parse_group(zone, &b)).and_then(|g| tessera::plan(g, bbox, year));
                     match plan {
                         Ok(plan) => {
+                            cut_set.store(plan.cut, std::sync::atomic::Ordering::Relaxed);
                             tessera::read(
                                 plan,
                                 bands,
@@ -287,7 +298,7 @@ fn add(app: &mut RustGisApp, i: usize) {
                 }),
             );
             let id = app.session.download_started();
-            app.ui.embeddings.reading = Some(Read::Data(slot, Request { name, dataset: "tessera", year, bands, id }));
+            app.ui.embeddings.reading = Some(Read::Data(slot, Request { name, dataset: "tessera", year, bands, id, cut }));
         }
     }
 }

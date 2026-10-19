@@ -301,9 +301,10 @@ pub fn aef_tiles(fields: &[Field], batch: &Batch, year: i32, bbox: [f64; 4]) -> 
                 }
                 _ => Vec::new(),
             };
-            let crs = text(f, epsg);
-            let zone =
-                crs.strip_prefix("EPSG:327").map(|z| format!("{z}S")).or_else(|| crs.strip_prefix("EPSG:326").map(|z| format!("{z}N")));
+            // `EPSG:32610`, or the bare number.
+            let code = text(f, epsg).trim_start_matches("EPSG:").to_string();
+            let crs = format!("EPSG:{code}");
+            let zone = code.strip_prefix("327").map(|z| format!("{z}S")).or_else(|| code.strip_prefix("326").map(|z| format!("{z}N")));
             let stem = url.rsplit('/').next().unwrap_or("").trim_end_matches(".tiff").trim_end_matches(".tif").to_string();
             let title = match &zone {
                 Some(z) => format!("AlphaEarth {year} · UTM {}", z.trim_start_matches('0')),
@@ -785,6 +786,13 @@ mod tests {
         let t = aef_tiles(&fields, &batch, 2021, [-123.0, 40.0, -122.0, 41.0]);
         assert_eq!(t.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["near", "far"]);
         assert_eq!(t[0].title, "AlphaEarth 2021 · UTM 10N");
+        // A bare EPSG number reads the same.
+        let mut bare = batch.clone();
+        for f in bare.features.iter_mut() {
+            f.attrs[3] = Value::Int(32610);
+        }
+        let b = aef_tiles(&fields, &bare, 2021, [-123.0, 40.0, -122.0, 41.0]);
+        assert_eq!((b[0].title.as_str(), b[0].detail.starts_with("EPSG:32610 ·")), ("AlphaEarth 2021 · UTM 10N", true));
         assert_eq!(t[0].url, "https://data.source.coop/a/2021/10N/near.tiff");
         assert_eq!(t[0].footprint.len(), 5);
         let fc = footprints_geojson(&t);

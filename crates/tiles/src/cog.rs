@@ -441,6 +441,20 @@ fn stats_level(layout: &Layout) -> usize {
     layout.levels.iter().rposition(|l| l.width >= 256 && l.height >= 256).unwrap_or(0)
 }
 
+/// The full range of a file's type of values, as a look shows them (floats have none: 0–255 is a
+/// rough default for them).
+fn type_range(layout: &Layout, aef: bool) -> (f32, f32) {
+    let r = match layout.data_type {
+        "Int8" => (-128.0, 127.0),
+        "Int16" => (-32768.0, 32767.0),
+        "UInt16" => (0.0, 65535.0),
+        "Int32" => (-2_147_483_648.0, 2_147_483_647.0),
+        "UInt32" => (0.0, 4_294_967_295.0),
+        _ => (0.0, 255.0),
+    };
+    (shown_value(r.0, aef), shown_value(r.1, aef))
+}
+
 /// Keeps a look's stretch: a few looks a file (a script trying many is hostile input); past them,
 /// the others are read again when asked for.
 fn keep_stretch(info: &Info, key: (Vec<usize>, bool), s: Vec<(f32, f32)>) {
@@ -476,19 +490,9 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     let colour: Vec<usize> = shown.iter().copied().take(3).collect();
     let coarsest = stats_level(&info.layout);
     let n = info.layout.levels.get(coarsest).map(|l| l.tiles() as usize).unwrap_or(0);
-    // Too many tiles to read for it: the values' full range for the type, or 0–255.
+    // Too many tiles to read for it: the values' full range for the type.
     if n == 0 || n > MAX_STATS_TILES {
-        // (Floats have no such range: 0–255 is a rough default for them.)
-        let r = match info.layout.data_type {
-            "Int8" => (-128.0, 127.0),
-            "Int16" => (-32768.0, 32767.0),
-            "UInt16" => (0.0, 65535.0),
-            "Int32" => (-2_147_483_648.0, 2_147_483_647.0),
-            "UInt32" => (0.0, 4_294_967_295.0),
-            _ => (0.0, 255.0),
-        };
-        let r = (shown_value(r.0, look.aef), shown_value(r.1, look.aef));
-        let s = vec![r; colour.len()];
+        let s = vec![type_range(&info.layout, look.aef); colour.len()];
         keep_stretch(&info, (colour, look.aef), s.clone());
         then(Ok(s));
         return;
@@ -505,13 +509,15 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     }
     let tiles: Vec<u32> = (0..n as u32).collect();
     let i = info.clone();
+    let shown_bands = colour.len();
     let done = move |r: Result<Vec<(f32, f32)>, String>| {
         let waiting = i.stretching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
-        if let Ok(s) = &r {
-            keep_stretch(&i, key, s.clone());
-        }
+        // An overview that can't be read: the type's full range, kept, so the map tiles that ask
+        // next don't read it again and again.
+        let s = r.unwrap_or_else(|_| vec![type_range(&i.layout, key.1); shown_bands]);
+        keep_stretch(&i, key, s.clone());
         for w in waiting {
-            w(r.clone());
+            w(Ok(s.clone()));
         }
     };
     fetch_bands(
