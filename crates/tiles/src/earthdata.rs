@@ -126,11 +126,11 @@ fn within(host: &str, suffix: &str) -> bool {
 const PUBLIC_HOSTS: &[&str] = &["cmr.earthdata.nasa.gov", "search.earthdata.nasa.gov", "gibs.earthdata.nasa.gov", "gis.earthdata.nasa.gov"];
 
 /// Whether `url` is on an Earthdata data host, the only place the token is sent: HTTPS on
-/// `*.earthdatacloud.nasa.gov` or `*.earthdata.nasa.gov`, never the login host or a public
+/// `*.earthdatacloud.nasa.gov` or `*.earthdata.nasa.gov`, never a login host (`*urs.…`) or a public
 /// service ([`PUBLIC_HOSTS`]).
 pub fn is_data_host(url: &str) -> bool {
     https_host(url).is_some_and(|h| {
-        h != LOGIN_HOST
+        !within(&h, LOGIN_HOST)
             && !PUBLIC_HOSTS.iter().any(|p| within(&h, p))
             && (within(&h, "earthdatacloud.nasa.gov") || within(&h, "earthdata.nasa.gov"))
     })
@@ -141,7 +141,7 @@ pub fn is_login(url: &str) -> bool {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h).split(':').next().unwrap_or("");
-    host.trim_end_matches('.').eq_ignore_ascii_case(LOGIN_HOST)
+    within(&host.trim_end_matches('.').to_ascii_lowercase(), LOGIN_HOST)
 }
 
 /// The `Authorization` header a request to `url` carries: the token kept, for a data host only.
@@ -553,6 +553,7 @@ mod tests {
             "http://data.lpdaac.earthdatacloud.nasa.gov/a.tif",
             "https://urs.earthdata.nasa.gov/oauth/authorize",
             "https://URS.earthdata.nasa.gov./x",
+            "https://uat.urs.earthdata.nasa.gov/oauth/authorize",
             "https://evilearthdata.nasa.gov/a",
             "https://earthdata.nasa.gov.evil.com/a",
             "https://user@data.lpdaac.earthdatacloud.nasa.gov/a",
@@ -572,6 +573,7 @@ mod tests {
         }
         assert!(is_login("https://urs.earthdata.nasa.gov/oauth/authorize?client_id=x"));
         assert!(is_login("https://URS.Earthdata.nasa.gov:443/x"));
+        assert!(is_login("https://uat.urs.earthdata.nasa.gov/x"));
         assert!(!is_login("https://data.lpdaac.earthdatacloud.nasa.gov/login"));
     }
 

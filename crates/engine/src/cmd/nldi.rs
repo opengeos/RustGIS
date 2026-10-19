@@ -208,6 +208,6 @@ fn fetch(_url: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn fetch_post(url: &str, _body: &str) -> Result<Vec<u8>, String> {
-    fetch(url)
+fn fetch_post(_url: &str, _body: &str) -> Result<Vec<u8>, String> {
+    Err("in the web app, use Home › Web Data › United States › USGS NLDI".into())
 }
