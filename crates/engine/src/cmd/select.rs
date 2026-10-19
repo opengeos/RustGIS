@@ -73,7 +73,7 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?: name|id (default: the active layer, which need not be the layer last selected in)}"#)
         .when(need_selection),
         C::new("identify", "Identify", "Home › Inspect", identify).view().params(
-            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted; the mode picks the layers, and every feature under the point in them, up to 100, is in "results"; topmost and visible take vector tile layers' features too, with "tileLayer" and "sourceLayer")}"#,
+            r#"{"lon", "lat", "tolerancePx"?, "mode"?: "topmost"|"visible"|"selectable"|"selectedInContents"|"none" (the map's pop-up mode when omitted; the mode picks the layers, and every feature under the point in them, up to 100, is in "results"; topmost and visible take vector tile layers' features too, with "tileLayer" and "sourceLayer", from the tiles drawn there: one not loaded yet is asked for, and its features come on a later identify)}"#,
         ),
         C::new("map.popupMode", "Pop-up Mode", "Home › Navigate", popup_mode)
             .params(r#"{"mode": "topmost"|"visible"|"selectable"|"selectedInContents"|"none"}"#),

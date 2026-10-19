@@ -323,7 +323,13 @@ pub fn write(tiles: Vec<(u8, u32, u32, Vec<u8>)>, a: &NewArchive) -> Result<Vec<
     h.push(min_zoom);
     h.extend_from_slice(&e7((w + e) / 2.0, 180.0));
     h.extend_from_slice(&e7((so + n) / 2.0, 90.0));
-    Ok([h, root, meta, leaves, data].concat())
+    let mut out = h;
+    out.reserve_exact(root.len() + meta.len() + leaves.len() + data.len());
+    for part in [root, meta, leaves] {
+        out.extend_from_slice(&part);
+    }
+    out.extend_from_slice(&data);
+    Ok(out)
 }
 
 /// A directory: delta-coded tile ids, then run lengths, lengths and offsets (0 for "right after
