@@ -854,7 +854,7 @@ impl Map {
         }
         for t in &mut self.tiles {
             // Only web addresses take dates (a file's template is dropped when it is repaired).
-            if let Some(template) = t.time_url.as_ref().filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
+            if let Some(template) = t.time_url.as_ref().filter(|u| tiles::is_web(u)) {
                 // Off: the first date the slider showed, or the template's start of time.
                 t.url = rustgis_data::time::fill_template(template, current.unwrap_or(t.time_at));
                 t.time_at = current.unwrap_or(t.time_at);

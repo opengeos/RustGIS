@@ -21,6 +21,8 @@ pub struct TimeBarState {
     /// The features of each step, and what they were counted for: the map and steps, and each
     /// bound layer's rows and fields (shared until an edit changes them).
     counts: Option<(CountsKey, Vec<Bound>, Vec<u32>)>,
+    /// The step's interval as dragged or typed, until it is applied.
+    interval: Option<u32>,
     /// The slider's steps, and the slider they were listed for.
     steps: Option<(TimeSlider, std::sync::Arc<Vec<f64>>)>,
 }
@@ -133,7 +135,9 @@ fn advance(app: &mut RustGisApp, ui: &Ui) {
     } else {
         app.time.playing = Some(elapsed);
     }
-    ui.ctx().request_repaint();
+    // Woken for the next step, not every frame (soon enough to stay on time).
+    let left = f64::from(t.speed_ms) - app.time.playing.unwrap_or(0.0);
+    ui.ctx().request_repaint_after(web_time::Duration::from_millis(left.clamp(1.0, 50.0) as u64));
 }
 
 /// The project, map and steps the counts were made for.
@@ -268,10 +272,15 @@ fn header(app: &mut RustGisApp, ui: &mut Ui, t: &TimeSlider, steps: &[f64], tk: 
             }
         });
         ui.label(egui::RichText::new(tl!("Show")).font(regular(11.5)).color(tk.text_dim));
-        let mut every = t.interval;
-        let changed = ui.add(egui::DragValue::new(&mut every).range(1..=1000).speed(0.1)).on_hover_text(tl!("Units per step")).changed();
-        if changed {
-            let _ = app.run("time.set", json!({"interval": every}));
+        // Applied when the drag or the typing ends: one undo step, not one a frame.
+        let mut every = app.time.interval.unwrap_or(t.interval);
+        let r = ui.add(egui::DragValue::new(&mut every).range(1..=1000).speed(0.1)).on_hover_text(tl!("Units per step"));
+        if r.changed() {
+            app.time.interval = Some(every);
+        }
+        let done = r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged() && !r.has_focus());
+        if done && let Some(n) = app.time.interval.take() {
+            let _ = app.run("time.set", json!({"interval": n}));
         }
         egui::ComboBox::from_id_salt("time_unit").selected_text(unit_label(t.unit)).width(70.0).show_ui(ui, |ui| {
             for u in Unit::ALL {

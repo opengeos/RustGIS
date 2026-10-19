@@ -9434,6 +9434,13 @@ fn time_slider_survives_saving_cumulative_edits_and_bad_parameters() {
     let (heights, _) = rustgis_data::io::read_geojson(text, "Peaks").unwrap();
     assert!(!rustgis_map::time::has_dates(&heights));
     assert_eq!(rustgis_map::time::time_fields(&heights).len(), 1, "still offered when asked");
+    // Pasted into a map without a slider, the copy shows every feature (no window comes along).
+    t.run("layer.copy", &json!({"layer": "Events"})).unwrap();
+    t.run("map.new", &json!({"name": "Plain"})).unwrap();
+    t.run("layer.paste", &Value::Null).unwrap();
+    assert!(t.map().time.is_none());
+    assert_eq!(shown(&t).len(), 8);
+    t.run("map.activate", &json!({"name": "Map"})).unwrap();
     // Features changed outside a command (as a streamed layer reads another view), with as many
     // rows: the window is worked out again for them, not the old rows' mask reused.
     {
@@ -9462,6 +9469,11 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
     // Only tile kinds that fill dates take a dated address.
     let e = s.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.pmtiles", "start": 2000})).unwrap_err();
     assert!(e.contains("dated addresses"), "{e}");
+    // A scheme in capitals is still a web address that follows the slider.
+    let mut caps = timed_events();
+    caps.run("map.addTiles", &json!({"url": "HTTPS://example.com/{date:YYYY}/{z}/{x}/{y}.png", "start": 2000, "end": 2002})).unwrap();
+    caps.run("time.goTo", &json!({"date": 2002})).unwrap();
+    assert!(caps.map().tiles[0].url.contains("/2002/"), "{}", caps.map().tiles[0].url);
     // A dated address with the slider off needs its span.
     let mut off = timed_events();
     assert!(off.run("map.addTiles", &json!({"url": "https://example.com/{date:YYYY}/{z}/{x}/{y}.png"})).is_err());

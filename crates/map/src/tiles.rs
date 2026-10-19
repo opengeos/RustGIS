@@ -144,6 +144,12 @@ pub struct TileLayer {
     pub time_at: f64,
 }
 
+/// Whether an address is on the web (`http://` or `https://`, in any case).
+pub fn is_web(url: &str) -> bool {
+    let scheme = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    scheme.starts_with("https://") || scheme.starts_with("http://")
+}
+
 fn is_zero(x: &f64) -> bool {
     *x == 0.0
 }
@@ -216,7 +222,7 @@ impl TileLayer {
     pub fn repair(&mut self) -> Result<(), String> {
         self.url = self.url.trim().to_string();
         // A dated address is a web address whose date is filled in after the scheme and host.
-        if self.time_url.as_ref().is_some_and(|u| !(u.starts_with("https://") || u.starts_with("http://")) || u.len() > 4096) {
+        if self.time_url.as_ref().is_some_and(|u| !is_web(u) || u.len() > 4096) {
             self.time_url = None;
         }
         let local = matches!(self.kind, TileKind::PmTiles | TileKind::MbTiles) && is_local_archive(&self.url);

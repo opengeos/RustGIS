@@ -291,7 +291,7 @@ fn digits(s: &str, min: usize, max: usize) -> Option<i64> {
 }
 
 /// Formats an instant with tokens `YYYY`, `YY`, `MMMM` (January), `MMM` (Jan), `MM`, `M`, `DD`,
-/// `D`, `HH`, `H`, `mm`, `ss`; other characters are kept.
+/// `D`, `HH`, `H`, `mm`, `ss`; other characters are kept, and so is text in brackets (`[Day] D`).
 pub fn format(t: f64, fmt: &str) -> String {
     if !t.is_finite() {
         return String::new();
@@ -317,6 +317,14 @@ pub fn format(t: f64, fmt: &str) -> String {
     let mut out = String::new();
     let mut rest = fmt;
     'outer: while !rest.is_empty() {
+        // `[text]` is kept as it is (`YYYY-MM-DD[T]HH`).
+        if let Some(r) = rest.strip_prefix('[')
+            && let Some(end) = r.find(']')
+        {
+            out.push_str(r.get(..end).unwrap_or(""));
+            rest = r.get(end + 1..).unwrap_or("");
+            continue;
+        }
         for (tok, val) in &tokens {
             if let Some(r) = rest.strip_prefix(tok) {
                 out.push_str(val);
@@ -555,6 +563,7 @@ mod tests {
         assert_eq!(format(t, "YYYY-MM-DD HH:mm:ss"), "2023-08-05 09:07:03");
         assert_eq!(format(t, "MMM D, YYYY"), "Aug 5, 2023");
         assert_eq!(format(t, "MMMM YY"), "August 23");
+        assert_eq!(format(t, "YYYY-MM-DD[T]HH [Day] D"), "2023-08-05T09 Day 5");
         assert_eq!(fill_template("https://x/{date:YYYY-MM-DD}/{z}/{y}/{x}.jpg", t), "https://x/2023-08-05/{z}/{y}/{x}.jpg");
         assert_eq!(fill_template("https://x/{YYYY}{MM}{DD}_{YYYYMMDD}.tif", t), "https://x/20230805_20230805.tif");
         assert_eq!(fill_template("open {brace", t), "open {brace");

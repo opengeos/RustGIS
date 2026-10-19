@@ -693,7 +693,8 @@ impl Session {
                 // whose features or fields the command changed (features are shared with the
                 // snapshot until written) take the window again.
                 for (i, m) in self.project.maps.iter_mut().enumerate() {
-                    let Some(window) = m.time.as_ref().map(rustgis_map::time::TimeSlider::window) else { continue };
+                    // No slider (a layer pasted from a map with one): no window either.
+                    let window = m.time.as_ref().map(rustgis_map::time::TimeSlider::window);
                     // Layer ids are a map's own: compared within the same map (any layer, when
                     // maps came or went).
                     let before = snap.maps.get(i).filter(|o| o.name == m.name).map(|o| o.layers.as_slice()).unwrap_or_default();
@@ -703,7 +704,7 @@ impl Session {
                         });
                         let rustgis_map::Layer { time, dataset, .. } = l;
                         if let Some(b) = time.as_mut().filter(|_| !same) {
-                            b.apply(dataset, Some(window));
+                            b.apply(dataset, window);
                         }
                     }
                 }
