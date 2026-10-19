@@ -265,12 +265,12 @@ buttons bound to its commands. Declare it in `plugin.json`:
 - `items` lists the widgets, top to bottom (1 to 32). Buttons that follow each other share a
   row. Each has an `id` (lower-case letters, digits and hyphens; a button's is its command's
   unless given), and `label` and `help` (on hover) where they apply:
-  - `text`: a caption (`label`) over text the plugin sets (`text` is what it shows first).
-  - `checkbox`: a box with a `label`, `default` `false` unless given.
-  - `slider`: whole numbers from `min` to `max` (`default` is `min` unless given), with a
-    caption, the value's label, and its two ends' labels. `steps: true` adds ‹ and › buttons
-    that move it by one.
-  - `button`: runs its `command`; its `label` is the command's unless given.
+    - `text`: a caption (`label`) over text the plugin sets (`text` is what it shows first).
+    - `checkbox`: a box with a `label`, `default` `false` unless given.
+    - `slider`: whole numbers from `min` to `max` (`default` is `min` unless given), with a
+      caption, the value's label, and its two ends' labels. `steps: true` adds ‹ and › buttons
+      that move it by one.
+    - `button`: runs its `command`; its `label` is the command's unless given.
 - A checkbox runs its `command` when it changes, and a slider when it is let go, or stepped:
   never while it is dragged, while the pane shows the label of the value it would take. Without
   a `command`, a widget's value just goes with the plugin's next request.
@@ -482,12 +482,12 @@ requests and replies over its standard input and output, one JSON object per lin
 1. RustGIS writes the request: `{"abi", "kind", "id", "params", "layers", "files", "lang"}`, as
    a WebAssembly module gets it.
 2. The program writes lines:
-   - `{"call": {"op": "...", "params": {...}}}`: a [host request](#what-a-plugin-can-ask-for).
-     RustGIS answers with one line, `{"ok": value}` or `{"error": "text"}`.
-   - `{"log": "text"}`: a line for the log (and a tool's run messages).
-   - `{"progress": "text"}`: what a tool is doing now, shown while it runs and not kept in its
-     messages: a line per step of a long run, say.
-   - Last, `{"ok": value}` or `{"error": "text"}`: the result.
+    - `{"call": {"op": "...", "params": {...}}}`: a [host request](#what-a-plugin-can-ask-for).
+      RustGIS answers with one line, `{"ok": value}` or `{"error": "text"}`.
+    - `{"log": "text"}`: a line for the log (and a tool's run messages).
+    - `{"progress": "text"}`: what a tool is doing now, shown while it runs and not kept in its
+      messages: a line per step of a long run, say.
+    - Last, `{"ok": value}` or `{"error": "text"}`: the result.
 3. RustGIS then closes the program's input; a program still running a few seconds later is
    stopped.
 

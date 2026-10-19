@@ -77,12 +77,12 @@ contribute their vertices. Leave the extent empty to use the input's, or give it
 
 - **The circles are geodesic,** in longitude/latitude. The map draws each one as the ellipse its projection makes of it, and redraws them when you change the projection: growing circles in Web Mercator, flattened ellipses of equal area in Mollweide.
 - **On a flat map, each circle also records Tissot's parameters at its centre** for the projection the map had when the tool ran:
-  - `h` and `k`: scale along the meridian and the parallel;
-  - `a` and `b`: the ellipse's semi-axes;
-  - `area_scale`: `a·b`, which is 1 on an equal-area projection;
-  - `max_angle`: the largest angular distortion ω in degrees, 0 on a conformal projection.
+    - `h` and `k`: scale along the meridian and the parallel;
+    - `a` and `b`: the ellipse's semi-axes;
+    - `area_scale`: `a·b`, which is 1 on an equal-area projection;
+    - `max_angle`: the largest angular distortion ω in degrees, 0 on a conformal projection.
 
-  They are measured against the WGS 84 ellipsoid. For a world projection the map draws on a sphere (Mollweide, Robinson…), they can be off by a few tenths of a percent.
+      They are measured against the WGS 84 ellipsoid. For a world projection the map draws on a sphere (Mollweide, Robinson…), they can be off by a few tenths of a percent.
 - **Making a distortion map:** color the circles by `area_scale` or `max_angle`.
 
 ## GeoLibre tools
