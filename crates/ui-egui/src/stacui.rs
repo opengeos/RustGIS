@@ -827,7 +827,9 @@ fn find_items(app: &mut RustGisApp) {
     if let Ok(c) = st.max_cloud.trim().parse::<f64>() {
         p["maxCloud"] = json!(c);
     }
-    if !st.sortby.trim().is_empty() {
+    // A preset's sort order, only while the dialog is still on the preset's API (another API
+    // may not sort).
+    if !st.sortby.trim().is_empty() && shown_preset(st).is_some() {
         p["sortby"] = json!(st.sortby.trim());
     }
     if st.use_view {
