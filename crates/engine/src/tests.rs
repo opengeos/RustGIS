@@ -9366,6 +9366,14 @@ fn time_slider_survives_saving_cumulative_edits_and_bad_parameters() {
     let (heights, _) = rustgis_data::io::read_geojson(text, "Peaks").unwrap();
     assert!(!rustgis_map::time::has_dates(&heights));
     assert_eq!(rustgis_map::time::time_fields(&heights).len(), 1, "still offered when asked");
+    // Features changed outside a command (as a streamed layer reads another view), with as many
+    // rows: the window is worked out again for them, not the old rows' mask reused.
+    {
+        let l = t.map_mut().layers.iter_mut().find(|l| l.name == "Events").unwrap();
+        let fi = l.dataset.field_index("when").unwrap();
+        l.dataset.features[0].attrs[fi] = rustgis_data::Value::Text("2015-12-01".into());
+    }
+    assert_eq!(shown(&t), ["e1", "e2", "e3", "e7"]);
     // A field that is gone filters nothing.
     t.run("edit.deleteField", &json!({"field": "when"})).unwrap();
     assert_eq!(shown(&t).len(), 8);

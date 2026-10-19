@@ -175,13 +175,24 @@ pub struct TimeBinding {
     /// a cumulative one is unbounded, which JSON can't hold; opening a project applies it again.
     #[serde(skip)]
     pub window: Option<(f64, f64)>,
-    /// The rows that window keeps, worked out when it was applied.
+    /// The rows the window keeps, and the window, rows and fields they were worked out for:
+    /// worked out again when a layer's features change outside a command (a streamed layer reading
+    /// another view), once, not on every draw.
     #[serde(skip)]
-    shown: Arc<Vec<bool>>,
+    shown: Arc<std::sync::Mutex<Option<Shown>>>,
     /// Each row's moment, with the rows, fields and field it was read from: kept while they are
     /// the same, so moving the slider doesn't read the dates again.
     #[serde(skip)]
     moments: Option<Arc<Moments>>,
+}
+
+/// A binding's rows in its window, and what they were worked out for.
+#[derive(Debug)]
+struct Shown {
+    window: (f64, f64),
+    features: rustgis_data::Features,
+    fields: Vec<rustgis_data::Field>,
+    rows: Arc<Vec<bool>>,
 }
 
 /// A binding's moments and what they were read from.
@@ -202,7 +213,8 @@ impl TimeBinding {
     pub fn apply(&mut self, ds: &Dataset, window: Option<(f64, f64)>) {
         self.window = window;
         let Some(w) = window else {
-            self.shown = Arc::new(Vec::new());
+            // A new cache: copies of the binding (an undo step) keep theirs.
+            self.shown = Arc::default();
             return;
         };
         let fresh =
@@ -216,16 +228,23 @@ impl TimeBinding {
             }));
         }
         let m = self.moments.as_ref().and_then(|m| m.moments.as_deref());
-        self.shown = Arc::new(keep(m, ds.features.len(), w));
+        let rows = Arc::new(keep(m, ds.features.len(), w));
+        self.shown =
+            Arc::new(std::sync::Mutex::new(Some(Shown { window: w, features: ds.features.clone(), fields: ds.fields.clone(), rows })));
     }
 
-    /// The rows in the window (`None`: there is none, and every row shows). The rows worked out
-    /// when it was applied serve while the layer has as many features; the session applies the
-    /// window again after every edit.
-    pub fn keeps(&self, ds: &Dataset) -> Option<std::borrow::Cow<'_, [bool]>> {
+    /// The rows in the window (`None`: there is none, and every row shows): those worked out
+    /// for these features and fields, or (when they changed outside a command) worked out now and
+    /// kept.
+    pub fn keeps(&self, ds: &Dataset) -> Option<Arc<Vec<bool>>> {
         let w = self.window?;
-        let n = ds.features.len();
-        Some(if self.shown.len() == n { std::borrow::Cow::Borrowed(self.shown.as_slice()) } else { rows_in(ds, &self.field, w).into() })
+        let mut cache = self.shown.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = cache.as_ref().filter(|c| c.window == w && c.features.shares(&ds.features) && c.fields == ds.fields) {
+            return Some(c.rows.clone());
+        }
+        let rows = Arc::new(rows_in(ds, &self.field, w));
+        *cache = Some(Shown { window: w, features: ds.features.clone(), fields: ds.fields.clone(), rows: rows.clone() });
+        Some(rows)
     }
 }
 
