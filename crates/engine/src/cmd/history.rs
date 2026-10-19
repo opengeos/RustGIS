@@ -65,7 +65,9 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
         match replay(r) {
             Ok((cmd, params)) if r.ok => text.push_str(&format!("\n{}\n", python(&cmd, &params))),
             Ok((cmd, params)) => {
-                let why = r.messages.first().map(|m| line(&crate::sources::redact_text(m))).unwrap_or_default();
+                // An error may quote a connection, password and all: redacted as a parameter's
+                // value is, not for its addresses only.
+                let why = r.messages.first().map(|m| line(&redacted_text(m))).unwrap_or_default();
                 text.push_str(&format!(": failed when it ran ({why})\n"));
                 for l in python(&cmd, &params).lines() {
                     text.push_str(&format!("# {l}\n"));
@@ -168,7 +170,8 @@ fn private_keys_removed(t: &str) -> String {
 /// value in quotes or braces (`password='a b'`, ODBC's `PWD={a;b}`) goes whole, to its closer
 /// (to the end of the text when it has none).
 fn secret_pairs_emptied(t: &str) -> String {
-    let parts = |c: char| c.is_whitespace() || c == ',' || c == ';';
+    // A query string's `&` too: `a=1&password=…` has no `://` for `redact` to read it by.
+    let parts = |c: char| c.is_whitespace() || matches!(c, ',' | ';' | '&');
     let mut out = String::new();
     let mut rest = t;
     while !rest.is_empty() {

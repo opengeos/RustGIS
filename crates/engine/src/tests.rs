@@ -8131,6 +8131,28 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(s.run("gp.historyScript", &Value::Null).is_err(), "nothing to save");
 }
 
+/// A secret in a query string joined by `&`, or in a failed run's error quoting a connection,
+/// is left out of the copied code and the history script.
+#[test]
+fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
+    let mut s = world();
+    s.project.gp_history.push(crate::GpRecord {
+        tool: "Buffer".into(),
+        id: "buffer".into(),
+        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2"}),
+        command: None,
+        at: 0,
+        ok: false,
+        messages: vec!["could not connect: host=db password=mp".into()],
+        millis: 0,
+        outputs: Vec::new(),
+    });
+    let py = s.run("gp.historyCode", &json!({"run": 0})).unwrap()["code"].as_str().unwrap().to_string();
+    assert!(py.contains("a=1&password=&b=2") && !py.contains("qp"), "{py}");
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("failed when it ran (could not connect: host=db password=)") && !text.contains("=mp"), "{text}");
+}
+
 #[path = "../../../tests/support/ogc_server.rs"]
 mod ogc_server;
 
