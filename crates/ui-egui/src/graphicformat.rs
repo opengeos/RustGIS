@@ -185,8 +185,9 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
 mod tests {
     use super::*;
     use crate::RightPane::Format;
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
+    use egui::accesskit::{Action, ActionData, ActionRequest, Role};
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use rustgis_engine::map::layout::TextAlign;
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut fonts = false;
@@ -227,11 +228,25 @@ mod tests {
         h.run_steps(2);
         assert!(graphics::bold(&ds(&h), row));
         assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
-        // Italic too, as a layout's text has it (#535), with alignment and letter spacing beside it.
+        // Italic, alignment and letter spacing too, as a layout's text has them (#535), each saved.
         h.get_by_role_and_label(Role::CheckBox, "Italic").click();
         h.run_steps(2);
         assert!(graphics::italic(&ds(&h), row));
-        assert!(h.query_by_label("Alignment").is_some() && h.query_by_role_and_label(Role::SpinButton, "Letter spacing").is_some());
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "Center").click();
+        h.run_steps(2);
+        assert_eq!(graphics::align(&ds(&h), row), TextAlign::Center);
+        // Set as assistive technology sets a number.
+        let (node, tree) = h.get_by_role_and_label(Role::SpinButton, "Letter spacing").accesskit_node().locate();
+        h.event(egui::Event::AccessKitActionRequest(ActionRequest {
+            action: Action::SetValue,
+            target_tree: tree,
+            target_node: node,
+            data: Some(ActionData::NumericValue(3.5)),
+        }));
+        h.run_steps(3);
+        assert_eq!(graphics::letter_spacing(&ds(&h), row), 3.5);
         // Typed, then the pane closed: the text is saved, the text still selected.
         h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
         h.run_steps(2);
