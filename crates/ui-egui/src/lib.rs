@@ -1280,8 +1280,6 @@ impl RustGisApp {
             self.ui.web_file = None;
             // A deletion asked for in the old project never reaches a namesake in the new one.
             self.map.deleting = None;
-            // Nor does a layout element's selection, or the text typed into its fields.
-            self.layout.forget_project();
             // A recording's steps name the old project's layers: it ends here, and says so.
             if let Some(steps) = self.ws.recording.take() {
                 let n = steps.len().to_string();
@@ -1316,6 +1314,9 @@ impl RustGisApp {
         if open_layout(self) != layout_before {
             self.layout.selected = None;
         }
+        // A project this command opened: a layout element's selection and the text typed into its
+        // fields stay with the old one.
+        layoutview::follow_project(self);
         if r.is_ok() && matches!(id, "edit.undo" | "edit.redo") {
             self.map.vertex = None;
             if let Some(before) = steps_before
@@ -2916,6 +2917,8 @@ impl RustGisApp {
                 }
             }
         }
+        // A project an agent or a script opened, before the frame draws the old one's fields.
+        layoutview::follow_project(self);
         // Fonts installed last frame are active now.
         self.fonts_pending = false;
         i18n::set_current(self.lang());

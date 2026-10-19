@@ -60,6 +60,8 @@ pub struct LayoutView {
     /// The element whose fields the Format pane drew this frame, by layout and element: text
     /// typed into any other is saved at the end of the frame (`save_drafts`).
     drawn: Option<(usize, u32)>,
+    /// The project (`Session::opened`) the selection and the text being typed are for.
+    project: Option<u64>,
     drag: Option<Drag>,
     /// The page rectangle and points per millimetre the drag last saw.
     drag_page: Option<(Rect, f32)>,
@@ -87,15 +89,18 @@ pub struct LayoutView {
     frame_zoom: Option<(String, u32, f64, (f64, f64), f64)>,
 }
 
-impl LayoutView {
-    /// Forgets the selection and the text typed into its fields: another project replaced the
-    /// one they were for, and its elements may have the same ids.
-    pub(crate) fn forget_project(&mut self) {
-        self.selected = None;
-        self.formatted = None;
-        self.drawn = None;
-        self.typing.clear();
+/// Forgets the selection and the text typed into its fields once another project has replaced
+/// the one they were for: its elements may have the same ids. Run after every command, after
+/// what agents and scripts sent, and before drafts are saved.
+pub(crate) fn follow_project(app: &mut RustGisApp) {
+    let opened = app.session.opened;
+    if app.layout.project.is_some_and(|p| p != opened) {
+        app.layout.selected = None;
+        app.layout.formatted = None;
+        app.layout.drawn = None;
+        app.layout.typing.clear();
     }
+    app.layout.project = Some(opened);
 }
 
 /// Seconds after the wheel stops before a map frame's zoom is applied.
@@ -863,6 +868,7 @@ fn finish_frame(app: &mut RustGisApp, li: usize, shape: &str) {
 /// layout changed, or the pane was closed or hidden, before the field could notice it lost focus.
 /// Runs once a frame, after the panes and the view.
 pub(crate) fn save_drafts(app: &mut RustGisApp) {
+    follow_project(app);
     let shown = app.layout.drawn.take();
     let stale: Vec<_> = app.layout.typing.keys().filter(|(l, id, _)| Some((*l, *id)) != shown).copied().collect();
     for key in stale {
@@ -1737,8 +1743,10 @@ mod tests {
         assert_eq!(left_out(&h), ["Cities"]);
     }
 
-    /// The layout view with the Format pane beside it, as the app draws them.
+    /// The layout view with the Format pane beside it, as the app draws them: after following
+    /// what agents ran (`RustGisApp::logic`), and saving drafts at the end.
     fn with_format(app: &mut RustGisApp, ui: &mut egui::Ui) {
+        super::follow_project(app);
         let t = crate::theme::Tokens::get(ui.ctx());
         if app.ui.right == Some(crate::RightPane::Format) {
             egui::Panel::right("format_pane").exact_size(320.0).show(ui, |ui| super::format(app, ui, &t));
@@ -1831,40 +1839,51 @@ mod tests {
     }
 
     /// Text being typed when another project opens is for the old one: it never reaches the
-    /// element of the same id in the new one.
+    /// element of the same id in the new one, whether the app opened it or an agent did through
+    /// the session itself (the MCP relay, the file bridge).
     #[test]
     fn a_draft_is_dropped_with_its_project() {
         use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
-        let mut app = RustGisApp::with_sample();
-        app.run("layout.new", json!({"name": "Drafts"})).unwrap();
-        let li = app.session.active_layout.unwrap();
-        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
-        let text = serde_json::to_string(&app.session.project).unwrap();
-        app.layout.selected = Some(title);
-        let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                if !fonts {
-                    crate::theme::install_fonts(ui.ctx(), &[], None);
-                    fonts = true;
-                    return;
-                }
-                with_format(app, ui);
-            },
-            app,
-        );
-        h.run_steps(3);
-        h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Title")).unwrap().focus();
-        h.run_steps(2);
-        h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).unwrap().type_text("Draft");
-        h.run_steps(2);
-        assert!(!h.state().layout.typing.is_empty(), "being typed");
-        h.state_mut().run("project.openText", json!({"text": text})).unwrap();
-        h.run_steps(2);
-        let app = h.state();
-        assert_eq!(app.session.project.layouts[li].element(title).map(|e| e.name.as_str()), Some("Title"), "the new project's own");
-        assert!(app.layout.typing.is_empty() && app.layout.selected.is_none());
+        for by_agent in [false, true] {
+            let mut app = RustGisApp::with_sample();
+            app.run("layout.new", json!({"name": "Drafts"})).unwrap();
+            let li = app.session.active_layout.unwrap();
+            let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
+            let text = serde_json::to_string(&app.session.project).unwrap();
+            app.layout.selected = Some(title);
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    with_format(app, ui);
+                },
+                app,
+            );
+            h.run_steps(3);
+            h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Title")).unwrap().focus();
+            h.run_steps(2);
+            h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).unwrap().type_text("Draft");
+            h.run_steps(2);
+            assert!(!h.state().layout.typing.is_empty(), "being typed");
+            let open = json!({"text": text});
+            if by_agent {
+                // As the relay runs an agent's command: on the session, past `RustGisApp::run`;
+                // the copy's layout opened in the same go.
+                h.state_mut().session.run("project.openText", &open).unwrap();
+                h.state_mut().session.run("layout.activate", &json!({"layout": li})).unwrap();
+            } else {
+                h.state_mut().run("project.openText", open).unwrap();
+            }
+            h.run_steps(2);
+            let app = h.state();
+            assert_eq!(app.session.project.layouts[li].element(title).map(|e| e.name.as_str()), Some("Title"), "agent: {by_agent}");
+            assert!(app.layout.typing.is_empty() && app.layout.selected.is_none(), "agent: {by_agent}");
+        }
     }
 
     /// Element ids are per layout: opening another layout ends the selection, so Delete or

@@ -277,6 +277,10 @@ pub struct Session {
     pub registry: Registry,
     /// Bumped on every change so views can cache.
     pub revision: u64,
+    /// Bumped each time another project replaces this one (new, open, sample, template), however
+    /// the command came (the app, an agent, a script): the interface drops what it kept for the
+    /// old one.
+    pub opened: u64,
     pub tool: Tool,
     /// The layer selected in the Layers pane (the one the Style and Data tabs act on).
     pub active_layer: Option<u32>,
@@ -450,6 +454,7 @@ impl Session {
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
+            opened: 0,
             tool: Tool::Explore,
             active_layer: None,
             view_size: (1200.0, 720.0),

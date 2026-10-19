@@ -41,6 +41,7 @@ pub(crate) fn reset_to(s: &mut Session, p: Project) {
 
 fn reset(s: &mut Session, p: Project) {
     s.project = p;
+    s.opened = s.opened.wrapping_add(1);
     s.active_layer = s.map().layers.first().map(|l| l.id);
     s.table_layer = None;
     s.table_standalone = None;
