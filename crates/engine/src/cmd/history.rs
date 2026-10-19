@@ -174,27 +174,47 @@ fn secret_pairs_emptied(t: &str) -> String {
     while !rest.is_empty() {
         let end = rest.find(parts).unwrap_or(rest.len());
         let item = rest.get(..end).unwrap_or(rest);
+        // The pair's name and where its value starts in `rest`: `name=value`, or libpq's
+        // `name = value`, spaces around the `=`. A space after the `=` comes before the value
+        // when the next word isn't a pair of its own.
+        let pair = match item.split_once('=') {
+            Some((k, _)) => Some((k, k.len() + 1)),
+            None => {
+                let after = rest.get(end..).unwrap_or("");
+                let eq = after.trim_start();
+                eq.strip_prefix('=').map(|_| (item, end + (after.len() - eq.len()) + 1))
+            }
+        };
+        let pair = pair.map(|(k, at)| {
+            let value = rest.get(at..).unwrap_or("");
+            let word = value.trim_start();
+            let next = word.get(..word.find(parts).unwrap_or(word.len())).unwrap_or("");
+            if word.len() < value.len() && !next.is_empty() && !next.contains('=') { (k, at + value.len() - word.len()) } else { (k, at) }
+        });
         // A bare `key`, `sig` or `sas` is as likely a field in an expression (`key=5`): a secret
         // only when its value reads as one.
-        let secret = |(k, v): &(&str, &str)| {
+        let secret = |&(k, at): &(&str, usize)| {
             let k = k.trim();
-            crate::sources::secret_key(k)
+            let value = rest.get(at..).unwrap_or("");
+            let v = value.get(..value.find(parts).unwrap_or(value.len())).unwrap_or("");
+            !k.is_empty()
+                && crate::sources::secret_key(k)
                 && (!["key", "sig", "sas"].iter().any(|p| k.eq_ignore_ascii_case(p))
                     || crate::sources::looks_like_a_key(v.trim_matches(['\'', '"', '{', '}'])))
         };
-        let Some((k, v)) = item.split_once('=').filter(secret) else {
+        let Some((_, at)) = pair.filter(secret) else {
             // Not a secret: the item and the separator after it, as they are.
             let next = rest.get(end..).and_then(|r| r.chars().next()).map_or(end, |c| end + c.len_utf8());
             out.push_str(rest.get(..next).unwrap_or(rest));
             rest = rest.get(next..).unwrap_or("");
             continue;
         };
-        out.push_str(k);
-        out.push('=');
+        // The name and the `=`, as they are (spaces before the value go: the separator follows).
+        out.push_str(rest.get(..at).unwrap_or("").trim_end());
         // Past the value: to its closer when it opens with a quote or a brace, then to the next
         // separator.
-        let value = rest.get(k.len() + 1..).unwrap_or("");
-        let close = match v.chars().next() {
+        let value = rest.get(at..).unwrap_or("");
+        let close = match value.chars().next() {
             Some(q @ ('\'' | '"')) => Some(q),
             Some('{') => Some('}'),
             _ => None,
