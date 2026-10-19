@@ -477,8 +477,9 @@ fn tile_vertices(q: &TileQuad) -> [TileVertex; 6] {
     [bl, br, tr, bl, tr, tl]
 }
 
-/// How many tile textures are kept besides the latest scene's.
-const KEPT_TILE_TEXTURES: usize = 256;
+/// How many bytes of tile textures are kept besides the latest scene's (a few hundred 256-pixel
+/// tiles, or a quarter as many 512-pixel ones).
+const KEPT_TILE_BYTES: u64 = 64 << 20;
 
 /// The tile pictures on the GPU, one texture each, kept across scenes (as MapLibre keeps its
 /// tiles): a map that moves or is drawn again finds the tiles it showed already uploaded. A
@@ -498,6 +499,7 @@ struct TileTexture {
     bind: wgpu::BindGroup,
     _texture: wgpu::Texture,
     used: u64,
+    bytes: u64,
 }
 
 impl TileTextures {
@@ -543,20 +545,31 @@ impl TileTextures {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
             ],
         });
-        let t = TileTexture { picture: Arc::downgrade(&q.picture), bind: bind.clone(), _texture: texture, used: self.scene };
+        let t = TileTexture {
+            picture: Arc::downgrade(&q.picture),
+            bind: bind.clone(),
+            _texture: texture,
+            used: self.scene,
+            bytes: u64::from(w) * u64::from(h) * 4,
+        };
         self.by_picture.insert(key, t);
         Some(bind)
     }
 
     /// Ends a scene: drops the textures of pictures the tile cache let go, and past
-    /// [`KEPT_TILE_TEXTURES`] those unused longest, but never one the scene just drew.
+    /// [`KEPT_TILE_BYTES`] those unused longest, but never one the scene just drew.
     fn end_scene(&mut self) {
         self.by_picture.retain(|_, t| t.picture.strong_count() > 0);
-        let mut old: Vec<(u64, usize)> = self.by_picture.iter().filter(|(_, t)| t.used != self.scene).map(|(k, t)| (t.used, *k)).collect();
-        if old.len() > KEPT_TILE_TEXTURES {
+        let mut old: Vec<(u64, u64, usize)> =
+            self.by_picture.iter().filter(|(_, t)| t.used != self.scene).map(|(k, t)| (t.used, t.bytes, *k)).collect();
+        if old.iter().map(|o| o.1).sum::<u64>() > KEPT_TILE_BYTES {
             old.sort_unstable_by_key(|o| std::cmp::Reverse(o.0));
-            for (_, k) in old.into_iter().skip(KEPT_TILE_TEXTURES) {
-                self.by_picture.remove(&k);
+            let mut kept = 0u64;
+            for (_, bytes, k) in old {
+                kept = kept.saturating_add(bytes);
+                if kept > KEPT_TILE_BYTES {
+                    self.by_picture.remove(&k);
+                }
             }
         }
         self.scene += 1;

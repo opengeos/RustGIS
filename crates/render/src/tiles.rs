@@ -347,7 +347,6 @@ mod tests {
 
     use crate::View;
 
-    /// Serves tiles and documents for `https://tiles.test/…` without a network.
     /// Requests that are never answered: their tiles stay on their way.
     static PARKED: std::sync::Mutex<Vec<rustgis_tiles::cache::Done>> = std::sync::Mutex::new(Vec::new());
 
@@ -540,9 +539,9 @@ mod tests {
         assert_eq!(kinds, [true, false], "{kinds:?}");
     }
 
-    /// A tile on its way is stood in for by its parent and, over that, by its children already
-    /// in the cache, which are sharper: zooming in, the tiles of the zoom passed through are
-    /// missing while those of the zoom it ends at are often here (#568).
+    /// A tile on its way is stood in for by its children already in the cache, which are sharper,
+    /// and by its parent only where they are missing: zooming in, the tiles of the zoom passed
+    /// through are missing while those of the zoom it ends at are often here (#568).
     #[test]
     fn children_in_the_cache_stand_in_over_the_parent() {
         use crate::gpu_scene::DrawCmd;
@@ -587,8 +586,7 @@ mod tests {
         }
         assert!(pending, "zoom 12 is on its way");
         assert_eq!([p.red(), p.green(), p.blue()], [20, 20, 220], "the children over the parent");
-        assert_eq!(over_centre.first(), Some(&Some(20)), "the parent first: {over_centre:?}");
-        assert_eq!(over_centre.last(), Some(&Some(220)), "a child last: {over_centre:?}");
+        assert_eq!(over_centre, [Some(220)], "a child, and not the parent under it");
     }
 
     #[test]

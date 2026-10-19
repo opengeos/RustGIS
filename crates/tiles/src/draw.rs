@@ -82,6 +82,7 @@ pub struct Drawn {
 }
 
 /// One tile's worth of drawing: the tile data, where that tile is, and the square it stands in for.
+#[derive(Clone)]
 struct Item {
     payload: Arc<Payload>,
     at: Extent,
@@ -285,17 +286,21 @@ fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, 
     let mut exact = Vec::new();
     let mut stand_ins = Vec::new();
     // A missing tile is stood in for by its nearest ancestor in the cache and, for raster tiles,
-    // by its children in the cache drawn over it: zooming in, the tiles of the zoom being passed
-    // through are often missing while those of the zoom it ends at are already here, and they
-    // are sharper than the ancestor.
+    // by its children in the cache, the ancestor only in the quarters they leave: zooming in, the
+    // tiles of the zoom being passed through are often missing while those of the zoom it ends
+    // at are already here, and they are sharper. Nothing is drawn twice, so a see-through layer
+    // stays even.
     let stand_in = |out: &mut Vec<Item>, p: &Placed| {
-        out.extend(ancestor(p, min_z, &url));
-        if want == Want::Image && p.id.z < max_z {
-            for c in p.id.children() {
-                let cp = Placed { id: c, wx: p.wx * 2 + i64::from(c.x & 1) };
-                if let Some(payload) = url(c).and_then(|u| cache::peek(&u)) {
-                    out.push(Item { payload, at: cp.extent(), z: c.z, clip: cp.extent() });
-                }
+        let parent = ancestor(p, min_z, &url);
+        if want != Want::Image || p.id.z >= max_z {
+            out.extend(parent);
+            return;
+        }
+        for c in p.id.children() {
+            let cp = Placed { id: c, wx: p.wx * 2 + i64::from(c.x & 1) };
+            match url(c).and_then(|u| cache::peek(&u)) {
+                Some(payload) => out.push(Item { payload, at: cp.extent(), z: c.z, clip: cp.extent() }),
+                None => out.extend(parent.as_ref().map(|a| Item { clip: cp.extent(), ..a.clone() })),
             }
         }
     };
