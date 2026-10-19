@@ -1860,7 +1860,6 @@ fn plugin_panels_run_their_commands_when_a_slider_is_let_go() {
     rp::unload("ui-panel");
 }
 
-/// A primary click in the middle of the map.
 /// The selected text, grabbed by its text, is dragged to another place (#516), as one undo step;
 /// the map stays where it was.
 #[test]
@@ -1916,6 +1915,7 @@ fn selected_text(h: &egui_kittest::Harness<'_, RustGisApp>) -> Option<String> {
     graphics::label(&l.dataset, row).map(str::to_string)
 }
 
+/// A primary click in the middle of the map.
 fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     let at = egui::pos2(700.0, 500.0);
     h.input_mut().events.push(egui::Event::PointerMoved(at));
