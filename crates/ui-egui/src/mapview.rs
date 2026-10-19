@@ -684,10 +684,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
         && gf.fits(&cam)
-        // Tiles zoomed in past their own zoom blur: the tiles for the new one are placed, as
-        // often as a stretched CPU frame is sharpened below.
+        // Tiles zoomed in past their own zoom blur, and zoomed out (no mipmaps) shimmer: the
+        // tiles for the new zoom are placed, as often as a stretched CPU frame is sharpened below.
         && !(gf.has_tiles
-            && cam.res < app.map.tex_camera.res / MOTION_STRETCH
+            && !(app.map.tex_camera.res / MOTION_STRETCH..=app.map.tex_camera.res * TILE_SHRINK).contains(&cam.res)
             && time - app.map.last_render >= motion_gap(app.map.motion_cost))
     {
         gf.set_camera(&rs.queue, &cam);
@@ -2663,6 +2663,10 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
 /// How far the map's last frame is zoomed in, while the map moves, before it is sharpened: a
 /// CPU frame drawn again, or a GPU scene's raster tiles placed for the new zoom.
 const MOTION_STRETCH: f64 = 1.1;
+
+/// How far a GPU scene's raster tiles are zoomed out, while the map moves, before the tiles for
+/// the new zoom are placed: their textures have no mipmaps, so shrunk much further they shimmer.
+const TILE_SHRINK: f64 = 1.5;
 
 /// Whether a flat GPU frame drawn with `scene` holds every feature `cam` shows in a `w`×`h`
 /// view: the view lies inside the extent its meshes were tessellated for, so moving them leaves

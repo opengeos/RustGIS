@@ -485,8 +485,9 @@ const KEPT_TILE_TEXTURES: usize = 256;
 /// texture goes when the tile cache drops its picture, or when it is among the longest unused.
 #[derive(Default)]
 struct TileTextures {
-    /// By the picture's address, with the picture itself (weakly) to tell a new picture at a
-    /// freed address from the old one.
+    /// By the picture's address, with the picture itself held weakly: the tile cache keeps the
+    /// picture alive, and once it lets go the texture goes too (the weak reference keeps the
+    /// address from being reused until then).
     by_picture: std::collections::HashMap<usize, TileTexture>,
     /// Counts scenes: when each texture was last drawn.
     scene: u64,
