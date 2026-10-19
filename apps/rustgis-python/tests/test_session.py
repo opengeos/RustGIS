@@ -183,6 +183,11 @@ def test_adding_data_returns_the_layer(sample, tmp_path):
 
 def test_the_view(sample):
     sample.zoom_to(sample["Cities"])
+    sample.zoom_to([sample["Cities"], sample["Countries"]])
+    with pytest.raises(TypeError):
+        sample.zoom_to(True)
+    with pytest.raises(TypeError):
+        sample.zoom_to((0, 0))
     sample.zoom_to((0, 0, 10, 10))
     west, south, east, north = sample.bounds
     assert west <= 0 and east >= 10 and south <= 0 and north >= 10

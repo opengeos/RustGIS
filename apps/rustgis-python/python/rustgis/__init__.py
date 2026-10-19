@@ -279,7 +279,11 @@ class Layer:
         return self.session.run("share.exportLayer", params)
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Layer) and other.session._root() is self.session._root() and other.id == self.id
+        return (
+            isinstance(other, Layer)
+            and other.session._root() is self.session._root()
+            and other.id == self.id
+        )
 
     def __hash__(self) -> int:
         return hash((id(self.session._root()), self.id))
@@ -630,15 +634,29 @@ class _Api:
                 params[key] = value
         return self.run("map.goToXY", params)
 
-    def zoom_to(self, target: Union[str, int, Layer, Iterable[float]]) -> Any:
-        """Zooms the map to a layer's features or to a bounding box.
+    def zoom_to(self, target: Union[str, int, Layer, Iterable[Any]]) -> Any:
+        """Zooms the map to a layer's features, to several layers', or to a bounding box.
 
         Args:
-            target: A layer (or its name or id), or ``(west, south, east, north)`` in degrees.
+            target: A layer (or its name or id), a list of layers (as :meth:`run_tool` returns
+                them), or ``(west, south, east, north)`` in degrees.
+
+        Raises:
+            RustGISError: When a layer isn't on the map, or the layers are all empty.
+            TypeError: When ``target`` is none of these.
         """
-        if isinstance(target, (str, int, Layer)):
+        if isinstance(target, (str, int, Layer)) and not isinstance(target, bool):
             return self.run("layer.zoomTo", layer=self._find_layer(target)["id"])
-        return self.run("map.zoomToExtent", extent=[float(v) for v in target])
+        items = list(target) if isinstance(target, (list, tuple)) else None
+        if items and all(isinstance(item, Layer) for item in items):
+            boxes = [box for box in (self._find_layer(item).get("extent") for item in items) if box]
+            if not boxes:
+                raise RustGISError("the layers have no features to zoom to")
+            extent = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+            return self.run("map.zoomToExtent", extent=extent)
+        if items is None or len(items) != 4 or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in items):
+            raise TypeError("zoom_to takes a layer, a list of layers, or (west, south, east, north)")
+        return self.run("map.zoomToExtent", extent=[float(v) for v in items])
 
 
 class Session(_Api):
