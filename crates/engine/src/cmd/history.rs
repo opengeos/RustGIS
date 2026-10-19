@@ -102,18 +102,21 @@ pub fn tool_of(r: &GpRecord) -> Option<String> {
 }
 
 /// `v` without what would give someone else the user's access: an address's keys, tokens and
-/// passwords, a connection's password.
+/// passwords, a connection's password. An object's keys too: the file may put anything there.
 fn redacted(v: &Value) -> Value {
     match v {
-        // A connection taken whole, though a libpq one (`PG:host=db password=…`) has spaces in it:
-        // `redact` takes its password out. Other text with spaces may name addresses among its
-        // words; a single word may be one.
-        Value::String(t) if connection(t) || !t.contains(char::is_whitespace) => Value::String(crate::sources::redact(t)),
-        Value::String(t) => Value::String(crate::sources::redact_text(t)),
+        Value::String(t) => Value::String(redacted_text(t)),
         Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), redacted(v))).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (redacted_text(k), redacted(v))).collect()),
         other => other.clone(),
     }
+}
+
+/// `t` without its secrets. A connection is taken whole, though a libpq one (`PG:host=db
+/// password=…`) has spaces in it: `redact` takes its password out. Other text with spaces may
+/// name addresses among its words; a single word may be one.
+fn redacted_text(t: &str) -> String {
+    if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) }
 }
 
 /// Whether `t` is a database connection `sources::redact` reads as one: PostgreSQL's (a URI, or

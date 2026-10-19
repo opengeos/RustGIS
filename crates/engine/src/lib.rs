@@ -412,6 +412,8 @@ pub(crate) struct PendingRun {
     pub tool_id: String,
     pub params: serde_json::Value,
     pub result: Result<rustgis_analysis::ToolResult, String>,
+    /// When the run started, in milliseconds since 1970.
+    pub started: u64,
     pub millis: u64,
 }
 

@@ -7868,7 +7868,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     let old = crate::GpRecord {
         tool: "Buffer".into(),
         id: String::new(),
-        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x"}),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1}),
         command: None,
         at: 0,
         ok: false,
@@ -7886,6 +7886,8 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
     // A libpq connection keeps its words but its password, though spaces part them.
     assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
+    // A key is redacted as a value is.
+    assert!(py.contains("https://k.example/") && !py.contains("k3y"), "{py}");
     // Nothing tells which tool an unknown name was.
     s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old.clone() });
     assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
