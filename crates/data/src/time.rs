@@ -387,9 +387,10 @@ pub fn parse_input(v: &serde_json::Value) -> Option<f64> {
                 x
             }
         }
-        serde_json::Value::String(s) => match s.trim().parse::<f64>() {
-            Ok(x) => return parse_input(&serde_json::json!(x)),
-            Err(_) => parse_text(s)?,
+        // Numbers written plainly, as in a field (`1e3` and `+2015` are no dates).
+        serde_json::Value::String(s) => match plain_number(s.trim()) {
+            Some(x) => return parse_input(&serde_json::json!(x)),
+            None => parse_text(s)?,
         },
         _ => return None,
     };
@@ -567,6 +568,8 @@ mod tests {
         assert_eq!(parse_input(&serde_json::json!(1_425_168_000_000_i64)), Some(d("2015-03-01")));
         assert_eq!(parse_input(&serde_json::json!(1e300)), None);
         assert_eq!(parse_input(&serde_json::json!("20150301")), Some(d("2015-03-01")));
+        assert_eq!(parse_input(&serde_json::json!("1e3")), None);
+        assert_eq!(parse_input(&serde_json::json!(" 2015 ")), Some(d("2015-01-01")));
         assert_eq!(parse_input(&serde_json::json!(0)), Some(0.0));
         assert_eq!(parse_input(&serde_json::json!(500)), Some(500.0));
         assert_eq!(parse_input(&serde_json::json!(20_150_301)), Some(d("2015-03-01")));

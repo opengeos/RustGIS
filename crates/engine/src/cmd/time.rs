@@ -282,8 +282,16 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"path": path, "frames": steps.len(), "bytes": bytes.len()}))
 }
 
+/// The browser build doesn't export (files go through the app's services there), so it leaves
+/// the GIF encoder out.
+#[cfg(target_arch = "wasm32")]
+fn frames(_: &mut Session, _: &[f64], _: f64, _: f64, _: Option<u32>) -> Result<Vec<u8>, String> {
+    Err("exporting time animations needs the desktop app".into())
+}
+
 /// Renders the map at each step: an animated GIF that loops, each frame shown for `gif`
 /// milliseconds, or (`None`) a zip of PNGs.
+#[cfg(not(target_arch = "wasm32"))]
 fn frames(s: &mut Session, steps: &[f64], w: f64, h: f64, gif: Option<u32>) -> Result<Vec<u8>, String> {
     use image::codecs::gif::{GifEncoder, Repeat};
     let mut out = Vec::new();

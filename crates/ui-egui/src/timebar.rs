@@ -136,11 +136,11 @@ fn advance(app: &mut RustGisApp, ui: &Ui) {
     ui.ctx().request_repaint();
 }
 
-/// The features of the bound layers in each step's own span (a step, whatever the window);
-/// worked out again only when the layers or steps change.
 /// A bound layer as its counts were made from.
 type Bound = (u32, String, rustgis_engine::data::Features, Vec<rustgis_engine::data::Field>);
 
+/// The features of the bound layers in each step's own span (a step, whatever the window);
+/// worked out again only when the layers or steps change.
 fn counts(app: &mut RustGisApp, t: &TimeSlider, steps: &[f64]) -> Vec<u32> {
     let m = app.session.map();
     let bound: Vec<Bound> = m

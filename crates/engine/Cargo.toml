@@ -14,8 +14,6 @@ rustgis-data = { workspace = true }
 rustgis-map = { workspace = true }
 rustgis-analysis = { workspace = true }
 rustgis-render = { workspace = true }
-# Time slider animations as GIFs.
-image = { workspace = true, features = ["gif"] }
 tiny-skia = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,3 +35,7 @@ geolibre = ["dep:rustgis-geolibre"]
 rusqlite = { workspace = true }
 rustgis-plugins = { workspace = true, features = ["testing"] }
 tiny-skia = { workspace = true }
+
+# Time slider animations as GIFs (exported by the desktop app only).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image = { workspace = true, features = ["gif"] }
