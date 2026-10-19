@@ -441,6 +441,16 @@ fn stats_level(layout: &Layout) -> usize {
     layout.levels.iter().rposition(|l| l.width >= 256 && l.height >= 256).unwrap_or(0)
 }
 
+/// Keeps a look's stretch: a few looks a file (a script trying many is hostile input); past them,
+/// the others are read again when asked for.
+fn keep_stretch(info: &Info, key: (Vec<usize>, bool), s: Vec<(f32, f32)>) {
+    let mut kept = info.stretch.lock().unwrap_or_else(|e| e.into_inner());
+    if kept.len() >= MAX_LOOKS {
+        kept.clear();
+    }
+    kept.insert(key, s);
+}
+
 /// The (low, high) values of a band's 2nd and 98th percentiles.
 fn percentiles(mut v: Vec<f32>) -> (f32, f32) {
     v.retain(|x| x.is_finite());
@@ -479,7 +489,7 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
         };
         let r = (shown_value(r.0, look.aef), shown_value(r.1, look.aef));
         let s = vec![r; colour.len()];
-        info.stretch.lock().unwrap_or_else(|e| e.into_inner()).insert((colour, look.aef), s.clone());
+        keep_stretch(&info, (colour, look.aef), s.clone());
         then(Ok(s));
         return;
     }
@@ -498,13 +508,7 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     let done = move |r: Result<Vec<(f32, f32)>, String>| {
         let waiting = i.stretching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
         if let Ok(s) = &r {
-            let mut kept = i.stretch.lock().unwrap_or_else(|e| e.into_inner());
-            // A few looks kept a file (a script trying many is hostile input): past them, the
-            // others are read again when asked for.
-            if kept.len() >= MAX_LOOKS {
-                kept.clear();
-            }
-            kept.insert(key, s.clone());
+            keep_stretch(&i, key, s.clone());
         }
         for w in waiting {
             w(r.clone());

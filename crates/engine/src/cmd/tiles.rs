@@ -310,7 +310,8 @@ fn cog_look(p: &Value) -> Result<Option<Box<dyn Fn(Look) -> Look>>, String> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::Array(a)) => match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64), a.len()) {
-            (Some(lo), Some(hi), 2) if lo.is_finite() && hi.is_finite() && hi > lo && (hi as f32) > (lo as f32) => {
+            // Finite as the 32-bit values kept, not only as given.
+            (Some(lo), Some(hi), 2) if (lo as f32).is_finite() && (hi as f32).is_finite() && (hi as f32) > (lo as f32) => {
                 Some(Some((lo as f32, hi as f32)))
             }
             _ => return Err("range is [low, high], low below high".into()),
@@ -402,6 +403,9 @@ mod tests {
         // A look is for a COG's layer: refused for others, which are left as they were.
         assert!(s.run("map.setTiles", &json!({"index": 0, "opacity": 0.2, "bands": [1, 2, 3]})).is_err());
         assert_ne!(s.map().tiles[0].opacity, 0.2);
+        // A range past what 32 bits hold is refused.
+        assert!(super::cog_look(&json!({"range": [0, 1e39]})).is_err());
+        assert!(super::cog_look(&json!({"range": [-0.3, 0.3]})).is_ok_and(|l| l.is_some()));
         assert!(s.run("map.removeTiles", &json!({})).is_ok());
         assert!(s.map().tiles.is_empty());
         // Saved and read back with the project.
