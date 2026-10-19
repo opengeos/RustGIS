@@ -8265,7 +8265,8 @@ fn text_graphics_take_italic_alignment_and_letter_spacing() {
     }
     assert_eq!(style(&s, ra), (false, TextAlign::Center, 3.0));
     assert!(s.run("graphics.style", &json!({})).unwrap_err().contains("letterSpacing"), "the style's own words list them");
-    // Placed again with a style: both happen; with a bad style, neither (it isn't moved first).
+    // Placed again with a style: both happen; with a bad style, neither (the session puts back a
+    // command that fails); with only nulls for a style, it is just placed.
     let at = |s: &Session| ds(s).features[ra].geometry.clone();
     let before = at(&s);
     for bad in [json!({"align": "up"}), json!({"fill": "red"})] {
@@ -8276,8 +8277,11 @@ fn text_graphics_take_italic_alignment_and_letter_spacing() {
         assert!(s.run("graphics.edit", &p).is_err());
         assert_eq!(at(&s), before, "placed again though its style was refused");
     }
+    s.run("graphics.edit", &json!({"layer": id, "row": ra, "points": [[12, 50]], "italic": null, "fill": null})).unwrap();
+    let nulls = at(&s);
+    assert!(nulls != before && !graphics::italic(&ds(&s), ra), "nulls are no style: placed, style kept");
     s.run("graphics.edit", &json!({"layer": id, "row": ra, "points": [[11, 50]], "italic": true})).unwrap();
-    assert!(graphics::italic(&ds(&s), ra) && at(&s) != before);
+    assert!(graphics::italic(&ds(&s), ra) && at(&s) != nulls);
     // A layer from before the fields: plain, until each is set.
     let l = s.map_mut().layer_mut(id).unwrap();
     for name in ["italic", "align", "letter_spacing"] {

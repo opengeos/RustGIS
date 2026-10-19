@@ -347,10 +347,6 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err("text is required".into());
         }
     }
-    // Checked before anything changes, so a bad style doesn't leave the graphic placed again.
-    color(p, "fill")?;
-    color(p, "outline")?;
-    TextStyle::of(p)?;
     // Placed again (a text dragged on the map, #516): only what sits at one point; other shapes
     // move with `edit.move`.
     let placed = match p.get("points") {
@@ -369,9 +365,10 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             ft.geometry = Some(g);
         }
         l.touch_geometry();
+        // A null is no style, as `restyle` reads it: placed with only nulls, it is just placed.
         let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold", "italic", "align", "letterSpacing"]
             .iter()
-            .any(|k| p.get(*k).is_some());
+            .any(|k| p.get(*k).is_some_and(|v| !v.is_null()));
         if !styled {
             return Ok(json!({"placed": 1}));
         }
