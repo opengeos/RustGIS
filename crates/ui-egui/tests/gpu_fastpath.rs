@@ -89,30 +89,9 @@ fn settling_after_a_camera_animation_re_renders_fully() {
     assert_eq!((tex_cam.center, tex_cam.res), (cam.center, cam.res), "a full re-render followed the settled camera (tex_camera refreshed)");
 }
 
-#[test]
-fn zooming_a_planet_with_raster_tiles_reuses_the_gpu_frame() {
-    use rustgis_ui_egui::rustgis_engine::map::{TileKind, TileLayer};
-    serve_planet_tiles();
-    let Some(mut h) = harness() else { return };
-    h.state_mut().run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
-    h.state_mut().session.map_mut().layers.clear();
-    h.state_mut().session.map_mut().graticule = false;
-    h.state_mut().session.map_mut().tiles.push(TileLayer::new("Moon", TileKind::Raster, "https://planet.test/{z}/{x}/{y}.png"));
-    wait_for_frame(&mut h);
+/// Compare the displayed GPU picture with the exact ground under the current camera.
+fn assert_gpu_picture_matches_cpu(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     assert!(h.output().shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))), "the GPU backend engaged");
-    let before = h.state().map.full_frame_camera();
-    for _ in 0..8 {
-        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(600.0, 350.0)));
-        h.input_mut().events.push(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, 2.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: Default::default(),
-        });
-        h.step();
-    }
-    assert_ne!(h.state().session.map().camera.res, before.res, "zoom engaged");
-    assert_eq!(h.state().map.full_frame_camera(), before, "navigation must reuse the uploaded image instead of redrawing every frame");
     // Exercise the actual blit shader as well: a shifted/scaled image must sample the same
     // ground as an exact CPU render, even when its rectangle extends past the window.
     let image = h.render().expect("moving GPU image");
@@ -136,8 +115,56 @@ fn zooming_a_planet_with_raster_tiles_reuses_the_gpu_frame() {
         }
     }
     assert!(error < samples * 6, "cached GPU image moved to the wrong ground: mean color error {}", error / samples);
+}
+
+#[test]
+fn zooming_a_planet_with_raster_tiles_reuses_the_gpu_frame() {
+    use rustgis_ui_egui::rustgis_engine::map::{TileKind, TileLayer};
+    serve_planet_tiles();
+    let Some(mut h) = harness() else { return };
+    h.state_mut().run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
+    h.state_mut().session.map_mut().layers.clear();
+    h.state_mut().session.map_mut().graticule = false;
+    // Keep both pictures at the same tile level: this test compares geometry, while the
+    // exact render can otherwise choose finer tiles than the cached moving picture.
+    let mut tiles = TileLayer::new("Moon", TileKind::Raster, "https://planet.test/{z}/{x}/{y}.png");
+    tiles.min_zoom = 3;
+    tiles.max_zoom = 3;
+    h.state_mut().session.map_mut().tiles.push(tiles);
+    wait_for_frame(&mut h);
+    assert!(h.output().shapes.iter().any(|s| matches!(s.shape, egui::Shape::Callback(_))), "the GPU backend engaged");
+    let before = h.state().map.full_frame_camera();
+    for _ in 0..8 {
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(600.0, 350.0)));
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 2.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Default::default(),
+        });
+        h.step();
+    }
+    assert_ne!(h.state().session.map().camera.res, before.res, "zoom engaged");
+    assert_eq!(h.state().map.full_frame_camera(), before, "navigation must reuse the uploaded image instead of redrawing every frame");
+    assert_gpu_picture_matches_cpu(&mut h);
     wait_for_frame(&mut h);
     assert_eq!(h.state().map.full_frame_camera(), h.state().session.map().camera, "settling sharpens the image");
+    // Start from a CPU preview, then force the first GPU frame to fill a pan gap. Its
+    // oversized picture must use cropped UVs immediately, including this very first frame.
+    h.state_mut().map.invalidate();
+    let from = egui::pos2(600.0, 350.0);
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.state_mut().map.invalidate();
+    h.input_mut().events.push(egui::Event::PointerMoved(from + egui::vec2(16.0, 0.0)));
+    h.step();
+    assert_gpu_picture_matches_cpu(&mut h);
 }
 
 #[test]
@@ -181,5 +208,31 @@ fn planet_layer_toggles_show_in_the_next_frame_and_stale_jobs_do_not_restore_the
             let p = image.get_pixel(center.x.round() as u32, center.y.round() as u32);
             assert!(p[0] > p[1], "an old worker restored a hidden overlay: {p:?}");
         }
+    }
+}
+
+#[test]
+fn tiled_camera_playback_does_not_start_settling_jobs() {
+    use rustgis_ui_egui::rustgis_engine::map::{TileKind, TileLayer};
+    serve_planet_tiles();
+    for gpu in [false, true] {
+        let Some(mut h) = harness() else { return };
+        h.state_mut().run("ui.map.gpu", json!({"on": gpu})).expect("backend");
+        h.state_mut().run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
+        h.state_mut().session.map_mut().layers.clear();
+        h.state_mut().session.map_mut().tiles.push(TileLayer::new("Moon", TileKind::Raster, "https://planet.test/{z}/{x}/{y}.png"));
+        wait_for_frame(&mut h);
+        let start = h.state().session.map().camera;
+        h.state_mut().run("animation.add", Value::Null).expect("first frame");
+        h.state_mut().run("map.setScale", json!({"scale": 20_000_000.0})).expect("zoom");
+        h.state_mut().run("animation.add", Value::Null).expect("second frame");
+        h.state_mut().run("ui.animationPlay", Value::Null).expect("play");
+        for _ in 0..4 {
+            h.step();
+            assert!(h.state().ws.playing.is_some(), "animation is playing");
+            assert!(!h.state().map.drawing(), "playback must render the current frame, not start a stale settling job");
+            assert_eq!(h.state().map.full_frame_camera(), h.state().session.map().camera);
+        }
+        assert_ne!(h.state().session.map().camera.res, start.res, "playback moved the camera");
     }
 }

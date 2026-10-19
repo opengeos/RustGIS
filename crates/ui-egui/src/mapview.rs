@@ -73,6 +73,8 @@ pub struct Toast {
 pub struct MapView {
     texture: Option<egui::TextureHandle>,
     key: Option<Key>,
+    /// A preview is attempted once for each frame key, including when drawing fails.
+    preview_attempt: Option<Key>,
     tex_camera: Camera,
     /// The size (points) of the view the texture was drawn for: larger than the map while it
     /// moves, so zooming out and panning have more of it to show.
@@ -178,6 +180,7 @@ impl Default for MapView {
         MapView {
             texture: None,
             key: None,
+            preview_attempt: None,
             tex_camera: Camera::world(),
             tex_size: (0.0, 0.0),
             tex_rect: Rect::NOTHING,
@@ -264,6 +267,7 @@ impl MapView {
     /// relies on it).
     pub fn invalidate(&mut self) {
         self.key = None;
+        self.preview_attempt = None;
         self.gpu_frame = None;
         self.tilt_settle = Default::default();
     }
@@ -562,7 +566,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
     // cached flat picture keeps navigation and layer changes responsive while they finish.
     let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
-    let settling = (tilted || globe_view || tiled_flat) && !moving;
+    let settling = (tilted || globe_view || tiled_flat) && !moving && app.ws.playing.is_none();
     let mut tilt_draped = tilt_draped;
     // A frame finishing during a new gesture is obsolete. Drain it now so it neither holds
     // the worker slot nor keeps screenshot/idle waiters waiting for a frame we will not show.
@@ -615,9 +619,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
             } else if tilted {
                 tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
-            } else {
+            } else if app.map.preview_attempt != Some(key) {
                 // A small preview shows a visibility change immediately. The exact frame is
-                // already on its way; do not rebuild this preview on subsequent UI frames.
+                // already on its way. Even a failed preview is attempted only once per key.
+                app.map.preview_attempt = Some(key);
                 let preview_ppp = f64::from(ppp.min(0.75)).min((524_288.0 / (w * h)).sqrt());
                 let view = View { width: w, height: h, pixels_per_point: preview_ppp, camera: cam, sky: true };
                 if let Some(r) = rustgis_engine::render::render(app.session.map_mut(), &view) {
@@ -691,6 +696,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             } else {
                 return None;
             };
+            // Aim for a 60 Hz frame budget; start coarse until a measured draw cost is available.
             let k = if ms > 0.0 { k * (16.0 / ms).sqrt().clamp(0.5, 1.4) } else { 0.65 };
             Some((vw, vh, ppp * (k * most).clamp(least, most) as f32))
         })
@@ -800,7 +806,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 renderer: gr.clone(),
                 buffers: gf.clone(),
                 target: app.map.gpu_target.clone(),
-                uv: if gpu_picture {
+                uv: if gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && gf.has_images {
                     Rect::from_min_max(
                         ((rect.min - tex_rect.min) / tex_rect.size()).to_pos2(),
                         ((rect.max - tex_rect.min) / tex_rect.size()).to_pos2(),

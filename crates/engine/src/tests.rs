@@ -8924,7 +8924,8 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     let text = serde_json::to_string(&s.project).unwrap();
     let p = Project::from_json(&text).unwrap();
     assert_eq!(p.maps.first().map(|m| m.body().id), Some("mars"));
-    s.run("map.addTiles", &json!({"url": "https://overlay.example.com/{z}/{x}/{y}.png", "id": "overlay", "overlay": true})).unwrap();
+    s.run("map.addTiles", &json!({"url": rustgis_map::planets::EARTH_BASEMAP.url, "id": "overlay", "overlay": true, "opacity": 0.5}))
+        .unwrap();
     // Back on the Earth the planetary basemap becomes USGS Imagery, keeping overlays;
     // an Earth map saves no body.
     let earth_view = s.run("map.body", &json!({"name": "earth"})).unwrap();
@@ -8932,7 +8933,7 @@ fn celestial_bodies_set_the_basemap_and_the_measurements() {
     assert!(s.map().body().is_earth());
     let tiles = &s.map().tiles;
     assert_eq!(tiles.len(), 2);
-    assert!(tiles.iter().any(|t| t.id == "overlay" && t.overlay));
+    assert!(tiles.iter().any(|t| t.id == "overlay" && t.overlay && t.opacity == 0.5));
     let imagery = tiles.iter().find(|t| !t.overlay).unwrap();
     assert_eq!(imagery.id, rustgis_map::planets::EARTH_BASEMAP.id);
     assert_eq!(imagery.url, rustgis_map::planets::EARTH_BASEMAP.url);

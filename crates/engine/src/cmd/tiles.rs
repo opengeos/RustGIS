@@ -177,8 +177,8 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     if replace {
         m.tiles.retain(|o| o.overlay);
     }
-    // The same address again replaces the old one.
-    m.tiles.retain(|o| !(o.url == t.url && o.kind == t.kind));
+    // The same address and role again replaces the old one; overlays survive basemap changes.
+    m.tiles.retain(|o| !(o.url == t.url && o.kind == t.kind && o.overlay == t.overlay));
     if m.tiles.len() >= MAX_TILE_LAYERS {
         return Err(format!("a map holds at most {MAX_TILE_LAYERS} tile layers"));
     }
