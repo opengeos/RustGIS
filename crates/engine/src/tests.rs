@@ -4285,12 +4285,14 @@ fn style_root_view_moves_the_map() {
     if std::env::var_os("RUSTGIS_TEST_STYLE_VIEW").is_none() {
         // Parallel reload tests clear the process-wide tile cache. Isolate these downloads:
         // refetching after a reload can exhaust the fixture server's request allowance.
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "tests::style_root_view_moves_the_map", "--nocapture"])
             .env("RUSTGIS_TEST_STYLE_VIEW", "1")
-            .status()
+            .output()
             .unwrap();
-        assert!(status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        assert!(stdout.contains("1 passed; 0 failed"), "the child must run the style-view test: {stdout}");
         return;
     }
     const STYLE: &[u8] = br#"{"version": 8, "center": [2.2945, 48.8584], "zoom": 16, "bearing": -20, "pitch": 55, "sources": {}, "layers": [{"id": "bg", "type": "background"}]}"#;

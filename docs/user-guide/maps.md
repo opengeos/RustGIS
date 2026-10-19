@@ -189,8 +189,9 @@ Astrogeology mosaics of the rest) and measures on that body: the Measure tools, 
 the map scale and layout scale bars use its radius. Coordinates stay longitude and latitude, and
 the map stays a Web Mercator sphere, the size of the body. Off the Earth there is no atmosphere:
 the globe has no glow around it, and a tilted view's sky is the black of space, with no haze
-toward the horizon. Choosing the Earth again replaces the planetary basemap with **USGS
-Imagery**, keeping overlay tile layers. The body is saved with the map.
+toward the horizon. Choosing the Earth replaces all non-overlay web tile layers, including
+planetary and custom basemaps, with **USGS Imagery**, keeping overlay tile layers. The body is
+saved with the map.
 
 The basemaps come from [OpenPlanetaryMap](https://www.openplanetary.org/opm) and
 [USGS Astrogeology](https://astrogeology.usgs.gov/). OpenPlanetaryMap's mosaics sit in storage
