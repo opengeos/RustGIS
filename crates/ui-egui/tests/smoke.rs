@@ -1432,7 +1432,9 @@ fn letting_agents_control_rustgis_starts_the_relay_and_shows_how_to_connect() {
         }
     }));
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+    // The connection instructions expand below the checkbox: keep the settings above the
+    // bottom composer so both pointer clicks reach the checkbox.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 2000.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);

@@ -4282,6 +4282,17 @@ fn map_links() {
 /// and pitch once it has loaded; without it the map stays where it is.
 #[test]
 fn style_root_view_moves_the_map() {
+    if std::env::var_os("RUSTGIS_TEST_STYLE_VIEW").is_none() {
+        // Parallel reload tests clear the process-wide tile cache. Isolate these downloads:
+        // refetching after a reload can exhaust the fixture server's request allowance.
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::style_root_view_moves_the_map", "--nocapture"])
+            .env("RUSTGIS_TEST_STYLE_VIEW", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
     const STYLE: &[u8] = br#"{"version": 8, "center": [2.2945, 48.8584], "zoom": 16, "bearing": -20, "pitch": 55, "sources": {}, "layers": [{"id": "bg", "type": "background"}]}"#;
     let base = serve(STYLE, 5);
     let mut s = world();
@@ -4298,7 +4309,7 @@ fn style_root_view_moves_the_map() {
     assert!(s.style_view.is_none());
     let m = s.map();
     let c = m.center_lonlat();
-    assert!((c.x - 2.2945).abs() < 1e-6 && (c.y - 48.8584).abs() < 1e-6, "{c:?}");
+    assert!((c.x - 2.2945).abs() < 1e-6 && (c.y - 48.8584).abs() < 1e-6, "{c:?}; notices: {:?}", s.notices);
     assert_eq!((m.camera.bearing, m.camera.pitch), (-20.0, 55.0));
     assert_eq!(s.run("map.link", &Value::Null).unwrap()["hash"], "#16/48.8584/2.2945/-20/55");
     // Only a style has a view of its own.
