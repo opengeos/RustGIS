@@ -481,8 +481,9 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if typing && !b.chord.command {
                 continue;
             }
-            // Duplicating needs a selected layout element; without one the key is left alone.
-            if b.command == "layout.duplicateElement" && !element {
+            // Duplicating needs a selected layout element, and not a text field being typed in;
+            // otherwise the key is left alone.
+            if b.command == "layout.duplicateElement" && (!element || typing) {
                 continue;
             }
             if i.consume_shortcut(&KeyboardShortcut::new(b.chord.modifiers(), b.chord.key)) {
