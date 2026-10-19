@@ -171,6 +171,9 @@ pub fn entry_status(e: &rustgis_plugins::registry::Entry) -> Value {
         o.insert("installed".into(), json!(installed));
         o.insert("update".into(), json!(update));
         o.insert("blocked".into(), json!(rustgis_plugins::blocked(&e.id, &e.sha256).map(|b| b.reason)));
+        // Said for every plugin (the registry leaves it out for WebAssembly ones): a process
+        // plugin isn't sandboxed.
+        o.insert("runtime".into(), json!(e.runtime));
     }
     v
 }
@@ -197,6 +200,22 @@ pub fn install_checked(e: &rustgis_plugins::registry::Entry, bytes: &[u8]) -> Re
     let pkg = rustgis_plugins::Package::from_zip(bytes)?;
     if pkg.manifest.id != e.id {
         return Err(format!("{}: the package is '{}', not '{}'", e.name, pkg.manifest.id, e.id));
+    }
+    // A registry that called a program sandboxed (or the other way round) is out of date: what
+    // the user was shown before installing must be what runs.
+    if pkg.manifest.runtime != e.runtime {
+        use rustgis_plugins::manifest::Runtime;
+        let runtime = |r| match r {
+            Runtime::Wasm => "WebAssembly",
+            Runtime::Process => "process",
+            Runtime::Skills => "skills",
+        };
+        return Err(format!(
+            "{}: the package is a {} plugin, but the registry lists it as a {} plugin; it wasn't installed",
+            e.name,
+            runtime(pkg.manifest.runtime),
+            runtime(e.runtime)
+        ));
     }
     install_bytes(bytes)
 }

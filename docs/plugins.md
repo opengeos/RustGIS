@@ -443,8 +443,10 @@ A process plugin is a program on your computer instead of a WebAssembly module: 
 or an executable in any language. It can use the file system, threads and any library, which
 lets existing analysis code (numpy, xarray, GDAL…) become a plugin without a rewrite. It is **not
 sandboxed**: it can do anything you can. The install prompt says so, and the Plugin Manager
-marks it *Not sandboxed*. Process plugins run on the desktop and the command line, not in the
-web app.
+marks it *Not sandboxed*, in **Browse** too, before it is installed (with the Python version
+its environment downloads, if it has one). Process plugins run on the desktop and the command
+line, not in the web app: its **Browse** list shows them as *Desktop and command line only*,
+with no **Install** button.
 
 ```json
 {
@@ -598,3 +600,12 @@ Open a pull request on
 
 CI builds or downloads the package and checks its manifest and module. A maintainer then
 reviews it. Once merged, it is published at `plugins.rustgis.app` with its hash.
+
+Each plugin's entry in the published `registry.json` comes from its manifest: `id`, `name`,
+`version`, `description`, `author`, `homepage`, `license`, `categories`, `permissions`,
+`minRustgisVersion` and `i18n` (its name and description translated), with `package` (an HTTPS
+address, or a path relative to `registry.json`), `sha256` and `size`. A process plugin's entry
+also has `"runtime": "process"` and, when it has a Python environment, `"python": "3.12"` (the
+version); a WebAssembly plugin's has neither, and a skills package's has `"runtime": "skills"`.
+RustGIS installs a package only if it runs the way its entry says. `rustgis-cli plugins browse`
+prints each entry with `runtime` filled in (`wasm` when the registry leaves it out).

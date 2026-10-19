@@ -536,6 +536,53 @@ fn hostile_panel_states_are_tamed() {
 }
 
 #[test]
+fn registry_entries_say_how_a_plugin_runs() {
+    use crate::manifest::Runtime;
+    let sha = "a".repeat(64);
+    let base = |id: &str| json!({"id": id, "name": id, "version": "1.0.0", "package": format!("{id}.rgplugin"), "sha256": sha});
+    let mut py = base("py");
+    py["runtime"] = json!("process");
+    py["python"] = json!("3.12");
+    let mut exe = base("exe");
+    exe["runtime"] = json!("process");
+    let mut skills = base("skills");
+    skills["runtime"] = json!("skills");
+    // A Python version only means something for a process plugin, and must look like one.
+    let mut wasm_py = base("wasm-py");
+    wasm_py["python"] = json!("3.12");
+    let mut bad_py = base("bad-py");
+    bad_py["runtime"] = json!("process");
+    bad_py["python"] = json!("latest; rm -rf /");
+    // A runtime this version doesn't know is skipped, not offered as WebAssembly.
+    let mut future = base("future");
+    future["runtime"] = json!("docker");
+    let text = json!([base("wasm"), py, exe, skills, wasm_py, bad_py, future]).to_string();
+    let v = registry::parse(&text, "https://plugins.rustgis.app/registry.json").unwrap();
+    let got: Vec<(&str, Runtime, Option<&str>)> = v.iter().map(|e| (e.id.as_str(), e.runtime, e.python.as_deref())).collect();
+    assert_eq!(
+        got,
+        [
+            ("bad-py", Runtime::Process, None),
+            ("exe", Runtime::Process, None),
+            ("py", Runtime::Process, Some("3.12")),
+            ("skills", Runtime::Skills, None),
+            ("wasm", Runtime::Wasm, None),
+            ("wasm-py", Runtime::Wasm, None),
+        ]
+    );
+    // Round trips: a WebAssembly entry is written as it was (no `runtime`, no `python`); a
+    // process one keeps both.
+    for e in &v {
+        let back: registry::Entry = serde_json::from_value(serde_json::to_value(e).unwrap()).unwrap();
+        assert_eq!(&back, e);
+    }
+    let wasm = serde_json::to_value(v.iter().find(|e| e.id == "wasm").unwrap()).unwrap();
+    assert!(wasm.get("runtime").is_none() && wasm.get("python").is_none(), "{wasm}");
+    let py = serde_json::to_value(v.iter().find(|e| e.id == "py").unwrap()).unwrap();
+    assert_eq!((&py["runtime"], &py["python"]), (&json!("process"), &json!("3.12")));
+}
+
+#[test]
 fn large_registries_are_read_quickly() {
     // 20,000 plugins (and a duplicate of each, which is dropped) parse in a fraction of a second;
     // the bound is generous so a busy CI machine doesn't fail it, while a quadratic scan

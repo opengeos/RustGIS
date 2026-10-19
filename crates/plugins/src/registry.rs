@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::manifest::{Permission, valid_id, version_parts};
+use crate::manifest::{Permission, Runtime, valid_id, version_parts};
 
 /// The hosted registry.
 pub const DEFAULT_URL: &str = "https://plugins.rustgis.app/registry.json";
@@ -48,6 +48,25 @@ pub struct Entry {
     /// The plugin's `name` and `description` in other languages, from its manifest's `i18n`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub i18n: BTreeMap<String, BTreeMap<String, String>>,
+    /// How the plugin runs, from its manifest: a process plugin is not sandboxed and doesn't
+    /// run in the web app. Absent (WebAssembly) in the registry for every other plugin.
+    #[serde(default, skip_serializing_if = "is_wasm")]
+    pub runtime: Runtime,
+    /// For a process plugin with a Python environment, its Python version (`3.12`): installing
+    /// it downloads that Python and the plugin's packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python: Option<String>,
+}
+
+fn is_wasm(r: &Runtime) -> bool {
+    *r == Runtime::Wasm
+}
+
+/// Whether `v` looks like a Python version (`3.12`, `3.12.4`), as a manifest's must.
+fn python_version(v: &str) -> bool {
+    v.len() <= 16
+        && (v == "3" || v.starts_with("3."))
+        && v.split('.').all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 impl Entry {
@@ -143,6 +162,10 @@ pub fn parse(text: &str, url: &str) -> Result<Vec<Entry>, String> {
         }
         if !e.homepage.starts_with("https://") && !e.homepage.starts_with("http://") {
             e.homepage.clear();
+        }
+        // Only a process plugin has a Python environment, and only a version is shown.
+        if e.runtime != Runtime::Process || !e.python.as_deref().is_some_and(python_version) {
+            e.python = None;
         }
         // Only the name and description are translated here, in at most 64 languages, each at
         // most 2,000 bytes: the registry comes from the network.

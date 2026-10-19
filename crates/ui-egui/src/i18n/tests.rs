@@ -210,3 +210,19 @@ fn plugin_permissions_are_in_every_catalog() {
         }
     }
 }
+
+#[test]
+fn registry_process_plugin_notes_are_in_every_catalog() {
+    for l in &LANGUAGES[1..] {
+        let (m, _) = parse(l.source);
+        for key in [
+            "Not sandboxed",
+            "Desktop and command line only",
+            "{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.",
+            "Installing it downloads Python {version} and the packages it needs from the internet.",
+        ] {
+            let tr = m.get(key).unwrap_or_else(|| panic!("{}: missing {key:?}", l.code));
+            assert_ne!(tr, key, "{}: {key:?} isn't translated", l.code);
+        }
+    }
+}

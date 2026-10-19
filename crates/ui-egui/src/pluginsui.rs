@@ -448,6 +448,13 @@ fn refresh(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 fn download(app: &mut RustGisApp, e: &Entry, ctx: &egui::Context) {
+    // Not downloaded only to be refused (the Browse row offers no Install for it either).
+    if !runs_here(e.runtime, cfg!(target_arch = "wasm32")) {
+        let msg =
+            crate::i18n::fmt("{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.", &[("name", &e.name)]);
+        app.plugins.message = Some((false, msg));
+        return;
+    }
     let slot = fetch(app, &e.package, rp::package::MAX_PACKAGE, Some(ctx.clone()));
     app.plugins.message = None;
     app.plugins.jobs.push(Job::Download { entry: Box::new(e.clone()), slot });
@@ -535,14 +542,21 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
-fn chip(ui: &mut egui::Ui, t: &Tokens, text: &str, color: egui::Color32) {
+fn chip(ui: &mut egui::Ui, t: &Tokens, text: &str, color: egui::Color32) -> egui::Response {
     egui::Frame::NONE
         .fill(color.gamma_multiply(0.14))
         .corner_radius(CornerRadius::same(4))
         .inner_margin(egui::Margin::symmetric(5, 1))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).size(10.5).color(if t.dark { color.gamma_multiply(1.3) } else { color }));
-        });
+        })
+        .response
+}
+
+/// Whether a plugin that runs as `runtime` can be installed here: the browser can't start
+/// programs, so a process plugin is for the desktop app and the command line.
+fn runs_here(runtime: rp::Runtime, web: bool) -> bool {
+    !(web && runtime == rp::Runtime::Process)
 }
 
 fn permissions(ui: &mut egui::Ui, t: &Tokens, perms: &[rp::Permission], native: bool) {
@@ -703,7 +717,7 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         let Some(Ok(list)) = &app.plugins.registry else { return };
         for row in rows {
             let Some(e) = app.plugins.browse.shown.get(row).and_then(|&i| list.get(i)) else { continue };
-            if browse_row(ui, t, e) {
+            if browse_row(ui, t, e, cfg!(target_arch = "wasm32")) {
                 install = Some(e.clone());
             }
         }
@@ -714,7 +728,8 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
 }
 
 /// One plugin in the Browse list, in a fixed-height row; returns whether Install was clicked.
-fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
+/// `web`: in the web app, which can't install process plugins.
+fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry, web: bool) -> bool {
     let lang = crate::i18n::current().code();
     let installed = rp::get(&e.id).map(|p| p.manifest.version.clone());
     let blocked = rp::blocked(&e.id, &e.sha256);
@@ -737,6 +752,13 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
                 }
             } else if installed.is_some() && !newer {
                 ui.label(egui::RichText::new(tl!("Installed")).color(t.green));
+            } else if !runs_here(e.runtime, web) {
+                // Listed rather than hidden, so the web app's list is the registry's, and says
+                // where the plugin can be installed.
+                ui.label(egui::RichText::new(tl!("Desktop and command line only")).color(t.text_dim)).on_hover_text(crate::i18n::fmt(
+                    "{name} runs as a program on your computer: it needs the desktop app or rustgis-cli.",
+                    &[("name", e.translate(lang, &e.name))],
+                ));
             } else {
                 let label = if newer { tl!("Update") } else { tl!("Install") };
                 clicked = crate::widgets::primary_button(ui, label, true, vec2(84.0, 24.0)).clicked();
@@ -772,6 +794,19 @@ fn browse_row(ui: &mut egui::Ui, t: &Tokens, e: &Entry) -> bool {
         desc.on_hover_text(tip);
     }
     ui.horizontal(|ui| {
+        // A process plugin can do anything: said first, as for installed ones, with what
+        // installing it downloads.
+        if e.runtime == rp::Runtime::Process {
+            chip(ui, t, tl!("Not sandboxed"), t.red).on_hover_text(tl!(
+                "This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author."
+            ));
+            if let Some(v) = &e.python {
+                chip(ui, t, &format!("Python {v}"), t.text_dim).on_hover_text(crate::i18n::fmt(
+                    "Installing it downloads Python {version} and the packages it needs from the internet.",
+                    &[("version", v)],
+                ));
+            }
+        }
         permission_chips(ui, t, &e.permissions);
         if !e.homepage.is_empty() {
             ui.add(egui::Hyperlink::from_label_and_url(egui::RichText::new(tl!("Homepage")).size(11.0), &e.homepage).open_in_new_tab(true));
@@ -992,5 +1027,19 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     if !open {
         app.plugins.open = false;
         app.plugins.message = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_web_app_offers_no_process_plugins() {
+        for r in [rp::Runtime::Wasm, rp::Runtime::Process, rp::Runtime::Skills] {
+            assert!(runs_here(r, false), "{r:?} on the desktop");
+        }
+        assert!(runs_here(rp::Runtime::Wasm, true) && runs_here(rp::Runtime::Skills, true));
+        assert!(!runs_here(rp::Runtime::Process, true));
     }
 }

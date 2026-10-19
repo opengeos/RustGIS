@@ -3593,6 +3593,8 @@ fn registry_downloads_are_checked() {
         min_rustgis_version: String::new(),
         permissions: Vec::new(),
         i18n: Default::default(),
+        runtime: rustgis_plugins::manifest::Runtime::Wasm,
+        python: None,
     };
     isolate_plugins();
     assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("doesn't match"));
@@ -3600,8 +3602,15 @@ fn registry_downloads_are_checked() {
     e.id = "other".into();
     assert!(crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err().contains("not 'other'"));
     e.id = "eng-reg".into();
+    // What the registry said about how it runs (shown before installing) must be so.
+    e.runtime = rustgis_plugins::manifest::Runtime::Process;
+    let err = crate::cmd::plugins::install_checked(&e, &bytes).unwrap_err();
+    assert!(err.contains("is a WebAssembly plugin, but the registry lists it as a process plugin"), "{err}");
+    assert_eq!(crate::cmd::plugins::entry_status(&e)["runtime"], "process");
+    e.runtime = rustgis_plugins::manifest::Runtime::Wasm;
     crate::cmd::plugins::install_checked(&e, &bytes).unwrap();
     assert_eq!(crate::cmd::plugins::entry_status(&e)["installed"], "1.0.0");
+    assert_eq!(crate::cmd::plugins::entry_status(&e)["runtime"], "wasm");
     let _ = rustgis_plugins::store::uninstall("eng-reg");
 }
 #[test]
