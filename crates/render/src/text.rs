@@ -99,7 +99,7 @@ fn shape(text: &str, px: f32, bold: bool) -> (Vec<(&'static FontRef<'static>, Gl
 const MAX_LINES: usize = 200;
 
 /// The lines of a label, split as the map view splits them (#577): at each `\n`, a trailing one
-/// making an empty last line.
+/// making an empty last line. Lines past [`MAX_LINES`] are left out (measured and drawn alike).
 pub fn lines(text: &str) -> impl Iterator<Item = &str> {
     text.split('\n').take(MAX_LINES)
 }
@@ -221,8 +221,10 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     let (cx, cy) = (l.center_x() * ppp, l.y * ppp);
     // Several lines (#577) as the map view draws them: each from the left of a block as wide as
     // the widest, the block centred on the label's point.
-    let (n, line_h) = (line_count(&l.text), px * 1.25);
-    let w = block_width(&l.text, l.size, l.bold) * ppp;
+    // Each line measured once: its width places it, the widest sizes the block.
+    let widths: Vec<(&str, f32)> = lines(&l.text).map(|line| (line, measure(line, l.size, l.bold) * ppp)).collect();
+    let (n, line_h) = (widths.len(), px * 1.25);
+    let w = widths.iter().map(|(_, lw)| *lw).fold(0.0, f32::max);
     if l.framed {
         let (h, pad) = (px * 1.2 + n.saturating_sub(1) as f32 * line_h, 3.0 * ppp);
         if let Some(r) = Rect::from_xywh(cx - w / 2.0 - pad, cy - h / 2.0 - pad, w + 2.0 * pad, h + 2.0 * pad) {
@@ -230,10 +232,8 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
         }
     }
     let top = cy - n.saturating_sub(1) as f32 * line_h / 2.0;
-    let placed: Vec<(&str, f32, f32)> = lines(&l.text)
-        .enumerate()
-        .map(|(i, line)| (line, cx - w / 2.0 + measure(line, l.size, l.bold) * ppp / 2.0, top + i as f32 * line_h))
-        .collect();
+    let placed: Vec<(&str, f32, f32)> =
+        widths.iter().enumerate().map(|(i, (line, lw))| (*line, cx - w / 2.0 + lw / 2.0, top + i as f32 * line_h)).collect();
     // Every line's halo first, so none covers the line above it.
     if let Some(h) = l.halo {
         let r = 1.2 * ppp;
