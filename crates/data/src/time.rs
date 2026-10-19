@@ -174,8 +174,10 @@ pub fn instant(v: &Value, kind: Kind) -> Option<f64> {
         Value::Null | Value::Bool(_) => return None,
     };
     let t = match (kind, x) {
-        (Kind::EpochMs, Some(x)) => x,
-        (Kind::EpochS, Some(x)) => x * 1000.0,
+        // Epoch times only as the field's were recognised (1900 to 2100, at their scale): a stray
+        // 0 or 42 isn't 1970.
+        (Kind::EpochMs, Some(x)) if number_kind(x) == Some(Kind::EpochMs) => x,
+        (Kind::EpochS, Some(x)) if number_kind(x) == Some(Kind::EpochS) => x * 1000.0,
         (Kind::Year, Some(x)) if x.fract() == 0.0 && (1000.0..=9999.0).contains(&x) => Civil::date(x as i64, 1, 1).ms(),
         (Kind::Text, None) => parse_text(text(v)?)?,
         // A text field's bare year, or a number in a field of dates.
@@ -496,13 +498,15 @@ mod tests {
         assert!((share - 2.0 / 3.0).abs() < 1e-9, "{share}");
         assert_eq!(instant(&Value::Int(1958), Kind::Year), Some(d("1958-01-01")));
         assert_eq!(instant(&Value::Text("1958".into()), Kind::Text), Some(d("1958-01-01")));
-        assert_eq!(instant(&Value::Int(86_400), Kind::EpochS), Some(DAY_MS));
+        assert_eq!(instant(&Value::Int(1_425_168_000), Kind::EpochS), Some(d("2015-03-01")));
         assert_eq!(instant(&Value::Bool(true), Kind::Text), None);
         // Outliers in a field of years or epoch times read as no date, not a far-off one.
         for v in [Value::Int(0), Value::Int(20_150_301), Value::Float(1e18)] {
             assert_eq!(instant(&v, Kind::Year), None, "{v:?}");
         }
         assert_eq!(instant(&Value::Float(1e300), Kind::EpochMs), None);
+        assert_eq!(instant(&Value::Int(42), Kind::EpochMs), None);
+        assert_eq!(instant(&Value::Int(0), Kind::EpochS), None);
     }
 
     #[test]

@@ -93,8 +93,11 @@ pub fn info(s: &Session) -> Value {
         .iter()
         .filter_map(|l| {
             let t = l.time.as_ref()?;
-            let shown = l.drawn_rows(s.scale()).iter().filter(|k| **k).count();
-            Some(json!({"layer": l.name, "field": t.field, "shown": shown, "features": l.dataset.features.len()}))
+            // The features in the window, from the rows worked out when it was applied (cheap for
+            // every step while playing).
+            let n = l.dataset.features.len();
+            let in_window = t.keeps(&l.dataset).map_or(n, |k| k.iter().filter(|k| **k).count());
+            Some(json!({"layer": l.name, "field": t.field, "shown": in_window, "features": n}))
         })
         .collect();
     let tiles: Vec<Value> = m.tiles.iter().filter(|t| t.time_url.is_some()).map(|t| json!({"name": t.name, "url": t.url})).collect();
