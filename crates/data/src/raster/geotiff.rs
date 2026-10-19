@@ -930,8 +930,8 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     // whose bands are stored apart, read whole (issue #544): such an image is read a tile at a
     // time, which can't be done below 8 bits a sample.
     let planar_tiles = planar && nbands > 1 && tiled && bits(&mut dec) >= 8;
-    // Only padding at the bottom: the decoder places a tile's right-edge padding by its column,
-    // which is right in every band.
+    // `padded`: padding rows at the bottom. Right-edge padding is fine: the decoder places it by
+    // the tile's column, which is right in every band.
     let padded = tile_rows.is_none_or(|t| t == 0 || h % t != 0);
     if planar && nbands > 1 && tiled && !planar_tiles && decimate_by == 1 && padded {
         return Err(err("tiled bands stored apart at fewer than 8 bits a sample aren't supported"));
@@ -1805,6 +1805,11 @@ mod tests {
         let bytes = planar_tiled(40, 24, (16, 16), 4, |_, _, _| 0);
         let e = read(std::io::Cursor::new(&bytes), "planar").unwrap_err();
         assert!(e.to_string().contains("fewer than 8 bits"), "{e}");
+        // Padded only on the right, they're left to the decoder (these samples are bytes, not
+        // nibbles, so whatever it makes of them).
+        let bytes = planar_tiled(40, 32, (16, 16), 4, |_, _, _| 0);
+        let read = read(std::io::Cursor::new(&bytes), "planar");
+        assert!(read.as_ref().err().is_none_or(|e| !e.to_string().contains("fewer than 8 bits")), "{read:?}");
     }
 
     #[test]
