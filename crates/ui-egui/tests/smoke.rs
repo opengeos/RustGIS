@@ -1080,9 +1080,12 @@ fn enter_adds_the_text_and_shift_enter_breaks_the_line() {
     use rustgis_ui_egui::rustgis_engine::map::graphics;
     let mut h = harness();
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 10, "lat": 50})).unwrap();
+    // A window measures itself on its first frame and settles on the next.
     h.step();
-    h.get_by_role_and_label(Role::CheckBox, "Bold").click();
     h.step();
+    h.get_by_role_and_label(Role::CheckBox, "Bold").click_accesskit();
+    h.step();
+    assert!(h.state().dialogs.bold, "ticked");
     h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Text")).unwrap().focus();
     h.step();
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
