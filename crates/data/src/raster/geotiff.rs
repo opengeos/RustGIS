@@ -283,6 +283,11 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
         return None;
     }
     // A latitude of true scale is said only for the projections that take one.
+    // A scale factor only for the projections whose keys carry one.
+    let scaled = get("k_0").or(get("k")).and_then(|v| v.parse::<f64>().ok()).is_some_and(|k| (k - 1.0).abs() > 1e-12);
+    if scaled && !matches!(get("proj"), Some("tmerc" | "merc" | "lcc" | "stere" | "sterea")) {
+        return None;
+    }
     let polar = get("lat_0").and_then(|v| v.parse::<f64>().ok()).is_some_and(|l| l.abs() == 90.0);
     if get("lat_ts").is_some() && !(matches!(get("proj"), Some("eqc" | "cea")) || (get("proj") == Some("stere") && polar)) {
         return None;
@@ -303,6 +308,8 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
                     (8, vec![(3078, lat1), (3079, lat2), (3084, lon0), (3085, lat0), (3086, x0), (3087, y0)])
                 }
                 Some(lat2) if (lat2 - lat1).abs() > 1e-12 => return None,
+                // The one-parallel form's latitude is both the parallel and the origin's.
+                _ if (lat1 - lat0).abs() > 1e-12 => return None,
                 _ => (9, vec![(3080, lon0), (3081, lat1), (3082, x0), (3083, y0), (3092, k0)]),
             }
         }
@@ -1210,6 +1217,8 @@ mod tests {
         assert!(keys_from_proj4("+proj=tmerc +lon_0=0 +units=us-ft +datum=WGS84", "x").is_none(), "only metres");
         for unsaid in [
             "+proj=stere +lat_0=45 +lat_ts=30 +datum=WGS84",
+            "+proj=lcc +lat_1=30 +lat_0=40 +lon_0=-96 +datum=WGS84",
+            "+proj=laea +lat_0=52 +lon_0=10 +k_0=0.9 +datum=WGS84",
             "+proj=lcc +lat_1=30 +lat_2=40 +k_0=0.9996 +datum=WGS84",
             "+proj=merc +lat_ts=33 +datum=WGS84",
             "+proj=tmerc +ellps=bessel +towgs84=598.1,73.7,418.2",

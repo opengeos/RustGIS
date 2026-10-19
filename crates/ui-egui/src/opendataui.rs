@@ -258,9 +258,8 @@ fn poll_probes(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut landed = Vec::new();
     st.probes.retain(|(i, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(r) => {
-            // Only a store that isn't there (404, or 403 as S3 says it): a passing error leaves
-            // the dataset to be added.
-            // (A 403 may be a passing refusal: only 404 says so.)
+            // Only a store that isn't there (a 404): any other error, a 403 included, may be
+            // passing and leaves the dataset to be added.
             let absent = r.err().and_then(|e| cache::http_status(&e)) == Some(404);
             landed.push((*i, !absent));
             false
