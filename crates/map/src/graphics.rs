@@ -6,6 +6,7 @@
 
 use rustgis_data::{Dataset, Field, FieldType, GeometryType, Value};
 
+use crate::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING, TextAlign};
 use crate::{Marker, Rgba, Symbol};
 
 /// The graphic kinds.
@@ -22,8 +23,11 @@ pub const FIELDS: &[(&str, FieldType)] = &[
     ("size", FieldType::Double),
     ("font_size", FieldType::Double),
     ("image", FieldType::Text),
-    // Last: graphics layers made before it lack it, and read it as false (#516).
+    // Last: graphics layers made before them lack them, and read them as plain text (#516, #535).
     ("bold", FieldType::Boolean),
+    ("italic", FieldType::Boolean),
+    ("align", FieldType::Text),
+    ("letter_spacing", FieldType::Double),
 ];
 
 /// Tokens dynamic text expands: (token, description).
@@ -77,6 +81,24 @@ pub fn font_size(ds: &Dataset, row: usize) -> f32 {
 /// layers made before it).
 pub fn bold(ds: &Dataset, row: usize) -> bool {
     num(ds, row, "bold").is_some_and(|v| v != 0.0)
+}
+
+/// Whether a text graphic is drawn italic (#535); false where the layer has no `italic` field.
+pub fn italic(ds: &Dataset, row: usize) -> bool {
+    num(ds, row, "italic").is_some_and(|v| v != 0.0)
+}
+
+/// How a text graphic's lines are aligned in their block, which stays centred on its point
+/// (#535): left where the layer has no `align` field or it holds something else (typed in the
+/// attribute table), as text graphics have always been laid out.
+pub fn align(ds: &Dataset, row: usize) -> TextAlign {
+    text(ds, row, "align").and_then(TextAlign::from_name).unwrap_or_default()
+}
+
+/// A text graphic's letter spacing in points (#535), within a layout text's range; 0 where the
+/// layer has no `letter_spacing` field.
+pub fn letter_spacing(ds: &Dataset, row: usize) -> f32 {
+    num(ds, row, "letter_spacing").unwrap_or(0.0).clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING) as f32
 }
 
 /// The colour text graphics are drawn in when their `fill` doesn't say.

@@ -5,6 +5,7 @@
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::Tool;
 use rustgis_engine::geom::{Coord, Extent, geodesic_length_m, geodesic_ring_area_m2};
+use rustgis_engine::map::layout::TextAlign;
 use rustgis_engine::map::{Camera, Globe, Projection};
 use rustgis_engine::render::{PlacedLabel, Rendered, View};
 use serde_json::{Value, json};
@@ -1044,30 +1045,54 @@ fn tex_rect(app: &RustGisApp, cam: Camera, rect: Rect, globe_view: bool) -> Rect
     Rect::from_min_max(to_screen(0.0, 0.0), to_screen(tw, th))
 }
 
+/// Map text laid out as the map view draws it: its font, and a text graphic's style (#535), its
+/// lines aligned in their block, slanted (egui's own slant, as the fonts have no italic face)
+/// and letter-spaced. The one layout for drawing a label and for picking or dragging a text
+/// graphic, so they agree.
+fn label_job(text: &str, size: f32, bold: bool, italic: bool, spacing: f32, align: TextAlign) -> egui::text::LayoutJob {
+    let font_id = if bold { semibold(size * 1.33) } else { regular(size * 1.33) };
+    // Letter spacing in points, scaled as the size is.
+    let format =
+        egui::TextFormat { font_id, color: Color32::WHITE, italics: italic, extra_letter_spacing: spacing * 1.33, ..Default::default() };
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+    job.halign = match align {
+        TextAlign::Left => egui::Align::LEFT,
+        TextAlign::Center => egui::Align::Center,
+        TextAlign::Right => egui::Align::RIGHT,
+    };
+    job
+}
+
+/// Where a laid-out text is drawn from so that its block sits at `at` as `anchor` says, and the
+/// block's rectangle: centred or right-aligned lines start left of the galley's origin.
+fn place_galley(anchor: Align2, at: Pos2, g: &egui::Galley) -> (Pos2, Rect) {
+    let r = anchor.anchor_size(at, g.size());
+    (r.min - g.rect.min.to_vec2(), r)
+}
+
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
-    let font = if l.bold { semibold(l.size * 1.33) } else { regular(l.size * 1.33) };
+    let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
-    let align = if l.align < -0.25 {
+    let anchor = if l.align < -0.25 {
         Align2::LEFT_CENTER
     } else if l.align > 0.25 {
         Align2::RIGHT_CENTER
     } else {
         Align2::CENTER_CENTER
     };
+    let (pos, r) = place_galley(anchor, at, &galley);
     // A selected text graphic: framed as laid out, under the text.
     if l.framed {
-        let galley = p.layout_no_wrap(l.text.clone(), font.clone(), Color32::TRANSPARENT);
-        let r = align.anchor_size(at, galley.size()).expand(3.0);
         let cyan = c32(rustgis_engine::render::SELECTION);
-        p.rect(r, 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
+        p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
     if let Some(h) = l.halo {
         let hc = c32(h);
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-            p.text(at + vec2(dx, dy), align, &l.text, font.clone(), hc);
+            p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
         }
     }
-    p.text(at, align, &l.text, font, c32(l.color));
+    p.galley_with_override_text_color(pos, galley, c32(l.color));
 }
 
 /// The globe as seen in this view, when the map is a globe.
@@ -1118,28 +1143,35 @@ pub(crate) fn text_graphic_at(app: &RustGisApp, ctx: &egui::Context, rect: Rect,
                     return None;
                 }
             }
-            let (at, text, font) = text_shown(app, rect, &tokens, l, row)?;
-            let size = ctx.fonts_mut(|f| f.layout_no_wrap(text, font, Color32::WHITE).size());
+            let (at, job) = text_shown(app, rect, &tokens, l, row)?;
+            let size = ctx.fonts_mut(|f| f.layout_job(job).size());
             Rect::from_center_size(at, size).expand(3.0).contains(p).then_some((l.id, row))
         })
     })
 }
 
-/// A text graphic as the map shows it: the screen point it is centred on, its text with the
-/// dynamic values filled in, and the font it is measured with.
+/// A text graphic as the map shows it: the screen point its block is centred on, and its text
+/// (the dynamic values filled in) laid out as [`draw_label`] lays it out, style and all.
 fn text_shown(
     app: &RustGisApp,
     rect: Rect,
     tokens: &rustgis_engine::map::graphics::TokenValues,
     l: &rustgis_engine::map::Layer,
     row: usize,
-) -> Option<(Pos2, String, egui::FontId)> {
+) -> Option<(Pos2, egui::text::LayoutJob)> {
     use rustgis_engine::map::graphics;
-    let text = graphics::expand(graphics::label(&l.dataset, row)?, tokens);
-    let at = lonlat_to_screen(app, rect, l.dataset.features.get(row)?.geometry.as_ref()?.label_point()?)?;
-    let size = graphics::font_size(&l.dataset, row) * 1.33;
-    let font = if graphics::bold(&l.dataset, row) { crate::theme::semibold(size) } else { regular(size) };
-    Some((at, text, font))
+    let ds = &l.dataset;
+    let text = graphics::expand(graphics::label(ds, row)?, tokens);
+    let at = lonlat_to_screen(app, rect, ds.features.get(row)?.geometry.as_ref()?.label_point()?)?;
+    let job = label_job(
+        &text,
+        graphics::font_size(ds, row),
+        graphics::bold(ds, row),
+        graphics::italic(ds, row),
+        graphics::letter_spacing(ds, row),
+        graphics::align(ds, row),
+    );
+    Some((at, job))
 }
 
 /// Centres the map on a place as it moves along (a simulated drive), keeping the zoom; the map
@@ -1387,11 +1419,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             }
             return;
         }
-        if let (Some((at, text, font)), Some(end)) = (shown, end) {
+        if let (Some((at, job)), Some(end)) = (shown, end) {
             let t = Tokens::get(ui.ctx());
             let painter =
                 ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.id().with("text_drag"))).with_clip_rect(rect);
-            let r = painter.text(at + (end - origin), egui::Align2::CENTER_CENTER, text, font, t.accent);
+            // Laid out as the map draws it (its style too, #535), in the accent colour.
+            let galley = painter.layout_job(job);
+            let (pos, r) = place_galley(Align2::CENTER_CENTER, at + (end - origin), &galley);
+            painter.galley_with_override_text_color(pos, galley, t.accent);
             painter.rect_stroke(r.expand(3.0), 2.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             ui.ctx().request_repaint();
@@ -2774,6 +2809,31 @@ mod tests {
         }
         assert_eq!(mv.fps(1.7), Some(10), "only the new burst counts");
         assert_eq!(mv.fps(2.3), None, "idle (no frame in 500 ms)");
+    }
+
+    /// A text graphic's style is measured as it is drawn (#535): letter-spaced, it is hit across
+    /// the width its spacing gives it, as the map view lays it out.
+    #[test]
+    fn a_styled_text_graphic_is_hit_as_drawn() {
+        let mut app = RustGisApp::with_sample();
+        let c = app.session.map().center_lonlat();
+        let r = app.run("graphics.add", json!({"shape": "text", "points": [[c.x, c.y]], "text": "Wide", "fontSize": 20})).unwrap();
+        let (layer, row) = (r["layer"].clone(), r["row"].clone());
+        let hit = r["layer"].as_u64().zip(r["row"].as_u64()).map(|(l, r)| (l as u32, r as usize));
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        // Past the plain text's right end, within the spaced text's.
+        let probe = |app: &RustGisApp| {
+            let mut found = None;
+            let mut out = egui::Context::default().run_ui(Default::default(), |ui| {
+                let at = lonlat_to_screen(app, rect, c).unwrap();
+                found = text_graphic_at(app, ui.ctx(), rect, at + vec2(50.0, 0.0));
+            });
+            out.textures_delta.clear();
+            found
+        };
+        assert_eq!(probe(&app), None, "plain, the text ends before");
+        app.run("graphics.edit", json!({"layer": layer, "row": row, "letterSpacing": 20})).unwrap();
+        assert_eq!(probe(&app), hit, "spaced, it reaches there");
     }
 
     /// A text graphic is found anywhere on its text, not only at its anchor (#420).

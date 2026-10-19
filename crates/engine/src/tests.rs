@@ -8218,6 +8218,90 @@ fn text_graphics_can_be_bold() {
     assert!(graphics::bold(&ds(&s), rb) && !graphics::bold(&ds(&s), ra));
 }
 
+/// Text graphics take italic, alignment and letter spacing (#535) as a layout's text does: added,
+/// styled or edited so, checked and limited the same; a layer made before the fields reads as
+/// plain text and gains each field when it is first set; one typed wrong in the attribute table
+/// reads as plain too.
+#[test]
+fn text_graphics_take_italic_alignment_and_letter_spacing() {
+    use rustgis_map::graphics;
+    use rustgis_map::layout::TextAlign;
+    let mut s = world();
+    let a = s
+        .run(
+            "graphics.add",
+            &json!({"shape": "text", "points": [[10, 50]], "text": "A\nB", "italic": true, "align": "center", "letterSpacing": 3}),
+        )
+        .unwrap();
+    let id = a["layer"].as_u64().unwrap() as u32;
+    let b = s.run("graphics.add", &json!({"shape": "text", "points": [[20, 40]], "text": "B", "layer": id})).unwrap();
+    let (ra, rb) = (a["row"].as_u64().unwrap() as usize, b["row"].as_u64().unwrap() as usize);
+    let ds = |s: &Session| s.map().layer(id).unwrap().dataset.clone();
+    let style = |s: &Session, r| (graphics::italic(&ds(s), r), graphics::align(&ds(s), r), graphics::letter_spacing(&ds(s), r));
+    assert_eq!(style(&s, ra), (true, TextAlign::Center, 3.0));
+    assert_eq!(style(&s, rb), (false, TextAlign::Left, 0.0), "not given: plain");
+    // Edited, styled and limited as a layout's text is.
+    s.run("graphics.edit", &json!({"layer": id, "row": rb, "align": "Right", "letterSpacing": 900})).unwrap();
+    assert_eq!(style(&s, rb), (false, TextAlign::Right, 50.0));
+    s.run("graphics.edit", &json!({"layer": id, "row": rb, "letterSpacing": -40})).unwrap();
+    assert_eq!(style(&s, rb).2, -5.0);
+    s.run("select.rows", &json!({"layer": id, "rows": [ra]})).unwrap();
+    s.run("graphics.style", &json!({"italic": false})).unwrap();
+    assert_eq!(style(&s, ra), (false, TextAlign::Center, 3.0), "only what is given changes");
+    // Wrong values are refused, and change nothing; the message names the parameter.
+    for (bad, name) in
+        [(json!({"align": "up"}), "alignment"), (json!({"italic": "maybe"}), "italic"), (json!({"letterSpacing": "wide"}), "letterSpacing")]
+    {
+        let mut p = bad.clone();
+        p["layer"] = json!(id);
+        p["row"] = json!(ra);
+        let err = s.run("graphics.edit", &p).unwrap_err();
+        assert!(err.contains(name), "{bad}: {err}");
+        let mut p = bad;
+        p["shape"] = json!("text");
+        p["points"] = json!([[0, 0]]);
+        p["text"] = json!("C");
+        assert!(s.run("graphics.add", &p).is_err());
+    }
+    assert_eq!(style(&s, ra), (false, TextAlign::Center, 3.0));
+    assert!(s.run("graphics.style", &json!({})).unwrap_err().contains("letterSpacing"), "the style's own words list them");
+    // Placed again with a style: both happen; with a bad style, neither (it isn't moved first).
+    let at = |s: &Session| ds(s).features[ra].geometry.clone();
+    let before = at(&s);
+    for bad in [json!({"align": "up"}), json!({"fill": "red"})] {
+        let mut p = bad;
+        p["layer"] = json!(id);
+        p["row"] = json!(ra);
+        p["points"] = json!([[11, 50]]);
+        assert!(s.run("graphics.edit", &p).is_err());
+        assert_eq!(at(&s), before, "placed again though its style was refused");
+    }
+    s.run("graphics.edit", &json!({"layer": id, "row": ra, "points": [[11, 50]], "italic": true})).unwrap();
+    assert!(graphics::italic(&ds(&s), ra) && at(&s) != before);
+    // A layer from before the fields: plain, until each is set.
+    let l = s.map_mut().layer_mut(id).unwrap();
+    for name in ["italic", "align", "letter_spacing"] {
+        let fi = l.dataset.field_index(name).unwrap();
+        l.dataset.fields.remove(fi);
+        l.dataset.features.iter_mut().for_each(|f| {
+            f.attrs.remove(fi);
+        });
+    }
+    assert_eq!(style(&s, ra), (false, TextAlign::Left, 0.0));
+    s.run("graphics.edit", &json!({"layer": id, "row": ra, "align": "center"})).unwrap();
+    assert_eq!(style(&s, ra), (false, TextAlign::Center, 0.0));
+    assert!(ds(&s).field_index("align").is_some() && ds(&s).field_index("italic").is_none(), "only the field set is gained");
+    // Typed wrong in the attribute table: read as plain, within range.
+    let l = s.map_mut().layer_mut(id).unwrap();
+    let (fa, fs) = (
+        l.dataset.ensure_field("align", rustgis_data::FieldType::Text),
+        l.dataset.ensure_field("letter_spacing", rustgis_data::FieldType::Double),
+    );
+    l.dataset.features[ra].attrs[fa] = rustgis_data::Value::Text("sideways".into());
+    l.dataset.features[ra].attrs[fs] = rustgis_data::Value::Float(f64::NAN);
+    assert_eq!(style(&s, ra), (false, TextAlign::Left, 0.0));
+}
+
 /// A text graphic is placed again by its points (dragged on the map, #516), as one undo step;
 /// other shapes move with `edit.move`.
 #[test]

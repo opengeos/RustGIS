@@ -4,6 +4,7 @@
 use base64::Engine;
 use rustgis_data::{Geometry, Value as Attr};
 use rustgis_geom::{Coord, lonlat_to_merc, merc_to_lonlat};
+use rustgis_map::layout::TextAlign;
 use rustgis_map::{Rgba, graphics};
 use serde_json::{Value, json};
 
@@ -24,13 +25,13 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"name"?: string}"#),
         C::new("graphics.add", "Add Graphic", "Edit › Graphics", add).params(
-            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
+            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "italic"?: bool, "align"?: "left"|"center"|"right" (a text's lines in their block, which stays centred on its point), "letterSpacing"?: points, -5 to 50, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
         ),
         C::new("graphics.style", "Graphic Style", "Edit › Graphics", style)
             .when(super::need_selection)
-            .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "text"?: string}"##),
+            .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50, "text"?: string}"##),
         C::new("graphics.edit", "Edit Graphic", "Edit › Graphics", edit).params(
-            r##"{"layer": graphics layer, "row": number, "points"?: [[lon, lat]] (a point or a text: where it sits), "text"?: string, "fontSize"?: number, "bold"?: bool, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
+            r##"{"layer": graphics layer, "row": number, "points"?: [[lon, lat]] (a point or a text: where it sits), "text"?: string, "fontSize"?: number, "bold"?: bool, "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
         ),
         C::new("graphics.keepTool", "Keep the last tool active", "Edit › Graphics", |s, p| {
             s.keep_tool = b(p, "on").unwrap_or(!s.keep_tool);
@@ -199,6 +200,51 @@ fn geometry(shape: &str, pts: Vec<Coord>) -> Result<Geometry, String> {
     })
 }
 
+/// The italic, alignment and letter spacing a command gives a text (#535): `None` where not given.
+#[derive(Default)]
+struct TextStyle {
+    italic: Option<bool>,
+    align: Option<TextAlign>,
+    spacing: Option<f64>,
+}
+
+impl TextStyle {
+    /// From `italic`, `align` and `letterSpacing`, read and checked as `layout.update` reads a
+    /// layout text's, so the same text takes the same values on the map and on the page.
+    fn of(p: &Value) -> Result<Self, String> {
+        let (italic, align, spacing) = super::layout::text_style(p, false, TextAlign::Left, 0.0)?;
+        let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+        Ok(TextStyle {
+            italic: given("italic").then_some(italic),
+            align: given("align").then_some(align),
+            spacing: given("letterSpacing").then_some(spacing),
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.italic.is_none() && self.align.is_none() && self.spacing.is_none()
+    }
+
+    /// The fields to set and their values; a layer made before a field gains it here.
+    fn sets(&self, ds: &mut rustgis_data::Dataset) -> Vec<(&'static str, Attr)> {
+        use rustgis_data::FieldType;
+        let mut out = Vec::new();
+        if let Some(v) = self.italic {
+            ds.ensure_field("italic", FieldType::Boolean);
+            out.push(("italic", Attr::Bool(v)));
+        }
+        if let Some(a) = self.align {
+            ds.ensure_field("align", FieldType::Text);
+            out.push(("align", Attr::Text(a.code().into())));
+        }
+        if let Some(v) = self.spacing {
+            ds.ensure_field("letter_spacing", FieldType::Double);
+            out.push(("letter_spacing", Attr::Float(v)));
+        }
+        out
+    }
+}
+
 fn color(p: &Value, k: &str) -> Result<Option<String>, String> {
     match ps(p, k) {
         Some(c) => Rgba::from_hex(c).map(|c| Some(c.hex())).ok_or_else(|| format!("{k} must be #RRGGBB or #RRGGBBAA")),
@@ -245,6 +291,7 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
     }
     let image = if shape == "picture" { Some(picture(p)?) } else { None };
     let (fill, outline) = (color(p, "fill")?, color(p, "outline")?);
+    let style = TextStyle::of(p)?;
     let id = target(s, p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let num = |k: &str, min: f64, max: f64| f(p, k).map(|v| Attr::Float(v.clamp(min, max))).unwrap_or(Attr::Null);
@@ -266,6 +313,12 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         let fi = l.dataset.ensure_field("bold", rustgis_data::FieldType::Boolean);
         if let Some(cell) = l.dataset.features.get_mut(row).and_then(|ft| ft.attrs.get_mut(fi)) {
             *cell = Attr::Bool(bold);
+        }
+    }
+    for (k, v) in style.sets(&mut l.dataset) {
+        let fi = l.dataset.field_index(k);
+        if let Some(cell) = fi.and_then(|fi| l.dataset.features.get_mut(row).and_then(|ft| ft.attrs.get_mut(fi))) {
+            *cell = v;
         }
     }
     l.touch_geometry();
@@ -294,6 +347,10 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err("text is required".into());
         }
     }
+    // Checked before anything changes, so a bad style doesn't leave the graphic placed again.
+    color(p, "fill")?;
+    color(p, "outline")?;
+    TextStyle::of(p)?;
     // Placed again (a text dragged on the map, #516): only what sits at one point; other shapes
     // move with `edit.move`.
     let placed = match p.get("points") {
@@ -312,7 +369,9 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             ft.geometry = Some(g);
         }
         l.touch_geometry();
-        let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold"].iter().any(|k| p.get(*k).is_some());
+        let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold", "italic", "align", "letterSpacing"]
+            .iter()
+            .any(|k| p.get(*k).is_some());
         if !styled {
             return Ok(json!({"placed": 1}));
         }
@@ -328,8 +387,15 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
     let fonts = &graphics::FONT_SIZE;
     let nums = [("width", "width", 0.0, 50.0), ("size", "size", 0.0, 200.0), ("font_size", "fontSize", *fonts.start(), *fonts.end())];
     let bold = b(p, "bold");
-    if fill.is_none() && outline.is_none() && text.is_none() && bold.is_none() && nums.iter().all(|(_, k, _, _)| f(p, k).is_none()) {
-        return Err("give a fill, outline, width, size, fontSize, bold or text".into());
+    let style = TextStyle::of(p)?;
+    if fill.is_none()
+        && outline.is_none()
+        && text.is_none()
+        && bold.is_none()
+        && style.is_empty()
+        && nums.iter().all(|(_, k, _, _)| f(p, k).is_none())
+    {
+        return Err("give a fill, outline, width, size, fontSize, bold, italic, align, letterSpacing or text".into());
     }
     let mut n = 0;
     let targeted = |l: &rustgis_map::Layer| one.map_or(!l.selection.is_empty(), |(id, _)| l.id == id);
@@ -351,6 +417,7 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
             l.dataset.ensure_field("bold", rustgis_data::FieldType::Boolean);
             sets.push(("bold", Attr::Bool(v)));
         }
+        sets.extend(style.sets(&mut l.dataset));
         let sets: Vec<(Option<usize>, Attr)> = sets.into_iter().map(|(k, v)| (l.dataset.field_index(k), v)).collect();
         let text_field = l.dataset.field_index("text");
         let rows = one.map_or_else(|| l.selection.clone(), |(_, row)| vec![row]);

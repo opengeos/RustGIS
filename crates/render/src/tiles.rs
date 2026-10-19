@@ -6,6 +6,7 @@
 
 use rustgis_geom::{Coord, Extent, MAX_LAT, lonlat_to_merc};
 use rustgis_map::effects::Blend;
+use rustgis_map::layout::TextAlign;
 use rustgis_map::projection::Flat;
 use rustgis_map::{Map, Rgba, TileKind, TileLayer};
 use rustgis_tiles::{Frame, Kind, Spec};
@@ -119,6 +120,9 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
                     icon,
                     align: -l.anchor[0],
                     framed: false,
+                    italic: false,
+                    spacing: 0.0,
+                    line_align: TextAlign::Left,
                 },
                 l.priority,
             ));

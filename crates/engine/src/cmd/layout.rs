@@ -747,7 +747,7 @@ fn edges(v: &Value) -> Result<GridEdges, String> {
 /// A text element's italic, alignment and letter spacing (points) from `italic`, `align` and
 /// `letterSpacing` in `p`, each keeping the current one when not given; one given but not of its
 /// kind is an error.
-fn text_style(p: &Value, italic: bool, align: TextAlign, spacing: f64) -> Result<(bool, TextAlign, f64), String> {
+pub(crate) fn text_style(p: &Value, italic: bool, align: TextAlign, spacing: f64) -> Result<(bool, TextAlign, f64), String> {
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     let italic = match p.get("italic") {
         None | Some(Value::Null) => italic,

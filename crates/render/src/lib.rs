@@ -105,6 +105,7 @@ use std::sync::OnceLock;
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
+use rustgis_map::layout::TextAlign;
 use rustgis_map::{Camera, Globe, LineStroke, Map, Marker, Rgba, Symbol};
 /// The image type pages and maps are drawn into.
 pub use tiny_skia::Pixmap;
@@ -177,12 +178,19 @@ pub struct PlacedLabel {
     /// Framed in the selection colour: a selected text graphic. Each renderer frames the text as
     /// it lays it out.
     pub framed: bool,
+    /// Slanted, and the letter spacing in points: a text graphic's (#535); other labels are
+    /// upright with no spacing.
+    pub italic: bool,
+    pub spacing: f32,
+    /// How the lines line up in their block (a text graphic's, #535); the block itself sits where
+    /// `align` puts it.
+    pub line_align: TextAlign,
 }
 
 impl PlacedLabel {
     /// The centre of the text, by this crate's measure of its width.
     pub fn center_x(&self) -> f32 {
-        self.x - self.align * text::block_width(&self.text, self.size, self.bold)
+        self.x - self.align * text::label_width(self)
     }
 }
 
@@ -2487,6 +2495,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         icon: None,
                         align: 0.0,
                         framed: selection.contains(&row),
+                        italic: rustgis_map::graphics::italic(ds_ptr, row),
+                        spacing: rustgis_map::graphics::letter_spacing(ds_ptr, row),
+                        line_align: rustgis_map::graphics::align(ds_ptr, row),
                     });
                 }
             }
@@ -2540,6 +2551,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         icon: None,
                         align: 0.0,
                         framed: false,
+                        italic: false,
+                        spacing: 0.0,
+                        line_align: TextAlign::Left,
                     },
                     pri,
                     (lid, row),
@@ -3106,7 +3120,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
     cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     // The text's box and its icon's, together.
     let bbox = |l: &PlacedLabel| {
-        let tw = text::block_width(&l.text, l.size, l.bold);
+        let tw = text::label_width(l);
         let th = text::block_height(&l.text, l.size);
         let cx = l.center_x();
         let text = (!l.text.is_empty()).then(|| [cx - tw / 2.0 - 2.0, l.y - th / 2.0, cx + tw / 2.0 + 2.0, l.y + th / 2.0]);
@@ -3188,6 +3202,9 @@ pub(crate) fn draw_attribution(pm: &mut Pixmap, attribution: &[String], ppp: f32
         icon: None,
         align: 0.0,
         framed: false,
+        italic: false,
+        spacing: 0.0,
+        line_align: TextAlign::Left,
     };
     text::draw(pm, &label, ppp);
 }
@@ -3207,6 +3224,9 @@ mod tests {
             icon,
             align,
             framed: false,
+            italic: false,
+            spacing: 0.0,
+            line_align: TextAlign::Left,
         }
     }
 
@@ -3441,6 +3461,89 @@ mod tests {
         let framed: Vec<u32> = (0..300).filter(|y| (0..400).any(|x| cyan(x, *y))).collect();
         assert!(framed.first().zip(rows.first()).is_some_and(|(f, r)| f < r), "frame above the first line");
         assert!(framed.last().zip(rows.last()).is_some_and(|(f, r)| f > r), "frame below the last line");
+    }
+
+    /// A text graphic's lines are aligned in their block, slanted and letter-spaced as it says
+    /// (#535), in an image as on screen; plain labels are drawn as before.
+    #[test]
+    fn a_text_graphic_is_drawn_aligned_slanted_and_spaced() {
+        let at = |text: &str| PlacedLabel { y: 150.0, size: 20.0, ..label(text, 200.0, None, 0.0) };
+        // Each band of ink (a line) as (top, bottom, left, right), top to bottom.
+        let bands = |l: &PlacedLabel| {
+            let mut pm = Pixmap::new(400, 300).unwrap();
+            text::draw(&mut pm, l, 1.0);
+            let dark = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|c| c.alpha() > 128 && c.red() < 60);
+            let rows: Vec<u32> = (0..300).filter(|y| (0..400).any(|x| dark(x, *y))).collect();
+            let mut out: Vec<(u32, u32, u32, u32)> = Vec::new();
+            for y in rows {
+                let cols: Vec<u32> = (0..400).filter(|x| dark(*x, y)).collect();
+                let (lo, hi) = (cols.first().copied().unwrap_or(0), cols.last().copied().unwrap_or(0));
+                match out.last_mut() {
+                    Some(b) if y == b.1 + 1 => *b = (b.0, y, b.2.min(lo), b.3.max(hi)),
+                    _ => out.push((y, y, lo, hi)),
+                }
+            }
+            out
+        };
+        // Lines of clearly different widths, so where the short one sits shows its alignment.
+        let two = "North Atlantic\nOcean";
+        // Left, as labels have always been: both lines start at the block's left.
+        let left = bands(&at(two));
+        assert_eq!(left.len(), 2);
+        assert!(left[0].2.abs_diff(left[1].2) <= 2, "left: {left:?}");
+        // Centred: the short line sits in the middle of the long one; right: their right edges meet.
+        let centred = bands(&PlacedLabel { line_align: TextAlign::Center, ..at(two) });
+        let (a, b) = (centred[0], centred[1]);
+        let gap = |x: u32, y: u32| i64::from(x) - i64::from(y);
+        assert!((gap(b.2, a.2) - gap(a.3, b.3)).abs() <= 3, "centred: {centred:?}");
+        assert!(b.2 > a.2 + 20, "the short line moved in: {centred:?}");
+        let right = bands(&PlacedLabel { line_align: TextAlign::Right, ..at(two) });
+        assert!(right[0].3.abs_diff(right[1].3) <= 2, "right: {right:?}");
+        // The block stays centred on its point whichever way its lines are aligned.
+        for b in [&left, &centred, &right] {
+            let (l, r) = (b.iter().map(|x| x.2).min().unwrap_or(0), b.iter().map(|x| x.3).max().unwrap_or(0));
+            assert!(((l + r) as f32 / 2.0 - 200.0).abs() <= 3.0, "block centred at {}", (l + r) / 2);
+        }
+        // Letter-spaced: wider by the spacing between each letter, still centred; measured so.
+        let plain = bands(&at("Spaced"))[0];
+        let spaced = PlacedLabel { spacing: 6.0, ..at("Spaced") };
+        let wide = bands(&spaced)[0];
+        let grew = (gap(wide.3, wide.2) - gap(plain.3, plain.2)) as f32;
+        assert!((grew - 5.0 * 6.0 * 1.33).abs() <= 3.0, "grew {grew}");
+        assert!(text::label_width(&spaced) > text::label_width(&at("Spaced")) + 30.0);
+        // Slanted: an upright stem leans right at the top.
+        let stem = |italic: bool| {
+            let mut pm = Pixmap::new(400, 300).unwrap();
+            text::draw(&mut pm, &PlacedLabel { italic, size: 60.0, ..at("l") }, 1.0);
+            let dark = |x: u32, y: u32| pm.pixel(x, y).is_some_and(|c| c.alpha() > 128);
+            let rows: Vec<u32> = (0..300).filter(|y| (0..400).any(|x| dark(x, *y))).collect();
+            let mid = |y: u32| {
+                let c: Vec<u32> = (0..400).filter(|x| dark(*x, y)).collect();
+                (c.first().copied().unwrap_or(0) + c.last().copied().unwrap_or(0)) as i64 / 2
+            };
+            mid(rows.first().copied().unwrap_or(0) + 2) - mid(rows.last().copied().unwrap_or(0).saturating_sub(2))
+        };
+        assert!(stem(false).abs() <= 1 && stem(true) >= 6, "lean: upright {}, italic {}", stem(false), stem(true));
+        // A text graphic's fields reach the label; a plain one's are neutral.
+        let mut m = Map::new("Map");
+        let id = m.add_graphics("Graphics");
+        let p = Coord::new(2.35, 48.85);
+        if let Some(l) = m.layer_mut(id) {
+            let field = |name: &str| l.dataset.field_index(name).unwrap();
+            let (fi, fa, fs) = (field("italic"), field("align"), field("letter_spacing"));
+            let mut attrs = vec![Value::Null; l.dataset.fields.len()];
+            attrs[0] = Value::Text("text".into());
+            attrs[1] = Value::Text("Styled".into());
+            (attrs[fi], attrs[fa], attrs[fs]) = (Value::Bool(true), Value::Text("right".into()), Value::Float(4.0));
+            l.dataset.push(Some(Geometry::Point(p)), attrs);
+            l.dataset.push(Some(Geometry::Point(Coord::new(2.45, 48.80))), vec![Value::Text("text".into()), Value::Text("Plain".into())]);
+        }
+        let camera = Camera { center: lonlat_to_merc(p), res: 5000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        let get = |t: &str| r.labels.iter().find(|l| l.text == t).map(|l| (l.italic, l.line_align, l.spacing));
+        assert_eq!(get("Styled"), Some((true, TextAlign::Right, 4.0)));
+        assert_eq!(get("Plain"), Some((false, TextAlign::Left, 0.0)));
     }
 
     #[test]
