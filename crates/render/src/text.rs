@@ -136,26 +136,32 @@ pub fn block_height(text: &str, size: f32) -> f32 {
     size * 1.25 + line_count(text).saturating_sub(1) as f32 * line_pitch(size)
 }
 
-/// Whether a label is slanted or letter-spaced (a text graphic's, #535): drawn and measured by
-/// its ink rather than its advance.
+/// Whether a label is slanted or letter-spaced (a text graphic's, #535), drawn with
+/// [`styled_at`].
 fn styled(l: &PlacedLabel) -> bool {
     l.italic || l.spacing != 0.0
 }
 
-/// Where a line of `l` starts drawing ink from the pen, and how wide it draws, in pixels at
-/// `ppp`: plain, its advance from the pen, as labels have always been placed; slanted or
-/// letter-spaced, its ink, which reaches past the advance (as a layout's text is aligned).
-fn line_extent(l: &PlacedLabel, line: &str, ppp: f32) -> (f32, f32) {
-    if !styled(l) {
-        return (0.0, measure(line, l.size, l.bold) * ppp);
+/// How wide a line of `l` is laid out, in pixels at `ppp`: its advance, and its letter spacing
+/// between letters (not past the last), as the map view lays it out (#535), so a text is placed
+/// alike on screen and in an export. A slant's overhang isn't counted, as it isn't there either.
+fn line_width(l: &PlacedLabel, line: &str, ppp: f32) -> f32 {
+    let advance = measure(line, l.size, l.bold) * ppp;
+    if l.spacing == 0.0 {
+        return advance;
     }
-    let (lo, hi) = styled_extent(line, l.size * 1.33 * ppp, l.bold, l.italic, l.spacing * 1.33 * ppp);
-    (lo, (hi - lo).max(0.0))
+    let letters = match font(l.bold) {
+        Some(_) => shape(line, l.size * 1.33 * ppp, l.bold).0.len(),
+        None => line.chars().count(),
+    };
+    // Letters drawn tighter than their own width (the most negative spacing) don't make it less
+    // than nothing.
+    (advance + l.spacing * 1.33 * ppp * letters.saturating_sub(1) as f32).max(0.0)
 }
 
 /// A label's width in points: its widest line as [`draw`] lays it out, its style included.
 pub fn label_width(l: &PlacedLabel) -> f32 {
-    lines(&l.text).map(|line| line_extent(l, line, 1.0).1).fold(0.0, f32::max)
+    lines(&l.text).map(|line| line_width(l, line, 1.0)).fold(0.0, f32::max)
 }
 
 /// The selection frame [`draw`] puts round a label, in points: [left, top, right, bottom].
@@ -264,15 +270,10 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     let (cx, cy) = (l.center_x() * ppp, l.y * ppp);
     // Several lines (#577) as the map view draws them: each aligned in a block as wide as the
     // widest (from its left unless a text graphic says otherwise, #535), the block centred on the
-    // label's point. Each line is measured once: its extent places it, the widest sizes the block.
-    let extents: Vec<(&str, f32, f32)> = lines(&l.text)
-        .map(|line| {
-            let (ink_left, lw) = line_extent(l, line, ppp);
-            (line, ink_left, lw)
-        })
-        .collect();
-    let (n, line_h) = (extents.len(), line_pitch(l.size) * ppp);
-    let w = extents.iter().map(|(_, _, lw)| *lw).fold(0.0, f32::max);
+    // label's point. Each line is measured once: its width places it, the widest sizes the block.
+    let widths: Vec<(&str, f32)> = lines(&l.text).map(|line| (line, line_width(l, line, ppp))).collect();
+    let (n, line_h) = (widths.len(), line_pitch(l.size) * ppp);
+    let w = widths.iter().map(|(_, lw)| *lw).fold(0.0, f32::max);
     if l.framed {
         let [x0, y0, x1, y1] = frame_box(l).map(|v| v * ppp);
         if let Some(r) = Rect::from_ltrb(x0, y0, x1, y1) {
@@ -280,24 +281,23 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
         }
     }
     let top = cy - n.saturating_sub(1) as f32 * line_h / 2.0;
-    // Each line: its text, where its ink starts, its width and where the pen starts, its centre y.
-    let placed: Vec<(&str, f32, f32, f32, f32)> = extents
+    // Each line: its text, its left edge (where the pen starts), its width, its centre y.
+    let placed: Vec<(&str, f32, f32, f32)> = widths
         .iter()
         .enumerate()
-        .map(|(i, (line, ink_left, lw))| {
+        .map(|(i, (line, lw))| {
             let free = match l.line_align {
                 TextAlign::Left => 0.0,
                 TextAlign::Center => (w - lw) / 2.0,
                 TextAlign::Right => w - lw,
             };
-            let left = cx - w / 2.0 + free;
-            (*line, left, *lw, left - ink_left, top + i as f32 * line_h)
+            (*line, cx - w / 2.0 + free, *lw, top + i as f32 * line_h)
         })
         .collect();
     let (styled, spacing) = (styled(l), l.spacing * 1.33 * ppp);
-    let put = |pm: &mut Pixmap, &(line, left, lw, pen, y): &(&str, f32, f32, f32, f32), color: Rgba, (dx, dy): (f32, f32)| {
+    let put = |pm: &mut Pixmap, &(line, left, lw, y): &(&str, f32, f32, f32), color: Rgba, (dx, dy): (f32, f32)| {
         if styled {
-            styled_at(pm, line, pen + dx, y + dy, px, color, l.bold, l.italic, spacing);
+            styled_at(pm, line, left + dx, y + dy, px, color, l.bold, l.italic, spacing);
         } else {
             draw_text(pm, line, left + lw / 2.0, y, px, color, l.bold, (dx, dy));
         }

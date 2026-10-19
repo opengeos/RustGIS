@@ -3510,7 +3510,13 @@ mod tests {
         let wide = bands(&spaced)[0];
         let grew = (gap(wide.3, wide.2) - gap(plain.3, plain.2)) as f32;
         assert!((grew - 5.0 * 6.0 * 1.33).abs() <= 3.0, "grew {grew}");
-        assert!(text::label_width(&spaced) > text::label_width(&at("Spaced")) + 30.0);
+        // Placed as the map view lays it out: its advance and the spacing between its letters (5
+        // gaps in "Spaced"), not its ink; a slant doesn't widen it either.
+        let added = text::label_width(&spaced) - text::label_width(&at("Spaced"));
+        assert!((added - 5.0 * 6.0 * 1.33).abs() < 0.01, "added {added}");
+        assert_eq!(text::label_width(&PlacedLabel { italic: true, ..at("Slant") }), text::label_width(&at("Slant")));
+        // Spaced tighter than its letters are wide, it is still no less than nothing.
+        assert!(text::label_width(&PlacedLabel { spacing: -5.0, size: 4.0, ..at("iiiiii") }) >= 0.0);
         // Slanted: an upright stem leans right at the top.
         let stem = |italic: bool| {
             let mut pm = Pixmap::new(400, 300).unwrap();
