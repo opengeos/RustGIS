@@ -231,8 +231,57 @@ fn tiled_camera_playback_does_not_start_settling_jobs() {
             h.step();
             assert!(h.state().ws.playing.is_some(), "animation is playing");
             assert!(!h.state().map.drawing(), "playback must render the current frame, not start a stale settling job");
-            assert_eq!(h.state().map.full_frame_camera(), h.state().session.map().camera);
+            // On the GPU the tiles move with the camera, as meshes do (#568).
+            if !(gpu && h.state().map.moves_on_gpu()) {
+                assert_eq!(h.state().map.full_frame_camera(), h.state().session.map().camera);
+            }
         }
         assert_ne!(h.state().session.map().camera.res, start.res, "playback moved the camera");
     }
+}
+
+/// A flat map with raster tiles stays sharp while it moves (#568): its tiles are placed on the
+/// GPU and move with the camera, as vector meshes do, rather than a picture of the view being
+/// shifted and stretched until the motion settles; zoomed in far enough, the tiles for the new
+/// zoom are placed mid-motion.
+#[test]
+fn raster_tiles_move_with_the_camera_on_the_gpu() {
+    use rustgis_ui_egui::rustgis_engine::map::{TileKind, TileLayer};
+    serve_planet_tiles();
+    let Some(mut h) = harness() else { return };
+    let m = h.state_mut().session.map_mut();
+    m.layers.clear();
+    m.graticule = false;
+    m.tiles.push(TileLayer::new("Tiles", TileKind::Raster, "https://flat.test/{z}/{x}/{y}.png"));
+    wait_for_frame(&mut h);
+    assert!(h.state().map.moves_on_gpu(), "the tiles are placed on the GPU, not drawn into a picture of the view");
+    let before = h.state().map.full_frame_camera();
+    let wheel = |h: &mut egui_kittest::Harness<'_, RustGisApp>, steps: usize| {
+        for _ in 0..steps {
+            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(450.0, 300.0)));
+            h.input_mut().events.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 2.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+            });
+            h.step();
+        }
+    };
+    // A little: the same tiles, moved by the camera.
+    wheel(&mut h, 2);
+    let res = h.state().session.map().camera.res;
+    assert!(res < before.res && res > before.res / 1.5, "zoomed in a little: {} to {res}", before.res);
+    assert_eq!(h.state().map.full_frame_camera(), before, "the tiles move with the camera, not drawn again");
+    assert_gpu_picture_matches_cpu(&mut h);
+    // Further: the tiles for the new zoom, before the motion settles.
+    for _ in 0..200 {
+        if h.state().session.map().camera.res < before.res / 1.6 {
+            break;
+        }
+        wheel(&mut h, 1);
+    }
+    assert_ne!(h.state().map.full_frame_camera(), before, "zoomed in past the tiles' own zoom, the new zoom's tiles are placed");
+    assert!(h.state().map.moves_on_gpu());
+    assert_gpu_picture_matches_cpu(&mut h);
 }

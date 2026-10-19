@@ -1079,7 +1079,7 @@ fn render_with(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Ren
 /// Flushes the GPU pass's CPU accumulator pixmap as an Image draw command and resets it to
 /// transparent. Basemap, tiles, rasters and tiny-skia-only layers draw into the accumulator
 /// between GPU mesh commands, preserving the exact painter's-algorithm order.
-fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bool) -> Option<()> {
+pub(crate) fn flush_acc(pm: &mut Pixmap, cmds: &mut Vec<gpu_scene::DrawCmd>, dirty: &mut bool) -> Option<()> {
     if *dirty {
         // Move the pixmap into the command (no full-screen copy) and start a fresh transparent
         // accumulator.
@@ -1398,7 +1398,7 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
                 match c {
                     DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
                     DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
-                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } => {}
+                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } | DrawCmd::Tiles { .. } => {}
                 }
             }
         }
@@ -2245,10 +2245,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         Some(g) => raster::Place::Globe(g),
         None => raster::Place::Flat(&flat, &key),
     };
-    let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none());
     // Hidden tile layers draw nothing: marking dirty anyway would emit an empty full-screen
     // Image command (a pointless upload, and it poisons the camera fast path's `has_images`).
-    cpu_dirty |= map.tiles.iter().any(|t| t.visible);
+    // On the GPU raster tile layers are placed as tiles, which move with the camera.
+    let tile_gpu =
+        (gpu && map.tiles.iter().any(|t| t.visible && t.opacity > 0.0)).then_some(tiles::Gpu { cmds: &mut cmds, dirty: &mut cpu_dirty });
+    let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none(), tile_gpu);
+    if !gpu {
+        cpu_dirty |= map.tiles.iter().any(|t| t.visible);
+    }
 
     // Layers, bottom first.
     let mut label_candidates: Vec<(PlacedLabel, f32, (u32, usize))> = Vec::new();
@@ -3457,6 +3462,7 @@ mod tests {
                 gpu_scene::DrawCmd::Points { .. } => "points",
                 gpu_scene::DrawCmd::Extrusion { .. } => "extrusion",
                 gpu_scene::DrawCmd::Image { .. } => "image",
+                gpu_scene::DrawCmd::Tiles { .. } => "tiles",
             })
             .collect()
     }

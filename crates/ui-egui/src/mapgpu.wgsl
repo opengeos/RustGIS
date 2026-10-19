@@ -270,3 +270,55 @@ fn fs_blit(in: ImgOut) -> @location(0) vec4f {
     }
     return color;
 }
+
+// ---- tiles (a raster tile layer: each tile its own texture, placed on the map) ----
+
+struct TileIn {
+    @location(0) position: vec2f,
+    @location(1) uv: vec2f,
+    @location(2) opacity: f32,
+};
+
+struct TileOut {
+    @builtin(position) clip: vec4f,
+    @location(0) uv: vec2f,
+    @location(1) opacity: f32,
+    @location(2) depth: vec2f,
+};
+
+@group(0) @binding(0) var<uniform> u_tile: CmdUniforms;
+@group(1) @binding(0) var t_tile: texture_2d<f32>;
+@group(1) @binding(1) var s_tile: sampler;
+
+@vertex
+fn vs_tile(in: TileIn) -> TileOut {
+    let world = vec4f(in.position, 0.0, 1.0);
+    var out: TileOut;
+    out.clip = u_tile.view_proj * world;
+    out.uv = in.uv;
+    out.opacity = in.opacity;
+    out.depth = vec2f(out.clip.w, dot(u_tile.scene_depth, world));
+    return out;
+}
+
+@fragment
+fn fs_tile(in: TileOut) -> @location(0) vec4f {
+    // Sampled before anything is discarded: derivatives need every fragment.
+    let size = vec2f(textureDimensions(t_tile));
+    let blended = textureSample(t_tile, s_tile, in.uv);
+    let texels = fwidth(in.uv * size);
+    if !kept(in.depth, u_tile) {
+        discard;
+    }
+    // A tile drawn at its own size takes its nearest pixel, as the CPU path does, rather than
+    // a blend of four that would soften it; scaled, it is blended.
+    var c = blended;
+    if all(abs(texels - vec2f(1.0)) < vec2f(0.01)) {
+        c = textureLoad(t_tile, vec2i(clamp(floor(in.uv * size), vec2f(0.0), size - 1.0)), 0);
+    }
+    c = c * in.opacity;
+    if u_tile.viewport.z > 0.5 {
+        return tilted(c, in.depth, u_tile);
+    }
+    return c;
+}

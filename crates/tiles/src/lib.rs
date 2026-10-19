@@ -34,5 +34,5 @@ pub mod style;
 pub mod template;
 pub mod usgis;
 
-pub use draw::{Drawn, Frame, Label, draw};
+pub use draw::{Drawn, Frame, Label, PlacedTiles, Placement, draw, place};
 pub use source::{Kind, Spec};

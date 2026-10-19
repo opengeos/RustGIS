@@ -5,8 +5,11 @@
 //! World positions are f32 offsets from each command's `origin` (map units): the f64
 //! subtraction happens on the CPU so city-zoom precision survives the f32 upload.
 
+use std::sync::Arc;
+
 use crate::PlacedLabel;
 use rustgis_map::Camera;
+use rustgis_tiles::cache::Payload;
 
 /// A finished GPU scene: draw commands in bottom-first order plus the same side channels
 /// (labels, attribution, pending flags) the CPU render returns in [`crate::Rendered`].
@@ -76,6 +79,32 @@ pub enum DrawCmd {
     /// depth buffer (as MapLibre's fill extrusions), or, with `shadows`, the shadows they cast
     /// on the ground, drawn under every feature.
     Extrusion { origin: [f64; 2], vertices: Vec<ExtrudeVertex>, indices: Vec<u32>, shadows: bool },
+    /// One raster tile layer's tiles, each its own picture placed on the map: the GPU keeps a
+    /// texture per picture across frames and moves the tiles with the camera as it moves the
+    /// meshes, so a map with a basemap stays sharp while it pans and zooms.
+    Tiles { origin: [f64; 2], tiles: Vec<TileQuad> },
+}
+
+/// One tile of a [`DrawCmd::Tiles`].
+#[derive(Clone)]
+pub struct TileQuad {
+    /// The tile's picture, shared with the tile cache (a [`Payload::Image`]).
+    pub picture: Arc<Payload>,
+    /// The square drawn: least x and y, greatest x and y, origin-relative map units.
+    pub rect: [f32; 4],
+    /// The part of the picture in that square: left, top, right, bottom (0..1, top down).
+    pub uv: [f32; 4],
+    pub opacity: f32,
+}
+
+impl TileQuad {
+    /// The picture's pixels (premultiplied RGBA).
+    pub fn pixmap(&self) -> Option<&tiny_skia::Pixmap> {
+        match &*self.picture {
+            Payload::Image(pm) => Some(pm),
+            _ => None,
+        }
+    }
 }
 
 /// What part of an extruded feature an [`ExtrudeVertex`] belongs to.

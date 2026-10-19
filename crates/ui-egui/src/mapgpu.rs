@@ -59,7 +59,8 @@ use std::sync::Arc;
 use egui_wgpu::{CallbackResources, CallbackTrait, RenderState, wgpu};
 use wgpu::util::DeviceExt;
 
-use rustgis_engine::render::gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
+use rustgis_engine::render::gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt, TileQuad};
+use rustgis_engine::render::rustgis_tiles::cache::Payload;
 
 /// Vertices per marker shape slot in the template bank (the circle's 24 fan triangles fill it
 /// exactly; smaller shapes pad with centre points — zero-area triangles are discarded).
@@ -219,6 +220,8 @@ pub(crate) struct GpuMapRenderer {
     /// Extruded features' roofs and walls (depth-tested and written), and their shadows.
     extrude_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
+    /// Raster tiles, each its own texture placed on the map.
+    tile_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     cmd_layout: wgpu::BindGroupLayout,
     backdrop_layout: wgpu::BindGroupLayout,
@@ -228,6 +231,8 @@ pub(crate) struct GpuMapRenderer {
     sampler: wgpu::Sampler,
     /// MSAA sample count of the offscreen scene target.
     samples: u32,
+    /// The tile pictures uploaded so far, kept across scenes.
+    tile_textures: std::sync::Mutex<TileTextures>,
 }
 
 impl GpuMapRenderer {
@@ -364,6 +369,15 @@ impl GpuMapRenderer {
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 36, shader_location: 3 },
             ],
         }];
+        let tile_buffers = [wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TileVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+            ],
+        }];
         let samples = 4;
         let scene_format = wgpu::TextureFormat::Rgba8Unorm;
         // Everything but the extrusions draws in order, ignoring the depth buffer; extrusions test
@@ -393,6 +407,16 @@ impl GpuMapRenderer {
             pipeline("mapgpu_mesh", "vs_mesh", "fs_mesh", &mesh_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
         let point_pipeline =
             pipeline("mapgpu_points", "vs_marker", "fs_marker", &point_buffers, &[&cmd_layout], scene_format, samples, flat.clone());
+        let tile_pipeline = pipeline(
+            "mapgpu_tiles",
+            "vs_tile",
+            "fs_tile",
+            &tile_buffers,
+            &[&cmd_layout, &image_layout],
+            scene_format,
+            samples,
+            flat.clone(),
+        );
         let image_pipeline = pipeline("mapgpu_image", "vs_image", "fs_image", &[], &[&image_layout], scene_format, samples, flat.clone());
         let backdrop_pipeline =
             pipeline("mapgpu_backdrop", "vs_backdrop", "fs_backdrop", &[], &[&backdrop_layout], scene_format, samples, flat.clone());
@@ -419,6 +443,7 @@ impl GpuMapRenderer {
             backdrop_pipeline,
             extrude_pipeline,
             shadow_pipeline,
+            tile_pipeline,
             blit_pipeline,
             cmd_layout,
             backdrop_layout,
@@ -427,7 +452,113 @@ impl GpuMapRenderer {
             templates,
             sampler,
             samples,
+            tile_textures: Default::default(),
         }
+    }
+}
+
+/// One corner of a tile (WGSL `TileIn`): origin-relative map units, where in the tile's picture,
+/// and the layer's opacity.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TileVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    opacity: f32,
+}
+
+/// The two triangles of a tile.
+fn tile_vertices(q: &TileQuad) -> [TileVertex; 6] {
+    let [x0, y0, x1, y1] = q.rect;
+    let [u0, v0, u1, v1] = q.uv;
+    // The picture's top row is the square's top (greatest y).
+    let c = |x: f32, y: f32, u: f32, v: f32| TileVertex { position: [x, y], uv: [u, v], opacity: q.opacity };
+    let (tl, tr, bl, br) = (c(x0, y1, u0, v0), c(x1, y1, u1, v0), c(x0, y0, u0, v1), c(x1, y0, u1, v1));
+    [bl, br, tr, bl, tr, tl]
+}
+
+/// How many tile textures are kept besides the latest scene's.
+const KEPT_TILE_TEXTURES: usize = 256;
+
+/// The tile pictures on the GPU, one texture each, kept across scenes (as MapLibre keeps its
+/// tiles): a map that moves or is drawn again finds the tiles it showed already uploaded. A
+/// texture goes when the tile cache drops its picture, or when it is among the longest unused.
+#[derive(Default)]
+struct TileTextures {
+    /// By the picture's address, with the picture itself (weakly) to tell a new picture at a
+    /// freed address from the old one.
+    by_picture: std::collections::HashMap<usize, TileTexture>,
+    /// Counts scenes: when each texture was last drawn.
+    scene: u64,
+}
+
+struct TileTexture {
+    picture: std::sync::Weak<Payload>,
+    bind: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+    used: u64,
+}
+
+impl TileTextures {
+    /// The bind group of a tile's picture, uploaded the first time it is drawn; `None` when it
+    /// is no picture or the device can't hold it.
+    fn bind(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, r: &GpuMapRenderer, q: &TileQuad) -> Option<wgpu::BindGroup> {
+        let key = Arc::as_ptr(&q.picture) as usize;
+        if let Some(t) = self.by_picture.get_mut(&key)
+            && t.picture.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &q.picture))
+        {
+            t.used = self.scene;
+            return Some(t.bind.clone());
+        }
+        let pm = q.pixmap()?;
+        let (w, h) = (pm.width(), pm.height());
+        let max = device.limits().max_texture_dimension_2d;
+        if !(1..=max).contains(&w) || !(1..=max).contains(&h) || pm.data().len() as u64 != u64::from(w) * u64::from(h) * 4 {
+            return None;
+        }
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mapgpu_tile"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            pm.data(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            size,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mapgpu_tile_bind"),
+            layout: &r.image_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
+            ],
+        });
+        let t = TileTexture { picture: Arc::downgrade(&q.picture), bind: bind.clone(), _texture: texture, used: self.scene };
+        self.by_picture.insert(key, t);
+        Some(bind)
+    }
+
+    /// Ends a scene: drops the textures of pictures the tile cache let go, and past
+    /// [`KEPT_TILE_TEXTURES`] those unused longest, but never one the scene just drew.
+    fn end_scene(&mut self) {
+        self.by_picture.retain(|_, t| t.picture.strong_count() > 0);
+        let mut old: Vec<(u64, usize)> = self.by_picture.iter().filter(|(_, t)| t.used != self.scene).map(|(k, t)| (t.used, *k)).collect();
+        if old.len() > KEPT_TILE_TEXTURES {
+            old.sort_unstable_by_key(|o| std::cmp::Reverse(o.0));
+            for (_, k) in old.into_iter().skip(KEPT_TILE_TEXTURES) {
+                self.by_picture.remove(&k);
+            }
+        }
+        self.scene += 1;
     }
 }
 
@@ -575,6 +706,16 @@ pub(crate) enum SceneDraw {
         bind: wgpu::BindGroup,
         _texture: wgpu::Texture,
     },
+    /// A raster tile layer: its tiles' corners in one buffer, six per tile, and each tile's
+    /// texture (from [`TileTextures`]) with the first of its corners.
+    Tiles {
+        vertices: wgpu::Buffer,
+        textures: Vec<(u32, wgpu::BindGroup)>,
+        uniforms: wgpu::Buffer,
+        bind: wgpu::BindGroup,
+        origin: [f64; 2],
+        clip: CmdClip,
+    },
 }
 
 /// A whole scene on the GPU, plus the view parameters needed to recompute per-draw uniforms
@@ -588,6 +729,8 @@ pub(crate) struct SceneBuffers {
     /// Scenes containing CPU image runs move as a cached picture on north-up flat maps;
     /// other scenes can re-project their vertices for a camera move.
     pub has_images: bool,
+    /// Raster tiles, drawn for the camera's zoom: zoomed in far past it they would show blurred.
+    pub has_tiles: bool,
     /// A turned or tilted scene: the camera it was drawn for, its sky and fog.
     pub tilt: Option<SceneTilt>,
 }
@@ -641,6 +784,8 @@ fn cmd_fits(limits: &wgpu::Limits, cmd: &DrawCmd) -> bool {
             let (w, h) = (pixmap.width(), pixmap.height());
             (1..=max_dim).contains(&w) && (1..=max_dim).contains(&h) && pixmap.data().len() as u64 == w as u64 * h as u64 * 4
         }
+        // A tile the device can't hold is left out (`TileTextures::bind`).
+        DrawCmd::Tiles { tiles, .. } => tiles.len().checked_mul(6 * std::mem::size_of::<TileVertex>()).is_some_and(fits),
     }
 }
 
@@ -663,7 +808,9 @@ impl SceneBuffers {
         }
         let mut draws = Vec::with_capacity(scene.cmds.len() + 1);
         let mut has_images = false;
+        let mut has_tiles = false;
         let tilt = scene.tilt.as_ref();
+        let mut tile_textures = r.tile_textures.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = tilt.filter(|t| t.camera.pitch != 0.0) {
             let u = BackdropUniforms::new(&camera, size, ppp, scene.clear, t);
             let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -824,9 +971,50 @@ impl SceneBuffers {
                     draws.push(SceneDraw::Image { bind, _texture: texture });
                     has_images = true;
                 }
+                DrawCmd::Tiles { origin, tiles } => {
+                    let mut vertices = Vec::with_capacity(tiles.len() * 6);
+                    let mut textures = Vec::with_capacity(tiles.len());
+                    for q in tiles {
+                        if let Some(bind) = tile_textures.bind(device, queue, r, q) {
+                            textures.push((vertices.len() as u32, bind));
+                            vertices.extend(tile_vertices(q));
+                        }
+                    }
+                    if textures.is_empty() {
+                        continue;
+                    }
+                    let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
+                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mapgpu_cmd_uniforms"),
+                        contents: bytemuck::bytes_of(&uniforms),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+                    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("mapgpu_tiles_bind"),
+                        layout: &r.cmd_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 1, resource: r.templates.as_entire_binding() },
+                        ],
+                    });
+                    draws.push(SceneDraw::Tiles {
+                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_tile_vertices"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        }),
+                        textures,
+                        uniforms,
+                        bind,
+                        origin: *origin,
+                        clip,
+                    });
+                    has_tiles = true;
+                }
             }
         }
-        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, tilt: scene.tilt })
+        tile_textures.end_scene();
+        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, has_tiles, tilt: scene.tilt })
     }
 
     /// Rewrites every command's camera uniforms for a moved camera — pan/zoom without
@@ -838,7 +1026,8 @@ impl SceneBuffers {
             let (uniforms, origin, clip) = match d {
                 SceneDraw::Mesh { uniforms, origin, clip, .. }
                 | SceneDraw::Points { uniforms, origin, clip, .. }
-                | SceneDraw::Extrusion { uniforms, origin, clip, .. } => (uniforms, origin, clip),
+                | SceneDraw::Extrusion { uniforms, origin, clip, .. }
+                | SceneDraw::Tiles { uniforms, origin, clip, .. } => (uniforms, origin, clip),
                 SceneDraw::Backdrop { uniforms, .. } => {
                     if let Some(t) = &self.tilt {
                         let u = BackdropUniforms::new(cam, self.size, self.ppp, self.clear, t);
@@ -898,6 +1087,15 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
                 rp.set_pipeline(&renderer.image_pipeline);
                 rp.set_bind_group(0, bind, &[]);
                 rp.draw(0..6, 0..1);
+            }
+            SceneDraw::Tiles { vertices, textures, bind, .. } => {
+                rp.set_pipeline(&renderer.tile_pipeline);
+                rp.set_bind_group(0, bind, &[]);
+                rp.set_vertex_buffer(0, vertices.slice(..));
+                for (first, texture) in textures {
+                    rp.set_bind_group(1, texture, &[]);
+                    rp.draw(*first..first + 6, 0..1);
+                }
             }
         }
     }
@@ -1480,6 +1678,91 @@ mod tests {
             },
             &world_view(),
         );
+    }
+
+    /// A map of raster tiles (#568): the GPU places each tile as its own texture, and draws
+    /// what the CPU draws, at a tile's own size and zoomed between levels, and see-through.
+    #[test]
+    fn parity_raster_tiles() {
+        use rustgis_engine::geom::lonlat_to_merc;
+        use rustgis_engine::map::{TileKind, TileLayer};
+        use rustgis_engine::render::rustgis_tiles;
+        // A tile of soft gradients, so a tile drawn at the wrong place or scale shows.
+        rustgis_tiles::cache::set_fetcher(|url, done| {
+            if !url.starts_with("https://parity.test/") {
+                done(Err("404".into()));
+                return;
+            }
+            let mut png = std::io::Cursor::new(Vec::new());
+            let tile = image::RgbaImage::from_fn(256, 256, |x, y| image::Rgba([40 + (x / 2) as u8, 60 + (y / 2) as u8, 140, 255]));
+            match tile.write_to(&mut png, image::ImageFormat::Png) {
+                Ok(()) => done(Ok(png.into_inner())),
+                Err(e) => done(Err(e.to_string())),
+            }
+        });
+        let build = |opacity: f32| {
+            move || {
+                let mut m = Map::new("Map");
+                m.graticule = false;
+                let mut t = TileLayer::new("Tiles", TileKind::Raster, "https://parity.test/{z}/{x}/{y}.png");
+                t.opacity = opacity;
+                m.tiles.push(t);
+                m
+            }
+        };
+        let center = lonlat_to_merc(Coord::new(12.3, 45.6));
+        // Zoom 4 at its own size, and zoom 3 drawn between levels.
+        for (res, opacity) in [(9783.939620500, 1.0), (13_000.0, 1.0), (13_000.0, 0.6)] {
+            let view = View {
+                width: 320.0,
+                height: 200.0,
+                pixels_per_point: 1.0,
+                camera: Camera { center, res, bearing: 0.0, pitch: 0.0 },
+                sky: false,
+            };
+            let mut m = build(opacity)();
+            render::render_png(&mut m, &view).expect("tiles fetched");
+            let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+            assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. })), "no picture of the view at {res}");
+            assert!(scene.cmds.iter().any(|c| matches!(c, DrawCmd::Tiles { .. })), "tiles at {res}");
+            assert_parity(&format!("raster tiles {res} {opacity}"), build(opacity), &view);
+        }
+    }
+
+    /// A tile picture is uploaded once, and drawn again from its texture by the next scenes.
+    #[test]
+    fn tile_textures_are_kept_across_scenes() {
+        let Some(rs) = headless_render_state() else { return };
+        let r = GpuMapRenderer::new(&rs);
+        let mut pm = rustgis_engine::render::Pixmap::new(4, 4).expect("pixmap");
+        pm.data_mut().chunks_mut(4).for_each(|p| p.copy_from_slice(&[200, 30, 30, 255]));
+        let picture = Arc::new(Payload::Image(pm));
+        let quad = TileQuad { picture: picture.clone(), rect: [0.0, 0.0, 100.0, 100.0], uv: [0.0, 0.0, 1.0, 1.0], opacity: 1.0 };
+        let scene = |q: &TileQuad| GpuScene {
+            clear: [0.0; 4],
+            cmds: vec![DrawCmd::Tiles { origin: [0.0, 0.0], tiles: vec![q.clone()] }],
+            labels: vec![],
+            unplaced: vec![],
+            attribution: vec![],
+            tiles_pending: false,
+            data_pending: false,
+            tile_errors: vec![],
+            tilt: None,
+            clips: vec![],
+        };
+        let upload = |s: &GpuScene| SceneBuffers::from_scene(&rs.device, &rs.queue, &r, s, Camera::world(), [400.0, 300.0], 1.0);
+        let first = upload(&scene(&quad)).expect("fits");
+        assert!(first.has_tiles && !first.has_images, "tiles move with the camera");
+        let _second = upload(&scene(&quad)).expect("fits");
+        let textures = r.tile_textures.lock().expect("textures");
+        assert_eq!(textures.by_picture.len(), 1, "one texture for the picture");
+        drop(textures);
+        // Once the tile cache lets the picture go, so does the GPU.
+        drop((quad, picture, first, _second));
+        let other = rustgis_engine::render::Pixmap::new(4, 4).expect("pixmap");
+        let q = TileQuad { picture: Arc::new(Payload::Image(other)), rect: [0.0, 0.0, 1.0, 1.0], uv: [0.0, 0.0, 1.0, 1.0], opacity: 1.0 };
+        let _third = upload(&scene(&q)).expect("fits");
+        assert_eq!(r.tile_textures.lock().expect("textures").by_picture.len(), 1);
     }
 
     #[test]

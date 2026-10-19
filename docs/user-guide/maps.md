@@ -302,8 +302,13 @@ Mode** switches it by hand.
 
 **View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU:
 vector layers are tessellated once and re-projected per frame, so panning and zooming stay
-smooth on large datasets. It is off by default, and the setting is remembered across sessions
-(`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
+smooth on large datasets. Raster tile layers (XYZ, TMS and WMS tiles, and raster PMTiles,
+MBTiles and styles) are drawn there as one texture per tile, moved with the camera like the
+vector layers, so a map with a basemap stays sharp while it pans and zooms; zoomed in past the
+tiles' own zoom, the next zoom's tiles are placed at once, their parents standing in until they
+arrive. Vector tile styles and blended tile layers are still drawn as a picture of the view,
+shifted and scaled while the map moves. GPU Rendering is off by default, and the setting is
+remembered across sessions (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for development). The globe,
 view effects and the colour-vision simulator always render on the CPU, and exports are
 unaffected — the choice only changes the on-screen flat map. A turned or tilted map is drawn on
 the GPU too, in perspective with its fog and sky, when everything it shows is drawn there: no

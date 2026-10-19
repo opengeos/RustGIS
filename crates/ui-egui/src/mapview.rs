@@ -284,6 +284,13 @@ impl MapView {
         self.tex_camera
     }
 
+    /// Whether the map shown is a GPU scene that moves with the camera (vector meshes and raster
+    /// tiles) rather than a picture shifted and scaled until it is drawn again (diagnostics and
+    /// tests).
+    pub fn moves_on_gpu(&self) -> bool {
+        self.gpu_frame.as_ref().is_some_and(|f| !f.has_images)
+    }
+
     /// How long the last map draw took, in milliseconds.
     pub fn render_ms(&self) -> u64 {
         self.render_ms
@@ -677,6 +684,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         && let (Some(gf), Some(rs)) = (&app.map.gpu_frame, &app.map.render_state)
         && !gf.has_images
         && gf.fits(&cam)
+        // Tiles zoomed in past their own zoom would blur: the tiles for the new one are placed.
+        && !(gf.has_tiles && cam.res < app.map.tex_camera.res / TILE_STRETCH)
     {
         gf.set_camera(&rs.queue, &cam);
         fast_engaged = true;
@@ -2647,6 +2656,10 @@ fn tab_close(ui: &mut Ui, t: &Tokens, tab: Rect, id: egui::Id, in_view: bool, en
     let resp = resp.on_hover_text(tip);
     enabled && resp.clicked()
 }
+
+/// How far a GPU scene's raster tiles are zoomed in, while the map moves, before the tiles for
+/// the new zoom are placed (each zoom level doubles it).
+const TILE_STRETCH: f64 = 1.5;
 
 /// Whether a flat GPU frame drawn with `scene` holds every feature `cam` shows in a `w`×`h`
 /// view: the view lies inside the extent its meshes were tessellated for, so moving them leaves

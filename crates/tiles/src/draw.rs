@@ -188,8 +188,80 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
     out
 }
 
+/// One raster tile placed on the map, for a renderer that draws each tile itself (the GPU map
+/// keeps a texture per tile picture and moves the tiles with the camera, as MapLibre does).
+#[derive(Clone)]
+pub struct Placement {
+    /// The tile's picture, shared with the cache: always a [`Payload::Image`].
+    pub picture: Arc<Payload>,
+    /// The Web Mercator square the picture covers.
+    pub at: Extent,
+    /// The square it is drawn in: `at` itself, or the missing tile a parent or child stands in
+    /// for.
+    pub clip: Extent,
+    pub opacity: f32,
+}
+
+/// A raster tile layer as placed tiles, bottom first, rather than drawn into a pixmap.
+#[derive(Default)]
+pub struct PlacedTiles {
+    pub tiles: Vec<Placement>,
+    pub attribution: Vec<String>,
+    pub pending: bool,
+    pub error: Option<String>,
+}
+
+/// `spec` as placed raster tiles over `view` (fetching those missing) and out to `reach` (only
+/// those already in the cache, so a camera moving there finds tiles to show), or `None` when it
+/// draws anything but raster tiles, which [`draw`] then draws into a pixmap.
+pub fn place(spec: &Spec, opacity: f32, frame: &Frame, view: &Extent, reach: &Extent) -> Option<PlacedTiles> {
+    let mut out = PlacedTiles::default();
+    let r = match resolve(spec) {
+        Resolve::Ready(r) => r,
+        Resolve::Pending => {
+            out.pending = true;
+            return Some(out);
+        }
+        Resolve::Failed(e) => {
+            out.error = Some(e);
+            return Some(out);
+        }
+    };
+    out.attribution = r.attribution.clone();
+    if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
+        return Some(out);
+    }
+    let zoom = template::style_zoom(frame.m_per_px * f64::from(frame.ppp));
+    let shown: Vec<&StyleLayer> = r.style.layers.iter().filter(|l| l.visible_at(zoom) && l.kind != LayerKind::Other).collect();
+    // Raster layers only; several are composited together before the layer's opacity applies.
+    if shown.iter().any(|l| l.kind != LayerKind::Raster) || (shown.len() > 1 && opacity < 0.999) {
+        return None;
+    }
+    let mut items: HashMap<&str, Vec<Item>> = HashMap::new();
+    for layer in shown {
+        let Some(src_id) = layer.source.as_deref() else { continue };
+        if !items.contains_key(src_id) {
+            let Some(src) = r.style.sources.iter().find(|s| s.0 == src_id).map(|s| &s.1) else { continue };
+            items.insert(src_id, tiles_in(src, view, Some(reach), frame, zoom, &mut out.pending));
+        }
+        let o = (layer.raster_opacity(zoom) * opacity).clamp(0.0, 1.0);
+        for it in items.get(src_id).into_iter().flatten() {
+            if matches!(*it.payload, Payload::Image(_)) {
+                out.tiles.push(Placement { picture: it.payload.clone(), at: it.at, clip: it.clip, opacity: o });
+            }
+        }
+    }
+    Some(out)
+}
+
 /// The tiles of a source in view, with stand-ins for those not here yet.
 fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mut bool) -> Vec<Item> {
+    tiles_in(src, view, None, frame, zoom, pending)
+}
+
+/// The tiles of a source in view and out to `reach` (those in the cache only), with stand-ins
+/// for those not here yet.
+fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, zoom: f32, pending: &mut bool) -> Vec<Item> {
     let (tiles, min_z, max_z, want, z) = match src {
         Source::Raster { tiles, tile_size, min_zoom, max_zoom, .. } => {
             let z = template::zoom_for(frame.m_per_px * f64::from(frame.ppp), *tile_size, *max_zoom);
@@ -212,9 +284,25 @@ fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mu
     };
     let mut exact = Vec::new();
     let mut stand_ins = Vec::new();
-    for p in template::covering(view, z) {
+    let mut placed = reach.map(|e| template::covering(e, z)).unwrap_or_default();
+    if placed.is_empty() {
+        placed = template::covering(view, z);
+    }
+    for p in placed {
         let Some(u) = url(p.id) else { continue };
-        match cache::get(&u, want) {
+        // Past the view, only what the cache already has.
+        let state = if p.extent().intersects(view) {
+            cache::get(&u, want)
+        } else {
+            match cache::peek(&u) {
+                Some(payload) => State::Ready(payload),
+                None => {
+                    stand_ins.extend(ancestor(&p, min_z, &url));
+                    continue;
+                }
+            }
+        };
+        match state {
             State::Ready(payload) => exact.push(Item { payload, at: p.extent(), z: p.id.z, clip: p.extent() }),
             State::Failed(_) => {}
             State::Pending => {
