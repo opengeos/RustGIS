@@ -273,6 +273,19 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
     if get("units").is_some_and(|u| u != "m") || get("to_meter").is_some() {
         return None;
     }
+    // Nor one with a parameter they can't say (a datum shift, a prime meridian, an axis order,
+    // grids): it would be written as another projection.
+    const SAID: [&str; 16] =
+        ["proj", "lat_0", "lon_0", "lat_1", "lat_2", "lat_ts", "x_0", "y_0", "k_0", "k", "datum", "ellps", "a", "b", "R", "rf"];
+    let tokens = proj4.split_whitespace().map(|t| t.trim_start_matches('+'));
+    if tokens.map(|t| t.split('=').next().unwrap_or(t)).any(|k| !SAID.contains(&k) && !matches!(k, "units" | "no_defs" | "type" | "wktext"))
+    {
+        return None;
+    }
+    // A latitude of true scale is said only for the projections that take one.
+    if get("lat_ts").is_some() && !matches!(get("proj"), Some("stere" | "eqc" | "cea")) {
+        return None;
+    }
     let num = |k: &str| get(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
     let (lat0, lon0) = (num("lat_0").unwrap_or(0.0), num("lon_0").unwrap_or(0.0));
     let (x0, y0, k0) = (num("x_0").unwrap_or(0.0), num("y_0").unwrap_or(0.0), num("k_0").or(num("k")).unwrap_or(1.0));
@@ -1185,6 +1198,13 @@ mod tests {
         assert!(keys_from_proj4("+proj=robin +lon_0=0 +datum=WGS84", "x").is_none());
         assert!(keys_from_proj4("junk", "x").is_none());
         assert!(keys_from_proj4("+proj=tmerc +lon_0=0 +units=us-ft +datum=WGS84", "x").is_none(), "only metres");
+        for unsaid in [
+            "+proj=merc +lat_ts=33 +datum=WGS84",
+            "+proj=tmerc +ellps=bessel +towgs84=598.1,73.7,418.2",
+            "+proj=lcc +lat_1=40 +pm=paris +a=6378249.2 +b=6356515",
+        ] {
+            assert!(keys_from_proj4(unsaid, "x").is_none(), "{unsaid}");
+        }
         // A polar stereographic round trip: the pole's longitude comes back.
         let (k, d, a) =
             keys_from_proj4("+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m", "NSIDC").unwrap();

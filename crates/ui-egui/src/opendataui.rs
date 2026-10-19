@@ -200,6 +200,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             } else {
                 st.found = found;
                 st.zarr_open = None;
+                // The earlier list's checks would land on these results' places.
+                st.probes.clear();
             }
             // A Zarr store is checked before it is offered.
             for (i, d) in st.found.iter().enumerate().skip(first) {
