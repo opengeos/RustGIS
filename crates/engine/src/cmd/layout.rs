@@ -475,7 +475,8 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
         "text" | "dynamicText" => {
             let default = if kind == "text" { "Text" } else { "{map} · {scale} · {date}" };
             let text: String = ps(p, "text").unwrap_or(default).chars().take(5000).collect();
-            let size = f(p, "size").unwrap_or(12.0).clamp(2.0, 400.0);
+            let fonts = rustgis_map::graphics::FONT_SIZE;
+            let size = f(p, "size").unwrap_or(12.0).clamp(*fonts.start(), *fonts.end());
             let (italic, align, letter_spacing) = text_style(p, false, TextAlign::Left, 0.0)?;
             let k = ElementKind::Text {
                 text,
@@ -947,7 +948,7 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(t) = ps(p, "text") {
                 *text = t.chars().take(5000).collect();
             }
-            if let Some(v) = num("size", 2.0, 400.0) {
+            if let Some(v) = num("size", *rustgis_map::graphics::FONT_SIZE.start(), *rustgis_map::graphics::FONT_SIZE.end()) {
                 *size = v;
             }
             if let Some(c) = col {

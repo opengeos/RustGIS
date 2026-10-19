@@ -1066,64 +1066,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         }
         ui.end_row();
         match &e.kind {
-            ElementKind::Text { text, size, color, bold, italic, align, letter_spacing } => {
-                ui.label(tl!("Size"));
-                let mut sz = *size;
-                let r = ui.add(egui::DragValue::new(&mut sz).range(2.0..=400.0).speed(0.2).suffix(" pt"));
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (sz - size).abs() > 1e-6 {
-                    update(app, json!({"size": sz}));
-                }
-                ui.end_row();
-                ui.label(tl!("Color"));
-                let mut c = crate::theme::c32(*color);
-                if crate::widgets::color_button(ui, &mut c).changed() {
-                    update(app, json!({"color": crate::theme::rgba(c).hex()}));
-                }
-                ui.end_row();
-                ui.label(tl!("Bold"));
-                let mut bb = *bold;
-                if ui.checkbox(&mut bb, "").changed() {
-                    update(app, json!({"bold": bb}));
-                }
-                ui.end_row();
-                ui.label(tl!("Italic"));
-                let mut it = *italic;
-                // Named for assistive technology, as its label sits in the other column.
-                let r = ui.checkbox(&mut it, "");
-                r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, it, tl!("Italic")));
-                if r.changed() {
-                    update(app, json!({"italic": it}));
-                }
-                ui.end_row();
-                ui.label(tl!("Alignment"));
-                egui::ComboBox::from_id_salt(("text_align", id)).selected_text(tl!(align.label())).show_ui(ui, |ui| {
-                    for v in TextAlign::ALL {
-                        if ui.selectable_label(*align == v, tl!(v.label())).clicked() && *align != v {
-                            update(app, json!({"align": v.code()}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Letter spacing"));
-                let mut ls = *letter_spacing;
-                let r = ui.add(
-                    egui::DragValue::new(&mut ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"),
-                );
-                r.widget_info(|| egui::WidgetInfo {
-                    label: Some(tl!("Letter spacing").to_string()),
-                    ..egui::WidgetInfo::drag_value(true, ls)
-                });
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (ls - letter_spacing).abs() > 1e-6 {
-                    update(app, json!({"letterSpacing": ls}));
-                }
-                ui.end_row();
-                ui.label(tl!("Text"));
-                ui.end_row();
-                if let Some(tx) = text_field(app, ui, (li, id, "text"), text, true) {
-                    update(app, json!({"text": tx}));
-                }
-                ui.end_row();
-            }
+            // Its text, size, colour and boldness: the shared form, below the grid.
+            ElementKind::Text { .. } => {}
             ElementKind::Legend { title, all_classes, hide_other, .. } => {
                 ui.label(tl!("Title"));
                 if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
@@ -1299,6 +1243,61 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             _ => {}
         }
     });
+    // A layout's text: the form a text graphic has too (#516), with the page's dynamic text, and
+    // the type settings only a layout's text has.
+    if let ElementKind::Text { text, size, color, bold, italic, align, letter_spacing } = &e.kind {
+        ui.add_space(6.0);
+        let key = (li, id, "text");
+        let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| text.clone());
+        let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
+        let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
+        let fields = crate::textform::Fields { text: &mut buf, size: &mut sz, color: Some(&mut c), bold: Some(&mut bb) };
+        let settled = crate::textform::show(ui, ("layout_text", li, id), &tokens, fields);
+        if settled.typing {
+            app.layout.typing.insert(key, buf);
+        } else if settled.text && buf != *text {
+            update(app, json!({"text": buf}));
+        }
+        if settled.size {
+            update(app, json!({"size": sz}));
+        }
+        if settled.color {
+            update(app, json!({"color": crate::theme::rgba(c).hex()}));
+        }
+        if settled.bold {
+            update(app, json!({"bold": bb}));
+        }
+        ui.add_space(6.0);
+        egui::Grid::new(("layout_text_type", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Italic"));
+            let mut it = *italic;
+            // Named for assistive technology, as its label sits in the other column.
+            let r = ui.checkbox(&mut it, "");
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, it, tl!("Italic")));
+            if r.changed() {
+                update(app, json!({"italic": it}));
+            }
+            ui.end_row();
+            ui.label(tl!("Alignment"));
+            egui::ComboBox::from_id_salt(("text_align", id)).selected_text(tl!(align.label())).show_ui(ui, |ui| {
+                for v in TextAlign::ALL {
+                    if ui.selectable_label(*align == v, tl!(v.label())).clicked() && *align != v {
+                        update(app, json!({"align": v.code()}));
+                    }
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Letter spacing"));
+            let mut ls = *letter_spacing;
+            let r = ui
+                .add(egui::DragValue::new(&mut ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"));
+            r.widget_info(|| egui::WidgetInfo { label: Some(tl!("Letter spacing").to_string()), ..egui::WidgetInfo::drag_value(true, ls) });
+            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (ls - letter_spacing).abs() > 1e-6 {
+                update(app, json!({"letterSpacing": ls}));
+            }
+            ui.end_row();
+        });
+    }
     // The layers a legend lists: a checkbox for each vector layer of its frame's map, ticked when
     // listed. Names gone from the map drop out of the list as it's written back.
     if let ElementKind::Legend { frame, exclude, .. } = &e.kind {
@@ -1662,6 +1661,50 @@ mod tests {
             matches!(kind, ElementKind::Text { italic: true, align: TextAlign::Left, letter_spacing, .. } if *letter_spacing == 3.5),
             "{kind:?}"
         );
+    }
+
+    /// A layout's text has the shared text form (#516): the page's dynamic text as well as the
+    /// map's, each added to the text and saved; the size in the range text graphics have.
+    #[test]
+    fn a_layout_text_offers_the_page_s_dynamic_text() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::map::layout::ElementKind;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Tokens"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
+        app.layout.selected = Some(title);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                with_format(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let text = |h: &egui_kittest::Harness<'_, RustGisApp>| match &h.state().session.project.layouts[li].element(title).unwrap().kind {
+            ElementKind::Text { text, .. } => text.clone(),
+            _ => panic!("a text"),
+        };
+        let before = text(&h);
+        for token in ["{page}", "{scale}"] {
+            h.get_by_role_and_label(Role::Button, token).click();
+            h.run_steps(2);
+        }
+        assert_eq!(text(&h), format!("{before}{{page}}{{scale}}"));
+        // Larger than text graphics drew before, as a layout's text could already be.
+        h.state_mut().run("layout.update", json!({"layout": li, "element": title, "size": 999})).unwrap();
+        let size = match &h.state().session.project.layouts[li].element(title).unwrap().kind {
+            ElementKind::Text { size, .. } => *size,
+            _ => panic!("a text"),
+        };
+        assert_eq!(size, *rustgis_engine::map::graphics::FONT_SIZE.end());
     }
 
     /// An overview frame's properties show its extent indicator's colour and width (#213), and

@@ -1073,7 +1073,7 @@ fn a_placed_text_is_edited_in_its_dialog() {
     h.step();
     assert_eq!(h.state().dialogs.open, None);
     let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    assert_eq!(graphics::font_size(ds, row.as_u64().unwrap() as usize), 200.0);
+    assert_eq!(graphics::font_size(ds, row.as_u64().unwrap() as usize), *graphics::FONT_SIZE.end());
     // A row that isn't a text graphic opens nothing.
     assert!(h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": 99})).is_err());
     assert_eq!(h.state().dialogs.open, None);

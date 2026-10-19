@@ -1104,6 +1104,18 @@ fn chart(pm: &mut Pixmap, r: Rect, ds: &rustgis_data::Dataset, field: &str, labe
 mod tests {
     use super::*;
 
+    /// Every token the Format pane offers a layout's text is one the page expands (#516).
+    #[test]
+    fn the_tokens_offered_are_the_ones_expanded() {
+        let layout = Layout::new("Atlas", 100.0, 100.0);
+        let info = PageInfo { page: 2, pages: 5, page_name: "North".into() };
+        let tokens = rustgis_map::layout::PAGE_TOKENS.iter().chain(rustgis_map::graphics::TOKENS);
+        for (token, _) in tokens {
+            assert!(!expand(token, &layout, &info, None).contains('{'), "{token}");
+        }
+        assert_eq!(expand("{page} of {pages}, {pageName} · {layout}", &layout, &info, None), "2 of 5, North · Atlas");
+    }
+
     #[test]
     fn legends_leave_out_what_the_frame_does_not_draw() {
         use rustgis_data::{Dataset, Field, FieldType, Geometry, Value};

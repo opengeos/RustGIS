@@ -170,4 +170,6 @@ unless Keep Tool is on. Each graphic keeps its own fill, outline, width and text
 layer's attributes, so you can edit them in the attribute table or with `graphics.style`. To
 change a text once it is placed, double-click it (with Explore or Select) or right-click it ›
 **Edit Text…**: the dialog opens with its text and size, and **Save** changes that graphic's text
-and size only, as one undo step (`graphics.edit` does the same by layer and row).
+and size only, as one undo step (`graphics.edit` does the same by layer and row). Text sizes go
+from 2 to 400 points, on the map as on a layout page, and the dialog's form is the one a layout's
+text has in the Format pane.

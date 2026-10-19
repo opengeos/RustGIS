@@ -66,8 +66,10 @@ the maps; while one is open, its groups lead the Publish tab:
   picked. From a command:
   `layout.addElement={"kind":"colorbar","layer":"DEM","title":"Elevation (m)","orientation":"vertical","ticks":3}`.
 - **Text** and **Dynamic Text**: `{date}`, `{time}`, `{scale}`, `{map}`, `{crs}`, `{page}`,
-  `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn. Besides size, colour and
-  bold, their properties set **Italic** (slanted, as water and ocean names are; the built-in
+  `{pages}`, `{pageName}` and `{layout}` fill in when the page is drawn; the Format pane has a
+  button for each, after the text. The text, its size (2 to 400 points, as text graphics on the
+  map), colour and bold are the same form as the map's Add Text dialog; Enter ends the text and
+  Shift+Enter starts a new line. Besides those, their properties set **Italic** (slanted, as water and ocean names are; the built-in
   fonts have no italic face, so the letters are slanted 12°), **Alignment** (left, center or
   right within the element) and **Letter spacing** in points (spaced-out names such as
   O C E A N O, or a negative value to tighten). Scripts set them with `italic`, `align` and
