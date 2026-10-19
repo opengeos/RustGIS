@@ -43,6 +43,8 @@ fn main() {
                 zooms.iter().map(|v| View { pixels_per_point: if backend == Backend::Cpu { 2.01 } else { 1.99 }, ..*v }).collect();
             let cold = ms(&zooms[1..], &mut m);
             let pans: Vec<View> = pans.iter().map(|v| View { pixels_per_point: zooms[0].pixels_per_point, ..*v }).collect();
+            // The pan starts from a view already drawn.
+            render_backend(&mut m, &zooms[0], backend);
             let pan = ms(&pans, &mut m);
             println!("{name:12} {backend:?}: zooming {cold:.1} ms/frame, panning {pan:.1} ms/frame");
         }
