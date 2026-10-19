@@ -1993,6 +1993,9 @@ fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
         let [w, so, e, n] = info.bounds;
         s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
         r["bounds"] = json!(info.bounds);
+    } else if r.get("dated").is_some() {
+        // Added, but its first date's file couldn't be read: the view stays where it was.
+        r["warning"] = json!(format!("{url} couldn't be read yet, so the map wasn't moved to it"));
     }
     r["inPlace"] = json!(true);
     Ok(r)

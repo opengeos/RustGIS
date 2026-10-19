@@ -829,6 +829,7 @@ impl Session {
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
+        self.keep_time_position(&cur);
         self.redo.push((cur, was, label, actor));
         self.touch_all_geometry();
         true
@@ -840,9 +841,21 @@ impl Session {
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
+        self.keep_time_position(&cur);
         self.undo.push((cur, was, label, actor));
         self.touch_all_geometry();
         true
+    }
+
+    /// After undo or redo swaps the project: each map's time slider stays on the step it was
+    /// moved to (moving through time isn't an undo step), its other settings as restored.
+    fn keep_time_position(&mut self, before: &Project) {
+        for (m, old) in self.project.maps.iter_mut().zip(&before.maps).filter(|(m, o)| m.name == o.name) {
+            if let (Some(t), Some(at)) = (m.time.as_mut(), old.time.as_ref().map(|t| t.current)) {
+                t.go_to(at);
+                m.apply_time();
+            }
+        }
     }
 
     fn open_layout_name(&self) -> Option<String> {

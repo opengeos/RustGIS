@@ -9419,6 +9419,14 @@ fn time_slider_survives_saving_cumulative_edits_and_bad_parameters() {
     t.active_layer = t.map().layer_by_name("Events").map(|l| l.id);
     t.run("edit.setValue", &json!({"row": 7, "field": "when", "value": "2015-02-14"})).unwrap();
     assert_eq!(shown(&t), ["e0", "e1", "e2", "e3", "e7"]);
+    // Undo takes the edit back, not the slider's moves since.
+    t.run("time.goTo", &json!({"date": "2015-04"})).unwrap();
+    t.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["date"], "2015-04");
+    assert_eq!(shown(&t), ["e0", "e1", "e2", "e3", "e4"]);
+    t.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["date"], "2015-04");
+    t.run("time.goTo", &json!({"date": "2015-03"})).unwrap();
     // Whole numbers that look like years (heights here) aren't taken for dates unasked; a layer
     // with real dates is.
     assert!(rustgis_map::time::has_dates(&t.map().layers[0].dataset));

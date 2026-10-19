@@ -107,7 +107,7 @@ pub fn info(s: &Session) -> Value {
     json!({
         "on": true,
         "start": t.label(t.start), "end": t.label(t.end), "date": t.label(t.current),
-        "current": t.current, "index": t.index(), "steps": steps.len(),
+        "current": t.current, "index": t.index_in(&steps), "steps": steps.len(),
         "unit": t.unit.code(), "interval": t.interval, "before": t.before, "after": t.after, "cumulative": t.cumulative,
         "window": [if from.is_finite() { json!(t.label(from)) } else { Value::Null }, t.label(to)],
         "speed": t.speed_ms, "loop": t.looping, "format": t.date_format(),

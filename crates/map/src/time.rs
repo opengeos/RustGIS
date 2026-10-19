@@ -306,12 +306,15 @@ pub fn field_span(ds: &Dataset, field: &str) -> Option<(f64, f64)> {
     })
 }
 
-/// Whether `ds` has a field of dates other than whole numbers that read as years (which may be
-/// heights or counts): one worth turning the slider on for unasked.
+/// Whether `ds` has a field of text dates or epoch milliseconds: one worth turning the slider on
+/// for unasked. Whole numbers that read as years or epoch seconds may be heights, counts or ids,
+/// and are bound only when asked.
 pub fn has_dates(ds: &Dataset) -> bool {
     let n = ds.features.len();
-    (0..ds.fields.len())
-        .any(|fi| time::detect((0..n).map(|r| ds.value(r, fi)), 500).is_some_and(|(kind, share)| share >= 0.6 && kind != time::Kind::Year))
+    (0..ds.fields.len()).any(|fi| {
+        time::detect((0..n).map(|r| ds.value(r, fi)), 500)
+            .is_some_and(|(kind, share)| share >= 0.6 && matches!(kind, time::Kind::Text | time::Kind::EpochMs))
+    })
 }
 
 /// The fields of `ds` that hold dates, best first, with the share of values that read as one

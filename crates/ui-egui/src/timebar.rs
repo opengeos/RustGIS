@@ -20,7 +20,7 @@ pub struct TimeBarState {
     pub playing: Option<f64>,
     /// The features of each step, and what they were counted for: the map and steps, and each
     /// bound layer's rows and fields (shared until an edit changes them).
-    counts: Option<(String, Vec<Bound>, Vec<u32>)>,
+    counts: Option<(CountsKey, Vec<Bound>, Vec<u32>)>,
     /// The slider's steps, and the slider they were listed for.
     steps: Option<(TimeSlider, std::sync::Arc<Vec<f64>>)>,
 }
@@ -136,33 +136,37 @@ fn advance(app: &mut RustGisApp, ui: &Ui) {
     ui.ctx().request_repaint();
 }
 
+/// The project, map and steps the counts were made for.
+type CountsKey = (u64, usize, Option<f64>, Option<f64>, usize, Unit, u32);
+
 /// A bound layer as its counts were made from.
 type Bound = (u32, String, rustgis_engine::data::Features, Vec<rustgis_engine::data::Field>);
 
 /// The features of the bound layers in each step's own span (a step, whatever the window);
 /// worked out again only when the layers or steps change.
 fn counts(app: &mut RustGisApp, t: &TimeSlider, steps: &[f64]) -> Vec<u32> {
-    let m = app.session.map();
-    let bound: Vec<Bound> = m
-        .layers
-        .iter()
-        .filter_map(|l| l.time.as_ref().map(|b| (l.id, b.field.clone(), l.dataset.features.clone(), l.dataset.fields.clone())))
-        .collect();
-    let key = format!(
-        "{}|{}|{:?}",
+    let key = (
         app.session.opened,
         app.session.project.active_map,
-        (steps.first(), steps.last(), steps.len(), t.unit, t.interval)
+        steps.first().copied(),
+        steps.last().copied(),
+        steps.len(),
+        t.unit,
+        t.interval,
     );
-    let same = |a: &[Bound]| {
-        a.len() == bound.len() && a.iter().zip(&bound).all(|(x, y)| x.0 == y.0 && x.1 == y.1 && x.2.shares(&y.2) && x.3 == y.3)
-    };
+    // Compared with the bound layers as they are, without copying them (this runs every frame).
+    let m = app.session.map();
+    let live = || m.layers.iter().filter_map(|l| l.time.as_ref().map(|b| (l, b)));
     if let Some((k, b, c)) = &app.time.counts
         && *k == key
-        && same(b)
+        && b.len() == live().count()
+        && b.iter()
+            .zip(live())
+            .all(|(x, (l, t))| x.0 == l.id && x.1 == t.field && x.2.shares(&l.dataset.features) && x.3 == l.dataset.fields)
     {
         return c.clone();
     }
+    let bound: Vec<Bound> = live().map(|(l, b)| (l.id, b.field.clone(), l.dataset.features.clone(), l.dataset.fields.clone())).collect();
     let mut out = vec![0u32; steps.len()];
     for (id, field, ..) in &bound {
         let Some(l) = app.session.map().layer(*id) else { continue };
