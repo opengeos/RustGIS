@@ -158,12 +158,13 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
         let split = app.map.split_mode;
-        let r = ui.add_enabled(!only_texts, egui::Button::selectable(split, tl!("Split (click the line)")));
+        // Toggles: one that is on stays enabled, so it can be turned off whatever is selected.
+        let r = ui.add_enabled(!only_texts || split, egui::Button::selectable(split, tl!("Split (click the line)")));
         if r.on_disabled_hover_text(not_for_texts).clicked() {
             app.map.split_mode = !split;
         }
         let on = app.session.tool == rustgis_engine::Tool::EditVertices;
-        let r = ui.add_enabled(!only_texts, egui::Button::selectable(on, tl!("Edit Vertices")));
+        let r = ui.add_enabled(!only_texts || on, egui::Button::selectable(on, tl!("Edit Vertices")));
         if r.on_hover_text(tl!("Drag vertices on the map; click an edge to add one")).on_disabled_hover_text(not_for_texts).clicked() {
             app.map.cancel_sketch();
             run(app, "tool.set", json!({"tool": if on { "explore" } else { "editVertices" }}));
