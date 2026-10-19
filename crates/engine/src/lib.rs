@@ -278,6 +278,9 @@ struct PutAside {
     back: Vec<Camera>,
     forward: Vec<Camera>,
     last_camera: Option<Camera>,
+    /// The projection those cameras are in: without it, the extent history given back would be
+    /// taken for another projection's and cleared.
+    history_projection: String,
     dirty: bool,
     trusted_tasks: std::collections::HashSet<String>,
     trusted_models: std::collections::HashSet<String>,
@@ -824,6 +827,7 @@ impl Session {
             back: take(&mut self.back),
             forward: take(&mut self.forward),
             last_camera: self.last_camera.take(),
+            history_projection: self.history_projection.clone(),
             dirty: std::mem::replace(&mut self.dirty, false),
             trusted_tasks: take(&mut self.trusted_tasks),
             trusted_models: take(&mut self.trusted_models),
@@ -864,6 +868,7 @@ impl Session {
             back,
             forward,
             last_camera,
+            history_projection,
             dirty,
             trusted_tasks,
             trusted_models,
@@ -892,6 +897,7 @@ impl Session {
             edit_counts,
         } = *a;
         (self.undo, self.redo, self.back, self.forward, self.last_camera) = (undo, redo, back, forward, last_camera);
+        self.history_projection = history_projection;
         (self.dirty, self.project_starts, self.history_from_file) = (dirty, project_starts, history_from_file);
         (self.trusted_tasks, self.trusted_models, self.trusted_notebooks) = (trusted_tasks, trusted_models, trusted_notebooks);
         (self.active_layer, self.table_layer, self.table_standalone, self.tool) = (active_layer, table_layer, table_standalone, tool);

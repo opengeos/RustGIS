@@ -7860,6 +7860,20 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     });
     assert!(r.is_err());
     assert_eq!((s.project.name.as_str(), s.undo_label()), (name.as_str(), undo));
+    // Its extent history comes back usable, though the project the task opened had another
+    // projection, and moving its view took the history for that projection.
+    s.record_extent();
+    s.map_mut().camera.center.x += 1e6;
+    s.record_extent();
+    assert!(s.can_extent_back());
+    let r = s.guarded("Task", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        s.run("map.projection", &json!({"type": "mollweide"}))?;
+        s.record_extent();
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert!(s.can_extent_back(), "the extent history is the restored map's");
     // Opened for good, it counts, and the old project's history and file go with it.
     s.run("project.new", &json!({"name": "Other"})).unwrap();
     assert_eq!((s.opened, s.undo_label(), s.path.as_deref()), (opened + 1, None, None));
