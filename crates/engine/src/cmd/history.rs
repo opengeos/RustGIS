@@ -141,7 +141,47 @@ fn redacted(v: &Value) -> Value {
 fn redacted_text(t: &str) -> String {
     let r = if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) };
     // After `redact` too: a prefix it knows may come in a form it doesn't (GDAL's `MYSQL:`).
-    secret_pairs_emptied(&private_keys_removed(&r))
+    query_pairs_emptied(&private_keys_removed(&r))
+}
+
+/// `t` with its secret pairs emptied (`secret_pairs_emptied`), parted first at each `&` that
+/// starts another `name=` pair, as a query string's do (`a=1&password=…`, with no `://` for
+/// `redact` to read it by). An `&` inside a value (`password=ab&cd`), or in quotes or braces,
+/// stays in it, so the whole value goes.
+fn query_pairs_emptied(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    let mut from = 0;
+    let mut open: Option<char> = None;
+    let mut chars = t.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match open {
+            Some(close) if c == '\\' && close != '}' => {
+                chars.next();
+            }
+            // ODBC writes a `}` in a braced value as `}}`.
+            Some('}') if c == '}' && chars.peek().is_some_and(|&(_, n)| n == '}') => {
+                chars.next();
+            }
+            Some(close) if c == close => open = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => open = Some(c),
+            None if c == '{' => open = Some('}'),
+            None if c == '&' && starts_pair(t.get(i + 1..).unwrap_or("")) => {
+                out.push_str(&secret_pairs_emptied(t.get(from..i).unwrap_or("")));
+                out.push('&');
+                from = i + 1;
+            }
+            None => {}
+        }
+    }
+    out.push_str(&secret_pairs_emptied(t.get(from..).unwrap_or("")));
+    out
+}
+
+/// Whether `s` starts with a pair's name and its `=`.
+fn starts_pair(s: &str) -> bool {
+    let n = s.find(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))).unwrap_or(s.len());
+    n > 0 && s.get(n..).is_some_and(|r| r.trim_start().starts_with('='))
 }
 
 /// `t` without the PEM private keys pasted in it (`-----BEGIN … PRIVATE KEY-----` to its
@@ -170,8 +210,7 @@ fn private_keys_removed(t: &str) -> String {
 /// value in quotes or braces (`password='a b'`, ODBC's `PWD={a;b}`) goes whole, to its closer
 /// (to the end of the text when it has none).
 fn secret_pairs_emptied(t: &str) -> String {
-    // A query string's `&` too: `a=1&password=…` has no `://` for `redact` to read it by.
-    let parts = |c: char| c.is_whitespace() || matches!(c, ',' | ';' | '&');
+    let parts = |c: char| c.is_whitespace() || c == ',' || c == ';';
     let mut out = String::new();
     let mut rest = t;
     while !rest.is_empty() {
@@ -216,12 +255,18 @@ fn secret_pairs_emptied(t: &str) -> String {
 /// (`\'`, as libpq writes one in a quoted value), which doesn't close it.
 fn closer(v: &str, c: char) -> Option<usize> {
     let mut escaped = false;
-    for (i, ch) in v.char_indices().skip(1) {
+    let mut chars = v.char_indices().skip(1).peekable();
+    while let Some((i, ch)) = chars.next() {
         if escaped {
             escaped = false;
         } else if ch == '\\' && c != '}' {
             escaped = true;
         } else if ch == c {
+            // ODBC writes a `}` in a braced value as `}}`: it doesn't close it.
+            if c == '}' && chars.peek().is_some_and(|&(_, n)| n == '}') {
+                chars.next();
+                continue;
+            }
             return Some(i);
         }
     }

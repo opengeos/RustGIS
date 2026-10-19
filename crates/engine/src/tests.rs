@@ -8132,14 +8132,15 @@ fn a_run_is_copied_from_the_history_as_code() {
 }
 
 /// A secret in a query string joined by `&`, or in a failed run's error quoting a connection,
-/// is left out of the copied code and the history script.
+/// is left out of the copied code and the history script; so is one with an `&` in it, or an
+/// ODBC braced one with an escaped `}}`.
 #[test]
 fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
     let mut s = world();
     s.project.gp_history.push(crate::GpRecord {
         tool: "Buffer".into(),
         id: "buffer".into(),
-        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2"}),
+        params: json!({"input": "Cities", "query": "a=1&password=qp&b=2", "amp": "password=pw1&zz9", "quoted": "password='q1&b=c2'", "odbc": "PWD={abc}}def;tail};UID=me"}),
         command: None,
         at: 0,
         ok: false,
@@ -8149,6 +8150,12 @@ fn secrets_in_a_query_or_a_run_s_error_stay_out_of_copied_code() {
     });
     let py = s.run("gp.historyCode", &json!({"run": 0})).unwrap()["code"].as_str().unwrap().to_string();
     assert!(py.contains("a=1&password=&b=2") && !py.contains("qp"), "{py}");
+    // An `&` in a value, or in quotes, isn't another pair: the whole value goes. So does an ODBC
+    // braced value with an escaped `}}` in it.
+    for secret in ["pw1", "zz9", "q1", "c2", "abc", "def", "tail"] {
+        assert!(!py.contains(secret), "{secret} in {py}");
+    }
+    assert!(py.contains("\"PWD=;UID=me\""), "{py}");
     let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
     assert!(text.contains("failed when it ran (could not connect: host=db password=)") && !text.contains("=mp"), "{text}");
 }
