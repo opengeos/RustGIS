@@ -67,6 +67,18 @@
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/plugins.webp" alt="The Plugin Manager browsing the plugin registry, listing Basemaps, Hello RustGIS, Map Explorer and Vector Toolkit with their permissions" width="100%"><p align="center"><sub><b>Plugins.</b> Browse and install sandboxed plugins from <a href="https://plugins.rustgis.app">plugins.rustgis.app</a>, each showing the permissions it asks for.</sub></p></td>
 </tr>
 <tr>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/modelbuilder.webp" alt="ModelBuilder after a run: Cities buffered by 300 km clip the Rivers, and Countries are dissolved by continent; every node is ticked and the results are on the map" width="100%"><p align="center"><sub><b>ModelBuilder.</b> Chain tools on a node canvas of inputs, tools and outputs, check the model as you build, and run it in one go.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/web-data.webp" alt="The Sentinel-2 Explorer in the Web Data pane over Bern: the clearest recent scenes as cards with previews, their footprints drawn on the map" width="100%"><p align="center"><sub><b>Web Data.</b> STAC catalogs, Overture Maps, OpenStreetMap, NASA Earthdata, open-data portals and satellite embeddings, searched where the map is.</sub></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/terrain.webp" alt="Mount Rainier in USGS imagery draped over elevation tiles, the map tilted 65°" width="100%"><p align="center"><sub><b>Terrain.</b> Tilt and turn the map, and drape it over a DEM or elevation tiles.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/mars-globe.webp" alt="Mars on the 3D globe, on the Viking mosaic, with Valles Marineris across the middle" width="100%"><p align="center"><sub><b>Other worlds.</b> Map the Moon, Mars and nine other bodies on their own basemaps, measured with their own radius.</sub></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/extrusion.webp" alt="Countries extruded by population on a map tilted 55° and turned 20°, lit and shaded, with labels on their roofs" width="100%"><p align="center"><sub><b>Extrusion.</b> Stand features up by a field or a height, lit and shaded, on a tilted map.</sub></p></td>
+<td width="50%" valign="top"><img src="https://assets.rustgis.app/images/time-slider.webp" alt="The Time Slider under the map at 2018, showing a layer of dated events cumulatively, with a bar for each year" width="100%"><p align="center"><sub><b>Time Slider.</b> Step dated features and dated imagery through time, and export the steps as a GIF.</sub></p></td>
+</tr>
+<tr>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/dark.webp" alt="RustGIS in dark mode with the View tab open over a map of Europe on the Midnight basemap" width="100%"><p align="center"><sub><b>Dark mode</b> and the View tab: effects, scene settings, panes and linked views.</sub></p></td>
 <td width="50%" valign="top"><img src="https://assets.rustgis.app/images/backstage.webp" alt="The Project backstage with cards to start a blank map, the World Atlas sample, or open a project" width="100%"><p align="center"><sub><b>Projects.</b> Start blank, from the World Atlas sample, or open a <code>.rgis</code> project.</sub></p></td>
 </tr>
