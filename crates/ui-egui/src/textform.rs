@@ -28,12 +28,11 @@ pub struct Settled {
     pub bold: bool,
 }
 
-/// A section's title in the Format pane ("Element", "Text"): what the rows below it are about.
-pub fn section(ui: &mut Ui, title: &str) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new(tl!(title)).font(crate::theme::semibold(12.0)).color(t.text_dim));
-    ui.add_space(2.0);
+/// A section of the Format pane ("Element", "Text"), folding as its other sections do (a frame's
+/// Grid, a legend's Layers): open unless the user folded it, which holds for every element.
+pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    ui.add_space(4.0);
+    egui::CollapsingHeader::new(tl!(title)).id_salt(("format_section", title)).default_open(true).show(ui, add).body_returned
 }
 
 /// The width the labels of a properties form take, so the controls of its grids line up in one

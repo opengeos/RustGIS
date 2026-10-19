@@ -113,10 +113,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     };
     ui.label(egui::RichText::new(tl!("Text Graphic")).font(crate::theme::semibold(14.0)));
     ui.separator();
-    crate::textform::section(ui, "Text");
     let select = app.graphic_format.select.take_if(|s| *s == k).is_some();
     let fields = crate::textform::Fields { text: &mut text, size: &mut size, color: Some(&mut color), bold: Some(&mut bold), select };
-    let settled = crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields, |_| {});
+    let settled =
+        crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields, |_| {}))
+            .unwrap_or_default();
     let save = |app: &mut RustGisApp, change: serde_json::Value| {
         let mut p = json!({"layer": layer, "row": row});
         if let (Some(p), Some(c)) = (p.as_object_mut(), change.as_object()) {

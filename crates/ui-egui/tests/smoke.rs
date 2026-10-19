@@ -1902,7 +1902,10 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     click_map(&mut h);
     assert_eq!(selected_text(&h).as_deref(), Some("{scale}"));
     assert_eq!(h.state().ui.right, Some(rustgis_ui_egui::RightPane::Format));
-    // Text starts with "Text" again (the button: the pane's box is labelled Text too).
+    // Text starts with "Text" again. The pane is closed first: its Text section's header is a
+    // button too.
+    h.state_mut().run("ui.pane.format", json!({"close": true})).unwrap();
+    h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Text").click_accesskit();
     h.step();
     assert_eq!(h.state().ui.dynamic_text, None);

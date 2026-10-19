@@ -1044,245 +1044,259 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         p["element"] = json!(id);
         let _ = app.run("layout.update", p);
     };
-    crate::textform::section(ui, "Element");
-    egui::Grid::new(("layout_props", id)).num_columns(2).min_col_width(crate::textform::LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Name"));
-        if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
-            update(app, json!({"name": name}));
-        }
-        ui.end_row();
-        for (label, key, v) in [("X (mm)", "x", e.x), ("Y (mm)", "y", e.y), ("Width (mm)", "w", e.w), ("Height (mm)", "h", e.h)] {
-            ui.label(tl!(label));
-            let mut val = v;
-            let r = ui.add(egui::DragValue::new(&mut val).speed(0.5).max_decimals(1));
-            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (val - v).abs() > 1e-6 {
-                update(app, json!({key: val}));
-            }
-            ui.end_row();
-        }
-        ui.label(tl!("Visible"));
-        let mut vis = e.visible;
-        if ui.checkbox(&mut vis, "").changed() {
-            update(app, json!({"visible": vis}));
-        }
-        ui.end_row();
-        match &e.kind {
-            // Its text, size, colour and boldness: the shared form, below the grid.
-            ElementKind::Text { .. } => {}
-            ElementKind::Legend { title, all_classes, hide_other, .. } => {
-                ui.label(tl!("Title"));
-                if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
-                    update(app, json!({"title": tt}));
+    crate::textform::section(ui, "Element", |ui| {
+        egui::Grid::new(("layout_props", id)).num_columns(2).min_col_width(crate::textform::LABEL_W).spacing(vec2(8.0, 6.0)).show(
+            ui,
+            |ui| {
+                ui.label(tl!("Name"));
+                if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
+                    update(app, json!({"name": name}));
                 }
                 ui.end_row();
-                // Off, the legend lists only what the frame draws (#207).
-                ui.label(tl!("All classes"));
-                let mut all = *all_classes;
-                if ui.checkbox(&mut all, "").changed() {
-                    update(app, json!({"allClasses": all}));
-                }
-                ui.end_row();
-                ui.label(tl!("Hide other values"));
-                let mut hide = *hide_other;
-                if ui.checkbox(&mut hide, "").changed() {
-                    update(app, json!({"hideOther": hide}));
-                }
-                ui.end_row();
-            }
-            ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse } => {
-                ui.label(tl!("Title"));
-                if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
-                    update(app, json!({"title": tt}));
-                }
-                ui.end_row();
-                // The rasters of the frame's map; none picked follows the top visible one.
-                ui.label(tl!("Layer"));
-                let rasters: Vec<String> = match layout.element(*frame).map(|f| &f.kind) {
-                    Some(ElementKind::MapFrame { map, .. }) => app
-                        .session
-                        .project
-                        .maps
-                        .iter()
-                        .find(|m| m.name.eq_ignore_ascii_case(map))
-                        .map(|m| m.layers.iter().filter(|l| l.is_raster()).map(|l| l.name.clone()).collect())
-                        .unwrap_or_default(),
-                    _ => Vec::new(),
-                };
-                let top = tl!("Top visible raster");
-                egui::ComboBox::from_id_salt(("colorbar_layer", id)).selected_text(layer.as_deref().unwrap_or(top)).show_ui(ui, |ui| {
-                    if ui.selectable_label(layer.is_none(), top).clicked() {
-                        update(app, json!({"layer": ""}));
-                    }
-                    for n in rasters {
-                        if ui.selectable_label(layer.as_deref() == Some(n.as_str()), n.as_str()).clicked() {
-                            update(app, json!({"layer": n}));
-                        }
-                    }
-                });
-                ui.end_row();
-                let vertical = *orientation == Orientation::Vertical;
-                ui.label(tl!("Orientation"));
-                ui.horizontal(|ui| {
-                    for (label, v) in [("Horizontal", false), ("Vertical", true)] {
-                        if ui.selectable_label(vertical == v, tl!(label)).clicked() && vertical != v {
-                            update(app, json!({"orientation": if v { "vertical" } else { "horizontal" }}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Labels"));
-                ui.horizontal(|ui| {
-                    let sides = if vertical { [("Right", "right"), ("Left", "left")] } else { [("Below", "below"), ("Above", "above")] };
-                    for ((label, code), side) in sides.into_iter().zip([TickSide::End, TickSide::Start]) {
-                        if ui.selectable_label(*tick_side == side, tl!(label)).clicked() && *tick_side != side {
-                            update(app, json!({"tickSide": code}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Ticks"));
-                let mut n = *ticks as u64;
-                let r = ui.add(egui::DragValue::new(&mut n).range(2..=MAX_COLORBAR_TICKS as u64));
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *ticks {
-                    update(app, json!({"ticks": n}));
-                }
-                ui.end_row();
-                ui.label(tl!("Reverse"));
-                let mut rev = *reverse;
-                if ui.checkbox(&mut rev, "").changed() {
-                    update(app, json!({"reverse": rev}));
-                }
-                ui.end_row();
-            }
-            ElementKind::MapFrame { map, scale, bearing, pitch, .. } => {
-                ui.label(tl!("Map"));
-                let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
-                egui::ComboBox::from_id_salt(("frame_map", id)).selected_text(map.as_str()).show_ui(ui, |ui| {
-                    for m in maps {
-                        if ui.selectable_label(m == *map, m.as_str()).clicked() {
-                            update(app, json!({"map": m}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Scale 1:"));
-                let mut sc = *scale;
-                let speed = sc * 0.01;
-                let r = ui.add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0));
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (sc - scale).abs() > 0.5 {
-                    update(app, json!({"scale": sc}));
-                }
-                ui.end_row();
-                // Turned and tilted as the map view is (Ctrl+drag there; Shift+arrows).
-                for (label, key, current, range) in
-                    [("Bearing", "bearing", *bearing, -180.0..=180.0), ("Pitch", "pitch", *pitch, 0.0..=85.0)]
-                {
+                for (label, key, v) in [("X (mm)", "x", e.x), ("Y (mm)", "y", e.y), ("Width (mm)", "w", e.w), ("Height (mm)", "h", e.h)] {
                     ui.label(tl!(label));
-                    let mut v = current;
-                    let r = ui.add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"));
-                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (v - current).abs() > 1e-6 {
-                        update(app, json!({key: v}));
+                    let mut val = v;
+                    let r = ui.add(egui::DragValue::new(&mut val).speed(0.5).max_decimals(1));
+                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (val - v).abs() > 1e-6 {
+                        update(app, json!({key: val}));
                     }
                     ui.end_row();
                 }
-            }
-            ElementKind::NorthArrow { style, fill, outline, .. } => {
-                ui.label(tl!("Style"));
-                egui::ComboBox::from_id_salt(("arrow_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
-                    for v in ArrowStyle::ALL {
-                        if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
-                            update(app, json!({"style": v.code()}));
-                        }
-                    }
-                });
-                ui.end_row();
-                for (label, key, current) in [("Fill", "fill", *fill), ("Outline", "outline", *outline)] {
-                    ui.label(tl!(label));
-                    let mut c = crate::theme::c32(current);
-                    if crate::widgets::color_button(ui, &mut c).changed() {
-                        update(app, json!({key: crate::theme::rgba(c).hex()}));
-                    }
-                    ui.end_row();
-                }
-            }
-            ElementKind::ScaleBar { units, divisions, style, .. } => {
-                ui.label(tl!("Style"));
-                egui::ComboBox::from_id_salt(("scale_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
-                    for v in ScaleBarStyle::ALL {
-                        if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
-                            update(app, json!({"style": v.code()}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Units"));
-                egui::ComboBox::from_id_salt(("scale_units", id)).selected_text(tl!(units.label())).show_ui(ui, |ui| {
-                    for v in ScaleUnits::ALL {
-                        if ui.selectable_label(*units == v, tl!(v.label())).clicked() && *units != v {
-                            update(app, json!({"units": v.code()}));
-                        }
-                    }
-                });
-                ui.end_row();
-                ui.label(tl!("Divisions"));
-                let mut n = *divisions as u64;
-                let r = ui.add(egui::DragValue::new(&mut n).range(1..=MAX_SCALE_DIVISIONS as u64));
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *divisions {
-                    update(app, json!({"divisions": n}));
+                ui.label(tl!("Visible"));
+                let mut vis = e.visible;
+                if ui.checkbox(&mut vis, "").changed() {
+                    update(app, json!({"visible": vis}));
                 }
                 ui.end_row();
-            }
-            ElementKind::Table { rows, .. } => {
-                ui.label(tl!("Rows"));
-                let mut n = *rows as u64;
-                let r = ui.add(egui::DragValue::new(&mut n).range(1..=500));
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *rows {
-                    update(app, json!({"rows": n}));
+                match &e.kind {
+                    // Its text, size, colour and boldness: the shared form, below the grid.
+                    ElementKind::Text { .. } => {}
+                    ElementKind::Legend { title, all_classes, hide_other, .. } => {
+                        ui.label(tl!("Title"));
+                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
+                            update(app, json!({"title": tt}));
+                        }
+                        ui.end_row();
+                        // Off, the legend lists only what the frame draws (#207).
+                        ui.label(tl!("All classes"));
+                        let mut all = *all_classes;
+                        if ui.checkbox(&mut all, "").changed() {
+                            update(app, json!({"allClasses": all}));
+                        }
+                        ui.end_row();
+                        ui.label(tl!("Hide other values"));
+                        let mut hide = *hide_other;
+                        if ui.checkbox(&mut hide, "").changed() {
+                            update(app, json!({"hideOther": hide}));
+                        }
+                        ui.end_row();
+                    }
+                    ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse } => {
+                        ui.label(tl!("Title"));
+                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
+                            update(app, json!({"title": tt}));
+                        }
+                        ui.end_row();
+                        // The rasters of the frame's map; none picked follows the top visible one.
+                        ui.label(tl!("Layer"));
+                        let rasters: Vec<String> = match layout.element(*frame).map(|f| &f.kind) {
+                            Some(ElementKind::MapFrame { map, .. }) => app
+                                .session
+                                .project
+                                .maps
+                                .iter()
+                                .find(|m| m.name.eq_ignore_ascii_case(map))
+                                .map(|m| m.layers.iter().filter(|l| l.is_raster()).map(|l| l.name.clone()).collect())
+                                .unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
+                        let top = tl!("Top visible raster");
+                        egui::ComboBox::from_id_salt(("colorbar_layer", id)).selected_text(layer.as_deref().unwrap_or(top)).show_ui(
+                            ui,
+                            |ui| {
+                                if ui.selectable_label(layer.is_none(), top).clicked() {
+                                    update(app, json!({"layer": ""}));
+                                }
+                                for n in rasters {
+                                    if ui.selectable_label(layer.as_deref() == Some(n.as_str()), n.as_str()).clicked() {
+                                        update(app, json!({"layer": n}));
+                                    }
+                                }
+                            },
+                        );
+                        ui.end_row();
+                        let vertical = *orientation == Orientation::Vertical;
+                        ui.label(tl!("Orientation"));
+                        ui.horizontal(|ui| {
+                            for (label, v) in [("Horizontal", false), ("Vertical", true)] {
+                                if ui.selectable_label(vertical == v, tl!(label)).clicked() && vertical != v {
+                                    update(app, json!({"orientation": if v { "vertical" } else { "horizontal" }}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(tl!("Labels"));
+                        ui.horizontal(|ui| {
+                            let sides =
+                                if vertical { [("Right", "right"), ("Left", "left")] } else { [("Below", "below"), ("Above", "above")] };
+                            for ((label, code), side) in sides.into_iter().zip([TickSide::End, TickSide::Start]) {
+                                if ui.selectable_label(*tick_side == side, tl!(label)).clicked() && *tick_side != side {
+                                    update(app, json!({"tickSide": code}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(tl!("Ticks"));
+                        let mut n = *ticks as u64;
+                        let r = ui.add(egui::DragValue::new(&mut n).range(2..=MAX_COLORBAR_TICKS as u64));
+                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *ticks {
+                            update(app, json!({"ticks": n}));
+                        }
+                        ui.end_row();
+                        ui.label(tl!("Reverse"));
+                        let mut rev = *reverse;
+                        if ui.checkbox(&mut rev, "").changed() {
+                            update(app, json!({"reverse": rev}));
+                        }
+                        ui.end_row();
+                    }
+                    ElementKind::MapFrame { map, scale, bearing, pitch, .. } => {
+                        ui.label(tl!("Map"));
+                        let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
+                        egui::ComboBox::from_id_salt(("frame_map", id)).selected_text(map.as_str()).show_ui(ui, |ui| {
+                            for m in maps {
+                                if ui.selectable_label(m == *map, m.as_str()).clicked() {
+                                    update(app, json!({"map": m}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(tl!("Scale 1:"));
+                        let mut sc = *scale;
+                        let speed = sc * 0.01;
+                        let r = ui.add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0));
+                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (sc - scale).abs() > 0.5 {
+                            update(app, json!({"scale": sc}));
+                        }
+                        ui.end_row();
+                        // Turned and tilted as the map view is (Ctrl+drag there; Shift+arrows).
+                        for (label, key, current, range) in
+                            [("Bearing", "bearing", *bearing, -180.0..=180.0), ("Pitch", "pitch", *pitch, 0.0..=85.0)]
+                        {
+                            ui.label(tl!(label));
+                            let mut v = current;
+                            let r = ui.add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"));
+                            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (v - current).abs() > 1e-6 {
+                                update(app, json!({key: v}));
+                            }
+                            ui.end_row();
+                        }
+                    }
+                    ElementKind::NorthArrow { style, fill, outline, .. } => {
+                        ui.label(tl!("Style"));
+                        egui::ComboBox::from_id_salt(("arrow_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
+                            for v in ArrowStyle::ALL {
+                                if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
+                                    update(app, json!({"style": v.code()}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        for (label, key, current) in [("Fill", "fill", *fill), ("Outline", "outline", *outline)] {
+                            ui.label(tl!(label));
+                            let mut c = crate::theme::c32(current);
+                            if crate::widgets::color_button(ui, &mut c).changed() {
+                                update(app, json!({key: crate::theme::rgba(c).hex()}));
+                            }
+                            ui.end_row();
+                        }
+                    }
+                    ElementKind::ScaleBar { units, divisions, style, .. } => {
+                        ui.label(tl!("Style"));
+                        egui::ComboBox::from_id_salt(("scale_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
+                            for v in ScaleBarStyle::ALL {
+                                if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
+                                    update(app, json!({"style": v.code()}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(tl!("Units"));
+                        egui::ComboBox::from_id_salt(("scale_units", id)).selected_text(tl!(units.label())).show_ui(ui, |ui| {
+                            for v in ScaleUnits::ALL {
+                                if ui.selectable_label(*units == v, tl!(v.label())).clicked() && *units != v {
+                                    update(app, json!({"units": v.code()}));
+                                }
+                            }
+                        });
+                        ui.end_row();
+                        ui.label(tl!("Divisions"));
+                        let mut n = *divisions as u64;
+                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=MAX_SCALE_DIVISIONS as u64));
+                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *divisions {
+                            update(app, json!({"divisions": n}));
+                        }
+                        ui.end_row();
+                    }
+                    ElementKind::Table { rows, .. } => {
+                        ui.label(tl!("Rows"));
+                        let mut n = *rows as u64;
+                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=500));
+                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *rows {
+                            update(app, json!({"rows": n}));
+                        }
+                        ui.end_row();
+                    }
+                    _ => {}
                 }
-                ui.end_row();
-            }
-            _ => {}
-        }
+            },
+        );
     });
     // A layout's text: the form a text graphic has too (#516), with the page's dynamic text, and
     // the type settings only a layout's text has.
     if let ElementKind::Text { text, size, color, bold, italic, align, letter_spacing } = &e.kind {
-        crate::textform::section(ui, "Text");
         let key = (li, id, "text");
         let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| text.clone());
         let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
         let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
         let fields = crate::textform::Fields { text: &mut buf, size: &mut sz, color: Some(&mut c), bold: Some(&mut bb), select: false };
         // The type settings only a layout's text has, in the form's grid so they line up.
-        let settled = crate::textform::show(ui, ("layout_text", li, id), &tokens, fields, |ui| {
-            ui.label(tl!("Italic"));
-            let mut it = *italic;
-            // Named for assistive technology, as its label sits in the other column.
-            let r = ui.checkbox(&mut it, "");
-            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, it, tl!("Italic")));
-            if r.changed() {
-                update(app, json!({"italic": it}));
-            }
-            ui.end_row();
-            ui.label(tl!("Alignment"));
-            egui::ComboBox::from_id_salt(("text_align", id)).selected_text(tl!(align.label())).show_ui(ui, |ui| {
-                for v in TextAlign::ALL {
-                    if ui.selectable_label(*align == v, tl!(v.label())).clicked() && *align != v {
-                        update(app, json!({"align": v.code()}));
-                    }
+        let settled = crate::textform::section(ui, "Text", |ui| {
+            crate::textform::show(ui, ("layout_text", li, id), &tokens, fields, |ui| {
+                ui.label(tl!("Italic"));
+                let mut it = *italic;
+                // Named for assistive technology, as its label sits in the other column.
+                let r = ui.checkbox(&mut it, "");
+                r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, it, tl!("Italic")));
+                if r.changed() {
+                    update(app, json!({"italic": it}));
                 }
-            });
-            ui.end_row();
-            ui.label(tl!("Letter spacing"));
-            let mut ls = *letter_spacing;
-            let r = ui
-                .add(egui::DragValue::new(&mut ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"));
-            r.widget_info(|| egui::WidgetInfo { label: Some(tl!("Letter spacing").to_string()), ..egui::WidgetInfo::drag_value(true, ls) });
-            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (ls - letter_spacing).abs() > 1e-6 {
-                update(app, json!({"letterSpacing": ls}));
-            }
-            ui.end_row();
-        });
+                ui.end_row();
+                ui.label(tl!("Alignment"));
+                egui::ComboBox::from_id_salt(("text_align", id)).selected_text(tl!(align.label())).show_ui(ui, |ui| {
+                    for v in TextAlign::ALL {
+                        if ui.selectable_label(*align == v, tl!(v.label())).clicked() && *align != v {
+                            update(app, json!({"align": v.code()}));
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Letter spacing"));
+                let mut ls = *letter_spacing;
+                let r = ui.add(
+                    egui::DragValue::new(&mut ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"),
+                );
+                r.widget_info(|| egui::WidgetInfo {
+                    label: Some(tl!("Letter spacing").to_string()),
+                    ..egui::WidgetInfo::drag_value(true, ls)
+                });
+                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (ls - letter_spacing).abs() > 1e-6 {
+                    update(app, json!({"letterSpacing": ls}));
+                }
+                ui.end_row();
+            })
+        })
+        .unwrap_or_default();
         if settled.typing {
             app.layout.typing.insert(key, buf);
         } else if settled.text && buf != *text {
