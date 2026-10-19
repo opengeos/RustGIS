@@ -7877,6 +7877,11 @@ fn a_run_is_copied_from_the_history_as_code() {
         outputs: Vec::new(),
     };
     s.project.gp_history.push(old.clone());
+    // Open in Tool finds the tool of a `gp.run` run, an older one's by its name; not a point
+    // buffer's, which another command made.
+    use crate::cmd::history::tool_of;
+    let runs = &s.project.gp_history;
+    assert_eq!((tool_of(&runs[0]).as_deref(), tool_of(&runs[1]), tool_of(&runs[2]).as_deref()), (Some("buffer"), None, Some("buffer")));
     let py = code(&mut s, 2, "python").unwrap();
     assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
     // Nothing tells which tool an unknown name was.

@@ -78,10 +78,17 @@ pub fn replay(r: &GpRecord) -> Result<(String, Value), String> {
     if let Some((cmd, params)) = &r.command {
         return Ok((cmd.clone(), redacted(params)));
     }
-    // Projects from before the id was kept: a built-in tool is found by its name.
-    let id = if r.id.is_empty() { super::gp::tool_id(&r.tool).map(str::to_string) } else { Some(r.id.clone()) };
-    let id = id.ok_or_else(|| format!("{} can't be run again: the history doesn't say which tool it was", r.tool))?;
+    let id = tool_of(r).ok_or_else(|| format!("{} can't be run again: the history doesn't say which tool it was", r.tool))?;
     Ok(("gp.run".into(), json!({"tool": id, "params": redacted(&r.params)})))
+}
+
+/// The id of the tool `r` ran with `gp.run`: kept with the run, or, in projects from before it
+/// was kept, a built-in tool found by its name. `None` for a run another command made.
+pub fn tool_of(r: &GpRecord) -> Option<String> {
+    if r.command.is_some() {
+        return None;
+    }
+    if r.id.is_empty() { super::gp::tool_id(&r.tool).map(str::to_string) } else { Some(r.id.clone()) }
 }
 
 /// `v` without what would give someone else the user's access: an address's keys, tokens and

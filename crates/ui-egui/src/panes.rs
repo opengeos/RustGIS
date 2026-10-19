@@ -3759,14 +3759,19 @@ fn history_menu(app: &mut RustGisApp, ui: &mut Ui, i: usize, h: &rustgis_engine:
         }
     }
     ui.separator();
-    // A tool run with `gp.run` opens in its form; a point buffered on the map has no layer to
-    // give it.
-    let tool = replay.as_ref().ok().filter(|(cmd, _)| cmd == "gp.run").map(|(_, p)| p.clone());
-    let r = ui.add_enabled(tool.is_some(), egui::Button::new(tl!("Open in Tool")));
-    if r.on_disabled_hover_text(tl!("This run has no tool form to open")).clicked() {
-        if let Some(p) = tool {
-            let _ = app.run("ui.gp.open", json!({"tool": p["tool"], "values": p["params"]}));
-        }
+    // A tool run with `gp.run` opens in its form, with the values it ran with as they were: the
+    // form is the user's own, so nothing is left out (copied code leaves keys out). A point
+    // buffered on the map has no layer to give it; a plugin's tool needs its plugin loaded.
+    let id = rustgis_engine::cmd::history::tool_of(h);
+    let known = id.as_deref().and_then(rustgis_engine::analysis::tool).is_some();
+    let why = match &id {
+        None => tl!("This run has no tool form to open"),
+        Some(_) if !known => tl!("Its tool isn't available now (a plugin's, not loaded, or a suite's, not installed)"),
+        Some(_) => "",
+    };
+    let r = ui.add_enabled(known, egui::Button::new(tl!("Open in Tool")));
+    if r.on_disabled_hover_text(why).clicked() {
+        let _ = app.run("ui.gp.open", json!({"tool": id, "values": h.params}));
         ui.close();
     }
 }
