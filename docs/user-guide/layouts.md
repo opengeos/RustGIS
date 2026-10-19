@@ -92,6 +92,12 @@ the maps; while one is open, its groups lead the Publish tab:
   wheel zooms the page. **Delete** (or **Backspace**, the delete key on a
   Mac) deletes the selected element, and **Ctrl+D** (**⌘D** on a Mac) duplicates it: the copy is
   placed 5 mm down and to the right, on top, and selected.
+- **Locked**, at the top of the Format pane, keeps a finished element from being changed by
+  mistake: it can still be selected (a lock marks its corner, and it has no handles), but not
+  moved, resized, deleted or edited, and a locked map frame's map isn't panned or zoomed. A map
+  series still turns its pages. **Duplicate** makes an unlocked copy, and a map frame isn't
+  deleted while one of its surrounds is locked. Scripts lock and unlock with `layout.update`
+  `{"locked": true}` or `{"locked": false}`.
 - **Rulers and guides**: rulers along the top and left show millimetres from the page's corner.
   Drag out of a ruler to add a guide, drag a guide to move it, and drag it back onto a ruler to
   remove it. Guides are saved with the layout but never printed or exported. **Clear Guides**

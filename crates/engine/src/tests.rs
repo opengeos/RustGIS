@@ -7760,6 +7760,96 @@ fn layout_elements_duplicate_offset_on_top_and_undo() {
 }
 
 #[test]
+fn locked_layout_elements_take_no_change_until_unlocked() {
+    use rustgis_map::layout::ElementKind;
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "L"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let frame = s.project.layouts[li].first_frame().unwrap();
+    let legend = s.project.layouts[li].elements.iter().find(|e| e.name == "Legend").unwrap().id;
+    let title = s.run("layout.addElement", &json!({"kind": "text", "text": "Title", "x": 10, "y": 10})).unwrap()["element"]
+        .as_u64()
+        .unwrap() as u32;
+    s.run("layout.update", &json!({"element": title, "locked": true})).unwrap();
+    let before = s.project.layouts[li].element(title).unwrap().clone();
+    assert!(before.locked);
+    // Every change is refused, and the element stays as it was.
+    for bad in [
+        json!({"x": 50}),
+        json!({"w": 80, "h": 20}),
+        json!({"text": "Oops"}),
+        json!({"name": "T"}),
+        json!({"visible": false}),
+        json!({"locked": true, "x": 1}),
+    ] {
+        let mut p = bad.clone();
+        p["element"] = json!(title);
+        let err = s.run("layout.update", &p).unwrap_err();
+        assert!(err.contains("locked"), "{bad}: {err}");
+    }
+    assert_eq!(s.project.layouts[li].element(title), Some(&before));
+    assert!(s.run("layout.removeElement", &json!({"element": title})).is_err());
+    assert!(s.project.layouts[li].element(title).is_some());
+    // Locking it again, or a null value, changes nothing and isn't refused.
+    s.run("layout.update", &json!({"element": title, "locked": true, "x": null})).unwrap();
+    // A copy can be made, and it isn't locked.
+    let copy = s.run("layout.duplicateElement", &json!({"element": title})).unwrap()["element"].as_u64().unwrap() as u32;
+    assert!(!s.project.layouts[li].element(copy).unwrap().locked);
+    // Unlocking may come with other changes.
+    s.run("layout.update", &json!({"element": title, "locked": false, "x": 50})).unwrap();
+    let e = s.project.layouts[li].element(title).unwrap();
+    assert_eq!((e.locked, e.x), (false, 50.0));
+    // Locking and moving at once: it moves, then locks.
+    s.run("layout.update", &json!({"element": title, "x": 60, "locked": true})).unwrap();
+    let e = s.project.layouts[li].element(title).unwrap();
+    assert_eq!((e.locked, e.x), (true, 60.0));
+    // Undone, the lock goes back as any other change does.
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(!s.project.layouts[li].element(title).unwrap().locked);
+
+    // A locked map frame keeps its extent and gets no grid or extent indicator…
+    s.run("layout.update", &json!({"element": frame, "locked": true})).unwrap();
+    let kind = s.project.layouts[li].element(frame).unwrap().kind.clone();
+    assert!(s.run("layout.frameZoom", &json!({"element": frame, "to": "full"})).is_err());
+    assert!(s.run("layout.update", &json!({"element": frame, "scale": 1_000_000})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "grid", "frame": frame})).is_err());
+    let inset = s.run("layout.addFrame", &json!({"x": 150, "y": 150, "w": 40, "h": 40})).unwrap()["element"].as_u64().unwrap() as u32;
+    assert!(s.run("layout.addElement", &json!({"kind": "extentIndicator", "frame": frame, "of": inset})).is_err());
+    assert_eq!(s.project.layouts[li].element(frame).unwrap().kind, kind);
+    // …but a map series still turns its pages.
+    s.run("layout.update", &json!({"element": frame, "locked": false})).unwrap();
+    s.run("layout.series", &json!({"layer": "Lakes", "frame": frame})).unwrap();
+    s.run("layout.update", &json!({"element": frame, "locked": true})).unwrap();
+    let center = |s: &Session| match &s.project.layouts[li].element(frame).unwrap().kind {
+        ElementKind::MapFrame { center, .. } => *center,
+        _ => panic!("not a frame"),
+    };
+    let first = center(&s);
+    s.run("layout.seriesPage", &json!({"page": "next"})).unwrap();
+    assert_ne!(center(&s), first, "the series moved the locked frame");
+
+    // A frame whose surround is locked isn't deleted: the surround would go with it.
+    s.run("layout.update", &json!({"element": frame, "locked": false})).unwrap();
+    s.run("layout.update", &json!({"element": legend, "locked": true})).unwrap();
+    let err = s.run("layout.removeElement", &json!({"element": frame})).unwrap_err();
+    assert!(err.contains("Legend"), "{err}");
+    assert!(s.project.layouts[li].element(frame).is_some() && s.project.layouts[li].element(legend).is_some());
+
+    // Saved with the lock, and a layout from before locks loads unlocked.
+    let saved = serde_json::to_value(&s.project.layouts[li]).unwrap();
+    let back: rustgis_map::layout::Layout = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(back, s.project.layouts[li]);
+    let old = saved["elements"].as_array().unwrap().iter().find(|e| e["id"] == json!(copy)).unwrap();
+    assert!(old.get("locked").is_none(), "an unlocked element doesn't write the field");
+    let mut older = saved.clone();
+    for e in older["elements"].as_array_mut().unwrap() {
+        e.as_object_mut().unwrap().remove("locked");
+    }
+    let back: rustgis_map::layout::Layout = serde_json::from_value(older).unwrap();
+    assert!(back.elements.iter().all(|e| !e.locked));
+}
+
+#[test]
 fn layout_shapes_are_added_restyled_and_saved() {
     use rustgis_map::layout::{ElementKind, LineDir};
     let mut s = world();

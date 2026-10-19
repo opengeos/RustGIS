@@ -537,7 +537,20 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         if id == "edit.delete"
             && let Some(li) = app.session.active_layout
         {
-            if let Some(el) = app.layout.selected.take() {
+            // A locked element (or a frame with a locked surround) stays, and says why (#536).
+            let kept = app
+                .layout
+                .selected
+                .is_some_and(|el| app.session.project.layouts.get(li).is_some_and(|l| l.locked_in_removal(el).is_some()));
+            if kept {
+                let text = crate::i18n::fmt(
+                    "{command}: {reason}",
+                    &[("command", tl!("Delete Element")), ("reason", crate::layoutview::locked_delete())],
+                );
+                if !app.map.toasts.iter().any(|t| t.text == text) {
+                    app.session.notify(text, true);
+                }
+            } else if let Some(el) = app.layout.selected.take() {
                 let _ = app.run("layout.removeElement", json!({"layout": li, "element": el}));
             }
             continue;

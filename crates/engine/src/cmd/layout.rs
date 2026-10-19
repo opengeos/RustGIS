@@ -85,7 +85,7 @@ pub fn commands() -> Vec<C> {
             r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle" (a neatline framing the page unless any of x, y, w, h is given)|"ellipse"|"circle"|"line"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50 (text, dynamicText), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "exclude"?: [layer names] (legend: layers it leaves out though the map draws them), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, ellipse, circle, northArrow), "width"?: outline width in points (rectangle, ellipse, circle; 0 for none) or line width in points (line, grid), "dir"?: "horizontal"|"vertical"|"falling"|"rising" (line), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
-            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "text"?, "size"?, "color"? (text, line), "bold"?, "italic"?, "align"?, "letterSpacing"? (text), "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "exclude"?: [layer names] (legend; [] lists every layer again), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse; for a rectangle or ellipse, color sets it when outline is not given), "width"?: points (rectangle, ellipse, line), "dir"? (line), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
+            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "locked"?: bool (a locked element takes no other change until unlocked; "locked": false unlocks it and may come with changes), "text"?, "size"?, "color"? (text, line), "bold"?, "italic"?, "align"?, "letterSpacing"? (text), "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "exclude"?: [layer names] (legend; [] lists every layer again), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse; for a rectangle or ellipse, color sets it when outline is not given), "width"?: points (rectangle, ellipse, line), "dir"? (line), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
         ),
         C::new("layout.guides", "Guides", "Publish › Page Setup", guides).params(
             r#"{"layout"?, "x"?: [mm] (vertical guides, from the page's left edge), "y"?: [mm] (horizontal guides, from its top edge), "clear"?: bool (remove every guide first)}"#,
@@ -96,6 +96,10 @@ pub fn commands() -> Vec<C> {
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
             let l = active(s, p)?;
+            // A frame's surrounds go with it: a locked one keeps the frame too.
+            if let Some(locked) = l.locked_in_removal(id).map(|e| e.id) {
+                unlocked(l, locked)?;
+            }
             if l.remove(id) { Ok(Value::Null) } else { Err(format!("no element {id}")) }
         })
         .params(r#"{"layout"?, "element": id}"#),
@@ -178,6 +182,14 @@ fn active<'a>(s: &'a mut Session, p: &Value) -> Result<&'a mut Layout, String> {
 
 fn element_id(p: &Value) -> Result<u32, String> {
     p.get("element").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).ok_or_else(|| "element is required".to_string())
+}
+
+/// Refuses to change a locked element (#536).
+fn unlocked(l: &Layout, id: u32) -> Result<(), String> {
+    match l.element(id) {
+        Some(e) if e.locked => Err(format!("'{}' is locked: unlock it first", e.name)),
+        _ => Ok(()),
+    }
 }
 
 fn unique_name(s: &Session, base: &str) -> String {
@@ -585,6 +597,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
             if of == frame || !matches!(l.element(of).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })) {
                 return Err("of must be another map frame".into());
             }
+            unlocked(l, frame)?;
             let (color, width) = indicator_style(p, l.element(frame).map(|e| &e.kind))?;
             let l = active(s, p)?;
             if let Some(ElementKind::MapFrame { extent_of, extent_color, extent_width, .. }) = l.element_mut(frame).map(|e| &mut e.kind) {
@@ -596,6 +609,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
         }
         "grid" => {
             let frame = frame_of(l, p)?;
+            unlocked(l, frame)?;
             // Options not given keep the frame's grid's, or the defaults for a new grid.
             let base = match l.element(frame).map(|e| &e.kind) {
                 Some(ElementKind::MapFrame { grid: Some(g), .. }) => g.clone(),
@@ -863,8 +877,14 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
             return Err(format!("{k} must be a number of degrees"));
         }
     }
-    // A new layer (tables and charts) or field (charts) must exist in the frame's map.
     let li = index(s, p)?;
+    // Locked, it takes no change but being unlocked, which may come with other changes.
+    let changes =
+        p.as_object().is_some_and(|o| o.iter().any(|(k, v)| !v.is_null() && !matches!(k.as_str(), "layout" | "element" | "locked")));
+    if changes && b(p, "locked") != Some(false) {
+        unlocked(s.project.layouts.get(li).ok_or("no layout")?, id)?;
+    }
+    // A new layer (tables and charts) or field (charts) must exist in the frame's map.
     let checked = {
         let l = s.project.layouts.get(li).ok_or("no layout")?;
         let e = l.element(id).ok_or_else(|| format!("no element {id}"))?;
@@ -1003,6 +1023,9 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(v) = b(p, "visible") {
         e.visible = v;
     }
+    if let Some(v) = b(p, "locked") {
+        e.locked = v;
+    }
     // A colorbar turned keeps its size: its length and thickness swap, unless given.
     if let (ElementKind::Colorbar { orientation, .. }, Some((_, Some(o), _))) = (&e.kind, &colorbar)
         && o != orientation
@@ -1138,6 +1161,7 @@ fn frame_zoom(s: &mut Session, p: &Value) -> CmdResult {
         Some(_) => frame_of(l, &json!({"frame": p.get("element")}))?,
         None => frame_of(l, p)?,
     };
+    unlocked(l, frame)?;
     let map = match l.element(frame).map(|e| &e.kind) {
         Some(ElementKind::MapFrame { map, .. }) => map.clone(),
         _ => return Err("no such frame".into()),

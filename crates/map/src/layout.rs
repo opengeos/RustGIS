@@ -773,6 +773,9 @@ pub struct Element {
     pub h: f64,
     #[serde(default = "yes")]
     pub visible: bool,
+    /// Locked, it can be selected but not moved, resized, deleted or edited until unlocked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
     pub kind: ElementKind,
 }
 
@@ -849,7 +852,7 @@ impl Layout {
         self.next_id = id.saturating_add(1);
         // Templates on tiny pages can compute sizes near zero.
         let (w, h) = (finite_or(w, 1.0).clamp(MIN_ELEMENT_MM, 5000.0), finite_or(h, 1.0).clamp(MIN_ELEMENT_MM, 5000.0));
-        self.elements.push(Element { id, name: name.into(), x, y, w, h, visible: true, kind });
+        self.elements.push(Element { id, name: name.into(), x, y, w, h, visible: true, locked: false, kind });
         id
     }
 
@@ -868,6 +871,12 @@ impl Layout {
     /// The topmost element at a page point (mm).
     pub fn hit(&self, x: f64, y: f64) -> Option<u32> {
         self.elements.iter().rev().find(|e| e.visible && e.contains(x, y)).map(|e| e.id)
+    }
+
+    /// The locked element that removing `id` would take with it: the element itself, or one of
+    /// the surrounds that belong to it.
+    pub fn locked_in_removal(&self, id: u32) -> Option<&Element> {
+        self.elements.iter().find(|e| e.locked && (e.id == id || e.kind.frame() == Some(id)))
     }
 
     /// Removes an element and the surrounds that belong to it.

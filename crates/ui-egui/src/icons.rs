@@ -973,6 +973,11 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.rect(14.0, 14.5, 8.0, 7.0, Some(amber), Some((1.0, ink)), 1.0);
             p.arc(18.0, 14.5, 2.6, 180.0, 360.0, 1.3, ink);
         }
+        "lock" => {
+            p.rect(5.0, 11.0, 14.0, 10.0, Some(p.tint(60)), Some((1.4, ink)), 1.5);
+            p.arc(12.0, 11.0, 4.5, 180.0, 360.0, 1.8, ink);
+            p.circle(12.0, 16.0, 1.4, Some(ink), None);
+        }
         "label_pause" => {
             paint(painter, r, "label", ink, accent);
             p.circle(18.0, 18.0, 4.5, Some(amber), None);

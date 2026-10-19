@@ -144,12 +144,13 @@ const HANDLE_PICK: f32 = 11.0;
 /// The selected element's resize handle at a screen point: the element and the handle (0..8
 /// clockwise from top-left), the nearest within reach. On a small element the reach shrinks, so
 /// its inside still moves it; outside, it keeps a floor, so a thin element's handles can still be
-/// picked up. Navigating, a map frame under the pointer pans instead: no handle.
+/// picked up. Navigating, a map frame under the pointer pans instead: no handle. A locked
+/// element has none.
 fn handle_at(app: &RustGisApp, layout: &Layout, page: Rect, s: f32, pos: Pos2) -> Option<(u32, usize)> {
     if nav_frame(app, layout, page, s, pos).is_some() {
         return None;
     }
-    let e = app.layout.selected.and_then(|id| layout.element(id))?;
+    let e = app.layout.selected.and_then(|id| layout.element(id)).filter(|e| !e.locked)?;
     let r = Rect::from_min_max(to_screen(page, s, (e.x, e.y)), to_screen(page, s, (e.x + e.w, e.y + e.h)));
     let third = r.width().min(r.height()) / 3.0;
     let reach = HANDLE_PICK.min(if r.contains(pos) { third } else { third.max(5.0) });
@@ -560,10 +561,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             None => pointer.and_then(|p| handle_at(app, &layout, page, s, p)).map(|(_, h)| h),
             _ => None,
         };
-        for (i, h) in handles(r).into_iter().enumerate() {
-            let hr = Rect::from_center_size(h, vec2(HANDLE, HANDLE));
-            painter.rect_filled(hr, 2.0, if active == Some(i) { accent } else { Color32::WHITE });
-            painter.rect_stroke(hr, 2.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
+        if e.locked {
+            // No handles: a lock at the top-right corner says why.
+            crate::icons::paint(&painter, Rect::from_center_size(r.right_top(), vec2(16.0, 16.0)), "lock", accent, accent);
+        } else {
+            for (i, h) in handles(r).into_iter().enumerate() {
+                let hr = Rect::from_center_size(h, vec2(HANDLE, HANDLE));
+                painter.rect_filled(hr, 2.0, if active == Some(i) { accent } else { Color32::WHITE });
+                painter.rect_stroke(hr, 2.0, Stroke::new(1.5, accent), egui::StrokeKind::Middle);
+            }
         }
         painter.text(r.left_top() + vec2(0.0, -4.0), Align2::LEFT_BOTTOM, &e.name, regular(11.0), accent);
     }
@@ -587,6 +593,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         Some("polygon") => tl!("Click the frame's corners · double-click to finish · Esc to stop").to_string(),
         Some(_) => tl!("Drag the frame's outline · Esc to stop").to_string(),
         None if app.layout.navigate => tl!("Drag a map frame to pan its map, wheel to zoom it · Esc to stop").to_string(),
+        None if app.layout.selected.is_some_and(|id| locked(&layout, id)) => {
+            tl!("Locked: unlock it in the Format pane to move or change it").to_string()
+        }
         None => crate::i18n::fmt(
             "{w} × {h} mm · {zoom}% · drag to move (Alt: no snapping), Shift-drag a map frame to pan it, wheel to zoom",
             &[
@@ -640,7 +649,14 @@ pub fn page_info(app: &mut RustGisApp, li: usize) -> rustgis_engine::render::lay
 /// The map frame under a screen point, when map frames are being navigated.
 fn nav_frame(app: &RustGisApp, layout: &Layout, page: Rect, s: f32, p: Pos2) -> Option<u32> {
     let (x, y) = to_mm(page, s, p);
-    layout.hit(x, y).filter(|id| app.layout.navigate && matches!(layout.element(*id).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })))
+    layout.hit(x, y).filter(|id| {
+        app.layout.navigate && layout.element(*id).is_some_and(|e| !e.locked && matches!(e.kind, ElementKind::MapFrame { .. }))
+    })
+}
+
+/// Whether the element is locked (#536): selected, but neither moved nor resized.
+fn locked(layout: &Layout, id: u32) -> bool {
+    layout.element(id).is_some_and(|e| e.locked)
 }
 
 fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &Layout, li: usize, page: Rect, s: f32) {
@@ -762,7 +778,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
             _ if matches!(app.layout.drag, Some(Drag::Move(..))) => ui.ctx().set_cursor_icon(CursorIcon::Move),
             _ if app.layout.drag.is_none() && app.layout.tool.is_none() && {
                 let (x, y) = to_mm(page, s, p);
-                layout.hit(x, y).is_some()
+                layout.hit(x, y).is_some_and(|id| !locked(layout, id))
             } =>
             {
                 ui.ctx().set_cursor_icon(CursorIcon::Move)
@@ -806,20 +822,25 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, layout: &L
         let handle = handle_at(app, layout, page, s, origin);
         let ruler = ruler_at(&app.layout, resp.rect, origin);
         let guide = guide_at(layout, page, s, origin);
-        app.layout.drag = Some(match (ruler, handle, guide, layout.hit(p.0, p.1)) {
-            (Some(vertical), ..) => Drag::NewGuide(vertical),
-            (None, Some((id, h)), ..) => Drag::Resize(id, h, p),
-            (None, None, Some((vertical, i)), _) => Drag::Guide(vertical, i),
+        app.layout.drag = match (ruler, handle, guide, layout.hit(p.0, p.1)) {
+            (Some(vertical), ..) => Some(Drag::NewGuide(vertical)),
+            (None, Some((id, h)), ..) => Some(Drag::Resize(id, h, p)),
+            (None, None, Some((vertical, i)), _) => Some(Drag::Guide(vertical, i)),
+            // A locked element is selected and stays put, its map too.
+            (None, None, None, Some(id)) if locked(layout, id) => {
+                app.layout.selected = Some(id);
+                None
+            }
             (None, None, None, Some(id)) if shift && matches!(layout.element(id).map(|e| &e.kind), Some(ElementKind::MapFrame { .. })) => {
                 app.layout.selected = Some(id);
-                Drag::PanFrame(id, p)
+                Some(Drag::PanFrame(id, p))
             }
             (None, None, None, Some(id)) => {
                 app.layout.selected = Some(id);
-                Drag::Move(id, p)
+                Some(Drag::Move(id, p))
             }
-            (None, None, None, None) => Drag::Pan,
-        });
+            (None, None, None, None) => Some(Drag::Pan),
+        };
     }
     if app.layout.drag == Some(Drag::Pan) {
         app.layout.pan += resp.drag_delta();
@@ -1094,7 +1115,22 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     match (layout, selected) {
         (Some((li, layout)), Some(drawn)) => {
             app.layout.drawn = Some(drawn);
-            properties(app, ui, &layout, li);
+            let Some(e) = layout.element(drawn.1) else { return };
+            // Where it is ("Layout: Text"), as the pane also formats a text on the map ("Map: Text").
+            let heading = crate::i18n::fmt("Layout: {kind}", &[("kind", tl!(e.kind.label()))]);
+            ui.label(egui::RichText::new(heading).font(semibold(14.0)));
+            ui.separator();
+            // Locked (#536), its properties show but take no change until it is unlocked.
+            let mut lock = e.locked;
+            if ui
+                .checkbox(&mut lock, tl!("Locked"))
+                .on_hover_text(tl!("Keep it from being moved, resized, deleted or edited by mistake"))
+                .changed()
+            {
+                let _ = app.run("layout.update", json!({"layout": li, "element": e.id, "locked": lock}));
+            }
+            ui.add_enabled_ui(!e.locked, |ui| properties(app, ui, &layout, li));
+            element_actions(app, ui, &layout, li, e.id);
         }
         _ => {
             ui.label(egui::RichText::new(tl!("Select an element to format it.")).color(t.text_dim));
@@ -1106,10 +1142,6 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
-    // Where it is ("Layout: Text"), as the pane also formats a text on the map ("Map: Text").
-    let heading = crate::i18n::fmt("Layout: {kind}", &[("kind", tl!(e.kind.label()))]);
-    ui.label(egui::RichText::new(heading).font(semibold(14.0)));
-    ui.separator();
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;
         p["layout"] = json!(li);
@@ -1515,6 +1547,11 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             }
         });
     }
+}
+
+/// Duplicate and Delete, under the properties: a locked element can be copied (the copy isn't
+/// locked) but not deleted, nor a frame with a locked surround.
+fn element_actions(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize, id: u32) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui.button(tl!("Duplicate")).on_hover_text(tl!("Copy this element (Ctrl+D, ⌘D on a Mac)")).clicked()
@@ -1522,11 +1559,21 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         {
             app.layout.selected = v["element"].as_u64().and_then(|v| u32::try_from(v).ok());
         }
-        if ui.button(tl!("Delete Element")).on_hover_text(tl!("Delete (or Backspace)")).clicked() {
+        if ui
+            .add_enabled(layout.locked_in_removal(id).is_none(), egui::Button::new(tl!("Delete Element")))
+            .on_hover_text(tl!("Delete (or Backspace)"))
+            .on_disabled_hover_text(locked_delete())
+            .clicked()
+        {
             let _ = app.run("layout.removeElement", json!({"layout": li, "element": id}));
             app.layout.selected = None;
         }
     });
+}
+
+/// Why a locked element, or a frame with a locked surround, isn't deleted.
+pub(crate) fn locked_delete() -> &'static str {
+    tl!("It is locked, or one of its surrounds is: unlock it first")
 }
 
 #[cfg(test)]
@@ -1847,6 +1894,65 @@ mod tests {
         assert_eq!(layout.elements.len(), n, "Backspace deleted the copy");
         assert!(layout.element(copy).is_none() && layout.element(title.id).is_some());
         assert_eq!(app.layout.selected, None);
+    }
+
+    /// A locked element is selected, but a drag from inside it or from where its corner handle
+    /// would be doesn't move or resize it, and Delete keeps it and says why (#536).
+    #[test]
+    fn a_locked_element_stays_put() {
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Locked"})).unwrap();
+        app.layout.no_snap = true;
+        let li = app.session.active_layout.unwrap();
+        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
+        app.run("layout.update", json!({"layout": li, "element": title.id, "locked": true})).unwrap();
+        let title = app.session.project.layouts[li].element(title.id).unwrap().clone();
+        app.layout.selected = Some(title.id);
+        let area = Rc::new(Cell::new(Rect::NOTHING));
+        let shown = area.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                shown.set(ui.available_rect_before_wrap());
+                let ctx = ui.ctx().clone();
+                crate::chrome::shortcuts(app, &ctx);
+                super::show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let layout = h.state().session.project.layouts[li].clone();
+        let (page, s) = page_rect(&h.state().layout, area.get(), &layout);
+        let button = |pos: Pos2, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let middle = to_screen(page, s, (title.x + title.w / 2.0, title.y + title.h / 2.0));
+        let corner = to_screen(page, s, (title.x + title.w, title.y + title.h)) + vec2(-4.0, -3.0);
+        for from in [middle, corner] {
+            h.event(Event::PointerMoved(from));
+            h.step();
+            h.event(button(from, true));
+            h.step();
+            for i in 1..=3 {
+                h.event(Event::PointerMoved(from + vec2(20.0, 15.0) * i as f32));
+                h.step();
+            }
+            h.event(button(from + vec2(60.0, 45.0), false));
+            h.step();
+            let app = h.state();
+            assert_eq!(app.session.project.layouts[li].element(title.id), Some(&title), "dragged from {from:?}");
+            assert_eq!(app.layout.selected, Some(title.id), "it stays selected");
+        }
+        let key = Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        h.event(key);
+        h.step();
+        let app = h.state();
+        assert!(app.session.project.layouts[li].element(title.id).is_some(), "Backspace kept it");
+        assert_eq!(app.layout.selected, Some(title.id));
+        assert!(app.session.notices.iter().any(|n| n.text.contains(super::locked_delete())), "it says why");
     }
 
     /// A text element's properties set italic, alignment and letter spacing (#213, point c).
