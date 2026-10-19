@@ -213,11 +213,6 @@ databases.
 in one alphabetical list, and those that cover one country in a submenu named after it. Each is
 described below.
 
-## Web Data
-
-**Home › Web Data** gathers public web services and catalogs: the ones that cover the whole world
-in one alphabetical list, and those that cover one country in a submenu named after it. Each is
-described below.
 
 ## STAC catalogs
 
