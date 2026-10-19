@@ -7826,7 +7826,8 @@ fn a_failed_command_reopens_the_layout_open_before_it() {
 #[test]
 fn a_failed_command_keeps_the_project_open_before_it() {
     let mut s = world();
-    // Edited, unsaved, with a task made here.
+    // Opened from a file, edited, unsaved, with a task made here.
+    s.path = Some("atlas.rgis".into());
     s.run("map.rename", &json!({"name": "Edited"})).unwrap();
     s.trusted_tasks.insert("mine".into());
     let (name, opened, undo) = (s.project.name.clone(), s.opened, s.undo_label());
@@ -7837,9 +7838,11 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     });
     assert!(r.is_err());
     assert_eq!((s.project.name.as_str(), s.opened), (name.as_str(), opened));
-    // It comes back with what it held: its undo history, its unsaved state, the trust it had.
+    // It comes back with what it held: its undo history, its unsaved state, the trust it had, and
+    // its file, so Save writes there.
     assert_eq!(s.undo_label(), undo);
     assert!(s.dirty && s.trusted_tasks.contains("mine"));
+    assert_eq!(s.path.as_deref(), Some(std::path::Path::new("atlas.rgis")));
     s.run("edit.undo", &Value::Null).unwrap();
     assert_ne!(s.map().name, "Edited", "the edit before still undoes");
     // A step failing after a replacement in its own command leaves the new project as it is; the
@@ -7854,9 +7857,9 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     });
     assert!(r.is_err());
     assert_eq!((s.project.name.as_str(), s.undo_label()), (name.as_str(), undo));
-    // Opened for good, it counts, and the old project's history goes with it.
+    // Opened for good, it counts, and the old project's history and file go with it.
     s.run("project.new", &json!({"name": "Other"})).unwrap();
-    assert_eq!((s.opened, s.undo_label()), (opened + 1, None));
+    assert_eq!((s.opened, s.undo_label(), s.path.as_deref()), (opened + 1, None, None));
     assert!(!s.trusted_tasks.contains("mine"));
 }
 

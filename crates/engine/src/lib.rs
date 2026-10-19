@@ -266,7 +266,8 @@ type Step = (Project, Option<usize>, &'static str, Option<String>);
 
 /// What a project held in the session beside itself when another replaced it (`reset`): put
 /// aside, not dropped, while the command that replaced it runs, and given back if that command
-/// fails and the project before it is restored (a task whose later step fails).
+/// fails and the project before it is restored (a task whose later step fails). It is what
+/// `reset` and `Session::clear_history` change, but the edit counts, which `guarded` restores.
 struct PutAside {
     /// The project these belong to (`Session::opened` before the replacement).
     opened: u64,
@@ -287,6 +288,23 @@ struct PutAside {
     tool: Tool,
     measurements: Vec<serde_json::Value>,
     topology_errors: Vec<TopologyIssue>,
+    /// The file it was opened from or saved to: a Save after the rollback writes there, not to
+    /// the file the replacement named (or none).
+    path: Option<PathBuf>,
+    model_run: Option<model::RunReport>,
+    /// Its work still under way (tool runs, downloads, plugin fetches, queries), which would
+    /// otherwise be dropped as another project's.
+    pending: Vec<PendingRun>,
+    #[cfg(feature = "geolibre")]
+    started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
+    plugin_runs: Vec<cmd::gp::StartedRun>,
+    downloading: Vec<u64>,
+    downloaded: Vec<(u64, Vec<u8>)>,
+    url_requests: Vec<serde_json::Value>,
+    plugin_retries: Vec<cmd::plugins::fetch::Retry>,
+    style_view: Option<(String, Camera)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    sql_results: Vec<(u64, String, Option<String>, rustgis_data::source::duckdb::Output)>,
 }
 
 pub struct Session {
@@ -798,6 +816,19 @@ impl Session {
             tool: self.tool,
             measurements: std::mem::take(&mut self.measurements),
             topology_errors: std::mem::take(&mut self.topology_errors),
+            path: self.path.clone(),
+            model_run: self.model_run.take(),
+            pending: std::mem::take(&mut self.pending),
+            #[cfg(feature = "geolibre")]
+            started: std::mem::take(&mut self.started),
+            plugin_runs: std::mem::take(&mut self.plugin_runs),
+            downloading: std::mem::take(&mut self.downloading),
+            downloaded: std::mem::take(&mut self.downloaded),
+            url_requests: std::mem::take(&mut self.url_requests),
+            plugin_retries: std::mem::take(&mut self.plugin_retries),
+            style_view: self.style_view.take(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sql_results: std::mem::take(&mut self.sql_results),
         }));
     }
 
@@ -811,6 +842,17 @@ impl Session {
         (self.active_layer, self.table_layer, self.table_standalone, self.tool) =
             (a.active_layer, a.table_layer, a.table_standalone, a.tool);
         (self.measurements, self.topology_errors) = (a.measurements, a.topology_errors);
+        (self.path, self.model_run, self.style_view) = (a.path, a.model_run, a.style_view);
+        (self.pending, self.plugin_runs, self.plugin_retries) = (a.pending, a.plugin_runs, a.plugin_retries);
+        (self.downloading, self.downloaded, self.url_requests) = (a.downloading, a.downloaded, a.url_requests);
+        #[cfg(feature = "geolibre")]
+        {
+            self.started = a.started;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.sql_results = a.sql_results;
+        }
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
