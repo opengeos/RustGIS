@@ -44,6 +44,8 @@ pub struct State {
     pub product: Option<(String, String)>,
     pub path: String,
     pub listing: s3::Listing,
+    /// Browsing one product only (Natural Earth): no products to go back to.
+    pub locked: bool,
     waiting: Option<(Asked, Answer)>,
     /// Overture's files being opened (their headers read), every one before any is added.
     opening: Option<(Vec<String>, Vec<Slot<Result<(), String>>>)>,
@@ -63,6 +65,7 @@ impl Default for State {
             product: None,
             path: String::new(),
             listing: s3::Listing::default(),
+            locked: false,
             waiting: None,
             opening: None,
             error: None,
@@ -305,6 +308,31 @@ fn list(app: &mut RustGisApp, more: bool) {
     }
 }
 
+/// Natural Earth's product on Source Cooperative (opengeos/natural-earth): its vector and raster
+/// themes as PMTiles, GeoParquet, GeoJSON, GeoPackage and shapefiles.
+pub const NATURAL_EARTH: (&str, &str) = ("opengeos", "natural-earth");
+
+/// Opens the Source Cooperative browser locked to Natural Earth, in its PMTiles folder (each
+/// theme a tile layer read in place).
+pub fn natural_earth(app: &mut RustGisApp) {
+    let c = &mut app.ui.catalogs;
+    c.locked = true;
+    c.product = Some((NATURAL_EARTH.0.into(), NATURAL_EARTH.1.into()));
+    c.path = "pmtiles/".into();
+    c.error = None;
+    c.info = None;
+    list(app, false);
+}
+
+/// Lets the Source Cooperative browser list products again, after Natural Earth.
+pub fn unlock(app: &mut RustGisApp) {
+    let c = &mut app.ui.catalogs;
+    c.locked = false;
+    c.product = None;
+    c.path.clear();
+    c.listing = s3::Listing::default();
+}
+
 /// A size, readable.
 fn size_text(n: u64) -> String {
     match n {
@@ -318,17 +346,24 @@ fn size_text(n: u64) -> String {
 /// Source Cooperative: the featured products (or an account's), a product's folders and files; a
 /// file is added by its address.
 pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new(tl!("Open data products on Source Cooperative. GeoParquet, FlatGeobuf, cloud-optimised GeoTIFFs and PMTiles are read in place; other files are downloaded.")).weak());
+    let locked = app.ui.catalogs.locked;
+    if locked {
+        ui.label(egui::RichText::new(tl!("Natural Earth's public domain map data (countries, states, coastlines, rivers, lakes, roads and more) on Source Cooperative. PMTiles are added as tile layers, other files as layers.")).weak());
+    } else {
+        ui.label(egui::RichText::new(tl!("Open data products on Source Cooperative. GeoParquet, FlatGeobuf, cloud-optimised GeoTIFFs and PMTiles are read in place; other files are downloaded.")).weak());
+    }
     let busy = app.ui.catalogs.waiting.is_some();
     let mut ask = None;
-    ui.horizontal(|ui| {
-        ui.label(tl!("Account"));
-        ui.add(egui::TextEdit::singleline(&mut app.ui.catalogs.account).hint_text(tl!("featured products")).desired_width(220.0));
-        if ui.add_enabled(!busy, egui::Button::new(tl!("List Products"))).clicked() {
-            let a = app.ui.catalogs.account.trim().to_string();
-            ask = Some(if a.is_empty() { Ok(sourcecoop::featured_url()) } else { sourcecoop::account_url(&a) });
-        }
-    });
+    if !locked {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Account"));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.catalogs.account).hint_text(tl!("featured products")).desired_width(220.0));
+            if ui.add_enabled(!busy, egui::Button::new(tl!("List Products"))).clicked() {
+                let a = app.ui.catalogs.account.trim().to_string();
+                ask = Some(if a.is_empty() { Ok(sourcecoop::featured_url()) } else { sourcecoop::account_url(&a) });
+            }
+        });
+    }
     if let Some(url) = ask {
         app.ui.catalogs.error = None;
         app.ui.catalogs.info = None;
@@ -359,7 +394,7 @@ pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
         }
         Some((account, product)) => {
             ui.horizontal(|ui| {
-                if ui.add_enabled(!busy, egui::Button::new(tl!("Products"))).clicked() {
+                if !locked && ui.add_enabled(!busy, egui::Button::new(tl!("Products"))).clicked() {
                     app.ui.catalogs.product = None;
                 }
                 if ui.add_enabled(!busy && !app.ui.catalogs.path.is_empty(), egui::Button::new(tl!("Up"))).clicked() {

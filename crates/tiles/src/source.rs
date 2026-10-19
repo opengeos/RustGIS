@@ -43,12 +43,15 @@ pub struct Spec {
     /// The vector tiles' layer names, when the service says them (an OGC API collection's): drawn
     /// in colours of their own, as an archive's layers are.
     pub layers: Vec<String>,
+    /// MapLibre style layers (a JSON array) drawing vector tiles instead of their own colours,
+    /// each from the tiles' source; empty for the default look.
+    pub style_layers: String,
 }
 
 impl Spec {
     fn key(&self) -> String {
         format!(
-            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.kind,
             self.url,
             self.subdomains.join(","),
@@ -58,7 +61,8 @@ impl Spec {
             self.tms,
             self.attribution,
             // Each name with its length, so ["a,b"] and ["a", "b"] differ.
-            self.layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>()
+            self.layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>(),
+            self.style_layers
         )
     }
 }
@@ -354,6 +358,9 @@ fn archive_style(spec: &Spec, info: Archive) -> Option<Value> {
         }));
     }
     let source = json!({"type": "vector", "tiles": tiles, "minzoom": minzoom, "maxzoom": maxzoom, "attribution": attribution});
+    if let Some(doc) = own_style(spec, &source) {
+        return Some(doc);
+    }
     let names = info.layers;
     let known = [
         "water",
@@ -397,12 +404,35 @@ fn named_layers_style(spec: &Spec, source: Value, names: &[String]) -> Value {
     json!({"version": 8, "sources": {"vector": source}, "layers": layers})
 }
 
+/// The most of a layer's own style layers drawn: `rustgis_map::tiles::MAX_STYLE_LAYER_COUNT`
+/// lets a layer keep as many (the engine's tests check the two agree).
+pub const MAX_OWN_STYLE_LAYERS: usize = 256;
+
+/// The style a layer's own style layers make (`spec.style_layers`), every layer drawing from
+/// `source`; `None` without them (or when they don't read).
+fn own_style(spec: &Spec, source: &Value) -> Option<Value> {
+    if spec.style_layers.is_empty() {
+        return None;
+    }
+    let Ok(Value::Array(mut layers)) = serde_json::from_str::<Value>(&spec.style_layers) else { return None };
+    layers.truncate(MAX_OWN_STYLE_LAYERS);
+    for l in &mut layers {
+        if let Some(o) = l.as_object_mut() {
+            o.insert("source".into(), json!("vector"));
+        }
+    }
+    Some(json!({"version": 8, "sources": {"vector": source}, "layers": layers}))
+}
+
 fn vector_style(spec: &Spec) -> Option<Value> {
     // Layers the service named: each in a colour of its own.
     // They keep their own colours even when their names are a basemap's (the archive guess), and
     // the template's options (`tms`, `{s}`) apply as for any template.
     if !spec.layers.is_empty() && spec.url.contains("{z}") {
         let source = json!({"type": "vector", "tiles": templates(spec), "minzoom": spec.min_zoom, "maxzoom": spec.max_zoom, "attribution": spec.attribution});
+        if let Some(doc) = own_style(spec, &source) {
+            return Some(doc);
+        }
         let names: Vec<String> = spec.layers.iter().take(64).cloned().collect();
         return Some(named_layers_style(spec, source, &names));
     }
@@ -413,6 +443,9 @@ fn vector_style(spec: &Spec) -> Option<Value> {
         // A TileJSON address.
         json!({"type": "vector", "url": spec.url})
     };
+    if let Some(own) = own_style(spec, &source) {
+        return Some(own);
+    }
     *doc.get_mut("sources")?.get_mut("vector")? = source;
     Some(doc)
 }
@@ -454,6 +487,7 @@ mod tests {
             tms: false,
             attribution: "&copy; <a href=\"x\">OSM</a>".into(),
             layers: Vec::new(),
+            style_layers: String::new(),
         }
     }
 
@@ -486,6 +520,21 @@ mod tests {
             }
             _ => panic!("no vector source"),
         }
+    }
+
+    #[test]
+    fn own_style_layers_draw_vector_tiles() {
+        let mut own = spec(Kind::Vector, "https://tiles.example.com/fields/{z}/{x}/{y}.pbf");
+        own.style_layers = r##"[{"id": "f", "type": "fill", "source": "elsewhere", "source-layer": "fields",
+            "paint": {"fill-color": ["step", ["get", "score"], "#d73027", 50, "#1a9850"]}}]"##
+            .into();
+        let Resolve::Ready(v) = resolve(&own) else { panic!("not ready") };
+        assert_eq!(v.style.layers.len(), 1);
+        assert_eq!(v.style.layers[0].source.as_deref(), Some("vector"), "drawn from the tiles' own source");
+        // Ones that don't read leave the default look.
+        own.style_layers = "{not json".into();
+        let Resolve::Ready(v) = resolve(&own) else { panic!("not ready") };
+        assert!(v.style.layers.len() > 10);
     }
 
     #[test]

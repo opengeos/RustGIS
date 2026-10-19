@@ -23,10 +23,10 @@ pub const MAX_GROUP_BYTES: usize = 64 << 20;
 pub fn commands() -> Vec<C> {
     let mut commands = vec![
         C::new("service.layers", "Service Layers", "Home › Add", layers).view().params(
-            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API collections address or landing page (its map tiles and linked collections), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched", "documents"?: [{"url": "a discovered document address", "text": "its fetched JSON"}]} → layers with source_url, and next when supplied documents need another fetch"#,
+            r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API collections address or landing page (its map tiles and linked collections), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer, or an ArcGIS services directory or folder (its folders and services, each listed by its own url)", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched", "documents"?: [{"url": "a discovered document address", "text": "its fetched JSON"}]} → layers with source_url, and next when supplied documents need another fetch"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
-            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" (the default) | "full" (a WCS coverage's area)}"#,
+            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "time"?: "a time-enabled WMTS layer's date (2024-06-01; its default otherwise)", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" (the default) | "full" (a WCS coverage's area)}"#,
         ),
         C::new("service.coverage", "WCS Coverage Request", "Home › Add", coverage).view().params(
             r#"{"url": "a WCS address", "type"?: "wcs", "layer": "the coverage's name", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed coverage's source_url", "describe"?: "its DescribeCoverage answer, when already fetched", "bbox"?: [west, south, east, north] | "view" (the default) | "full"} → the GetCoverage address of a GeoTIFF (layer.addUrl adds it)"#,
@@ -175,7 +175,7 @@ fn vet(mut svc: Service, caps: &str) -> Service {
     svc.layers.retain(|l| {
         let u = match &l.offer {
             Offer::Tiles { template } | Offer::VectorTiles { template, .. } => template,
-            Offer::Features { url } | Offer::Style { url } => url,
+            Offer::Features { url } | Offer::Style { url } | Offer::Service { url } => url,
             Offer::Coverage(Coverage { endpoint, .. }) => endpoint,
         };
         crate::render::rustgis_tiles::address::check(u, Some(caps)).is_ok()
@@ -272,8 +272,13 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Style { url } => json!({"type": "style", "url": url}),
                 Offer::VectorTiles { template, layers } => json!({"type": "vectorTiles", "url": template, "layers": layers}),
                 Offer::Coverage(c) => json!({"type": "coverage", "url": c.endpoint, "describe": rustgis_data::ogc::describe_coverage_url(c), "version": c.version}),
+                Offer::Service { url } => json!({"type": "service", "url": url}),
             };
-            json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets})
+            let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
+            if let Some(t) = &l.time {
+                layer["time"] = json!({"default": t.default, "values": t.values});
+            }
+            layer
         })
         .collect();
     json!({"kind": svc.kind, "title": svc.title, "count": layers.len(), "layers": layers, "notes": svc.notes})
@@ -305,7 +310,19 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         .find(|(l, _)| l.name == want)
         .or_else(|| candidates().find(|(l, _)| l.name.eq_ignore_ascii_case(want) || l.title.eq_ignore_ascii_case(want)))
         .ok_or_else(|| format!("{url}: no layer '{want}' (service.layers lists them)"))?;
-    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&layer.title).to_string();
+    // A time-enabled layer at the time asked for (its default otherwise), named with it.
+    let asked = ps(p, "time").map(str::trim).filter(|t| !t.is_empty());
+    let time = match (&layer.time, asked) {
+        (Some(_), Some(t)) => Some(rustgis_data::ogc::checked_time(t)?),
+        (Some(t), None) => Some(t.default.clone()),
+        (None, Some(_)) => return Err(format!("{}: the layer has no time to pick (leave time out)", layer.title)),
+        (None, None) => None,
+    };
+    let title = match (&time, asked) {
+        (Some(t), Some(_)) => format!("{} {t}", layer.title),
+        _ => layer.title.clone(),
+    };
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&title).to_string();
     let zoom = |s: &mut Session| {
         if let Some([w, so, e, n]) = layer.bbox {
             s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
@@ -321,6 +338,10 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     match &layer.offer {
         Offer::Tiles { template } => {
             let template = advertised.as_deref().unwrap_or(template);
+            let template = match &time {
+                Some(t) => template.replace("{Time}", t),
+                None => template.to_string(),
+            };
             let r = super::tiles::add(s, &json!({"url": template, "kind": "raster", "name": name, "overlay": true}))?;
             zoom(s);
             Ok(r)
@@ -335,6 +356,9 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             let r = super::tiles::add(s, &json!({"url": style, "kind": "style", "name": name}))?;
             zoom(s);
             Ok(r)
+        }
+        Offer::Service { url: open } => {
+            Err(format!("{url}: '{want}' is a folder or service the directory lists: list its layers (service.layers with url {open})"))
         }
         Offer::Coverage(c) => {
             let (get, _) = coverage_request(s, p, c)?;

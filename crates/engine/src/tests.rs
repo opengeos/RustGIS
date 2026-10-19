@@ -5134,6 +5134,65 @@ fn gml_mapinfo_and_topojson() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Fields of the World's fields and density are two looks of one archive and stay side by side;
+/// the fields again at another score threshold replace the earlier ones.
+#[test]
+fn fields_of_the_world_looks() {
+    let mut s = Session::new(Project::default());
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "fields"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "density"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "fields", "minScore": 50})).unwrap();
+    let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Fields of the World 2024 fields", "Fields of the World 2024 density"]);
+    assert!(s.map().tiles[0].style_layers.contains("50"));
+    // Both replaces the parts (not another overlay of the archive); a part then replaces both.
+    let url = crate::cmd::webdata::fields_url(2024);
+    s.run("map.addTiles", &json!({"url": url, "kind": "pmtiles", "name": "My fields", "overlay": true})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024})).unwrap();
+    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024", "My fields"]);
+    s.run("map.removeTiles", &json!({"name": "My fields"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "density"})).unwrap();
+    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024 density"]);
+}
+
+/// A time-enabled WMTS layer (NASA GIBS's) is added at the date asked for, or its default; an
+/// ArcGIS services directory lists its folders and services to open, which aren't added.
+#[test]
+fn service_times_and_directories() {
+    const WMTS: &str = r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
+<Layer><ows:Title>True Color</ows:Title><ows:Identifier>TC</ows:Identifier>
+ <Dimension><ows:Identifier>Time</ows:Identifier><Default>2024-06-02</Default><Value>2000-02-24/2024-06-02/P1D</Value></Dimension>
+ <TileMatrixSetLink><TileMatrixSet>gm</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/jpeg" template="https://gibs.example.org/TC/default/{Time}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.jpeg"/></Layer>
+<TileMatrixSet><ows:Identifier>gm</ows:Identifier><ows:SupportedCRS>EPSG:3857</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>559082264.0287178</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+ <TileMatrix><ows:Identifier>1</ows:Identifier><ScaleDenominator>279541132.0143589</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+</TileMatrixSet></Contents></Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    let url = "https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml";
+    let v = s.run("service.layers", &json!({"url": url, "text": WMTS})).unwrap();
+    assert_eq!(v["layers"][0]["time"]["default"], "2024-06-02");
+    s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS})).unwrap();
+    s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "2020-01-05"})).unwrap();
+    let urls: Vec<(&str, &str)> = s.map().tiles.iter().map(|t| (t.name.as_str(), t.url.as_str())).collect();
+    assert_eq!(
+        urls,
+        [
+            ("True Color 2020-01-05", "https://gibs.example.org/TC/default/2020-01-05/gm/{z}/{y}/{x}.jpeg"),
+            ("True Color", "https://gibs.example.org/TC/default/2024-06-02/gm/{z}/{y}/{x}.jpeg")
+        ]
+    );
+    assert!(s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "../../etc"})).is_err());
+    // A directory: its folders and services, each opened by its own address.
+    let root = "https://x.example.org/arcgis/rest/services";
+    let dir = r#"{"currentVersion": 11, "folders": ["Hydro"], "services": [{"name": "Topo", "type": "MapServer"}]}"#;
+    let v = s.run("service.layers", &json!({"url": root, "text": dir})).unwrap();
+    assert_eq!(v["kind"], "ArcGIS Services Directory");
+    assert_eq!(v["layers"][1]["offer"], json!({"type": "service", "url": "https://x.example.org/arcgis/rest/services/Topo/MapServer"}));
+    let e = s.run("service.add", &json!({"url": root, "text": dir, "layer": "Topo/MapServer"})).unwrap_err();
+    assert!(e.contains("service.layers"), "{e}");
+}
+
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's
 /// features are downloaded (from a local server); unknown layers and documents are refused.
 #[test]

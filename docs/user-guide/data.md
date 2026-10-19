@@ -352,6 +352,86 @@ cloud-optimised GeoTIFFs and PMTiles are read in place, other files downloaded.
 list them; a listed file's `"url"` is added with `layer.addUrl`. Like STAC searches, these reach the
 network: the AI Assistant asks first and plugins need the network permission.
 
+## Natural Earth
+
+**Home › Web Data › Natural Earth…** is the Source Cooperative browser locked to
+[Natural Earth](https://www.naturalearthdata.com)'s public domain map data as Source Cooperative
+holds it (`opengeos/natural-earth`): countries, states, coastlines, land, ocean, rivers, lakes,
+glaciers, urban areas, airports, railways and more. It opens on the `pmtiles/` folder, whose
+archives are added as tile layers read in place; the `geoparquet/`, `geojson/`, `gpkg/` and
+`shapefiles/` folders hold the same themes as files, added as layers. With commands:
+`sourcecoop.list` (`{"account": "opengeos", "product": "natural-earth", "path": "pmtiles/"}`), then
+`layer.addUrl` with a file's `"url"`.
+
+## Fields of the World
+
+**Home › Web Data › Fields of the World…** adds the agricultural field boundaries the
+[Fields of the World](https://fieldsofthe.world) model found in Sentinel-2 imagery, worldwide, one
+year at a time (2017 to 2025; 2nd Edition, CC BY 4.0). Each year is a PMTiles archive on Source
+Cooperative read in place. Fields are drawn from zoom 9, filled and outlined by the model's score
+(0 to 100: red below 45, through orange and yellow, to green from 80); zoomed out, field density
+cells are drawn instead, coloured by the share of each cell covered by fields: **Add field
+boundaries** and **Add field density** add each. **Score threshold** hides the fields scoring below
+it. `fieldsOfTheWorld.add` does the same (`"year"`, `"draw"`:
+`both`, `fields` or `density`, `"minScore"`):
+
+```sh
+rustgis-cli run --cmd 'map.goToXY={"lon":-93.6,"lat":42.03,"scale":40000}' --cmd 'fieldsOfTheWorld.add={"year":2024,"minScore":40}' --cmd 'share.exportMap={"path":"fields.png"}'
+```
+
+The look is the tile layer's own style layers (`map.addTiles` takes MapLibre style layers as
+`"styleLayers"`, drawing vector tiles in place of their default colours).
+
+## NASA Earthdata
+
+**Home › Web Data › NASA Earthdata…** lists the layers of NASA's
+[Global Imagery Browse Services](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api)
+(GIBS) in Web Mercator: more than a thousand layers of satellite imagery and science data (MODIS,
+VIIRS, Landsat, sea surface temperature, aerosols, fires…), grouped by mission or instrument (the
+first part of their names) and searched by words. Most layers change day by day: **Date**
+(YYYY-MM-DD) picks the day they are added at, and empty adds the service's default (its latest).
+The same layer can be added at several dates, each a layer named with its date. A WMTS layer with a time dimension works the same way in any service,
+and with commands `service.add` takes `"time"`:
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml","layer":"MODIS_Terra_CorrectedReflectance_TrueColor","time":"2024-06-01"}' --cmd 'share.exportMap={"path":"gibs.png"}'
+```
+
+## United States
+
+**Home › Web Data › United States** holds services covering the United States.
+
+**EnviroAtlas…** shows the US EPA's [EnviroAtlas](https://www.epa.gov/enviroatlas) services
+(`https://enviroatlas.epa.gov/arcgis/rest/services`) as a tree: folders, their services (**Add**
+adds a service's whole map or image), and each service's layers, each with an **Add** of its own
+(drawn alone). A search looks through the services of every folder and of the folders in them, a few folders at a time. **Add From Service** also browses
+any ArcGIS services directory: its folders and the map, feature, image and vector tile services in them are listed
+with **Open**, which lists that folder or service (**Back** returns). A map service offers its
+whole map, each of its layers drawn alone (`… (map)`) and its layers' features. With commands,
+`service.layers` on a directory lists its folders and services, each with the `url` to list next.
+
+**FEMA NFHL…** lists the layers of FEMA's
+[National Flood Hazard Layer](https://www.fema.gov/flood-maps/national-flood-hazard-layer) map
+service (`https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer`), searched by
+words: **Add** draws the whole map or one layer such as Flood Hazard Zones alone, and
+**Features** downloads a layer's features in the view (up to the server's limit). Its flood layers are drawn only from zoom 15 (closer than about 1:36,000),
+and FEMA's server can be slow to answer.
+
+**The National Map…** lists 31 map services of the USGS
+[The National Map](https://www.usgs.gov/programs/national-geospatial-program/national-map) and
+partners by category (basemaps, hydrography, elevation, imagery, cartography, hazards, other data,
+indexes), searched by words; **Add** adds one as a tile layer (the basemaps from their tile caches,
+the others as images the server draws). `nationalMap.services` lists them and `nationalMap.add`
+(`"service"`: an id or title) adds one:
+
+```sh
+rustgis-cli run --cmd 'nationalMap.add={"service":"basemap/USGSTopo"}' --cmd 'nationalMap.add={"service":"hydro/wbd"}' --cmd 'map.goToXY={"lon":-105.27,"lat":40.0,"scale":300000}' --cmd 'share.exportMap={"path":"topo.png"}'
+```
+
+`ui.dialog` opens these panels on a search with `"search"`
+(`{"name": "nasaEarthdata", "search": "sea surface temperature"}`). All of these work in the web
+app too: their documents and tiles are fetched like any other.
+
 ## Satellite embeddings
 
 **Home › Web Data › Satellite Embeddings…** shows pre-computed satellite embeddings: vectors a
