@@ -191,6 +191,12 @@ fn geokey(keys: &[u16], doubles: &[f64], ascii: &str, k: u16) -> Option<KeyValue
 
 /// A user-defined projection from a file's GeoKeys, as a PROJ definition.
 fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
+    let (proj4, label) = proj4_of_keys(keys, doubles, ascii)?;
+    Crs::custom(CustomCrs { proj4, label, geokeys: keys.to_vec(), doubles: doubles.to_vec(), ascii: ascii.to_string() }).map_err(err)
+}
+
+/// A user-defined projection's PROJ definition and name, from its GeoKeys.
+fn proj4_of_keys(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<(String, String)> {
     let short = |k| match geokey(keys, doubles, ascii, k) {
         Some(KeyValue::Short(v)) => Some(v),
         _ => None,
@@ -253,14 +259,26 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
         },
     };
     let label = text(3073).or_else(|| text(1026)).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom projection".into());
-    Crs::custom(CustomCrs {
-        proj4: format!("{proj} {earth} {units} +no_defs"),
-        label,
-        geokeys: keys.to_vec(),
-        doubles: doubles.to_vec(),
-        ascii: ascii.to_string(),
+    Ok((format!("{proj} {earth} {units} +no_defs"), label))
+}
+
+/// Whether two PROJ definitions place the same points: points around the projection's origin,
+/// unprojected by both, land within a millimetre-scale tolerance.
+fn same_projection(a: &str, b: &str) -> bool {
+    let (Ok(pa), Ok(pb), Ok(ll)) = (
+        proj4rs::Proj::from_proj_string(a),
+        proj4rs::Proj::from_proj_string(b),
+        proj4rs::Proj::from_proj_string("+proj=longlat +datum=WGS84 +no_defs"),
+    ) else {
+        return false;
+    };
+    let offsets = [(0.0, 0.0), (100_000.0, 50_000.0), (-250_000.0, 150_000.0), (300_000.0, -200_000.0), (-50_000.0, -400_000.0)];
+    offsets.iter().all(|(dx, dy)| {
+        let (mut p, mut q) = ((*dx, *dy, 0.0), (*dx, *dy, 0.0));
+        let ok = proj4rs::transform::transform(&pa, &ll, &mut p).is_ok() && proj4rs::transform::transform(&pb, &ll, &mut q).is_ok();
+        // Radians: 1e-9 is under a centimetre.
+        ok && p.0.is_finite() && p.1.is_finite() && (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9
     })
-    .map_err(err)
 }
 
 /// GeoKeys for a user-defined projection from its PROJ definition (one read from WKT, which
@@ -365,7 +383,10 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
     entries.sort_by_key(|e| e[0]);
     let mut keys = vec![1, 1, 0, entries.len() as u16];
     keys.extend(entries.iter().flatten());
-    Some((keys, doubles, ascii))
+    // The keys must say the same projection: read back, it places points where the definition
+    // does (anything they can't carry, written differently, is refused rather than shifted).
+    let (back, _) = proj4_of_keys(&keys, &doubles, &ascii).ok()?;
+    same_projection(proj4, &back).then_some((keys, doubles, ascii))
 }
 
 fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
@@ -1218,6 +1239,7 @@ mod tests {
         for unsaid in [
             "+proj=stere +lat_0=45 +lat_ts=30 +datum=WGS84",
             "+proj=lcc +lat_1=30 +lat_0=40 +lon_0=-96 +datum=WGS84",
+            "+proj=eqc +lat_0=30 +lon_0=0 +datum=WGS84",
             "+proj=laea +lat_0=52 +lon_0=10 +k_0=0.9 +datum=WGS84",
             "+proj=lcc +lat_1=30 +lat_2=40 +k_0=0.9996 +datum=WGS84",
             "+proj=merc +lat_ts=33 +datum=WGS84",
