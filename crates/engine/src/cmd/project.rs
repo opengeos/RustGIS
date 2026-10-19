@@ -40,6 +40,8 @@ pub(crate) fn reset_to(s: &mut Session, p: Project) {
 }
 
 fn reset(s: &mut Session, p: Project) {
+    // Kept until the command ends: a failure gives the project back with its history.
+    s.put_aside();
     s.project = p;
     s.opened = s.opened.wrapping_add(1);
     s.active_layer = s.map().layers.first().map(|l| l.id);

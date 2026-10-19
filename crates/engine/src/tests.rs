@@ -7826,16 +7826,38 @@ fn a_failed_command_reopens_the_layout_open_before_it() {
 #[test]
 fn a_failed_command_keeps_the_project_open_before_it() {
     let mut s = world();
-    let (name, opened) = (s.project.name.clone(), s.opened);
-    let r = s.guarded("Plugin Command", true, |s| {
+    // Edited, unsaved, with a task made here.
+    s.run("map.rename", &json!({"name": "Edited"})).unwrap();
+    s.trusted_tasks.insert("mine".into());
+    let (name, opened, undo) = (s.project.name.clone(), s.opened, s.undo_label());
+    assert!(undo.is_some() && s.dirty);
+    let r = s.guarded("Task", true, |s| {
         s.run("project.new", &json!({"name": "Other"}))?;
         Err("a later step failed".into())
     });
     assert!(r.is_err());
     assert_eq!((s.project.name.as_str(), s.opened), (name.as_str(), opened));
-    // Opened for good, it counts.
+    // It comes back with what it held: its undo history, its unsaved state, the trust it had.
+    assert_eq!(s.undo_label(), undo);
+    assert!(s.dirty && s.trusted_tasks.contains("mine"));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_ne!(s.map().name, "Edited", "the edit before still undoes");
+    // A step failing after a replacement in its own command leaves the new project as it is; the
+    // task failing gives the first one back.
+    s.run("map.rename", &json!({"name": "Edited"})).unwrap();
+    let undo = s.undo_label();
+    let r = s.guarded("Task", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        assert!(s.run("layer.remove", &json!({"layer": "no such layer"})).is_err());
+        assert_eq!(s.project.name, "Other");
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert_eq!((s.project.name.as_str(), s.undo_label()), (name.as_str(), undo));
+    // Opened for good, it counts, and the old project's history goes with it.
     s.run("project.new", &json!({"name": "Other"})).unwrap();
-    assert_eq!(s.opened, opened + 1);
+    assert_eq!((s.opened, s.undo_label()), (opened + 1, None));
+    assert!(!s.trusted_tasks.contains("mine"));
 }
 
 #[path = "../../../tests/support/ogc_server.rs"]

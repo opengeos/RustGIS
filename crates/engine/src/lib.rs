@@ -264,6 +264,31 @@ const UNDO_LIMIT: usize = 40;
 /// An undo or redo step: the project before it, the layout open then, its label and who made it.
 type Step = (Project, Option<usize>, &'static str, Option<String>);
 
+/// What a project held in the session beside itself when another replaced it (`reset`): put
+/// aside, not dropped, while the command that replaced it runs, and given back if that command
+/// fails and the project before it is restored (a task whose later step fails).
+struct PutAside {
+    /// The project these belong to (`Session::opened` before the replacement).
+    opened: u64,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    back: Vec<Camera>,
+    forward: Vec<Camera>,
+    last_camera: Option<Camera>,
+    dirty: bool,
+    trusted_tasks: std::collections::HashSet<String>,
+    trusted_models: std::collections::HashSet<String>,
+    trusted_notebooks: std::collections::HashSet<String>,
+    project_starts: u64,
+    history_from_file: usize,
+    active_layer: Option<u32>,
+    table_layer: Option<u32>,
+    table_standalone: Option<u32>,
+    tool: Tool,
+    measurements: Vec<serde_json::Value>,
+    topology_errors: Vec<TopologyIssue>,
+}
+
 pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
@@ -341,6 +366,10 @@ pub struct Session {
     /// session's, so a step that added or moved layouts opens the right one when undone).
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// What the project replaced during the command running held beside itself, to give back if
+    /// the command fails ([`PutAside`]); and how deep commands run within commands now.
+    put_aside: Option<Box<PutAside>>,
+    depth: u32,
     /// Who runs commands now: `None` is the user; the MCP relay names an attached agent around
     /// its calls. Each undo step remembers who made it ([`Session::undo_actor`]).
     pub actor: Option<String>,
@@ -483,6 +512,8 @@ impl Session {
             auto_cache: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            put_aside: None,
+            depth: 0,
             actor: None,
             back: Vec::new(),
             forward: Vec::new(),
@@ -662,9 +693,10 @@ impl Session {
     pub(crate) fn guarded(&mut self, label: &'static str, mutates: bool, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let snapshot = mutates.then(|| self.project.clone());
         let open_layout = self.active_layout;
-        // The project's generation rolls back with it: a project opened part way (a plugin's
-        // command through its bridge) and then undone is the one before, still open.
+        // The project's generation rolls back with it: a project opened part way (a task's step)
+        // and then undone is the one before, still open.
         let opened = self.opened;
+        self.depth += 1;
         // Edit counts roll back with the project when a command fails part way.
         let counts = mutates.then(|| self.edit_counts.clone());
         self.request_only = false;
@@ -674,6 +706,7 @@ impl Session {
         let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
+        self.depth = self.depth.saturating_sub(1);
         // A command that changed a streamed layer's features or fields (not by reading its
         // source) would lose the change at the next read: undone, with a way to edit it instead.
         let res = match (&res, &snapshot) {
@@ -703,6 +736,11 @@ impl Session {
                 // the command opened on the way (a task's steps).
                 self.project = snap;
                 self.active_layout = open_layout;
+                // Replaced during the command: what it held beside itself (its undo history, its
+                // trust, its unsaved state) comes back with it.
+                if self.opened != opened {
+                    self.give_back(opened);
+                }
                 self.opened = opened;
                 if let Some(c) = counts {
                     self.edit_counts = c;
@@ -726,9 +764,53 @@ impl Session {
         {
             self.notify(e.clone(), true);
         }
+        // The command, and those it ran, are done: a replaced project stays replaced.
+        if self.depth == 0 {
+            self.put_aside = None;
+        }
         self.fix_active_layer();
         self.revision = self.revision.wrapping_add(1);
         res
+    }
+
+    /// Puts aside what the project about to be replaced holds beside itself (`reset`), while a
+    /// command runs: the first replacement in it only, as that is the project a failure gives back.
+    pub(crate) fn put_aside(&mut self) {
+        if self.depth == 0 || self.put_aside.is_some() {
+            return;
+        }
+        self.put_aside = Some(Box::new(PutAside {
+            opened: self.opened,
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            back: std::mem::take(&mut self.back),
+            forward: std::mem::take(&mut self.forward),
+            last_camera: self.last_camera.take(),
+            dirty: self.dirty,
+            trusted_tasks: std::mem::take(&mut self.trusted_tasks),
+            trusted_models: std::mem::take(&mut self.trusted_models),
+            trusted_notebooks: std::mem::take(&mut self.trusted_notebooks),
+            project_starts: self.project_starts,
+            history_from_file: self.history_from_file,
+            active_layer: self.active_layer,
+            table_layer: self.table_layer,
+            table_standalone: self.table_standalone,
+            tool: self.tool,
+            measurements: std::mem::take(&mut self.measurements),
+            topology_errors: std::mem::take(&mut self.topology_errors),
+        }));
+    }
+
+    /// Gives back what project `opened` held beside itself, when it is restored.
+    fn give_back(&mut self, opened: u64) {
+        let Some(a) = self.put_aside.take_if(|a| a.opened == opened) else { return };
+        let a = *a;
+        (self.undo, self.redo, self.back, self.forward, self.last_camera) = (a.undo, a.redo, a.back, a.forward, a.last_camera);
+        (self.dirty, self.project_starts, self.history_from_file) = (a.dirty, a.project_starts, a.history_from_file);
+        (self.trusted_tasks, self.trusted_models, self.trusted_notebooks) = (a.trusted_tasks, a.trusted_models, a.trusted_notebooks);
+        (self.active_layer, self.table_layer, self.table_standalone, self.tool) =
+            (a.active_layer, a.table_layer, a.table_standalone, a.tool);
+        (self.measurements, self.topology_errors) = (a.measurements, a.topology_errors);
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
