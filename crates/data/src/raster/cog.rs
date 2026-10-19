@@ -202,6 +202,10 @@ impl Level {
     pub fn down(&self) -> u32 {
         self.height.div_ceil(self.tile_height.max(1))
     }
+    /// How many tiles one band plane (or the whole image, bands together) has.
+    pub fn tiles(&self) -> u32 {
+        self.across().saturating_mul(self.down())
+    }
 }
 
 /// What a tiled GeoTIFF holds and where.
@@ -216,6 +220,9 @@ pub struct Layout {
     pub bands: usize,
     pub color: ColorHint,
     pub data_type: &'static str,
+    /// The bands are stored apart (planar configuration 2): each tile's bands are chunks of their
+    /// own, band `b` of tile `i` at chunk `b × tiles + i`, so a band is read without the others.
+    pub planar: bool,
 }
 
 impl Layout {
@@ -228,6 +235,25 @@ impl Layout {
             pixel_width: self.transform.pixel_width * f64::from(fw) / f64::from(level.width.max(1)),
             pixel_height: self.transform.pixel_height * f64::from(fh) / f64::from(level.height.max(1)),
             ..self.transform
+        }
+    }
+
+    /// How many bands one chunk (a tile's bytes) holds: one when they are stored apart.
+    pub fn chunk_bands(&self) -> usize {
+        if self.planar { 1 } else { self.bands.max(1) }
+    }
+
+    /// The chunk holding band `band` (0-based) of tile `tile` of a level, and that band's place in
+    /// it; `None` past the bands or tiles.
+    pub fn chunk(&self, level: &Level, tile: u32, band: usize) -> Option<(u32, usize)> {
+        if band >= self.bands.max(1) || tile >= level.tiles() {
+            return None;
+        }
+        if self.planar {
+            let b = u32::try_from(band).ok()?;
+            Some((b.checked_mul(level.tiles())?.checked_add(tile)?, 0))
+        } else {
+            Some((tile, band))
         }
     }
 }
@@ -299,20 +325,21 @@ fn read_layout(r: Sparse) -> Result<Parse> {
         ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, ColorHint::Gray),
         other => return Ok(Parse::NotTiled(format!("{other:?} images are read whole"))),
     };
-    let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
-    if planar && bands > 1 {
-        return Ok(Parse::NotTiled("bands stored apart are read whole".into()));
-    }
-    let data_type = match dec.find_tag_unsigned::<u16>(Tag::SampleFormat).ok().flatten().unwrap_or(1) {
-        3 => "Float32",
-        2 => "Int16",
-        _ => {
-            if dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.first().copied()).unwrap_or(8) > 8 {
-                "UInt16"
-            } else {
-                "UInt8"
-            }
-        }
+    // Bands stored apart: each band of a tile is a chunk of its own.
+    let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2) && bands > 1;
+    let (planes, per_chunk) = if planar { (bands, 1) } else { (1, bands) };
+    let bits = dec.find_tag_unsigned_vec::<u16>(Tag::BitsPerSample).ok().flatten().and_then(|v| v.first().copied()).unwrap_or(8);
+    // One value a band (the first stands for all).
+    let format = dec.find_tag_unsigned_vec::<u16>(Tag::SampleFormat).ok().flatten().and_then(|v| v.first().copied()).unwrap_or(1);
+    let data_type = match (format, bits) {
+        (3, 64) => "Float64",
+        (3, _) => "Float32",
+        (2, ..=8) => "Int8",
+        (2, ..=16) => "Int16",
+        (2, _) => "Int32",
+        (_, ..=8) => "UInt8",
+        (_, ..=16) => "UInt16",
+        _ => "UInt32",
     };
     let mut levels = Vec::new();
     let mut index = 0usize;
@@ -329,10 +356,11 @@ fn read_layout(r: Sparse) -> Result<Parse> {
             };
             let th = dec.find_tag_unsigned::<u32>(Tag::TileLength).ok().flatten().unwrap_or(tw);
             let (w, h) = dec.dimensions().map_err(err)?;
-            if tw == 0 || th == 0 || (tw as usize).saturating_mul(th as usize).saturating_mul(bands) > MAX_TILE_SAMPLES {
+            if tw == 0 || th == 0 || (tw as usize).saturating_mul(th as usize).saturating_mul(per_chunk) > MAX_TILE_SAMPLES {
                 return Err(err(format!("tiles of {tw} × {th} pixels")));
             }
-            let n = (w.div_ceil(tw) as usize).saturating_mul(h.div_ceil(th) as usize);
+            // Every band plane's tiles, when the bands are stored apart.
+            let n = (w.div_ceil(tw) as usize).saturating_mul(h.div_ceil(th) as usize).saturating_mul(planes);
             take_tiles(&mut allowance, n)?;
             let mut offsets = dec.find_tag_unsigned_vec::<u64>(Tag::TileOffsets).map_err(err)?.unwrap_or_default();
             let mut counts = dec.find_tag_unsigned_vec::<u64>(Tag::TileByteCounts).map_err(err)?.unwrap_or_default();
@@ -356,11 +384,12 @@ fn read_layout(r: Sparse) -> Result<Parse> {
     if levels.is_empty() {
         return Ok(Parse::NotTiled("no image".into()));
     }
-    Ok(Parse::Done(Box::new(Layout { levels, crs: geo.0, transform: geo.1, nodata: geo.2, bands, color, data_type })))
+    Ok(Parse::Done(Box::new(Layout { levels, crs: geo.0, transform: geo.1, nodata: geo.2, bands, color, data_type, planar })))
 }
 
-/// Decodes one tile: its bands, each `tile_width × tile_height` samples (row by row; NaN past the
-/// image's edge). `header` holds the file's IFDs, `bytes` the tile's own bytes.
+/// Decodes one chunk (a tile, or one band of a tile when the bands are stored apart, see
+/// [`Layout::chunk`]): its bands, each `tile_width × tile_height` samples (row by row; NaN past
+/// the image's edge). `header` holds the file's IFDs, `bytes` the chunk's own bytes.
 pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, bytes: Vec<u8>) -> Result<Vec<Vec<f32>>> {
     let l = layout.levels.get(level).ok_or_else(|| err("no such level"))?;
     let at = *l.offsets.get(index as usize).ok_or_else(|| err("no such tile"))?;
@@ -381,9 +410,11 @@ pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, b
         DecodingResult::F64(v) => v.into_iter().map(|x| x as f32).collect(),
     };
     let (tw, th) = (l.tile_width as usize, l.tile_height as usize);
-    let nb = layout.bands.max(1);
+    let nb = layout.chunk_bands();
+    // A band's chunk is a tile of its plane.
+    let tile = if layout.planar { index % l.tiles().max(1) } else { index };
     // An edge tile may come back cropped to the image: its rows are as wide as it says.
-    let (col, row) = (index % l.across(), index / l.across());
+    let (col, row) = (tile % l.across().max(1), tile / l.across().max(1));
     let rows = (l.height - (row * l.tile_height).min(l.height)).min(l.tile_height) as usize;
     let cols_cropped = (l.width - (col * l.tile_width).min(l.width)).min(l.tile_width) as usize;
     let stride = if values.len() >= tw * th * nb { tw } else { cols_cropped.max(1) };
@@ -415,97 +446,163 @@ pub fn decode_tile(header: &Sparse, layout: &Layout, level: usize, index: u32, b
 /// `(x + y) % 256`. Its IFDs come first, as a cloud-optimised file's do.
 #[doc(hidden)]
 pub fn example(size: u32, tile: u32) -> Vec<u8> {
-    let (size, tile) = (size.clamp(1, 4096), tile.clamp(16, 1024));
+    example_with(&Example { size, tile, ..Example::default() })
+}
+
+/// What [`example_with`] writes.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct Example {
+    /// Pixels a side (at most 4096).
+    pub size: u32,
+    /// Pixels a tile side (16 to 1024).
+    pub tile: u32,
+    /// Bands (1 to 16): band `b` of pixel (x, y) is `(x + y + 10 b) % 256` (`% 100 − 50` in
+    /// signed bytes).
+    pub bands: u16,
+    /// Bands stored apart (planar configuration 2).
+    pub planar: bool,
+    /// Signed bytes, no-data −128 (pixel (0, 0) of every band is no-data).
+    pub int8: bool,
+    /// Stored bottom up: a positive Y pixel size, the first row the southernmost (at 45° N).
+    pub bottom_up: bool,
+}
+
+impl Default for Example {
+    fn default() -> Self {
+        Example { size: 1024, tile: 256, bands: 1, planar: false, int8: false, bottom_up: false }
+    }
+}
+
+/// A small cloud-optimised GeoTIFF as [`Example`] says, laid out as [`example`] lays it out.
+#[doc(hidden)]
+pub fn example_with(e: &Example) -> Vec<u8> {
+    let (size, tile) = (e.size.clamp(1, 4096), e.tile.clamp(16, 1024));
+    let nb = u32::from(e.bands.clamp(1, 16));
+    let planes = if e.planar { nb } else { 1 };
+    let per_chunk = nb / planes;
     let mut sizes = vec![size];
     while *sizes.last().unwrap_or(&tile) > tile {
         sizes.push(sizes.last().unwrap_or(&tile).div_ceil(2));
     }
-    // Each image's pixels, tile by tile.
+    let value = |x: u32, y: u32, b: u32| -> u8 {
+        if e.int8 {
+            if x == 0 && y == 0 { 0x80 } else { (((x + y + 10 * b) % 100) as i32 - 50) as i8 as u8 }
+        } else {
+            ((x + y + 10 * b) % 256) as u8
+        }
+    };
+    // Each image's chunks, in the file's order (band planes one after another when stored apart).
     let images: Vec<Vec<Vec<u8>>> = sizes
         .iter()
         .map(|&s| {
             let k = size / s;
             let n = s.div_ceil(tile);
-            (0..n * n)
-                .map(|i| {
+            let mut chunks = Vec::new();
+            for plane in 0..planes {
+                for i in 0..n * n {
                     let (tx, ty) = (i % n, i / n);
-                    (0..tile * tile)
-                        .map(|p| {
-                            let (x, y) = (tx * tile + p % tile, ty * tile + p / tile);
-                            if x < s && y < s { ((x * k + y * k) % 256) as u8 } else { 0 }
-                        })
-                        .collect()
-                })
-                .collect()
+                    let mut c = Vec::with_capacity((tile * tile * per_chunk) as usize);
+                    for p in 0..tile * tile {
+                        let (x, y) = (tx * tile + p % tile, ty * tile + p / tile);
+                        for b in 0..per_chunk {
+                            let band = if e.planar { plane } else { b };
+                            c.push(if x < s && y < s { value(x * k, y * k, band) } else { 0 });
+                        }
+                    }
+                    chunks.push(c);
+                }
+            }
+            chunks
         })
         .collect();
-    // IFD entries: (tag, type, values); type 3 short, 4 long, 12 double.
+    // IFD entries: (tag, type, values); type 2 ascii, 3 short, 4 long, 12 double.
     enum V {
+        A(Vec<u8>),
         S(Vec<u16>),
         L(Vec<u32>),
         D(Vec<f64>),
     }
     let header_len = 8u32;
+    let chunk_len = tile * tile * per_chunk;
     let mut ifds: Vec<Vec<(u16, V)>> = Vec::new();
     for (i, &s) in sizes.iter().enumerate() {
-        let n = (s.div_ceil(tile) * s.div_ceil(tile)) as usize;
-        let mut e = vec![
+        let n = (s.div_ceil(tile) * s.div_ceil(tile) * planes) as usize;
+        let mut t = vec![
             (254u16, V::L(vec![if i == 0 { 0 } else { 1 }])),
             (256, V::L(vec![s])),
             (257, V::L(vec![s])),
-            (258, V::S(vec![8])),
+            (258, V::S(vec![8; nb as usize])),
             (259, V::S(vec![1])),
             (262, V::S(vec![1])),
-            (277, V::S(vec![1])),
+            (277, V::S(vec![nb as u16])),
+            (284, V::S(vec![if e.planar { 2 } else { 1 }])),
             (322, V::L(vec![tile])),
             (323, V::L(vec![tile])),
             (324, V::L(vec![0; n])),
-            (325, V::L(vec![tile * tile; n])),
+            (325, V::L(vec![chunk_len; n])),
         ];
-        if i == 0 {
-            e.push((33550, V::D(vec![1.0 / f64::from(size), 1.0 / f64::from(size), 0.0])));
-            e.push((33922, V::D(vec![0.0, 0.0, 0.0, 10.0, 46.0, 0.0])));
-            e.push((34735, V::S(vec![1, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326])));
+        if nb > 1 {
+            t.push((338, V::S(vec![0; nb as usize - 1])));
         }
-        ifds.push(e);
+        if e.int8 {
+            t.push((339, V::S(vec![2; nb as usize])));
+        }
+        if i == 0 {
+            let px = 1.0 / f64::from(size);
+            if e.bottom_up {
+                t.push((34264, V::D(vec![px, 0.0, 0.0, 10.0, 0.0, px, 0.0, 45.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])));
+            } else {
+                t.push((33550, V::D(vec![px, px, 0.0])));
+                t.push((33922, V::D(vec![0.0, 0.0, 0.0, 10.0, 46.0, 0.0])));
+            }
+            t.push((34735, V::S(vec![1, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326])));
+        }
+        if e.int8 {
+            t.push((42113, V::A(b"-128\0".to_vec())));
+        }
+        t.sort_by_key(|(tag, _)| *tag);
+        ifds.push(t);
     }
     // Sizes: each IFD is 2 + 12·entries + 4, its out-of-line values after it.
     let size_of = |v: &V| match v {
+        V::A(x) => x.len(),
         V::S(x) => x.len() * 2,
         V::L(x) => x.len() * 4,
         V::D(x) => x.len() * 8,
     };
     let mut ifd_at = Vec::new();
     let mut at = header_len as usize;
-    for e in &ifds {
+    for t in &ifds {
         ifd_at.push(at);
-        at += 2 + 12 * e.len() + 4;
-        at += e.iter().map(|(_, v)| size_of(v)).filter(|s| *s > 4).map(|s| s + s % 2).sum::<usize>();
+        at += 2 + 12 * t.len() + 4;
+        at += t.iter().map(|(_, v)| size_of(v)).filter(|s| *s > 4).map(|s| s + s % 2).sum::<usize>();
     }
-    // Tile data after every IFD.
+    // Chunk data after every IFD.
     let mut data_at = at;
     let mut out = vec![b'I', b'I', 42, 0];
     out.extend_from_slice(&header_len.to_le_bytes());
-    for e in ifds.iter_mut() {
-        for (tag, v) in e.iter_mut() {
+    for t in ifds.iter_mut() {
+        for (tag, v) in t.iter_mut() {
             if *tag == 324
                 && let V::L(offs) = v
             {
                 for o in offs.iter_mut() {
                     *o = data_at as u32;
-                    data_at += (tile * tile) as usize;
+                    data_at += chunk_len as usize;
                 }
             }
         }
     }
-    for (i, e) in ifds.iter().enumerate() {
+    for (i, t) in ifds.iter().enumerate() {
         // Written in order, each IFD where `ifd_at` placed it.
-        let mut extra = out.len() + 2 + 12 * e.len() + 4;
+        let mut extra = out.len() + 2 + 12 * t.len() + 4;
         let mut body = Vec::new();
         let mut tail = Vec::new();
-        body.extend_from_slice(&(e.len() as u16).to_le_bytes());
-        for (tag, v) in e {
+        body.extend_from_slice(&(t.len() as u16).to_le_bytes());
+        for (tag, v) in t {
             let (ty, count, bytes): (u16, usize, Vec<u8>) = match v {
+                V::A(x) => (2, x.len(), x.clone()),
                 V::S(x) => (3, x.len(), x.iter().flat_map(|a| a.to_le_bytes()).collect()),
                 V::L(x) => (4, x.len(), x.iter().flat_map(|a| a.to_le_bytes()).collect()),
                 V::D(x) => (12, x.len(), x.iter().flat_map(|a| a.to_le_bytes()).collect()),
@@ -533,8 +630,8 @@ pub fn example(size: u32, tile: u32) -> Vec<u8> {
         out.extend_from_slice(&tail);
     }
     for image in &images {
-        for t in image {
-            out.extend_from_slice(t);
+        for c in image {
+            out.extend_from_slice(c);
         }
     }
     out
@@ -591,6 +688,60 @@ pub(crate) mod tests {
         // A wrong tile index, junk tile bytes: errors, never a panic.
         assert!(decode_tile(&s, &l, 0, 99, Vec::new()).is_err());
         let _ = decode_tile(&s, &l, 0, 0, vec![1, 2, 3]);
+    }
+
+    /// Reads a file's layout from its bytes, as the tile cache would.
+    fn layout_of(file: &[u8]) -> (Sparse, Box<Layout>) {
+        let s = Sparse::default().with(0, file.to_vec());
+        match layout(&s).unwrap() {
+            Parse::Done(l) => (s, l),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn bands_stored_apart_signed_bytes_bottom_up() {
+        // As AlphaEarth's embeddings are: planar, Int8 with no-data −128, a positive Y pixel size;
+        // 600 pixels in tiles of 256, so the right and bottom tiles are cut by the image's edge.
+        let e = Example { size: 600, tile: 256, bands: 4, planar: true, int8: true, bottom_up: true };
+        let file = example_with(&e);
+        let (s, l) = layout_of(&file);
+        assert!(l.planar && l.bands == 4 && l.data_type == "Int8" && l.chunk_bands() == 1);
+        assert_eq!(l.nodata, Some(-128.0));
+        assert!(l.transform.pixel_height > 0.0 && (l.transform.origin_y - 45.0).abs() < 1e-12);
+        let full = &l.levels[0];
+        assert_eq!((full.tiles(), full.offsets.len()), (9, 36));
+        // Band 2 of tile 4 (row 1, column 1) is chunk 2 × 9 + 4, a band of its own.
+        assert_eq!(l.chunk(full, 4, 2), Some((22, 0)));
+        assert_eq!(l.chunk(full, 9, 0), None);
+        assert_eq!(l.chunk(full, 0, 4), None);
+        let read = |level: usize, chunk: u32| {
+            let lv = &l.levels[level];
+            let (at, n) = (lv.offsets[chunk as usize] as usize, lv.counts[chunk as usize] as usize);
+            decode_tile(&s, &l, level, chunk, file[at..at + n].to_vec()).unwrap()
+        };
+        let want = |x: u32, y: u32, b: u32| (((x + y + 10 * b) % 100) as i32 - 50) as f32;
+        let t = read(0, 22);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0][3 * 256 + 7], want(256 + 7, 256 + 3, 2));
+        // The no-data pixel (0, 0) of band 1: NaN.
+        let (c, _) = l.chunk(full, 0, 1).unwrap();
+        let t = read(0, c);
+        assert!(t[0][0].is_nan() && t[0][1] == want(1, 0, 1));
+        // An edge tile (row 2, column 2) of the last band: its pixels, and NaN past the image.
+        let (c, _) = l.chunk(full, 8, 3).unwrap();
+        let t = read(0, c);
+        assert_eq!(t[0][5 * 256 + 9], want(512 + 9, 512 + 5, 3));
+        assert!(t[0][100 * 256 + 100].is_nan());
+        // Junk chunks and indices: errors, never a panic.
+        assert!(decode_tile(&s, &l, 0, 36, Vec::new()).is_err());
+        let _ = decode_tile(&s, &l, 0, 35, vec![9; 7]);
+        // Bands together (chunky) are still read all at once.
+        let (_, l2) = layout_of(&example_with(&Example { planar: false, ..e }));
+        assert!(!l2.planar && l2.chunk_bands() == 4 && l2.chunk(&l2.levels[0], 4, 2) == Some((4, 2)));
+        for n in (0..file.len().min(4000)).step_by(7) {
+            let _ = layout(&Sparse::default().with(0, file[..n].to_vec()));
+        }
     }
 
     #[test]

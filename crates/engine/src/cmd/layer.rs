@@ -1968,7 +1968,7 @@ pub fn is_tiff_url(url: &str) -> bool {
 
 /// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
 /// as the view needs them), framed when its header is in.
-fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
     let mut q = json!({"url": url, "kind": "cog", "name": name});

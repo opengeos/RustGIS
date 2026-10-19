@@ -544,6 +544,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     menu_item(ui, app, "", "Overture Maps…", "ui.dialog", pane("overture"));
     menu_item(ui, app, "", "Planet Open Data…", "ui.stac.planet", Value::Null);
     menu_item(ui, app, "", "Portolan…", "ui.stac.portolan", Value::Null);
+    menu_item(ui, app, "", "Satellite Embeddings…", "ui.dialog", pane("embeddings"));
     menu_item(ui, app, "", "Search Open Data…", "ui.searchOpenData", Value::Null);
     menu_item(ui, app, "", "Sentinel-2 Explorer…", "ui.stac.sentinel2", Value::Null);
     menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", pane("sourcecoop"));

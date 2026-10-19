@@ -13,6 +13,7 @@ pub mod cache;
 pub mod cog;
 pub mod draw;
 pub mod earthdata;
+pub mod embeddings;
 pub mod failure;
 pub mod geocode;
 pub mod mbtiles;

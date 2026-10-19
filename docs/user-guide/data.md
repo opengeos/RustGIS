@@ -432,6 +432,35 @@ rustgis-cli run --cmd 'nationalMap.add={"service":"basemap/USGSTopo"}' --cmd 'na
 (`{"name": "nasaEarthdata", "search": "sea surface temperature"}`). All of these work in the web
 app too: their documents and tiles are fetched like any other.
 
+## Satellite embeddings
+
+**Home › Web Data › Satellite Embeddings…** shows pre-computed satellite embeddings: vectors a
+geospatial foundation model made for every pixel or image patch, so that places alike have values
+alike. Pick a dataset (its provider, model, resolution, years, coverage, licence and links are
+shown), a year, and **Search where the map is**; the results are cards with **Zoom** and **Add**,
+their footprints drawn as a layer.
+
+| Dataset | What RustGIS does with it |
+|---|---|
+| **AlphaEarth Foundations** (Google's Satellite Embedding; 64 values a 10 m pixel, 2017–2025) | Finds the year's UTM tiles where the map is in the dataset's GeoParquet index on [Source Cooperative](https://source.coop/tge-labs/aef), read in place (its bounding boxes, then the rows that meet the map). **Add** shows a tile as a cloud-optimised GeoTIFF read in place: three bands (**Bands**, from 1; A01, A16 and A09 by default) as red, green and blue, dequantised (`sign(v)·(v/127.5)²`) and stretched over ±**Stretch** (0.3). Only the three bands shown are read, a band at a time. **Apply to layers** shows other bands or another stretch on the tiles already added. |
+| **Earth Index** (Earth Genome; 384 values every ~320 m, 2024) | Names the Sentinel-2 (MGRS) tiles where the map is and keeps those with a file. **Add points** reads the file's points in the view in place (every point's position, then the vectors of those in view: zoom to a few kilometres) and colours them by their vectors' first three principal components (64 colours); **Keep value** keeps one of each vector's values as the points' `value` field. |
+| **Tessera** (Cambridge; 128 values a 10 m pixel, 2017–2025) | **Add view** reads three bands (1, 2 and 3 by default) of the view from Tessera's [Zarr store](https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate) in place (the shard's index, then the chunks the view needs: at most about 6 km a side, its centre when the view is larger), as a 32-bit raster in UTM. |
+| **Clay**, **Major TOM**, **Copernicus-Embed** | Listed with links to their data and papers; RustGIS doesn't read them. |
+
+AlphaEarth's tiles keep their look in their layer's address (`#bands=2,17,10&range=-0.3,0.3&dequantize=aef`),
+which `map.setTiles` changes for any cloud-optimised GeoTIFF read in place (`"bands"`, `"range"`,
+`"dequantize"`); GeoTIFFs with their bands stored apart (planar), signed bytes and bottom-up images
+are read in place too. The commands: `embeddings.datasets`, `embeddings.search` (`"dataset"`,
+`"year"`, `"bbox"` or the view, `"footprints"`) and `embeddings.add` (`"dataset"`, `"url"`,
+`"bands"`, `"stretch"`, `"dimension"`, `"bbox"`, `"year"`):
+
+```sh
+rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-122.55,37.7,-122.3,37.85]}' --cmd 'embeddings.search={"dataset":"alphaearth","year":2024}' --cmd 'embeddings.add={"dataset":"alphaearth","url":"https://data.source.coop/tge-labs/aef/v1/annual/2024/10N/xcyo46pot2fg6a61t-0000008192-0000000000.tiff"}' --cmd 'share.exportMap={"path":"aef.png"}'
+rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-83.96,35.94,-83.9,35.98]}' --cmd 'embeddings.add={"dataset":"tessera","year":2024}' --cmd 'share.exportMap={"path":"tessera.png"}'
+```
+
+These reach the network: the AI Assistant asks first and plugins need the network permission.
+
 ## Geocoding addresses
 
 **Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a table's addresses into points:

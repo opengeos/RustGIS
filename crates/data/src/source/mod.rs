@@ -264,6 +264,56 @@ pub fn open_url_blocking(url: &str) -> Result<Box<dyn FeatureSource>> {
     remote::drive_blocking(file, std::sync::Arc::new(move || open_file_now(f.clone())))
 }
 
+/// What a [`query_url`] read: the fields (the file's, then the nested columns asked for) and the
+/// rows.
+pub type Queried = (Vec<crate::Field>, Batch);
+
+fn query_now(file: &std::sync::Arc<remote::Remote>, columns: &[String], req: &Request) -> Result<Queried> {
+    let cols: Vec<&str> = columns.iter().map(String::as_str).collect();
+    let src = parquet::ParquetSource::open_remote(file.clone(), &url_name(file.url()))?.with_columns(&cols).exact();
+    let batch = src.read(req)?;
+    Ok((src.info().fields.clone(), batch))
+}
+
+/// Reads the rows of a GeoParquet by its web address that a request matches, with nested
+/// columns (`assets.data.href`) as fields too: a catalog's index read in place, fetching what it
+/// needs (off the caller's thread).
+pub fn query_url(url: &str, columns: Vec<String>, req: Request, done: Box<dyn FnOnce(Result<Queried>) + Send>) {
+    let file = remote::file(url);
+    let f = file.clone();
+    remote::drive(file, std::sync::Arc::new(move || query_now(&f, &columns, &req)), done);
+}
+
+/// [`query_url`], waiting for it (the command line and tools).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn query_url_blocking(url: &str, columns: Vec<String>, req: Request) -> Result<Queried> {
+    let file = remote::file(url);
+    let f = file.clone();
+    remote::drive_blocking(file, std::sync::Arc::new(move || query_now(&f, &columns, &req)))
+}
+
+/// Reads the points of a GeoParquet by its web address in an extent, with a list column's
+/// vectors (see [`parquet::read_vectors`]), fetching what it needs (off the caller's thread).
+pub fn vectors_url(
+    url: &str,
+    extent: Extent,
+    column: String,
+    limits: (usize, usize),
+    done: Box<dyn FnOnce(Result<parquet::Vectors>) + Send>,
+) {
+    let file = remote::file(url);
+    let f = file.clone();
+    remote::drive(file, std::sync::Arc::new(move || parquet::read_vectors(&f, &extent, &column, limits.0, limits.1)), done);
+}
+
+/// [`vectors_url`], waiting for it (the command line and tools).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn vectors_url_blocking(url: &str, extent: Extent, column: String, limits: (usize, usize)) -> Result<parquet::Vectors> {
+    let file = remote::file(url);
+    let f = file.clone();
+    remote::drive_blocking(file, std::sync::Arc::new(move || parquet::read_vectors(&f, &extent, &column, limits.0, limits.1)))
+}
+
 /// Reads a request, fetching what a source read by its web address needs, and waiting for it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_blocking(src: &std::sync::Arc<dyn FeatureSource>, req: &Request) -> Result<Batch> {

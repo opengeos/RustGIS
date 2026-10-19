@@ -1101,3 +1101,89 @@ fn exports_are_written_in_the_system_the_layer_was_read_in() {
     let ds = utm_squares(25832);
     assert!(crate::io::write_path_in(&ds, &d.join("squares.geojson"), Crs::from_epsg(25832).unwrap()).is_err());
 }
+
+/// A catalog index as AlphaEarth's is (a `bbox` struct, a nested `assets.data.href`), and patch
+/// embeddings as Earth Index's are (a fixed-size list of floats a point), in row groups of 50.
+fn write_index_and_vectors() -> Vec<u8> {
+    use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
+    use arrow_array::{BinaryArray, Float64Array, RecordBatch, StringArray, StructArray};
+    use arrow_schema::{DataType, Field as AField, Fields, Schema};
+    let pts = points();
+    let wkbs: Vec<Vec<u8>> = pts.iter().map(|(c, ..)| wkb::encode(&Geometry::Point(*c))).collect();
+    let bbox_fields: Fields =
+        ["xmin", "ymin", "xmax", "ymax"].map(|n| Arc::new(AField::new(n, DataType::Float64, false))).into_iter().collect();
+    let coord =
+        |f: fn(&Coord) -> f64| Arc::new(Float64Array::from(pts.iter().map(|(c, ..)| f(c)).collect::<Vec<_>>())) as arrow_array::ArrayRef;
+    let bbox = StructArray::new(bbox_fields.clone(), vec![coord(|c| c.x), coord(|c| c.y), coord(|c| c.x), coord(|c| c.y)], None);
+    let href =
+        Arc::new(StringArray::from(pts.iter().map(|p| format!("s3://bucket/{}.tiff", p.1)).collect::<Vec<_>>())) as arrow_array::ArrayRef;
+    let data_fields: Fields = vec![Arc::new(AField::new("href", DataType::Utf8, true))].into_iter().collect();
+    let data = Arc::new(StructArray::new(data_fields.clone(), vec![href], None)) as arrow_array::ArrayRef;
+    let asset_fields: Fields = vec![Arc::new(AField::new("data", DataType::Struct(data_fields), true))].into_iter().collect();
+    let assets = StructArray::new(asset_fields.clone(), vec![data], None);
+    let mut emb = FixedSizeListBuilder::new(Float32Builder::new(), 4);
+    for (_, _, v) in &pts {
+        for k in 0..4 {
+            emb.values().append_value((*v * 10 + k) as f32);
+        }
+        emb.append(true);
+    }
+    let emb = emb.finish();
+    let schema = Arc::new(Schema::new(vec![
+        AField::new("geometry", DataType::Binary, false),
+        AField::new("bbox", DataType::Struct(bbox_fields), false),
+        AField::new("assets", DataType::Struct(asset_fields), true),
+        AField::new("embedding", arrow_array::Array::data_type(&emb).clone(), true),
+    ]));
+    let cols: Vec<arrow_array::ArrayRef> = vec![
+        Arc::new(BinaryArray::from(wkbs.iter().map(|w| w.as_slice()).collect::<Vec<_>>())),
+        Arc::new(bbox),
+        Arc::new(assets),
+        Arc::new(emb),
+    ];
+    let geo = r#"{"version":"1.0.0","primary_column":"geometry","columns":{"geometry":{"encoding":"WKB","geometry_types":["Point"]}}}"#;
+    let props = ::parquet::file::properties::WriterProperties::builder()
+        .set_max_row_group_row_count(Some(50))
+        .set_key_value_metadata(Some(vec![::parquet::file::metadata::KeyValue::new("geo".to_string(), geo.to_string())]))
+        .build();
+    let mut out = Vec::new();
+    let mut w = ::parquet::arrow::ArrowWriter::try_new(&mut out, schema.clone(), Some(props)).unwrap();
+    w.write(&RecordBatch::try_new(schema, cols).unwrap()).unwrap();
+    w.close().unwrap();
+    out
+}
+
+#[test]
+fn nested_columns_and_vectors_by_address() {
+    let bytes = write_index_and_vectors();
+    let url = "https://test.example/index.parquet";
+    remote::testing::serve(url, bytes.clone());
+    let e = Extent::new(10.0, 10.0, 40.0, 30.0);
+    // The rows in the extent, with the nested column as a field.
+    let (fields, batch) =
+        query_url_blocking(url, vec!["assets.data.href".into(), "no.such".into()], Request { extent: Some(e), limit: 1000 }).unwrap();
+    let k = fields.iter().position(|f| f.name == "assets.data.href").unwrap();
+    assert!(!fields.iter().any(|f| f.name == "no.such"));
+    assert_eq!(batch.features.len(), in_box(&e));
+    let names: Vec<String> = points().iter().filter(|(c, ..)| e.contains(*c)).map(|p| format!("s3://bucket/{}.tiff", p.1)).collect();
+    for f in &batch.features {
+        assert!(names.contains(&f.attrs[k].to_string()), "{:?}", f.attrs[k]);
+    }
+    // The points in the extent with their vectors: four values each, as written.
+    let v = vectors_url_blocking(url, e, "embedding".into(), (100, 10_000)).unwrap();
+    assert_eq!((v.points.len(), v.dims, v.values.len()), (in_box(&e), 4, in_box(&e) * 4));
+    for (i, p) in v.points.iter().enumerate() {
+        let (_, _, id) = points().into_iter().find(|(c, ..)| (c.x, c.y) == *p).unwrap();
+        assert_eq!(&v.values[i * 4..i * 4 + 4], &[(id * 10) as f32, (id * 10 + 1) as f32, (id * 10 + 2) as f32, (id * 10 + 3) as f32]);
+    }
+    // Past the limits: said, not read.
+    let err = vectors_url_blocking(url, Extent::new(-180.0, -90.0, 180.0, 90.0), "embedding".into(), (2, 10_000)).unwrap_err();
+    assert!(err.to_string().contains("zoom in"), "{err}");
+    assert!(vectors_url_blocking(url, e, "nothing".into(), (100, 10_000)).is_err());
+    // A cut file: errors, never a panic.
+    for n in [0, 10, 100, bytes.len() / 2] {
+        let cut = format!("https://test.example/cut-{n}.parquet");
+        remote::testing::serve(&cut, bytes[bytes.len() - n..].to_vec());
+        let _ = vectors_url_blocking(&cut, e, "embedding".into(), (100, 10_000));
+    }
+}

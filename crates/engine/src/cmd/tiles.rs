@@ -4,6 +4,7 @@
 use rustgis_map::effects::Blend;
 use rustgis_map::planets;
 use rustgis_map::tiles::{MAX_TILE_LAYERS, TileKind, TileLayer};
+use rustgis_render::rustgis_tiles::cog::{self, Look};
 use serde_json::{Value, json};
 
 use super::{b, f, ps};
@@ -41,6 +42,8 @@ pub const NETWORK: &[&str] = &[
     "nationalMap.add",
     "fieldsOfTheWorld.add",
     "portal.files",
+    "embeddings.search",
+    "embeddings.add",
     "earthdata.collections",
     "earthdata.granules",
     "nldi.flowline",
@@ -58,7 +61,7 @@ pub fn commands() -> Vec<C> {
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
-            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
+            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text, "bands"?: [red, green, blue] | [band] (a cloud-optimised GeoTIFF's bands shown, from 1; [] for its own), "range"?: [low, high] (the values shown from black to full colour; null: each band's 2nd–98th percentile), "dequantize"?: "aef" (AlphaEarth's quantised embeddings) | "none"}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
         C::new("map.body", "Celestial Body", "Home › Add", body).params(
@@ -341,12 +344,73 @@ fn blend(p: &Value) -> Result<Option<Blend>, String> {
     ps(p, "blend").map(|m| Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))).transpose()
 }
 
+/// A change of a COG layer's look a command asks for (`bands`, `range`, `dequantize`), applied to
+/// the look it has; `None` when it asks for none.
+#[allow(clippy::type_complexity)]
+fn cog_look(p: &Value) -> Result<Option<Box<dyn Fn(Look) -> Look>>, String> {
+    if p.get("bands").is_none() && p.get("range").is_none() && p.get("dequantize").is_none() {
+        return Ok(None);
+    }
+    let bands: Option<Vec<usize>> = match p.get("bands") {
+        None => None,
+        Some(Value::Array(a)) => {
+            let b: Option<Vec<usize>> = a.iter().map(|v| v.as_u64().filter(|b| (1..=65_535).contains(b)).map(|b| b as usize - 1)).collect();
+            match b {
+                Some(b) if matches!(b.len(), 0 | 1 | 3) => Some(b),
+                _ => return Err("bands is [red, green, blue] or [band], each from 1".into()),
+            }
+        }
+        Some(_) => return Err("bands is [red, green, blue] or [band], each from 1".into()),
+    };
+    let range: Option<Option<(f32, f32)>> = match p.get("range") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::Array(a)) => match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64), a.len()) {
+            // Finite as the 32-bit values kept, not only as given.
+            (Some(lo), Some(hi), 2) if (lo as f32).is_finite() && (hi as f32).is_finite() && (hi as f32) > (lo as f32) => {
+                Some(Some((lo as f32, hi as f32)))
+            }
+            _ => return Err("range is [low, high], low below high".into()),
+        },
+        Some(_) => return Err("range is [low, high], low below high".into()),
+    };
+    let aef = match ps(p, "dequantize") {
+        None => None,
+        Some("aef") => Some(true),
+        Some("none") => Some(false),
+        Some(other) => return Err(format!("unknown dequantize '{other}' (aef or none)")),
+    };
+    Ok(Some(Box::new(move |old: Look| Look {
+        bands: bands.clone().unwrap_or(old.bands),
+        range: range.unwrap_or(old.range),
+        aef: aef.unwrap_or(old.aef),
+    })))
+}
+
 fn set(s: &mut Session, p: &Value) -> CmdResult {
     let i = find(s, p)?.ok_or("name or index is required")?;
     let mode = blend(p)?;
+    let look = cog_look(p)?;
     let m = s.map_mut();
     let n = m.tiles.len();
     let Some(t) = m.tiles.get_mut(i) else { return Err("no tile layer at that index".into()) };
+    // Refused before anything changes.
+    if look.is_some() && t.kind != TileKind::Cog {
+        return Err("bands, range and dequantize are for a cloud-optimised GeoTIFF's layer".into());
+    }
+    let new_url = match look {
+        Some(look) => {
+            let new = look(cog::split(&t.url).1);
+            // Bands the file hasn't (when its header is in): said, not shown as its own look.
+            if let Ok(Some(info)) = cog::info(&t.url)
+                && let Some(b) = new.bands.iter().find(|b| **b >= info.layout.bands)
+            {
+                return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b + 1));
+            }
+            Some(cog::with_look(&t.url, &new))
+        }
+        None => None,
+    };
     if let Some(v) = b(p, "visible") {
         t.visible = v;
     }
@@ -358,6 +422,9 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(r) = ps(p, "rename").map(str::trim).filter(|r| !r.is_empty()) {
         t.name = r.chars().take(120).collect();
+    }
+    if let Some(url) = new_url {
+        t.url = url;
     }
     if let Some(mv) = ps(p, "move") {
         let to = match mv {
@@ -401,6 +468,12 @@ mod tests {
         assert!(s.run("map.addTiles", &json!({"url": "file:///etc/passwd"})).is_err());
         assert!(s.run("map.addTiles", &json!({"url": "https://a/{z}", "kind": "nope"})).is_err());
         assert!(s.run("map.removeTiles", &json!({"index": 7})).is_err());
+        // A look is for a COG's layer: refused for others, which are left as they were.
+        assert!(s.run("map.setTiles", &json!({"index": 0, "opacity": 0.2, "bands": [1, 2, 3]})).is_err());
+        assert_ne!(s.map().tiles[0].opacity, 0.2);
+        // A range past what 32 bits hold is refused.
+        assert!(super::cog_look(&json!({"range": [0, 1e39]})).is_err());
+        assert!(super::cog_look(&json!({"range": [-0.3, 0.3]})).is_ok_and(|l| l.is_some()));
         assert!(s.run("map.removeTiles", &json!({})).is_ok());
         assert!(s.map().tiles.is_empty());
         // Saved and read back with the project.

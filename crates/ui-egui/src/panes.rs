@@ -168,7 +168,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
 
 /// The Web Data services shown in the Web Data pane, by the `ui.dialog` name that opens them, and
 /// their titles.
-const WEB_DATA: [(&str, &str); 14] = [
+const WEB_DATA: [(&str, &str); 15] = [
     ("opendata", "Search Open Data"),
     ("stac", "STAC Search"),
     ("osm", "OpenStreetMap"),
@@ -183,6 +183,7 @@ const WEB_DATA: [(&str, &str); 14] = [
     ("fieldsOfTheWorld", "Fields of the World"),
     ("earthaccess", "NASA Earthaccess"),
     ("nldi", "USGS NLDI"),
+    ("embeddings", "Satellite Embeddings"),
 ];
 
 /// The Web Data service a `ui.dialog` name opens, if it is one.
@@ -215,6 +216,7 @@ fn web_data(app: &mut RustGisApp, ui: &mut Ui) {
         "fieldsOfTheWorld" => crate::webdataui::fields_of_the_world(app, ui),
         "earthaccess" => crate::earthaccessui::pane(app, ui),
         "nldi" => crate::nldiui::pane(app, ui),
+        "embeddings" => crate::embeddingsui::pane(app, ui),
         _ => crate::opendataui::dialog(app, ui),
     }
 }

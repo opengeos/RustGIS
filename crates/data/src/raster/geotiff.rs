@@ -1005,8 +1005,10 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     Ok(r)
 }
 
-/// Writes a raster as a Deflate-compressed GeoTIFF: RGB(A) bytes for 8-bit colour rasters,
-/// otherwise `band` (0-based) as 32-bit floats.
+/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
+/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
+/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
+/// raster always writes its colour bands, as its 8-bit form did before.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     let mut out = std::io::Cursor::new(Vec::new());
@@ -1109,6 +1111,31 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             tags!(img);
             img.write_data(&data).map_err(err)?;
         }
+    } else if rgb && let (Some(red), Some(green), Some(blue)) = (r.bands.first(), r.bands.get(1), r.bands.get(2)) {
+        // Colour bands that aren't bytes (three embedding dimensions): kept as 32-bit floats, with
+        // their alpha band when they have one.
+        let n = (w as usize) * (h as usize);
+        let at = |b: &crate::raster::Band, i: usize| b.data.get(i).copied().unwrap_or(f32::NAN);
+        match r.bands.get(3).filter(|_| matches!(r.color, ColorHint::Rgb { alpha: true })) {
+            Some(alpha) => {
+                let mut data = Vec::with_capacity(n * 4);
+                for i in 0..n {
+                    data.extend([at(red, i), at(green, i), at(blue, i), at(alpha, i)]);
+                }
+                let mut img = enc.new_image::<colortype::RGBA32Float>(w, h).map_err(err)?;
+                tags!(img);
+                img.write_data(&data).map_err(err)?;
+            }
+            None => {
+                let mut data = Vec::with_capacity(n * 3);
+                for i in 0..n {
+                    data.extend([at(red, i), at(green, i), at(blue, i)]);
+                }
+                let mut img = enc.new_image::<colortype::RGB32Float>(w, h).map_err(err)?;
+                tags!(img);
+                img.write_data(&data).map_err(err)?;
+            }
+        }
     } else {
         let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
         let mut img = enc.new_image::<colortype::Gray32Float>(w, h).map_err(err)?;
@@ -1122,6 +1149,24 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::raster::tests::small;
+
+    #[test]
+    fn float_colour_round_trip() {
+        let r = small();
+        let n = (r.width * r.height) as usize;
+        let bands = (0..3).map(|b| (0..n).map(|i| i as f32 * 0.5 - b as f32).collect()).collect();
+        let c = Raster::new("c", r.width, r.height, bands, r.transform, r.crs, None, ColorHint::Rgb { alpha: false }, "Float32").unwrap();
+        let back = read(std::io::Cursor::new(write(&c, 0).unwrap()), "back").unwrap();
+        assert_eq!(back.bands.len(), 3);
+        assert_eq!(back.value(2, 1, 1), c.value(2, 1, 1));
+        assert!(matches!(back.color, ColorHint::Rgb { .. }));
+        // With an alpha band: four bands back.
+        let bands = (0..4).map(|b| (0..n).map(|i| i as f32 * 0.5 - b as f32).collect()).collect();
+        let a = Raster::new("a", r.width, r.height, bands, r.transform, r.crs, None, ColorHint::Rgb { alpha: true }, "Float32").unwrap();
+        let back = read(std::io::Cursor::new(write(&a, 0).unwrap()), "back").unwrap();
+        assert_eq!(back.bands.len(), 4);
+        assert_eq!(back.value(3, 1, 1), a.value(3, 1, 1));
+    }
 
     #[test]
     fn float_round_trip() {
@@ -1213,9 +1258,9 @@ mod tests {
         // A byte no-data value survives on the byte path.
         let back = read(std::io::Cursor::new(write(&mk(255.0), 0).unwrap()), "b").unwrap();
         assert_eq!((back.band_count(), back.value(0, 1, 0), back.value(0, 0, 0)), (3, None, Some(10.0)));
-        // One that doesn't fit a byte keeps the file honest by writing floats (band 1 only).
+        // One that doesn't fit a byte keeps the file honest by writing the three bands as floats.
         let back = read(std::io::Cursor::new(write(&mk(-9999.0), 0).unwrap()), "f").unwrap();
-        assert_eq!((back.band_count(), back.value(0, 1, 0), back.nodata), (1, None, Some(-9999.0)));
+        assert_eq!((back.band_count(), back.value(0, 1, 0), back.nodata), (3, None, Some(-9999.0)));
     }
 
     #[test]

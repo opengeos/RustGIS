@@ -281,7 +281,7 @@ pub(crate) fn fill_cache(s: &mut Session) -> usize {
 }
 
 /// The longitude/latitude extent the flat map's view shows.
-pub(crate) fn view_extent(s: &Session) -> Extent {
+pub fn view_extent(s: &Session) -> Extent {
     let m = s.map();
     let (w, h) = s.view_size;
     let e = m.camera.extent(w, h);
