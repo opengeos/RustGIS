@@ -238,6 +238,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     // address is, and one that can't be read says so when the layer draws.
     #[cfg(not(target_arch = "wasm32"))]
     if archive && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) {
+        // Its error, if any, is the layer's to report when it draws.
         let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&url, std::time::Duration::from_secs(1));
     }
     // A style goes to the view it gives, an archive to its bounds, once read (see
