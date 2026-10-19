@@ -28,7 +28,7 @@ pub struct Settled {
 
 /// The form, its fields told apart by `id` (an element, a dialog). `tokens` are the dynamic text
 /// lists the text expands where it is shown.
-pub fn show(ui: &mut Ui, id: impl std::hash::Hash, tokens: &[&[(&str, &str)]], f: Fields<'_>) -> Settled {
+pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&[(&str, &str)]], f: Fields<'_>) -> Settled {
     let id = egui::Id::new(id);
     let mut out = Settled::default();
     ui.label(tl!("Text"));
