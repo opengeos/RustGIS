@@ -533,6 +533,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     menu_item(ui, app, "", "Earthdata GIS…", "ui.searchOpenData", svc("earthdata-gis"));
     menu_item(ui, app, "", "GeoLens…", "ui.searchOpenData", svc("geolens"));
     menu_item(ui, app, "", "Hugging Face…", "ui.searchOpenData", svc("huggingface"));
+    menu_item(ui, app, "", "NASA Earthaccess…", "ui.dialog", json!({"name": "earthaccess"}));
     menu_item(ui, app, "", "Ocean Data Platform…", "ui.searchOpenData", svc("ocean-data"));
     menu_item(ui, app, "", "OpenAerialMap…", "ui.searchOpenData", svc("openaerialmap"));
     menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
@@ -550,6 +551,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
         menu_item(ui, app, "", "US Local GIS…", "ui.searchOpenData", svc("us-local"));
         menu_item(ui, app, "", "US State GIS…", "ui.searchOpenData", svc("us-state"));
         menu_item(ui, app, "", "USGS 3DEP DEM…", "ui.searchOpenData", svc("usgs-dem"));
+        menu_item(ui, app, "", "USGS NLDI…", "ui.dialog", json!({"name": "nldi"}));
     });
 }
 

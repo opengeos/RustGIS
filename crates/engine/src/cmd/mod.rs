@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod deeplearning;
 pub mod design;
 pub mod directions;
+pub mod earthdata;
 pub mod edit;
 pub mod effects;
 pub mod geocode;
@@ -18,6 +19,7 @@ pub mod layer;
 pub mod layer_copy;
 pub mod layout;
 pub mod navigate;
+pub mod nldi;
 pub mod notebook;
 pub mod plugins;
 pub mod portals;
@@ -85,6 +87,8 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(stac::commands());
     v.extend(portals::commands());
     v.extend(catalogs::commands());
+    v.extend(earthdata::commands());
+    v.extend(nldi::commands());
     v
 }
 

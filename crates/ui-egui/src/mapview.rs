@@ -1139,6 +1139,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
     if hover.is_some() && app.ui.nav.picking.is_some() && app.ui.right == Some(crate::RightPane::Directions) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
+    // So does a point for the NLDI.
+    if hover.is_some() && crate::nldiui::wants_click(app) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
     // Wheel zoom about the pointer.
     if let Some(p) = hover {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
@@ -1436,6 +1440,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         if crate::navui::click(app, c, other) {
             return;
         }
+        // The NLDI pane waiting for a point traces its flowline.
+        if crate::nldiui::click(app, c) {
+            return;
+        }
         // A workflow waiting for map points takes the click.
         if let Some(pick) = &mut app.workflow.pick
             && pick.points.len() < pick.needed
@@ -1685,6 +1693,8 @@ fn overlays(app: &mut RustGisApp, ui: &mut Ui, p: &egui::Painter, rect: Rect, t:
     if app.ui.right == Some(crate::RightPane::Directions) {
         crate::navui::paint(&app.ui.nav, p, rect, t, |c| lonlat_to_screen(app, rect, c));
     }
+    // The NLDI's point, while its pane is open.
+    crate::nldiui::paint(app, p, rect, t, |c| lonlat_to_screen(app, rect, c));
     // Points picked for a workflow.
     if let Some(pick) = &app.workflow.pick {
         let pts = pick.points.clone();

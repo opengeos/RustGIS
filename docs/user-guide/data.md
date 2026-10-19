@@ -398,6 +398,66 @@ rustgis-cli run --cmd 'portal.files={"dataset":"giswqs/geospatial"}'
 rustgis-cli run --sample --cmd 'portal.add={"url":"https://data.geopf.fr/telechargement/download/LiDARHD-NUALID/NUALHD_1-0__LAZ_LAMB93_KE_2025-06-06/LHD_FXX_0652_6864_PTS_LAMB93_IGN69.copc.laz","name":"LiDAR HD 0652-6864"}'
 ```
 
+### NASA Earthaccess
+
+**Home › Web Data › NASA Earthaccess…** searches [NASA Earthdata](https://www.earthdata.nasa.gov)
+as GeoLibre's Earthaccess panel does, through NASA's Common Metadata Repository (CMR):
+
+1. **Dataset**: pick one of the **Popular datasets** (ICESat-2 ATL03/ATL06/ATL08, GEDI L2A/L2B/L4A,
+   HLS Landsat and Sentinel-2, NASADEM), or search by keyword (`earthdata.collections`), keeping
+   to **Earthdata Cloud only** if you like, and pick one of the results. A popular dataset is its
+   cloud-hosted, newest version.
+2. **Granules**: set the start and end dates (the last 30 days at first) and press **Search this
+   view** (`earthdata.granules`): the granules where the map is, newest first, 25 at a time
+   (**Load more**). Their footprints are drawn as a layer.
+3. Each granule is a card with its preview, date, size, cloud cover and number of files, and
+   **Add** (its first GeoTIFF, added as a COG read in place), **Download** (its first file, in
+   the browser), **Zoom** and **Details** (its page on Earthdata Search). **Files** lists every file,
+   each GeoTIFF with its own **Add**.
+
+Searching needs no account, but NASA's data servers ask for an
+[Earthdata Login](https://urs.earthdata.nasa.gov) token to read most files. Paste one in the pane's
+**Earthdata Login** section (or run `earthdata.login`): it is kept until RustGIS closes, never in
+the project, and sent only over HTTPS to NASA's Earthdata data servers (`*.earthdatacloud.nasa.gov`
+and `*.earthdata.nasa.gov`), never to the login server itself; a redirect away from them (to the
+presigned address the file is served from) goes without it. A file the token doesn't open says
+so (an expired token, or a dataset whose EULA you haven't accepted on Earthdata Login).
+
+In the web app, searching and footprints work, but NASA's data servers don't let web pages read
+their files (they send no CORS headers), so GeoTIFFs are added in the desktop app; **Download**
+still opens a file in a new tab, where Earthdata Login asks you to sign in.
+
+```sh
+rustgis-cli run --cmd 'earthdata.collections={"keyword":"GEDI biomass","cloudHosted":true}'
+rustgis-cli run --sample --cmd 'earthdata.granules={"shortName":"HLSL30","bbox":[-90,42.5,-89,43.5],"start":"2024-06-01","end":"2024-06-30"}' --cmd 'share.exportMap={"path":"hls.png"}'
+rustgis-cli run --sample --cmd 'earthdata.login={"token":"…"}' --cmd 'layer.addUrl={"url":"https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-protected/HLSL30.020/…/….B04.tif"}'
+```
+
+### USGS NLDI
+
+**Home › Web Data › United States › USGS NLDI…** uses the USGS
+[Network-Linked Data Index](https://api.water.usgs.gov/nldi) on the NHDPlus river network, as
+GeoLibre's NLDI panel does. Each result is a layer:
+
+- **Flowline**: choose the whole flowline, or its part upstream or downstream of the point, and
+  click the map (or type a longitude and latitude and press **Trace**, or **Map centre**). The
+  flowline a raindrop falling there would reach is added, with the raindrop's path to it
+  (`nldi.flowline`, the NLDI's flowtrace; when that fails, the nearest flowline and the way to it).
+- **Basin from hydrolocation**: the basin draining to the flowline (`nldi.basin`).
+- **Navigation**: pick upstream or downstream, main stem, tributaries or diversions, and a
+  distance (1–9,999 km), and press **Load sources & plot**: the sources the navigation can list are
+  loaded (`nldi.sources`) and the NHDPlus flowlines along it plotted (`nldi.navigate`). Pick another
+  source (stream gages, water quality sites, wells, HUC12 pour points…) and press **Plot another
+  navigation layer** to add it too.
+- **Clear NLDI result** removes the layers the pane added.
+
+The NLDI's server is sometimes slow or fails for a point it hasn't seen before: try again a little
+later, or another point.
+
+```sh
+rustgis-cli run --sample --cmd 'nldi.flowline={"lon":-89.36083,"lat":43.08944}' --cmd 'nldi.basin={"comid":13293750}' --cmd 'nldi.navigate={"comid":13293750,"mode":"UM","distance":100}' --cmd 'nldi.navigate={"comid":13293750,"mode":"DM","distance":50,"source":"nwissite"}' --cmd 'share.exportMap={"path":"nldi.png"}'
+```
+
 ## S3 buckets
 
 An `s3://bucket/key` address works wherever data is added by its address: **Add Data › From

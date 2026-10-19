@@ -536,6 +536,36 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// POSTs a JSON document and reads the answer (at most the tile cache's `MAX_BYTES`), without
+/// following redirects; an error status is `HTTP <status>`.
+async fn post_json(url: &str, body: &str) -> Result<Vec<u8>, String> {
+    use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache;
+    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_redirect(web_sys::RequestRedirect::Error);
+    let headers = web_sys::Headers::new().map_err(err)?;
+    headers.set("Content-Type", "application/json").map_err(err)?;
+    headers.set("Accept", "application/json").map_err(err)?;
+    init.set_headers(&headers);
+    init.set_body(&wasm_bindgen::JsValue::from_str(body));
+    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str_and_init(url, &init))
+        .await
+        .map_err(|_| "the browser couldn't reach it (offline, or the server doesn't accept requests from web pages)".to_string())?
+        .dyn_into()
+        .map_err(err)?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
+    let bytes = js_sys::Uint8Array::new(&buf);
+    if bytes.length() as usize > cache::MAX_BYTES {
+        return Err(format!("{} bytes is too large", bytes.length()));
+    }
+    Ok(bytes.to_vec())
+}
+
 /// Makes an HTTP request (the AI assistant's calls to its model), returning the response of any
 /// status.
 async fn http(
@@ -598,6 +628,10 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
     // Map tiles come through the browser's fetch (the app repaints when they arrive).
     rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_fetcher(|url, done| {
         wasm_bindgen_futures::spawn_local(async move { done(fetch_bytes(&url).await) });
+    });
+    // So are JSON documents POSTed (the NLDI's flowtrace).
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::set_poster(|url, body, done| {
+        wasm_bindgen_futures::spawn_local(async move { done(post_json(&url, &body).await) });
     });
     let open_inbox = inbox.clone();
     let font_ctx = ctx.clone();
