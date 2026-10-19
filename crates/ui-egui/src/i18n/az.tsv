@@ -1,9 +1,12 @@
 # az interface catalog: English<TAB>translation
  by 	 ×
 '{b}' isn't a bucket name	'{b}' bucket adı deyil
+'{text}' isn't a scale: type one such as 1:12,345	«{text}» miqyas deyil: məsələn, 1:12,345 kimi birini yazın
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(süzülmüş)
 + Add Stop	+ Dayanacaq əlavə et
++ Input	+ Giriş
++ Output	+ Çıxış
 /F	/F
 /PID	/PID
 /T	/T
@@ -21,21 +24,31 @@ A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT girişi yalnız 
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	Ölkənin geoBoundaries-dən inzibati sərhədləri (CC BY 4.0): ölkənin özü (ADM0), birinci səviyyəli bölgüləri (ADM1, məsələn ştatlar) və daha xırda bölgülər.
 A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	Fərdi genişləndirmə bu rastrın öz vahidlərindədir: onu standart kimi saxlamaq üçün başqa genişləndirmə tipi seçin.
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Masaüstündə və brauzerdə coğrafi məlumatları xəritələşdirmək, təhlil etmək və paylaşmaq üçün təmiz Rust ilə yazılmış sürətli, azad və açıq mənbəli CİS.
+A field (known once the model runs)	Sahə (model işə salındıqdan sonra məlum olur)
 A flat scene centred on the view (azimuthal equidistant).	Görünüşün mərkəzində düz səhnə (azimutal bərabərməsafəli).
+A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens serverinin məlumat dəstləri, obyekt kimi oxunur (hər birinin ilk 1000-i).
 A globe scene.	Qlobus səhnəsi.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	En və uzunluq (40.7, -74.0 və ya 40°42'N 74°0'W), lay, əlfəcin və ya layın cədvəlindəki dəyər. Enter işıqlandırılmış sətri seçir; «Yer axtar» mətni yer kimi axtarır
+A layer the model reads	Modelin oxuduğu lay
 A magnifying lens that follows the pointer.	Göstəricini izləyən böyüdücü linza.
-A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer.	Xəritə, obyekt və ya örtük xidmətinin ünvanı: WMS, WMTS, WFS, WCS, OGC API Features və ya Tiles, yaxud ArcGIS FeatureServer, MapServer, ImageServer və ya VectorTileServer.
+A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	Xəritə, obyekt və ya örtük xidmətinin ünvanı: WMS, WMTS, WFS, WCS, OGC API Features və ya Tiles, yaxud ArcGIS FeatureServer, MapServer, ImageServer və ya VectorTileServer (və ya baxmaq üçün xidmətlər kataloqu).
+a name, or owner/name such as giswqs/geospatial	ad və ya sahib/ad, məsələn giswqs/geospatial
+A node cannot connect to itself.	Düyün özünə qoşula bilməz.
 A notebook of text and command cells.	Mətn və əmr xanalarından ibarət bloknot.
 A place or an address	Yer və ya ünvan
 A project keeps at least one map	Layihədə ən azı bir xəritə qalır
 A projected coordinate system.	Proyeksiyalı koordinat sistemi.
 A report listing the selected layer's records, page after page.	Seçilmiş layın qeydlərini səhifə-səhifə sadalayan hesabat.
+A result that only feeds other tools is removed once the model has run; add an output to keep it.	Yalnız digər alətlərə ötürülən nəticə model işlədikdən sonra silinir; onu saxlamaq üçün çıxış əlavə edin.
+A result the model keeps, under a name	Modelin ad altında saxladığı nəticə
 A service import or refresh is already running.	Xidmətin idxalı və ya yenilənməsi artıq davam edir.
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	Tapşırıq ən çox 200 addım saxlayır: onu yaratmaq üçün yazmanı dayandırın, sonra qalanını başqa tapşırıq kimi yazın.
 A template with the first selected feature's values	İlk seçilmiş obyektin qiymətləri ilə şablon
 A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.	Kafel xidmətinin ünvanı: {z}/{x}/{y} ilə rastr kafellər (və ya WMS üçün {-y}, {q}, {bbox-epsg-3857}), vektor kafellər (.pbf) və ya TileJSON, MapLibre üslubu, PMTiles arxivi (veb ünvan və ya bu kompüterdəki fayl) və ya bu kompüterdəki MBTiles faylı.
+A token is set.	Token təyin edilib.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Qiymət, sahə və ya + − × ÷ ilə birləşdirilmiş ikisi. Seçilmiş sətirlərə, heç nə seçilməyibsə bütün sətirlərə tətbiq olunur.
+a vector a pixel	hər piksel üçün bir vektor
+a vector an image patch	hər təsvir fraqmenti üçün bir vektor
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Veb ünvanı ilə, konsolidasiya edilmiş metaməlumatlı Zarr anbarı (format 2 və ya 3), yaxud bu kompüterdəki qovluq. Dəyişənin xəritəsi onun digər ölçülərinin, məsələn zamanın, seçilmiş addımları üçün oxunur.
 About	Haqqında
 About plugins	Plaginlər haqqında
@@ -72,9 +85,12 @@ Add a second map frame first	Əvvəlcə ikinci xəritə çərçivəsi əlavə ed
 Add a text element.	Mətn elementi əlavə edin.
 Add a web basemap over the others instead of replacing them, to blend it with them. Click one that shows to take it off.	Veb əsas xəritəni digərlərini əvəz etmədən onların üzərinə əlavə edin ki, onlarla qarışsın. Götürmək üçün görünənlərdən birinə klikləyin.
 Add Administrative Boundaries	İnzibati sərhədlər əlavə et
+Add an Earthdata Login token (Earthdata Login, above) to put NASA GeoTIFFs on the map.	NASA GeoTIFF-lərini xəritəyə qoymaq üçün Earthdata Login tokeni əlavə edin (yuxarıda, Earthdata Login).
 Add an elevation raster first.	Əvvəlcə hündürlük rastrı əlavə edin.
 Add an elevation raster to the map first	Əvvəlcə xəritəyə hündürlük rastrı əlavə edin
 Add an empty layer with a ready-made schema, to draw into.	Çəkmək üçün hazır sxemli boş lay əlavə edin.
+Add an input for each layer the model reads.	Modelin oxuduğu hər lay üçün giriş əlavə edin.
+Add an output to keep a result under a name.	Nəticəni ad altında saxlamaq üçün çıxış əlavə edin.
 Add and Open	Əlavə et və aç
 Add and Open Notebook	Bloknotu əlavə et və aç
 Add Archive	Arxiv əlavə et
@@ -88,6 +104,7 @@ Add Data	Məlumat əlavə et
 Add Data (from file contents)	Məlumat əlavə et (fayl məzmunundan)
 Add Data (from text)	Məlumat əlavə et (mətndən)
 Add Data From Database	Verilənlər bazasından məlumat əlavə et
+Add data from public web services and catalogs.	Açıq veb xidmətlərdən və kataloqlardan məlumat əlavə edin.
 Add Data From SQL	SQL-dən məlumat əlavə et
 Add Data From URL	URL-dən məlumat əlavə et
 Add Data From URL…	URL-dən məlumat əlavə et…
@@ -100,6 +117,9 @@ Add Element	Element əlavə et
 Add Encoded Polyline	Kodlaşdırılmış polixətt əlavə et
 Add Field	Sahə əlavə et
 Add field	Sahə əlavə et
+Add field boundaries	Sahə sərhədlərini əlavə et
+Add field density	Sahə sıxlığını əlavə et
+Add Fields of the World	Fields of the World əlavə et
 Add Folder	Qovluq əlavə et
 Add Folder…	Qovluq əlavə et…
 Add folder…	Qovluq əlavə et…
@@ -109,25 +129,30 @@ Add From Service…	Xidmətdən əlavə et…
 Add GeoJSON, CSV or Shapefile data to the map.	Xəritəyə GeoJSON, CSV və ya Shapefile məlumatı əlavə edin.
 Add Graphic	Qrafika əlavə et
 Add Graphics Layer	Qrafika layı əlavə et
+Add Input	Giriş əlavə et
 Add Job	İş əlavə et
 Add Keyframe	Açar kadr əlavə et
 Add Layer File	Lay faylı əlavə et
 Add Open Data	Açıq məlumat əlavə et
+Add Output	Çıxış əlavə et
 Add Overture Maps Data	Overture Maps məlumatı əlavə et
 Add Page After	Sonra səhifə əlavə et
 Add Page Before	Əvvəl səhifə əlavə et
 Add pages, layouts, related reports and related records to the report.	Hesabata səhifələr, tərtibatlar, əlaqəli hesabatlar və əlaqəli qeydlər əlavə edin.
 Add Photos	Foto əlavə et
 Add Plugin Folder…	Plagin qovluğu əlavə et…
+Add points	Nöqtələr əlavə et
 Add raster tiles, vector tiles or a map style by address.	Ünvanla rastr kafellər, vektor kafellər və ya xəritə üslubu əlavə edin.
 Add Rule	Qayda əlavə et
 Add sample countries	Nümunə ölkələri əlavə et
 Add Sample Data	Nümunə məlumat əlavə et
+Add Satellite Embeddings	Peyk embeddinqləri əlavə et
 Add Service Layer	Xidmət layı əlavə et
 Add skill…	Bacarıq əlavə et…
 Add STAC Asset	STAC resursu əlavə et
 Add STAC Footprints	STAC konturları əlavə et
 Add Step	Addım əlavə et
+Add Stroke	Cizgi əlavə et
 Add Style	Üslub əlavə et
 Add Style File…	Üslub faylı əlavə et…
 Add Task Step	Tapşırıq addımı əlavə et
@@ -136,6 +161,8 @@ Add text that updates: page, date, scale, map and more.	Yenilənən mətn əlav�
 Add the attribute table of a layer in the map frame.	Xəritə çərçivəsindəki layın atribut cədvəlini əlavə edin.
 Add the current view as a keyframe.	Cari görünüşü açar kadr kimi əlavə edin.
 Add the maps of a map file, map package, project or project package.	Xəritə faylının, xəritə paketinin, layihənin və ya layihə paketinin xəritələrini əlavə edin.
+Add The National Map Service	The National Map xidməti əlavə et
+Add this GeoTIFF to the map	Bu GeoTIFF-i xəritəyə əlavə et
 Add this MCP server to your agent:	Bu MCP serverini agentinizə əlavə edin:
 Add Tile Layer	Kafel layı əlavə et
 Add Tile Layer…	Kafel layı əlavə et…
@@ -143,13 +170,16 @@ Add To Current Selection	Cari seçimə əlavə et
 Add to Favourites	Seçilmişlərə əlavə et
 Add to Map	Xəritəyə əlavə et
 Add vector data.	Vektor məlumatı əlavə edin.
+Add view	Görünüş əlavə et
 Add Zarr Variable	Zarr dəyişəni əlavə et
 Add Zarr Variable…	Zarr dəyişəni əlavə et…
-Add {format}	{format} əlavə et
+Add ▾	Əlavə et ▾
 Added	Əlavə edildi
 Added Overture's {theme} as map tiles ({release}; some themes show only zoomed in): {attribution}	Overture-un {theme} mövzusu xəritə kafelləri kimi əlavə edildi ({release}; bəzi mövzular yalnız yaxınlaşdırdıqda görünür): {attribution}
+Added {name}	{name} əlavə edildi
 Added {p} points, {l} lines and {g} polygons	{p} nöqtə, {l} xətt və {g} poliqon əlavə edildi
 Added: {names}	Əlavə edildi: {names}
+Adding…	Əlavə edilir…
 Additional surrounds.	Əlavə xəritə elementləri.
 Address	Ünvan
 Address fields	Ünvan sahələri
@@ -164,24 +194,28 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	İnzibati sərhədlər
+After the event	Hadisədən sonra
 Agent input exceeds the protocol line limit.	Agentin girişi protokolun sətir limitini aşır.
 Agent input pipe closed.	Agentin giriş kanalı bağlandı.
 Agent input queue is full or disconnected; stop the agent and try again.	Agentin giriş növbəsi doludur və ya bağlantısı kəsilib; agenti dayandırın və yenidən cəhd edin.
 Agent threads	Agent axınları
 Agent work	Agent work
+Agents have full access: they may run scripts, tasks, models and plugins. Click to stop the MCP relay	Agentlərin tam girişi var: skriptləri, tapşırıqları, modelləri və plaginləri işə sala bilərlər. MCP relyni dayandırmaq üçün klikləyin
 Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Qoşulan bu kompüterdəki agentlər (Claude Code, Codex, Cursor və digərləri) RustGIS-in alətləri ilə burada açıq olan xəritə üzərində işləyir: faylları aça, saxlaya və vebdən istifadə edə bilərlər. Skriptlər və plagin idarəsi söndürülü qalır.
-Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off. The choice is remembered across launches.	Qoşulan bu kompüterdəki agentlər (Claude Code, Codex, Cursor və digərləri) RustGIS-in alətləri ilə burada açıq olan xəritə üzərində işləyir: faylları aça, saxlaya və vebdən istifadə edə bilərlər. Skriptlər və plagin idarəsi söndürülü qalır. Seçim növbəti açılışlarda da yadda saxlanılır.
 Agents then run commands, change files and use the web on this computer without asking you.	Agentlər bu kompüterdə sizdən soruşmadan əmrlər işlədəcək, faylları dəyişəcək və vebdən istifadə edəcək.
 Aggregation	Aqreqasiya
+Agricultural field boundaries the Fields of the World model found in Sentinel-2 imagery, worldwide, a year at a time (2nd Edition, CC BY 4.0). These are model predictions, not surveyed parcels.	Fields of the World modelinin Sentinel-2 təsvirlərində bütün dünya üzrə, hər dəfə bir il üçün tapdığı kənd təsərrüfatı sahələrinin sərhədləri (2nd Edition, CC BY 4.0). Bunlar ölçülmüş torpaq sahələri deyil, model proqnozlarıdır.
 AI	Sİ
 AI\nAssistant	Sİ\nköməkçisi
 AI Assistant	Sİ köməkçisi
 AI provider	Sİ provayderi
+Albers Equal Area Conic	Albersin bərabərsahəli konik proyeksiyası
 Alignment	Düzləndirmə
 All	Hamısı
 All categories	Bütün kateqoriyalar
 All classes	Bütün siniflər
 All files	Bütün fayllar
+all of it	hamısı
 All Selected	Bütün seçilmişlər
 All steps done.	Bütün addımlar tamamlandı.
 All tables with geometry	Həndəsəli bütün cədvəllər
@@ -205,18 +239,23 @@ Analyze › AI	Analiz › Sİ
 Analyze › Workflows	Analiz › İş axınları
 AND	AND
 Angle	Bucaq
+Animated GIF	Animasiyalı GIF
 Animation	Animasiya
 Another run is under way.	Başqa icra artıq gedir.
+Any	İstənilən
 anywhere in the records	qeydlərin istənilən yerində
 API key	API açarı
 Apply	Tətbiq et
 Apply a function to a raster	Rastra funksiya tətbiq et
 Apply Control Points	Nəzarət nöqtələrini tətbiq et
 Apply Style	Üslubu tətbiq et
+Apply to layers	Laylara tətbiq et
 Apply to the selected layer	Seçilmiş laya tətbiq et
 Approve agents' actions without asking	Agentlərin əməliyyatlarını soruşmadan təsdiqlə
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
+ArcGIS Portal	ArcGIS Portal
+ArcGIS Portal…	ArcGIS Portal…
 ArcGIS REST	ArcGIS REST
 Archive	Arxiv
 Archive History	Arxiv tarixçəsi
@@ -228,10 +267,13 @@ Area of use: within {r}° of the {lon}° meridian	İstifadə sahəsi: {lon}° me
 Area of use: within {r}° of {lon}°, {lat}°	İstifadə sahəsi: {lon}°, {lat}° nöqtəsindən {r}° daxilində
 Area {area}   ·   Perimeter {perimeter}	Sahə {area}   ·   Perimetr {perimeter}
 Areas (name, land use, area)	Ərazilər (ad, torpaq istifadəsi, sahə)
+Arrange	Düz
 Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Məlumatlarınız haqqında sual verin və ya xəritə ilə nə edilməli olduğunu təsvir edin. Köməkçi sizin üçün RustGIS əmrlərini icra edir; hər dəyişiklik geri alına bilər.
 Ask about the map, or tell it what to do…	Xəritə haqqında soruşun və ya nə edəcəyini deyin…
 Ask about your data, or tell the assistant what to do with the map.	Məlumatlarınız haqqında soruşun və ya köməkçiyə xəritə ilə nə edəcəyini deyin.
+Asking NASA's CMR…	NASA CMR-ə sorğu…
 Asking the catalog…	Kataloqa sorğu…
+Asking the NLDI…	NLDI-yə sorğu…
 Assistant settings	Köməkçi parametrləri
 Atlas	Atlas
 Attachments	Qoşmalar
@@ -256,6 +298,7 @@ Avoid	Qaçın
 AWS	AWS
 AWS, anonymous	AWS, anonim
 Azimuth	Azimut
+Back	Geri
 Back to Explore; cancel a sketch	Kəşfə qayıt; eskizi ləğv et
 Back to the Map	Xəritəyə qayıt
 Back to the map	Xəritəyə qayıt
@@ -269,15 +312,21 @@ Bands	Kanallar
 Bands: blue green red NIR SWIR	Kanallar: blue green red NIR SWIR
 Basemap	Əsas xəritə
 Basemaps	Əsas xəritələr
+Basin from hydrolocation	Hidrolokasiyadan hövzə
+Bearing	Azimut
 Bearing {b}° · Pitch {p}°	Azimut {b}° · Meyl {p}°
 Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both.	Azimut: xəritənin yuxarı tərəfinin baxdığı istiqamət, şimaldan saat əqrəbi istiqamətində. Meyl: düz aşağı baxışdan əyilmə. Hər ikisini sıfırlamaq üçün klikləyin.
+Before the event	Hadisədən əvvəl
 Below	Aşağı
 Below 1:5,000,000 show everything; beyond it only what matches:	1:5 000 000-dan iri miqyasda hər şeyi göstər; ondan kiçikdə yalnız uyğun gələnləri:
 Below Left	Aşağı sol
 Below Right	Aşağı sağ
 Best	Ən yaxşı
+Bevel	Kəsik
 Bike	Velosiped
 Bilinear	Bilinear
+Bind To Time Slider	Zaman sürgüsünə bağla
+Bind to Time Slider	Zaman sürgüsünə bağla
 Blank	Boş
 Blank Letter page	Boş Letter səhifəsi
 Blank Map	Boş xəritə
@@ -325,6 +374,7 @@ By\nAttributes	Atributlara\ngörə
 By\nLocation	Məkana\ngörə
 by {author}	müəllif: {author}
 By {field}	{field} sahəsinə görə
+cached tiles	keşlənmiş kafellər
 Calculate	Hesabla
 Calculate\nGeometry	Həndəsəni\nhesabla
 Calculate Field	Sahəni hesabla
@@ -338,19 +388,27 @@ Camera Effect	Kamera effekti
 Can't read this folder	Bu qovluğu oxumaq mümkün deyil
 Cancel	Ləğv et
 Cancel Caching	Keşləməni ləğv et
+Cap	Uc
 Capture To Clipboard	Mübadilə buferinə çək
 CARGO_PKG_VERSION	CARGO_PKG_VERSION
 Cartography	Kartoqrafiya
 Case Field	Qrup sahəsi
 Cast Shadow	Kölgə sal
+Catalog	Kataloq
+catalog is a static STAC catalog's catalog.json or collection.json	catalog statik STAC kataloqunun catalog.json və ya collection.json faylıdır
 Catalogue search (CSW)	Kataloqda axtarış (CSW)
+Celestial Bodies	Göy cisimləri
+Celestial Body	Göy cismi
+Celestial body: {body}	Göy cismi: {body}
 Cell size	Xana ölçüsü
 cell size °	xana ölçüsü °
+Center	Mərkəz
 Center Map Here	Xəritəni burada mərkəzləşdir
 Centered	Mərkəzdə
+Central meridian	Mərkəzi meridian
 Chain functions	Funksiyaları zəncirlə
 Chain raster functions.	Rastr funksiyalarını zəncirləyin.
-Chain tools into a model; build one from your history.	Alətləri modelə zəncirləyin; tarixçənizdən model qurun.
+Change dataset	Məlumat dəstini dəyiş
 Change Detection	Dəyişikliklərin aşkarlanması
 Change the map's backdrop.	Xəritənin fonunu dəyişin.
 Change the map's coordinate system	Xəritənin koordinat sistemini dəyiş
@@ -367,6 +425,9 @@ Check Again	Yenidən yoxla
 Check for\nUpdates	Yeniləmələri\nyoxla
 Check for Updates	Yeniləmələri yoxla
 Check for Updates…	Yeniləmələri yoxla…
+Check the address and the service type.	Ünvanı və xidmət növünü yoxlayın.
+Check the address and your connection.	Ünvanı və bağlantınızı yoxlayın.
+Check the address.	Ünvanı yoxlayın.
 Check the integration's client, permissions, workspace policy and route configuration.	İnteqrasiyanın müştərisini, icazələrini, iş sahəsi siyasətini və marşrut konfiqurasiyasını yoxlayın.
 Checking for updates…	Yeniləmələr yoxlanılır…
 China	Çin
@@ -377,6 +438,7 @@ Choose a country	Ölkə seçin
 Choose a delimited text file or a spreadsheet, then pick its columns.	Ayrılmış mətn faylı və ya cədvəl seçin, sonra onun sütunlarını seçin.
 Choose a destination	Təyinat nöqtəsi seçin
 choose a file first	əvvəlcə fayl seçin
+Choose a layer…	Lay seçin…
 Choose a model.	Model seçin.
 Choose a resampling type for the raster layer.	Rastr layı üçün yenidən nümunələmə tipini seçin.
 Choose a start	Başlanğıc seçin
@@ -392,6 +454,7 @@ Choose the interface language.	İnterfeys dilini seçin.
 Choose which layers a click identifies.	Klikin hansı layları müəyyən etdiyini seçin.
 Choose which tabs the ribbon shows.	Lentin hansı tabları göstərdiyini seçin.
 Circle	Dairə
+Circle Radius (km)	Dairə radiusu (km)
 Class color	Sinif rəngi
 Class Style	Sinif üslubu
 Classes	Siniflər
@@ -411,6 +474,7 @@ Clear Guides	Bələdçi xətləri təmizlə
 Clear History	Tarixçəni təmizlə
 Clear Limits	Hədləri təmizlə
 Clear mask	Maskanı təmizlə
+Clear NLDI result	NLDI nəticəsini təmizlə
 Clear search	Axtarışı təmizlə
 Clear Selection	Seçimi təmizlə
 Clear selection	Seçimi təmizlə
@@ -432,6 +496,7 @@ Click the map to add a point	Nöqtə əlavə etmək üçün xəritəyə klikləy
 Click the map to place a point	Nöqtə yerləşdirmək üçün xəritəyə klikləyin
 Click the map to place text	Mətn yerləşdirmək üçün xəritəyə klikləyin
 Click the map to place text.	Mətn yerləşdirmək üçün xəritəyə klikləyin.
+Click the map to trace a point	Nöqtəni izləmək üçün xəritəyə klikləyin
 Click the map: {n} of {total}	Xəritəyə klikləyin: {n} / {total}
 Click the observer on the map	Xəritədə müşahidəçini klikləyin
 Click the observer, then the target	Müşahidəçini, sonra hədəfi klikləyin
@@ -445,6 +510,7 @@ Click to add vertices · double-click to finish	Təpə əlavə etmək üçün kl
 Click to add vertices · double-click to finish the line	Təpə əlavə etmək üçün klikləyin · xətti bitirmək üçün iki dəfə klikləyin
 Click to edit the description	Təsviri redaktə etmək üçün klikləyin
 Click to place a point graphic.	Nöqtə qrafikası yerləşdirmək üçün klikləyin.
+Click to select the node	Düyünü seçmək üçün klikləyin
 Click to switch between decimal degrees and DMS	Onluq dərəcə ilə DMS arasında keçid üçün klikləyin
 Clip	Kəs
 Clip a raster to the view, or resample it.	Rastrı görünüşə görə kəsin və ya yenidən nümunələyin.
@@ -456,10 +522,12 @@ Close	Bağla
 Close (Esc)	Bağla (Esc)
 Close All	Hamısını bağla
 Close all panes	Bütün panelləri bağla
+Close ModelBuilder	Model qurucusunu bağla
 Close Others	Digərlərini bağla
 Close Table	Cədvəli bağla
 Close table	Cədvəli bağla
 Close the layout and show the map.	Tərtibatı bağlayın və xəritəni göstərin.
+Close the time slider (it stays on; Time Slider opens it again).	Zaman sürgüsünü bağla (aktiv qalır; «Zaman sürgüsü» onu yenidən açır).
 Close thread	Axını bağla
 Close {name}	Bağla: {name}
 Closest	Ən yaxın
@@ -482,6 +550,7 @@ Colors from the raster's own color table.	Rastrın öz rəng cədvəlindən rən
 Colour ramps (RustGIS, QGIS, GDAL, GMT)	Rəng şkalaları (RustGIS, QGIS, GDAL, GMT)
 Columns named like longitude/latitude, easting/northing or geometry are picked for you.	longitude/latitude, easting/northing və ya geometry kimi adlanan sütunlar sizin üçün seçilir.
 Combinations from the box above, one per line	Yuxarıdakı qutudan kombinasiyalar, hər sətirdə bir
+COMID {comid}	COMID {comid}
 Comma	Vergül
 Command\nSearch	Əmr\naxtarışı
 command is required	command tələb olunur
@@ -489,6 +558,7 @@ Command Search	Əmr axtarışı
 Commands	Əmrlər
 Commands on the Plugins tab: {commands} · Tools in the Tools pane: {tools}	Plaginlər tabındakı əmrlər: {commands} · Alətlər panelindəki alətlər: {tools}
 Commands…	Əmrlər…
+Common scales	Ümumi miqyaslar
 Compact	Sıxışdır
 Compacted the earlier conversation.	Əvvəlki söhbət sıxışdırıldı.
 Compare	Müqayisə et
@@ -496,9 +566,12 @@ Compare two rasters	İki rastrı müqayisə et
 Compass rose	Kompas gülü
 Completed	Tamamlandı
 Confirm uninstall	Silməni təsdiqlə
+Conic, conformal: true shapes across a mid-latitude region; set its meridian and parallels to the region.	Konik, konform: orta enlik regionunda düzgün formalar; meridianını və paralellərini regiona uyğun təyin edin.
+Conic, equal-area: true sizes across a mid-latitude region; set its meridian and parallels to the region.	Konik, bərabərsahəli: orta enlik regionunda düzgün ölçülər; meridianını və paralellərini regiona uyğun təyin edin.
 Connect	Qoş
 Connect a folder to the Browser.	Brauzerə qovluq qoşun.
 Connect to S3	S3-ə qoşul
+Connect, or pick a layer	Qoşulun və ya lay seçin
 Connecting to {url}…	{url} ünvanına qoşulur…
 Connection	Bağlantı
 Connections	Bağlantılar
@@ -521,19 +594,28 @@ Coordinate	Koordinat
 Coordinate System	Koordinat sistemi
 Coordinate system	Koordinat sistemi
 Coordinate System…	Koordinat sistemi…
+Copied the command.	Əmr kopyalandı.
 Copied the map to the clipboard	Xəritə mübadilə buferinə kopyalandı
 Copied {path}	{path} kopyalandı
 Copies the (selected) features of a layer to a new layer.	Layın (seçilmiş) obyektlərini yeni laya kopyalayır.
 Copy	Kopyala
+Copy a model.run command that runs this model, for the Script pane or Python	Bu modeli işə salan model.run əmrini Skript paneli və ya Python üçün kopyala
 Copy Address	Ünvanı kopyala
+Copy address	Ünvanı kopyala
 Copy an image of the map to the clipboard.	Xəritənin təsvirini mübadilə buferinə kopyalayın.
 Copy As GeoJSON	GeoJSON kimi kopyala
+Copy Command	Əmri kopyala
 Copy coordinates to the clipboard	Koordinatları mübadilə buferinə kopyala
+Copy details	Təfərrüatları kopyala
+Copy Group	Qrupu kopyala
+Copy Layer	Layı kopyala
+Copy Layers	Layları kopyala
 Copy Path	Yolu kopyala
 Copy sign-in link	Giriş keçidini kopyala
 Copy the selected features (also as GeoJSON text).	Seçilmiş obyektləri kopyalayın (həm də GeoJSON mətni kimi).
 Copy the selected features and delete them.	Seçilmiş obyektləri kopyalayın və silin.
 Copy the selected layer's data source path.	Seçilmiş layın məlumat mənbəyi yolunu kopyalayın.
+Copy this element (Ctrl+D, ⌘D on a Mac)	Bu elementi kopyala (Ctrl+D, Mac-də ⌘D)
 Corrections	Düzəlişlər
 Cost	Xərc
 could not draw the map	xəritəni çəkmək mümkün olmadı
@@ -571,6 +653,7 @@ Ctrl+K	Ctrl+K
 Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
 Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
+Cumulative	Kumulyativ
 Current date	Cari tarix
 Current Project	Cari layihə
 Current time	Cari vaxt
@@ -599,8 +682,12 @@ data.gov and CKAN catalogues	data.gov və CKAN kataloqları
 Database	Verilənlər bazası
 Databases	Verilənlər bazaları
 Database…	Verilənlər bazası…
+Dataset	Məlumat dəsti
+Datasets on Hugging Face by name or owner/name; browse a dataset's files and add GeoTIFFs, GeoParquet, PMTiles, LiDAR and other files.	Hugging Face-də ada və ya sahib/ada görə məlumat dəstləri; dəstin fayllarına baxın və GeoTIFF, GeoParquet, PMTiles, LiDAR və digər fayllar əlavə edin.
 Data…	Məlumat…
+Date	Tarix
 Dates	Tarixlər
+Day	Gün
 Day and night shading for a time.	Müəyyən vaxt üçün gecə-gündüz kölgələnməsi.
 Decimal	Onluq
 Decline	İmtina et
@@ -614,6 +701,7 @@ Definition Query	Təyinat sorğusu
 Definition query	Təyinat sorğusu
 Definition Query…	Təyinat sorğusu…
 Delete	Sil
+Delete (or Backspace)	Delete (və ya Backspace)
 Delete Cell	Xananı sil
 Delete Color Ramp	Rəng şkalasını sil
 Delete Element	Elementi sil
@@ -622,6 +710,7 @@ Delete Job	İşi sil
 Delete Layout	Tərtibatı sil
 Delete Map	Xəritəni sil
 Delete Model	Modeli sil
+Delete node	Düyünü sil
 Delete Notebook	Bloknotu sil
 Delete Page	Səhifəni sil
 Delete Presentation	Təqdimatı sil
@@ -655,6 +744,9 @@ Directions	Marşrut
 Directions From Here	Buradan marşrut
 Directions To Here	Bura marşrut
 Directions use an external routing server	Marşrutlar xarici marşrutlaşdırma serverindən istifadə edir
+Discard	Ləğv et
+Discard unsaved changes to the current model?	Cari modeldəki saxlanmamış dəyişikliklər ləğv edilsin?
+Disconnect	Bağlantını kəs
 Disconnect From S3	S3-dən ayrıl
 Display	Göstərmə
 Display Filters	Göstərmə filtrləri
@@ -663,6 +755,7 @@ Display Type	Göstərmə tipi
 Dissolve	Birləşdir
 Dissolve Field	Birləşdirmə sahəsi
 Distance	Məsafə
+Distance (km)	Məsafə (km)
 Distance Coefficient P	Məsafə əmsalı P
 Distances along the surface, heights, areas and volumes.	Səth boyunca məsafələr, hündürlüklər, sahələr və həcmlər.
 DISTINCT	DISTINCT
@@ -680,6 +773,7 @@ Double-click	İki dəfə klik
 Double-click to add	Əlavə etmək üçün iki dəfə klikləyin
 Download	Endir
 Download\nMap	Xəritəni\nendir
+Download its features in the view (up to the server's limit)	Görünüşdəki obyektlərini endir (serverin limitinə qədər)
 Download Map	Xəritəni endir
 Download OpenStreetMap Data	OpenStreetMap məlumatını endir
 Download the GeoLibre runner	GeoLibre işlədicisini endir
@@ -695,7 +789,9 @@ Drag a box to draw an ellipse.	Ellips çəkmək üçün çərçivə çəkin.
 Drag a box to zoom into.	Yaxınlaşdırmaq üçün çərçivə çəkin.
 Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Xəritəsini sürüşdürmək üçün xəritə çərçivəsini dartın, miqyas üçün çarxı fırladın · dayandırmaq üçün Esc
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Düzbucaqlı çəkin, sonra onun içinə yerləşdirmək üçün PNG və ya JPEG təsvir seçin.
+Drag a tool from the palette to start building, or add an input layer.	Qurmağa başlamaq üçün palitradan alət sürükləyin və ya giriş layı əlavə edin.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Köçürmək üçün təpəni dartın · təpə əlavə etmək üçün kənara klikləyin · Delete seçilmiş təpəni silir
+Drag from a node's right port to another node's left port to connect them.	Qoşmaq üçün düyünün sağ portundan digər düyünün sol portuna sürükləyin.
 Drag from the centre out	Mərkəzdən kənara çəkin
 Drag from the centre to draw a circle.	Dairə çəkmək üçün mərkəzdən çəkin.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Xəritə çərçivələrini köçürmək əvəzinə, onların xəritələrini sürüşdürmək üçün içəridə dartın və miqyası dəyişmək üçün çarxı fırladın.
@@ -707,9 +803,12 @@ Drag to draw	Çəkmək üçün sürükləyin
 Drag to draw a freehand line.	Sərbəst xətt çəkmək üçün sürükləyin.
 Drag to draw a freehand polygon.	Sərbəst poliqon çəkmək üçün sürükləyin.
 Drag to draw a rectangle.	Düzbucaqlı çəkmək üçün sürükləyin.
+Drag tools from the palette onto the canvas.	Alətləri palitradan kətana sürükləyin.
 Drag vertices on the map; click an edge to add one	Xəritədə təpələri dartın; təpə əlavə etmək üçün kənara klikləyin
 Draw a halo around label text.	Etiket mətni ətrafında halo çəkin.
 Draw a labelled latitude/longitude grid over the map frame.	Xəritə çərçivəsinin üzərində etiketli en/uzunluq toru çəkin.
+Draw a model: chain tools from input layers to the results to keep	Model çəkin: alətləri giriş laylarından saxlanacaq nəticələrə qədər zəncirləyin
+Draw a model: chain tools from input layers to the results to keep.	Model çəkin: alətləri giriş laylarından saxlanacaq nəticələrə qədər zəncirləyin.
 Draw labels at every scale and distance.	Etiketləri hər miqyasda və məsafədə çəkin.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Seçilmiş layda yeni obyektlər çəkin. Xətləri və poliqonları bitirmək üçün iki dəfə klikləyin.
 Draw new single-band rasters with the inverted grey stretch again.	Yeni tək zolaqlı rastrları yenidən tərs boz genişləndirmə ilə çək.
@@ -724,8 +823,11 @@ Drawing	Çəkmə
 Drawing Effects	Çəkmə effektləri
 Drawing Mode	Çəkmə rejimi
 Drawing Order	Çəkmə sırası
+drawn by the server	server tərəfindən çəkilir
 Drive	Avtomobil
+Drone and aerial imagery shared on OpenAerialMap, newest first, added as cloud-optimised GeoTIFFs.	OpenAerialMap-də paylaşılan dron və aerofoto təsvirləri, ən yenisi əvvəl, bulud üçün optimallaşdırılmış GeoTIFF kimi əlavə edilir.
 Duplicate	Dublikat et
+Duplicate Element	Elementi dublikat et
 Duplicate Layout	Tərtibatı dublikat et
 Duplicate Map	Xəritəni dublikat et
 Dusk	Toran
@@ -734,13 +836,25 @@ Dynamic Picture	Dinamik şəkil
 Dynamic picture	Dinamik şəkil
 Dynamic range adjustment (stretch the pixels in view)	Dinamik diapazon tənzimləməsi (görünən pikselləri genişləndir)
 Dynamic range adjustment: stretch using the pixels in view.	Dinamik diapazon tənzimləməsi: görünən piksellərə görə genişləndirin.
-Dynamic text:	Dinamik mətn:
+Dynamical	Dynamical
+Dynamical…	Dynamical…
 e.g.  pop_est / 1000000   or   'Africa'   or   name	məs.  pop_est / 1000000   və ya   'Africa'   və ya   name
 e.g. 0, 255, -9999	məs. 0, 255, -9999
 e.g. continent = 'Europe'	məs. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	məs. pop_est > 100000000 AND continent = 'Asia'
 Each geoprocessing run becomes a step, chained by its outputs	Hər geoemal icrası çıxışları ilə zəncirlənən bir addıma çevrilir
+Earth Index has no points in the view	Earth Index-də görünüşdə nöqtə yoxdur
 Earth Search	Earth Search
+Earthdata Cloud	Earthdata Cloud
+Earthdata Cloud only	Yalnız Earthdata Cloud
+Earthdata footprints	Earthdata konturları
+Earthdata GIS	Earthdata GIS
+Earthdata GIS…	Earthdata GIS…
+Earthdata Login Status	Earthdata Login vəziyyəti
+Earthdata Login Token	Earthdata Login tokeni
+Earthdata Login: no token	Earthdata Login: token yoxdur
+Earthdata Login: token expired	Earthdata Login: tokenin müddəti bitib
+Earthdata Login: token set	Earthdata Login: token təyin edilib
 East	Şərq
 Eckert IV (equal-area world)	Eckert IV (bərabərsahəli dünya)
 Edge	Kənar
@@ -751,9 +865,11 @@ Edit and run the notebook.	Bloknotu redaktə edin və işə salın.
 Edit Attribute	Atributu redaktə et
 Edit Cell	Xananı redaktə et
 Edit Description	Təsviri redaktə et
+Edit Graphic	Qrafikanı redaktə et
 Edit Status	Redaktə vəziyyəti
 Edit Steps	Addımları redaktə et
 Edit Task Step	Tapşırıq addımını redaktə et
+Edit Text…	Mətni redaktə et…
 Edit the title and instructions	Başlığı və təlimatları redaktə et
 Edit Vertex	Təpəni redaktə et
 Edit Vertices	Təpələri redaktə et
@@ -769,6 +885,7 @@ Effects	Effektlər
 Element	Element
 Element Properties	Element xüsusiyyətləri
 Elevation	Hündürlük
+Elevation model	Hündürlük modeli
 Elevation profiles along lines, cross sections and more.	Xətlər boyunca hündürlük profilləri, en kəsiklər və s.
 Eligible requests in RustGIS use your ChatGPT plan. You can manage usage in ChatGPT settings.	RustGIS-dəki uyğun sorğular ChatGPT planınızdan istifadə edir. İstifadəni ChatGPT ayarlarında idarə edə bilərsiniz.
 Ellipse	Ellips
@@ -781,14 +898,18 @@ Enable Plugin	Plagini aktivləşdir
 Enabled	Aktiv
 Encloses each feature, or all features, in its convex hull.	Hər obyekti və ya bütün obyektləri qabarıq örtüyə alır.
 End	Son
+End date	Bitmə tarixi
 Endpoint	Son nöqtə
 Enhancement	Gücləndirmə
 Enter	Enter
 Enter an API key.	API açarını daxil edin.
 Enter the provider's address.	Provayderin ünvanını daxil edin.
 Enter to send, Shift+Enter for a new line	Göndərmək üçün Enter, yeni sətir üçün Shift+Enter
+EnviroAtlas	EnviroAtlas
+EnviroAtlas…	EnviroAtlas…
 Environments	Mühitlər
-EPSG code	EPSG kodu
+EPSG	EPSG
+EPSG or ESRI code	EPSG və ya ESRI kodu
 EPSG:	EPSG:
 EPSG:4326	EPSG:4326
 Equal Earth	Equal Earth
@@ -796,12 +917,16 @@ Equal Interval	Bərabər interval
 Equirectangular (Plate Carrée)	Bərabər məsafəli silindrik (Plate Carrée)
 Erase	Pozma
 Erase Features	Obyektləri poz
+Error	Xəta
 Error Inspector	Xəta yoxlayıcısı
 Error Inspector (validate)	Xəta yoxlayıcısı (yoxla)
 Esc	Esc
+ESRI	ESRI
+ESRI:	ESRI:
 Europe Equal Area (ETRS89 LAEA)	Avropa bərabər sahəli (ETRS89 LAEA)
 Every band's value at a pixel.	Pikseldə hər kanalın qiyməti.
 Every editing tool.	Bütün redaktə alətləri.
+Every layer, as FEMA draws them	Bütün laylar, FEMA-nın çəkdiyi kimi
 every Socrata site, or one such as data.cityofnewyork.us	bütün Socrata saytları və ya biri, məsələn data.cityofnewyork.us
 Everywhere	Hər yerdə
 Existing Template	Mövcud şablon
@@ -832,6 +957,7 @@ Export Map failed unexpectedly	Xəritənin ixracı gözlənilmədən uğursuz ol
 Export Map…	Xəritəni ixrac et…
 Export Mesh	Şəbəkəni ixrac et
 Export Mesh (OBJ)…	Şəbəkəni ixrac et (OBJ)…
+Export Model	Modeli ixrac et
 Export Presentation	Təqdimatı ixrac et
 Export Presentation…	Təqdimatı ixrac et…
 Export Raster	Rastrı ixrac et
@@ -848,9 +974,13 @@ Export the presentation as a slideshow or PDF, or save it as a file.	Təqdimatı
 Export the report, or save it as a report file or template.	Hesabatı ixrac edin və ya hesabat faylı ya da şablonu kimi saxlayın.
 Export the selected layer as a 3D model (OBJ), polygons extruded.	Seçilmiş layı 3D model (OBJ) kimi ixrac edin, poliqonlar qaldırılmış şəkildə.
 Export the selected layer to GeoJSON or CSV.	Seçilmiş layı GeoJSON və ya CSV formatına ixrac edin.
+Export the steps as an animated GIF.	Addımları animasiyalı GIF kimi ixrac et.
+Export Time Animation	Zaman animasiyasını ixrac et
 Export To 3D	3D-yə ixrac et
 Export To 3D File	3D fayla ixrac et
+Exported to {path}.	{path} yoluna ixrac edildi.
 exporting animations needs the desktop app	animasiyaların ixracı masaüstü tətbiq tələb edir
+exporting time animations needs the desktop app	zaman animasiyalarının ixracı masaüstü tətbiq tələb edir
 Export…	İxrac et…
 Expression	İfadə
 Extent	Əhatə
@@ -881,23 +1011,37 @@ featured products	seçmə məhsullar
 Features	Obyektlər
 Features most like the selected one	Seçilmişə ən çox bənzəyən obyektlər
 Feet	Fut
+FEMA NFHL	FEMA NFHL
+FEMA NFHL…	FEMA NFHL…
+FEMA's National Flood Hazard Layer: effective flood zones, floodways, base flood elevations, levees and map panels. Its flood layers are drawn only from zoom 15 (closer than about 1:36,000), its availability map only farther out.	FEMA-nın National Flood Hazard Layer-i: qüvvədə olan daşqın zonaları, daşqın yataqları, baza daşqın hündürlükləri, bəndlər və xəritə vərəqləri. Daşqın layları yalnız 15-ci miqyas səviyyəsindən (təxminən 1:36,000-dən yaxın), mövcudluq xəritəsi isə yalnız daha uzaqda çəkilir.
 Ferries	Bərələr
 Fetch map tiles, data and web services from addresses it chooses	Seçdiyi ünvanlardan xəritə kafellərini, məlumatları və veb xidmətlərini almaq
 Fetch the tiles and styles of the web layers again.	Veb layların plitələrini və üslublarını yenidən yüklə.
 Field	Sahə
 field * 2, 'text', a + b	field * 2, 'text', a + b
+Field boundaries	Sahə sərhədləri
+Field density	Sahə sıxlığı
 Field name	Sahə adı
 Fields	Sahələr
+Fields are drawn from zoom 9: zoom in to see them.	Sahələr 9-cu miqyas səviyyəsindən çəkilir: görmək üçün yaxınlaşdırın.
+Fields colored by score, drawn from zoom 9	Bala görə rənglənmiş sahələr, 9-cu miqyas səviyyəsindən çəkilir
+Fields of the World	Fields of the World
+Fields of the World…	Fields of the World…
 fields, comma separated	sahələr, vergüllə ayrılmış
 Fields, statistics, groups, pictures, attachments and charts in the report.	Hesabatda sahələr, statistika, qruplar, şəkillər, qoşmalar və diaqramlar.
 Fields:	Sahələr:
 File	Fayl
+File bridge only	Yalnız fayl körpüsü
+File bridge: the script ran	Fayl körpüsü: skript işlədi
+File bridge: {error}	Fayl körpüsü: {error}
 File name	Fayl adı
 file path	fayl yolu
+Files ({n})	Fayllar ({n})
 Fill	Doldurma
 Fill Cache	Keşi doldur
 Fill the cache whenever the projection changes.	Proyeksiya dəyişdikdə keşi doldurun.
 Film grain	Film dənəvərliyi
+Filter	Filtr
 Filter bookmarks	Əlfəcinləri filtrlə
 Filter layers	Layları filtrlə
 Filter rows…	Sətirləri süz…
@@ -905,7 +1049,6 @@ Find a place by coordinates.	Koordinatlara görə yer tapın.
 Find a place or an address by name (OpenStreetMap).	Yeri və ya ünvanı adı ilə tapın (OpenStreetMap).
 Find and run geoprocessing tools.	Geoemal alətlərini tapın və işə salın.
 Find any command by name (Ctrl+K).	İstənilən əmri adına görə tapın (Ctrl+K).
-Find Datasets	Məlumat dəstlərini tap
 Find Items	Elementləri tap
 Find Place	Yer tap
 Find plugins in the RustGIS plugin registry.	RustGIS plagin reyestrində plagin tapın.
@@ -916,13 +1059,19 @@ Finish Polygon	Poliqonu bitir
 Finish Profile	Profili bitir
 Finish Tool Run	Alətin işini tamamla
 Finished: {tool}	Tamamlandı: {tool}
+Firewall	Firewall
+First standard parallel	Birinci standart paralel
 First-Person	Birinci şəxs
 First-Person Navigation	Birinci şəxs naviqasiyası
+Fit	Sığdır
 Fit To Map View	Xəritə görünüşünə uyğunlaşdır
+Fix the problems listed below first	Əvvəlcə aşağıda sadalanan problemləri düzəldin
 Fixed Zoom In	Sabit yaxınlaşdırma
 Fixed Zoom Out	Sabit uzaqlaşdırma
+Flat	Düz
 FlatGeobuf	FlatGeobuf
 Flip Line	Xətti çevir
+Flowline	Axın xətti
 Fog	Duman
 Folder	Qovluq
 Folder Connections	Qovluq bağlantıları
@@ -931,15 +1080,18 @@ Folders	Qovluqlar
 Folder…	Qovluq…
 for a store that doesn't say	bunu göstərməyən anbar üçün
 Forest	Meşə
+Forget Earthdata Login Token	Earthdata Login tokenini unut
 Format	Format
 Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	Tapıldı: {names}. Agent bu xəritə üzərində RustGIS-in alətləri və öz alətləri (veb, skriptlər, fayllar) ilə, Sənədlər › RustGIS › Agent work-də saxlanan öz qovluğunda işləyir. Hər əməliyyatdan əvvəl sizdən soruşur.
 Frame rate	Kadr tezliyi
 Frame rate, draw time, data size and memory.	Kadr tezliyi, çəkmə vaxtı, məlumat həcmi və yaddaş.
+France	Fransa
 Free the prepared geometry.	Hazırlanmış həndəsəni boşaldın.
 Freehand	Sərbəst
 FROM	FROM
 From Selection	Seçimdən
 From Service…	Xidmətdən…
+From symbol	Simvoldan
 from the address	ünvandan
 from the service	xidmətdən
 From URL…	URL-dən…
@@ -951,6 +1103,7 @@ Function Editor	Funksiya redaktoru
 Gamma	Qamma
 Gemini stopped the reply ({reason}).	Gemini cavabı dayandırdı ({reason}).
 Generalization	Ümumiləşdirmə
+Generate a token	Token yarat
 geoBoundaries listed no countries: type a country's code	geoBoundaries heç bir ölkə göstərmədi: ölkə kodunu yazın
 Geocode	Geokodla
 Geocode Addresses	Ünvanları geokodla
@@ -958,9 +1111,12 @@ Geocode Addresses…	Ünvanları geokodla…
 Geocoder	Geokoder
 Geocoding {n} addresses…	{n} ünvan geokodlanır…
 Geodata Service	Geoməlumat xidməti
+Geodesic circles on a grid that show how the map's projection distorts scale, area and angles.	Xəritə proyeksiyasının miqyası, sahəni və bucaqları necə təhrif etdiyini göstərən şəbəkə üzərində geodezik dairələr.
 GeoJSON	GeoJSON
 GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or GeoTIFF, up to 256 MB; the server must allow requests from web pages (CORS).	GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zip-lənmiş Shapefile, KML, GPX və ya GeoTIFF, 256 MB-a qədər; server veb səhifələrdən sorğulara icazə verməlidir (CORS).
 GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zipped Shapefiles, KML, GPX or GeoTIFF, up to 512 MB.	GeoJSON, CSV, GeoParquet, FlatGeobuf, GeoPackage, zip-lənmiş Shapefile, KML, GPX və ya GeoTIFF, 512 MB-a qədər.
+GeoLens	GeoLens
+GeoLens…	GeoLens…
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre alətləri
 Geometry	Həndəsə
@@ -981,14 +1137,20 @@ Give a Zarr store's address or folder	Zarr anbarının ünvanını və ya qovlu�
 Give the catalogue's web address	Kataloqun veb ünvanını göstərin
 Give the file's web address	Faylın veb ünvanını göstərin
 Give the service's web address	Xidmətin veb ünvanını göstərin
+give the text's layer and row, or the lon and lat to place one	mətnin layını və sətrini, yaxud yerləşdirmək üçün uzunluq və enliyi göstərin
 Global	Qlobal
 Globe	Qlobus
 Go	Keç
+Go back a step.	Bir addım geri.
 Go back to the previous extent.	Əvvəlki hüduda qayıdın.
+Go forward a step.	Bir addım irəli.
 Go forward to the next extent.	Növbəti hüduda keçin.
 Go to a saved extent or save the current one.	Saxlanmış hüduda keçin və ya cari hüdudu saxlayın.
 Go To Bookmark	Əlfəcinə keç
+Go to Date	Tarixə keç
 Go To Map Link	Xəritə keçidinə keç
+Go to the first step.	Birinci addıma keç.
+Go to the last step.	Sonuncu addıma keç.
 Go To XY	XY-ə keç
 Go to {coordinate}	{coordinate} nöqtəsinə keç
 Google Gemini	Google Gemini
@@ -997,6 +1159,7 @@ GPU	GPU
 GPU\nRendering	GPU\ntəsviri
 GPX	GPX
 Graduated Colors	Pilləli rənglər
+Granules	Qranullar
 Graphic Style	Qrafika üslubu
 Graphics	Qrafika
 Graphics and Text	Qrafika və mətn
@@ -1005,6 +1168,7 @@ Graticule	Koordinat şəbəkəsi
 Green	Yaşıl
 Greys	Boz tonlar
 Grid	Tor
+Grid Spacing (degrees)	Şəbəkə addımı (dərəcə)
 Ground\nTo Grid	Yerdən\ntora
 Ground To Grid	Yerdən tora
 Group	Qrup
@@ -1018,6 +1182,7 @@ Guided analysis: suitability, visibility, networks, interpolation and more.	Bəl
 Guides	Bələdçi xətlər
 Halo	Halo
 Harbour (qualitative)	Liman (keyfiyyət)
+Hazards	Təhlükələr
 Haze	Toz dumanı
 Haze, fog, rain or snow over the map.	Xəritə üzərində toz dumanı, duman, yağış və ya qar.
 Height	Hündürlük
@@ -1037,6 +1202,7 @@ Hide values (no data)	Qiymətləri gizlət (məlumat yoxdur)
 Hide values inside a range	Diapazon daxilindəki qiymətləri gizlət
 Hide values outside a range	Diapazondan kənar qiymətləri gizlət
 Hide walls facing away from you.	Sizdən əks tərəfə baxan divarları gizlədin.
+Hides fields scoring below this. The score is the model's mean field probability × 100, a ranking rather than a calibrated probability.	Balı bundan aşağı olan sahələri gizlədir. Bal modelin orta sahə ehtimalı × 100-dür; kalibrlənmiş ehtimal deyil, sıralamadır.
 High values of the first raster and low values of the second score best.	Birinci rastrın yüksək və ikincinin aşağı qiymətləri ən yaxşı bal alır.
 Highways	Avtomagistrallar
 Histogram Equalize	Histoqram bərabərləşdirmə
@@ -1048,18 +1214,30 @@ Home	Əsas
 Home › Add	Əsas › Əlavə et
 Home › Navigate	Əsas › Naviqasiya
 Home › Navigate › Bookmarks	Əsas › Naviqasiya › Əlfəcinlər
+Home › Web Data	Əsas › Veb məlumatlar
+Home › Web Data › United States	Əsas › Veb məlumatlar › ABŞ
 Homepage	Ana səhifə
 Horizontal	Üfüqi
 host=localhost dbname=gis user=postgres	host=localhost dbname=gis user=postgres
 host=… dbname=… user=…, or a .duckdb file	host=… dbname=… user=… və ya .duckdb faylı
 Hosted Imagery	Yerləşdirilmiş təsvirlər
+Hour	Saat
 How the layer's colours combine with the tile layers and basemap beneath.	Layın rənglərinin altındakı plitə layları və əsas xəritə ilə necə birləşdiyi.
 How the layer's colours combine with what's beneath.	Layın rənglərinin altındakılarla necə birləşdiyi.
+HUB Ocean's Ocean Data Platform: marine datasets, read as features (up to 10,000 each).	HUB Ocean-un Ocean Data Platform-u: dəniz məlumat dəstləri, obyekt kimi oxunur (hər birindən 10 000-ə qədər).
 hub.arcgis.com, or an organisation's Hub site	hub.arcgis.com və ya təşkilatın Hub saytı
+Hugging Face	Hugging Face
+Hugging Face…	Hugging Face…
+Hydrography	Hidroqrafiya
+Icechunk only, not read yet	Yalnız Icechunk, hələ oxunmur
+Id: {id}	Id: {id}
 Identify	Müəyyən et
 Idle	Boşdadır
 IDW\nInterpolation	IDW\ninterpolyasiyası
 IDW Interpolation	IDW interpolyasiyası
+IGN LiDAR HD	IGN LiDAR HD
+IGN LiDAR HD…	IGN LiDAR HD…
+IGN's LiDAR HD point clouds of France: 1 km tiles where the map is, added as COPC point clouds.	IGN-in Fransa üzrə LiDAR HD nöqtə buludları: xəritənin olduğu yerdə 1 km-lik kafellər, COPC nöqtə buludları kimi əlavə edilir.
 Illumination	İşıqlandırma
 Image Analysis	Təsvir analizi
 Image Classification	Təsvir təsnifatı
@@ -1067,6 +1245,7 @@ Image Page	Təsvir səhifəsi
 Imagery	Təsvirlər
 Imagery Sharing	Təsvir paylaşımı
 Imagery Tools	Təsvir alətləri
+ImageServer	ImageServer
 Image…	Təsvir…
 Import	İdxal
 Import\nProject	Layihəni\nidxal et
@@ -1076,6 +1255,7 @@ Import Bookmarks…	Əlfəcinləri idxal et…
 Import Deep Learning Package	Dərin öyrənmə paketini idxal et
 Import Layout	Tərtibatı idxal et
 Import Layout…	Tərtibatı idxal et…
+Import Model	Modeli idxal et
 Import Package…	Paketi idxal et…
 Import Presentation	Təqdimatı idxal et
 Import Report	Hesabatı idxal et
@@ -1085,7 +1265,7 @@ Import Styles From…	Üslubları idxal et…
 Import Task	Tapşırığı idxal et
 Import Task…	Tapşırığı idxal et…
 Import Thumbnail	Miniatürü idxal et
-Import Web Tool	Veb aləti idxal et
+Import…	İdxal et…
 In Beyond	Yaxınlaşma həddi
 In memory	Yaddaşda
 In Progress	İcra olunur
@@ -1093,15 +1273,19 @@ in progress	icra olunur
 In project	Layihədə
 In RustGIS, it can:	RustGIS-də bunları edə bilər:
 In use	İstifadədədir
+Indexes	İndekslər
 Indices	İndekslər
 Infographics	İnfoqrafika
 Information	Məlumat
+INPUT	GİRİŞ
+Input	Giriş
 Input Features	Giriş obyektləri
 Input Polygons	Giriş poliqonları
 Input Rows	Giriş sətirləri
 Input Summary Features	Giriş yekun obyektləri
 Input Table	Giriş cədvəli
 Insert	Əlavə et
+Insert Dynamic Text	Dinamik mətn daxil et
 Inspect	Araşdır
 Install	Quraşdır
 Install a plugin	Plagin quraşdır
@@ -1143,17 +1327,24 @@ It runs: {program}	İşə saldığı: {program}
 It's in the Symbology pane, open on the step's layer.	Bu, addımın layı üçün açıq olan Simvolika panelindədir.
 It's installed but turned off: turn it on in the Plugin Manager.	Quraşdırılıb, lakin söndürülüb: onu Plagin menecerində aktivləşdirin.
 It's too large to keep in the browser: install it again on your next visit.	Brauzerdə saxlanmaq üçün çox böyükdür: növbəti girişinizdə onu yenidən quraşdırın.
+Italic	Kursiv
 Item Pop-ups	Element açılan pəncərələri
 Item {id}	Element {id}
+Its firewall ({firewall}) blocked RustGIS. The service may only allow some applications: contact its administrator and send them the details below.	Onun firewall-u ({firewall}) RustGIS-i blokladı. Xidmət yalnız bəzi tətbiqlərə icazə verə bilər: onun administratoru ilə əlaqə saxlayın və aşağıdakı təfərrüatları göndərin.
 Jobs	İşlər
 JOIN	JOIN
+Join	Birləşmə
 Keep a history of every edit to the layer, to look back or restore.	Geriyə baxmaq və ya bərpa etmək üçün layın hər redaktəsinin tarixçəsini saxlayın.
 Keep an archive of edits	Redaktələrin arxivini saxla
 keep current	cari saxla
+Keep one value of each point's vector as its value field	Hər nöqtənin vektorunun bir dəyərini onun dəyər sahəsi kimi saxla
+Keep Result	Nəticəni saxla
 Keep the labelled features fixed as the map moves.	Xəritə hərəkət etdikcə etiketlənmiş obyektləri sabit saxlayın.
 Keep the last drawing tool active after each graphic.	Hər qrafikadan sonra son çəkmə alətini aktiv saxlayın.
 Keep the last tool active	Son aləti aktiv saxla
+Keep this result	Bu nəticəni saxla
 Keep Tool	Aləti saxla
+Keep value	Dəyəri saxla
 Keyboard Shortcuts	Klaviatura qısayolları
 Keyboard shortcuts.	Klaviatura qısayolları.
 Keys from	Açarların mənbəyi
@@ -1172,15 +1363,19 @@ Label Visibility Range	Etiket görünmə diapazonu
 Labeling	Etiketləmə
 Labels	Etiketlər
 Lagoon	Laquna
+Lambert Conformal Conic	Lambertin konform konik proyeksiyası
 Lambert Cylindrical Equal Area	Lambert bərabər sahəli silindrik
 Landscape	Albom
 Language	Dil
 Lasso	Lasso
 Lasso (draw)	Lasso (çəkmə)
+Last agent call failed: {call} ({secs} s ago)	Agentin son çağırışı uğursuz oldu: {call} ({secs} s əvvəl)
+Last agent call: {call} ({secs} s ago)	Agentin son çağırışı: {call} ({secs} s əvvəl)
 Last map render time	Xəritənin son göstərilmə vaxtı
 Last Project	Son layihə
 Latitude	En dairəsi
 Latitude (Y)	En dairəsi (Y)
+Lay the nodes out along the flow	Düyünləri axın boyunca düz
 Layer	Lay
 Layer\nTemplates	Lay\nşablonları
 Layer Blend	Lay qarışdırma
@@ -1189,7 +1384,9 @@ Layer File	Lay faylı
 Layer From\nSelection	Seçimdən\nlay
 Layer Template	Lay şablonu
 Layer Templates	Lay şablonları
+layer {id}	lay {id}
 Layers	Laylar
+Layers ({n})	Laylar ({n})
 Layers and Table Views	Laylar və cədvəl görünüşləri
 Layout	Tərtibat
 Layout\nFile	Tərtibat\nfaylı
@@ -1197,6 +1394,7 @@ Layout after: {name}	Sonrakı tərtibat: {name}
 Layout before: {name}	Əvvəlki tərtibat: {name}
 Layout File…	Tərtibat faylı…
 Layout name	Tərtibat adı
+Layout: {kind}	Tərtibat: {kind}
 Layouts	Tərtibatlar
 Learn	Öyrən
 Learning\nResources	Öyrənmə\nresursları
@@ -1206,6 +1404,7 @@ Legend label. Clear it to show the value again.	Legenda etiketi. Qiyməti yenid�
 Length {length} · gain {gain} m · loss {loss} m	Uzunluq {length} · artım {gain} m · azalma {loss} m
 Let the assistant hand tasks to agents on this computer	Köməkçiyə tapşırıqları bu kompüterdəki agentlərə ötürməyə icazə ver
 Let your Agents Control RustGIS	Agentlərinizə RustGIS-i idarə etməyə icazə verin
+Letter spacing	Hərflərarası məsafə
 Level	Səviyyə
 Library	Kitabxana
 Light and Shadow	İşıq və kölgə
@@ -1214,6 +1413,7 @@ Lighting	İşıqlandırma
 LIKE	LIKE
 LIMIT	LIMIT
 Limit a field to coded values or a range.	Sahəni kodlu qiymətlərlə və ya diapazonla məhdudlaşdırın.
+Limit to map view	Xəritə görünüşü ilə məhdudlaşdır
 Limit where tools work, and the cell size of new rasters.	Alətlərin işlədiyi ərazini və yeni rastrların xana ölçüsünü məhdudlaşdırın.
 Limit which features draw with a SQL expression.	SQL ifadəsi ilə hansı obyektlərin çəkildiyini məhdudlaşdırın.
 Limits	Limitlər
@@ -1222,6 +1422,7 @@ Line color	Xətt rəngi
 Line Of Sight	Görmə xətti
 Line of sight between two points	İki nöqtə arasında görmə xətti
 Line Of Sight From Here	Buradan görmə xətti
+Line Strokes	Xətt cizgiləri
 Line width	Xətt qalınlığı
 Line {n} isn't four numbers (column row lon lat)	{n} sətri dörd ədəd deyil (sütun sətir uzunluq enlik)
 Lines	Xətlər
@@ -1231,6 +1432,7 @@ Link	Əlaqələndir
 Link Cursors	Kursorları əlaqələndir
 Link Views	Görünüşləri əlaqələndir
 List	Siyahı
+List a Dataset's Files	Məlumat dəstinin fayllarının siyahısı
 List by data source	Məlumat mənbəyinə görə sırala
 List by drawing order	Çəkmə sırasına görə sırala
 List by selection	Seçimə görə sırala
@@ -1247,15 +1449,22 @@ List Source Cooperative Files	Source Cooperative fayllarının siyahısı
 List Source Cooperative Products	Source Cooperative məhsullarının siyahısı
 List STAC Collections	STAC kolleksiyalarının siyahısı
 List Tables	Cədvəllərin siyahısı
+List The National Map Services	The National Map xidmətlərinin siyahısı
 List the provider's models	Provayderin modellərini siyahıla
+List this layer in the legend	Bu layı legendada göstər
+List what it holds	Tərkibini göstər
+Listed for discovery: RustGIS doesn't read this dataset yet. Its data and paper are linked above.	Tanışlıq üçün göstərilib: RustGIS bu məlumat dəstini hələ oxumur. Onun məlumatlarına və məqaləsinə keçidlər yuxarıdadır.
 Listing…	Siyahı alınır…
 Lit	İşıqlı
 Live summary of the features in view.	Görünüşdəki obyektlərin canlı xülasəsi.
 Load All Features	Bütün obyektləri yüklə
 Load an unpacked plugin from its folder while you develop it.	Hazırlayarkən paketlənməmiş plagini öz qovluğundan yükləyin.
+Load more	Daha çox yüklə
+Load sources & plot	Mənbələri yüklə və qur
 Load Whitebox and GeoLibre tools	Whitebox və GeoLibre alətlərini yüklə
 Loaded {name} from its folder.	{name} öz qovluğundan yükləndi.
 Loading the GeoLibre tools…	GeoLibre alətləri yüklənir…
+Loading…	Yüklənir…
 Loads map tiles from the web	Xəritə kafellərini internetdən yükləyir
 Local	Yerli
 Locate	Yer tap
@@ -1270,6 +1479,7 @@ Longitude	Uzunluq dairəsi
 Longitude (X)	Uzunluq dairəsi (X)
 Look for {name}, outlined on the ribbon.	Lentdə çərçivə ilə göstərilən {name} elementini tapın.
 Looking up the place…	Yer axtarılır…
+Loop	Təkrar
 Lower Priority	Prioriteti azalt
 Made in RustGIS: samples, drawings and tool outputs	RustGIS-də yaradılanlar: nümunələr, çertyojlar və alət nəticələri
 Magnifier	Böyüdücü
@@ -1285,7 +1495,10 @@ Manage Templates	Şablonları idarə et
 Map	Xəritə
 Map\nFrame	Xəritə\nçərçivəsi
 Map (the current view)	Xəritə (cari görünüş)
+map by date	tarixə görə xəritə
+Map centre	Xəritənin mərkəzi
 Map draw	Xəritənin çəkilməsi
+Map Extent	Xəritə hüdudu
 Map File	Xəritə faylı
 Map Frame	Xəritə çərçivəsi
 Map Frames	Xəritə çərçivələri
@@ -1303,9 +1516,11 @@ Map Thumbnail	Xəritə miniatürü
 Map tiles of the whole world	Bütün dünyanın xəritə kafelləri
 Map View	Xəritə görünüşü
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
+Map: {kind}	Xəritə: {kind}
 Mapping	Xəritələşdirmə
 Maps	Xəritələr
 Maps move together.	Xəritələr birlikdə hərəkət edir.
+MapServer	MapServer
 Marker	Marker
 Mask Values	Qiymətləri maskala
 Masking	Maskalama
@@ -1317,12 +1532,14 @@ MCP Relay	MCP Relay
 MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	MCP rely artıq 127.0.0.1:{port} ünvanında dinləyir; {asked} portunu istifadə etmək üçün əvvəlcə dayandırın
 MCP relay listening on 127.0.0.1:{port}	MCP rely 127.0.0.1:{port} ünvanında dinləyir
 MCP relay stopped	MCP rely dayandırıldı
+MCP relay · full access · {n} attached	MCP rely · tam giriş · {n} qoşulub
 MCP relay · {n} attached	MCP rely · {n} qoşulub
 Mean	Orta
 Measure	Ölç
 Measure Area	Sahəni ölç
 Measure Distance	Məsafəni ölç
 Measure geodesic distances and areas on the map.	Xəritədə geodeziya məsafələrini və sahələrini ölçün.
+Measure on this body, with one of its basemaps.	Bu cisim üzərində, onun əsas xəritələrindən biri ilə ölçün.
 Measure with an elevation raster	Hündürlük rastrı ilə ölç
 Measurements so far.	İndiyədək ölçmələr.
 Mensuration	Ölçmə
@@ -1330,6 +1547,7 @@ Mensuration Tools	Ölçmə alətləri
 Merge	Birləşdir
 Merge elevation rasters into a surface model and export a 3D mesh.	Hündürlük rastrlarını səth modelinə birləşdirin və 3D şəbəkə ixrac edin.
 Merges polygons that share a field value into one feature per value.	Eyni sahə qiymətinə malik poliqonları hər qiymət üçün bir obyektdə birləşdirir.
+Messages appear here.	Mesajlar burada görünür.
 Meters	Metr
 Method	Üsul
 Midnight	Gecəyarısı
@@ -1343,16 +1561,19 @@ Minimum Bounding Geometry	Minimal sərhəd həndəsəsi
 Minimum Maximum	Minimum maksimum
 Minutes	Dəqiqə
 minutes ago	dəqiqə əvvəl
+Miter	İti
 Mobile Map	Mobil xəritə
 Mod+	Mod+
 Model	Model
 Model\nBuilder	Model\nqurucusu
 model id	model identifikatoru
+Model output	Model çıxışı
 ModelBuilder	Model qurucusu
 Models	Modellər
 Modify	Dəyişdir
 Modify Selected Features	Seçilmiş obyektləri dəyişdir
 Mollweide (equal-area world)	Mollveyde (bərabər sahəli dünya)
+Month	Ay
 More	Daha çox
 More basemaps:	Daha çox əsas xəritə:
 Mosaic images into an orthomosaic	Təsvirləri ortomozaikaya birləşdir
@@ -1373,14 +1594,26 @@ Move Up	Yuxarı köçür
 Move up	Yuxarı köçür
 Move, rotate, scale, merge, explode, split or flip the selected features.	Seçilmiş obyektləri köçürün, döndərin, ölçüsünü dəyişin, birləşdirin, parçalayın, bölün və ya çevirin.
 Move, Rotate, Scale…	Köçür, döndər, ölçünü dəyiş…
+MultiLineString	MultiLineString
+MultiPolygon	MultiPolygon
 My Buckets	Mənim bucket-lərim
 My OGC Layer	Mənim OGC layım
 N/S/E/W	N/S/E/W
 Name	Ad
 name the plugin whose panel to open: {"id": plugin id}	paneli açılacaq plagini göstərin: {"id": plugin id}
+NASA Earthaccess	NASA Earthaccess
+NASA Earthaccess…	NASA Earthaccess…
+NASA Earthdata	NASA Earthdata
+NASA Earthdata through Earthaccess's search: find a dataset, then its granules where the map is, drawn as footprints. GeoTIFFs are added as COGs, read in place. Searching needs no account.	Earthaccess axtarışı vasitəsilə NASA Earthdata: məlumat dəstini, sonra onun xəritənin olduğu yerdəki qranullarını tapın; onlar kontur kimi çəkilir. GeoTIFF-lər COG kimi əlavə edilir və yerində oxunur. Axtarış üçün hesab lazım deyil.
+NASA Earthdata…	NASA Earthdata…
+NASA's CMR has no dataset named {name}	NASA CMR-də {name} adlı məlumat dəsti yoxdur
+NASA's Earthdata GIS: imagery, maps, features and web maps of Earth science data.	NASA-nın Earthdata GIS-i: Yer elmləri məlumatlarının təsvirləri, xəritələri, obyektləri və veb xəritələri.
+NASA's Global Imagery Browse Services (GIBS): over a thousand layers of satellite imagery and science data, most of them daily.	NASA-nın Global Imagery Browse Services (GIBS): peyk təsvirləri və elmi məlumatların mindən çox layı, əksəriyyəti gündəlik.
 Natural Breaks (Jenks)	Təbii fasilələr (Jenks)
 Natural Color (1, 2, 3)	Təbii rəng (1, 2, 3)
 Natural Earth	Natural Earth
+Natural Earth's public domain map data (countries, states, coastlines, rivers, lakes, roads and more) on Source Cooperative. PMTiles are added as tile layers, other files as layers.	Source Cooperative-də Natural Earth-ün ictimai mülkiyyətdə olan xəritə məlumatları (ölkələr, ştatlar, sahil xətləri, çaylar, göllər, yollar və s.). PMTiles kafel layları kimi, digər fayllar isə lay kimi əlavə edilir.
+Natural Earth…	Natural Earth…
 Navigate	Naviqasiya
 Navigate with the mouse (planar) or walk with W A S D, Q and E (first-person).	Siçanla naviqasiya edin (müstəvi) və ya W A S D, Q və E ilə gəzin (birinci şəxs).
 Navigation	Naviqasiya
@@ -1429,17 +1662,29 @@ New Workspace From Visible Rasters	Görünən rastrlardan yeni iş sahəsi
 Next	Növbəti
 Next Extent	Növbəti hüdud
 Next Page	Növbəti səhifə
+NLDI result cleared.	NLDI nəticəsi təmizləndi.
+NLDI returned no plottable navigation source.	NLDI qurula bilən naviqasiya mənbəyi qaytarmadı.
 No	Xeyr
 No agents that speak ACP (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose) were found on this computer.	Bu kompüterdə ACP dəstəkləyən agent (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Cursor, OpenCode, goose) tapılmadı.
+No AlphaEarth layer on the map	Xəritədə AlphaEarth layı yoxdur
 No bookmark matches the filter.	Filtrə uyğun əlfəcin yoxdur.
 No bookmarks yet	Hələ əlfəcin yoxdur
 No bookmarks yet. New Bookmark saves the current view of the map.	Hələ əlfəcin yoxdur. «Yeni əlfəcin» xəritənin cari görünüşünü saxlayır.
+No catalogs below this one: Find Items lists its items	Bundan aşağıda kataloq yoxdur: «Elementləri tap» onun elementlərini göstərir
+No COMID was returned for this point.	Bu nöqtə üçün COMID qaytarılmadı.
 no command	əmr yoxdur
 No connections this session	Bu sessiyada bağlantı yoxdur
+No datasets match.	Uyğun məlumat dəsti yoxdur.
 No datasets with data RustGIS can add	RustGIS-in əlavə edə biləcəyi məlumat dəsti yoxdur
 No edits since the project was saved	Layihə saxlanıldıqdan sonra redaktə yoxdur
+No field of this layer holds dates.	Bu layın heç bir sahəsində tarix yoxdur.
+No granules in this view and date range.	Bu görünüşdə və tarix aralığında qranul yoxdur.
 no home folder	ev qovluğu yoxdur
+no layer	lay yoxdur
+No layer has a field of dates.	Heç bir layda tarix sahəsi yoxdur.
+no layer has a field of dates: add one that has, or a tile layer whose address has a date (map.addTiles)	heç bir layda tarix sahəsi yoxdur: belə sahəsi olan lay və ya ünvanında tarix olan kafel layı əlavə edin (map.addTiles)
 No layers match	Uyğun lay yoxdur
+No layers match your search.	Axtarışınıza uyğun lay yoxdur.
 No mask	Maska yoxdur
 No models are available for this account.	Bu hesab üçün əlçatan model yoxdur.
 No notebooks yet. Analyze › New Notebook starts one, or Add and Open Notebook opens one.	Hələ bloknot yoxdur. Analiz › Yeni bloknot birini başladır, Bloknotu əlavə et və aç isə birini açır.
@@ -1454,13 +1699,19 @@ No Pop-ups	Açılan pəncərə yoxdur
 No presentations yet. Publish › New Presentation starts one.	Hələ təqdimat yoxdur. Nəşr › Yeni təqdimat birini başladır.
 No products	Məhsul yoxdur
 No project opened or saved yet	Hələ heç bir layihə açılmayıb və ya saxlanmayıb
+No properties	Xüsusiyyət yoxdur
 No relationships (Data Design › Relationships)	Əlaqə yoxdur (Məlumat dizaynı › Əlaqələr)
 No relationships yet	Hələ əlaqə yoxdur
 No reports yet. Publish › New Report lists the selected layer's records.	Hələ hesabat yoxdur. Nəşr › Yeni hesabat seçilmiş layın qeydlərini sadalayır.
+no row	sətir yoxdur
 no service or file links	xidmət və ya fayl keçidi yoxdur
+No services match your search.	Axtarışınıza uyğun xidmət yoxdur.
 No standalone tables	Müstəqil cədvəl yoxdur
 No styles yet	Hələ üslub yoxdur
 No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	Hələ tapşırıq yoxdur. Birini yazın və ya Analiz › Tapşırıq ilə geoemal tarixçənizdən yaradın.
+no text graphic there	orada mətn qrafikası yoxdur
+No tools match your search.	Axtarışınıza uyğun alət yoxdur.
+no yearly series	illik sıra yoxdur
 NoData	NoData
 Nominatim	Nominatim
 None	Heç biri
@@ -1474,16 +1725,20 @@ North Polar Stereographic	Şimal qütb stereoqrafik
 not a picture	şəkil deyil
 not a RustGIS layout	RustGIS tərtibatı deyil
 not a RustGIS project	RustGIS layihəsi deyil
+Not for texts: a text is edited in the Format pane.	Mətnlər üçün deyil: mətn Format panelində redaktə edilir.
 not needed	lazım deyil
 Not sandboxed	Qum qutusundan kənar
 Not saved yet	Hələ saxlanmayıb
+Not searched, as they didn't load: {folders}	Yüklənmədikləri üçün axtarılmadı: {folders}
 Not Selectable	Seçilə bilməz
 Notebook	Bloknot
 Notebook Pane	Bloknot paneli
 Nothing found	Heç nə tapılmadı
+Nothing found where the map is	Xəritənin olduğu yerdə heç nə tapılmadı
 Nothing here	Burada heç nə yoxdur
 Nothing named {name} to rename	Adını dəyişmək üçün {name} adlı heç nə yoxdur
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Hələ heç nə paylaşılmayıb. Nəşr › Fərqli paylaş veb xəritələr, laylar, üslublar, səhnələr və s. yaradır.
+Nothing was found at this address.	Bu ünvanda heç nə tapılmadı.
 Nothing was recorded, so no task was made.	Heç nə yazılmadı, buna görə tapşırıq yaradılmadı.
 Now	İndi
 NULL	NULL
@@ -1491,11 +1746,14 @@ Nulls	Boş qiymətlər
 Observations (observer, date, species, count)	Müşahidələr (müşahidəçi, tarix, növ, say)
 observer height m	müşahidəçinin hündürlüyü m
 Ocean	Okean
+Ocean Data Platform	Ocean Data Platform
+Ocean Data Platform…	Ocean Data Platform…
 of a geometry that doesn't say	bunu göstərməyən həndəsə üçün
 Off	Söndürülü
 Off, west and south are negative: -112.5°.	Söndürüləndə qərb və cənub mənfidir: -112.5°.
 Offline	Oflayn
 Offline area	Oflayn ərazi
+Offset	Sürüşmə
 OGC API	OGC API
 OGC API Features and Tiles	OGC API Features və Tiles
 OID	OID
@@ -1509,23 +1767,29 @@ One command per line: id {json}. Lines starting with # are comments.	Hər sətir
 One DuckDB SELECT: DuckDB Spatial's ST_ functions, files and web addresses (read_parquet('…')), and the tables of the database below. Ctrl+Enter runs it.	Bir DuckDB SELECT: DuckDB Spatial-ın ST_ funksiyaları, fayllar və veb ünvanlar (read_parquet('…')) və aşağıdakı verilənlər bazasının cədvəlləri. Ctrl+Enter onu işə salır.
 One page per feature of an index layer.	İndeks layının hər obyekti üçün bir səhifə.
 One per line: code=name	Hər sətirdə bir: kod=ad
+One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Simvoldan bir cizgi. Haşiyələr, paralel xətlər və sürüşmələr üçün cizgilər əlavə edin.
 Only features matching this expression draw in {layer}.	{layer} layında yalnız bu ifadəyə uyğun obyektlər çəkilir.
 Only where the map is	Yalnız xəritənin olduğu yerdə
 Opacity	Qeyri-şəffaflıq
 Open	Aç
 Open a .rgis project	.rgis layihəsini aç
 open a layout first	əvvəlcə tərtibat açın
+Open a model file (*.model.json)	Model faylını aç (*.model.json)
+Open a model of this project	Bu layihənin modelini aç
 Open a RustGIS or Jupyter notebook.	RustGIS və ya Jupyter bloknotunu açın.
 Open a RustGIS project.	RustGIS layihəsini açın.
 Open an offline area to edit.	Redaktə üçün oflayn ərazi açın.
 Open browser again	Brauzeri yenidən aç
 Open Custom Template	Fərdi şablonu aç
 Open Custom Template…	Fərdi şablonu aç…
+Open data catalogs registered with Portolan: pick a publisher's catalog, then Find Items for its collections.	Portolan-da qeydiyyatdan keçmiş açıq məlumat kataloqları: naşirin kataloqunu seçin, sonra onun kolleksiyaları üçün «Elementləri tap».
 Open data catalogues searched by text. Files are added by their address (read in place when they can be); a service opens Add From Service to pick its layer.	Mətnlə axtarılan açıq məlumat kataloqları. Fayllar ünvanları ilə əlavə edilir (mümkün olduqda yerində oxunur); xidmət öz layını seçmək üçün «Xidmətdən əlavə et» pəncərəsini açır.
 Open data products on Source Cooperative. GeoParquet, FlatGeobuf, cloud-optimised GeoTIFFs and PMTiles are read in place; other files are downloaded.	Source Cooperative-də açıq məlumat məhsulları. GeoParquet, FlatGeobuf, bulud üçün optimallaşdırılmış GeoTIFF-lər və PMTiles yerində oxunur; digər fayllar endirilir.
 Open folder	Qovluğu aç
 Open In Geoprocessing…	Geoemalda aç…
+Open in ModelBuilder	Model qurucusunda aç
 Open Layout	Tərtibatı aç
+Open ModelBuilder	Model qurucusunu aç
 Open Notebook	Bloknotu aç
 Open Offline Map	Oflayn xəritəni aç
 Open Presentation	Təqdimatı aç
@@ -1543,8 +1807,11 @@ Open the RustGIS user guide.	RustGIS istifadəçi təlimatını açın.
 Open the selected layer's table.	Seçilmiş layın cədvəlini açın.
 Open the Symbology pane.	Simvolika panelini açın.
 Open the task's steps	Tapşırığın addımlarını aç
+Open this granule in Earthdata Search	Bu qranulu Earthdata Search-də aç
 Open {code} on epsg.io	{code} kodunu epsg.io-da aç
 Open, save and create projects	Layihələri açın, saxlayın və yaradın
+OpenAerialMap	OpenAerialMap
+OpenAerialMap…	OpenAerialMap…
 OpenAI-compatible	OpenAI ilə uyğun
 Opened {name} for printing	{name} çap üçün açıldı
 OpenFreeMap Bright	OpenFreeMap Bright
@@ -1570,11 +1837,15 @@ Or run, for Claude Code or Codex:	Və ya Claude Code və ya Codex üçün bunu i
 ORDER BY	ORDER BY
 Orientation	Oriyentasiya
 Ortho Mapping	Orto xəritələşdirmə
+Other	Digər
+Other Data	Digər məlumatlar
 Out Beyond	Uzaqlaşma həddi
 Outline	Kontur
 Outline another frame's extent in this map frame.	Bu xəritə çərçivəsində başqa çərçivənin hüdudunu kontur ilə göstərin.
 Outline color	Kontur rəngi
 Outline width	Kontur qalınlığı
+Outlines {frame}	{frame} konturu
+OUTPUT	ÇIXIŞ
 Output	Çıxış
 Output Name	Çıxış adı
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Təxminən 25 MB-lıq birdəfəlik endirmə ilə brauzerdə işləyən 1000-dən çox raster, vektor, LiDAR, hidrologiya və relyef aləti.
@@ -1617,15 +1888,22 @@ Parent folder	Ana qovluq
 parks, bike lanes, flood zones…	parklar, velosiped zolaqları, daşqın zonaları…
 Password	Parol
 Paste	Yapışdır
+Paste a token	Token yapışdırın
 Paste copied features into the selected layer, or as a new layer.	Kopyalanmış obyektləri seçilmiş laya və ya yeni lay kimi yapışdırın.
+Paste Group	Qrupu yapışdır
+Paste Groups	Qrupları yapışdır
+Paste Layer	Layı yapışdır
+Paste Layers	Layları yapışdır
 Paste Special	Xüsusi yapışdır
 Paste Special (as a new layer)	Xüsusi yapışdır (yeni lay kimi)
 paste your key	açarınızı yapışdırın
 Pause	Dayandır
+Pause.	Fasilə.
 PDF or PNG	PDF və ya PNG
 Percent Clip	Faiz kəsimi
 Perceptually Uniform	Qavrayışca bərabər
 Performance	Performans
+Phase	Faza
 Photon	Photon
 Pick a live value, such as the scale or date, then click the map to place it.	Miqyas və ya tarix kimi canlı qiymət seçin, sonra yerləşdirmək üçün xəritəyə klikləyin.
 Pick a route in the list, or click a grey route on the map.	Siyahıdan marşrut seçin və ya xəritədəki boz marşruta klikləyin.
@@ -1634,6 +1912,7 @@ Picture	Şəkil
 Pictures	Şəkillər
 Pictures, attachments and chart	Şəkillər, qoşmalar və diaqram
 Pipe	Şaquli xətt
+Pitch	Meyl
 Pixel	Piksel
 Pixel Editor	Piksel redaktoru
 Pixel Size (°)	Piksel ölçüsü (°)
@@ -1646,10 +1925,16 @@ Places (name, category, address, rating)	Məkanlar (ad, kateqoriya, ünvan, reyt
 Plan a route between places and follow it turn by turn (Valhalla, on OpenStreetMap data).	Yerlər arasında marşrut planlayın və onu addım-addım izləyin (Valhalla, OpenStreetMap məlumatları əsasında).
 Planar	Müstəvi
 Planar Navigation	Müstəvi naviqasiya
+Planet Open Data	Planet Open Data
+Planet Open Data…	Planet Open Data…
+Planet's imagery of disasters (CC BY-NC), a static STAC catalog on Source Cooperative: pick an event, then Find Items.	Planet-in fəlakət təsvirləri (CC BY-NC), Source Cooperative-də statik STAC kataloqu: hadisə seçin, sonra «Elementləri tap».
 Planetary Computer	Planetary Computer
 Planning a route sends its start, stops and destination to a routing server, and looking up a place by name sends the name to OpenStreetMap's Nominatim.	Marşrut planlaşdırılarkən başlanğıc, dayanacaqlar və təyinat nöqtəsi marşrutlaşdırma serverinə göndərilir, yerin adla axtarışı isə adı OpenStreetMap-in Nominatim xidmətinə göndərir.
 Play	Oynat
 Play the animation.	Animasiyanı oynadın.
+Play through the steps.	Addımları oynat.
+Plot another navigation layer	Başqa naviqasiya layı qur
+Plotted {n} {source} features.	{n} {source} obyekti quruldu.
 Plugin	Plagin
 Plugin\nManager	Plagin\nmeneceri
 Plugin folder	Plagin qovluğu
@@ -1677,6 +1962,8 @@ Pop-up Mode	Açılan pəncərə rejimi
 pop_max > 1000000	pop_max > 1000000
 Populated Places	Yaşayış məntəqələri
 Portal	Portal
+Portolan	Portolan
+Portolan…	Portolan…
 Portrait	Kitab
 Postprocessing	Sonrakı emal
 power 2	qüvvət 2
@@ -1688,6 +1975,7 @@ Presentation	Təqdimat
 Presentation File	Təqdimat faylı
 Presentation Pane	Təqdimat paneli
 Preset	Şablon
+Press Load sources & plot first	Əvvəlcə «Mənbələri yüklə və qur» düyməsini basın
 Preview and set up the report.	Hesabata ön baxış edin və onu tənzimləyin.
 Preview, edit and play the presentation.	Təqdimata ön baxış edin, onu redaktə edin və oynadın.
 Previous	Əvvəlki
@@ -1723,6 +2011,10 @@ Projections	Proyeksiyalar
 Proportional Symbols	Mütənasib simvollar
 Provider	Provayder
 Proximity	Yaxınlıq
+Public GIS portals of US counties and cities, by state.	ABŞ qraflıqlarının və şəhərlərinin açıq CİS portalları, ştatlar üzrə.
+Public GIS portals of US federal agencies, by department.	ABŞ federal agentliklərinin açıq CİS portalları, idarələr üzrə.
+Public GIS portals of US states and the District of Columbia.	ABŞ ştatlarının və Kolumbiya dairəsinin açıq CİS portalları.
+Public layers on ArcGIS Online or another ArcGIS portal: feature, map, image and vector tile services, web maps and GeoJSON files.	ArcGIS Online və ya digər ArcGIS portalındakı açıq laylar: obyekt, xəritə, təsvir və vektor kafel xidmətləri, veb xəritələr və GeoJSON faylları.
 Publish	Nəşr
 Publish › Output	Nəşr › Çıxış
 Put the layer back as it was then	Layı o vaxtkı vəziyyətinə qaytar
@@ -1754,7 +2046,13 @@ Raster Layer	Rastr layı
 Raster tiles (XYZ)	Rastr kafellər (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Rastr · {w} × {h} · {n} kanal · {renderer}
 Read and write files on this computer	Bu kompüterdəki faylları oxumaq və yazmaq
+Read the bands picked for the view (at most about 6 km a side)	Görünüş üçün seçilmiş kanalları oxu (tərəfi ən çox təxminən 6 km)
 Read the map's layers and features	Xəritənin laylarını və obyektlərini oxumaq
+Read the points in the view, coloured by their principal components	Görünüşdəki nöqtələri baş komponentlərinə görə rənglənmiş halda oxu
+Reading a granule's files needs an Earthdata Login token, which works for every NASA DAAC. It is kept until RustGIS closes, never in the project, and sent only to NASA's Earthdata data servers.	Qranulun fayllarını oxumaq üçün bütün NASA DAAC-larında işləyən Earthdata Login tokeni lazımdır. O, RustGIS bağlanana qədər saxlanılır, heç vaxt layihədə saxlanmır və yalnız NASA-nın Earthdata məlumat serverlərinə göndərilir.
+Reading the catalog: {n} documents read, {m} items found…	Kataloq oxunur: {n} sənəd oxundu, {m} element tapıldı…
+Reading the catalog…	Kataloq oxunur…
+Reading the embeddings…	Embeddinqlər oxunur…
 Reading the store… ({n} files to go)	Anbar oxunur… ({n} fayl qalıb)
 Reading the tileset of	Kafel dəsti oxunur
 Reading {n} of Overture's {ty} files where the map is: {attribution}	Xəritənin olduğu yerdə Overture-un {n} {ty} faylı oxunur: {attribution}
@@ -1770,6 +2068,7 @@ Recording: {n} steps	Yazılır: {n} addım
 Rectangle	Düzbucaqlı
 Red	Qırmızı
 Redo	Təkrarla
+Redo (Ctrl+Y)	Təkrarla (Ctrl+Y)
 Redo the change you undid.	Geri aldığınız dəyişikliyi təkrarlayın.
 Redo {action}	{action} təkrarla
 Red–Blue	Qırmızı–Mavi
@@ -1798,8 +2097,10 @@ Remove	Sil
 Remove All	Hamısını sil
 Remove an offline area.	Oflayn ərazini silin.
 Remove Bookmark	Əlfəcini sil
+Remove Connection	Bağlantını sil
 Remove Data Source	Məlumat mənbəyini sil
 Remove every guide from this layout.	Bu tərtibatdakı bütün bələdçi xətləri silin.
+Remove Extent Indicator	Hüdud göstəricisini sil
 Remove Folder	Qovluğu sil
 Remove From Current Selection	Cari seçimdən çıxar
 Remove from Favourites	Seçilmişlərdən sil
@@ -1810,8 +2111,10 @@ Remove Section	Bölməni sil
 Remove Table	Cədvəli sil
 Remove the last keyframe.	Son açar kadrı silin.
 Remove the layer from the map.	Layı xəritədən silin.
+Remove the strokes and draw the symbol's line alone	Cizgiləri sil və yalnız simvolun xəttini çək
 Remove this stop	Bu dayanacağı sil
 Remove Tile Layer	Kafel layını sil
+Remove token	Tokeni sil
 Remove {name}	Sil: {name}
 Removes the parts of polygon features that overlap erase polygons.	Poliqon obyektlərin pozma poliqonları ilə üst-üstə düşən hissələrini silir.
 Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Tolerantlıqdan az kənara çıxan təpələri silir (Douglas–Peucker).
@@ -1833,6 +2136,7 @@ Report Pane	Hesabat paneli
 Report Properties	Hesabat xüsusiyyətləri
 Report Section	Hesabat bölməsi
 Report Template	Hesabat şablonu
+Request ID	Sorğu ID-si
 Requests go to the OpenAI API and use your ChatGPT plan.	Sorğular OpenAI API-yə gedir və ChatGPT planınızdan istifadə edir.
 Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.	Sorğular mesajınızı, eləcə də xəritənin lay adlarını, sahələrini və köməkçinin oxuduğu sətirləri provayderə göndərir.
 Resample	Yenidən nümunələ
@@ -1844,10 +2148,14 @@ Reset Default	Standartı sıfırla
 Reset Effects	Effektləri sıfırla
 Reset North	Şimala sıfırla
 Reset north	Şimala sıfırla
+Response	Cavab
 Restore	Bərpa et
 Restore From Archive	Arxivdən bərpa et
+Result name	Nəticənin adı
 Results	Nəticələr
 Resume	Davam et
+Retry	Yenidən cəhd et
+Retry after	Yenidən cəhd: sonra
 Reverse	Tərsinə çevir
 RGB	RGB
 Ribbon	Lent
@@ -1861,6 +2169,7 @@ Rotate Map	Xəritəni döndər
 Rotation	Fırlanma
 Rotation Type	Fırlanma tipi
 rotation °	fırlanma °
+Round	Dairəvi
 roundabout turn	dairəvi yolda dönün
 Routes (name, surface, length)	Marşrutlar (ad, örtük, uzunluq)
 Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	Marşrutlar Valhalla (FOSSGIS) tərəfindən OpenStreetMap məlumatları əsasında qurulur. Yol müddətləri canlı tıxacları nəzərə almır.
@@ -1874,23 +2183,30 @@ Run All Steps	Bütün addımları icra et
 Run Cells	Xanaları işə sal
 Run Chain	Zənciri işə sal
 Run commands from text, one per line.	Mətndən əmrləri işə salın, hər sətirdə bir.
+Run failed: {error}	İşə salma uğursuz oldu: {error}
+Run finished.	İşə salma başa çatdı.
+Run finished. Layers kept: {names}.	İşə salma başa çatdı. Saxlanan laylar: {names}.
 Run Model	Modeli işə sal
 Run Script	Skripti işə sal
 Run SQL Query	SQL sorğusunu işə sal
 Run Task	Tapşırığı işə sal
+Run the model	Modeli işə sal
 Run Tool	Aləti işə sal
 Run {name}	{name} işə sal
 Running the query for the map…	Xəritə üçün sorğu icra edilir…
 Running…	İşləyir…
 RustGIS	RustGIS
 RustGIS bookmarks	RustGIS əlfəcinləri
+RustGIS couldn't reach the server.	RustGIS serverə qoşula bilmədi.
 RustGIS deep learning package	RustGIS dərin öyrənmə paketi
 RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	RustGIS keçən dəfə düzgün bağlanmadı, ona görə də başlanğıc layihəniz əvəzinə World Atlas ilə açıldı. Hazır olanda layihəni Layihə menyusundan açın.
+RustGIS doesn't have this tool. Install the tools it comes from, or delete the node.	RustGIS-də bu alət yoxdur. Onun aid olduğu alətləri quraşdırın və ya düyünü silin.
 RustGIS is a free and open-source GIS written in pure Rust. It runs on the desktop and in the browser, and every action is a command you can also run from the command line.	RustGIS təmiz Rust ilə yazılmış azad və açıq mənbəli CİS-dir. O, masaüstündə və brauzerdə işləyir və hər əməliyyat komanda sətrindən də işlədə biləcəyiniz bir komandadır.
 RustGIS layer file	RustGIS lay faylı
 RustGIS layers, maps and projects	RustGIS layları, xəritələri və layihələri
 RustGIS layout	RustGIS tərtibatı
 RustGIS maps and projects	RustGIS xəritələri və layihələri
+RustGIS model	RustGIS modeli
 RustGIS or Jupyter notebook	RustGIS və ya Jupyter bloknotu
 RustGIS plugin	RustGIS plagini
 RustGIS presentation	RustGIS təqdimatı
@@ -1912,6 +2228,9 @@ S3…	S3…
 Sample data (Natural Earth)	Nümunə məlumat (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Nümunə məlumat © Natural Earth (ictimai mülkiyyət). RustGIS Apache-2.0 lisenziyası altındadır.
 Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Nümunə məlumat: Natural Earth (ictimai mülkiyyət). Apache-2.0 lisenziyası altındadır.
+Satellite Embedding Datasets	Peyk embeddinqi məlumat dəstləri
+Satellite Embeddings	Peyk embeddinqləri
+Satellite Embeddings…	Peyk embeddinqləri…
 Saturation	Doyğunluq
 Save	Saxla
 Save As	Fərqli saxla
@@ -1928,6 +2247,7 @@ Save Data Source	Məlumat mənbəyini saxla
 Save Layer File	Lay faylını saxla
 Save Layout File	Tərtibat faylını saxla
 Save Map File	Xəritə faylını saxla
+Save Model	Modeli saxla
 Save Notebook	Bloknotu saxla
 save or load a pane set by name	panel dəstini adla saxlayın və ya yükləyin
 Save Project	Layihəni saxla
@@ -1939,6 +2259,8 @@ Save Task Item	Tapşırıq elementini saxla
 Save the active map (with its data) as a map file.	Aktiv xəritəni (məlumatları ilə) xəritə faylı kimi saxlayın.
 Save the last task as a task file.	Son tapşırığı tapşırıq faylı kimi saxlayın.
 Save the layout as a layout file.	Tərtibatı tərtibat faylı kimi saxlayın.
+Save the model as a file (*.model.json)	Modeli fayl kimi saxla (*.model.json)
+Save the model in the project	Modeli layihədə saxla
 Save the open layout as a layout file.	Açıq tərtibatı tərtibat faylı kimi saxlayın.
 Save the panes you have open, and switch back to them.	Açıq panellərinizi saxlayın və onlara geri qayıdın.
 Save the project under a new name.	Layihəni yeni adla saxlayın.
@@ -1954,9 +2276,11 @@ Save Web Scene	Veb səhnəni saxla
 Saved	Saxlanıldı
 Saved as the default style for new single-band rasters.	Yeni tək zolaqlı rastrlar üçün standart üslub kimi saxlanıldı.
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Saxlanılan açarlar tətbiqin tənzimləmələrində şifrələnmədən saxlanılır (vebdə brauzerin yaddaşında).
+Saved models	Saxlanmış modellər
 Saved symbology: apply it to the selected layer, or save the layer's.	Saxlanmış simvolika: onu seçilmiş laya tətbiq edin və ya layınkını saxlayın.
 Saved View	Saxlanmış görünüş
 Saved {name}	{name} saxlanıldı
+Saved {name}.	{name} saxlanıldı.
 saving failed unexpectedly	saxlama gözlənilmədən uğursuz oldu
 Scale	Miqyas
 Scale\nBar	Miqyas\nxətkeşi
@@ -1967,6 +2291,7 @@ Scale and rotate entered distances and directions to the grid.	Daxil edilmiş m�
 Scale ×2	Ölçü ×2
 Scale ×½	Ölçü ×½
 Scene	Səhnə
+Score threshold	Bal həddi
 Score two rasters 1–10 and weight them	İki rastrı 1–10 bal ilə qiymətləndir və çəkilərini təyin et
 Script	Skript
 Scroll the ribbon left	Lenti sola sürüşdür
@@ -1974,20 +2299,36 @@ Scroll the ribbon right	Lenti sağa sürüşdür
 Scroll the tabs left	Vərəqləri sola sürüşdür
 Scroll the tabs right	Vərəqləri sağa sürüşdür
 Search	Axtar
+Search (this portal needs words)…	Axtarış (bu portal sözlər tələb edir)…
 Search Catalogue	Kataloqda axtar
 Search commands — e.g. buffer, basemap, labels	Əmr axtarın — məs. bufer, əsas xəritə, etiketlər
+Search datasets, e.g. GEDI biomass	Məlumat dəstlərində axtar, məs. GEDI biomass
 Search Distance (km)	Axtarış məsafəsi (km)
 Search every command and its parameters	Hər əmri və onun parametrlərini axtarın
+Search layers (e.g. temperature)	Laylarda axtar (məs. temperature)
 Search layers, places, lat/lon…	Lay, yer, en/uzunluq axtar…
+Search layers…	Laylarda axtar…
+Search NASA Earthdata Collections	NASA Earthdata kolleksiyalarında axtar
+Search NASA Earthdata Granules	NASA Earthdata qranullarında axtar
 Search Open Data	Açıq məlumat axtar
 Search Open Data…	Açıq məlumat axtar…
 Search places for “{query}”	«{query}» üçün yer axtar
 Search plugins	Plagin axtar
 Search results © OpenStreetMap contributors	Axtarış nəticələri © OpenStreetMap iştirakçıları
+Search Satellite Embeddings	Peyk embeddinqlərində axtar
+Search services and layers…	Xidmətlərdə və laylarda axtar…
+Search services…	Xidmətlərdə axtar…
 Search the map	Xəritədə axtar
+Search this view	Bu görünüşdə axtar
+Search tools	Alətlərdə axtar
+Search where the map is	Xəritənin olduğu yerdə axtar
+Search {name}…	{name} daxilində axtar…
 Searching places…	Yerlər axtarılır…
+Searching the folders…	Qovluqlarda axtarılır…
+Searching works here, but NASA's data servers don't let web pages read their files (no CORS), so GeoTIFFs and downloads of protected data need the desktop app. Download opens a file in a new tab, where Earthdata Login asks you to sign in.	Axtarış burada işləyir, lakin NASA-nın məlumat serverləri veb səhifələrin onların fayllarını oxumasına icazə vermir (CORS yoxdur), ona görə GeoTIFF-lər və qorunan məlumatların endirilməsi masaüstü tətbiq tələb edir. «Endir» faylı yeni vərəqdə açır və orada Earthdata Login sizdən daxil olmağı xahiş edir.
 Searching…	Axtarılır…
 Searching… try again in a moment.	Axtarılır… bir azdan yenidən cəhd edin.
+Second standard parallel	İkinci standart paralel
 Seconds	Saniyə
 Secret access key	Gizli giriş açarı
 Sections	Bölmələr
@@ -1999,12 +2340,15 @@ SELECT	SELECT
 Select	Seç
 Select (click)	Seç (klik)
 Select (rectangle)	Seç (düzbucaqlı)
+Select a direction…	İstiqamət seçin…
 Select a feature layer in the Layers pane	Laylar panelində obyekt layı seçin
 Select a layer in Layers to style it.	Üslub vermək üçün Laylarda lay seçin.
 Select a layer in the Layers pane	Laylar panelində lay seçin
 select a layer in the Layers pane first	əvvəlcə Laylar panelində lay seçin
 Select a layer in the Layers pane.	Laylar panelində lay seçin.
+Select a navigation method after tracing a point.	Nöqtəni izlədikdən sonra naviqasiya üsulu seçin.
 Select All	Hamısını seç
+Select an element to format it.	Formatlamaq üçün element seçin.
 Select By\nAttributes	Atributlara\ngörə seç
 Select By\nLocation	Məkana\ngörə seç
 Select By Attributes	Atributlara görə seç
@@ -2015,6 +2359,7 @@ Select features with a SQL expression.	Obyektləri SQL ifadəsi ilə seçin.
 Select Layer	Lay seç
 Select Layer By Attribute	Layı atributlara görə seç
 Select Layer By Location	Layı məkana görə seç
+Select one text on the map, or a layout element, to format it.	Formatlamaq üçün xəritədə bir mətn və ya tərtibat elementi seçin.
 Select Related	Əlaqəlini seç
 Select Rows	Sətirləri seç
 Select rows with a SQL expression.	Sətirləri SQL ifadəsi ilə seçin.
@@ -2036,6 +2381,10 @@ Selects features with a SQL where clause, e.g. pop_est > 1000000.	Obyektləri SQ
 Semicolon	Nöqtəli vergül
 Send	Göndər
 Send offline edits back and refresh.	Oflayn redaktələri geri göndərin və yeniləyin.
+Sent as	Göndərilmə forması
+Sentinel-2 Explorer	Sentinel-2 Explorer
+Sentinel-2 Explorer…	Sentinel-2 Explorer…
+Sentinel-2 scenes (Collection 1, Level-2A) from Earth Search, clearest first: add the true colour image (visual) or a band.	Earth Search-dən Sentinel-2 səhnələri (Collection 1, Level-2A), ən aydını əvvəl: həqiqi rəngli təsviri (visual) və ya kanalı əlavə edin.
 Separator	Ayırıcı
 Sepia	Sepiya
 Sequential	Ardıcıl
@@ -2079,6 +2428,7 @@ sharp right	kəskin sağa dönün
 Shift+	Shift+
 Shift+drag	Shift+sürüklə
 Shift+Enter starts a new line.	Shift+Enter yeni sətir başladır.
+Shifts the stroke sideways: positive to the right of the line's direction, negative to the left	Cizgini yana sürüşdürür: müsbət dəyər xəttin istiqamətinin sağına, mənfi dəyər soluna
 Shortcuts	Qısayollar
 Shortest route over a line network	Xətt şəbəkəsi üzrə ən qısa marşrut
 Show	Göstər
@@ -2089,6 +2439,7 @@ Show different features at different scales.	Müxtəlif miqyaslarda müxtəlif o
 Show grid	Toru göstər
 Show Group	Qrupu göstər
 Show latitude/longitude lines on the basemap.	Əsas xəritədə en/uzunluq xətlərini göstərin.
+Show layers through time: only the features whose date falls in the slider's window, and dated imagery for its date.	Layları zamanda göstər: yalnız tarixi sürgünün pəncərəsinə düşən obyektlər və onun tarixinə aid tarixli təsvirlər.
 Show Map	Xəritəni göstər
 Show Me	Mənə göstər
 Show or hide	Göstər və ya gizlət
@@ -2101,6 +2452,7 @@ Show or hide the layer.	Layı göstərin və ya gizlədin.
 Show or hide the Layers pane.	Laylar panelini göstərin və ya gizlədin.
 Show or hide the Tools pane.	Alətlər panelini göstərin və ya gizlədin.
 Show rulers. Drag from a ruler to add a guide; drag a guide back onto it to remove it.	Xətkeşləri göstərin. Bələdçi xətt əlavə etmək üçün xətkeşdən dartın; silmək üçün bələdçi xətti xətkeşə geri dartın.
+Show the bands picked, read in place as the map needs them	Seçilmiş kanalları göstər, xəritəyə lazım olduqca yerində oxunur
 Show the description	Təsviri göstər
 Show the labels that don't fit, in red.	Sığmayan etiketləri qırmızı rəngdə göstərin.
 Show the layer only inside another layer's polygons.	Layı yalnız başqa layın poliqonları daxilində göstərin.
@@ -2110,14 +2462,30 @@ Show the next map series page.	Xəritə seriyasının növbəti səhifəsini gö
 Show the pointer's place on the other map.	Göstəricinin digər xəritədəki yerini göstərin.
 Show the previous map series page.	Xəritə seriyasının əvvəlki səhifəsini göstərin.
 Show the Symbology pane for the selected layer.	Seçilmiş lay üçün Simvolika panelini göstərin.
+Show the whole model	Bütün modeli göstər
+Show these bands and stretch on the AlphaEarth layers on the map	Bu kanalları və genişləndirməni xəritədəki AlphaEarth laylarında göstər
 Show vertices	Təpələri göstər
 Show where this step's command is, to do it yourself	Özünüz etmək üçün bu addımın əmrinin harada olduğunu göstər
 Show {n} Steps	{n} addımı göstər
+showing everything through {to}	{to} tarixinə qədər hər şey göstərilir
+showing {date}	{date} göstərilir
+showing {from} to {to}	{from} – {to} göstərilir
+Showing {n} datasets.	{n} məlumat dəsti göstərilir.
+Showing {n} granules, newest first.	{n} qranul göstərilir, ən yenisi əvvəl.
+Showing {n} items	{n} element göstərilir
+Showing {n} items (more match: narrow the search)	{n} element göstərilir (daha çox uyğun gəlir: axtarışı daraldın)
+Showing {n} items (some catalogs were too deep or too large to read: pick a catalog further down)	{n} element göstərilir (bəzi kataloqlar oxumaq üçün çox dərin və ya çox böyük idi: daha aşağıda kataloq seçin)
+Showing {n} items (stopped after reading {r} documents: pick a catalog further down)	{n} element göstərilir ({r} sənəd oxunduqdan sonra dayandı: daha aşağıda kataloq seçin)
+Showing {n} items ({f} documents couldn't be read)	{n} element göstərilir ({f} sənəd oxuna bilmədi)
+Showing {n} of {m}	{m} içindən {n} göstərilir
+Showing {n} of {m} items (narrow the search for others)	{m} elementdən {n} göstərilir (digərləri üçün axtarışı daraldın)
+Showing {n} of {total} on {portal}	{portal} üzrə {total} içindən {n} göstərilir
 Side by Side	Yan-yana
 Side labels	Kənar etiketləri
 Sign in to choose a model.	Model seçmək üçün daxil olun.
 Sign in with your ChatGPT account.	ChatGPT hesabınızla daxil olun.
 Sign out	Çıxış
+Sign-in	Giriş
 Sign-in cancelled.	Giriş ləğv edildi.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Giriş üçün vaxt bitdi. Yenidən başlayın və brauzerin bu kompüterin geri döngə ünvanına çatmasına icazə verin.
 signed in	daxil olunub
@@ -2202,15 +2570,20 @@ ST_YMax	ST_YMax
 ST_YMin	ST_YMin
 STAC API	STAC API
 STAC APIs	STAC API-lər
+STAC catalog	STAC kataloqu
 STAC Search	STAC axtarışı
 STAC Search…	STAC axtarışı…
+Stack another stroke on top	Üstə başqa cizgi əlavə et
 Stack on the current basemaps	Cari əsas xəritələrin üzərinə əlavə et
 Standalone Tables	Müstəqil cədvəllər
 Standard Deviation	Standart sapma
 Star	Ulduz
 Stars	Ulduzlar
 Start	Başla
+Start an empty model	Boş model başlat
+Start date	Başlama tarixi
 Start Over	Yenidən başla
+Start over at the end while playing.	Oynadılarkən sonda yenidən başla.
 Start With	Bununla başla
 Start-up	Başlanğıc
 starting with a project file needs the desktop app	layihə faylı ilə başlamaq üçün masaüstü tətbiq lazımdır
@@ -2219,9 +2592,11 @@ Statistics Field	Statistika sahəsi
 Status	Vəziyyət
 Status Bar	Status paneli
 Std. Dev.	Std. sapma
+Step	Addım
 Step back	Geri addım
 Step forward	İrəli addım
 Step through a task.	Tapşırığı addım-addım icra edin.
+Step Time	Addım vaxtı
 Step {n} done	{n}-ci addım tamamlandı
 Stepped line	Pilləli xətt
 Stop	Dayandır
@@ -2237,6 +2612,8 @@ Stretch\nType	Genişləndirmə\ntipi
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Onu xəritə görünüşünə uyğun dartın və ya nəzarət nöqtələri verin (hər sətirdə bir: sütun sətir uzunluq enlik).
 Stretch Type	Genişləndirmə tipi
 Stretch type	Genişləndirmə tipi
+Stroke {n}	Cizgi {n}
+Strokes	Cizgilər
 Style	Üslub
 Style Items	Üslub elementləri
 Style › Drawing	Üslub › Çəkmə
@@ -2287,10 +2664,14 @@ Tasks	Tapşırıqlar
 Tasks: guided steps that each run a command.	Tapşırıqlar: hər biri bir əmr icra edən bələdçili addımlar.
 Template name	Şablonun adı
 Templates	Şablonlar
+Tennessee GIS	Tennessee GIS
+Tennessee GIS…	Tennessee GIS…
+Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	Tennessinin açıq CİS məlumatları (Tennessee GeoData, geodata.tn.gov): mülk sərhədləri, nəqliyyat, səhiyyə, hidrologiya və s.
 Terrain	Relyef
 Test	Test
 Text	Mətn
 Text Symbol	Mətn simvolu
+That connection would create a loop.	Bu bağlantı dövr yaradardı.
 The address fields are empty in every row.	Ünvan sahələri bütün sətirlərdə boşdur.
 the answer isn't UTF-8 text	cavab UTF-8 mətni deyil
 The assistant follows a skill's instructions when it uses it. Whatever they say, its commands that need your approval still ask.	Köməkçi bacarıqdan istifadə edərkən onun təlimatlarına əməl edir. Nə deyirlərsə desinlər, təsdiqinizi tələb edən əmrləri yenə də soruşur.
@@ -2300,11 +2681,14 @@ The Basemaps plugin's tab of public basemaps.	Əsas xəritələr plagininin icti
 the capture failed unexpectedly	çəkiliş gözlənilmədən uğursuz oldu
 The connection failed; trying again in {seconds} s.	Bağlantı alınmadı; {seconds} san sonra yenidən cəhd ediləcək.
 The country list couldn't be read ({e}): type a country's code	Ölkə siyahısını oxumaq mümkün olmadı ({e}): ölkə kodunu yazın
+The dataset has nothing RustGIS can add	Məlumat dəstində RustGIS-in əlavə edə biləcəyi heç nə yoxdur
 The environment (AWS_ACCESS_KEY_ID…)	Mühit (AWS_ACCESS_KEY_ID…)
 The features where the map is	Xəritənin olduğu yerdəki obyektlər
 The first 1,000 entries; narrow it down a folder at a time.	İlk 1000 element; hər dəfə bir qovluq daraldın.
 The first {n} are listed.	İlk {n} göstərilir.
+The first {n} are shown: search to narrow them.	İlk {n} göstərilir: daraltmaq üçün axtarın.
 The first {n} rows	İlk {n} sətir
+The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flowtrace cavab vermədi: nöqtəyə ən yaxın axın xəttinin tamamı göstərilir.
 The installed GeoLibre runner lists no tools.	Quraşdırılmış GeoLibre işlədicisi heç bir alət göstərmir.
 The job covers the map view	İş xəritə görünüşünü əhatə edir
 The key is kept for this session only.	Açar yalnız bu sessiya üçün saxlanılır.
@@ -2314,13 +2698,20 @@ The link doesn't say its STAC API: Find Items searches {api}	Keçid öz STAC API
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Baxmaq üçün plaginlərin siyahısı. RustGIS plagin reyestri üçün boş saxlayın.
 the map has no layers	xəritədə lay yoxdur
 The map is drawn in this coordinate system; layers are projected on the fly.	Xəritə bu koordinat sistemində çəkilir; laylar dərhal proyeksiya olunur.
+the map isn't on screen in RustGIS (a layout or the catalog is shown), so it was drawn offscreen	xəritə RustGIS-də ekranda deyil (tərtibat və ya kataloq göstərilir), ona görə ekrandan kənarda çəkildi
 The map view as it is now	Xəritə görünüşü indiki halında
+The map's extent isn't known yet	Xəritənin hüdudu hələ məlum deyil
 The map's view takes {n} of Overture's {ty} files (up to {max}): zoom in, or add the theme as map tiles	Xəritə görünüşü Overture-un {n} {ty} faylını tutur (ən çoxu {max}): yaxınlaşdırın və ya mövzunu xəritə kafelləri kimi əlavə edin
 the MCP relay couldn't start	MCP relyni işə salmaq mümkün olmadı
+The MCP relay couldn't start; agents can still use the file bridge. Click to turn agents off	MCP rely işə düşə bilmədi; agentlər yenə də fayl körpüsündən istifadə edə bilər. Agentləri söndürmək üçün klikləyin
 The model answering; click to change it	Cavab verən model; dəyişmək üçün klikləyin
 The model declined this request.	Model bu sorğunu rədd etdi.
 The model declined this request: {why}	Model bu sorğunu rədd etdi: {why}
+The model is ready to run.	Model işə salınmağa hazırdır.
 The model sent an empty reply; ask again, or try another model.	Model boş cavab göndərdi; yenidən soruşun və ya başqa model sınayın.
+The National Map	The National Map
+The National Map…	The National Map…
+the NLDI's answer isn't UTF-8 text	NLDI-nin cavabı UTF-8 mətni deyil
 the page is too large to draw	səhifə çəkmək üçün çox böyükdür
 the picture is too large to show	şəkil göstərmək üçün çox böyükdür
 the picture is too large to show, or isn't one	şəkil göstərmək üçün çox böyükdür və ya şəkil deyil
@@ -2341,9 +2732,18 @@ The reply reached its length limit.	Cavab uzunluq limitinə çatdı.
 The reply stopped before completion; no actions were run.	Cavab tamamlanmadan dayandı; heç bir əməliyyat icra edilmədi.
 The reply stopped early ({reason}).	Cavab vaxtından əvvəl dayandı ({reason}).
 the report export failed unexpectedly	hesabatın ixracı gözlənilmədən uğursuz oldu
+The request failed.	Sorğu uğursuz oldu.
+The result wired into this output is added to the map under this name.	Bu çıxışa qoşulmuş nəticə xəritəyə bu ad altında əlavə edilir.
 The saved sign-in changed. Select your account again.	Saxlanmış giriş dəyişib. Hesabınızı yenidən seçin.
+The server had a problem answering.	Server cavab verərkən problem yarandı.
+The server is limiting requests.	Server sorğuları məhdudlaşdırır.
+The server refused the request.	Server sorğunu rədd etdi.
+The server took too long to answer.	Server çox gec cavab verdi.
+The service may be private or need a token.	Xidmət şəxsi ola və ya token tələb edə bilər.
+The service needs a sign-in or a token.	Xidmət giriş və ya token tələb edir.
 The service's answer isn't UTF-8 text	Xidmətin cavabı UTF-8 mətni deyil
 The Shapefile's files download as one zip.	Shapefile faylları bir zip arxivi kimi endirilir.
+The share of each cell covered by fields, for the zoomed-out view	Hər xananın sahələrlə örtülü payı, uzaqlaşdırılmış görünüş üçün
 The sign-in expired or was revoked. Sign in again.	Girişin müddəti bitib və ya icazə ləğv edilib. Yenidən daxil olun.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Giriş məlumatı tətbiqin parametrlər qovluğunda yalnız istifadəçi hesabınız üçün saxlanılır, heç vaxt layihə faylında saxlanılmır.
 The start-up project {path} didn't open: {error}	{path} başlanğıc layihəsi açılmadı: {error}
@@ -2352,8 +2752,13 @@ The step's layer {name} isn't in the map.	Addımın layı {name} xəritədə yox
 The store has no variables with two or more dimensions.	Anbarda iki və ya daha çox ölçülü dəyişən yoxdur.
 the store is gone	anbar artıq yoxdur
 The task's steps changed, so the step being edited was closed: edit it again.	Tapşırığın addımları dəyişdi, buna görə redaktə olunan addım bağlandı: onu yenidən redaktə edin.
+the time slider is off	zaman sürgüsü sönülüdür
+The token expires on {date}.	Tokenin müddəti {date} tarixində bitir.
 the view has no extent	görünüşün hüdudu yoxdur
+The view is larger than one read: its centre was read (zoom in for the rest)	Görünüş bir oxumadan böyükdür: onun mərkəzi oxundu (qalanı üçün yaxınlaşdırın)
 The web app always runs the latest release: reload the page to get it.	Veb tətbiq həmişə ən son buraxılışla işləyir: onu almaq üçün səhifəni yeniləyin.
+the window's screenshot didn't come back in time, so the map was drawn offscreen	pəncərənin ekran görüntüsü vaxtında gəlmədi, ona görə xəritə ekrandan kənarda çəkildi
+the window's screenshot didn't hold the map, so it was drawn offscreen	pəncərənin ekran görüntüsündə xəritə yox idi, ona görə ekrandan kənarda çəkildi
 Theme	Mövzu
 Thermal	Termal
 Thinking…	Düşünür…
@@ -2368,6 +2773,8 @@ This plugin can:	Bu plagin bunları edə bilər:
 This plugin runs as a program on your computer, outside RustGIS's sandbox. It can do anything you can: read and change your files, use the network and run other programs. Install it only if you trust its author.	Bu plagin RustGIS-in qum qutusundan kənarda, kompüterinizdə proqram kimi işləyir. Sizin edə bildiyiniz hər şeyi edə bilər: fayllarınızı oxuyub dəyişə, şəbəkədən istifadə edə və başqa proqramlar işə sala bilər. Onu yalnız müəllifinə etibar edirsinizsə quraşdırın.
 This request has no one-time allow option.	Bu sorğu üçün birdəfəlik icazə seçimi yoxdur.
 This request uses an unsupported capability. Check the parameter and change the request.	Bu sorğu dəstəklənməyən funksiyadan istifadə edir. Parametri yoxlayın və sorğunu dəyişin.
+This result is kept	Bu nəticə saxlanılır
+This step	Bu addım
 This step names no tool to show.	Bu addım göstəriləcək alət göstərmir.
 Thumbnail	Miniatür
 Tick length	Bölgü işarəsinin uzunluğu
@@ -2380,7 +2787,13 @@ Tile Layers	Kafel layları
 Tilt Map	Xəritəni əy
 Tilt-shift	Tilt-shift
 Tilt-shift blur and film grain.	Tilt-shift bulanıqlığı və film dənəvərliyi.
+Time	Zaman
+Time\nSlider	Zaman\nsürgüsü
+Time Fields	Zaman sahələri
+Time Slider	Zaman sürgüsü
+Time Slider Settings	Zaman sürgüsü parametrləri
 Tint by elevation	Hündürlüyə görə rənglə
+Tissot's Indicatrix	Tisso indikatrisası
 Title	Başlıq
 Toggle Dark Mode	Qaranlıq rejimi dəyiş
 Toggle GPU Rendering	GPU təsvirini dəyiş
@@ -2404,6 +2817,8 @@ Topology Options	Topologiya seçimləri
 Topology Options…	Topologiya seçimləri…
 Topology rules and the errors they find.	Topologiya qaydaları və onların tapdığı xətalar.
 Total {total}   ·   Segment {segment}	Cəmi {total}   ·   Seqment {segment}
+Trace	İzlə
+Trace a point first: click the map.	Əvvəlcə nöqtəni izləyin: xəritəyə klikləyin.
 Track jobs and their status.	İşləri və onların vəziyyətini izləyin.
 Train a neural network on training polygons	Təlim poliqonları üzərində neyron şəbəkəsini öyrət
 Train a neural network on training polygons and classify every pixel.	Təlim poliqonları üzərində neyron şəbəkəsini öyrədin və hər pikseli təsnif edin.
@@ -2413,21 +2828,30 @@ Trained models	Öyrədilmiş modellər
 Transparency	Şəffaflıq
 Traverse	Poliqonometriya
 Triangle	Üçbucaq
+Try again in a moment.	Bir azdan yenidən cəhd edin.
+Try again later.	Sonra yenidən cəhd edin.
 Turn editing on or off for the map.	Xəritə üçün redaktəni yandırın və ya söndürün.
 Turn Labels Off	Etiketləri söndür
 Turn labels on or off for the selected layer.	Seçilmiş lay üçün etiketləri yandırın və ya söndürün.
 Turn labels on or off.	Etiketləri yandırın və ya söndürün.
 Turn Off	Söndür
 Turn on the Basemaps plugin	Əsas xəritələr plaginini aktivləşdir
+Turn the time slider off: every feature shows again.	Zaman sürgüsünü söndür: bütün obyektlər yenidən görünür.
 Turns a table's addresses into points: each row's address fields are joined with commas (such as street, city, country) and looked up. The public servers take up to 100 addresses a run, one a second; a server of your own takes more.	Cədvəlin ünvanlarını nöqtələrə çevirir: hər sətrin ünvan sahələri vergüllə birləşdirilir (məsələn küçə, şəhər, ölkə) və axtarılır. İctimai serverlər bir icrada 100-ə qədər ünvan qəbul edir, saniyədə bir; öz serveriniz daha çox qəbul edir.
 Two layers are named {name}: the step names it, so it replays on the first of them. Rename one to tell them apart.	İki layın adı {name}-dir: addım bu adı göstərir, buna görə onlardan birincisində təkrarlanır. Onları ayırmaq üçün birinin adını dəyişin.
 Type	Növ
 type a file name	fayl adını yazın
+type a longitude and latitude, or click the map	uzunluq və enlik yazın və ya xəritəyə klikləyin
+Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	Miqyas yazın, məsələn 1:12,345, 12345 və ya 25k, və Enter basın
 Type an address or coordinates and press Enter, or click the map.	Ünvan və ya koordinatlar yazıb Enter basın, ya da xəritəyə klikləyin.
 Type numbers separated by commas	Vergüllə ayrılmış rəqəmlər yazın
 Typed below	Aşağıda yazılan
+UM	UM
 Unavailable: {reason}	Əlçatan deyil: {reason}
+Unbind From Time Slider	Zaman sürgüsündən ayır
+Unbind from Time Slider	Zaman sürgüsündən ayır
 Undo	Geri al
+Undo (Ctrl+Z)	Geri al (Ctrl+Z)
 Undo / Redo	Geri al / Təkrarla
 Undo doesn't remove the recorded step: delete it in Edit Steps once you stop recording.	Geri al yazılmış addımı silmir: yazmanı dayandırdıqdan sonra onu «Addımları redaktə et» bölməsində silin.
 Undo the last change.	Son dəyişikliyi geri alın.
@@ -2438,10 +2862,15 @@ Uninstall GeoLibre Tools	GeoLibre alətlərini sil
 Uninstall Plugin	Plagini sil
 Uninstalled {id}.	{id} silindi.
 Unique Values	Unikal qiymətlər
+United States	ABŞ
 Units	Vahidlər
+Units per step	Addım başına vahid
+UNKNOWN TOOL	NAMƏLUM ALƏT
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre alətlərini boşaldın və RustGIS başlayanda onları yükləməyi dayandırın.
+Unsaved changes	Saxlanmamış dəyişikliklər
 Unsupervised classes (k-means)	Nəzarətsiz siniflər (k-means)
 Unsupervised classes (k-means).	Nəzarətsiz siniflər (k-means).
+Untitled model	Adsız model
 Up	Yuxarı
 Up a level	Bir səviyyə yuxarı
 Update	Yenilə
@@ -2451,22 +2880,49 @@ Update to {version}	{version} versiyasına yenilə
 Upload File	Fayl yüklə
 Upload File…	Fayl yüklə…
 url is required	url tələb olunur
+US EPA EnviroAtlas: maps of ecosystem services, land cover, people and the built environment across the United States.	US EPA EnviroAtlas: ABŞ üzrə ekosistem xidmətləri, torpaq örtüyü, əhali və tikili mühit xəritələri.
+US Federal GIS	ABŞ federal CİS
+US Federal GIS…	ABŞ federal CİS…
+US Local GIS	ABŞ yerli CİS
+US Local GIS…	ABŞ yerli CİS…
+US State GIS	ABŞ ştat CİS
+US State GIS…	ABŞ ştat CİS…
 USA Contiguous Albers Equal Area	ABŞ bitişik ştatlar Albers bərabər sahəli
 Use	İstifadə et
+Use a Single Stroke	Tək cizgidən istifadə et
 Use another account	Başqa hesabdan istifadə et
 Use Current View	Cari görünüşdən istifadə et
+Use each feature's line color	Hər obyektin xətt rəngindən istifadə et
+Use each feature's line width	Hər obyektin xətt qalınlığından istifadə et
 USERPROFILE	USERPROFILE
+USGS 3DEP DEM	USGS 3DEP DEM
+USGS 3DEP DEM…	USGS 3DEP DEM…
+USGS 3DEP elevation models (GeoTIFF tiles from The National Map) where the map is.	Xəritənin olduğu yerdə USGS 3DEP hündürlük modelləri (The National Map-dən GeoTIFF kafelləri).
+USGS 3DEP LiDAR point clouds (COPC) from the Planetary Computer, where the map is: add a tile's data as a point cloud.	Xəritənin olduğu yerdə Planetary Computer-dən USGS 3DEP LiDAR nöqtə buludları (COPC): kafelin məlumatlarını nöqtə buludu kimi əlavə edin.
 USGS Imagery	USGS təsvirləri
+USGS LiDAR	USGS LiDAR
+USGS LiDAR…	USGS LiDAR…
+USGS NLDI	USGS NLDI
+USGS NLDI network tools: choose a flowline direction and click the map (or trace the point below). Then get the basin, or choose a navigation method and press Load sources & plot to plot its flowlines, or pick a catalog such as stream gages or wells and plot it too. The NLDI covers the United States' NHDPlus network.	USGS NLDI şəbəkə alətləri: axın xəttinin istiqamətini seçin və xəritəyə klikləyin (və ya aşağıda nöqtəni izləyin). Sonra hövzəni alın, yaxud naviqasiya üsulu seçib onun axın xətlərini qurmaq üçün «Mənbələri yüklə və qur» düyməsini basın, ya da hidrometrik məntəqələr və ya quyular kimi bir kataloq seçib onu da qurun. NLDI ABŞ-ın NHDPlus şəbəkəsini əhatə edir.
+USGS NLDI…	USGS NLDI…
 USGS The National Map	USGS The National Map
+USGS The National Map's map services (topographic maps, imagery, elevation, hydrography, boundaries and more) and a few partners'. Each is added as a tile layer.	USGS The National Map-in və bir neçə tərəfdaşın xəritə xidmətləri (topoqrafik xəritələr, təsvirlər, hündürlük, hidroqrafiya, sərhədlər və s.). Hər biri kafel layı kimi əlavə edilir.
 Using ChatGPT plan	ChatGPT planı istifadə olunur
+Utilities	Kommunal şəbəkələr
 Valid combinations, one per line: a, b	Etibarlı kombinasiyalar, hər sətirdə bir: a, b
 Valid expression · {n} matching rows	İfadə düzgündür · {n} uyğun sətir
 Validate	Yoxla
+Validate Model	Modeli yoxla
 value (empty: no-data)	qiymət (boş: məlumat yoxdur)
+Values from −stretch to +stretch are shown from black to full colour	−stretch-dən +stretch-ə qədər dəyərlər qaradan tam rəngə qədər göstərilir
+Vantor Open Data	Vantor Open Data
+Vantor's open imagery of disasters: pick an event and a phase (before or after it), then Find Items.	Vantor-un fəlakətlərə aid açıq təsvirləri: hadisə və faza (ondan əvvəl və ya sonra) seçin, sonra «Elementləri tap».
+Vantor…	Vantor…
 Variable	Dəyişən
 Vector and raster data	Vektor və rastr məlumatı
 Vector Layer	Vektor layı
 Vector tiles (MVT)	Vektor kafellər (MVT)
+Vectors a geospatial foundation model made for every pixel or image patch, found where the map is and shown as colours.	Geoməkan əsas modelinin hər piksel və ya təsvir fraqmenti üçün yaratdığı vektorlar; xəritənin olduğu yerdə tapılır və rənglər kimi göstərilir.
 Version {version}	Versiya {version}
 Vertex	Təpə
 Vertical	Şaquli
@@ -2503,10 +2959,14 @@ Want more basemaps?	Daha çox əsas xəritə istəyirsiniz?
 WCS	WCS
 WCS Coverage Request	WCS örtük sorğusu
 Weather	Hava
+Weather and climate data from dynamical.org (NOAA GFS, GEFS and HRRR, ECMWF, DWD ICON…) as Zarr stores: open a dataset, pick a variable and its time steps, and add it.	dynamical.org-dan hava və iqlim məlumatları (NOAA GFS, GEFS və HRRR, ECMWF, DWD ICON…) Zarr anbarları kimi: məlumat dəstini açın, dəyişəni və onun zaman addımlarını seçin və əlavə edin.
+Web\nData	Veb\nməlumatlar
 Web\nMap	Veb\nxəritə
 Web Basemaps	Veb əsas xəritələr
+Web Data	Veb məlumatlar
 Web Layer	Veb lay
 Web Link Chart	Veb əlaqə diaqramı
+Web maps	Veb xəritələr
 Web Mercator	Web Mercator
 Web Scene	Veb səhnə
 Web Style	Veb üslub
@@ -2533,7 +2993,11 @@ Where the map opens: the full extent or a view you saved.	Xəritənin harada aç
 Where tools work	Alətlərin işlədiyi ərazi
 Which 5 countries have the largest GDP?	Hansı 5 ölkənin ÜDM-i ən böyükdür?
 Whitebox and GeoLibre tools	Whitebox və GeoLibre alətləri
+Whole map	Bütün xəritə
 Whose borders the sample countries and the basemap outline show.	Nümunə ölkələrin və əsas xəritə konturunun kimin sərhədlərini göstərdiyi.
+Wide (±1 step)	Geniş (±1 addım)
+Wider (±3 steps)	Daha geniş (±3 addım)
+Width	Qalınlıq
 Width (mm)	En (mm)
 Windows	Pəncərələr
 Winkel Tripel	Winkel Tripel
@@ -2543,6 +3007,8 @@ WKT column	WKT sütunu
 WMS	WMS
 WMTS	WMTS
 Words	Sözlər
+words in the name	addakı sözlər
+words to keep to (optional)	məhdudlaşdırıcı sözlər (istəyə bağlı)
 Workflow Manager	İş axını meneceri
 Workflows	İş axınları
 Working	İşləyir
@@ -2573,12 +3039,16 @@ XY Table To Point…	XY cədvəlindən nöqtəyə…
 Y (mm)	Y (mm)
 Y column	Y sütunu
 Y Field	Y sahəsi
+Year	İl
 Yes	Bəli
 You can undo this with {shortcut}.	Bunu {shortcut} ilə geri ala bilərsiniz.
 You have version {version}.	Sizdə {version} versiyası var.
 You're using your ChatGPT plan	ChatGPT planınızdan istifadə edirsiniz
 Your skills are kept in the skills folder of the app's settings folder. Shared skills (~/.agents/skills) are off until you turn them on.	Bacarıqlarınız tətbiqin ayarlar qovluğundakı skills qovluğunda saxlanılır. Paylaşılan bacarıqlar (~/.agents/skills) siz açana qədər söndürülüdür.
 Yours	Sizin
+YYYY-MM-DD	İİİİ-AA-GG
+YYYY-MM-DD, for the layers that change with time	İİİİ-AA-GG, zamanla dəyişən laylar üçün
+YYYY-MM-DD, for time layers	İİİİ-AA-GG, zaman layları üçün
 z (m)	z (m)
 Z factor	Z əmsalı
 Zarr	Zarr
@@ -2629,6 +3099,7 @@ Zoom To World	Dünyaya yaxınlaşdır
 {url}: downloaded after another project was opened, so it wasn't opened	{url}: başqa layihə açıldıqdan sonra endirildi, ona görə açılmadı
 {url}: only HTTPS addresses, or plain HTTP on this computer or network, are allowed	{url}: yalnız HTTPS ünvanlarına və ya bu kompüterdə, yaxud bu şəbəkədə adi HTTP-yə icazə verilir
 © OpenStreetMap contributors	© OpenStreetMap iştirakçıları
+±, dequantised	±, dekvantlaşdırılmış
 — fps	— kadr/san
 ⌘K	⌘K
 ▶ Simulate	▶ Simulyasiya et
