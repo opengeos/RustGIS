@@ -370,7 +370,8 @@ pub fn parse_input(v: &serde_json::Value) -> Option<f64> {
             if x.fract() == 0.0 && (1000.0..=9999.0).contains(&x) {
                 Civil::date(x as i64, 1, 1).ms()
             } else if x.fract() == 0.0 && (10_000_101.0..=99_991_231.0).contains(&x) {
-                parse_text(&format!("{:04}-{:02}-{:02}", (x / 1e4) as i64, (x / 100.0) as i64 % 100, x as i64 % 100))?
+                // Not a valid date: the milliseconds it also reads as.
+                parse_text(&format!("{:04}-{:02}-{:02}", (x / 1e4) as i64, (x / 100.0) as i64 % 100, x as i64 % 100)).unwrap_or(x)
             } else {
                 x
             }
@@ -555,7 +556,8 @@ mod tests {
         assert_eq!(parse_input(&serde_json::json!(0)), Some(0.0));
         assert_eq!(parse_input(&serde_json::json!(500)), Some(500.0));
         assert_eq!(parse_input(&serde_json::json!(20_150_301)), Some(d("2015-03-01")));
-        assert_eq!(parse_input(&serde_json::json!(20_151_301)), None);
+        assert_eq!(parse_input(&serde_json::json!(20_151_301)), Some(20_151_301.0));
+        assert_eq!(parse_input(&serde_json::json!(86_400_000)), Some(DAY_MS));
         assert_eq!(parse_input(&serde_json::json!([1])), None);
     }
 }
