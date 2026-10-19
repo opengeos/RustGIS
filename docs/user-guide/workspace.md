@@ -41,6 +41,9 @@ Tools for working across maps and views, and for setting up the app the way you 
 - **Thumbnails** for the project and for each map, from the view or an image.
 - **Animation**: add keyframes (views), play them, and export the moves as PNG frames.
 - **Time Slider** (View › Time) shows data through time, in a timeline docked under the map.
+
+  ![The Time Slider under the map at 2018, showing a layer of dated events cumulatively, with a bar for each year](https://assets.rustgis.app/images/time-slider.webp)
+
   - **Bind To Time Slider** (a layer's context menu, or the bar's **Layers** menu) picks the
     layer's date field: the one most of whose values read as dates. Text dates (`2015-03-01`,
     `2015-03-01T12:00:00Z`, `2015/3/1`), epoch milliseconds or seconds, and years (`1958`) all
@@ -56,6 +59,11 @@ Tools for working across maps and views, and for setting up the app the way you 
     cloud-optimised GeoTIFF a file per date with `layer.addUrl`, giving its `start` and `end`.
     For example NASA GIBS daily MODIS imagery:
     `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
+  - From scripts: `time.bind` (`"layer"`, `"field"`, `"unit"`, `"show"`), `time.set` (the
+    window: `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`, `"speed"`, `"loop"`,
+    `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes
+    back), `time.fields` (a layer's date fields) and `time.unbind`:
+    `rustgis-cli run --cmd 'layer.addData={"path":"quakes.csv"}' --cmd 'time.bind={"layer":"quakes","unit":"year","show":"cumulative"}' --cmd 'time.goTo={"date":"2018"}'`.
   - **Export** writes the steps as an animated GIF (`time.export` also writes a zip of PNG
     frames). The slider, its window and the bindings are saved with the project; the off button
     turns it off and every feature shows again.

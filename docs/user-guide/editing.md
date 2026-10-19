@@ -11,6 +11,8 @@ coordinates. Every edit is one undo step.
 
 ## Modifying features
 
+![Edit Vertices on Lake Victoria: square vertex handles and round midpoint handles around the selected lake](https://assets.rustgis.app/images/editing.webp)
+
 The Edit tab's **Edit** button turns editing on or off for the map; with it off, the map is
 read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest:
 
@@ -29,7 +31,12 @@ read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest
   same to one vertex and `edit.setGeometry` (Set Geometry) replaces a feature's whole shape.
 - **Feature templates**: named default values for new features, made from a selected feature;
   the Create tool uses the chosen template.
-- **Snapping**: new and dragged vertices snap to nearby vertices, edges and line ends (magenta marker).
+- **Snapping** (**Edit › Snapping**): new and dragged vertices snap to nearby vertices, edges and
+  line ends (magenta marker). Each of the three can be turned off, and the tolerance is how near,
+  in screen pixels, a vertex must come to snap (10 by default, 1 to 100):
+  `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}`.
+- **Settings**: **Show Vertices** marks the vertices of the selected features even when Edit
+  Vertices isn't on (`edit.settings={"showVertices": true}`).
 - **Elevation**: new features get a `z` value, constant or sampled from a raster surface.
 - **Ground to grid**: a scale factor and rotation applied to entered distances and directions
   (Move, and `edit.traverse`, which draws a line or polygon from distances and bearings).

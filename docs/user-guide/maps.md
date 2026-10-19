@@ -5,7 +5,7 @@ projection, bookmarks and view settings. Maps open as tabs above the map view.
 
 ## Navigating
 
-Drag to pan and scroll to zoom; ++home++ (or **Full Extent**) shows all the data. **Map ›
+Drag to pan and scroll to zoom; ++home++ (or **Full Extent**) shows all the data. **Home ›
 Navigate** has fixed zoom steps, **Previous** and **Next** extents, **Bookmarks** (the World Atlas
 has World, Europe, Africa, Americas and East Asia) and **Go To XY**, which pans to a longitude and
 latitude. **New Bookmark…** saves the current view under a name, with an optional description of
@@ -38,6 +38,8 @@ or `{"by": 10}`), `map.resetNorth` faces north and looks straight down, and **Go
 [Layouts](layouts.md)), and the globe turns and tilts the same way: tilted, its camera swings
 back about the centre of view, so the horizon comes into sight past the curve of the Earth.
 
+![Countries extruded by population on a map tilted 55° and turned 20°, lit and shaded, with labels on their roofs](https://assets.rustgis.app/images/extrusion.webp)
+
 **Terrain** gives a tilted map relief, as MapLibre's terrain does: the map is draped over the
 ground's heights, labels and point markers stand on it, and nearer slopes hide what lies behind
 them. The heights come from a DEM raster layer of the project (heights in metres; the layer can
@@ -49,6 +51,8 @@ Terrain-RGB (`mapbox`, also MapTiler's). `map.terrain` sets it: `{"layer": "DEM"
 `{"off": true}` flattens the map again. Terrain is saved with the project and shows in exported
 maps; a flat (untilted) view, the globe and other projections stay flat, extruded layers are
 not lifted onto the relief yet, and identify and selection still pick on the flat ground.
+
+![Mount Rainier in USGS imagery draped over Terrarium elevation tiles, tilted 65°](https://assets.rustgis.app/images/terrain.webp)
 
 MapLibre map links carry a view in their address, as
 `#zoom/latitude/longitude/bearing/pitch` (`https://…/#15.5/40.7484/-73.9857/30/60`). **Go To Map
@@ -180,6 +184,8 @@ tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.set
 
 ### Other worlds
 
+![Mars on the 3D globe, on the Viking mosaic, with Valles Marineris across the middle](https://assets.rustgis.app/images/mars-globe.webp)
+
 A map can be on the Moon, Mars or another body instead of the Earth. Pick the body from the
 planet button at the top of the Layers pane, or under **Celestial Bodies** in the Basemap
 gallery: Earth, Moon, Mars, Callisto, Charon, Europa, Ganymede, Io, Mercury, Pluto, Titan and
@@ -200,6 +206,8 @@ are read through the opengeos tile service (`tiles.geolibre.app`, shared with Ge
 adds what browsers need, reprojects the USGS mosaics and caches the tiles. From scripts:
 `map.body={"name": "mars"}` (`"basemap"` picks another of its basemaps, or `false` adds none, still
 taking other bodies' basemaps off) and `map.bodies`.
+
+![The Moon's near side on the LOLA hillshaded albedo basemap, its maria dark among the cratered highlands](https://assets.rustgis.app/images/moon.webp)
 
 ### Worldview
 
@@ -286,7 +294,8 @@ The View tab adds effects drawn over the map: **Illumination** (day and night sh
 with twilight), **Weather** (haze, fog, rain, snow), **Visual Effect** (vignette, edges, the stars around the globe), **Camera
 Effect** (tilt-shift blur, film grain) and **Postprocessing** (brightness, contrast, saturation,
 sepia). The **Color Vision** simulator shows the map as people with protanopia, deuteranopia,
-tritanopia or achromatopsia see it (on screen only; exports are untouched).
+tritanopia or achromatopsia see it (on screen only; exports are untouched). **View › Display ›
+Graticule** (`map.graticule`) draws latitude and longitude lines over the basemap.
 
 **Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant;
 not in the web app, which doesn't include that projection).

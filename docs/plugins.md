@@ -207,7 +207,7 @@ English strings and their translations, written exactly as they appear in `plugi
 ### A tab of its own
 
 By default a plugin's commands and tools get a group on the **Plugins** tab. A plugin can have a
-ribbon tab of its own instead. The tab sits at the end of the tab strip, and **Help › Ribbon**
+ribbon tab of its own instead. The tab sits at the end of the tab strip, and **Settings › Customize › Ribbon**
 can hide it like any other. Declare it in `plugin.json`:
 
 ```json

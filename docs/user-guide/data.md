@@ -47,7 +47,7 @@ the table's name beside it (`input_name`). The **XY Table To Point** tool
 the project, from two fields of coordinates and their coordinate system. In a text field a single comma is the decimal separator
 (`1,234` is 1.234); thousands separators are not read.
 **Home › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
-and **Insert › Layer Templates** adds empty layers with ready-made schemas to draw into.
+and **Data › Layer Templates** adds empty layers with ready-made schemas to draw into.
 
 Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. GeoPackage,
 GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are converted as they

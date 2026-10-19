@@ -136,14 +136,20 @@ it unchanged.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
+- **Label field and text**: the field the labels show
+  (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size, colour, halo
+  and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
 - **Placement**: automatic (above points, centred on lines and polygons), centred, or one of
-  eight positions around the feature.
+  eight positions around the feature (`labels.placement={"layer": "Cities", "position":
+  "aboveRight"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
+
+![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)
 
 ## Layer effects
 

@@ -29,7 +29,8 @@ script from the command line, a notebook or the AI Assistant.
     cloud-optimised GeoTIFF, web tiles, vector tiles, PMTiles, MBTiles and MapLibre styles, drawn on a 3D
     globe or in any projection, on the desktop and in the browser; STAC catalogs, Overture
     Maps, OpenStreetMap, open-data portals and S3 buckets; SQL, DuckDB and live PostGIS,
-    MySQL and MariaDB databases on the desktop.
+    MySQL and MariaDB databases on the desktop. Tilt the map over terrain, extrude features in
+    3D, and map the Moon, Mars and other worlds.
     [Data](user-guide/data.md) · [Web Data](user-guide/web-data.md) · [Formats](user-guide/data-formats.md) · [Maps](user-guide/maps.md)
 
 -   **Cartography**
@@ -75,11 +76,23 @@ script from the command line, a notebook or the AI Assistant.
 
 [![The Analyze tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)](https://assets.rustgis.app/images/buffer-history.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
+[![ModelBuilder: a model of buffer, clip and dissolve after a run](https://assets.rustgis.app/images/modelbuilder.webp)](https://assets.rustgis.app/images/modelbuilder.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
 [![A shaded-relief elevation model with the Style tab](https://assets.rustgis.app/images/raster.webp)](https://assets.rustgis.app/images/raster.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
 [![The World Atlas on the 3D globe](https://assets.rustgis.app/images/globe.webp)](https://assets.rustgis.app/images/globe.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
+[![Mount Rainier in USGS imagery draped over terrain, tilted](https://assets.rustgis.app/images/terrain.webp)](https://assets.rustgis.app/images/terrain.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
+[![Mars on the 3D globe, on the Viking mosaic](https://assets.rustgis.app/images/mars-globe.webp)](https://assets.rustgis.app/images/mars-globe.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
+[![Countries extruded by population on a tilted map](https://assets.rustgis.app/images/extrusion.webp)](https://assets.rustgis.app/images/extrusion.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
 [![An OpenFreeMap vector style over Paris with the Basemap gallery](https://assets.rustgis.app/images/tiles.webp)](https://assets.rustgis.app/images/tiles.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
+[![The Sentinel-2 Explorer in the Web Data pane, with scene footprints on the map](https://assets.rustgis.app/images/web-data.webp)](https://assets.rustgis.app/images/web-data.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
+
+[![The Time Slider showing dated events through 2018](https://assets.rustgis.app/images/time-slider.webp)](https://assets.rustgis.app/images/time-slider.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
 [![A page layout with a map frame, legend, north arrow and scale bar](https://assets.rustgis.app/images/layout.webp)](https://assets.rustgis.app/images/layout.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
 
