@@ -89,6 +89,8 @@ pub(crate) fn inflate(bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// Encodes a tile (uncompressed). Coordinates are rounded to whole tile units; keys and values
 /// are shared within each layer. Parts with too few points for their kind are left out (a line
 /// needs two, a ring three besides its closing point), and so are features left with none.
+/// Rings are written as given: exterior rings must wind clockwise (y down) and holes the other
+/// way, as decoding tells them apart by their signed area ([`ring_area`]).
 pub fn encode(tile: &Tile) -> Vec<u8> {
     let mut out = Vec::new();
     for l in &tile.layers {
@@ -97,7 +99,7 @@ pub fn encode(tile: &Tile) -> Vec<u8> {
     out
 }
 
-fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+pub(crate) fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push((v as u8) | 0x80);
         v >>= 7;

@@ -265,13 +265,7 @@ pub fn write(tiles: Vec<(u8, u32, u32, Vec<u8>)>, a: &NewArchive) -> Result<Vec<
 /// A directory: delta-coded tile ids, then run lengths, lengths and offsets (0 for "right after
 /// the previous entry"), all varints.
 fn write_dir(entries: &[Entry]) -> Vec<u8> {
-    fn varint(b: &mut Vec<u8>, mut v: u64) {
-        while v >= 0x80 {
-            b.push((v as u8) | 0x80);
-            v >>= 7;
-        }
-        b.push(v as u8);
-    }
+    use crate::mvt::put_varint as varint;
     let mut b = Vec::new();
     varint(&mut b, entries.len() as u64);
     let mut last = 0;
