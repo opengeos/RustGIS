@@ -22,9 +22,17 @@ pub struct TimeBarState {
     counts: Option<(String, Vec<u32>)>,
 }
 
-/// The window presets, as the Show menu names them.
-const SHOWS: [(&str, &str); 4] =
-    [("step", "This step"), ("wide", "Wide (±1 step)"), ("wider", "Wider (±3 steps)"), ("cumulative", "Cumulative")];
+/// A window preset (`time.set`'s `show`), as the Show menu names it.
+fn show_label(code: &str) -> String {
+    match code {
+        "step" => tl!("This step"),
+        "wide" => tl!("Wide (±1 step)"),
+        "wider" => tl!("Wider (±3 steps)"),
+        "cumulative" => tl!("Cumulative"),
+        _ => tl!("Custom"),
+    }
+    .to_string()
+}
 
 fn unit_label(u: Unit) -> String {
     match u {
@@ -83,7 +91,7 @@ pub fn export(app: &mut RustGisApp) -> Result<Value, String> {
     if app.services.download.is_some() {
         return Err("exporting time animations needs the desktop app".into());
     }
-    let name = format!("{} time.gif", app.session.map().name);
+    let name = crate::i18n::fmt("{map} time.gif", &[("map", &app.session.map().name)]);
     match crate::dialogs::pick_save(&name, &["gif"], tl!("Animated GIF")) {
         Some(path) => app.run("time.export", json!({"path": path})),
         None => Ok(Value::Null),
@@ -220,14 +228,11 @@ fn header(app: &mut RustGisApp, ui: &mut Ui, t: &TimeSlider, steps: &[f64], tk: 
         if ui.selectable_label(looped, tl!("Loop")).on_hover_text(tl!("Start over at the end while playing.")).clicked() {
             let _ = app.run("time.set", json!({"loop": !looped}));
         }
-        let shown = rustgis_engine::cmd::time::SHOWS
-            .iter()
-            .position(|(_, b, a, c)| *b == t.before && *a == t.after && *c == t.cumulative)
-            .and_then(|i| SHOWS.get(i))
-            .map_or_else(|| tl!("Custom").to_string(), |(_, l)| tl!(l).to_string());
-        egui::ComboBox::from_id_salt("time_show").selected_text(shown).width(130.0).show_ui(ui, |ui| {
-            for (code, l) in SHOWS {
-                if ui.button(tl!(l)).clicked() {
+        let presets = rustgis_engine::cmd::time::SHOWS;
+        let shown = presets.iter().find(|(_, b, a, c)| *b == t.before && *a == t.after && *c == t.cumulative).map_or("custom", |p| p.0);
+        egui::ComboBox::from_id_salt("time_show").selected_text(show_label(shown)).width(130.0).show_ui(ui, |ui| {
+            for (code, ..) in presets {
+                if ui.button(show_label(code)).clicked() {
                     let _ = app.run("time.set", json!({"show": code}));
                 }
             }
@@ -277,7 +282,7 @@ fn layers_menu(app: &mut RustGisApp, ui: &mut Ui) {
                 let current = bound.clone().or_else(|| fields.first().map(|f| f.0.clone())).unwrap_or_default();
                 egui::ComboBox::from_id_salt(("time_field", *id)).selected_text(current.as_str()).show_ui(ui, |ui| {
                     for (f, share) in fields {
-                        let label = format!("{f} ({:.0}%)", share * 100.0);
+                        let label = crate::i18n::fmt("{field} ({share}%)", &[("field", f), ("share", &format!("{:.0}", share * 100.0))]);
                         if ui.selectable_label(*f == current, label).clicked() {
                             let _ = app.run("time.bind", json!({"layer": id, "field": f}));
                         }

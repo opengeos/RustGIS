@@ -9435,5 +9435,10 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
     assert_eq!(s.run("time.export", &json!({"path": zip.display().to_string(), "width": 96, "height": 64})).unwrap()["frames"], 12);
     assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-06");
     assert!(s.run("time.export", &json!({"path": zip.display().to_string(), "from": "2016"})).is_err());
+    // Only GIFs and zips, so a file is what its name says.
+    assert!(s.run("time.export", &json!({"path": dir.join("events.png").display().to_string()})).is_err());
+    // A huge step number is the last step.
+    s.run("time.goTo", &json!({"step": u64::MAX})).unwrap();
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-12");
     std::fs::remove_dir_all(&dir).ok();
 }

@@ -14,6 +14,9 @@ pub const SHOWS: [(&str, u32, u32, bool); 4] =
 
 /// The most frames an export makes.
 const MAX_FRAMES: usize = 2000;
+/// The most pixels an export renders over all its frames (it blocks while it runs): 300 frames
+/// at 1280 × 720, or 2000 at about 500 × 300.
+const MAX_PIXELS: f64 = 3.0e8;
 
 /// The map has a time slider.
 fn need_slider(s: &Session) -> Option<&'static str> {
@@ -52,7 +55,7 @@ pub fn commands() -> Vec<C> {
             let t = match uint(p, "step") {
                 Some(i) => {
                     let steps = sl.steps();
-                    steps.get((i as usize).min(steps.len().saturating_sub(1))).copied().unwrap_or(sl.start)
+                    steps.get(usize::try_from(i).unwrap_or(usize::MAX).min(steps.len().saturating_sub(1))).copied().unwrap_or(sl.start)
                 }
                 None => p.get("date").and_then(time::parse_input).ok_or("date is required (2015-06-01, a year, or milliseconds since 1970), or step")?,
             };
@@ -248,7 +251,11 @@ pub(crate) fn set(s: &mut Session, p: &Value) -> CmdResult {
 /// Renders every step (or those from `from` to `to`) and writes them as a GIF or a zip of PNGs.
 fn export(s: &mut Session, p: &Value) -> CmdResult {
     let path = ps(p, "path").ok_or("path is required (a .gif, or a .zip of PNG frames)")?.to_string();
-    let gif = path.to_ascii_lowercase().ends_with(".gif");
+    let lower = path.to_ascii_lowercase();
+    let gif = lower.ends_with(".gif");
+    if !gif && !lower.ends_with(".zip") {
+        return Err("path must end in .gif (an animation) or .zip (PNG frames)".into());
+    }
     let (w, h) = (f(p, "width").unwrap_or(640.0).clamp(64.0, 1920.0), f(p, "height").unwrap_or(400.0).clamp(64.0, 1080.0));
     let (from, to) = (date(p, "from")?, date(p, "to")?);
     let saved = s.map().time.clone().ok_or("the time slider is off")?;
@@ -257,8 +264,8 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     if steps.is_empty() {
         return Err("no step falls between from and to".into());
     }
-    // Rendering blocks while it runs: a bound on the work, as Export Animation has.
-    if steps.len() > MAX_FRAMES || steps.len() as f64 * w * h > 1.5e9 {
+    // Rendering blocks while it runs: a bound on the work.
+    if steps.len() > MAX_FRAMES || steps.len() as f64 * w * h > MAX_PIXELS {
         return Err(format!("{} frames at {w:.0} × {h:.0} is too many; narrow from and to, or lower the size", steps.len()));
     }
     // Each frame shows the view's extent, as Export Map does. The slider comes back however the
