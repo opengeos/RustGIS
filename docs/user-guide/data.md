@@ -220,15 +220,18 @@ other assets: by collection, dates, the most cloud cover and (by default) where 
 default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1)
 (Sentinel-2, Landsat, NAIP, Copernicus DEM and Sentinel-1 on AWS); Microsoft's [Planetary
 Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered beside it, and any
-STAC API with item search works. **Collections** lists what the API offers, **Find Items** shows up to 50 items (date, cloud
-cover, id) and draws their footprints as a layer; a click frames an item, and **Add** adds the
-asset chosen beside it: `visual` (true colour) when there is one, else the first GeoTIFF, else the
-first data asset. A cloud-optimised GeoTIFF is read in place, the tiles each view needs by range
+STAC API with item search works. **Collections** lists what the API offers, and **Find Items** shows up to 50 items as cards
+(with "Showing 50 of 1234 items" when the API says how many match) and draws their footprints as
+a layer. Each card has the item's preview picture when it has one, its id, a collection · date ·
+cloud cover line, and **Zoom** (to the item), the asset to add, **Add** and **Details** (the item's
+properties). The asset chosen at first is `visual` (true colour) when there is one, else the first
+GeoTIFF, else the first point cloud, else the first data asset. A cloud-optimised GeoTIFF is read in place, the tiles each view needs by range
 (see [Files on the web](data-formats.md#files-on-the-web)); other assets download whole.
 
 The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
 `"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
-`2024-06-01/2024-06-30`, `"limit"`, `"maxCloud"`, `"footprints"`), and `stac.addAsset` with
+`2024-06-01/2024-06-30`, `"limit"`, `"maxCloud"`, `"footprints"`, and `"properties": true` for
+every property of each item rather than its date and cloud cover), and `stac.addAsset` with
 an item `stac.search` returned (`"item"`) or an item's address (`"url"`) and `"asset"`:
 
 ```sh
@@ -243,6 +246,75 @@ of the layer's address, so a project saved with one reads it again only while th
 (about an hour): add the asset again after that. A `?stac=` link opens the web app on an item or a
 collection ([web app links](../installation.md)). Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
+
+### Static catalogs
+
+Many catalogs are plain files rather than an API: a `catalog.json` linking to child catalogs and
+`collection.json` files, which link to their items. Give STAC Search the address of one (or pick
+Planet Open Data, Portolan or Vantor Open Data from its list) and the **Collection** row becomes
+**Catalog**: its child catalogs and collections are listed, and picking one shows its own children
+(an **↑** entry goes back up; **Browse** reads the list again). **Find Items** walks the catalog from
+the one picked, several documents at a time, and keeps the items that match the dates, the most
+cloud cover and, with **Only where the map is** ticked, the map's extent. It lists the first 50 items it finds that match, sorted by date (the walk goes in the catalog's
+order, so in a large catalog these aren't the earliest or latest: pick a catalog further down for
+others). Undated items, and items without a footprint, are kept. A collection whose data
+are its own assets (as many Portolan collections' GeoParquet and PMTiles files are) is listed as
+an item of its own. A walk reads at most 400 documents and goes at most 8 catalogs deep; when it
+stops early, it says so: pick a catalog further down. Items are added as from an API: a
+cloud-optimised GeoTIFF is read in place, GeoParquet and FlatGeobuf by range, PMTiles a tile at a
+time.
+
+`stac.collections` with a static catalog's `"url"` lists its children (`"id"` is each one's
+address), and `stac.search` walks one, with `"phase"` (`"pre"` or `"post"`) for catalogs of events:
+
+```sh
+rustgis-cli run --cmd 'stac.search={"url":"https://vantor-opendata.s3.amazonaws.com/events/Mexico-Hurricane-Simon-Oct-2026/collection.json","phase":"post"}'
+```
+
+The services below are STAC Search opened on one API or catalog, with the dialog titled after
+the service. Their commands (`ui.stac.planet`, `ui.stac.portolan`, `ui.stac.sentinel2`,
+`ui.stac.vantor`, `ui.stac.usgsLidar`) take `"catalog"` (a catalog's or collection's address to
+start from), `"phase"` and `"search": true` (find items at once).
+
+### Planet Open Data
+
+**Home › Web Data › Planet Open Data…** browses Planet's [disaster data
+releases](https://source.coop/planet/disasterdata) on Source Cooperative: imagery of earthquakes,
+floods, fires and storms from PlanetScope, SkySat and Pelican, before and after the event, licensed
+CC BY-NC 4.0. Pick an event (and, below it, its pre-event or post-event imagery or one collection),
+then **Find Items**; **Add** adds a scene's `visual` image.
+
+### Portolan
+
+**Home › Web Data › Portolan…** opens the [Portolan
+registry](https://github.com/portolan-sdi/portolan-registry), a catalog of the open data catalogs
+published with Portolan (cities, regions and agencies, most in Europe). Pick a publisher's catalog,
+then a theme or collection, then **Find Items**: each collection's files (GeoParquet, PMTiles and
+others) are listed, and **Add** adds the one chosen (`visual` first, often a PMTiles archive).
+
+### Sentinel-2 Explorer
+
+**Home › Web Data › Sentinel-2 Explorer…** searches Earth Search's Sentinel-2 Collection 1 Level-2A
+scenes (`sentinel-2-c1-l2a`) where the map is, over the last 90 days and with at most 20 % cloud
+cover, clearest first (sorted by cloud cover). **Add** adds the true colour image (`visual`);
+the asset list beside each scene offers its bands (`red`, `nir`, `swir16`, `scl`…), each a
+cloud-optimised GeoTIFF read in place. `stac.search` sorts with `"sortby"`
+(`"eo:cloud_cover"`, `"-datetime"` for newest first) on APIs that sort.
+
+### Vantor
+
+**Home › Web Data › Vantor…** browses [Vantor](https://vantor.com)'s open data (formerly Maxar's
+Open Data program): very high resolution imagery of disasters, one collection per event. Pick an
+event and a phase (before or after the event), then **Find Items**; **Add** adds a scene's
+`visual` cloud-optimised GeoTIFF.
+
+### USGS LiDAR
+
+**Home › Web Data › United States › USGS LiDAR…** searches the USGS 3D Elevation Program's LiDAR
+point clouds on the Planetary Computer (`3dep-lidar-copc`) where the map is: zoom to a town first.
+Each tile's `data` asset is a COPC file, signed with the Planetary Computer's token and added as a
+LiDAR point cloud (an evenly spread sample of its points, see [Formats](#formats)). A tile is
+downloaded whole, often tens of megabytes, so adding one takes a while.
 
 ## Overture Maps
 

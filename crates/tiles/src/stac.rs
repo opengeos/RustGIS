@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+pub mod catalog;
+
 /// Element 84's Earth Search (Sentinel-2, Landsat, Copernicus DEM and more, on AWS), the default.
 pub const EARTH_SEARCH: &str = "https://earth-search.aws.element84.com/v1";
 /// Microsoft's Planetary Computer, whose assets are signed with a token of their collection's
@@ -26,6 +28,8 @@ const MAX_ASSETS: usize = 100;
 const MAX_TEXT: usize = 2000;
 /// The most coordinates a footprint keeps.
 const MAX_FOOTPRINT: usize = 20_000;
+/// The most properties kept with an item.
+const MAX_PROPERTIES: usize = 100;
 
 /// A collection an API offers.
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +68,9 @@ pub struct Item {
     /// `self` link, which it could point anywhere); `None` for an item given whole, whose assets
     /// may then only be public web addresses.
     pub origin: Option<String>,
+    /// Its properties, to show: the first hundred plain values (not objects or arrays), long
+    /// text cut.
+    pub properties: Option<Value>,
 }
 
 /// What a search asks for.
@@ -77,6 +84,9 @@ pub struct Search {
     pub limit: usize,
     /// The most cloud cover, in percent.
     pub max_cloud: Option<f64>,
+    /// The order of the items: a property, `-` first for descending (`eo:cloud_cover`,
+    /// `-datetime`), for APIs with the sort extension.
+    pub sortby: Option<String>,
 }
 
 /// An API's address from what the user gave: without a trailing `/search` or `/collections`,
@@ -113,6 +123,18 @@ pub fn search_url(api: &str, s: &Search) -> Result<String, String> {
     if let Some(c) = s.max_cloud.filter(|c| c.is_finite()) {
         let c = c.clamp(0.0, 100.0);
         q.push(format!("query={}", encode(&format!(r#"{{"eo:cloud_cover":{{"lte":{c}}}}}"#))));
+    }
+    if let Some(by) = s.sortby.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+        let (sign, field) = by.strip_prefix('-').map(|f| ("-", f)).unwrap_or(("+", by.trim_start_matches('+')));
+        if field.is_empty() || field.len() > 100 || !field.chars().all(|c| c.is_ascii_alphanumeric() || "_:.-".contains(c)) {
+            return Err(format!("{by}: sortby is a property's name, - first for descending"));
+        }
+        let field = if field.starts_with("properties.") || matches!(field, "id" | "collection") {
+            field.to_string()
+        } else {
+            format!("properties.{field}")
+        };
+        q.push(format!("sortby={}", encode(&format!("{sign}{field}"))));
     }
     Ok(format!("{api}/search?{}", q.join("&")))
 }
@@ -212,7 +234,13 @@ pub fn parse_items(bytes: &[u8], from: &str) -> Result<(Vec<Item>, Option<String
     Ok((items, next))
 }
 
-/// An item from its own document.
+/// How many items a search's answer says match in all (`numberMatched`, or the context
+/// extension's `matched`).
+pub fn parse_matched(bytes: &[u8]) -> Option<u64> {
+    let v = json(bytes).ok()?;
+    v.get("numberMatched").or_else(|| v.get("context").and_then(|c| c.get("matched"))).and_then(Value::as_u64)
+}
+
 /// The STAC API an item or collection fetched from `from` belongs to: the address before
 /// `/collections/`, else its `root` link's (a static catalog's `….json` root is no API), else the
 /// collection its `parent` link names. `None` when nothing says.
@@ -318,7 +346,34 @@ fn item(f: &Value, from: Option<&str>) -> Option<Item> {
         })
         .collect();
     assets.sort_by(|a, b| a.key.cmp(&b.key));
-    Some(Item { id, collection: text(f.get("collection")), datetime, bbox, geometry, cloud, assets, url, origin: from.map(str::to_string) })
+    let properties = props.and_then(Value::as_object).map(|p| {
+        // Shown, not used: the first hundred plain values, short text kept whole and long text cut.
+        let kept: serde_json::Map<String, Value> = p
+            .iter()
+            .filter(|(_, v)| !v.is_object() && !v.is_array())
+            .take(MAX_PROPERTIES)
+            .map(|(k, v)| {
+                let v = match v {
+                    Value::String(t) if t.len() > 200 => Value::String(t.chars().take(200).collect()),
+                    other => other.clone(),
+                };
+                (k.chars().take(100).collect(), v)
+            })
+            .collect();
+        Value::Object(kept)
+    });
+    Some(Item {
+        id,
+        collection: text(f.get("collection")),
+        datetime,
+        bbox,
+        geometry,
+        cloud,
+        assets,
+        url,
+        origin: from.map(str::to_string),
+        properties,
+    })
 }
 
 /// How many numbers a GeoJSON geometry holds (bounded by how deep it goes).
@@ -380,6 +435,13 @@ impl Asset {
         let path = self.href.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
         t.contains("geotiff") || t.starts_with("image/tiff") || path.ends_with(".tif") || path.ends_with(".tiff")
     }
+
+    /// Whether it is a LiDAR point cloud (LAS, LAZ or COPC).
+    pub fn is_point_cloud(&self) -> bool {
+        let t = self.media_type.to_ascii_lowercase();
+        let path = self.href.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+        t.contains("vnd.las") || t.contains("laszip") || path.ends_with(".laz") || path.ends_with(".las")
+    }
 }
 
 impl Item {
@@ -401,9 +463,29 @@ impl Item {
                 .filter(ok)
                 .find(|a| a.key == "visual")
                 .or_else(|| self.assets.iter().filter(ok).find(|a| a.is_geotiff()))
+                .or_else(|| self.assets.iter().filter(ok).find(|a| a.is_point_cloud()))
                 .or_else(|| self.assets.iter().filter(ok).find(|a| a.roles.iter().any(|r| r == "data")))
         };
         choose(true).or_else(|| choose(false)).ok_or_else(|| format!("{}: no asset RustGIS can add", self.id))
+    }
+
+    /// Its preview picture: the `thumbnail` asset (or one with that role, or a `preview`), a PNG
+    /// or JPEG on the web.
+    pub fn thumbnail(&self) -> Option<&Asset> {
+        let picture = |a: &&Asset| {
+            let t = a.media_type.to_ascii_lowercase();
+            let path = a.href.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+            is_web(&a.href)
+                && (t.starts_with("image/png")
+                    || t.starts_with("image/jpeg")
+                    || t.starts_with("image/jpg")
+                    || (t.is_empty() && [".png", ".jpg", ".jpeg"].iter().any(|e| path.ends_with(e))))
+        };
+        let named = |k: &str| self.assets.iter().filter(picture).find(|a| a.key == k);
+        named("thumbnail")
+            .or_else(|| self.assets.iter().filter(picture).find(|a| a.roles.iter().any(|r| r == "thumbnail")))
+            .or_else(|| named("preview"))
+            .or_else(|| self.assets.iter().filter(picture).find(|a| a.roles.iter().any(|r| r == "overview")))
     }
 
     /// The address of the asset to add (see [`Item::pick`]), checked: a plain web address the item
@@ -526,15 +608,30 @@ pub fn sign_blocking(href: &str) -> Result<String, String> {
     Ok(sign(href, &token))
 }
 
-/// An item as the commands return it (and read back in `stac.addAsset`).
+/// An item as the commands return it (and read back in `stac.addAsset`), with its date and
+/// cloud cover as its properties: small, for the command line and the AI Assistant.
 pub fn item_json(i: &Item) -> Value {
+    item_json_with(i, false)
+}
+
+/// [`item_json`], with every property kept when `all` (`stac.search`'s `"properties": true`).
+pub fn item_json_with(i: &Item, all: bool) -> Value {
+    // The date and cloud cover read are always there, whatever properties were kept.
+    let kept = i.properties.as_ref().and_then(Value::as_object).filter(|_| all);
+    let mut props = kept.cloned().unwrap_or_default();
+    if props.get("datetime").is_none_or(Value::is_null) {
+        props.insert("datetime".into(), Value::String(i.datetime.clone()));
+    }
+    if props.get("eo:cloud_cover").is_none_or(Value::is_null) {
+        props.insert("eo:cloud_cover".into(), serde_json::json!(i.cloud));
+    }
     serde_json::json!({
         "type": "Feature",
         "id": i.id,
         "collection": i.collection,
         "bbox": i.bbox,
         "geometry": i.geometry,
-        "properties": {"datetime": i.datetime, "eo:cloud_cover": i.cloud},
+        "properties": props,
         "assets": i.assets.iter().map(|a| (a.key.clone(), serde_json::json!({"href": a.href, "type": a.media_type, "roles": a.roles, "title": a.title}))).collect::<serde_json::Map<_, _>>(),
         "links": i.url.as_ref().map(|u| vec![serde_json::json!({"rel": "self", "href": u})]).unwrap_or_default(),
     })
@@ -602,12 +699,17 @@ mod tests {
             datetime: Some("2024-06-01/2024-06-30".into()),
             limit: 999,
             max_cloud: Some(20.0),
+            sortby: None,
         };
         let u = search_url("https://x.org/v1", &s).unwrap();
         assert_eq!(
             u,
             "https://x.org/v1/search?limit=200&collections=sentinel-2-l2a&bbox=7,46,7.1,46.1&datetime=2024-06-01T00%3A00%3A00Z%2F2024-06-30T23%3A59%3A59Z&query=%7B%22eo%3Acloud_cover%22%3A%7B%22lte%22%3A20%7D%7D"
         );
+        let sorted = |by: &str| search_url("https://x.org/v1", &Search { sortby: Some(by.into()), ..Default::default() });
+        assert!(sorted("eo:cloud_cover").unwrap().ends_with("&sortby=%2Bproperties.eo%3Acloud_cover"));
+        assert!(sorted("-datetime").unwrap().ends_with("&sortby=-properties.datetime"));
+        assert!(sorted("a&b=c").is_err() && sorted("-").is_err());
         assert_eq!(datetime("2024-06-01").unwrap(), "2024-06-01T00:00:00Z/2024-06-01T23:59:59Z");
         assert_eq!(datetime("2024-06-01/..").unwrap(), "2024-06-01T00:00:00Z/..");
         assert!(datetime("yesterday").is_err());
@@ -636,6 +738,10 @@ mod tests {
         let (items, next) = parse_items(page, "https://x.org/v1/search?limit=2").unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(next.as_deref(), Some("https://x.org/v1/search?token=abc"));
+        assert_eq!(parse_matched(page), None);
+        assert_eq!(parse_matched(br#"{"numberMatched": 1234}"#), Some(1234));
+        assert_eq!(parse_matched(br#"{"context": {"matched": 7}}"#), Some(7));
+        assert_eq!(parse_matched(br#"{"numberMatched": -1}"#), None);
         let i = &items[0];
         assert_eq!((i.datetime.as_str(), i.cloud, i.bbox), ("2024-06-02T10:30:00Z", Some(3.5), Some([7.0, 46.0, 8.0, 47.0])));
         assert_eq!(i.url.as_deref(), Some("https://x.org/v1/collections/sentinel-2-l2a/items/S2A_1"));
@@ -647,6 +753,10 @@ mod tests {
         // The asset added: the one named, else visual; an s3:// address is kept (fetched through
         // the S3 connection serving its bucket, or anonymously from AWS).
         assert_eq!(i.asset_href(None).unwrap().0, "visual");
+        // The thumbnail: by key, a picture on the web.
+        assert_eq!(i.thumbnail().unwrap().key, "thumbnail");
+        assert!(items[1].thumbnail().is_none());
+        assert_eq!(i.properties.as_ref().unwrap()["eo:cloud_cover"], 3.5);
         assert_eq!(i.asset_href(Some("b04")).unwrap().1, "s3://bucket/B04.tif");
         assert!(i.asset_href(Some("nope")).unwrap_err().contains("visual"));
         let mut pc = i.clone();
@@ -685,6 +795,18 @@ mod tests {
         // Written out and read back.
         let again = item_from_json(&item_json(i), i.origin.as_deref()).unwrap();
         assert_eq!(&again, i);
+        // A date read from start_datetime is written out too.
+        let ranged = serde_json::json!({"type": "Feature", "id": "r", "properties": {"start_datetime": "2024-01-01T00:00:00Z", "eo:cloud_cover": null}});
+        let r = item_from_json(&ranged, None).unwrap();
+        let out = item_json(&r);
+        // Only the date and cloud cover, unless every property is asked for.
+        assert_eq!(item_json(i)["properties"].as_object().map(|p| p.len()), Some(2));
+        let mut wide = i.clone();
+        wide.properties = Some(serde_json::json!({"gsd": 10, "platform": "sentinel-2a"}));
+        assert_eq!(item_json_with(&wide, true)["properties"]["platform"], "sentinel-2a");
+        assert!(item_json(&wide)["properties"].get("platform").is_none());
+        assert_eq!(out["properties"]["datetime"], "2024-01-01T00:00:00Z");
+        assert_eq!(item_from_json(&out, None).unwrap().datetime, r.datetime);
         assert_eq!(footprints_geojson(&items)["features"].as_array().unwrap().len(), 1);
         assert!(parse_items(b"{}", "https://x.org").is_err());
     }

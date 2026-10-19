@@ -538,10 +538,14 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     menu_item(ui, app, "", "OpenAerialMap…", "ui.searchOpenData", svc("openaerialmap"));
     menu_item(ui, app, "", "OpenStreetMap…", "ui.dialog", json!({"name": "osm"}));
     menu_item(ui, app, "", "Overture Maps…", "ui.dialog", json!({"name": "overture"}));
+    menu_item(ui, app, "", "Planet Open Data…", "ui.stac.planet", Value::Null);
+    menu_item(ui, app, "", "Portolan…", "ui.stac.portolan", Value::Null);
     menu_item(ui, app, "", "Satellite Embeddings…", "ui.dialog", json!({"name": "embeddings"}));
     menu_item(ui, app, "", "Search Open Data…", "ui.searchOpenData", Value::Null);
+    menu_item(ui, app, "", "Sentinel-2 Explorer…", "ui.stac.sentinel2", Value::Null);
     menu_item(ui, app, "", "Source Cooperative…", "ui.dialog", json!({"name": "sourcecoop"}));
-    menu_item(ui, app, "", "STAC Search…", "ui.dialog", json!({"name": "stac"}));
+    menu_item(ui, app, "", "STAC Search…", "ui.stac", Value::Null);
+    menu_item(ui, app, "", "Vantor…", "ui.stac.vantor", Value::Null);
     ui.separator();
     submenu_row(ui, "", tl!("France"), |ui| {
         menu_item(ui, app, "", "IGN LiDAR HD…", "ui.searchOpenData", svc("ign-lidar"));
@@ -552,6 +556,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
         menu_item(ui, app, "", "US Local GIS…", "ui.searchOpenData", svc("us-local"));
         menu_item(ui, app, "", "US State GIS…", "ui.searchOpenData", svc("us-state"));
         menu_item(ui, app, "", "USGS 3DEP DEM…", "ui.searchOpenData", svc("usgs-dem"));
+        menu_item(ui, app, "", "USGS LiDAR…", "ui.stac.usgsLidar", Value::Null);
         menu_item(ui, app, "", "USGS NLDI…", "ui.dialog", json!({"name": "nldi"}));
     });
 }
