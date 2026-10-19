@@ -153,6 +153,147 @@ pub fn tile_id(z: u8, x: u32, y: u32) -> u64 {
     base + d
 }
 
+/// What a new archive says of itself (see [`write`]).
+#[derive(Clone, Debug)]
+pub struct NewArchive {
+    pub tile_type: TileType,
+    /// The tiles given are gzipped (as vector tiles usually are).
+    pub gzipped_tiles: bool,
+    /// Longitude/latitude bounds: west, south, east, north.
+    pub bounds: [f64; 4],
+    /// The JSON metadata (`vector_layers`, `attribution`, `name`…).
+    pub metadata: Value,
+}
+
+/// Writes a PMTiles (v3) archive of `tiles` (zoom, x, y, bytes): clustered, identical tiles
+/// stored once, its directories uncompressed, in leaf directories when the root would pass the
+/// first 16 KB. Tiles given twice keep the last.
+pub fn write(tiles: Vec<(u8, u32, u32, Vec<u8>)>, a: &NewArchive) -> Result<Vec<u8>, String> {
+    let mut tiles: Vec<(u64, u8, Vec<u8>)> = tiles.into_iter().map(|(z, x, y, b)| (tile_id(z, x, y), z, b)).collect();
+    tiles.sort_by_key(|t| t.0);
+    // The last of each id (a stable sort keeps them in the order given).
+    let mut unique: Vec<(u64, u8, Vec<u8>)> = Vec::with_capacity(tiles.len());
+    for t in tiles {
+        match unique.last_mut() {
+            Some(last) if last.0 == t.0 => *last = t,
+            _ => unique.push(t),
+        }
+    }
+    let (Some(first), Some(last)) = (unique.first(), unique.last()) else { return Err("an archive needs at least one tile".into()) };
+    let (min_zoom, max_zoom) = (first.1, last.1);
+    let mut data: Vec<u8> = Vec::new();
+    let mut stored: HashMap<&[u8], (u64, u64)> = HashMap::new();
+    let mut entries: Vec<Entry> = Vec::new();
+    for (id, _, b) in &unique {
+        let (offset, length) = *stored.entry(b.as_slice()).or_insert_with(|| {
+            let at = data.len() as u64;
+            data.extend_from_slice(b);
+            (at, b.len() as u64)
+        });
+        // The same tile right after the previous one: a longer run.
+        if let Some(e) = entries.last_mut()
+            && e.offset == offset
+            && e.length == length
+            && e.tile_id + e.run_length == *id
+        {
+            e.run_length += 1;
+            continue;
+        }
+        entries.push(Entry { tile_id: *id, offset, length, run_length: 1 });
+    }
+    let contents = stored.len() as u64;
+    let addressed: u64 = entries.iter().map(|e| e.run_length).sum();
+    // The root directory, or leaves of more entries each until the root fits.
+    let mut root = write_dir(&entries);
+    let mut leaves = Vec::new();
+    let mut per_leaf = 4096usize;
+    while 127 + root.len() > HEAD as usize {
+        leaves.clear();
+        let mut index = Vec::new();
+        for chunk in entries.chunks(per_leaf) {
+            let Some(first) = chunk.first() else { continue };
+            let leaf = write_dir(chunk);
+            index.push(Entry { tile_id: first.tile_id, offset: leaves.len() as u64, length: leaf.len() as u64, run_length: 0 });
+            leaves.extend(leaf);
+        }
+        root = write_dir(&index);
+        per_leaf = per_leaf.checked_mul(2).ok_or("too many tiles")?;
+    }
+    let meta = serde_json::to_vec(&a.metadata).map_err(|e| e.to_string())?;
+    let root_at = 127u64;
+    let meta_at = root_at + root.len() as u64;
+    let leaf_at = meta_at + meta.len() as u64;
+    let data_at = leaf_at + leaves.len() as u64;
+    let mut h = b"PMTiles".to_vec();
+    h.push(3);
+    for v in [
+        root_at,
+        root.len() as u64,
+        meta_at,
+        meta.len() as u64,
+        leaf_at,
+        leaves.len() as u64,
+        data_at,
+        data.len() as u64,
+        addressed,
+        entries.len() as u64,
+        contents,
+    ] {
+        h.extend_from_slice(&v.to_le_bytes());
+    }
+    let tile_type = match a.tile_type {
+        TileType::Unknown => 0,
+        TileType::Mvt => 1,
+        TileType::Png => 2,
+        TileType::Jpeg => 3,
+        TileType::Webp => 4,
+        TileType::Avif => 5,
+    };
+    // Clustered; directories uncompressed; tiles as given.
+    h.extend_from_slice(&[1, 1, if a.gzipped_tiles { 2 } else { 1 }, tile_type, min_zoom, max_zoom]);
+    let e7 = |v: f64| ((v.clamp(-180.0, 180.0) * 1e7).round() as i32).to_le_bytes();
+    let [w, so, e, n] = a.bounds;
+    for v in [w, so, e, n] {
+        h.extend_from_slice(&e7(v));
+    }
+    h.push(min_zoom);
+    h.extend_from_slice(&e7((w + e) / 2.0));
+    h.extend_from_slice(&e7((so + n) / 2.0));
+    Ok([h, root, meta, leaves, data].concat())
+}
+
+/// A directory: delta-coded tile ids, then run lengths, lengths and offsets (0 for "right after
+/// the previous entry"), all varints.
+fn write_dir(entries: &[Entry]) -> Vec<u8> {
+    fn varint(b: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            b.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        b.push(v as u8);
+    }
+    let mut b = Vec::new();
+    varint(&mut b, entries.len() as u64);
+    let mut last = 0;
+    for e in entries {
+        varint(&mut b, e.tile_id - last);
+        last = e.tile_id;
+    }
+    for e in entries {
+        varint(&mut b, e.run_length);
+    }
+    for e in entries {
+        varint(&mut b, e.length);
+    }
+    let mut prev: Option<&Entry> = None;
+    for e in entries {
+        let next = prev.is_some_and(|p| p.offset + p.length == e.offset);
+        varint(&mut b, if next { 0 } else { e.offset + 1 });
+        prev = Some(e);
+    }
+    b
+}
+
 enum State {
     Loading(Vec<Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>>),
     Ready(Arc<Info>),
@@ -570,7 +711,7 @@ fn gunzip(b: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -612,38 +753,6 @@ mod tests {
         assert!(parse_url("pmtiles:99/1/2@x").is_none() && parse_url("pmtiles:1/2@x").is_none());
     }
 
-    fn varint(out: &mut Vec<u8>, mut v: u64) {
-        loop {
-            let b = (v & 0x7f) as u8;
-            v >>= 7;
-            if v == 0 {
-                out.push(b);
-                return;
-            }
-            out.push(b | 0x80);
-        }
-    }
-
-    fn dir(entries: &[Entry]) -> Vec<u8> {
-        let mut b = Vec::new();
-        varint(&mut b, entries.len() as u64);
-        let mut last = 0;
-        for e in entries {
-            varint(&mut b, e.tile_id - last);
-            last = e.tile_id;
-        }
-        for e in entries {
-            varint(&mut b, e.run_length);
-        }
-        for e in entries {
-            varint(&mut b, e.length);
-        }
-        for e in entries {
-            varint(&mut b, e.offset + 1);
-        }
-        b
-    }
-
     /// A PMTiles archive of `tiles` (uncompressed), its directory in the root or in a leaf.
     pub(crate) fn archive(tiles: &[(u8, u32, u32, Vec<u8>)], tile_type: u8, leaf: bool, metadata: &str) -> Vec<u8> {
         let mut tiles: Vec<(u64, &Vec<u8>)> = tiles.iter().map(|(z, x, y, b)| (tile_id(*z, *x, *y), b)).collect();
@@ -655,10 +764,10 @@ mod tests {
             data.extend_from_slice(b);
         }
         let (root, leaves) = if leaf {
-            let l = dir(&entries);
-            (dir(&[Entry { tile_id: entries[0].tile_id, offset: 0, length: l.len() as u64, run_length: 0 }]), l)
+            let l = write_dir(&entries);
+            (write_dir(&[Entry { tile_id: entries[0].tile_id, offset: 0, length: l.len() as u64, run_length: 0 }]), l)
         } else {
-            (dir(&entries), Vec::new())
+            (write_dir(&entries), Vec::new())
         };
         let meta = metadata.as_bytes();
         let root_at = 127u64;
@@ -686,6 +795,47 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         fetch(url, Box::new(move |r| tx.send(r).unwrap_or_default()));
         rx.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| e.to_string())?
+    }
+
+    #[test]
+    fn written_archives_read_back() {
+        let dir = std::env::temp_dir().join(format!("rustgis-pmtiles-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let new = |tile_type| NewArchive {
+            tile_type,
+            gzipped_tiles: false,
+            bounds: [-10.0, -5.0, 10.0, 5.0],
+            metadata: serde_json::json!({"vector_layers": [{"id": "roads"}]}),
+        };
+        // A few tiles, one given twice and two alike (stored once).
+        let small =
+            vec![(0u8, 0u32, 0u32, b"old".to_vec()), (1, 0, 0, b"same".to_vec()), (1, 0, 1, b"same".to_vec()), (0, 0, 0, b"zero".to_vec())];
+        let bytes = write(small, &new(TileType::Mvt)).unwrap();
+        let p = dir.join("small.pmtiles");
+        std::fs::write(&p, &bytes).unwrap();
+        let (info, _, _) = parse_head(&bytes).unwrap();
+        assert_eq!((info.tile_type, info.min_zoom, info.max_zoom), (TileType::Mvt, 0, 1));
+        assert_eq!(info.bounds, [-10.0, -5.0, 10.0, 5.0]);
+        let a = p.display().to_string();
+        assert_eq!(get(&format!("pmtiles:0/0/0@{a}")).unwrap(), b"zero");
+        assert_eq!(get(&format!("pmtiles:1/0/0@{a}")).unwrap(), b"same");
+        assert_eq!(get(&format!("pmtiles:1/0/1@{a}")).unwrap(), b"same");
+        assert!(get(&format!("pmtiles:1/1/1@{a}")).unwrap().is_empty());
+        // Every tile to zoom 7, each different: too many for the root, so in leaves.
+        let many: Vec<(u8, u32, u32, Vec<u8>)> = (0..=7u8)
+            .flat_map(|z| (0..1u32 << z).flat_map(move |x| (0..1u32 << z).map(move |y| (z, x, y, format!("{z}/{x}/{y}").into_bytes()))))
+            .collect();
+        let bytes = write(many, &new(TileType::Png)).unwrap();
+        let (info, _, _) = parse_head(&bytes).unwrap();
+        assert!(info.leaf_length > 0);
+        let p = dir.join("many.pmtiles");
+        std::fs::write(&p, &bytes).unwrap();
+        let a = p.display().to_string();
+        for (z, x, y) in [(0, 0, 0), (5, 17, 3), (7, 127, 127), (7, 0, 99)] {
+            assert_eq!(get(&format!("pmtiles:{z}/{x}/{y}@{a}")).unwrap(), format!("{z}/{x}/{y}").into_bytes());
+        }
+        assert!(write(Vec::new(), &new(TileType::Mvt)).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

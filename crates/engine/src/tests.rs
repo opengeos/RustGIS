@@ -4735,6 +4735,61 @@ fn pmtiles_archives_become_tile_layers() {
     assert_eq!(t.map().tiles.iter().filter(|x| x.kind == rustgis_map::TileKind::PmTiles).count(), 2);
 }
 
+/// Identify reports the features of a vector PMTiles archive under the point (topmost and
+/// visible modes), with their tile and source layers; hidden layers and the selectable mode don't.
+#[test]
+fn identify_reports_vector_tile_features() {
+    use crate::render::rustgis_tiles::{mvt, pmtiles};
+    let park = mvt::Feature {
+        id: Some(3),
+        kind: mvt::GeomKind::Polygon,
+        geometry: vec![vec![[1024.0, 1024.0], [3072.0, 1024.0], [3072.0, 3072.0], [1024.0, 3072.0], [1024.0, 1024.0]]],
+        props: vec![("name".into(), mvt::Value::String("Central".into())), ("visitors".into(), mvt::Value::Number(1200.0))],
+    };
+    let tile = mvt::encode(&mvt::Tile { layers: vec![mvt::Layer { name: "parks".into(), extent: 4096, features: vec![park] }] });
+    let new = pmtiles::NewArchive {
+        tile_type: pmtiles::TileType::Mvt,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({"vector_layers": [{"id": "parks"}]}),
+    };
+    let dir = std::env::temp_dir().join(format!("rustgis-identify-tiles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("parks.pmtiles");
+    std::fs::write(&path, pmtiles::write(vec![(0, 0, 0, tile)], &new).unwrap()).unwrap();
+
+    let mut s = Session::new(Project::default());
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    // Zoom 0, the park in the middle of the world.
+    s.map_mut().camera.center = rustgis_geom::Coord::new(0.0, 0.0);
+    s.map_mut().camera.res = 2.0 * 20_037_508.342_789_244 / 256.0;
+    let identify = |s: &mut Session, p: Value| {
+        // The archive and its tile arrive in the background.
+        for _ in 0..500 {
+            let r = s.run("identify", &p).unwrap();
+            if !r.is_null() {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Value::Null
+    };
+    let r = identify(&mut s, json!({"lon": 1.0, "lat": 1.0}));
+    assert_eq!(r["tileLayer"], "parks", "{r}");
+    assert_eq!(r["sourceLayer"], "parks");
+    assert_eq!(r["layer"], "parks › parks");
+    assert_eq!(r["attributes"]["name"], "Central");
+    assert_eq!(r["attributes"]["visitors"], "1200");
+    assert!(r.get("layerId").is_none(), "{r}");
+    assert_eq!(r["results"].as_array().map(Vec::len), Some(1));
+    // Outside the park, in the selectable mode, or hidden: nothing.
+    assert!(s.run("identify", &json!({"lon": 150.0, "lat": -70.0})).unwrap().is_null());
+    assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0, "mode": "selectable"})).unwrap().is_null());
+    s.run("map.setTiles", &json!({"index": 0, "visible": false})).unwrap();
+    assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0})).unwrap().is_null());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// An MBTiles file of one red picture tile: added by path or as an upload, it is a tile layer that
 /// draws, survives a project round trip (by path), and a file that isn't an archive is refused.
 #[test]

@@ -1,4 +1,4 @@
-//! Mapbox Vector Tile (spec v2.1) decoder.
+//! Mapbox Vector Tile (spec v2.1) decoder, and an encoder ([`encode`]).
 //!
 //! Hand-written protobuf reader; transparently inflates gzip and zlib input. Hostile input never panics: malformed
 //! wire data fails with `Err`, malformed geometry drops the one feature, out-of-range tags are ignored.
@@ -84,6 +84,163 @@ pub(crate) fn inflate(bytes: &[u8]) -> Result<Vec<u8>, String> {
         return inflate::decompress_to_vec_zlib_with_limit(bytes, MAX_INFLATE).map_err(|e| format!("zlib: {:?}", e.status));
     }
     Ok(bytes.to_vec())
+}
+
+/// Encodes a tile (uncompressed). Coordinates are rounded to whole tile units; keys and values
+/// are shared within each layer. Parts with too few points for their kind are left out (a line
+/// needs two, a ring three besides its closing point), and so are features left with none.
+pub fn encode(tile: &Tile) -> Vec<u8> {
+    let mut out = Vec::new();
+    for l in &tile.layers {
+        put_bytes(&mut out, 3, &encode_layer(l));
+    }
+    out
+}
+
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+fn put_bytes(out: &mut Vec<u8>, field: u64, b: &[u8]) {
+    put_varint(out, field << 3 | 2);
+    put_varint(out, b.len() as u64);
+    out.extend_from_slice(b);
+}
+
+fn put_uint(out: &mut Vec<u8>, field: u64, v: u64) {
+    put_varint(out, field << 3);
+    put_varint(out, v);
+}
+
+fn encode_layer(l: &Layer) -> Vec<u8> {
+    let mut keys: Vec<&str> = Vec::new();
+    let mut values: Vec<Vec<u8>> = Vec::new();
+    let mut features = Vec::new();
+    for f in &l.features {
+        let Some(geom) = encode_geometry(f.kind, &f.geometry) else { continue };
+        let mut tags = Vec::new();
+        for (k, v) in &f.props {
+            let ki = keys.iter().position(|x| *x == k).unwrap_or_else(|| {
+                keys.push(k);
+                keys.len() - 1
+            });
+            let bytes = encode_value(v);
+            let vi = values.iter().position(|x| *x == bytes).unwrap_or_else(|| {
+                values.push(bytes);
+                values.len() - 1
+            });
+            put_varint(&mut tags, ki as u64);
+            put_varint(&mut tags, vi as u64);
+        }
+        let mut fb = Vec::new();
+        if let Some(id) = f.id {
+            put_uint(&mut fb, 1, id);
+        }
+        if !tags.is_empty() {
+            put_bytes(&mut fb, 2, &tags);
+        }
+        let kind = match f.kind {
+            GeomKind::Point => 1,
+            GeomKind::LineString => 2,
+            _ => 3,
+        };
+        put_uint(&mut fb, 3, kind);
+        put_bytes(&mut fb, 4, &geom);
+        features.push(fb);
+    }
+    let mut out = Vec::new();
+    put_uint(&mut out, 15, 2);
+    put_bytes(&mut out, 1, l.name.as_bytes());
+    for f in &features {
+        put_bytes(&mut out, 2, f);
+    }
+    for k in &keys {
+        put_bytes(&mut out, 3, k.as_bytes());
+    }
+    for v in &values {
+        put_bytes(&mut out, 4, v);
+    }
+    put_uint(&mut out, 5, u64::from(l.extent));
+    out
+}
+
+fn encode_value(v: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    match v {
+        Value::String(s) => put_bytes(&mut out, 1, s.as_bytes()),
+        // Whole numbers as zigzag integers, the rest as doubles.
+        Value::Number(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => {
+            let i = *n as i64;
+            put_uint(&mut out, 6, ((i << 1) ^ (i >> 63)) as u64);
+        }
+        Value::Number(n) => {
+            put_varint(&mut out, 3 << 3 | 1);
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        Value::Bool(b) => put_uint(&mut out, 7, u64::from(*b)),
+    }
+    out
+}
+
+/// The command stream of a feature's parts (packed), `None` when nothing is left of them.
+fn encode_geometry(kind: GeomKind, parts: &[Vec<[f32; 2]>]) -> Option<Vec<u8>> {
+    let mut cmds: Vec<u32> = Vec::new();
+    let (mut cx, mut cy) = (0i64, 0i64);
+    let mut step = |cmds: &mut Vec<u32>, p: &[f32; 2]| {
+        let (x, y) = (p[0].round() as i64, p[1].round() as i64);
+        let zz = |d: i64| ((d << 1) ^ (d >> 63)) as u32;
+        cmds.push(zz(x - cx));
+        cmds.push(zz(y - cy));
+        (cx, cy) = (x, y);
+    };
+    match kind {
+        GeomKind::Unknown => return None,
+        GeomKind::Point => {
+            let pts: Vec<&[f32; 2]> = parts.iter().flatten().collect();
+            if pts.is_empty() {
+                return None;
+            }
+            cmds.push(1 | (pts.len() as u32) << 3);
+            for p in pts {
+                step(&mut cmds, p);
+            }
+        }
+        GeomKind::LineString | GeomKind::Polygon => {
+            let closed = kind == GeomKind::Polygon;
+            for part in parts {
+                // A ring's closing point is implied by ClosePath.
+                let pts = match part.split_last() {
+                    Some((last, rest)) if closed && part.first() == Some(last) => rest,
+                    _ => part.as_slice(),
+                };
+                if pts.len() < if closed { 3 } else { 2 } {
+                    continue;
+                }
+                let Some((first, rest)) = pts.split_first() else { continue };
+                cmds.push(1 | 1 << 3);
+                step(&mut cmds, first);
+                cmds.push(2 | (rest.len() as u32) << 3);
+                for p in rest {
+                    step(&mut cmds, p);
+                }
+                if closed {
+                    cmds.push(7 | 1 << 3);
+                }
+            }
+        }
+    }
+    if cmds.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    for c in cmds {
+        put_varint(&mut out, u64::from(c));
+    }
+    Some(out)
 }
 
 /// Signed ring area by the shoelace formula, in tile units. Positive = exterior ring (clockwise with y down),
@@ -411,6 +568,65 @@ fn decode_geometry(kind: GeomKind, cmds: &[u32]) -> Option<Vec<Vec<[f32; 2]>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_tiles_decode_to_themselves() {
+        let f = |id, kind, geometry: Vec<Vec<[f32; 2]>>, props: Vec<(&str, Value)>| Feature {
+            id,
+            kind,
+            geometry,
+            props: props.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        };
+        let tile = Tile {
+            layers: vec![
+                Layer {
+                    name: "parks".into(),
+                    extent: 4096,
+                    features: vec![
+                        // A polygon with a hole, its rings closed as decoding gives them.
+                        f(
+                            Some(1),
+                            GeomKind::Polygon,
+                            vec![
+                                vec![[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0]],
+                                vec![[20.0, 20.0], [20.0, 80.0], [80.0, 80.0], [20.0, 20.0]],
+                            ],
+                            vec![("name", Value::String("Central".into())), ("area", Value::Number(1.5)), ("open", Value::Bool(true))],
+                        ),
+                        f(
+                            None,
+                            GeomKind::LineString,
+                            vec![vec![[-10.0, 5.0], [4200.0, 5.0]], vec![[1.0, 1.0], [2.0, 3.0]]],
+                            vec![("lanes", Value::Number(-2.0))],
+                        ),
+                    ],
+                },
+                Layer {
+                    name: "pois".into(),
+                    extent: 512,
+                    features: vec![f(
+                        Some(9),
+                        GeomKind::Point,
+                        vec![vec![[3.0, 4.0]], vec![[5.0, 6.0]]],
+                        vec![("name", Value::String("Central".into()))],
+                    )],
+                },
+            ],
+        };
+        assert_eq!(decode(&encode(&tile)).unwrap(), tile);
+        // Parts too short for their kind go; a feature left with none goes too.
+        let short = Tile {
+            layers: vec![Layer {
+                name: "x".into(),
+                extent: 4096,
+                features: vec![
+                    f(None, GeomKind::Polygon, vec![vec![[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]]], vec![]),
+                    f(None, GeomKind::LineString, vec![vec![[0.0, 0.0]]], vec![]),
+                ],
+            }],
+        };
+        assert!(decode(&encode(&short)).unwrap().layers[0].features.is_empty());
+    }
 
     // ---- tiny test-only encoder ----
 

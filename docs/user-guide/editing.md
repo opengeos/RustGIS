@@ -65,3 +65,8 @@ under the click, every visible layer, only selectable layers, only the layer sel
 nothing. The pop-up lists every feature under the click in those layers, overlapping ones included
 (up to 100): step through them with ‹ ›. The feature shown is the one selected. The magnifier in
 the pop-up's header zooms to it.
+
+The topmost and visible modes also identify the features of vector tile layers under the click:
+PMTiles and MBTiles archives and vector tiles added as data (not catalog basemaps or MapLibre
+styles), beneath the map's own layers. Each shows its tile layer and source layer (`firenze ›
+buildings`) and its attributes; tile features can't be selected or zoomed to.

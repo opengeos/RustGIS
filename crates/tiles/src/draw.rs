@@ -188,6 +188,124 @@ pub fn draw(pm: &mut Pixmap, spec: &Spec, opacity: f32, frame: &Frame, labels: b
     out
 }
 
+/// A vector tile feature under a point (see [`pick`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picked {
+    /// The tile layer it is in (`roads`, `buildings`).
+    pub source_layer: String,
+    pub id: Option<u64>,
+    pub kind: GeomKind,
+    pub props: Vec<(String, crate::mvt::Value)>,
+}
+
+/// The vector tile features drawn under the Web Mercator point (`x`, `y`), topmost first: those
+/// of the fill, line, circle and symbol layers shown at this scale whose shapes come within
+/// `tol_px` pixels of it (lines and circles counting their width). `m_per_px` is the map's metres
+/// per (logical) pixel. Only tiles already fetched are looked at; at most `limit` are returned,
+/// each once however many style layers draw it.
+pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usize) -> Vec<Picked> {
+    let mut out: Vec<Picked> = Vec::new();
+    let Resolve::Ready(r) = resolve(spec) else { return out };
+    if !(m_per_px.is_finite() && m_per_px > 0.0 && x.is_finite() && y.is_finite()) {
+        return out;
+    }
+    let tol_px = tol_px.clamp(0.0, 64.0);
+    let tol = f64::from(tol_px) * m_per_px;
+    let frame = Frame { left: x - tol, top: y + tol, m_per_px, ppp: 1.0 };
+    let view = Extent::new(x - tol, y - tol, x + tol, y + tol);
+    let zoom = template::style_zoom(m_per_px);
+    let mut items: HashMap<String, Vec<Item>> = HashMap::new();
+    let mut pending = false;
+    // The layer drawn last is on top.
+    for layer in r.style.layers.iter().rev() {
+        if out.len() >= limit {
+            break;
+        }
+        let kind_ok =
+            matches!(layer.kind, LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle | LayerKind::Symbol);
+        if !kind_ok || !layer.visible_at(zoom) {
+            continue;
+        }
+        let (Some(src_id), Some(src_layer)) = (layer.source.as_deref(), layer.source_layer.as_deref()) else { continue };
+        if !items.contains_key(src_id) {
+            let Some(src) = r.style.sources.iter().find(|s| s.0 == src_id).map(|s| &s.1) else { continue };
+            if !matches!(src, Source::Vector { .. }) {
+                continue;
+            }
+            items.insert(src_id.to_string(), tiles_for(src, &view, &frame, zoom, &mut pending));
+        }
+        let Some(list) = items.get(src_id) else { continue };
+        // The real tile under the point last (stand-ins come first), so it is looked at first.
+        for it in list.iter().rev().filter(|it| it.clip.contains(rustgis_geom::Coord::new(x, y))) {
+            let Payload::Vector(tile) = &*it.payload else { continue };
+            let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { continue };
+            // The point and tolerance in the tile's units.
+            let units = f64::from(l.extent.max(1)) / TileId::span(it.z);
+            let p = [((x - it.at.min_x) * units) as f32, ((it.at.max_y - y) * units) as f32];
+            let px = (m_per_px * units) as f32;
+            for f in &l.features {
+                let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
+                let reach = match layer.kind {
+                    LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon => tol_px,
+                    LayerKind::Line if matches!(f.kind, GeomKind::LineString | GeomKind::Polygon) => tol_px + layer.line_width(&ctx) / 2.0,
+                    LayerKind::Circle if f.kind == GeomKind::Point => tol_px + layer.circle_radius(&ctx),
+                    // A label's point: as near as a small symbol.
+                    LayerKind::Symbol if f.kind == GeomKind::Point => tol_px + 6.0,
+                    _ => continue,
+                };
+                if !layer.matches(&ctx) || !hits(f, layer.kind, p, reach * px) {
+                    continue;
+                }
+                let picked = Picked { source_layer: l.name.clone(), id: f.id, kind: f.kind, props: f.props.clone() };
+                if !out.contains(&picked) {
+                    out.push(picked);
+                    if out.len() >= limit {
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether a feature's shape (in tile units) comes within `reach` of `p`: inside a polygon fill,
+/// or near its outline, a line or a point.
+fn hits(f: &crate::mvt::Feature, kind: LayerKind, p: [f32; 2], reach: f32) -> bool {
+    let near = |a: [f32; 2], b: [f32; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        let (ex, ey) = (a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+        ex * ex + ey * ey <= reach * reach
+    };
+    let along = |part: &[[f32; 2]], closed: bool| {
+        part.windows(2).any(|w| matches!(w, [a, b] if near(*a, *b)))
+            || (closed && matches!((part.last(), part.first()), (Some(a), Some(b)) if near(*a, *b)))
+            || (part.len() == 1 && part.first().is_some_and(|a| near(*a, *a)))
+    };
+    match f.kind {
+        GeomKind::Point => f.geometry.iter().flatten().any(|a| near(*a, *a)),
+        GeomKind::LineString => f.geometry.iter().any(|part| along(part, false)),
+        GeomKind::Polygon if kind == LayerKind::Line => f.geometry.iter().any(|part| along(part, true)),
+        // Inside by the even-odd rule over every ring (holes and separate parts alike), or on an edge.
+        GeomKind::Polygon => {
+            let mut inside = false;
+            for ring in &f.geometry {
+                let n = ring.len();
+                for i in 0..n {
+                    let (Some(a), Some(b)) = (ring.get(i), ring.get((i + n - 1) % n)) else { continue };
+                    if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
+                        inside = !inside;
+                    }
+                }
+            }
+            inside || f.geometry.iter().any(|part| along(part, true))
+        }
+        GeomKind::Unknown => false,
+    }
+}
+
 /// The tiles of a source in view, with stand-ins for those not here yet.
 fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mut bool) -> Vec<Item> {
     let (tiles, min_z, max_z, want, z) = match src {
@@ -806,6 +924,73 @@ mod tests {
         collect_labels(&mut early, &item(vec![point.clone()]), &layer(0.0), &world_frame(), 0.0, placement_rank(3), None, (64.0, 64.0));
         collect_labels(&mut late, &item(vec![point]), &layer(50.0), &world_frame(), 0.0, placement_rank(7), None, (64.0, 64.0));
         assert!(late[0].priority > early[0].priority);
+    }
+
+    /// A one-feature MVT layer with one string property, `name`.
+    fn mvt_layer(name: &str, kind: GeomKind, pts: &[[f32; 2]], value: &str) -> crate::mvt::Layer {
+        let geometry = match kind {
+            GeomKind::Point => pts.iter().map(|p| vec![*p]).collect(),
+            _ => vec![pts.to_vec()],
+        };
+        let props = vec![("name".to_string(), crate::mvt::Value::String(value.into()))];
+        crate::mvt::Layer { name: name.into(), extent: 4096, features: vec![crate::mvt::Feature { id: Some(7), kind, geometry, props }] }
+    }
+
+    #[test]
+    fn picks_the_vector_tile_features_under_a_point() {
+        let tile = crate::mvt::encode(&crate::mvt::Tile {
+            layers: vec![
+                mvt_layer("parks", GeomKind::Polygon, &[[1024.0, 1024.0], [3072.0, 1024.0], [3072.0, 3072.0], [1024.0, 3072.0]], "Central"),
+                mvt_layer("roads", GeomKind::LineString, &[[0.0, 500.0], [4096.0, 500.0]], "Main Street"),
+                mvt_layer("pois", GeomKind::Point, &[[3500.0, 3500.0]], "Cafe"),
+            ],
+        });
+        let dir = std::env::temp_dir().join(format!("rustgis-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pick.pmtiles");
+        let meta = r#"{"vector_layers":[{"id":"parks"},{"id":"roads"},{"id":"pois"}]}"#;
+        std::fs::write(&path, crate::pmtiles::tests::archive(&[(0, 0, 0, tile)], 1, false, meta)).unwrap();
+        let spec = Spec {
+            kind: crate::source::Kind::PmTiles,
+            url: path.display().to_string(),
+            subdomains: Vec::new(),
+            min_zoom: 0,
+            max_zoom: 14,
+            tile_size: 512,
+            tms: false,
+            attribution: String::new(),
+            layers: Vec::new(),
+            style_layers: String::new(),
+        };
+        // Zoom 0: one tile over the world, 4096 units across it.
+        let half = 20_037_508.342_789_244;
+        let at = |u: f64, v: f64| (-half + u / 4096.0 * 2.0 * half, half - v / 4096.0 * 2.0 * half);
+        let m_per_px = 2.0 * half / 256.0;
+        let names = |(x, y): (f64, f64)| -> Vec<String> {
+            // The archive and its tile arrive in the background.
+            for _ in 0..500 {
+                let got = pick(&spec, x, y, m_per_px, 3.0, 10);
+                if !got.is_empty() {
+                    return got.iter().map(|p| format!("{}:{:?}", p.source_layer, p.props.first().map(|v| &v.1))).collect();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Vec::new()
+        };
+        assert_eq!(names(at(2048.0, 2048.0)), vec![r#"parks:Some(String("Central"))"#]);
+        assert_eq!(names(at(200.0, 505.0)), vec![r#"roads:Some(String("Main Street"))"#]);
+        assert_eq!(names(at(3510.0, 3495.0)), vec![r#"pois:Some(String("Cafe"))"#]);
+        // On the park's edge, from outside: within the tolerance. Farther: nothing (the tile is in).
+        assert_eq!(names(at(1024.0 - 40.0, 2048.0)).len(), 1);
+        let (x, y) = at(100.0, 3900.0);
+        assert!(pick(&spec, x, y, m_per_px, 3.0, 10).is_empty());
+        let (x, y) = at(1024.0 - 80.0, 2048.0);
+        assert!(pick(&spec, x, y, m_per_px, 3.0, 10).is_empty());
+        // Hostile scales and points pick nothing.
+        for (x, y, m) in [(f64::NAN, 0.0, m_per_px), (0.0, 0.0, 0.0), (0.0, 0.0, f64::INFINITY)] {
+            assert!(pick(&spec, x, y, m, 3.0, 10).is_empty());
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
