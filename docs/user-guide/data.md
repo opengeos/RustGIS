@@ -220,15 +220,18 @@ other assets: by collection, dates, the most cloud cover and (by default) where 
 default API is Element 84's [Earth Search](https://earth-search.aws.element84.com/v1)
 (Sentinel-2, Landsat, NAIP, Copernicus DEM and Sentinel-1 on AWS); Microsoft's [Planetary
 Computer](https://planetarycomputer.microsoft.com/api/stac/v1) is offered beside it, and any
-STAC API with item search works. **Collections** lists what the API offers, **Find Items** shows up to 50 items (date, cloud
-cover, id) and draws their footprints as a layer; a click frames an item, and **Add** adds the
-asset chosen beside it: `visual` (true colour) when there is one, else the first GeoTIFF, else the
-first data asset. A cloud-optimised GeoTIFF is read in place, the tiles each view needs by range
+STAC API with item search works. **Collections** lists what the API offers, and **Find Items** shows up to 50 items as cards
+(with "Showing 50 of 1234 items" when the API says how many match) and draws their footprints as
+a layer. Each card has the item's preview picture when it has one, its id, a collection · date ·
+cloud cover line, and **Zoom** (to the item), the asset to add, **Add** and **Details** (the item's
+properties). The asset chosen at first is `visual` (true colour) when there is one, else the first
+GeoTIFF, else the first point cloud, else the first data asset. A cloud-optimised GeoTIFF is read in place, the tiles each view needs by range
 (see [Files on the web](data-formats.md#files-on-the-web)); other assets download whole.
 
 The commands do the same: `stac.collections` (`"url"`), `stac.search` (`"collections"`,
 `"bbox"` as `[west, south, east, north]` or `"view"`, `"datetime"` such as
-`2024-06-01/2024-06-30`, `"limit"`, `"maxCloud"`, `"footprints"`), and `stac.addAsset` with
+`2024-06-01/2024-06-30`, `"limit"`, `"maxCloud"`, `"footprints"`, and `"properties": true` for
+every property of each item rather than its date and cloud cover), and `stac.addAsset` with
 an item `stac.search` returned (`"item"`) or an item's address (`"url"`) and `"asset"`:
 
 ```sh
@@ -243,6 +246,75 @@ of the layer's address, so a project saved with one reads it again only while th
 (about an hour): add the asset again after that. A `?stac=` link opens the web app on an item or a
 collection ([web app links](../installation.md)). Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
+
+### Static catalogs
+
+Many catalogs are plain files rather than an API: a `catalog.json` linking to child catalogs and
+`collection.json` files, which link to their items. Give STAC Search the address of one (or pick
+Planet Open Data, Portolan or Vantor Open Data from its list) and the **Collection** row becomes
+**Catalog**: its child catalogs and collections are listed, and picking one shows its own children
+(an **↑** entry goes back up; **Browse** reads the list again). **Find Items** walks the catalog from
+the one picked, several documents at a time, and keeps the items that match the dates, the most
+cloud cover and, with **Only where the map is** ticked, the map's extent. It lists the first 50 items it finds that match, sorted by date (the walk goes in the catalog's
+order, so in a large catalog these aren't the earliest or latest: pick a catalog further down for
+others). Undated items, and items without a footprint, are kept. A collection whose data
+are its own assets (as many Portolan collections' GeoParquet and PMTiles files are) is listed as
+an item of its own. A walk reads at most 400 documents and goes at most 8 catalogs deep; when it
+stops early, it says so: pick a catalog further down. Items are added as from an API: a
+cloud-optimised GeoTIFF is read in place, GeoParquet and FlatGeobuf by range, PMTiles a tile at a
+time.
+
+`stac.collections` with a static catalog's `"url"` lists its children (`"id"` is each one's
+address), and `stac.search` walks one, with `"phase"` (`"pre"` or `"post"`) for catalogs of events:
+
+```sh
+rustgis-cli run --cmd 'stac.search={"url":"https://vantor-opendata.s3.amazonaws.com/events/Mexico-Hurricane-Simon-Oct-2026/collection.json","phase":"post"}'
+```
+
+The services below are STAC Search opened on one API or catalog, with the dialog titled after
+the service. Their commands (`ui.stac.planet`, `ui.stac.portolan`, `ui.stac.sentinel2`,
+`ui.stac.vantor`, `ui.stac.usgsLidar`) take `"catalog"` (a catalog's or collection's address to
+start from), `"phase"` and `"search": true` (find items at once).
+
+### Planet Open Data
+
+**Home › Web Data › Planet Open Data…** browses Planet's [disaster data
+releases](https://source.coop/planet/disasterdata) on Source Cooperative: imagery of earthquakes,
+floods, fires and storms from PlanetScope, SkySat and Pelican, before and after the event, licensed
+CC BY-NC 4.0. Pick an event (and, below it, its pre-event or post-event imagery or one collection),
+then **Find Items**; **Add** adds a scene's `visual` image.
+
+### Portolan
+
+**Home › Web Data › Portolan…** opens the [Portolan
+registry](https://github.com/portolan-sdi/portolan-registry), a catalog of the open data catalogs
+published with Portolan (cities, regions and agencies, most in Europe). Pick a publisher's catalog,
+then a theme or collection, then **Find Items**: each collection's files (GeoParquet, PMTiles and
+others) are listed, and **Add** adds the one chosen (`visual` first, often a PMTiles archive).
+
+### Sentinel-2 Explorer
+
+**Home › Web Data › Sentinel-2 Explorer…** searches Earth Search's Sentinel-2 Collection 1 Level-2A
+scenes (`sentinel-2-c1-l2a`) where the map is, over the last 90 days and with at most 20 % cloud
+cover, clearest first (sorted by cloud cover). **Add** adds the true colour image (`visual`);
+the asset list beside each scene offers its bands (`red`, `nir`, `swir16`, `scl`…), each a
+cloud-optimised GeoTIFF read in place. `stac.search` sorts with `"sortby"`
+(`"eo:cloud_cover"`, `"-datetime"` for newest first) on APIs that sort.
+
+### Vantor
+
+**Home › Web Data › Vantor…** browses [Vantor](https://vantor.com)'s open data (formerly Maxar's
+Open Data program): very high resolution imagery of disasters, one collection per event. Pick an
+event and a phase (before or after the event), then **Find Items**; **Add** adds a scene's
+`visual` cloud-optimised GeoTIFF.
+
+### USGS LiDAR
+
+**Home › Web Data › United States › USGS LiDAR…** searches the USGS 3D Elevation Program's LiDAR
+point clouds on the Planetary Computer (`3dep-lidar-copc`) where the map is: zoom to a town first.
+Each tile's `data` asset is a COPC file, signed with the Planetary Computer's token and added as a
+LiDAR point cloud (an evenly spread sample of its points, see [Formats](#formats)). A tile is
+downloaded whole, often tens of megabytes, so adding one takes a while.
 
 ## Overture Maps
 
@@ -279,6 +351,115 @@ cloud-optimised GeoTIFFs and PMTiles are read in place, other files downloaded.
 `sourcecoop.products` (`"account"`) and `sourcecoop.list` (`"account"`, `"product"`, `"path"`)
 list them; a listed file's `"url"` is added with `layer.addUrl`. Like STAC searches, these reach the
 network: the AI Assistant asks first and plugins need the network permission.
+
+## Natural Earth
+
+**Home › Web Data › Natural Earth…** is the Source Cooperative browser locked to
+[Natural Earth](https://www.naturalearthdata.com)'s public domain map data as Source Cooperative
+holds it (`opengeos/natural-earth`): countries, states, coastlines, land, ocean, rivers, lakes,
+glaciers, urban areas, airports, railways and more. It opens on the `pmtiles/` folder, whose
+archives are added as tile layers read in place; the `geoparquet/`, `geojson/`, `gpkg/` and
+`shapefiles/` folders hold the same themes as files, added as layers. With commands:
+`sourcecoop.list` (`{"account": "opengeos", "product": "natural-earth", "path": "pmtiles/"}`), then
+`layer.addUrl` with a file's `"url"`.
+
+## Fields of the World
+
+**Home › Web Data › Fields of the World…** adds the agricultural field boundaries the
+[Fields of the World](https://fieldsofthe.world) model found in Sentinel-2 imagery, worldwide, one
+year at a time (2017 to 2025; 2nd Edition, CC BY 4.0). Each year is a PMTiles archive on Source
+Cooperative read in place. Fields are drawn from zoom 9, filled and outlined by the model's score
+(0 to 100: red below 45, through orange and yellow, to green from 80); zoomed out, field density
+cells are drawn instead, coloured by the share of each cell covered by fields: **Add field
+boundaries** and **Add field density** add each. **Score threshold** hides the fields scoring below
+it. `fieldsOfTheWorld.add` does the same (`"year"`, `"draw"`:
+`both`, `fields` or `density`, `"minScore"`):
+
+```sh
+rustgis-cli run --cmd 'map.goToXY={"lon":-93.6,"lat":42.03,"scale":40000}' --cmd 'fieldsOfTheWorld.add={"year":2024,"minScore":40}' --cmd 'share.exportMap={"path":"fields.png"}'
+```
+
+The look is the tile layer's own style layers (`map.addTiles` takes MapLibre style layers as
+`"styleLayers"`, drawing vector tiles in place of their default colours).
+
+## NASA Earthdata
+
+**Home › Web Data › NASA Earthdata…** lists the layers of NASA's
+[Global Imagery Browse Services](https://www.earthdata.nasa.gov/engage/open-data-services-software/earthdata-developer-portal/gibs-api)
+(GIBS) in Web Mercator: more than a thousand layers of satellite imagery and science data (MODIS,
+VIIRS, Landsat, sea surface temperature, aerosols, fires…), grouped by mission or instrument (the
+first part of their names) and searched by words. Most layers change day by day: **Date**
+(YYYY-MM-DD) picks the day they are added at, and empty adds the service's default (its latest).
+The same layer can be added at several dates, each a layer named with its date. A WMTS layer with a time dimension works the same way in any service,
+and with commands `service.add` takes `"time"`:
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml","layer":"MODIS_Terra_CorrectedReflectance_TrueColor","time":"2024-06-01"}' --cmd 'share.exportMap={"path":"gibs.png"}'
+```
+
+## United States
+
+**Home › Web Data › United States** holds services covering the United States.
+
+**EnviroAtlas…** shows the US EPA's [EnviroAtlas](https://www.epa.gov/enviroatlas) services
+(`https://enviroatlas.epa.gov/arcgis/rest/services`) as a tree: folders, their services (**Add**
+adds a service's whole map or image), and each service's layers, each with an **Add** of its own
+(drawn alone). A search looks through the services of every folder and of the folders in them, a few folders at a time. **Add From Service** also browses
+any ArcGIS services directory: its folders and the map, feature, image and vector tile services in them are listed
+with **Open**, which lists that folder or service (**Back** returns). A map service offers its
+whole map, each of its layers drawn alone (`… (map)`) and its layers' features. With commands,
+`service.layers` on a directory lists its folders and services, each with the `url` to list next.
+
+**FEMA NFHL…** lists the layers of FEMA's
+[National Flood Hazard Layer](https://www.fema.gov/flood-maps/national-flood-hazard-layer) map
+service (`https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer`), searched by
+words: **Add** draws the whole map or one layer such as Flood Hazard Zones alone, and
+**Features** downloads a layer's features in the view (up to the server's limit). Its flood layers are drawn only from zoom 15 (closer than about 1:36,000),
+and FEMA's server can be slow to answer.
+
+**The National Map…** lists 31 map services of the USGS
+[The National Map](https://www.usgs.gov/programs/national-geospatial-program/national-map) and
+partners by category (basemaps, hydrography, elevation, imagery, cartography, hazards, other data,
+indexes), searched by words; **Add** adds one as a tile layer (the basemaps from their tile caches,
+the others as images the server draws). `nationalMap.services` lists them and `nationalMap.add`
+(`"service"`: an id or title) adds one:
+
+```sh
+rustgis-cli run --cmd 'nationalMap.add={"service":"basemap/USGSTopo"}' --cmd 'nationalMap.add={"service":"hydro/wbd"}' --cmd 'map.goToXY={"lon":-105.27,"lat":40.0,"scale":300000}' --cmd 'share.exportMap={"path":"topo.png"}'
+```
+
+`ui.dialog` opens these panels on a search with `"search"`
+(`{"name": "nasaEarthdata", "search": "sea surface temperature"}`). All of these work in the web
+app too: their documents and tiles are fetched like any other.
+
+## Satellite embeddings
+
+**Home › Web Data › Satellite Embeddings…** shows pre-computed satellite embeddings: vectors a
+geospatial foundation model made for every pixel or image patch, so that places alike have values
+alike. Pick a dataset (its provider, model, resolution, years, coverage, licence and links are
+shown), a year, and **Search where the map is**; the results are cards with **Zoom** and **Add**,
+their footprints drawn as a layer.
+
+| Dataset | What RustGIS does with it |
+|---|---|
+| **AlphaEarth Foundations** (Google's Satellite Embedding; 64 values a 10 m pixel, 2017–2025) | Finds the year's UTM tiles where the map is in the dataset's GeoParquet index on [Source Cooperative](https://source.coop/tge-labs/aef), read in place (its bounding boxes, then the rows that meet the map). **Add** shows a tile as a cloud-optimised GeoTIFF read in place: three bands (**Bands**, from 1; A01, A16 and A09 by default) as red, green and blue, dequantised (`sign(v)·(v/127.5)²`) and stretched over ±**Stretch** (0.3). Only the three bands shown are read, a band at a time. **Apply to layers** shows other bands or another stretch on the tiles already added. |
+| **Earth Index** (Earth Genome; 384 values every ~320 m, 2024) | Names the Sentinel-2 (MGRS) tiles where the map is and keeps those with a file. **Add points** reads the file's points in the view in place (every point's position, then the vectors of those in view: zoom to a few kilometres) and colours them by their vectors' first three principal components (64 colours); **Keep value** keeps one of each vector's values as the points' `value` field. |
+| **Tessera** (Cambridge; 128 values a 10 m pixel, 2017–2025) | **Add view** reads three bands (1, 2 and 3 by default) of the view from Tessera's [Zarr store](https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate) in place (the shard's index, then the chunks the view needs: at most about 6 km a side, its centre when the view is larger), as a 32-bit raster in UTM. |
+| **Clay**, **Major TOM**, **Copernicus-Embed** | Listed with links to their data and papers; RustGIS doesn't read them. |
+
+AlphaEarth's tiles keep their look in their layer's address (`#bands=2,17,10&range=-0.3,0.3&dequantize=aef`),
+which `map.setTiles` changes for any cloud-optimised GeoTIFF read in place (`"bands"`, `"range"`,
+`"dequantize"`); GeoTIFFs with their bands stored apart (planar), signed bytes and bottom-up images
+are read in place too. The commands: `embeddings.datasets`, `embeddings.search` (`"dataset"`,
+`"year"`, `"bbox"` or the view, `"footprints"`) and `embeddings.add` (`"dataset"`, `"url"`,
+`"bands"`, `"stretch"`, `"dimension"`, `"bbox"`, `"year"`):
+
+```sh
+rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-122.55,37.7,-122.3,37.85]}' --cmd 'embeddings.search={"dataset":"alphaearth","year":2024}' --cmd 'embeddings.add={"dataset":"alphaearth","url":"https://data.source.coop/tge-labs/aef/v1/annual/2024/10N/xcyo46pot2fg6a61t-0000008192-0000000000.tiff"}' --cmd 'share.exportMap={"path":"aef.png"}'
+rustgis-cli run --cmd 'map.zoomToExtent={"extent":[-83.96,35.94,-83.9,35.98]}' --cmd 'embeddings.add={"dataset":"tessera","year":2024}' --cmd 'share.exportMap={"path":"tessera.png"}'
+```
+
+These reach the network: the AI Assistant asks first and plugins need the network permission.
 
 ## Geocoding addresses
 

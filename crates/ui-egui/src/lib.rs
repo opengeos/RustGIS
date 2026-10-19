@@ -24,9 +24,11 @@ mod dialogs;
 mod docpanes;
 mod earthaccessui;
 mod editpanes;
+mod embeddingsui;
 mod failureui;
 mod geocodeui;
 mod globe_drape;
+mod graphicformat;
 pub mod icons;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,8 +60,10 @@ mod textform;
 pub mod theme;
 mod tilt_drape;
 mod tilt_settle;
+mod timebar;
 mod update;
 mod vertexedit;
+mod webdataui;
 mod widgets;
 mod workspacepanes;
 mod zarrui;
@@ -286,6 +290,17 @@ pub struct ServiceConn {
     pub describing: Option<(Value, Slot<Result<Vec<u8>, String>>)>,
 }
 
+/// How Add From Service's list is browsed.
+#[derive(Default)]
+pub struct ServiceBrowse {
+    /// Words the listed layers' titles or names contain.
+    pub filter: String,
+    /// The date time-enabled layers are added at (their default when empty).
+    pub time: String,
+    /// The directories (and their types) opened before the one shown, the last most recent.
+    pub back: Vec<(String, &'static str)>,
+}
+
 /// Reading an OGC API layer's tile template from its tileset list (and tileset), off the frame.
 pub struct TilesResolve {
     /// `service.add`'s parameters, given the template as `"tiles"` once read.
@@ -483,6 +498,12 @@ pub struct UiState {
     pub link_zoomed: bool,
     /// The service Add From Service is connected (or connecting) to.
     pub service: Option<ServiceConn>,
+    /// Add From Service's list: its filter, a time-enabled layer's date, and the directories
+    /// opened on the way to the service shown (Back returns to them).
+    pub service_browse: ServiceBrowse,
+    /// The Web Data panels of single services (NASA Earthdata, EnviroAtlas, FEMA NFHL, The
+    /// National Map, Fields of the World): their documents, searches and choices.
+    pub web_services: webdataui::State,
     pub service_import: Option<serviceui::Import>,
     pub service_group_name: String,
     /// Add From Service › Catalogue: the search and the records found.
@@ -497,6 +518,8 @@ pub struct UiState {
     pub catalogs: catalogsui::State,
     /// Search Open Data: the portal, the search under way and the datasets found.
     pub opendata: opendataui::State,
+    /// Satellite Embeddings: the dataset, its choices, the read under way and the tiles found.
+    pub embeddings: embeddingsui::State,
     /// NASA Earthaccess: the dataset, the granules found and the request under way.
     pub earthaccess: earthaccessui::State,
     /// USGS NLDI: the point traced, its COMID, the navigation and the request under way.
@@ -607,6 +630,8 @@ impl Default for UiState {
             cog_probes: Vec::new(),
             link_zoomed: false,
             service: None,
+            service_browse: ServiceBrowse::default(),
+            web_services: Default::default(),
             service_import: None,
             service_group_name: "My OGC Layer".into(),
             csw: Default::default(),
@@ -615,6 +640,7 @@ impl Default for UiState {
             portals: Default::default(),
             catalogs: Default::default(),
             opendata: Default::default(),
+            embeddings: Default::default(),
             earthaccess: Default::default(),
             nldi: Default::default(),
             geocode: Default::default(),
@@ -648,11 +674,15 @@ pub struct RustGisApp {
     pub gp: panes::GpForm,
     pub table: table::TableState,
     pub layout: layoutview::LayoutView,
+    /// The text graphic the Format pane edits (#516).
+    pub(crate) graphic_format: graphicformat::GraphicFormat,
     pub forms: editpanes::Forms,
     pub workflow: analysispane::Workflow,
     /// ModelBuilder's view: the model on its canvas.
     pub mb: modelbuilder::ModelBuilder,
     pub ws: workspacepanes::WorkspaceState,
+    /// The time slider bar.
+    pub time: timebar::TimeBarState,
     /// The Plugin Manager and plugin downloads.
     pub plugins: pluginsui::PluginsState,
     /// Help › Check for Updates.
@@ -728,10 +758,12 @@ impl RustGisApp {
             gp: panes::GpForm::default(),
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
+            graphic_format: graphicformat::GraphicFormat::default(),
             forms: editpanes::Forms::default(),
             workflow: analysispane::Workflow::default(),
             mb: modelbuilder::ModelBuilder::default(),
             ws: workspacepanes::WorkspaceState::default(),
+            time: timebar::TimeBarState::default(),
             plugins: pluginsui::PluginsState::default(),
             update: update::UpdateState::default(),
             reports: reportpane::ReportState::default(),
@@ -1857,6 +1889,15 @@ impl RustGisApp {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 stacui::open_link(self, url)?;
             }
+            // STAC Search (`ui.stac`), or a Web Data service that is STAC Search on one API or
+            // catalog (`ui.stac.planet`, `ui.stac.portolan`, `ui.stac.sentinel2`, `ui.stac.vantor`,
+            // `ui.stac.usgsLidar`); `{"search": true}` finds items at once.
+            "ui.stac" => stacui::open_preset(self, None, p)?,
+            other if other.starts_with("ui.stac.") => {
+                let preset =
+                    other.strip_prefix("ui.stac.").and_then(stacui::Preset::from_id).ok_or_else(|| format!("unknown command '{other}'"))?;
+                stacui::open_preset(self, Some(preset), p)?;
+            }
             // Search Open Data: the dialog, then (with a query) the search, off the frame.
             "ui.searchOpenData" => {
                 self.run("ui.dialog", json!({"name": "opendata"}))?;
@@ -1954,6 +1995,15 @@ impl RustGisApp {
                     "arcgis" => "arcgis",
                     _ => "auto",
                 };
+                // Opened from a menu (Home › Web Data): the dialog with it.
+                if self.dialogs.open != Some("addService") {
+                    self.run("ui.dialog", json!({"name": "addService"}))?;
+                }
+                // The Type shown is the connection's.
+                self.dialogs.mode = kind;
+                // Another service: its own list, unfiltered (Open keeps the way back).
+                self.ui.service_browse.filter.clear();
+                self.ui.service_browse.back.clear();
                 let caps = rustgis_engine::data::ogc::capabilities_url(url, (kind != "auto").then_some(kind));
                 // A refusal is told with what the server said (#509).
                 let slot = fetch_detailed_into(&caps);
@@ -2475,6 +2525,9 @@ impl RustGisApp {
                     return self.run(cmd, json!({"path": path}));
                 }
             }
+            "ui.timeSlider" => return timebar::toggle(self),
+            "ui.timePlay" => return timebar::play(self),
+            "ui.timeExport" => return timebar::export(self),
             "ui.animationPlay" => {
                 if self.session.map().animation.len() < 2 {
                     return Err("add at least two keyframes".into());
@@ -2611,7 +2664,8 @@ impl RustGisApp {
                     zarrui::connect(self);
                 }
             }
-            // Edit › Dynamic Text: the text tool, its dialog starting with one of the map's values.
+            // Edit › Dynamic Text: the text tool, the text it places starting with one of the map's
+            // values.
             "ui.dynamicText" => {
                 let text = p.get("text").and_then(Value::as_str).unwrap_or("");
                 let token = rustgis_engine::map::graphics::TOKENS
@@ -2622,38 +2676,50 @@ impl RustGisApp {
                 self.run("tool.set", json!({"tool": "graphicText"}))?;
                 self.ui.dynamic_text = Some(token);
             }
+            // A text graphic has no dialog any more (#516): by its layer and row it opens in the
+            // Format pane; at `lon`/`lat` it is placed there (with `text`, else "Text") and opens.
+            "ui.dialog" if p.get("name").and_then(Value::as_str) == Some("graphicText") => {
+                let num = |k: &str| p.get(k).and_then(Value::as_f64);
+                match (p.get("layer").and_then(Value::as_u64), p.get("row").and_then(Value::as_u64), num("lon"), num("lat")) {
+                    (Some(layer), Some(row), ..) => {
+                        let (layer, row) = (u32::try_from(layer).unwrap_or(u32::MAX), usize::try_from(row).unwrap_or(usize::MAX));
+                        graphicformat::edit(self, layer, row)?;
+                    }
+                    (.., Some(lon), Some(lat)) => {
+                        let text: Option<String> = p.get("text").and_then(Value::as_str).map(|t| t.chars().take(2000).collect());
+                        graphicformat::place(self, lon, lat, text.as_deref())?;
+                    }
+                    _ => return Err("give the text's layer and row, or the lon and lat to place one".into()),
+                }
+            }
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 // A Web Data service opens in the right pane, beside the map it searches.
                 if let Some(name) = panes::web_data_name(which) {
+                    // A Web Data panel opened on a search.
+                    if let Some(words) = p.get("search").and_then(Value::as_str) {
+                        webdataui::set_search(self, which, words);
+                    }
+                    // Natural Earth is Source Cooperative's browser locked to its product; Source
+                    // Cooperative opened after it starts from the products again.
+                    // A panel reopened asks again for what failed.
+                    webdataui::forget_failed(self);
+                    if which == "naturalEarth" {
+                        catalogsui::natural_earth(self);
+                    } else if which == "sourcecoop" && self.ui.catalogs.locked {
+                        catalogsui::unlock(self);
+                    }
                     self.ui.web_data = name;
                     self.ui.open_right(RightPane::WebData);
+                    // Satellite Embeddings opens on a dataset, when given one.
+                    if name == "embeddings"
+                        && let Some(d) = p.get("dataset").and_then(Value::as_str)
+                    {
+                        embeddingsui::pick(self, d)?;
+                    }
                     return Ok(Value::Null);
                 }
                 self.dialogs.open(which, &self.session)?;
-                // The text graphic dialog remembers where the map was clicked.
-                if which == "graphicText" {
-                    self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
-                    self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
-                    // Dynamic Text starts it with the value picked.
-                    if let Some(t) = p.get("text").and_then(Value::as_str) {
-                        self.dialogs.text = t.chars().take(2000).collect();
-                    }
-                    // A placed text to edit (its layer and row), starting from its text and size.
-                    if let (Some(layer), Some(row)) = (p.get("layer").and_then(Value::as_u64), p.get("row").and_then(Value::as_u64)) {
-                        use rustgis_engine::map::graphics;
-                        let l = u32::try_from(layer).ok().and_then(|id| self.session.map().layer(id)).filter(|l| l.graphics);
-                        let found = l
-                            .zip(usize::try_from(row).ok())
-                            .and_then(|(l, r)| Some((graphics::label(&l.dataset, r)?.to_string(), graphics::font_size(&l.dataset, r))));
-                        let Some((text, size)) = found else {
-                            self.dialogs.open = None;
-                            return Err(tl!("no text graphic there").to_string());
-                        };
-                        (self.dialogs.mode, self.dialogs.a, self.dialogs.b) = ("edit", layer.to_string(), row.to_string());
-                        (self.dialogs.text, self.dialogs.size) = (text, f64::from(size));
-                    }
-                }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
                 // one in view), so renaming another from the Browser leaves the view alone.
                 if matches!(which, "renameMap" | "renameLayout") {
@@ -3001,6 +3067,7 @@ impl RustGisApp {
         portalsui::poll(self, ctx);
         catalogsui::poll(self, ctx);
         opendataui::poll(self, ctx);
+        embeddingsui::poll(self, ctx);
         earthaccessui::poll(self, ctx);
         nldiui::poll(self, ctx);
         geocodeui::poll(self, ctx);
@@ -3131,12 +3198,15 @@ impl RustGisApp {
             chrome::status_bar(self, ui);
             panes::show(self, ui);
             table::show(self, ui);
+            timebar::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
                 mapview::show(self, ui);
             });
         }
-        // Text typed into a layout element's field the Format pane no longer shows.
+        // Text typed into a layout element's field, or a text graphic's, the Format pane no
+        // longer shows.
         layoutview::save_drafts(self);
+        graphicformat::save_draft(self);
         dialogs::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         pluginsui::show(self, &ctx);

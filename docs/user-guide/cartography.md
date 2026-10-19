@@ -161,15 +161,21 @@ Layer tab: **Layer Blend** (multiply, screen, overlay, darken, lighten, differen
 Edit › Graphics draws shapes in a graphics layer (Home › Add Data › Graphics Layer, or one is
 made with the first graphic). Point, Line, Curve and Polygon are clicked vertex by vertex
 (double-click to finish); Freehand, Lasso, Rectangle, Circle and Ellipse are dragged. Text places
-a label where you click. Dynamic Text is a menu of values that update as the map changes (map
-name, scale, date, time, coordinate system, number of layers, map centre): pick one, then click
-the map, and the text starts with its token (`{map}`, `{scale}`, `{date}`, `{time}`, `{crs}`,
-`{layers}` or `{center}`); the dialog's **Insert Dynamic Text** menu adds more. Picture: drag a rectangle,
-then pick a PNG or JPEG image to stretch over it. Tools return to Explore after each graphic
-unless Keep Tool is on. Each graphic keeps its own fill, outline, width and text size in the
-layer's attributes, so you can edit them in the attribute table or with `graphics.style`. To
-change a text once it is placed, double-click it (with Explore or Select) or right-click it ›
-**Edit Text…**: the dialog opens with its text and size, and **Save** changes that graphic's text
-and size only, as one undo step (`graphics.edit` does the same by layer and row). Text sizes go
-from 2 to 400 points, on the map as on a layout page, and the dialog's form is the one a layout's
-text has in the Format pane.
+a text where you click, as a layout's text is placed: it says "Text", is selected, and opens in
+the **Format** pane (beside the other right-hand panes) with its text selected, so you type over
+it. Shift+Enter starts a new line, and Enter ends the text. Dynamic Text is a menu of values that
+update as the map changes (map name, scale, date, time, coordinate system, number of layers, map
+centre): pick one, then click the map, and the text starts with its token (`{map}`, `{scale}`,
+`{date}`, `{time}`, `{crs}`, `{layers}` or `{center}`); the pane's **Insert Dynamic Text** menu adds
+more. Picture: drag a rectangle, then pick a PNG or JPEG image to stretch over it. Tools return
+to Explore after each graphic unless Keep Tool is on. Each graphic keeps its own fill, outline,
+width, text size and bold in the layer's attributes, so you can edit them in the attribute table
+or with `graphics.style`. To change a text later, click anywhere on it (with Explore or Select):
+selected alone, it opens in the Format pane, with the same form a layout's text has there: text,
+size, colour and bold. Each change is one undo step on that text only (`graphics.edit` does the
+same by layer and row, with `text`, `fontSize`, `fill` for the colour and `bold`). Once a text is selected, drag it by
+its text to move it, as one undo step (`points` on `graphics.edit`); a drag anywhere else, or on a
+text that isn't selected, pans the map as usual. A graphics layer that isn't **Selectable** keeps
+its texts from being picked, moved or edited. Closing the
+pane keeps the text selected; double-clicking it or right-clicking it › **Edit Text…** opens the
+pane again. Text sizes go from 2 to 400 points, on the map as on a layout page.

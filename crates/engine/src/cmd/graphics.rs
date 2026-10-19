@@ -24,13 +24,13 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"name"?: string}"#),
         C::new("graphics.add", "Add Graphic", "Edit › Graphics", add).params(
-            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
+            r##"{"shape": "point"|"text"|"line"|"curve"|"freehand"|"polygon"|"lasso"|"rectangle"|"circle"|"ellipse"|"picture", "points": [[lon, lat], …] (rectangle, ellipse, picture: two corners; circle: centre and a point on the edge), "layer"?: graphics layer, "text"?: string (dynamic tokens: {map} {scale} {date} {time} {crs} {layers} {center}), "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "image"?: base64 PNG/JPEG, "path"?: picture file}"##,
         ),
         C::new("graphics.style", "Graphic Style", "Edit › Graphics", style)
             .when(super::need_selection)
-            .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "text"?: string}"##),
+            .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "text"?: string}"##),
         C::new("graphics.edit", "Edit Graphic", "Edit › Graphics", edit).params(
-            r##"{"layer": graphics layer, "row": number, "text"?: string, "fontSize"?: number, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
+            r##"{"layer": graphics layer, "row": number, "points"?: [[lon, lat]] (a point or a text: where it sits), "text"?: string, "fontSize"?: number, "bold"?: bool, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
         ),
         C::new("graphics.keepTool", "Keep the last tool active", "Edit › Graphics", |s, p| {
             s.keep_tool = b(p, "on").unwrap_or(!s.keep_tool);
@@ -260,8 +260,15 @@ fn add(s: &mut Session, p: &Value) -> CmdResult {
         opt(image),
     ];
     l.dataset.push(Some(g), attrs);
-    l.touch_geometry();
     let row = l.dataset.features.len() - 1;
+    // By name, as a layer made before the field lacks it.
+    if let Some(bold) = b(p, "bold") {
+        let fi = l.dataset.ensure_field("bold", rustgis_data::FieldType::Boolean);
+        if let Some(cell) = l.dataset.features.get_mut(row).and_then(|ft| ft.attrs.get_mut(fi)) {
+            *cell = Attr::Bool(bold);
+        }
+    }
+    l.touch_geometry();
     Ok(json!({"layer": id, "row": row, "shape": shape}))
 }
 
@@ -287,6 +294,29 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
             return Err("text is required".into());
         }
     }
+    // Placed again (a text dragged on the map, #516): only what sits at one point; other shapes
+    // move with `edit.move`.
+    let placed = match p.get("points") {
+        Some(_) => {
+            let kind = graphics::kind(&l.dataset, row).to_string();
+            if !matches!(kind.as_str(), "point" | "text") {
+                return Err("only a point or a text graphic is placed again by its points".into());
+            }
+            Some(geometry(&kind, points(p)?)?)
+        }
+        None => None,
+    };
+    if let Some(g) = placed {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        if let Some(ft) = l.dataset.features.get_mut(row) {
+            ft.geometry = Some(g);
+        }
+        l.touch_geometry();
+        let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold"].iter().any(|k| p.get(*k).is_some());
+        if !styled {
+            return Ok(json!({"placed": 1}));
+        }
+    }
     restyle(s, p, Some((id, row)))
 }
 
@@ -297,8 +327,9 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
     // Font sizes are kept within the range they are drawn at (graphics::font_size).
     let fonts = &graphics::FONT_SIZE;
     let nums = [("width", "width", 0.0, 50.0), ("size", "size", 0.0, 200.0), ("font_size", "fontSize", *fonts.start(), *fonts.end())];
-    if fill.is_none() && outline.is_none() && text.is_none() && nums.iter().all(|(_, k, _, _)| f(p, k).is_none()) {
-        return Err("give a fill, outline, width, size, fontSize or text".into());
+    let bold = b(p, "bold");
+    if fill.is_none() && outline.is_none() && text.is_none() && bold.is_none() && nums.iter().all(|(_, k, _, _)| f(p, k).is_none()) {
+        return Err("give a fill, outline, width, size, fontSize, bold or text".into());
     }
     let mut n = 0;
     let targeted = |l: &rustgis_map::Layer| one.map_or(!l.selection.is_empty(), |(id, _)| l.id == id);
@@ -314,6 +345,11 @@ fn restyle(s: &mut Session, p: &Value, one: Option<(u32, usize)>) -> CmdResult {
             if let Some(v) = f(p, k) {
                 sets.push((field, Attr::Float(v.clamp(min, max))));
             }
+        }
+        // A layer made before the field gains it here.
+        if let Some(v) = bold {
+            l.dataset.ensure_field("bold", rustgis_data::FieldType::Boolean);
+            sets.push(("bold", Attr::Bool(v)));
         }
         let sets: Vec<(Option<usize>, Attr)> = sets.into_iter().map(|(k, v)| (l.dataset.field_index(k), v)).collect();
         let text_field = l.dataset.field_index("text");

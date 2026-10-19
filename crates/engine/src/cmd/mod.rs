@@ -8,6 +8,7 @@ pub mod directions;
 pub mod earthdata;
 pub mod edit;
 pub mod effects;
+pub mod embeddings;
 pub mod geocode;
 pub mod gp;
 pub mod graphics;
@@ -38,7 +39,9 @@ pub mod sources;
 pub mod sql;
 pub mod stac;
 pub mod tiles;
+pub mod time;
 pub mod view;
+pub mod webdata;
 pub mod workflows;
 pub mod workspace;
 pub mod zarr;
@@ -89,8 +92,11 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(stac::commands());
     v.extend(portals::commands());
     v.extend(catalogs::commands());
+    v.extend(webdata::commands());
+    v.extend(embeddings::commands());
     v.extend(earthdata::commands());
     v.extend(nldi::commands());
+    v.extend(time::commands());
     v
 }
 

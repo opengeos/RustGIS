@@ -115,7 +115,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, c: Coord) {
     ui.separator();
     if let Some((layer, row)) = app.map.menu_text {
         if menu_row(ui, "g_text", tl!("Edit Text…"), "", true).clicked() {
-            run(app, "ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row}));
+            if let Err(e) = crate::graphicformat::edit(app, layer, row) {
+                app.session.notify(e, true);
+            }
             ui.close();
         }
         ui.separator();

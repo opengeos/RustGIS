@@ -34,7 +34,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
@@ -1884,6 +1884,18 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         return super::tiles::add(s, &q);
     }
+    // A dated address (one file per date, `{date:YYYY}`) is read in place, following the time
+    // slider: a GeoTIFF on the web, before anything fetches the address as it is.
+    if rustgis_data::time::is_template(url) {
+        let web = lower.starts_with("https://") || lower.starts_with("http://");
+        return if is_tiff_url(url) && web {
+            add_cog(s, p, url)
+        } else {
+            Err(format!(
+                "{url}: dated addresses work for cloud-optimised GeoTIFFs on the web (http, https) here, and for tile layers (map.addTiles)"
+            ))
+        };
+    }
     // A FlatGeobuf or GeoParquet: read in place by range when it has a spatial index (or a bbox
     // covering), otherwise downloaded whole.
     if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) {
@@ -1956,18 +1968,62 @@ pub fn is_tiff_url(url: &str) -> bool {
 
 /// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,
 /// as the view needs them), framed when its header is in.
-fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
-    let stem = url.split(['?', '#']).next().unwrap_or(url).rsplit('/').next().unwrap_or("GeoTIFF");
-    let stem = stem.rsplit_once('.').map(|(a, _)| a).unwrap_or(stem);
-    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(stem);
-    let mut r = super::tiles::add(s, &json!({"url": url, "kind": "cog", "name": name}))?;
-    if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(url) {
+pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
+    let stem = cog_name(url);
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
+    let mut q = json!({"url": url, "kind": "cog", "name": name});
+    // A dated address's span and steps (see map.addTiles).
+    for k in ["start", "end", "unit", "interval", "dates"] {
+        if let Some(v) = p.get(k) {
+            q[k] = v.clone();
+        }
+    }
+    let mut r = super::tiles::add(s, &q)?;
+    // A dated address is framed on the file of the date it shows.
+    let url = match r.get("url").and_then(Value::as_str) {
+        Some(dated) => {
+            // Its header read now (natively) as an undated address's is before it is added.
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = crate::render::rustgis_tiles::cog::probe_blocking(dated);
+            dated.to_string()
+        }
+        None => url.to_string(),
+    };
+    if let Ok(Some(info)) = crate::render::rustgis_tiles::cog::info(&url) {
         let [w, so, e, n] = info.bounds;
         s.zoom_to(&rustgis_geom::Extent::new(w, so, e, n));
         r["bounds"] = json!(info.bounds);
+    } else if r.get("dated").is_some() {
+        // Added, but its first date's file couldn't be read: the view stays where it was.
+        r["warning"] = json!(format!("{url} couldn't be read yet, so the map wasn't moved to it"));
     }
     r["inPlace"] = json!(true);
     Ok(r)
+}
+
+/// A GeoTIFF's name from its address: the file name without its extension, or for a dated
+/// address (`…/landsat/{date:YYYY}.tif`) what is left of it once the dates are taken out, else its
+/// folder's name.
+fn cog_name(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let mut parts = path.rsplit('/');
+    let file = parts.next().unwrap_or("GeoTIFF");
+    let file = file.rsplit_once('.').map(|(a, _)| a).unwrap_or(file);
+    if !rustgis_data::time::is_template(file) {
+        return file.to_string();
+    }
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in file.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = (depth - 1).max(0),
+            c if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out.trim_matches(['_', '-', '.', ' ']).to_string();
+    if out.is_empty() { parts.next().filter(|d| !d.is_empty() && !d.contains(':')).unwrap_or("GeoTIFF").to_string() } else { out }
 }
 
 /// Adds a download the app finished (its bytes handed to the session, not passed as text).

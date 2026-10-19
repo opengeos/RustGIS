@@ -2478,7 +2478,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         size: rustgis_map::graphics::font_size(ds_ptr, row),
                         color,
                         halo: Some(halo_for(color)),
-                        bold: false,
+                        bold: rustgis_map::graphics::bold(ds_ptr, row),
                         icon: None,
                         align: 0.0,
                         framed: selection.contains(&row),

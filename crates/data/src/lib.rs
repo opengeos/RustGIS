@@ -25,6 +25,7 @@ pub mod raster;
 pub mod sheets;
 pub mod source;
 pub mod sqlite;
+pub mod time;
 pub mod topojson;
 pub mod value;
 pub mod wkb;

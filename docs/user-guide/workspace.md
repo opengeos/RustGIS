@@ -40,6 +40,25 @@ Tools for working across maps and views, and for setting up the app the way you 
     tools' outputs are refused.
 - **Thumbnails** for the project and for each map, from the view or an image.
 - **Animation**: add keyframes (views), play them, and export the moves as PNG frames.
+- **Time Slider** (View › Time) shows data through time, in a timeline docked under the map.
+  - **Bind To Time Slider** (a layer's context menu, or the bar's **Layers** menu) picks the
+    layer's date field: the one most of whose values read as dates. Text dates (`2015-03-01`,
+    `2015-03-01T12:00:00Z`, `2015/3/1`), epoch milliseconds or seconds, and years (`1958`) all
+    read; times are UTC. Only the features whose date falls in the slider's window draw (and
+    show in the legend). The bar's bars count each step's features.
+  - **Step** is an hour, a day, a month or a year, times a number; the slider starts in steps
+    that suit the data's span. **Show** sets the window: **This step**, **Wide** (a step either
+    side), **Wider** (three either side), or **Cumulative** (everything up to the step).
+  - Play, pause, step, or click and drag the timeline; **Loop** starts over at the end, and the
+    speed runs from 0.5× to 4× (0.8 s a step at 1×).
+  - Imagery by date: a tile address with date placeholders (`{date:YYYY-MM-DD}`, `{YYYY}`,
+    `{MM}`, `{DD}`, `{YYYYMMDD}`) follows the slider. Add it with `map.addTiles`, or a
+    cloud-optimised GeoTIFF a file per date with `layer.addUrl`, giving its `start` and `end`.
+    For example NASA GIBS daily MODIS imagery:
+    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
+  - **Export** writes the steps as an animated GIF (`time.export` also writes a zip of PNG
+    frames). The slider, its window and the bindings are saved with the project; the off button
+    turns it off and every feature shows again.
 - **Profile**: elevation profiles along clicked points or selected lines, auto-completed to the
   raster's edge, or across a line (a cross section), with gain, loss and a chart.
 - **Infographics** (Home tab) summarise what's in view: counts, totals and top categories.

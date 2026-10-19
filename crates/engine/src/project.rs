@@ -498,6 +498,8 @@ impl Project {
                 m.camera = rustgis_map::Camera::world();
             }
             m.camera.clamp();
+            // The time slider's window and dated tile addresses, before the addresses are checked.
+            m.apply_time();
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
             m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);

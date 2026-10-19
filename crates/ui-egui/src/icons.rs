@@ -457,6 +457,29 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.line(&[(12.5, 7.0), (12.5, 12.0), (16.0, 14.0)], 1.6, ink);
             p.fill(&[(1.5, 9.5), (6.0, 9.5), (3.5, 13.5)], ink);
         }
+        "time_slider" => {
+            // A clock over a slider track with its thumb.
+            p.circle(12.0, 9.0, 7.0, Some(p.tint(40)), Some((1.4, ink)));
+            p.line(&[(12.0, 5.0), (12.0, 9.0), (15.0, 10.5)], 1.5, ink);
+            p.line(&[(2.0, 20.0), (22.0, 20.0)], 1.6, ink);
+            p.rect(14.0, 17.5, 3.5, 5.0, Some(p.acc), None, 1.0);
+        }
+        "time_off" => {
+            p.circle(12.0, 12.0, 8.0, Some(p.tint(30)), Some((1.4, ink)));
+            p.line(&[(12.0, 7.0), (12.0, 12.0), (15.5, 14.0)], 1.5, ink);
+            p.line(&[(4.0, 4.0), (20.0, 20.0)], 1.8, red);
+        }
+        "time_first" | "time_last" => {
+            let flip = |x: f32| if name == "time_last" { 24.0 - x } else { x };
+            p.line(&[(flip(6.0), 6.0), (flip(6.0), 18.0)], 2.0, ink);
+            p.fill(&[(flip(18.0), 6.0), (flip(8.0), 12.0), (flip(18.0), 18.0)], ink);
+        }
+        "time_prev" => p.fill(&[(17.0, 6.0), (7.0, 12.0), (17.0, 18.0)], ink),
+        "time_next" => p.fill(&[(7.0, 6.0), (17.0, 12.0), (7.0, 18.0)], ink),
+        "time_pause" => {
+            p.rect(6.5, 5.0, 4.0, 14.0, Some(ink), None, 1.0);
+            p.rect(13.5, 5.0, 4.0, 14.0, Some(ink), None, 1.0);
+        }
         "environments" | "settings" => {
             for i in 0..8 {
                 let a = (i as f32 * 45.0).to_radians();
@@ -1143,6 +1166,13 @@ pub const ALL: &[&str] = &[
     "modelbuilder",
     "python",
     "history",
+    "time_slider",
+    "time_off",
+    "time_first",
+    "time_last",
+    "time_prev",
+    "time_next",
+    "time_pause",
     "environments",
     "settings",
     "buffer",

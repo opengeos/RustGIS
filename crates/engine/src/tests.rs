@@ -992,6 +992,7 @@ fn hostile_params_never_panic() {
             "project.save"
                 | "project.saveAs"
                 | "share.exportMap"
+                | "time.export"
                 | "share.exportLayer"
                 | "share.exportTable"
                 | "share.exportRaster"
@@ -5134,6 +5135,65 @@ fn gml_mapinfo_and_topojson() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Fields of the World's fields and density are two looks of one archive and stay side by side;
+/// the fields again at another score threshold replace the earlier ones.
+#[test]
+fn fields_of_the_world_looks() {
+    let mut s = Session::new(Project::default());
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "fields"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "density"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "fields", "minScore": 50})).unwrap();
+    let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Fields of the World 2024 fields", "Fields of the World 2024 density"]);
+    assert!(s.map().tiles[0].style_layers.contains("50"));
+    // Both replaces the parts (not another overlay of the archive); a part then replaces both.
+    let url = crate::cmd::webdata::fields_url(2024);
+    s.run("map.addTiles", &json!({"url": url, "kind": "pmtiles", "name": "My fields", "overlay": true})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024})).unwrap();
+    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024", "My fields"]);
+    s.run("map.removeTiles", &json!({"name": "My fields"})).unwrap();
+    s.run("fieldsOfTheWorld.add", &json!({"year": 2024, "draw": "density"})).unwrap();
+    assert_eq!(s.map().tiles.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Fields of the World 2024 density"]);
+}
+
+/// A time-enabled WMTS layer (NASA GIBS's) is added at the date asked for, or its default; an
+/// ArcGIS services directory lists its folders and services to open, which aren't added.
+#[test]
+fn service_times_and_directories() {
+    const WMTS: &str = r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
+<Layer><ows:Title>True Color</ows:Title><ows:Identifier>TC</ows:Identifier>
+ <Dimension><ows:Identifier>Time</ows:Identifier><Default>2024-06-02</Default><Value>2000-02-24/2024-06-02/P1D</Value></Dimension>
+ <TileMatrixSetLink><TileMatrixSet>gm</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/jpeg" template="https://gibs.example.org/TC/default/{Time}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.jpeg"/></Layer>
+<TileMatrixSet><ows:Identifier>gm</ows:Identifier><ows:SupportedCRS>EPSG:3857</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>559082264.0287178</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+ <TileMatrix><ows:Identifier>1</ows:Identifier><ScaleDenominator>279541132.0143589</ScaleDenominator><TopLeftCorner>-20037508.34278925 20037508.34278925</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight></TileMatrix>
+</TileMatrixSet></Contents></Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    let url = "https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml";
+    let v = s.run("service.layers", &json!({"url": url, "text": WMTS})).unwrap();
+    assert_eq!(v["layers"][0]["time"]["default"], "2024-06-02");
+    s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS})).unwrap();
+    s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "2020-01-05"})).unwrap();
+    let urls: Vec<(&str, &str)> = s.map().tiles.iter().map(|t| (t.name.as_str(), t.url.as_str())).collect();
+    assert_eq!(
+        urls,
+        [
+            ("True Color 2020-01-05", "https://gibs.example.org/TC/default/2020-01-05/gm/{z}/{y}/{x}.jpeg"),
+            ("True Color", "https://gibs.example.org/TC/default/2024-06-02/gm/{z}/{y}/{x}.jpeg")
+        ]
+    );
+    assert!(s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "../../etc"})).is_err());
+    // A directory: its folders and services, each opened by its own address.
+    let root = "https://x.example.org/arcgis/rest/services";
+    let dir = r#"{"currentVersion": 11, "folders": ["Hydro"], "services": [{"name": "Topo", "type": "MapServer"}]}"#;
+    let v = s.run("service.layers", &json!({"url": root, "text": dir})).unwrap();
+    assert_eq!(v["kind"], "ArcGIS Services Directory");
+    assert_eq!(v["layers"][1]["offer"], json!({"type": "service", "url": "https://x.example.org/arcgis/rest/services/Topo/MapServer"}));
+    let e = s.run("service.add", &json!({"url": root, "text": dir, "layer": "Topo/MapServer"})).unwrap_err();
+    assert!(e.contains("service.layers"), "{e}");
+}
+
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's
 /// features are downloaded (from a local server); unknown layers and documents are refused.
 #[test]
@@ -7820,22 +7880,129 @@ fn a_failed_command_reopens_the_layout_open_before_it() {
     assert_eq!(s.active_layout.and_then(|i| s.project.layouts.get(i)).map(|l| l.name.as_str()), Some("A"));
 }
 
+/// Text graphics can be bold (#516): added, styled or edited so; a graphics layer made before the
+/// field reads as not bold and gains the field when one is made bold.
+#[test]
+fn text_graphics_can_be_bold() {
+    use rustgis_map::graphics;
+    let mut s = world();
+    let a = s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "A", "bold": true})).unwrap();
+    let id = a["layer"].as_u64().unwrap() as u32;
+    let b = s.run("graphics.add", &json!({"shape": "text", "points": [[20, 40]], "text": "B", "layer": id})).unwrap();
+    let (ra, rb) = (a["row"].as_u64().unwrap() as usize, b["row"].as_u64().unwrap() as usize);
+    let ds = |s: &Session| s.map().layer(id).unwrap().dataset.clone();
+    assert!(graphics::bold(&ds(&s), ra) && !graphics::bold(&ds(&s), rb));
+    s.run("graphics.edit", &json!({"layer": id, "row": rb, "bold": true})).unwrap();
+    assert!(graphics::bold(&ds(&s), rb));
+    s.run("select.rows", &json!({"layer": id, "rows": [ra]})).unwrap();
+    s.run("graphics.style", &json!({"bold": false})).unwrap();
+    assert!(!graphics::bold(&ds(&s), ra));
+    // A layer from before the field: not bold, until made so.
+    let l = s.map_mut().layer_mut(id).unwrap();
+    let fi = l.dataset.field_index("bold").unwrap();
+    l.dataset.fields.remove(fi);
+    l.dataset.features.iter_mut().for_each(|f| {
+        f.attrs.remove(fi);
+    });
+    assert!(!graphics::bold(&ds(&s), rb));
+    s.run("graphics.edit", &json!({"layer": id, "row": rb, "bold": true})).unwrap();
+    assert!(graphics::bold(&ds(&s), rb) && !graphics::bold(&ds(&s), ra));
+}
+
+/// A text graphic is placed again by its points (dragged on the map, #516), as one undo step;
+/// other shapes move with `edit.move`.
+#[test]
+fn a_text_graphic_is_placed_again_by_its_points() {
+    let mut s = world();
+    let t = s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "A"})).unwrap();
+    let id = t["layer"].as_u64().unwrap() as u32;
+    let row = t["row"].as_u64().unwrap() as usize;
+    let at = |s: &Session| s.map().layer(id).unwrap().dataset.features[row].geometry.as_ref().unwrap().label_point().unwrap();
+    s.run("graphics.edit", &json!({"layer": id, "row": row, "points": [[12, 48]]})).unwrap();
+    assert_eq!((at(&s).x, at(&s).y), (12.0, 48.0));
+    assert_eq!(s.undo_label(), Some("Edit Graphic"));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!((at(&s).x, at(&s).y), (10.0, 50.0));
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 0], [5, 5]], "layer": id})).unwrap();
+    assert!(s.run("graphics.edit", &json!({"layer": id, "row": r["row"], "points": [[1, 1]]})).is_err());
+}
+
+/// A point, a text graphic's too, turns and scales on itself: Rotate and Scale leave it out, and
+/// with nothing else selected they change nothing and leave no undo step (#516).
+#[test]
+fn rotating_or_scaling_a_text_changes_nothing() {
+    let mut s = world();
+    let t = s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "A"})).unwrap();
+    let layer = t["layer"].as_u64().unwrap();
+    s.run("select.rows", &json!({"layer": layer, "rows": [t["row"]]})).unwrap();
+    let label = s.undo_label();
+    assert!(s.run("edit.rotate", &json!({"angle": 34})).is_err());
+    assert!(s.run("edit.scale", &json!({"factor": 2})).is_err());
+    assert_eq!(s.undo_label(), label, "no undo step");
+    // With a shape beside it, the shape turns.
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 0], [5, 5]], "layer": layer})).unwrap();
+    s.run("select.rows", &json!({"layer": layer, "rows": [t["row"], r["row"]]})).unwrap();
+    assert_eq!(s.run("edit.rotate", &json!({"angle": 34})).unwrap()["modified"], 1);
+}
+
 /// A command that opens another project part way and then fails (a plugin's command through its
 /// bridge) leaves the project before it open, counted as it was: the interface keeps what it
 /// holds for it.
 #[test]
 fn a_failed_command_keeps_the_project_open_before_it() {
     let mut s = world();
-    let (name, opened) = (s.project.name.clone(), s.opened);
-    let r = s.guarded("Plugin Command", true, |s| {
+    // Opened from a file, edited, unsaved, with a task made here.
+    s.path = Some("atlas.rgis".into());
+    s.run("map.rename", &json!({"name": "Edited"})).unwrap();
+    s.trusted_tasks.insert("mine".into());
+    let (name, opened, undo) = (s.project.name.clone(), s.opened, s.undo_label());
+    assert!(undo.is_some() && s.dirty);
+    let r = s.guarded("Task", true, |s| {
         s.run("project.new", &json!({"name": "Other"}))?;
         Err("a later step failed".into())
     });
     assert!(r.is_err());
     assert_eq!((s.project.name.as_str(), s.opened), (name.as_str(), opened));
-    // Opened for good, it counts.
+    // It comes back with what it held: its undo history, its unsaved state, the trust it had, and
+    // its file, so Save writes there.
+    assert_eq!(s.undo_label(), undo);
+    assert!(s.dirty && s.trusted_tasks.contains("mine"));
+    assert_eq!(s.path.as_deref(), Some(std::path::Path::new("atlas.rgis")));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_ne!(s.map().name, "Edited", "the edit before still undoes");
+    // A step failing after a replacement in its own command leaves the new project as it is; the
+    // task failing gives the first one back.
+    s.run("map.rename", &json!({"name": "Edited"})).unwrap();
+    let undo = s.undo_label();
+    let r = s.guarded("Task", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        // A step that runs (no condition stops it first) and fails inside, rolled back on its own.
+        let rev = s.revision;
+        assert!(s.run("map.rename", &json!({"name": ""})).is_err());
+        assert!(s.revision > rev, "it ran as a command");
+        assert_eq!(s.project.name, "Other");
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert_eq!((s.project.name.as_str(), s.undo_label()), (name.as_str(), undo));
+    // Its extent history comes back usable, though the project the task opened had another
+    // projection, and moving its view took the history for that projection.
+    s.record_extent();
+    s.map_mut().camera.center.x += 1e6;
+    s.record_extent();
+    assert!(s.can_extent_back());
+    let r = s.guarded("Task", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        s.run("map.projection", &json!({"type": "mollweide"}))?;
+        s.record_extent();
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err());
+    assert!(s.can_extent_back(), "the extent history is the restored map's");
+    // Opened for good, it counts, and the old project's history and file go with it.
     s.run("project.new", &json!({"name": "Other"})).unwrap();
-    assert_eq!(s.opened, opened + 1);
+    assert_eq!((s.opened, s.undo_label(), s.path.as_deref()), (opened + 1, None, None));
+    assert!(!s.trusted_tasks.contains("mine"));
 }
 
 /// A run from the history as code (#539): a Python call, a Script pane line, a CLI command. A
@@ -9336,4 +9503,245 @@ fn legends_leave_layers_out() {
     s.run("layer.rename", &json!({"layer": "Nations", "name": "Countries"})).unwrap();
     s.run("layer.rename", &json!({"layer": "Lakes", "name": "Countries"})).unwrap();
     assert!(left_out(&s, lakes).is_empty(), "the other Countries isn't taken out");
+}
+
+/// A point layer of events, one a month through 2015 (two in March), with their dates as text,
+/// epoch milliseconds and years.
+fn timed_events() -> Session {
+    isolate_plugins();
+    let mut feats = Vec::new();
+    let dates = ["2015-01-10", "2015-02-03", "2015-03-01", "2015-03-30", "2015-04-15", "2015-06-20", "2015-09-09", "2015-12-25"];
+    for (i, d) in dates.iter().enumerate() {
+        let ms = rustgis_data::time::parse_text(d).unwrap();
+        feats.push(json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [i as f64, 0.0]},
+            "properties": {"name": format!("e{i}"), "when": d, "ms": ms, "year": 2010 + i}}));
+    }
+    let text = json!({"type": "FeatureCollection", "features": feats}).to_string();
+    let (ds, _) = rustgis_data::io::read_geojson(&text, "Events").unwrap();
+    let mut s = Session::new(Project::default());
+    let id = s.map_mut().add_dataset(ds);
+    s.active_layer = Some(id);
+    s
+}
+
+fn shown(s: &Session) -> Vec<String> {
+    let l = s.map().layer_by_name("Events").unwrap();
+    let fi = l.dataset.field_index("name").unwrap();
+    l.drawn_rows(s.scale()).iter().enumerate().filter(|(_, k)| **k).map(|(r, _)| l.dataset.value(r, fi).to_string()).collect()
+}
+
+#[test]
+fn time_slider_shows_the_features_of_its_window() {
+    let mut s = timed_events();
+    // The date fields, best first: text dates and epoch milliseconds all read; years too.
+    let fields = s.run("time.fields", &Value::Null).unwrap();
+    let names: Vec<&str> = fields["fields"].as_array().unwrap().iter().map(|f| f["field"].as_str().unwrap()).collect();
+    assert!(names.contains(&"when") && names.contains(&"ms") && names.contains(&"year"), "{names:?}");
+    assert!(!names.contains(&"name"));
+    // Bound by its text dates: a slider by month over the layer's year, at January.
+    let r = s.run("time.bind", &json!({"field": "when"})).unwrap();
+    assert_eq!((r["unit"].as_str(), r["steps"].as_u64(), r["date"].as_str()), (Some("month"), Some(12), Some("2015-01")), "{r}");
+    assert_eq!(shown(&s), ["e0"]);
+    s.run("time.goTo", &json!({"date": "2015-03-15"})).unwrap();
+    assert_eq!(shown(&s), ["e2", "e3"]);
+    // Stepping: May is empty, wrapping goes back to January.
+    s.run("time.step", &json!({"by": 2})).unwrap();
+    assert!(shown(&s).is_empty());
+    s.run("time.step", &json!({"by": 8, "wrap": true})).unwrap();
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-01");
+    // Wider and cumulative windows.
+    s.run("time.set", &json!({"date": "2015-04", "show": "wide"})).unwrap();
+    assert_eq!(shown(&s), ["e2", "e3", "e4"]);
+    s.run("time.set", &json!({"show": "cumulative"})).unwrap();
+    assert_eq!(shown(&s), ["e0", "e1", "e2", "e3", "e4"]);
+    // Epoch milliseconds read the same, and the layer's legend follows the window.
+    s.run("time.set", &json!({"show": "step", "date": "2015-12"})).unwrap();
+    s.run("time.bind", &json!({"field": "ms"})).unwrap();
+    assert_eq!(shown(&s), ["e7"]);
+    // A quarter a step.
+    s.run("time.set", &json!({"date": "2015-01", "interval": 3})).unwrap();
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["steps"], 4);
+    assert_eq!(shown(&s), ["e0", "e1", "e2", "e3"]);
+    // Saved and opened again, the slider and the binding hold.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::from_json(&text).unwrap());
+    assert_eq!(shown(&t), ["e0", "e1", "e2", "e3"]);
+    t.run("time.step", &Value::Null).unwrap();
+    assert_eq!(shown(&t), ["e4", "e5"]);
+    // Bound by year numbers (2010–2017), a step a year.
+    t.run("time.set", &json!({"off": true})).unwrap();
+    assert_eq!(shown(&t).len(), 8);
+    t.run("time.bind", &json!({"layer": "Events", "field": "year"})).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["unit"], "year");
+    t.run("time.goTo", &json!({"date": 2012})).unwrap();
+    assert_eq!(shown(&t), ["e2"]);
+    // Unbound, everything shows again; undo binds it again.
+    t.run("time.unbind", &json!({"layer": "Events"})).unwrap();
+    assert_eq!(shown(&t).len(), 8);
+    t.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(shown(&t), ["e2"]);
+    // Irregular dates: steps only at those, each window up to the next.
+    t.run("time.bind", &json!({"layer": "Events", "field": "when"})).unwrap();
+    t.run("time.set", &json!({"dates": ["2015-01-01", "2015-03-01", "2015-09-01"], "date": "2015-03-01"})).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["steps"], 3);
+    assert_eq!(shown(&t), ["e2", "e3", "e4", "e5"]);
+    for bad in [json!({"layer": "Events", "field": "nope"}), json!({"layer": "Events", "field": "name"})] {
+        assert!(t.run("time.bind", &bad).is_err(), "{bad}");
+    }
+    for bad in [json!({"unit": "fortnight"}), json!({"start": "soon"}), json!({"show": "all"}), json!({"dates": "2015"})] {
+        assert!(t.run("time.set", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn time_slider_survives_saving_cumulative_edits_and_bad_parameters() {
+    let mut s = timed_events();
+    // Text and epoch dates come before whole numbers that may only look like years.
+    let fields = s.run("time.fields", &Value::Null).unwrap();
+    assert_eq!(fields["fields"].as_array().unwrap().last().unwrap()["field"], "year");
+    // A bad parameter leaves nothing behind: no slider, no binding.
+    assert!(s.run("time.bind", &json!({"field": "when", "unit": "fortnight"})).is_err());
+    assert!(s.map().time.is_none() && s.map().layers[0].time.is_none());
+    // Settings without a span don't turn an off slider on.
+    assert!(s.run("time.set", &json!({"loop": false})).is_err());
+    assert!(s.map().time.is_none());
+    s.run("time.bind", &json!({"field": "when"})).unwrap();
+    s.run("time.set", &json!({"date": "2015-03", "show": "cumulative"})).unwrap();
+    assert_eq!(shown(&s), ["e0", "e1", "e2", "e3"]);
+    // Saved with its unbounded window, and opened again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::from_json(&text).unwrap());
+    assert_eq!(shown(&t), ["e0", "e1", "e2", "e3"]);
+    // An edited date moves its feature in or out of the window at once.
+    t.active_layer = t.map().layer_by_name("Events").map(|l| l.id);
+    t.run("edit.setValue", &json!({"row": 7, "field": "when", "value": "2015-02-14"})).unwrap();
+    assert_eq!(shown(&t), ["e0", "e1", "e2", "e3", "e7"]);
+    // Undo takes the edit back, not the slider's moves since.
+    t.run("time.goTo", &json!({"date": "2015-04"})).unwrap();
+    t.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["date"], "2015-04");
+    assert_eq!(shown(&t), ["e0", "e1", "e2", "e3", "e4"]);
+    t.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(t.run("time.info", &Value::Null).unwrap()["date"], "2015-04");
+    t.run("time.goTo", &json!({"date": "2015-03"})).unwrap();
+    // Whole numbers that look like years (heights here) aren't taken for dates unasked; a layer
+    // with real dates is.
+    assert!(rustgis_map::time::has_dates(&t.map().layers[0].dataset));
+    let text = r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":null,"properties":{"elev":1500}},{"type":"Feature","geometry":null,"properties":{"elev":2210}}]}"#;
+    let (heights, _) = rustgis_data::io::read_geojson(text, "Peaks").unwrap();
+    assert!(!rustgis_map::time::has_dates(&heights));
+    assert_eq!(rustgis_map::time::time_fields(&heights).len(), 1, "still offered when asked");
+    // Pasted into a map without a slider, the copy shows every feature (no window comes along).
+    t.run("layer.copy", &json!({"layer": "Events"})).unwrap();
+    t.run("map.new", &json!({"name": "Plain"})).unwrap();
+    t.run("layer.paste", &Value::Null).unwrap();
+    assert!(t.map().time.is_none());
+    assert_eq!(shown(&t).len(), 8);
+    t.run("map.activate", &json!({"name": "Map"})).unwrap();
+    // Features changed outside a command (as a streamed layer reads another view), with as many
+    // rows: the window is worked out again for them, not the old rows' mask reused.
+    {
+        let l = t.map_mut().layers.iter_mut().find(|l| l.name == "Events").unwrap();
+        let fi = l.dataset.field_index("when").unwrap();
+        l.dataset.features[0].attrs[fi] = rustgis_data::Value::Text("2015-12-01".into());
+    }
+    assert_eq!(shown(&t), ["e1", "e2", "e3", "e7"]);
+    // A field that is gone filters nothing.
+    t.run("edit.deleteField", &json!({"field": "when"})).unwrap();
+    assert_eq!(shown(&t).len(), 8);
+}
+
+#[test]
+fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
+    let mut s = timed_events();
+    let r = s
+        .run(
+            "map.addTiles",
+            &json!({"url": "https://example.com/{date:YYYY-MM-DD}/{z}/{x}/{y}.png", "start": "2023-08-01", "end": "2023-08-31"}),
+        )
+        .unwrap();
+    assert_eq!(r["url"], "https://example.com/2023-08-01/{z}/{x}/{y}.png");
+    let i = s.run("time.info", &Value::Null).unwrap();
+    assert_eq!((i["unit"].as_str(), i["steps"].as_u64()), (Some("day"), Some(31)), "{i}");
+    // Only tile kinds that fill dates take a dated address.
+    let e = s.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.pmtiles", "start": 2000})).unwrap_err();
+    assert!(e.contains("dated addresses"), "{e}");
+    // A COG's look (its bands, its range) stays when the date changes.
+    let mut look = timed_events();
+    look.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.tif", "kind": "cog", "start": 2000, "end": 2002})).unwrap();
+    look.run("map.setTiles", &json!({"index": 0, "bands": [3, 2, 1], "range": [0, 3000]})).unwrap();
+    let shown_look = look.map().tiles[0].url.split_once('#').map(|(_, l)| l.to_string()).unwrap_or_default();
+    assert!(!shown_look.is_empty(), "{}", look.map().tiles[0].url);
+    look.run("time.goTo", &json!({"date": 2002})).unwrap();
+    let url = look.map().tiles[0].url.clone();
+    assert!(url.starts_with("https://example.com/2002.tif#") && url.ends_with(&shown_look), "{url}");
+    // A scheme in capitals is still a web address that follows the slider.
+    let mut caps = timed_events();
+    caps.run("map.addTiles", &json!({"url": "HTTPS://example.com/{date:YYYY}/{z}/{x}/{y}.png", "start": 2000, "end": 2002})).unwrap();
+    caps.run("time.goTo", &json!({"date": 2002})).unwrap();
+    assert!(caps.map().tiles[0].url.contains("/2002/"), "{}", caps.map().tiles[0].url);
+    // A dated address with the slider off needs its span.
+    let mut off = timed_events();
+    assert!(off.run("map.addTiles", &json!({"url": "https://example.com/{date:YYYY}/{z}/{x}/{y}.png"})).is_err());
+    assert!(off.map().tiles.is_empty() && off.map().time.is_none());
+    // Dated addresses only for GeoTIFFs on the web, refused before anything is fetched.
+    for url in ["https://example.com/{YYYY}.parquet", "s3://bucket/{YYYY}.tif"] {
+        let e = off.run("layer.addUrl", &json!({"url": url, "start": 2000})).unwrap_err();
+        assert!(e.contains("dated addresses"), "{e}");
+    }
+    // A later check failing (here the blend) takes back the slider the span turned on: the
+    // session restores the project when a command fails.
+    assert!(
+        off.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}/{z}/{x}/{y}.png", "start": 2000, "blend": "nope"})).is_err()
+    );
+    assert!(off.map().tiles.is_empty() && off.map().time.is_none());
+    // Three days of daily imagery step by the day the address names, not by the hour.
+    let mut short = timed_events();
+    short
+        .run(
+            "map.addTiles",
+            &json!({"url": "https://example.com/{date:YYYY-MM-DD}/{z}/{x}/{y}.png", "start": "2023-08-28", "end": "2023-08-30"}),
+        )
+        .unwrap();
+    let i = short.run("time.info", &Value::Null).unwrap();
+    assert_eq!((i["unit"].as_str(), i["steps"].as_u64()), (Some("day"), Some(3)), "{i}");
+    short.run("time.goTo", &json!({"step": 99})).unwrap();
+    assert_eq!(short.map().tiles[0].url, "https://example.com/2023-08-30/{z}/{x}/{y}.png");
+    short.run("time.goTo", &json!({"step": 1})).unwrap();
+    assert_eq!(short.map().tiles[0].url, "https://example.com/2023-08-29/{z}/{x}/{y}.png");
+    s.run("time.goTo", &json!({"date": "2023-08-30"})).unwrap();
+    assert_eq!(s.map().tiles[0].url, "https://example.com/2023-08-30/{z}/{x}/{y}.png");
+    // Kept in the project as its template, filled again when opened.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let t = Project::from_json(&text).unwrap();
+    assert_eq!(t.maps[0].tiles[0].url, "https://example.com/2023-08-30/{z}/{x}/{y}.png");
+    // A template from a file that isn't a web address is dropped, its layer left as it was.
+    let mut p: Value = serde_json::from_str(&text).unwrap();
+    p["maps"][0]["tiles"][0]["timeUrl"] = json!("file:///etc/{date:YYYY}");
+    let t = Project::from_json(&p.to_string()).unwrap();
+    assert_eq!(t.maps[0].tiles[0].time_url, None);
+    // Exported: a frame a step, the slider back where it was.
+    s.run("time.set", &json!({"start": "2015-01-01", "end": "2015-12-31", "unit": "month"})).unwrap();
+    s.run("map.removeTiles", &Value::Null).unwrap();
+    s.run("time.bind", &json!({"field": "when"})).unwrap();
+    s.run("time.goTo", &json!({"date": "2015-06"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("rustgis-time-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let gif = dir.join("events.gif");
+    let r = s
+        .run("time.export", &json!({"path": gif.display().to_string(), "width": 96, "height": 64, "from": "2015-02", "to": "2015-05"}))
+        .unwrap();
+    assert_eq!(r["frames"], 4);
+    let bytes = std::fs::read(&gif).unwrap();
+    assert!(bytes.starts_with(b"GIF89a"));
+    let zip = dir.join("events.zip");
+    assert_eq!(s.run("time.export", &json!({"path": zip.display().to_string(), "width": 96, "height": 64})).unwrap()["frames"], 12);
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-06");
+    assert!(s.run("time.export", &json!({"path": zip.display().to_string(), "from": "2016"})).is_err());
+    // Only GIFs and zips, so a file is what its name says.
+    assert!(s.run("time.export", &json!({"path": dir.join("events.png").display().to_string()})).is_err());
+    // A huge step number is the last step.
+    s.run("time.goTo", &json!({"step": u64::MAX})).unwrap();
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["date"], "2015-12");
+    std::fs::remove_dir_all(&dir).ok();
 }

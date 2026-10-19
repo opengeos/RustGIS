@@ -280,6 +280,56 @@ const UNDO_LIMIT: usize = 40;
 /// An undo or redo step: the project before it, the layout open then, its label and who made it.
 type Step = (Project, Option<usize>, &'static str, Option<String>);
 
+/// What a project holds in the session beside itself: what [`Session::clear_history`] forgets
+/// when another project starts, and what opening one sets (its file, layer, tool…). When another
+/// replaces it within a command that can be rolled back (a task's step), it is put aside rather
+/// than dropped, and given back if that command fails and the project is restored. One list
+/// ([`Session::take_project_state`]) serves both, and giving it back names every field, so a
+/// field forgotten here can't be wiped by a replacement without coming back.
+struct PutAside {
+    /// The project these belong to (`Session::opened` before the replacement).
+    opened: u64,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    back: Vec<Camera>,
+    forward: Vec<Camera>,
+    last_camera: Option<Camera>,
+    /// The projection those cameras are in: without it, the extent history given back would be
+    /// taken for another projection's and cleared.
+    history_projection: String,
+    dirty: bool,
+    trusted_tasks: std::collections::HashSet<String>,
+    trusted_models: std::collections::HashSet<String>,
+    trusted_notebooks: std::collections::HashSet<String>,
+    project_starts: u64,
+    history_from_file: usize,
+    active_layer: Option<u32>,
+    table_layer: Option<u32>,
+    table_standalone: Option<u32>,
+    tool: Tool,
+    measurements: Vec<serde_json::Value>,
+    topology_errors: Vec<TopologyIssue>,
+    /// The file it was opened from or saved to: a Save after the rollback writes there, not to
+    /// the file the replacement named (or none).
+    path: Option<PathBuf>,
+    model_run: Option<model::RunReport>,
+    /// Its work still under way (tool runs, downloads, plugin fetches, queries): the runs of
+    /// the previous project mustn't land in the next one.
+    pending: Vec<PendingRun>,
+    #[cfg(feature = "geolibre")]
+    started: Vec<(u64, rustgis_geolibre::Job, serde_json::Value, u64)>,
+    plugin_runs: Vec<cmd::gp::StartedRun>,
+    downloading: Vec<u64>,
+    downloaded: Vec<(u64, Vec<u8>)>,
+    url_requests: Vec<serde_json::Value>,
+    plugin_retries: Vec<cmd::plugins::fetch::Retry>,
+    /// A style of the project still loading, which mustn't move the next one's view.
+    style_view: Option<(String, Camera)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    sql_results: Vec<(u64, String, Option<String>, rustgis_data::source::duckdb::Output)>,
+    edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
+}
+
 pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
@@ -357,6 +407,13 @@ pub struct Session {
     /// session's, so a step that added or moved layouts opens the right one when undone).
     undo: Vec<Step>,
     redo: Vec<Step>,
+    /// What the project replaced during the command running held beside itself, to give back if
+    /// the command fails ([`PutAside`]); and how deep commands run within commands now.
+    put_aside: Option<Box<PutAside>>,
+    depth: u32,
+    /// How many of the commands running now restore the project if they fail: a replacement is
+    /// put aside only under one of them, as only then can it be rolled back.
+    restorable: u32,
     /// Who runs commands now: `None` is the user; the MCP relay names an attached agent around
     /// its calls. Each undo step remembers who made it ([`Session::undo_actor`]).
     pub actor: Option<String>,
@@ -503,6 +560,9 @@ impl Session {
             auto_cache: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            put_aside: None,
+            depth: 0,
+            restorable: 0,
             actor: None,
             back: Vec::new(),
             forward: Vec::new(),
@@ -682,9 +742,11 @@ impl Session {
     pub(crate) fn guarded(&mut self, label: &'static str, mutates: bool, f: impl FnOnce(&mut Session) -> CmdResult) -> CmdResult {
         let snapshot = mutates.then(|| self.project.clone());
         let open_layout = self.active_layout;
-        // The project's generation rolls back with it: a project opened part way (a plugin's
-        // command through its bridge) and then undone is the one before, still open.
+        // The project's generation rolls back with it: a project opened part way (a task's step)
+        // and then undone is the one before, still open.
         let opened = self.opened;
+        self.depth += 1;
+        self.restorable += u32::from(mutates);
         // Edit counts roll back with the project when a command fails part way.
         let counts = mutates.then(|| self.edit_counts.clone());
         self.request_only = false;
@@ -694,6 +756,8 @@ impl Session {
         let said = self.notices_given;
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)))
             .unwrap_or_else(|_| Err(format!("{label} failed unexpectedly; the project was restored")));
+        self.depth = self.depth.saturating_sub(1);
+        self.restorable = self.restorable.saturating_sub(u32::from(mutates));
         // A command that changed a streamed layer's features or fields (not by reading its
         // source) would lose the change at the next read: undone, with a way to edit it instead.
         let res = match (&res, &snapshot) {
@@ -709,6 +773,25 @@ impl Session {
             // session's own flag says so, not the answer, which a plugin's command could forge.
             (Ok(_), Some(_)) if std::mem::take(&mut self.request_only) => {}
             (Ok(_), Some(mut snap)) => {
+                // An edit may change the dates the time slider's window filters on: bound layers
+                // whose features or fields the command changed (features are shared with the
+                // snapshot until written) take the window again.
+                for (i, m) in self.project.maps.iter_mut().enumerate() {
+                    // No slider (a layer pasted from a map with one): no window either.
+                    let window = m.time.as_ref().map(rustgis_map::time::TimeSlider::window);
+                    // Layer ids are a map's own: compared within the same map (any layer, when
+                    // maps came or went).
+                    let before = snap.maps.get(i).filter(|o| o.name == m.name).map(|o| o.layers.as_slice()).unwrap_or_default();
+                    for l in m.layers.iter_mut().filter(|l| l.time.is_some()) {
+                        let same = before.iter().find(|o| o.id == l.id).is_some_and(|o| {
+                            o.dataset.features.shares(&l.dataset.features) && o.dataset.fields == l.dataset.fields && o.time.is_some()
+                        });
+                        let rustgis_map::Layer { time, dataset, .. } = l;
+                        if let Some(b) = time.as_mut().filter(|_| !same) {
+                            b.apply(dataset, window);
+                        }
+                    }
+                }
                 // Undo keeps streamed layers' sources, not their windows: they read the view again.
                 strip_windows(&mut snap);
                 self.undo.push((snap, open_layout, label, self.actor.clone()));
@@ -723,6 +806,11 @@ impl Session {
                 // the command opened on the way (a task's steps).
                 self.project = snap;
                 self.active_layout = open_layout;
+                // Replaced during the command: what it held beside itself (its undo history, its
+                // trust, its unsaved state) comes back with it.
+                if self.opened != opened {
+                    self.give_back(opened);
+                }
                 self.opened = opened;
                 if let Some(c) = counts {
                     self.edit_counts = c;
@@ -746,9 +834,124 @@ impl Session {
         {
             self.notify(e.clone(), true);
         }
+        // The command, and those it ran, are done: a replaced project stays replaced.
+        if self.depth == 0 {
+            self.put_aside = None;
+        }
         self.fix_active_layer();
         self.revision = self.revision.wrapping_add(1);
         res
+    }
+
+    /// Puts aside what the project about to be replaced holds beside itself (`reset`), while a
+    /// command that restores the project if it fails runs: the first replacement in it only, as
+    /// that is the project a failure gives back. Elsewhere (opening a project from the menu) it is
+    /// dropped as before, so nothing is kept longer.
+    pub(crate) fn put_aside(&mut self) {
+        if self.restorable == 0 || self.put_aside.is_some() {
+            return;
+        }
+        self.put_aside = Some(Box::new(self.take_project_state()));
+    }
+
+    /// Takes out what the project holds beside itself ([`PutAside`]), leaving what a project
+    /// just started holds: what `clear_history` forgets is moved out, the rest (its file, layer,
+    /// tool…, which opening sets) is copied.
+    fn take_project_state(&mut self) -> PutAside {
+        use std::mem::take;
+        PutAside {
+            opened: self.opened,
+            undo: take(&mut self.undo),
+            redo: take(&mut self.redo),
+            back: take(&mut self.back),
+            forward: take(&mut self.forward),
+            last_camera: self.last_camera.take(),
+            history_projection: self.history_projection.clone(),
+            dirty: std::mem::replace(&mut self.dirty, false),
+            trusted_tasks: take(&mut self.trusted_tasks),
+            trusted_models: take(&mut self.trusted_models),
+            trusted_notebooks: take(&mut self.trusted_notebooks),
+            project_starts: self.project_starts,
+            history_from_file: self.history_from_file,
+            active_layer: self.active_layer,
+            table_layer: self.table_layer,
+            table_standalone: self.table_standalone,
+            tool: self.tool,
+            measurements: take(&mut self.measurements),
+            topology_errors: take(&mut self.topology_errors),
+            path: self.path.clone(),
+            model_run: self.model_run.take(),
+            pending: take(&mut self.pending),
+            #[cfg(feature = "geolibre")]
+            started: take(&mut self.started),
+            plugin_runs: take(&mut self.plugin_runs),
+            downloading: take(&mut self.downloading),
+            downloaded: take(&mut self.downloaded),
+            url_requests: take(&mut self.url_requests),
+            plugin_retries: take(&mut self.plugin_retries),
+            style_view: self.style_view.take(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sql_results: take(&mut self.sql_results),
+            edit_counts: take(&mut self.edit_counts),
+        }
+    }
+
+    /// Gives back what project `opened` held beside itself, when it is restored. Every field is
+    /// named (no `..`): one added to [`PutAside`] and not given back doesn't compile.
+    fn give_back(&mut self, opened: u64) {
+        let Some(a) = self.put_aside.take_if(|a| a.opened == opened) else { return };
+        let PutAside {
+            opened: _,
+            undo,
+            redo,
+            back,
+            forward,
+            last_camera,
+            history_projection,
+            dirty,
+            trusted_tasks,
+            trusted_models,
+            trusted_notebooks,
+            project_starts,
+            history_from_file,
+            active_layer,
+            table_layer,
+            table_standalone,
+            tool,
+            measurements,
+            topology_errors,
+            path,
+            model_run,
+            pending,
+            #[cfg(feature = "geolibre")]
+            started,
+            plugin_runs,
+            downloading,
+            downloaded,
+            url_requests,
+            plugin_retries,
+            style_view,
+            #[cfg(not(target_arch = "wasm32"))]
+            sql_results,
+            edit_counts,
+        } = *a;
+        (self.undo, self.redo, self.back, self.forward, self.last_camera) = (undo, redo, back, forward, last_camera);
+        self.history_projection = history_projection;
+        (self.dirty, self.project_starts, self.history_from_file) = (dirty, project_starts, history_from_file);
+        (self.trusted_tasks, self.trusted_models, self.trusted_notebooks) = (trusted_tasks, trusted_models, trusted_notebooks);
+        (self.active_layer, self.table_layer, self.table_standalone, self.tool) = (active_layer, table_layer, table_standalone, tool);
+        (self.measurements, self.topology_errors, self.edit_counts) = (measurements, topology_errors, edit_counts);
+        (self.path, self.model_run, self.style_view) = (path, model_run, style_view);
+        (self.pending, self.plugin_runs, self.plugin_retries) = (pending, plugin_runs, plugin_retries);
+        (self.downloading, self.downloaded, self.url_requests) = (downloading, downloaded, url_requests);
+        #[cfg(feature = "geolibre")]
+        {
+            self.started = started;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.sql_results = sql_results;
+        }
     }
 
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
@@ -794,35 +997,10 @@ impl Session {
     }
 
     /// Forgets undo/redo and extent history and marks the project clean (after new/open, or a
-    /// front end setting up how the project starts).
+    /// front end setting up how the project starts): what [`PutAside`] holds, dropped.
     pub fn clear_history(&mut self) {
-        self.undo.clear();
-        self.redo.clear();
-        self.back.clear();
-        self.forward.clear();
-        self.last_camera = None;
-        self.dirty = false;
-        self.trusted_tasks.clear();
-        self.trusted_models.clear();
-        self.model_run = None;
+        drop(self.take_project_state());
         self.project_starts = self.project_starts.wrapping_add(1);
-        self.trusted_notebooks.clear();
-        self.edit_counts.clear();
-        self.topology_errors.clear();
-        self.measurements.clear();
-        // Runs of the previous project mustn't land in this one.
-        self.pending.clear();
-        #[cfg(feature = "geolibre")]
-        self.started.clear();
-        self.plugin_runs.clear();
-        self.downloading.clear();
-        self.downloaded.clear();
-        self.url_requests.clear();
-        self.plugin_retries.clear();
-        // A style of the last project still loading doesn't move this one.
-        self.style_view = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        self.sql_results.clear();
     }
 
     pub(crate) fn undo(&mut self) -> bool {
@@ -831,6 +1009,7 @@ impl Session {
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
+        self.keep_time_position(&cur);
         self.redo.push((cur, was, label, actor));
         self.touch_all_geometry();
         true
@@ -842,9 +1021,21 @@ impl Session {
         let cur = std::mem::replace(&mut self.project, p);
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
+        self.keep_time_position(&cur);
         self.undo.push((cur, was, label, actor));
         self.touch_all_geometry();
         true
+    }
+
+    /// After undo or redo swaps the project: each map's time slider stays on the step it was
+    /// moved to (moving through time isn't an undo step), its other settings as restored.
+    fn keep_time_position(&mut self, before: &Project) {
+        for (m, old) in self.project.maps.iter_mut().zip(&before.maps).filter(|(m, o)| m.name == o.name) {
+            if let (Some(t), Some(at)) = (m.time.as_mut(), old.time.as_ref().map(|t| t.current)) {
+                t.go_to(at);
+                m.apply_time();
+            }
+        }
     }
 
     fn open_layout_name(&self) -> Option<String> {

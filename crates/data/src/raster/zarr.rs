@@ -684,6 +684,12 @@ fn unshuffle(d: &[u8], size: usize) -> Vec<u8> {
     out
 }
 
+/// Decodes a blosc (version 1) frame of at most `want` bytes (a sharded store's inner chunk read
+/// by itself, such as Tessera's).
+pub fn blosc_decode(d: &[u8], want: usize) -> Result<Vec<u8>> {
+    blosc(d, want)
+}
+
 /// A blosc (version 1) frame: a 16-byte header, then blocks compressed with LZ4, zlib or zstd,
 /// each byte-shuffled and possibly split into a stream per byte of the type.
 fn blosc(d: &[u8], want: usize) -> Result<Vec<u8>> {

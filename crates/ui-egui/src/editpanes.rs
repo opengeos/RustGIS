@@ -112,6 +112,13 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 
     heading(ui, "Modify Selected Features");
+    // Texts alone (#516): of these tools only Move applies to them (the others turn, scale or cut
+    // shapes, and a text is a point); they are formatted in the Format pane.
+    let only_texts = {
+        let mut rows = app.session.map().layers.iter().flat_map(|l| l.selection.iter().map(move |r| (l, *r))).peekable();
+        rows.peek().is_some() && rows.all(|(l, r)| l.graphics && rustgis_engine::map::graphics::kind(&l.dataset, r) == "text")
+    };
+    let not_for_texts = tl!("Not for texts: a text is edited in the Format pane.");
     egui::Grid::new("modify").num_columns(3).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Move (m)"));
         ui.horizontal(|ui| {
@@ -127,7 +134,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.end_row();
         ui.label(tl!("Rotate (°)"));
         ui.add(egui::TextEdit::singleline(&mut app.forms.angle).hint_text("90").desired_width(124.0));
-        if ui.button(tl!("Rotate")).clicked() {
+        if ui.add_enabled(!only_texts, egui::Button::new(tl!("Rotate"))).on_disabled_hover_text(not_for_texts).clicked() {
             let t = app.forms.angle.clone();
             if let Some(a) = number(app, &t, "Angle") {
                 run(app, "edit.rotate", json!({"angle": a}));
@@ -136,7 +143,7 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.end_row();
         ui.label(tl!("Scale (×)"));
         ui.add(egui::TextEdit::singleline(&mut app.forms.factor).hint_text("2").desired_width(124.0));
-        if ui.button(tl!("Scale")).clicked() {
+        if ui.add_enabled(!only_texts, egui::Button::new(tl!("Scale"))).on_disabled_hover_text(not_for_texts).clicked() {
             let t = app.forms.factor.clone();
             if let Some(k) = number(app, &t, "Scale") {
                 run(app, "edit.scale", json!({"factor": k}));
@@ -146,17 +153,19 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
     ui.horizontal_wrapped(|ui| {
         for (label, id) in [("Merge", "edit.merge"), ("Explode", "edit.explode"), ("Flip Line", "edit.flip")] {
-            if ui.button(tl!(label)).clicked() {
+            if ui.add_enabled(!only_texts, egui::Button::new(tl!(label))).on_disabled_hover_text(not_for_texts).clicked() {
                 run(app, id, Value::Null);
             }
         }
         let split = app.map.split_mode;
-        if ui.selectable_label(split, tl!("Split (click the line)")).clicked() {
+        // Toggles: one that is on stays enabled, so it can be turned off whatever is selected.
+        let r = ui.add_enabled(!only_texts || split, egui::Button::selectable(split, tl!("Split (click the line)")));
+        if r.on_disabled_hover_text(not_for_texts).clicked() {
             app.map.split_mode = !split;
         }
         let on = app.session.tool == rustgis_engine::Tool::EditVertices;
-        if ui.selectable_label(on, tl!("Edit Vertices")).on_hover_text(tl!("Drag vertices on the map; click an edge to add one")).clicked()
-        {
+        let r = ui.add_enabled(!only_texts || on, egui::Button::selectable(on, tl!("Edit Vertices")));
+        if r.on_hover_text(tl!("Drag vertices on the map; click an edge to add one")).on_disabled_hover_text(not_for_texts).clicked() {
             app.map.cancel_sketch();
             run(app, "tool.set", json!({"tool": if on { "explore" } else { "editVertices" }}));
         }

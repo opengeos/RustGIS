@@ -1034,10 +1034,12 @@ fn delimited_text_dialog_lists_the_picked_files_columns() {
     assert_eq!((h.state().dialogs.a.as_str(), h.state().dialogs.b.as_str()), ("Lon", "Lat"));
 }
 
-/// Edit Text (#420) opens with a placed text's text and size, and Save changes that text only,
-/// whatever is selected, as one undo step.
+/// Edit Text (#420) on a placed text opens the Format pane on it (#516): it is selected alone, and
+/// the text typed there is saved for that text only, as one undo step.
 #[test]
-fn a_placed_text_is_edited_in_its_dialog() {
+fn a_placed_text_is_edited_in_the_format_pane() {
+    use egui::accesskit::Role;
+    use rustgis_ui_egui::RightPane;
     use rustgis_ui_egui::rustgis_engine::map::graphics;
     let mut h = harness();
     let first = h.state_mut().run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "First", "fontSize": 20})).unwrap();
@@ -1045,65 +1047,54 @@ fn a_placed_text_is_edited_in_its_dialog() {
     let (layer, row) = (first["layer"].clone(), second["row"].clone());
     h.state_mut().run("select.rows", json!({"layer": layer, "rows": [first["row"]]})).unwrap();
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
-    let d = &h.state().dialogs;
-    assert_eq!((d.open, d.mode, d.text.as_str(), d.size), (Some("graphicText"), "edit", "Second", 14.0));
+    assert_eq!((h.state().dialogs.open, h.state().ui.right), (None, Some(RightPane::Format)), "the pane, not the dialog");
+    let selection = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+        h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().selection.clone()
+    };
+    assert_eq!(selection(&h), [row.as_u64().unwrap() as usize]);
     h.step();
-    (h.state_mut().dialogs.text, h.state_mut().dialogs.size) = ("Second, edited".into(), 24.0);
     h.step();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
+    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Second")).unwrap().focus();
+    h.step();
+    h.event(egui::Event::Text(", edited".into()));
+    h.step();
+    h.key_press(egui::Key::Enter);
     h.step();
     h.step();
-    assert_eq!(h.state().dialogs.open, None);
     let s = &h.state().session;
     let ds = &s.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    let text = |r: &serde_json::Value| {
-        let r = r.as_u64().unwrap() as usize;
-        (graphics::label(ds, r).unwrap().to_string(), graphics::font_size(ds, r))
-    };
-    assert_eq!(text(&row), ("Second, edited".into(), 24.0));
-    assert_eq!(text(&first["row"]), ("First".into(), 20.0), "the selected text is left alone");
+    let text = |r: &serde_json::Value| graphics::label(ds, r.as_u64().unwrap() as usize).unwrap().to_string();
+    assert!(text(&row).contains(", edited"), "{}", text(&row));
+    assert_eq!(text(&first["row"]), "First", "the other text is left alone");
     assert_eq!(s.undo_label(), Some("Edit Graphic"));
-    // The size is kept within what text graphics draw (#457).
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
-    h.step();
-    h.state_mut().dialogs.size = 500.0;
-    h.step();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Save").click();
-    h.step();
-    h.step();
-    assert_eq!(h.state().dialogs.open, None);
-    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    assert_eq!(graphics::font_size(ds, row.as_u64().unwrap() as usize), *graphics::FONT_SIZE.end() as f32);
     // A row that isn't a text graphic opens nothing.
     assert!(h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": 99})).is_err());
     assert_eq!(h.state().dialogs.open, None);
 }
 
-/// In the text dialog, sharing its form with a layout's text (#516) kept its keys: Shift+Enter
-/// starts a new line, Enter saves.
+/// The Text tool places a text, as a layout's is placed (#516): "Text", selected, in the Format
+/// pane with its text selected, so typing replaces it; Shift+Enter starts a new line, Enter ends
+/// it. The tool goes back to Explore.
 #[test]
-fn enter_saves_the_text_dialog_and_shift_enter_breaks_the_line() {
-    use egui::accesskit::Role;
-    use rustgis_ui_egui::rustgis_engine::map::graphics;
+fn a_placed_text_is_typed_over_in_the_format_pane() {
     let mut h = harness();
-    let added = h.state_mut().run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
-    let (layer, row) = (added["layer"].clone(), added["row"].clone());
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
+    h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
     h.step();
-    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+    click_map(&mut h);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
+    assert_eq!((h.state().ui.right, h.state().dialogs.open), (Some(rustgis_ui_egui::RightPane::Format), None));
+    assert_eq!(h.state().session.tool.code(), "explore");
+    h.event(egui::Event::Text("Hello".into()));
     h.step();
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
-    h.event(egui::Event::Text("Line".into()));
+    h.event(egui::Event::Text("World".into()));
     h.step();
-    assert_eq!(h.state().dialogs.open, Some("graphicText"), "Shift+Enter doesn't save");
-    assert!(h.state().dialogs.text.contains('\n'), "{:?}", h.state().dialogs.text);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"), "still being typed");
     h.key_press(egui::Key::Enter);
     h.step();
     h.step();
-    assert_eq!(h.state().dialogs.open, None, "Enter saves");
-    let ds = &h.state().session.map().layer(layer.as_u64().unwrap() as u32).unwrap().dataset;
-    let saved = graphics::label(ds, row.as_u64().unwrap() as usize).unwrap_or_default();
-    assert!(saved.contains('\n') && saved.contains("Line") && saved.contains("Old"), "{saved:?}");
+    assert_eq!(selected_text(&h).as_deref(), Some("Hello\nWorld"));
+    assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
 }
 
 /// Add Data From URL downloads off the frame and adds the file when it lands; a failed download
@@ -1890,6 +1881,61 @@ fn a_run_opens_again_in_its_tool_from_the_history() {
     assert_eq!(app.gp.values.get("input").map(String::as_str), Some("Cities"));
 }
 
+/// The selected text, grabbed by its text, is dragged to another place (#516), as one undo step;
+/// the map stays where it was.
+#[test]
+fn a_selected_text_is_dragged_on_the_map() {
+    let mut h = harness();
+    // The pane open first: opening narrows the map, which would move the text on the screen.
+    h.state_mut().run("ui.pane.format", json!({})).unwrap();
+    h.step();
+    h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
+    h.step();
+    click_map(&mut h);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
+    // The pane took the focus to type over the text: Enter ends it.
+    h.key_press(egui::Key::Enter);
+    h.step();
+    let anchor = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+        let l = h.state().session.map().layers.iter().find(|l| l.selection.len() == 1).unwrap();
+        l.dataset.features[l.selection[0]].geometry.as_ref().unwrap().label_point().unwrap()
+    };
+    let (before, camera) = (anchor(&h), h.state().session.map().camera.center);
+    let (from, to) = (egui::pos2(700.0, 500.0), egui::pos2(780.0, 500.0));
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    for x in [720.0, 750.0, 780.0] {
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, 500.0)));
+        h.step();
+    }
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.step();
+    let after = anchor(&h);
+    assert!(after.x > before.x + 1e-6 && (after.y - before.y).abs() < 1e-6, "{before:?} → {after:?}");
+    assert_eq!(h.state().session.map().camera.center, camera, "the map didn't pan");
+    assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
+}
+
+/// The text of the one text graphic selected, if that is what is selected.
+fn selected_text(h: &egui_kittest::Harness<'_, RustGisApp>) -> Option<String> {
+    use rustgis_ui_egui::rustgis_engine::map::graphics;
+    let mut rows = h.state().session.map().layers.iter().flat_map(|l| l.selection.iter().map(move |r| (l, *r)));
+    let (l, row) = rows.next().filter(|_| rows.next().is_none())?;
+    graphics::label(&l.dataset, row).map(str::to_string)
+}
+
 /// A primary click in the middle of the map.
 fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     let at = egui::pos2(700.0, 500.0);
@@ -1919,21 +1965,20 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.step();
     assert_eq!(h.state().session.tool.code(), "graphicText");
     assert_eq!(h.state().ui.dynamic_text, Some("{scale}"));
-    // The dialog a click on the map opens starts with the value.
+    // The text a click on the map places starts with the value (#516: selected, in the Format
+    // pane).
     click_map(&mut h);
-    assert_eq!(h.state().dialogs.open, Some("graphicText"));
-    assert_eq!(h.state().dialogs.text, "{scale}");
-    h.state_mut().dialogs.open = None;
+    assert_eq!(selected_text(&h).as_deref(), Some("{scale}"));
+    assert_eq!(h.state().ui.right, Some(rustgis_ui_egui::RightPane::Format));
+    // Text starts with "Text" again. The pane is closed first: its Text section's header is a
+    // button too.
+    h.state_mut().run("ui.pane.format", json!({"close": true})).unwrap();
     h.step();
-    // Text starts with "Text" again (the button: the dialog's box is labelled Text too).
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Text").click_accesskit();
     h.step();
     assert_eq!(h.state().ui.dynamic_text, None);
     click_map(&mut h);
-    assert_eq!(h.state().dialogs.open, Some("graphicText"));
-    assert_eq!(h.state().dialogs.text, "Text");
-    h.state_mut().dialogs.open = None;
-    h.step();
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
     // Another tool forgets the value.
     h.get_by_label("Dynamic Text").click_accesskit();
     h.step();

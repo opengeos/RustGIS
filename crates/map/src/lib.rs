@@ -19,6 +19,7 @@ pub mod report;
 pub mod source;
 pub mod symbology;
 pub mod tiles;
+pub mod time;
 pub mod view;
 pub mod world;
 
@@ -107,6 +108,9 @@ pub struct Layer {
     /// Definition query: only matching features draw.
     #[serde(default)]
     pub definition_query: Option<String>,
+    /// Bound to the map's time slider: only features whose date is in its window draw.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<time::TimeBinding>,
     /// Selected rows (indices into `dataset.features`).
     #[serde(default)]
     pub selection: Vec<usize>,
@@ -191,6 +195,7 @@ impl Layer {
             min_scale: None,
             max_scale: None,
             definition_query: None,
+            time: None,
             selection: Vec::new(),
             expanded: true,
             selectable: true,
@@ -483,10 +488,16 @@ impl Layer {
         self.min_scale.is_none_or(|m| scale <= m) && self.max_scale.is_none_or(|m| scale >= m)
     }
 
-    /// Rows drawn at a scale denominator: those passing the definition query and every display
-    /// filter that applies at that scale (a filter that no longer reads is skipped).
+    /// Rows drawn at a scale denominator: those passing the definition query, the time slider's
+    /// window and every display filter that applies at that scale (a filter that no longer reads
+    /// is skipped).
     pub fn drawn_rows(&self, scale: f64) -> Vec<bool> {
         let mut rows = self.visible_rows();
+        if let Some(keep) = self.time.as_ref().and_then(|t| t.keeps(&self.dataset)) {
+            for (r, k) in rows.iter_mut().zip(keep.iter()) {
+                *r = *r && *k;
+            }
+        }
         for f in self.display_filters.iter().filter(|f| f.applies(scale)) {
             if let Ok(e) = rustgis_data::query::parse(&f.where_, &self.dataset) {
                 for (r, keep) in rows.iter_mut().enumerate() {
@@ -506,7 +517,8 @@ impl Layer {
         }
         // Nothing to filter: every feature is drawn, and no row list needs building.
         let query = self.definition_query.as_deref().is_some_and(|q| !q.trim().is_empty());
-        if !query && self.display_filters.is_empty() {
+        let timed = self.time.as_ref().is_some_and(|t| t.window.is_some());
+        if !query && !timed && self.display_filters.is_empty() {
             return (!self.dataset.features.is_empty()).then(|| self.renderer.legend_for(&self.dataset, &[]));
         }
         let rows = self.drawn_rows(scale);
@@ -705,6 +717,9 @@ pub struct Map {
     /// Animation keyframes: views the animation moves through.
     #[serde(default)]
     pub animation: Vec<view::Keyframe>,
+    /// The time slider, when it is on: bound layers show only what falls in its window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<time::TimeSlider>,
     /// The celestial body the map is on (a [`rustgis_geom::Body`] id): its size sets the ground
     /// distances, areas and scale (#223).
     #[serde(default = "earth", skip_serializing_if = "is_earth")]
@@ -800,6 +815,7 @@ impl Map {
             view: view::ViewSettings::default(),
             thumbnail: None,
             animation: Vec::new(),
+            time: None,
             body: earth(),
             next_layer_id: 1,
         }
@@ -820,6 +836,30 @@ impl Map {
         };
         self.next_layer_id = id.saturating_add(1);
         id
+    }
+
+    /// Applies the time slider: bound layers keep the features in its window (all of them when it
+    /// is off), and tile layers with a dated URL show the current step's tiles.
+    pub fn apply_time(&mut self) {
+        if let Some(t) = self.time.as_mut() {
+            t.normalize();
+        }
+        let window = self.time.as_ref().map(time::TimeSlider::window);
+        let current = self.time.as_ref().map(|t| t.current);
+        for l in &mut self.layers {
+            let Layer { time, dataset, .. } = l;
+            if let Some(b) = time.as_mut() {
+                b.apply(dataset, window);
+            }
+        }
+        for t in &mut self.tiles {
+            // Only web addresses take dates (a file's template is dropped when it is repaired).
+            if let Some(template) = t.time_url.as_ref().filter(|u| tiles::is_web(u)) {
+                // Off: the first date the slider showed, or the template's start of time.
+                t.url = rustgis_data::time::fill_template(template, current.unwrap_or(t.time_at));
+                t.time_at = current.unwrap_or(t.time_at);
+            }
+        }
     }
 
     pub fn add_service_group(&mut self, mut group: ServiceGroup) -> u32 {

@@ -4,8 +4,11 @@
 //! a tile layer like a PMTiles archive: drawn as its tiles land, on the desktop and in the browser.
 //!
 //! Grey images are stretched between their 2nd and 98th percentiles (from the coarsest
-//! overview); 8-bit colour images are shown as they are. Files are hostile input: header reads, tile
-//! counts and sizes are bounded (see [`rustgis_data::raster::cog`]).
+//! overview); 8-bit colour images are shown as they are. An address may end with a [`Look`]
+//! (`#bands=2,17,10&range=-0.3,0.3`): the bands shown as red, green and blue (or one, grey) and
+//! their stretch. Bands stored apart (planar files, such as AlphaEarth's 64 embedding bands) are
+//! read a band at a time, only those shown. Files are hostile input: header reads, tile counts and
+//! sizes are bounded (see [`rustgis_data::raster::cog`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -40,9 +43,101 @@ const SIZE: u32 = 256;
 /// Web Mercator's half extent.
 const HALF: f64 = 20_037_508.342_789_244;
 
-/// The template of a COG's map tiles.
+/// The template of a COG's map tiles (its address's [`Look`] kept).
 pub fn template(url: &str) -> String {
     format!("{SCHEME}{{z}}/{{x}}/{{y}}@{url}")
+}
+
+/// The most looks' stretches a file keeps.
+const MAX_LOOKS: usize = 64;
+/// The most bands a [`Look`] names.
+const MAX_LOOK_BANDS: usize = 3;
+/// The highest band number a [`Look`] may name.
+const MAX_BAND: usize = 65_535;
+
+/// How a COG layer shows its bands, from the end of its address (`#bands=2,17,10&range=-0.3,0.3`,
+/// bands counted from 1, `&dequantize=aef` for AlphaEarth's quantised embeddings).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Look {
+    /// The bands shown (0-based): three as red, green and blue, or one, grey; empty for the file's
+    /// own (its colour bands, else its first).
+    pub bands: Vec<usize>,
+    /// The values shown from black to full colour, for every band; `None` for each band's 2nd to
+    /// 98th percentile.
+    pub range: Option<(f32, f32)>,
+    /// Values are AlphaEarth's quantised embeddings, shown as `sign(v)·(v/127.5)²`.
+    pub aef: bool,
+}
+
+impl Look {
+    /// The address part this look adds (empty for the file's own look).
+    pub fn suffix(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.bands.is_empty() {
+            parts.push(format!("bands={}", self.bands.iter().map(|b| (b + 1).to_string()).collect::<Vec<_>>().join(",")));
+        }
+        if let Some((lo, hi)) = self.range {
+            parts.push(format!("range={lo},{hi}"));
+        }
+        if self.aef {
+            parts.push("dequantize=aef".into());
+        }
+        if parts.is_empty() { String::new() } else { format!("#{}", parts.join("&")) }
+    }
+
+    /// The look an address part says (`bands=…&range=…&dequantize=aef`); `None` when it isn't one.
+    fn parse(part: &str) -> Option<Look> {
+        let mut look = Look::default();
+        for kv in part.split('&') {
+            let (k, v) = kv.split_once('=')?;
+            match k {
+                "bands" => {
+                    let bands: Vec<usize> = v.split(',').map(|b| b.trim().parse::<usize>().ok()).collect::<Option<_>>()?;
+                    if bands.len() > MAX_LOOK_BANDS || bands.iter().any(|b| *b == 0 || *b > MAX_BAND) {
+                        return None;
+                    }
+                    look.bands = bands.into_iter().map(|b| b - 1).collect();
+                }
+                "range" => {
+                    let (lo, hi) = v.split_once(',')?;
+                    let (lo, hi) = (lo.trim().parse::<f32>().ok()?, hi.trim().parse::<f32>().ok()?);
+                    if !(lo.is_finite() && hi.is_finite() && hi > lo) {
+                        return None;
+                    }
+                    look.range = Some((lo, hi));
+                }
+                "dequantize" => look.aef = v == "aef",
+                _ => return None,
+            }
+        }
+        Some(look)
+    }
+}
+
+/// A COG's address without its [`Look`], and the look (the file's own when it names none).
+pub fn split(url: &str) -> (&str, Look) {
+    match url.rsplit_once('#') {
+        Some((file, part)) => match Look::parse(part) {
+            Some(look) => (file, look),
+            None => (url, Look::default()),
+        },
+        None => (url, Look::default()),
+    }
+}
+
+/// A COG's address showing `look` (any look it had replaced).
+pub fn with_look(url: &str, look: &Look) -> String {
+    format!("{}{}", split(url).0, look.suffix())
+}
+
+/// A value as a look shows it.
+fn shown_value(v: f32, aef: bool) -> f32 {
+    if aef {
+        let q = v / 127.5;
+        q * q * v.signum()
+    } else {
+        v
+    }
 }
 
 /// Whether a tile address is a COG's.
@@ -62,12 +157,44 @@ pub struct Info {
     pub min_zoom: u8,
     /// The zoom whose pixels are about the size of the full image's.
     pub max_zoom: u8,
-    /// Each shown band's (low, high) values, mapped to 0 and 255 (set once the coarsest overview
-    /// is read, before the file is ready).
-    stretch: Mutex<Vec<(f32, f32)>>,
-    /// Bands shown as red, green, blue (or one, grey), and alpha.
+    /// Each shown band's (low, high) values, mapped to 0 and 255, by the bands shown and whether
+    /// they are dequantised (the file's own bands' set once the coarsest overview is read, before
+    /// the file is ready; others' as a look first needs them).
+    stretch: Mutex<HashMap<(Vec<usize>, bool), Vec<(f32, f32)>>>,
+    /// The stretches being read, with who waits for each: read once, however many map tiles
+    /// ask for it first.
+    stretching: Mutex<HashMap<(Vec<usize>, bool), Vec<StretchThen>>>,
+    /// Stretches whose read failed, and when: drawn with the type's full range meanwhile (not
+    /// kept), read again after [`RETRY`].
+    stretch_failed: Mutex<HashMap<(Vec<usize>, bool), Instant>>,
+    /// The file's own bands shown as red, green, blue (or one, grey), and alpha.
     rgb: bool,
     alpha: bool,
+}
+
+impl Info {
+    /// The bands a look shows (0-based): three as red, green and blue (and the file's alpha, as a
+    /// fourth, for its own), or one, grey.
+    pub fn shown(&self, look: &Look) -> Vec<usize> {
+        let n = self.layout.bands.max(1);
+        // Bands the file has, as many as asked (one or three); otherwise the file's own look.
+        let picked: Vec<usize> = look.bands.iter().copied().filter(|b| *b < n).collect();
+        match picked.len() {
+            1 | 3 if picked.len() == look.bands.len() => picked,
+            _ if self.rgb && self.alpha => vec![0, 1, 2, 3],
+            _ if self.rgb => vec![0, 1, 2],
+            _ => vec![0],
+        }
+    }
+
+    /// The bands' (low, high) values for a look, when known.
+    fn stretch_for(&self, look: &Look, shown: &[usize]) -> Option<Vec<(f32, f32)>> {
+        let colour = &shown[..shown.len().min(3)];
+        if let Some(r) = look.range {
+            return Some(vec![r; colour.len()]);
+        }
+        self.stretch.lock().unwrap_or_else(|e| e.into_inner()).get(&(colour.to_vec(), look.aef)).cloned()
+    }
 }
 
 enum State {
@@ -109,6 +236,7 @@ pub(crate) fn forget() {
 
 /// A file's info: `Ok(None)` while it is being read (asking for it starts the read).
 pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
+    let url = split(url).0;
     {
         let i = infos().lock().unwrap_or_else(|e| e.into_inner());
         match i.get(url) {
@@ -277,9 +405,6 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
     let rgb = layout.bands >= 3;
     let alpha = matches!(layout.color, ColorHint::Rgb { alpha: true });
     let bytes = layout.data_type == "UInt8";
-    let shown = if rgb { 3 } else { 1 };
-    let coarsest = layout.levels.len().saturating_sub(1);
-    let n = layout.levels.get(coarsest).map(|l| (l.across() * l.down()) as usize).unwrap_or(0);
     let info = Arc::new(Info {
         layout,
         header,
@@ -288,42 +413,220 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         merc,
         min_zoom: 0,
         max_zoom,
-        stretch: Mutex::new(vec![(0.0, 255.0); shown]),
+        stretch: Mutex::new(HashMap::new()),
+        stretching: Mutex::new(HashMap::new()),
+        stretch_failed: Mutex::new(HashMap::new()),
         rgb,
         alpha,
     });
     // 8-bit colour images are shown as they are; others between the coarsest overview's
     // percentiles.
-    if (bytes && rgb) || n == 0 || n > MAX_STATS_TILES {
+    let own = Look::default();
+    if bytes && rgb {
+        info.stretch.lock().unwrap_or_else(|e| e.into_inner()).insert((vec![0, 1, 2], false), vec![(0.0, 255.0); 3]);
         done(Ok(info));
         return;
     }
-    let tiles: Vec<u32> = (0..n as u32).collect();
     let i = info.clone();
-    fetch_all(
+    with_stretch(
         info,
         url.clone(),
+        own,
+        Box::new(move |r| match r {
+            Ok(_) => done(Ok(i)),
+            Err(e) => done(Err(format!("{url}: {e}"))),
+        }),
+    );
+}
+
+/// The image the stretch is read from: the coarsest at least 256 pixels wide (GDAL writes
+/// overviews down to a pixel, too few to take percentiles of), else the full image.
+fn stats_level(layout: &Layout) -> usize {
+    layout.levels.iter().rposition(|l| l.width >= 256 && l.height >= 256).unwrap_or(0)
+}
+
+/// The full range of a file's type of values, as a look shows them (floats have none: 0–255 is a
+/// rough default for them).
+fn type_range(layout: &Layout, aef: bool) -> (f32, f32) {
+    let r = match layout.data_type {
+        "Int8" => (-128.0, 127.0),
+        "Int16" => (-32768.0, 32767.0),
+        "UInt16" => (0.0, 65535.0),
+        "Int32" => (-2_147_483_648.0, 2_147_483_647.0),
+        "UInt32" => (0.0, 4_294_967_295.0),
+        _ => (0.0, 255.0),
+    };
+    (shown_value(r.0, aef), shown_value(r.1, aef))
+}
+
+/// Keeps a look's stretch: a few looks a file (a script trying many is hostile input); past them,
+/// the others are read again when asked for.
+fn keep_stretch(info: &Info, key: (Vec<usize>, bool), s: Vec<(f32, f32)>) {
+    let own = (info.shown(&Look::default()).into_iter().take(3).collect::<Vec<_>>(), false);
+    let mut kept = info.stretch.lock().unwrap_or_else(|e| e.into_inner());
+    // Past the cap one other look goes, never the file's own (an 8-bit colour image's is "as it
+    // is", not read).
+    if kept.len() >= MAX_LOOKS
+        && let Some(k) = kept.keys().find(|k| **k != own).cloned()
+    {
+        kept.remove(&k);
+    }
+    kept.insert(key, s);
+}
+
+/// The (low, high) values of a band's 2nd and 98th percentiles.
+fn percentiles(mut v: Vec<f32>) -> (f32, f32) {
+    v.retain(|x| x.is_finite());
+    if v.is_empty() {
+        return (0.0, 1.0);
+    }
+    v.sort_by(f32::total_cmp);
+    let at = |q: f64| v.get(((v.len() - 1) as f64 * q) as usize).copied().unwrap_or(0.0);
+    let (lo, hi) = (at(0.02), at(0.98));
+    if hi > lo { (lo, hi) } else { (lo, lo + 1.0) }
+}
+
+/// Calls `then` with a look's stretch: given, known, or read from the coarsest overview (a few
+/// tiles of the bands shown) and kept.
+type StretchThen = Box<dyn FnOnce(Result<Vec<(f32, f32)>, String>) + Send>;
+
+fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
+    let shown = info.shown(&look);
+    if let Some(s) = info.stretch_for(&look, &shown) {
+        then(Ok(s));
+        return;
+    }
+    let colour: Vec<usize> = shown.iter().copied().take(3).collect();
+    let coarsest = stats_level(&info.layout);
+    let n = info.layout.levels.get(coarsest).map(|l| l.tiles() as usize).unwrap_or(0);
+    // Too many tiles to read for it: the values' full range for the type.
+    if n == 0 || n > MAX_STATS_TILES {
+        let s = vec![type_range(&info.layout, look.aef); colour.len()];
+        keep_stretch(&info, (colour, look.aef), s.clone());
+        then(Ok(s));
+        return;
+    }
+    // Read once: later asks wait for the read under way.
+    let key = (colour.clone(), look.aef);
+    // A read that failed lately: the type's full range for now.
+    if info.stretch_failed.lock().unwrap_or_else(|e| e.into_inner()).get(&key).is_some_and(|at| at.elapsed() < RETRY) {
+        then(Ok(vec![type_range(&info.layout, look.aef); colour.len()]));
+        return;
+    }
+    {
+        let mut reading = info.stretching.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(waiting) = reading.get_mut(&key) {
+            waiting.push(then);
+            return;
+        }
+        reading.insert(key.clone(), vec![then]);
+    }
+    let tiles: Vec<u32> = (0..n as u32).collect();
+    let i = info.clone();
+    let shown_bands = colour.len();
+    let key_aef = look.aef;
+    let done = move |r: Result<Vec<(f32, f32)>, String>| {
+        let waiting = i.stretching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
+        // An overview that can't be read: the type's full range for now (not kept: the failure may
+        // pass), and no read again until RETRY has passed.
+        let s = match r {
+            Ok(s) => {
+                keep_stretch(&i, key, s.clone());
+                s
+            }
+            Err(_) => {
+                let mut failed = i.stretch_failed.lock().unwrap_or_else(|e| e.into_inner());
+                if failed.len() >= MAX_LOOKS {
+                    failed.clear();
+                }
+                failed.insert(key, Instant::now());
+                vec![type_range(&i.layout, key_aef); shown_bands]
+            }
+        };
+        for w in waiting {
+            w(Ok(s.clone()));
+        }
+    };
+    fetch_bands(
+        info,
+        file,
         coarsest,
         tiles,
+        colour.clone(),
         Box::new(move |r| match r {
-            Ok(bands) => {
-                let mut s = Vec::new();
-                for b in 0..shown {
-                    let mut v: Vec<f32> =
-                        bands.iter().filter_map(|t| t.get(b)).flat_map(|v| v.iter().copied()).filter(|x| x.is_finite()).collect();
-                    if v.is_empty() {
-                        s.push((0.0, 1.0));
-                        continue;
-                    }
-                    v.sort_by(f32::total_cmp);
-                    let at = |q: f64| v.get(((v.len() - 1) as f64 * q) as usize).copied().unwrap_or(0.0);
-                    let (lo, hi) = (at(0.02), at(0.98));
-                    s.push(if hi > lo { (lo, hi) } else { (lo, lo + 1.0) });
-                }
-                *i.stretch.lock().unwrap_or_else(|e| e.into_inner()) = s;
-                done(Ok(i));
+            Ok(picked) => {
+                let s: Vec<(f32, f32)> = (0..colour.len())
+                    .map(|j| {
+                        percentiles(
+                            picked
+                                .iter()
+                                .filter_map(|t| t.get(j))
+                                .filter_map(|(chunk, b)| chunk.get(*b))
+                                .flat_map(|v| v.iter().map(|x| shown_value(*x, look.aef)))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                done(Ok(s))
             }
-            Err(e) => done(Err(format!("{url}: {e}"))),
+            Err(e) => done(Err(e)),
+        }),
+    );
+}
+
+/// The bands of a tile a look shows: for each, the decoded chunk holding it and its place there.
+type Picked = Vec<(Bands, usize)>;
+
+/// Reads the bands `bands` (0-based) of some tiles of a level, then calls `then` with each tile's
+/// (in the order asked). Bands stored apart are read alone; together, a tile's chunk once.
+fn fetch_bands(
+    info: Arc<Info>,
+    file: String,
+    level: usize,
+    tiles: Vec<u32>,
+    bands: Vec<usize>,
+    then: Box<dyn FnOnce(Result<Vec<Picked>, String>) + Send>,
+) {
+    let Some(l) = info.layout.levels.get(level) else {
+        then(Err("no such overview".into()));
+        return;
+    };
+    let mut places = Vec::with_capacity(tiles.len() * bands.len());
+    for &t in &tiles {
+        for &b in &bands {
+            match info.layout.chunk(l, t, b) {
+                Some(p) => places.push(p),
+                None => {
+                    then(Err(format!("no band {} in tile {t}", b + 1)));
+                    return;
+                }
+            }
+        }
+    }
+    let mut chunks: Vec<u32> = places.iter().map(|(c, _)| *c).collect();
+    chunks.sort_unstable();
+    chunks.dedup();
+    let want = chunks.clone();
+    let nb = bands.len();
+    fetch_all(
+        info,
+        file,
+        level,
+        want,
+        Box::new(move |r| {
+            then(r.and_then(|got| {
+                if got.len() != chunks.len() {
+                    return Err("a GeoTIFF tile went missing".into());
+                }
+                Ok(places
+                    .chunks(nb.max(1))
+                    .map(|tile| {
+                        tile.iter()
+                            .filter_map(|(c, at)| chunks.binary_search(c).ok().and_then(|i| got.get(i)).map(|b| (b.clone(), *at)))
+                            .collect()
+                    })
+                    .collect())
+            }))
         }),
     );
 }
@@ -387,7 +690,7 @@ fn get_tile(info: Arc<Info>, url: String, level: usize, idx: u32, then: Box<dyn 
         then(Err("no such tile".into()));
         return;
     };
-    let nb = info.layout.bands.max(1);
+    let nb = info.layout.chunk_bands();
     let per_band = (l.tile_width as usize) * (l.tile_height as usize);
     let samples = per_band * nb;
     // A tile the file leaves out (GDAL's sparse files: no bytes) is empty.
@@ -473,11 +776,25 @@ pub(crate) fn fetch(url: &str, done: Done) {
         done(Err(format!("{url}: not a COG tile address")));
         return;
     };
-    let a = archive.clone();
+    let (file, look) = split(&archive);
+    let file = file.to_string();
+    let f = file.clone();
     with_info(
-        &archive,
+        &file,
         Box::new(move |info| match info {
-            Ok(info) => draw(info, a, z, x, y, done),
+            Ok(info) => {
+                let i = info.clone();
+                let f2 = f.clone();
+                with_stretch(
+                    info,
+                    f,
+                    look.clone(),
+                    Box::new(move |s| match s {
+                        Ok(s) => draw(i, f2, &look, &s, z, x, y, done),
+                        Err(e) => done(Err(e)),
+                    }),
+                );
+            }
             Err(e) => done(Err(e)),
         }),
     );
@@ -504,7 +821,8 @@ fn locate(info: &Info, level: usize, native: &[Option<Coord>]) -> Vec<Option<(u3
         .collect()
 }
 
-fn draw(info: Arc<Info>, url: String, z: u8, x: u32, y: u32, done: Done) {
+#[allow(clippy::too_many_arguments)]
+fn draw(info: Arc<Info>, url: String, look: &Look, stretch: &[(f32, f32)], z: u8, x: u32, y: u32, done: Done) {
     let n = (1u64 << z) as f64;
     let size = 2.0 * HALF / n;
     let (x0, y1) = (-HALF + f64::from(x) * size, HALF - f64::from(y) * size);
@@ -576,25 +894,36 @@ fn draw(info: Arc<Info>, url: String, z: u8, x: u32, y: u32, done: Done) {
         done(Err("too many GeoTIFF tiles for one map tile".into()));
         return;
     }
-    let i = info.clone();
+    let shown = info.shown(look);
+    let pen = Pen { rgb: shown.len() >= 3, alpha: shown.len() >= 4, aef: look.aef, stretch: stretch.to_vec() };
     let w2 = wanted.clone();
-    fetch_all(
+    fetch_bands(
         info,
         url,
         level,
         wanted,
+        shown,
         Box::new(move |r| match r {
-            Ok(bands) => done(paint(&i, &spots, &w2, &bands)),
+            Ok(bands) => done(paint(&pen, &spots, &w2, &bands)),
             Err(e) => done(Err(e)),
         }),
     );
 }
 
+/// How a map tile's pixels are coloured from the bands shown.
+struct Pen {
+    /// Three bands as red, green and blue (else one, grey), and a fourth as alpha.
+    rgb: bool,
+    alpha: bool,
+    aef: bool,
+    stretch: Vec<(f32, f32)>,
+}
+
 /// The map tile's pixels, from the tiles read, as a raw picture (none when nothing is there).
-fn paint(info: &Info, spots: &[Option<(u32, usize)>], wanted: &[u32], tiles: &[Bands]) -> Result<Vec<u8>, String> {
-    let stretch = info.stretch.lock().unwrap_or_else(|e| e.into_inner()).clone();
+fn paint(pen: &Pen, spots: &[Option<(u32, usize)>], wanted: &[u32], tiles: &[Picked]) -> Result<Vec<u8>, String> {
     let scale = |b: usize, v: f32| -> u8 {
-        let (lo, hi) = stretch.get(b).copied().unwrap_or((0.0, 255.0));
+        let (lo, hi) = pen.stretch.get(b).copied().unwrap_or((0.0, 255.0));
+        let v = shown_value(v, pen.aef);
         (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8
     };
     let mut rgba = vec![0u8; spots.len() * 4];
@@ -602,14 +931,14 @@ fn paint(info: &Info, spots: &[Option<(u32, usize)>], wanted: &[u32], tiles: &[B
     for (k, spot) in spots.iter().enumerate() {
         let Some((t, at)) = spot else { continue };
         let Some(bands) = wanted.binary_search(t).ok().and_then(|i| tiles.get(i)) else { continue };
-        let v = |b: usize| bands.get(b).and_then(|band| band.get(*at)).copied().unwrap_or(f32::NAN);
-        let px = if info.rgb {
+        let v = |b: usize| bands.get(b).and_then(|(chunk, i)| chunk.get(*i)).and_then(|band| band.get(*at)).copied().unwrap_or(f32::NAN);
+        let px = if pen.rgb {
             let (r, g, b) = (v(0), v(1), v(2));
             if !(r.is_finite() && g.is_finite() && b.is_finite()) {
                 continue;
             }
-            let a = if info.alpha { v(3) } else { 255.0 };
-            if info.alpha && (a.is_nan() || a <= 0.0) {
+            let a = if pen.alpha { v(3) } else { 255.0 };
+            if pen.alpha && (a.is_nan() || a <= 0.0) {
                 continue;
             }
             [scale(0, r), scale(1, g), scale(2, b), a.clamp(0.0, 255.0) as u8]
@@ -646,6 +975,7 @@ fn read_whole(e: &str) -> bool {
 /// line): `Ok(false)` for any other file, read whole instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn probe_blocking(url: &str) -> Result<bool, String> {
+    let url = split(url).0;
     let (tx, rx) = std::sync::mpsc::channel();
     with_info(url, Box::new(move |r| tx.send(r.map(|_| ())).unwrap_or_default()));
     match rx.recv_timeout(std::time::Duration::from_secs(60)) {
@@ -659,6 +989,7 @@ pub fn probe_blocking(url: &str) -> Result<bool, String> {
 /// Whether the file at `url` is a cloud-optimised GeoTIFF, off the frame (the app): `then` gets
 /// `Ok(false)` for any other file, read whole instead.
 pub fn probe(url: &str, then: Box<dyn FnOnce(Result<bool, String>) + Send>) {
+    let url = split(url).0;
     with_info(
         url,
         Box::new(move |r| {
@@ -680,5 +1011,52 @@ mod tests {
         assert_eq!(template("https://x.org/a.tif"), "cog:{z}/{x}/{y}@https://x.org/a.tif");
         assert_eq!(parse_url("cog:3/2/1@https://x.org/a.tif"), Some((3, 2, 1, "https://x.org/a.tif".into())));
         assert!(parse_url("cog:99/0/0@x").is_none() && parse_url("cog:1/0/0@").is_none() && !is_tile("pmtiles:1/0/0@x"));
+    }
+
+    #[test]
+    fn stretch_read_from_an_overview_large_enough() {
+        let file = rustgis_data::raster::cog::example(1024, 64);
+        let rustgis_data::raster::cog::Parse::Done(l) = cog::layout(&Sparse::default().with(0, file)).unwrap() else { panic!() };
+        // Overviews down to 64 pixels: the 256-pixel one is read.
+        assert_eq!(l.levels.last().map(|l| l.width), Some(64));
+        assert_eq!(l.levels[stats_level(&l)].width, 256);
+    }
+
+    #[test]
+    fn looks_in_addresses() {
+        let u = "https://x.org/a.tiff";
+        let look = Look { bands: vec![1, 16, 9], range: Some((-0.3, 0.3)), aef: true };
+        let shown = with_look(u, &look);
+        assert_eq!(shown, "https://x.org/a.tiff#bands=2,17,10&range=-0.3,0.3&dequantize=aef");
+        assert_eq!(split(&shown), (u, look));
+        // Another look replaces it; the file's own adds nothing.
+        assert_eq!(with_look(&shown, &Look::default()), u);
+        // A template keeps the look, so each look's map tiles are their own.
+        let (_, _, _, archive) = parse_url(&template(&shown).replace("{z}/{x}/{y}", "1/0/0")).unwrap();
+        assert_eq!(split(&archive).0, u);
+        // Anything else after `#` is part of the address; bad looks are no looks.
+        for bad in ["#page=2", "#bands=0,1,2", "#bands=1,2,3,4", "#range=1,1", "#range=x,1", "#bands=99999999999", "#bands="] {
+            let a = format!("{u}{bad}");
+            assert_eq!(split(&a), (a.as_str(), Look::default()), "{bad}");
+        }
+        assert!((shown_value(127.5, true) - 1.0).abs() < 1e-6 && (shown_value(-63.75, true) + 0.25).abs() < 1e-6);
+        assert_eq!(shown_value(-5.0, false), -5.0);
+    }
+
+    #[test]
+    fn paints_the_bands_shown() {
+        let chunk = |v: f32| -> Bands { Arc::new(vec![vec![v; 4]]) };
+        // One tile, its three bands from three chunks (stored apart); pixel 1 has no data.
+        let mut red = vec![10.0; 4];
+        red[1] = f32::NAN;
+        let tile: Picked = vec![(Arc::new(vec![red]), 0), (chunk(20.0), 0), (chunk(30.0), 0)];
+        let spots: Vec<Option<(u32, usize)>> = (0..(SIZE * SIZE) as usize).map(|k| if k < 2 { Some((7, k)) } else { None }).collect();
+        let pen = Pen { rgb: true, alpha: false, aef: false, stretch: vec![(0.0, 40.0); 3] };
+        let out = paint(&pen, &spots, &[7], &[tile]).unwrap();
+        let px = &out[crate::cache::RAW.len() + 8..];
+        assert_eq!(&px[..4], &[64, 128, 191, 255]);
+        assert_eq!(&px[4..8], &[0, 0, 0, 0]);
+        // Nothing there: no picture.
+        assert!(paint(&pen, &vec![None; spots.len()], &[], &[]).unwrap().is_empty());
     }
 }

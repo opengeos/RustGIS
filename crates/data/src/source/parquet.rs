@@ -45,6 +45,8 @@ pub struct ParquetSource {
     reproject: Reproject,
     /// The file, when it is read by its web address.
     remote: Option<Arc<Remote>>,
+    /// Every row group meeting a read's extent is read (a catalog's index), never a sample of them.
+    exact: bool,
 }
 
 impl ParquetSource {
@@ -66,20 +68,7 @@ impl ParquetSource {
     /// fetched (run it with [`remote::drive`]); a file without a bbox covering can't be read in
     /// place ([`remote::READ_WHOLE`]).
     pub fn open_remote(file: Arc<Remote>, name: &str) -> Result<Self> {
-        let (mut tail, whole) = file.tail(FOOTER).ok_or_else(remote::need)?;
-        let meta_len = footer_length(&tail)?;
-        let need = meta_len.saturating_add(8);
-        if need > tail.len() as u64 {
-            if whole || need > MAX_FOOTER {
-                return Err(DataError::Format(format!("GeoParquet: a footer of {need} bytes, longer than the file or too long to read")));
-            }
-            tail = file.tail(need).ok_or_else(remote::need)?.0;
-        }
-        let end = tail.len().saturating_sub(8);
-        let start = end.saturating_sub(usize::try_from(meta_len).unwrap_or(usize::MAX));
-        let md = parquet::file::metadata::ParquetMetaDataReader::decode_metadata(tail.get(start..end).unwrap_or_default()).map_err(err)?;
-        let props = Arc::new(parquet::file::properties::ReaderProperties::builder().build());
-        let reader = Arc::new(RemoteFile { chunks: Arc::new(Chunks(file.clone())), metadata: Arc::new(md), props });
+        let reader = remote_reader(&file)?;
         let src = Self::new(reader, name, Some(file))?;
         if src.covering.is_none() {
             return Err(DataError::Unsupported(format!("a GeoParquet without a bbox covering {}", remote::READ_WHOLE)));
@@ -87,6 +76,58 @@ impl ParquetSource {
         Ok(src)
     }
 
+    /// Adds nested columns (a struct's fields, by dotted path such as `assets.data.href`) to the
+    /// fields read, as top-level columns are read. Paths the file hasn't, repeated columns and types
+    /// not read are left out.
+    pub fn with_columns(mut self, paths: &[&str]) -> Self {
+        let reader = self.reader.clone();
+        let schema = reader.metadata().file_metadata().schema_descr();
+        for p in paths.iter().take(64) {
+            if self.info.fields.iter().any(|f| f.name == *p) {
+                continue;
+            }
+            let Some(i) = (0..schema.num_columns()).find(|&i| schema.column(i).path().string() == *p) else { continue };
+            let c = schema.column(i);
+            if i == self.geom_col || c.max_rep_level() > 0 || self.covering.is_some_and(|cv| cv.contains(&i)) {
+                continue;
+            }
+            if let Some(ty) = field_type(&c) {
+                self.info.fields.push(Field::new(p.to_string(), ty));
+                self.field_cols.push(i);
+            }
+        }
+        self
+    }
+
+    /// Reads take every row group an extent meets (a catalog's index, whose matches are all
+    /// wanted), not a sample spread over the file; an extent needing more than one read may fetch
+    /// is an error.
+    pub fn exact(mut self) -> Self {
+        self.exact = true;
+        self
+    }
+}
+
+/// The metadata of a file by its web address, from its footer: fails with [`remote::NEED`] until
+/// the footer is fetched.
+fn remote_reader(file: &Arc<Remote>) -> Result<Arc<RemoteFile>> {
+    let (mut tail, whole) = file.tail(FOOTER).ok_or_else(remote::need)?;
+    let meta_len = footer_length(&tail)?;
+    let need = meta_len.saturating_add(8);
+    if need > tail.len() as u64 {
+        if whole || need > MAX_FOOTER {
+            return Err(DataError::Format(format!("GeoParquet: a footer of {need} bytes, longer than the file or too long to read")));
+        }
+        tail = file.tail(need).ok_or_else(remote::need)?.0;
+    }
+    let end = tail.len().saturating_sub(8);
+    let start = end.saturating_sub(usize::try_from(meta_len).unwrap_or(usize::MAX));
+    let md = parquet::file::metadata::ParquetMetaDataReader::decode_metadata(tail.get(start..end).unwrap_or_default()).map_err(err)?;
+    let props = Arc::new(parquet::file::properties::ReaderProperties::builder().build());
+    Ok(Arc::new(RemoteFile { chunks: Arc::new(Chunks(file.clone())), metadata: Arc::new(md), props }))
+}
+
+impl ParquetSource {
     fn new(reader: Arc<dyn FileReader>, name: &str, remote: Option<Arc<Remote>>) -> Result<Self> {
         let md = reader.metadata();
         let schema = md.file_metadata().schema_descr();
@@ -171,7 +212,7 @@ impl ParquetSource {
             indexed: covering.is_some(),
             notes,
         };
-        let mut src = ParquetSource { info, reader, geom_col, field_cols, covering, reproject, remote };
+        let mut src = ParquetSource { info, reader, geom_col, field_cols, covering, reproject, remote, exact: false };
         if src.info.geometry_type == GeometryType::None {
             src.info.geometry_type = super::peek_kind(&src);
         }
@@ -216,12 +257,18 @@ impl FeatureSource for ParquetSource {
             // (the read samples their rows), so what is fetched stays near what is shown. No more
             // bytes than a read may fetch.
             let rows: u64 = groups.iter().map(|&g| rows_in(g) as u64).sum();
-            if rows > (limit as u64).saturating_mul(8) && !groups.is_empty() {
+            if rows > (limit as u64).saturating_mul(8) && !groups.is_empty() && !self.exact {
                 thinned = usize::try_from(rows.div_ceil((limit as u64).saturating_mul(4).max(1))).unwrap_or(usize::MAX).max(2);
             }
             let cols: Vec<usize> = self.covering.map(|c| c.to_vec()).unwrap_or_default();
             let all: Vec<usize> = cols.iter().copied().chain([self.geom_col]).chain(self.field_cols.iter().copied()).collect();
             let cost: u64 = groups.iter().step_by(thinned).map(|&g| chunks_size(md, g, &all)).sum();
+            if cost > remote::READ_BUDGET && self.exact {
+                return Err(DataError::Format(format!(
+                    "GeoParquet: the extent needs {} MB of the file, more than one read takes",
+                    cost >> 20
+                )));
+            }
             if cost > remote::READ_BUDGET {
                 thinned = thinned.saturating_mul(usize::try_from(cost.div_ceil(remote::READ_BUDGET)).unwrap_or(usize::MAX).max(2));
             }
@@ -644,6 +691,161 @@ fn read_f64(rg: &dyn RowGroupReader, col: usize, n: usize) -> Result<Vec<Option<
         ColumnReader::DoubleColumnReader(mut r) => read_column(&mut r, &all, max_def),
         _ => Ok(Vec::new()),
     }
+}
+
+/// Points with a vector each (patch embeddings, such as Earth Index's), read from a GeoParquet by
+/// its web address: the points in an extent, and their vectors.
+#[derive(Clone, Debug, Default)]
+pub struct Vectors {
+    /// Each point's longitude and latitude.
+    pub points: Vec<(f64, f64)>,
+    /// Values a vector.
+    pub dims: usize,
+    /// The vectors, one after another (`points.len() × dims` values).
+    pub values: Vec<f32>,
+}
+
+/// The most values one vector may have.
+const MAX_DIMS: usize = 8192;
+/// The most vector values one read keeps (in all; 4 bytes each).
+const MAX_VECTOR_VALUES: usize = if cfg!(target_arch = "wasm32") { 8 << 20 } else { 32 << 20 };
+
+/// Reads the points of a GeoParquet in `extent` (longitude/latitude) with the vectors of a list
+/// column (`column`, such as `embedding`), from a file by its web address. The geometry of every
+/// row group is read (it has no bbox covering), then the vectors of those holding points in the
+/// extent: at most `max_groups` of them and `max_points` points, or an error saying how many the
+/// extent needs. Fails with [`remote::NEED`] until the bytes it needs are fetched (run it with
+/// [`remote::drive`]).
+pub fn read_vectors(file: &Arc<Remote>, extent: &Extent, column: &str, max_groups: usize, max_points: usize) -> Result<Vectors> {
+    let reader = remote_reader(file)?;
+    let md = reader.metadata();
+    let schema = md.file_metadata().schema_descr();
+    let leaf = |pred: &dyn Fn(&ColumnDescPtr) -> bool| (0..schema.num_columns()).find(|&i| pred(&schema.column(i)));
+    let geom = leaf(&|c| c.path().string() == "geometry" && c.physical_type() == Physical::BYTE_ARRAY)
+        .ok_or_else(|| DataError::Format("GeoParquet: no geometry column".into()))?;
+    let prefix = format!("{column}.");
+    let vec_col = leaf(&|c| {
+        c.path().string().starts_with(&prefix) && c.max_rep_level() == 1 && matches!(c.physical_type(), Physical::FLOAT | Physical::DOUBLE)
+    })
+    .ok_or_else(|| DataError::Format(format!("GeoParquet: no list column '{column}' of numbers")))?;
+    let groups: Vec<usize> = (0..md.num_row_groups()).collect();
+    if groups.iter().map(|&g| chunks_size(md, g, &[geom])).sum::<u64>() > remote::READ_BUDGET {
+        return Err(DataError::Format("GeoParquet: its geometry is too large to read in place".into()));
+    }
+    if !want_chunks(file, md, &groups, &[geom])? {
+        return Err(remote::need());
+    }
+    // The points in the extent, by row group.
+    let mut found: Vec<(usize, Vec<(usize, (f64, f64))>)> = Vec::new();
+    let mut total = 0usize;
+    let mut hit = 0usize;
+    for &g in &groups {
+        let rg = reader.get_row_group(g).map_err(err)?;
+        let rows = usize::try_from(rg.metadata().num_rows()).unwrap_or(0).min(MAX_GROUP_ROWS);
+        let geoms = read_bytes(rg.as_ref(), geom, &vec![true; rows])?;
+        let inside: Vec<(usize, (f64, f64))> = geoms
+            .iter()
+            .enumerate()
+            .filter_map(|(r, b)| match b.as_deref().and_then(wkb::decode) {
+                Some(crate::Geometry::Point(c)) if extent.contains(c) => Some((r, (c.x, c.y))),
+                _ => None,
+            })
+            .collect();
+        if !inside.is_empty() {
+            total = total.saturating_add(inside.len());
+            hit += 1;
+            // Past the limits the points are only counted, for the error.
+            if total <= max_points && hit <= max_groups {
+                found.push((g, inside));
+            }
+        }
+    }
+    if hit > max_groups || total > max_points {
+        return Err(DataError::Format(format!("the area holds {total} points in {hit} row groups, more than are read at once: zoom in")));
+    }
+    let used: Vec<usize> = found.iter().map(|(g, _)| *g).collect();
+    if !want_chunks(file, md, &used, &[vec_col])? {
+        return Err(remote::need());
+    }
+    let mut out = Vectors::default();
+    for (g, inside) in &found {
+        let rg = reader.get_row_group(*g).map_err(err)?;
+        let rows = usize::try_from(rg.metadata().num_rows()).unwrap_or(0).min(MAX_GROUP_ROWS);
+        let mut take = vec![false; rows];
+        for (r, _) in inside {
+            if let Some(t) = take.get_mut(*r) {
+                *t = true;
+            }
+        }
+        let lists = read_lists(rg.as_ref(), vec_col, &take)?;
+        for (r, p) in inside {
+            let Some(v) = lists.get(*r) else { continue };
+            if out.dims == 0 && !v.is_empty() && v.len() <= MAX_DIMS {
+                out.dims = v.len();
+            }
+            if v.len() == out.dims && out.dims > 0 {
+                if out.values.len().saturating_add(v.len()) > MAX_VECTOR_VALUES {
+                    return Err(DataError::Format(format!(
+                        "the area's vectors hold more than {MAX_VECTOR_VALUES} values, more than are read at once: zoom in"
+                    )));
+                }
+                out.points.push(*p);
+                out.values.extend_from_slice(v);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Reads a list column of numbers over the rows of a row group (`take.len()` of them): each row's
+/// values for the rows `take` marks, empty for the others (whose values are passed over, not
+/// kept) and for a null or empty list.
+fn read_lists(rg: &dyn RowGroupReader, col: usize, take: &[bool]) -> Result<Vec<Vec<f32>>> {
+    let n = take.len();
+    let desc = rg.metadata().column(col).column_descr_ptr();
+    let max_def = desc.max_def_level();
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(n.min(1 << 20));
+    let (mut defs, mut reps) = (Vec::new(), Vec::new());
+    // Values kept over the row group: bounded, so a crafted file can't fill memory.
+    let mut budget = 1usize << 24;
+    macro_rules! lists {
+        ($r:expr, $conv:expr) => {{
+            let mut values = Vec::new();
+            let mut left = n;
+            while left > 0 {
+                defs.clear();
+                reps.clear();
+                values.clear();
+                let (records, _, levels) = $r.read_records(left.min(BATCH), Some(&mut defs), Some(&mut reps), &mut values).map_err(err)?;
+                if records == 0 {
+                    break;
+                }
+                left = left.saturating_sub(records);
+                let mut it = values.drain(..);
+                let mut kept = false;
+                for (d, r) in defs.iter().zip(&reps).take(levels) {
+                    if *r == 0 {
+                        kept = take.get(out.len()).copied().unwrap_or(false);
+                        out.push(Vec::new());
+                    }
+                    if *d == max_def
+                        && let Some(v) = it.next()
+                        && kept
+                        && let Some(last) = out.last_mut()
+                    {
+                        budget = budget.checked_sub(1).ok_or_else(|| DataError::Format("GeoParquet: lists too long to read".into()))?;
+                        last.push($conv(v));
+                    }
+                }
+            }
+        }};
+    }
+    match rg.get_column_reader(col).map_err(err)? {
+        ColumnReader::FloatColumnReader(mut r) => lists!(r, |v: f32| v),
+        ColumnReader::DoubleColumnReader(mut r) => lists!(r, |v: f64| v as f32),
+        _ => return Err(DataError::Format("GeoParquet: the list column holds no numbers".into())),
+    }
+    Ok(out)
 }
 
 /// Rows per row group written.

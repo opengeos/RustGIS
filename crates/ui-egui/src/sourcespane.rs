@@ -131,6 +131,10 @@ pub fn open(app: &mut RustGisApp, s: &Source) -> Result<(), String> {
         "zarr" => app.run("ui.addZarr", json!({"address": s.address})).map(|_| ()),
         "stac" if text(x, "api").is_some() => {
             app.ui.stac.api = s.address.clone();
+            app.ui.stac.preset = None;
+            (app.ui.stac.node, app.ui.stac.node_title) = (String::new(), String::new());
+            app.ui.stac.trail.clear();
+            app.ui.stac.children.clear();
             app.ui.stac.collections.clear();
             app.ui.stac.items.clear();
             app.run("ui.dialog", json!({"name": "stac"})).map(|_| ())

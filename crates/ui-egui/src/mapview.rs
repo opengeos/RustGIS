@@ -35,6 +35,13 @@ enum DragKind {
     Sketch,
     /// Moving or inserting a vertex with the Edit Vertices tool.
     Vertex,
+    /// Moving the selected text graphic, grabbed by its text (#516): its layer id and row, and
+    /// where the press was. Held by the drag itself, so it ends with it, however it ends.
+    Text {
+        layer: u32,
+        row: usize,
+        origin: Pos2,
+    },
 }
 
 /// Graphic shapes drawn by dragging rather than clicking.
@@ -312,6 +319,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
         egui::Frame::NONE.inner_margin(egui::Margin::same(16)).show(ui, |ui| crate::workspacepanes::catalog_view(app, ui, &t));
         return;
     }
+    // A text selected on the map opens the Format pane (#516).
+    crate::graphicformat::follow(app, ui.ctx());
     animate(app, ui);
     // Side by side: the other map on the right, following this one when views are linked.
     if let Some(other) = split_map(app).filter(|i| *i != app.session.project.active_map) {
@@ -1049,7 +1058,8 @@ pub(crate) fn lonlat_to_screen(app: &RustGisApp, rect: Rect, c: Coord) -> Option
 }
 
 /// The text graphic drawn on top under the screen point `p`, as (layer id, row): one whose text,
-/// with its dynamic values filled in as drawn, covers the point.
+/// with its dynamic values filled in as drawn, covers the point. A layer that isn't selectable
+/// (`layer.selectable`) is passed over: its texts can't be picked, so can't be edited either.
 pub(crate) fn text_graphic_at(app: &RustGisApp, ctx: &egui::Context, rect: Rect, p: Pos2) -> Option<(u32, usize)> {
     use rustgis_engine::map::graphics;
     let (map, scale) = (app.session.map(), app.session.scale());
@@ -1057,7 +1067,7 @@ pub(crate) fn text_graphic_at(app: &RustGisApp, ctx: &egui::Context, rect: Rect,
     // Only what is drawn, as render_frame draws it: the first layer on top, and in a layer the
     // last row. Fully transparent layers and rows beyond the view clipping distance are not drawn.
     let clip = map.view.clip_distance.map(|d| (map.camera.center_lonlat(), d));
-    map.layers.iter().filter(|l| l.graphics && map.draws_at(l, scale) && map.layer_opacity(l) > 0.0).find_map(|l| {
+    map.layers.iter().filter(|l| l.graphics && l.selectable && map.draws_at(l, scale) && map.layer_opacity(l) > 0.0).find_map(|l| {
         let drawn = l.drawn_rows(scale);
         (0..l.dataset.features.len()).rev().filter(|r| drawn.get(*r) == Some(&true)).find_map(|row| {
             let g = l.dataset.features.get(row)?.geometry.as_ref()?;
@@ -1068,13 +1078,28 @@ pub(crate) fn text_graphic_at(app: &RustGisApp, ctx: &egui::Context, rect: Rect,
                     return None;
                 }
             }
-            let text = graphics::expand(graphics::label(&l.dataset, row)?, &tokens);
-            let at = lonlat_to_screen(app, rect, g.label_point()?)?;
-            let font = regular(graphics::font_size(&l.dataset, row) * 1.33);
+            let (at, text, font) = text_shown(app, rect, &tokens, l, row)?;
             let size = ctx.fonts_mut(|f| f.layout_no_wrap(text, font, Color32::WHITE).size());
             Rect::from_center_size(at, size).expand(3.0).contains(p).then_some((l.id, row))
         })
     })
+}
+
+/// A text graphic as the map shows it: the screen point it is centred on, its text with the
+/// dynamic values filled in, and the font it is measured with.
+fn text_shown(
+    app: &RustGisApp,
+    rect: Rect,
+    tokens: &rustgis_engine::map::graphics::TokenValues,
+    l: &rustgis_engine::map::Layer,
+    row: usize,
+) -> Option<(Pos2, String, egui::FontId)> {
+    use rustgis_engine::map::graphics;
+    let text = graphics::expand(graphics::label(&l.dataset, row)?, tokens);
+    let at = lonlat_to_screen(app, rect, l.dataset.features.get(row)?.geometry.as_ref()?.label_point()?)?;
+    let size = graphics::font_size(&l.dataset, row) * 1.33;
+    let font = if graphics::bold(&l.dataset, row) { crate::theme::semibold(size) } else { regular(size) };
+    Some((at, text, font))
 }
 
 /// Centres the map on a place as it moves along (a simulated drive), keeping the zoom; the map
@@ -1260,7 +1285,14 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         && let Some(p) = resp.interact_pointer_pos()
     {
         let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(p);
-        let kind = if middle {
+        // The selected text, grabbed by its text, moves (#516); any other drag is as before.
+        let grabbed = (matches!(tool, Tool::Explore | Tool::Select) && !middle && !shift && !ctrl)
+            .then(|| text_graphic_at(app, ui.ctx(), rect, origin))
+            .flatten()
+            .filter(|hit| crate::graphicformat::selected(app) == Some(*hit));
+        let kind = if let Some((layer, row)) = grabbed {
+            DragKind::Text { layer, row, origin }
+        } else if middle {
             DragKind::Pan
         } else if tool == Tool::EditVertices && crate::vertexedit::drag_start(app, rect, origin) {
             DragKind::Vertex
@@ -1299,6 +1331,30 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else {
             app.map.sketch.truncate(1);
             app.map.sketch.push(c);
+        }
+    }
+    // A dragged text shows where it will land; it is placed there, as one undo step, on release.
+    if let Some((_, DragKind::Text { layer, row, origin })) = app.map.drag {
+        let end = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()));
+        let map = app.session.map();
+        let tokens = rustgis_engine::map::graphics::TokenValues::of(map, app.session.scale());
+        let shown = map.layer(layer).and_then(|l| text_shown(app, rect, &tokens, l, row));
+        if resp.drag_stopped() {
+            app.map.drag = None;
+            let to = shown.zip(end).and_then(|((at, ..), end)| screen_to_lonlat(app, rect, at + (end - origin)));
+            if let Some(c) = to {
+                let _ = app.run("graphics.edit", json!({"layer": layer, "row": row, "points": [[c.x, c.y]]}));
+            }
+            return;
+        }
+        if let (Some((at, text, font)), Some(end)) = (shown, end) {
+            let t = Tokens::get(ui.ctx());
+            let painter =
+                ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.id().with("text_drag"))).with_clip_rect(rect);
+            let r = painter.text(at + (end - origin), egui::Align2::CENTER_CENTER, text, font, t.accent);
+            painter.rect_stroke(r.expand(3.0), 2.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            ui.ctx().request_repaint();
         }
     }
     if let (Some((_, DragKind::Vertex)), Some(p)) = (app.map.drag, resp.interact_pointer_pos()) {
@@ -1405,12 +1461,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         } else if tool == Tool::EditVertices {
             // Its two clicks chose a vertex or a feature; zooming would lose the place.
         } else if let Some(p) = resp.interact_pointer_pos() {
-            // A double-click on a text graphic edits it; elsewhere it zooms in.
+            // A double-click on a text graphic edits it in the Format pane; elsewhere it zooms in.
             if matches!(tool, Tool::Explore | Tool::Select)
                 && let Some((layer, row)) = text_graphic_at(app, ui.ctx(), rect, p)
             {
                 app.map.popup = None;
-                let _ = app.run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row}));
+                let _ = crate::graphicformat::edit(app, layer, row);
                 return;
             }
             zoom(app, 2.0, (p.x - rect.min.x) as f64, (p.y - rect.min.y) as f64, w, h);
@@ -1456,6 +1512,21 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
             let _ = app.run("edit.split", json!({"lon": c.x, "lat": c.y}));
             return;
         }
+        // A click anywhere on a text graphic's text selects it, not only on its anchor; on the
+        // one already selected, it brings back the Format pane closed over it (#516). Shift and
+        // Ctrl (Cmd) clicks add to or take from the selection as usual.
+        if matches!(tool, Tool::Explore | Tool::Select)
+            && !ui.input(|i| i.modifiers.shift || i.modifiers.command)
+            && let Some((layer, row)) = text_graphic_at(app, ui.ctx(), rect, p)
+        {
+            app.map.popup = None;
+            if crate::graphicformat::selected(app) == Some((layer, row)) {
+                app.ui.open_right(crate::RightPane::Format);
+            } else {
+                let _ = app.run("select.rows", json!({"layer": layer, "rows": [row]}));
+            }
+            return;
+        }
         // Sketch vertices snap to features when snapping is on.
         let c = if tool.creates() || matches!(tool, Tool::Graphic(_) | Tool::Measure | Tool::MeasureArea) { snapped(app, c) } else { c };
         match tool {
@@ -1496,12 +1567,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
             Tool::Graphic("point") => finish_graphic(app, "point", vec![c]),
+            // Placed, selected and open in the Format pane, as a layout's text (#516).
             Tool::Graphic("text") => {
-                let mut params = json!({"name": "graphicText", "lon": c.x, "lat": c.y});
-                if let Some(t) = app.ui.dynamic_text {
-                    params["text"] = json!(t);
+                let text = app.ui.dynamic_text;
+                if let Err(e) = crate::graphicformat::place(app, c.x, c.y, text) {
+                    app.session.notify(e, true);
                 }
-                let _ = app.run("ui.dialog", params);
             }
             // Dragged shapes ignore plain clicks.
             Tool::Graphic(s) if !vertex_shape(Tool::Graphic(s)) => {}
@@ -2258,7 +2329,7 @@ fn picture_texture(app: &mut RustGisApp, ctx: &egui::Context, value: &str) -> Re
 /// A picture kept with a feature, decoded for the identify popup. A project's value is hostile:
 /// its size is checked before anything is decoded, so a small compressed picture can't unpack
 /// into a huge one.
-fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
+pub(crate) fn decode_picture(bytes: &[u8]) -> Result<image::RgbaImage, String> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(2048);
@@ -2689,6 +2760,11 @@ mod tests {
         app.run("map.clipping", json!({"distance": 1_000_000.0})).unwrap();
         assert_eq!(probe(&app), None, "beyond the clipping distance");
         app.run("map.clipping", json!({"mode": "none"})).unwrap();
+        assert_eq!(probe(&app), hit);
+        // Nor text on a layer that isn't selectable.
+        app.run("layer.selectable", json!({"layer": layer, "on": false})).unwrap();
+        assert_eq!(probe(&app), None, "not selectable");
+        app.run("layer.selectable", json!({"layer": layer, "on": true})).unwrap();
         assert_eq!(probe(&app), hit);
         app.run("group.set", json!({"group": "Notes", "transparency": 100})).unwrap();
         assert_eq!(probe(&app), None, "on a fully transparent layer");

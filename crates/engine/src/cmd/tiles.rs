@@ -4,6 +4,7 @@
 use rustgis_map::effects::Blend;
 use rustgis_map::planets;
 use rustgis_map::tiles::{MAX_TILE_LAYERS, TileKind, TileLayer};
+use rustgis_render::rustgis_tiles::cog::{self, Look};
 use serde_json::{Value, json};
 
 use super::{b, f, ps};
@@ -38,7 +39,11 @@ pub const NETWORK: &[&str] = &[
     "sourcecoop.list",
     "portal.search",
     "portal.add",
+    "nationalMap.add",
+    "fieldsOfTheWorld.add",
     "portal.files",
+    "embeddings.search",
+    "embeddings.add",
     "earthdata.collections",
     "earthdata.granules",
     "nldi.flowline",
@@ -51,12 +56,12 @@ pub const NETWORK: &[&str] = &[
 pub fn commands() -> Vec<C> {
     vec![
         C::new("map.addTiles", "Add Tile Layer", "Home › Add", add).params(
-            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "overlay"?: bool (a transparent layer kept on top), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id, "view"?: bool (a MapLibre style: go to the place, zoom, bearing and pitch its root properties give, once it loads)}"#,
+            r#"{"url": "https://…/{z}/{x}/{y}.png" | vector tiles ".pbf" or TileJSON | MapLibre style.json | a PMTiles archive (web address or file path) | an MBTiles file path, "kind"?: "raster"|"vector"|"style"|"pmtiles"|"mbtiles" (guessed from the url), "name"?: text, "attribution"?: text, "minZoom"?: number, "maxZoom"?: number, "tileSize"?: 256|512, "tms"?: bool, "subdomains"?: [text], "layers"?: [vector tile layer names, drawn in colours of their own], "styleLayers"?: [MapLibre style layers drawing vector tiles instead (their source is the tiles')], "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference" (how it combines with what is beneath), "overlay"?: bool (a transparent layer kept on top; one with the same address and role is replaced when it has the same name or the same look), "replace"?: bool (removes the other tile basemaps, not overlays), "id"?: catalog id, "view"?: bool (a MapLibre style: go to the place, zoom, bearing and pitch its root properties give, once it loads), "start"?, "end"?: dates a url with date placeholders ({date:YYYY-MM-DD}, {YYYY}) spans, turning the time slider on (or, when it is on, setting its span), "unit"?, "interval"?, "dates"?: its steps (as in time.set)}"#,
         ),
         C::new("map.removeTiles", "Remove Tile Layer", "Home › Add", remove)
             .params(r#"{"name"?: text, "index"?: number, "id"?: catalog id} (removes every tile layer when none is given)"#),
         C::new("map.setTiles", "Tile Layer Properties", "Home › Add", set).params(
-            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text}"#,
+            r#"{"name"?: text | "index"?: number (0 = top) | "id"?: catalog id, "visible"?: bool, "opacity"?: 0–1, "blend"?: "normal"|"multiply"|"screen"|"overlay"|"darken"|"lighten"|"difference", "move"?: "up"|"down"|"top"|"bottom", "rename"?: text, "bands"?: [red, green, blue] | [band] (a cloud-optimised GeoTIFF's bands shown, from 1; [] for its own), "range"?: [low, high] (the values shown from black to full colour; null: each band's 2nd–98th percentile), "dequantize"?: "aef" (AlphaEarth's quantised embeddings) | "none"}"#,
         ),
         C::new("map.tiles", "Tile Layers", "Home › Add", |s, _| Ok(list(s, false))).view(),
         C::new("map.body", "Celestial Body", "Home › Add", body).params(
@@ -137,7 +142,22 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         Some(k) => TileKind::from_code(k).ok_or_else(|| format!("unknown kind '{k}' (raster, vector, style, pmtiles or mbtiles)"))?,
         None => TileKind::guess(url),
     };
-    let mut t = TileLayer::new(ps(p, "name").unwrap_or_default(), kind, url);
+    // A dated address (`{date:YYYY-MM-DD}`) follows the time slider, which the layer's span
+    // (`start`, `end`) turns on when it is off.
+    let dated = rustgis_data::time::is_template(url);
+    if dated && !matches!(kind, TileKind::Raster | TileKind::Vector | TileKind::Cog) {
+        return Err(format!("{url}: dated addresses work for raster, vector and GeoTIFF tile layers, not {}", kind.code()));
+    }
+    let at = if dated { dated_start(s, p)? } else { 0.0 };
+    let mut t = TileLayer::new(
+        ps(p, "name").unwrap_or_default(),
+        kind,
+        if dated { rustgis_data::time::fill_template(url, at) } else { url.to_string() },
+    );
+    if dated {
+        t.time_url = Some(url.to_string());
+        t.time_at = at;
+    }
     if let Some(a) = ps(p, "attribution") {
         t.attribution = a.to_string();
     }
@@ -164,6 +184,13 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(names) = p.get("layers").and_then(Value::as_array) {
         t.layers = names.iter().filter_map(Value::as_str).map(str::to_string).collect();
     }
+    // The tiles' own look: MapLibre style layers, as a JSON array or its text.
+    match p.get("styleLayers") {
+        Some(Value::String(text)) => t.style_layers = rustgis_map::tiles::checked_style_layers(text)?,
+        Some(v @ Value::Array(_)) => t.style_layers = rustgis_map::tiles::checked_style_layers(&v.to_string())?,
+        Some(Value::Null) | None => {}
+        Some(_) => return Err("styleLayers is a JSON array of MapLibre style layers".into()),
+    }
     if let Some(subs) = p.get("subdomains") {
         t.subdomains = match subs {
             Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
@@ -186,19 +213,51 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         m.tiles.retain(|o| o.overlay);
     }
     // The same address and role again replaces the old one; overlays survive basemap changes.
-    m.tiles.retain(|o| !(o.url == t.url && o.kind == t.kind && o.overlay == t.overlay));
+    // Two looks of one archive (Fields of the World's fields and density) are told apart by
+    // their names: the same look, or the same name, replaces.
+    m.tiles.retain(|o| {
+        !(o.url == t.url && o.kind == t.kind && o.overlay == t.overlay && (o.style_layers == t.style_layers || o.name == t.name))
+    });
     if m.tiles.len() >= MAX_TILE_LAYERS {
         return Err(format!("a map holds at most {MAX_TILE_LAYERS} tile layers"));
     }
     // Overlays go on top; basemaps go on top of the other basemaps, under the overlays.
     let at = if t.overlay { 0 } else { m.tiles.iter().position(|o| !o.overlay).unwrap_or(m.tiles.len()) };
-    let out = json!({"name": t.name, "kind": t.kind.code(), "index": at});
+    let mut out = json!({"name": t.name, "kind": t.kind.code(), "index": at});
+    if t.time_url.is_some() {
+        out["url"] = json!(t.url);
+        out["dated"] = json!(true);
+    }
     m.tiles.insert(at, t);
     if view {
         s.style_view = Some((url, s.map().camera));
         follow_style_view(s, web_time::Duration::ZERO);
     }
     Ok(out)
+}
+
+/// The date a dated tile layer starts at: the time slider's step. Its `start` (and `end`,
+/// `unit`, `interval` or `dates`) set the slider up, turning it on when it is off. Should a later
+/// check of the layer fail, the session restores the project, the slider with it (tested).
+fn dated_start(s: &mut Session, p: &Value) -> Result<f64, String> {
+    let keys = ["start", "end", "unit", "interval", "dates"];
+    let mut given: serde_json::Map<String, Value> = keys.iter().filter_map(|k| p.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+    if given.is_empty() {
+        return s
+            .map()
+            .time
+            .as_ref()
+            .map(|t| t.current)
+            .ok_or_else(|| "this address has dates: give its start (and end), or turn the time slider on first".to_string());
+    }
+    // Steps by what the address changes by: a day for `{date:YYYY-MM-DD}`, a year for `{YYYY}`.
+    if !given.contains_key("unit")
+        && let Some(u) = ps(p, "url").and_then(rustgis_data::time::template_unit)
+    {
+        given.insert("unit".into(), json!(u.code()));
+    }
+    super::time::set(s, &Value::Object(given))?;
+    Ok(s.map().time.as_ref().map_or(0.0, |t| t.current))
 }
 
 /// The most passes made waiting for a style to load (each waits for the fetches under way).
@@ -285,12 +344,73 @@ fn blend(p: &Value) -> Result<Option<Blend>, String> {
     ps(p, "blend").map(|m| Blend::from_code(m).ok_or_else(|| format!("unknown blend mode '{m}'"))).transpose()
 }
 
+/// A change of a COG layer's look a command asks for (`bands`, `range`, `dequantize`), applied to
+/// the look it has; `None` when it asks for none.
+#[allow(clippy::type_complexity)]
+fn cog_look(p: &Value) -> Result<Option<Box<dyn Fn(Look) -> Look>>, String> {
+    if p.get("bands").is_none() && p.get("range").is_none() && p.get("dequantize").is_none() {
+        return Ok(None);
+    }
+    let bands: Option<Vec<usize>> = match p.get("bands") {
+        None => None,
+        Some(Value::Array(a)) => {
+            let b: Option<Vec<usize>> = a.iter().map(|v| v.as_u64().filter(|b| (1..=65_535).contains(b)).map(|b| b as usize - 1)).collect();
+            match b {
+                Some(b) if matches!(b.len(), 0 | 1 | 3) => Some(b),
+                _ => return Err("bands is [red, green, blue] or [band], each from 1".into()),
+            }
+        }
+        Some(_) => return Err("bands is [red, green, blue] or [band], each from 1".into()),
+    };
+    let range: Option<Option<(f32, f32)>> = match p.get("range") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::Array(a)) => match (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64), a.len()) {
+            // Finite as the 32-bit values kept, not only as given.
+            (Some(lo), Some(hi), 2) if (lo as f32).is_finite() && (hi as f32).is_finite() && (hi as f32) > (lo as f32) => {
+                Some(Some((lo as f32, hi as f32)))
+            }
+            _ => return Err("range is [low, high], low below high".into()),
+        },
+        Some(_) => return Err("range is [low, high], low below high".into()),
+    };
+    let aef = match ps(p, "dequantize") {
+        None => None,
+        Some("aef") => Some(true),
+        Some("none") => Some(false),
+        Some(other) => return Err(format!("unknown dequantize '{other}' (aef or none)")),
+    };
+    Ok(Some(Box::new(move |old: Look| Look {
+        bands: bands.clone().unwrap_or(old.bands),
+        range: range.unwrap_or(old.range),
+        aef: aef.unwrap_or(old.aef),
+    })))
+}
+
 fn set(s: &mut Session, p: &Value) -> CmdResult {
     let i = find(s, p)?.ok_or("name or index is required")?;
     let mode = blend(p)?;
+    let look = cog_look(p)?;
     let m = s.map_mut();
     let n = m.tiles.len();
     let Some(t) = m.tiles.get_mut(i) else { return Err("no tile layer at that index".into()) };
+    // Refused before anything changes.
+    if look.is_some() && t.kind != TileKind::Cog {
+        return Err("bands, range and dequantize are for a cloud-optimised GeoTIFF's layer".into());
+    }
+    let new_url = match look {
+        Some(look) => {
+            let new = look(cog::split(&t.url).1);
+            // Bands the file hasn't (when its header is in): said, not shown as its own look.
+            if let Ok(Some(info)) = cog::info(&t.url)
+                && let Some(b) = new.bands.iter().find(|b| **b >= info.layout.bands)
+            {
+                return Err(format!("the GeoTIFF has {} bands, not {}", info.layout.bands, b + 1));
+            }
+            Some(cog::with_look(&t.url, &new))
+        }
+        None => None,
+    };
     if let Some(v) = b(p, "visible") {
         t.visible = v;
     }
@@ -302,6 +422,13 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
     }
     if let Some(r) = ps(p, "rename").map(str::trim).filter(|r| !r.is_empty()) {
         t.name = r.chars().take(120).collect();
+    }
+    if let Some(url) = new_url {
+        // A dated layer keeps the look at every date: its template takes it too.
+        if let Some(template) = t.time_url.as_mut() {
+            *template = cog::with_look(template, &cog::split(&url).1);
+        }
+        t.url = url;
     }
     if let Some(mv) = ps(p, "move") {
         let to = match mv {
@@ -345,6 +472,12 @@ mod tests {
         assert!(s.run("map.addTiles", &json!({"url": "file:///etc/passwd"})).is_err());
         assert!(s.run("map.addTiles", &json!({"url": "https://a/{z}", "kind": "nope"})).is_err());
         assert!(s.run("map.removeTiles", &json!({"index": 7})).is_err());
+        // A look is for a COG's layer: refused for others, which are left as they were.
+        assert!(s.run("map.setTiles", &json!({"index": 0, "opacity": 0.2, "bands": [1, 2, 3]})).is_err());
+        assert_ne!(s.map().tiles[0].opacity, 0.2);
+        // A range past what 32 bits hold is refused.
+        assert!(super::cog_look(&json!({"range": [0, 1e39]})).is_err());
+        assert!(super::cog_look(&json!({"range": [-0.3, 0.3]})).is_ok_and(|l| l.is_some()));
         assert!(s.run("map.removeTiles", &json!({})).is_ok());
         assert!(s.map().tiles.is_empty());
         // Saved and read back with the project.

@@ -159,7 +159,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Shares => crate::docpanes::shares(app, ui, t),
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
-            RightPane::Format => crate::layoutview::format(app, ui, t),
+            RightPane::Format => crate::graphicformat::show(app, ui, t),
             RightPane::Plugin => crate::pluginpanel::show(app, ui, t),
             RightPane::WebData => web_data(app, ui),
         });
@@ -168,15 +168,22 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
 
 /// The Web Data services shown in the Web Data pane, by the `ui.dialog` name that opens them, and
 /// their titles.
-const WEB_DATA: [(&str, &str); 8] = [
+const WEB_DATA: [(&str, &str); 15] = [
     ("opendata", "Search Open Data"),
     ("stac", "STAC Search"),
     ("osm", "OpenStreetMap"),
     ("boundaries", "Administrative Boundaries"),
     ("overture", "Overture Maps"),
     ("sourcecoop", "Source Cooperative"),
+    ("naturalEarth", "Natural Earth"),
+    ("nationalMap", "The National Map"),
+    ("nasaEarthdata", "NASA Earthdata"),
+    ("enviroAtlas", "EnviroAtlas"),
+    ("femaNfhl", "FEMA NFHL"),
+    ("fieldsOfTheWorld", "Fields of the World"),
     ("earthaccess", "NASA Earthaccess"),
     ("nldi", "USGS NLDI"),
+    ("embeddings", "Satellite Embeddings"),
 ];
 
 /// The Web Data service a `ui.dialog` name opens, if it is one.
@@ -188,6 +195,7 @@ pub fn web_data_name(name: &str) -> Option<&'static str> {
 fn web_data_title(app: &RustGisApp) -> &'static str {
     match app.ui.web_data {
         "opendata" => app.ui.opendata.title(),
+        "stac" => crate::stacui::title(app),
         n => WEB_DATA.iter().find(|(k, _)| *k == n).map(|(_, t)| *t).unwrap_or("Web Data"),
     }
 }
@@ -200,9 +208,15 @@ fn web_data(app: &mut RustGisApp, ui: &mut Ui) {
         "osm" => crate::portalsui::osm(app, ui),
         "boundaries" => crate::portalsui::boundaries(app, ui),
         "overture" => crate::catalogsui::overture(app, ui),
-        "sourcecoop" => crate::catalogsui::sourcecoop(app, ui),
+        "sourcecoop" | "naturalEarth" => crate::catalogsui::sourcecoop(app, ui),
+        "nationalMap" => crate::webdataui::national_map(app, ui),
+        "nasaEarthdata" => crate::webdataui::nasa_earthdata(app, ui),
+        "enviroAtlas" => crate::webdataui::enviroatlas(app, ui),
+        "femaNfhl" => crate::webdataui::fema_nfhl(app, ui),
+        "fieldsOfTheWorld" => crate::webdataui::fields_of_the_world(app, ui),
         "earthaccess" => crate::earthaccessui::pane(app, ui),
         "nldi" => crate::nldiui::pane(app, ui),
+        "embeddings" => crate::embeddingsui::pane(app, ui),
         _ => crate::opendataui::dialog(app, ui),
     }
 }
@@ -1679,6 +1693,20 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     } else {
         if ui.button(tl!("Definition Query…")).clicked() {
             let _ = app.run("ui.dialog", json!({"name": "definitionQuery"}));
+            ui.close();
+        }
+        if l.time.is_some() {
+            if ui.button(tl!("Unbind From Time Slider")).clicked() {
+                let _ = app.run("time.unbind", json!({"layer": l.id}));
+                ui.close();
+            }
+        } else if ui
+            .add_enabled(!rustgis_engine::map::time::time_fields(&l.dataset).is_empty(), egui::Button::new(tl!("Bind To Time Slider")))
+            .on_disabled_hover_text(tl!("No field of this layer holds dates."))
+            .clicked()
+        {
+            app.time.hidden = false;
+            let _ = app.run("time.bind", json!({"layer": l.id}));
             ui.close();
         }
         if ui.button(tl!("Export Features…")).clicked() {

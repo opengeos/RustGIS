@@ -11,9 +11,9 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("stac.collections", "List STAC Collections", "Home › Add › Web Data › STAC Search", collections)
             .view()
-            .params(r#"{"url"?: "a STAC API (default: Earth Search, https://earth-search.aws.element84.com/v1; Planetary Computer: https://planetarycomputer.microsoft.com/api/stac/v1)"}"#),
+            .params(r#"{"url"?: "a STAC API (default: Earth Search, https://earth-search.aws.element84.com/v1; Planetary Computer: https://planetarycomputer.microsoft.com/api/stac/v1), or a static catalog's catalog.json or collection.json (its child catalogs and collections are listed)"}"#),
         C::new("stac.search", "STAC Search", "Home › Add › Web Data › STAC Search", search).params(
-            r#"{"url"?: "a STAC API (default: Earth Search)", "collections"?: id | [ids], "bbox"?: [west, south, east, north] | "view" (the map's extent), "datetime"?: "2024-06-01" | "2024-06-01/2024-06-30", "limit"?: 1–200 (default 10), "maxCloud"?: percent, "footprints"?: bool (adds the items' footprints as a layer, default true)}"#,
+            r#"{"url"?: "a STAC API (default: Earth Search), or a static catalog's catalog.json or collection.json (walked from there, at most 400 documents)", "collections"?: id | [ids] (APIs), "bbox"?: [west, south, east, north] | "view" (the map's extent), "datetime"?: "2024-06-01" | "2024-06-01/2024-06-30", "limit"?: 1–200 (default 10), "maxCloud"?: percent, "sortby"?: "eo:cloud_cover" | "-datetime" (APIs that sort), "phase"?: "pre" | "post" (static catalogs of events), "properties"?: bool (every property of each item, not only its date and cloud cover; default false), "footprints"?: bool (adds the items' footprints as a layer, default true)}"#,
         ),
         C::new("stac.addFootprints", "Add STAC Footprints", "Home › Add › Web Data › STAC Search", add_footprints_cmd)
             .params(r#"{"footprints": GeoJSON FeatureCollection (items' footprints, as STAC Search finds them), "name"?: text}"#),
@@ -48,6 +48,7 @@ pub fn search_params(s: &Session, p: &Value) -> Result<Search, String> {
         datetime: ps(p, "datetime").map(str::to_string),
         limit: f(p, "limit").map(|l| l.clamp(1.0, stac::MAX_ITEMS as f64) as usize).unwrap_or(10),
         max_cloud: f(p, "maxCloud"),
+        sortby: ps(p, "sortby").map(str::to_string),
     })
 }
 
@@ -107,6 +108,15 @@ fn collections(_s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // A static catalog: its child catalogs and collections, by their addresses.
+        if stac::catalog::is_static(&api) {
+            crate::render::rustgis_tiles::address::check(&api, None)?;
+            let bytes = crate::render::rustgis_tiles::cache::download_blocking(&api)?;
+            let c = stac::catalog::parse_children(&bytes, &api)?;
+            return Ok(
+                json!({"count": c.len(), "static": true, "collections": c.iter().map(|c| json!({"id": c.url, "title": c.title})).collect::<Vec<_>>()}),
+            );
+        }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(&stac::collections_url(&api))?;
         let c = stac::parse_collections(&bytes)?;
         Ok(json!({"count": c.len(), "collections": c.iter().map(|c| json!({"id": c.id, "title": c.title})).collect::<Vec<_>>()}))
@@ -115,6 +125,9 @@ fn collections(_s: &mut Session, p: &Value) -> CmdResult {
 
 fn search(s: &mut Session, p: &Value) -> CmdResult {
     let api = stac::api(ps(p, "url"))?;
+    if stac::catalog::is_static(&api) {
+        return search_static(s, p, &api);
+    }
     let url = stac::search_url(&api, &search_params(s, p)?)?;
     #[cfg(target_arch = "wasm32")]
     {
@@ -125,7 +138,58 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
     {
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(&url)?;
         let (items, next) = stac::parse_items(&bytes, &url)?;
-        let mut out = json!({"count": items.len(), "items": items.iter().map(stac::item_json).collect::<Vec<_>>(), "next": next});
+        let all = b(p, "properties").unwrap_or(false);
+        let mut out =
+            json!({"count": items.len(), "items": items.iter().map(|i| stac::item_json_with(i, all)).collect::<Vec<_>>(), "next": next});
+        if b(p, "footprints").unwrap_or(true)
+            && let Some(id) = add_footprints(s, &items, "STAC footprints")?
+        {
+            out["layer"] = json!(id);
+            if let Some(e) = s.map().layer(id).map(|l| l.extent()) {
+                s.zoom_to(&e);
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// A search of a static catalog: a walk from its document, keeping the items that match.
+fn search_static(s: &mut Session, p: &Value, root: &str) -> CmdResult {
+    crate::render::rustgis_tiles::address::check(root, None)?;
+    let search = search_params(s, p)?;
+    // A static catalog has no search: it is walked in its own order, and its nodes are its
+    // collections.
+    let mut ignored = Vec::new();
+    if search.sortby.as_deref().is_some_and(|b| !b.trim().is_empty()) {
+        ignored.push("sortby");
+    }
+    if !search.collections.is_empty() {
+        ignored.push("collections");
+    }
+    let note = (!ignored.is_empty()).then(|| {
+        format!(
+            "{} ignored: a static catalog is walked in its own order (the first items found that match, then sorted by date); give a collection's collection.json as url",
+            ignored.join(" and ")
+        )
+    });
+    let filter = stac::catalog::Filter::from_search(&search, ps(p, "phase"))?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, filter, root, note);
+        Err("in the web app, search STAC with Home › Web Data › STAC Search".into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let walk = stac::catalog::walk_blocking(root, filter, search.limit);
+        let complete = walk.complete();
+        let (read, failed) = (walk.reads, walk.failed);
+        let items = walk.into_items();
+        let all = b(p, "properties").unwrap_or(false);
+        let mut out = json!({"count": items.len(), "items": items.iter().map(|i| stac::item_json_with(i, all)).collect::<Vec<_>>(),
+            "complete": complete, "read": read, "failed": failed});
+        if let Some(n) = note {
+            out["note"] = json!(n);
+        }
         if b(p, "footprints").unwrap_or(true)
             && let Some(id) = add_footprints(s, &items, "STAC footprints")?
         {

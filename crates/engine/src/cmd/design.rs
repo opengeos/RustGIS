@@ -311,6 +311,12 @@ pub fn commands() -> Vec<C> {
         C::new("edit.rotate", "Rotate", "Edit › Features › Modify", |s, p| {
             let deg = f(p, "angle").ok_or("angle is required")?;
             modify(s, |g| {
+                // Any point, a feature's or a text graphic's, turns on itself: left out, so a
+                // selection of points alone fails rather than recording an edit that changes
+                // nothing (and an undo step).
+                if matches!(g, Geometry::Point(_)) {
+                    return None;
+                }
                 let c = lonlat_to_merc(g.extent().center());
                 let (sin, cos) = (-deg.to_radians()).sin_cos();
                 Some(g.map_coords(&|p: Coord| {
@@ -325,6 +331,10 @@ pub fn commands() -> Vec<C> {
         C::new("edit.scale", "Scale", "Edit › Features › Modify", |s, p| {
             let k = f(p, "factor").filter(|k| *k > 0.0 && *k < 1e6).ok_or("factor must be a positive number")?;
             modify(s, |g| {
+                // Any point, a feature's or a text graphic's, scales on itself: left out, as above.
+                if matches!(g, Geometry::Point(_)) {
+                    return None;
+                }
                 let c = lonlat_to_merc(g.extent().center());
                 Some(g.map_coords(&|p: Coord| {
                     let m = lonlat_to_merc(p);
