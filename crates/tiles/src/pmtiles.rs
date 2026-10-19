@@ -127,7 +127,8 @@ fn unzstd(b: &[u8], limit: u64) -> Result<Vec<u8>, String> {
             && magic & 0xFFFF_FFF0 == 0x184D_2A50
         {
             let len = src.get(4..8).and_then(|l| <[u8; 4]>::try_from(l).ok()).map(u32::from_le_bytes).ok_or("Zstandard: a cut frame")?;
-            src = src.get(8 + len as usize..).ok_or("Zstandard: a cut frame")?;
+            let next = usize::try_from(len).ok().and_then(|l| l.checked_add(8)).ok_or("Zstandard: a cut frame")?;
+            src = src.get(next..).ok_or("Zstandard: a cut frame")?;
             continue;
         }
         let room = (limit + 1).saturating_sub(out.len() as u64);
@@ -679,6 +680,8 @@ mod tests {
         assert_eq!(Compression::Zstd.decode(frames.clone()).unwrap(), b"first second");
         assert!(Compression::Zstd.decode(frames[..frames.len() - 3].to_vec()).is_err());
         assert!(unzstd(&frames, 8).is_err());
+        // A skippable frame claiming more than there is.
+        assert!(unzstd(&[0x50, 0x2a, 0x4d, 0x18, 0xff, 0xff, 0xff, 0xff], 64).is_err());
         // Junk that claims to be compressed fails rather than panics.
         for c in [Compression::Gzip, Compression::Brotli, Compression::Zstd] {
             for junk in [&b""[..], b"\x1f\x8b", b"\xff\xff\xff\xff", b"\x28\xb5\x2f\xfd\x00"] {

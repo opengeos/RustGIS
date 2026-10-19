@@ -233,10 +233,12 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     }
     let archive = t.kind == TileKind::PmTiles && t.id.is_empty();
     m.tiles.insert(at, t);
-    // A file's header is read now (natively), so a script's next command sees the map moved.
+    // A file's header is read now (natively), so a script's next command sees the map moved; a
+    // file slower than a second to answer (a network mount) is framed when it does, as a web
+    // address is, and one that can't be read says so when the layer draws.
     #[cfg(not(target_arch = "wasm32"))]
     if archive && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) {
-        let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&url, std::time::Duration::from_secs(5));
+        let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&url, std::time::Duration::from_secs(1));
     }
     // A style goes to the view it gives, an archive to its bounds, once read (see
     // follow_style_view); a catalog's archive leaves the map where it is.
