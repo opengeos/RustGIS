@@ -139,7 +139,7 @@ pub fn commands() -> Vec<C> {
         share_as("share.webTool", "Web Tool", web_tool, r#"{"model"?: name (default: the last model), "path"?: "*.rgistool"}"#),
         share_as("share.webScene", "Web Scene", web_scene, r#"{"map"?: name, "path"?: "*.gltf" (polygons extruded by their layer's extrusion)}"#),
         share_as("share.linkChart", "Web Link Chart", web_link_chart, r#"{"relationship"?: name (default: every relationship), "path"?: "*.html"}"#),
-        C::new("share.jobs", "Jobs", "Publish › Status", |s, _| {
+        C::new("share.jobs", "Jobs", "Publish › Share As", |s, _| {
             let items: Vec<Value> = s.project.shared.iter().rev().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
             Ok(json!({"items": items, "stores": s.project.data_stores}))
         })
