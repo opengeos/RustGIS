@@ -188,6 +188,9 @@ def test_the_view(sample):
         sample.zoom_to(True)
     with pytest.raises(TypeError):
         sample.zoom_to((0, 0))
+    sample.zoom_to(v for v in (0, 0, 10, 10))
+    with pytest.raises(TypeError):
+        sample.zoom_to((0, 0, 10, "north"))
     sample.zoom_to((0, 0, 10, 10))
     west, south, east, north = sample.bounds
     assert west <= 0 and east >= 10 and south <= 0 and north >= 10

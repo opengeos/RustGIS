@@ -647,16 +647,28 @@ class _Api:
         """
         if isinstance(target, (str, int, Layer)) and not isinstance(target, bool):
             return self.run("layer.zoomTo", layer=self._find_layer(target)["id"])
-        items = list(target) if isinstance(target, (list, tuple)) else None
+        try:
+            items = list(target)  # type: ignore[arg-type]
+        except TypeError:
+            items = []
         if items and all(isinstance(item, Layer) for item in items):
             boxes = [box for box in (self._find_layer(item).get("extent") for item in items) if box]
             if not boxes:
                 raise RustGISError("the layers have no features to zoom to")
-            extent = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+            extent = [
+                min(b[0] for b in boxes),
+                min(b[1] for b in boxes),
+                max(b[2] for b in boxes),
+                max(b[3] for b in boxes),
+            ]
             return self.run("map.zoomToExtent", extent=extent)
-        if items is None or len(items) != 4 or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in items):
+        try:
+            box = [float(v) for v in items if not isinstance(v, (bool, str, Layer))]
+        except (TypeError, ValueError):
+            box = []
+        if len(box) != 4 or len(items) != 4:
             raise TypeError("zoom_to takes a layer, a list of layers, or (west, south, east, north)")
-        return self.run("map.zoomToExtent", extent=[float(v) for v in items])
+        return self.run("map.zoomToExtent", extent=box)
 
 
 class Session(_Api):
