@@ -97,13 +97,23 @@ pub fn tool_of(r: &GpRecord) -> Option<String> {
 /// passwords, a connection's password.
 fn redacted(v: &Value) -> Value {
     match v {
-        // A whole address or connection, or text with addresses in it.
-        Value::String(t) if t.contains(char::is_whitespace) => Value::String(crate::sources::redact_text(t)),
-        Value::String(t) => Value::String(crate::sources::redact(t)),
+        // A connection taken whole, though a libpq one (`PG:host=db password=…`) has spaces in it:
+        // `redact` takes its password out. Other text with spaces may name addresses among its
+        // words; a single word may be one.
+        Value::String(t) if connection(t) || !t.contains(char::is_whitespace) => Value::String(crate::sources::redact(t)),
+        Value::String(t) => Value::String(crate::sources::redact_text(t)),
         Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
         Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), redacted(v))).collect()),
         other => other.clone(),
     }
+}
+
+/// Whether `t` is a database connection `sources::redact` reads as one: PostgreSQL's (a URI, or
+/// libpq's `key=value` words after `postgres:`, `postgresql:` or GDAL's `PG:`), MySQL's or
+/// MariaDB's.
+fn connection(t: &str) -> bool {
+    let lower = t.to_ascii_lowercase();
+    ["postgres:", "postgresql:", "pg:", "mysql:", "mariadb:"].iter().any(|p| lower.starts_with(p))
 }
 
 /// The project file a script opens: the one it was opened from or saved to, else one named

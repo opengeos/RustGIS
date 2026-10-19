@@ -7868,7 +7868,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     let old = crate::GpRecord {
         tool: "Buffer".into(),
         id: String::new(),
-        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1}),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x"}),
         command: None,
         at: 0,
         ok: false,
@@ -7884,6 +7884,8 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert_eq!((tool_of(&runs[0]).as_deref(), tool_of(&runs[1]), tool_of(&runs[2]).as_deref()), (Some("buffer"), None, Some("buffer")));
     let py = code(&mut s, 2, "python").unwrap();
     assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
+    // A libpq connection keeps its words but its password, though spaces part them.
+    assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
     // Nothing tells which tool an unknown name was.
     s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old });
     assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
@@ -7895,7 +7897,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("UTC)\ns.run(\n    \"gp.run\""), "{text}");
     assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
     assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
-    assert!(!text.contains("s3cr3t"));
+    assert!(!text.contains("s3cr3t") && !text.contains("hunter2"));
     assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
     // A file name every system takes, whatever the project is called.
     s.project.name = "A*B?\"C<D>|E".into();
