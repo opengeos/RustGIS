@@ -156,7 +156,8 @@ pub(crate) fn save_draft(app: &mut RustGisApp) {
     let (map, layer, row) = k;
     let here = opened == app.session.opened && map == app.session.project.active_map;
     let current = app.session.map().layer(layer).and_then(|l| graphics::label(&l.dataset, row)).map(str::to_string);
-    if here && current.is_some_and(|c| c != text) && !text.trim().is_empty() {
+    // A blank text goes to `graphics.edit` too, which refuses it and says so, as when Enter ends it.
+    if here && current.is_some_and(|c| c != text) {
         let _ = app.run("graphics.edit", json!({"layer": layer, "row": row, "text": text}));
     }
 }
@@ -222,6 +223,34 @@ mod tests {
         edit(h.state_mut(), layer, row).unwrap();
         assert_eq!(h.state().ui.right, Some(Format));
         assert!(edit(h.state_mut(), layer, row + 99).is_err());
+    }
+
+    /// A text cleared in the pane is refused, as `graphics.edit` refuses one: when Enter ends it and
+    /// when the pane closes over it alike. The text keeps what it said, and stays on the map.
+    #[test]
+    fn a_cleared_text_is_refused_however_it_ends() {
+        for close in [false, true] {
+            let mut app = RustGisApp::with_sample();
+            let added = app.run("graphics.add", json!({"shape": "text", "points": [[10, 50]], "text": "Old"})).unwrap();
+            let (layer, row) = (added["layer"].as_u64().unwrap() as u32, added["row"].as_u64().unwrap() as usize);
+            app.run("select.rows", json!({"layer": layer, "rows": [row]})).unwrap();
+            let mut h = harness(app);
+            h.run_steps(3);
+            h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+            h.run_steps(2);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.key_press(egui::Key::Backspace);
+            h.run_steps(2);
+            if close {
+                h.state_mut().run("ui.pane.format", json!({})).unwrap();
+            } else {
+                h.key_press(egui::Key::Enter);
+            }
+            h.run_steps(2);
+            let ds = &h.state().session.map().layer(layer).unwrap().dataset;
+            assert_eq!(graphics::label(ds, row), Some("Old"), "closed: {close}");
+            assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("text is required")), "closed: {close}");
+        }
     }
 
     /// Only one text is formatted: two graphics selected, or one that isn't a text, leave the
