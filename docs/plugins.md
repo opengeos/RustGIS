@@ -77,8 +77,12 @@ package) from every install. RustGIS checks it when you browse the registry and 
 
 ## Writing a plugin
 
-Start from [`plugins/hello`](https://github.com/opengeos/rustgis-plugins/tree/main/plugins/hello)
-in the plugins repository. It uses the `rustgis-plugin` SDK crate:
+Start from the [plugin template](https://github.com/opengeos/rustgis-plugin-template) (or the
+[Python template](https://github.com/opengeos/rustgis-python-plugin-template) for a
+[process plugin](#process-plugins)), and read the
+[official plugins](https://official-plugins.rustgis.app) for examples, such as
+[Hello RustGIS](https://github.com/opengeos/rustgis-official-plugins/tree/main/plugins/hello).
+A plugin uses the `rustgis-plugin` SDK crate:
 
 ```rust
 use rustgis_plugin::{Kind, Request, ToolOutput, Value, geojson, host, json};
@@ -234,7 +238,7 @@ can hide it like any other. Declare it in `plugin.json`:
 - The label can't be the name of one of RustGIS's tabs (Map, Insert, Analysis, Plugins…). The
   `i18n` translations apply to the tab, group and menu labels too.
 
-[Map Explorer](https://github.com/opengeos/rustgis-plugins/tree/main/plugins/map-explorer) is
+[Map Explorer](https://github.com/opengeos/rustgis-official-plugins/tree/main/plugins/map-explorer) is
 an example.
 
 ### A panel
