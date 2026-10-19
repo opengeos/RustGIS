@@ -9383,6 +9383,9 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
     assert_eq!(r["url"], "https://example.com/2023-08-01/{z}/{x}/{y}.png");
     let i = s.run("time.info", &Value::Null).unwrap();
     assert_eq!((i["unit"].as_str(), i["steps"].as_u64()), (Some("day"), Some(31)), "{i}");
+    // Only tile kinds that fill dates take a dated address.
+    let e = s.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.pmtiles", "start": 2000})).unwrap_err();
+    assert!(e.contains("dated addresses"), "{e}");
     // A dated address with the slider off needs its span.
     let mut off = timed_events();
     assert!(off.run("map.addTiles", &json!({"url": "https://example.com/{date:YYYY}/{z}/{x}/{y}.png"})).is_err());

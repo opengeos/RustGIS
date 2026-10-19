@@ -139,7 +139,10 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     };
     // A dated address (`{date:YYYY-MM-DD}`) follows the time slider, which the layer's span
     // (`start`, `end`) turns on when it is off.
-    let dated = rustgis_data::time::is_template(url) && matches!(kind, TileKind::Raster | TileKind::Vector | TileKind::Cog);
+    let dated = rustgis_data::time::is_template(url);
+    if dated && !matches!(kind, TileKind::Raster | TileKind::Vector | TileKind::Cog) {
+        return Err(format!("{url}: dated addresses work for raster, vector and GeoTIFF tile layers, not {}", kind.code()));
+    }
     let at = if dated { dated_start(s, p)? } else { 0.0 };
     let mut t = TileLayer::new(
         ps(p, "name").unwrap_or_default(),
