@@ -132,7 +132,10 @@ fn unzstd(b: &[u8], limit: u64) -> Result<Vec<u8>, String> {
             continue;
         }
         let room = (limit + 1).saturating_sub(out.len() as u64);
-        let d = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| format!("Zstandard: {e}"))?;
+        // A frame declaring a window larger than an archive section needs is refused before its
+        // buffer is allocated.
+        let window = limit.min(32 << 20);
+        let d = ruzstd::decoding::StreamingDecoder::new_with_max_window_size(&mut src, window).map_err(|e| format!("Zstandard: {e}"))?;
         d.take(room).read_to_end(&mut out).map_err(|e| format!("Zstandard: {e}"))?;
         if out.len() as u64 > limit {
             return Err("Zstandard: too large once decompressed".into());
@@ -680,6 +683,8 @@ mod tests {
         assert_eq!(Compression::Zstd.decode(frames.clone()).unwrap(), b"first second");
         assert!(Compression::Zstd.decode(frames[..frames.len() - 3].to_vec()).is_err());
         assert!(unzstd(&frames, 8).is_err());
+        // A frame header declaring a 1 GB window.
+        assert!(unzstd(&[0x28, 0xb5, 0x2f, 0xfd, 0x00, 0xa0, 1, 0, 0], 1 << 20).is_err());
         // A skippable frame claiming more than there is.
         assert!(unzstd(&[0x50, 0x2a, 0x4d, 0x18, 0xff, 0xff, 0xff, 0xff], 64).is_err());
         // Junk that claims to be compressed fails rather than panics.

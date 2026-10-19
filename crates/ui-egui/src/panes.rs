@@ -1307,8 +1307,8 @@ fn visibility_box(ui: &Ui, cb: Rect, visible: bool, t: &Tokens) {
 }
 
 /// A web tile layer's row (index `i` of `count`, top first as the map lists them): its checkbox
-/// shows or hides it; right-click zooms to it (an archive or GeoTIFF), sets its opacity, moves it up or down (not with `reorder` off:
-/// the list is filtered), or removes it.
+/// shows or hides it; right-click zooms to it (an archive or GeoTIFF), sets its opacity, moves it
+/// up or down (not with `reorder` off: the list is filtered), or removes it.
 fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: bool, tile: &TileLayer, t: &Tokens) {
     let shown = if tile.overlay { format!("{} · {}", tile.name, tl!("overlay")) } else { tile.name.clone() };
     let name = row_name(ui, shown.clone(), regular(12.5), ui.available_width() - NAME_X - 8.0);
