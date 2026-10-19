@@ -46,7 +46,7 @@ pub fn commands() -> Vec<C> {
         .when(need_feature_layer)
         .params(r#"{"layer"?}"#),
         C::new("time.set", "Time Slider Settings", "View › Time", set).params(
-            r#"{"start"?, "end"?: dates (text, a year or milliseconds since 1970), "date"?: the current step, "unit"?: "hour"|"day"|"month"|"year", "interval"?: steps of that many units, "dates"?: [dates] (irregular steps; [] for regular ones), "show"?: "step"|"wide"|"wider"|"cumulative", "before"?, "after"?: steps the window takes in, "cumulative"?: bool, "speed"?: milliseconds a step shows for, "loop"?: bool, "format"?: date format (YYYY, MM, MMM, DD, HH, mm), "off"?: bool (turns the slider off, every feature showing)}"#,
+            r#"{"start"?, "end"?: dates (text, a year or milliseconds since 1970), "date"?: the current step, "unit"?: "hour"|"day"|"month"|"year", "interval"?: steps of that many units, "dates"?: [dates] (irregular steps; [] for regular ones), "show"?: "step"|"wide"|"wider"|"cumulative", "before"?: steps before the current one the window takes in, "after"?: steps from the current one (at least 1), "cumulative"?: bool, "speed"?: milliseconds a step shows for, "loop"?: bool, "format"?: date format (YYYY, MM, MMM, DD, HH, mm), "off"?: bool (turns the slider off, every feature showing)}"#,
         ),
         C::new("time.goTo", "Go to Date", "View › Time", |s, p| {
             let m = s.map_mut();

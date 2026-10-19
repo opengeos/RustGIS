@@ -155,7 +155,8 @@ impl TimeSlider {
         self.end = fix(self.end).max(self.start);
         self.interval = self.interval.clamp(1, 10_000);
         self.before = self.before.min(10_000);
-        self.after = self.after.min(10_000);
+        // The window always takes in the current step: `[from, to)` is never empty.
+        self.after = self.after.clamp(1, 10_000);
         self.speed_ms = self.speed_ms.clamp(16, 60_000);
         self.dates.retain(|t| t.is_finite());
         self.dates.sort_by(f64::total_cmp);

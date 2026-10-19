@@ -34,7 +34,9 @@ impl Unit {
     }
 
     pub fn from_code(s: &str) -> Option<Unit> {
-        Unit::ALL.into_iter().find(|u| u.code().eq_ignore_ascii_case(s.trim().trim_end_matches('s')))
+        let s = s.trim();
+        let s = s.strip_suffix(['s', 'S']).unwrap_or(s);
+        Unit::ALL.into_iter().find(|u| u.code().eq_ignore_ascii_case(s))
     }
 
     /// The unit that steps through a span of `ms` in a sensible number of steps: hours up to two
@@ -525,6 +527,8 @@ mod tests {
         assert_eq!(add(f64::MAX, Unit::Year, i64::MAX), add(f64::MAX, Unit::Year, i64::MAX));
         assert_eq!(Unit::for_span(365.0 * DAY_MS), Unit::Month);
         assert_eq!(Unit::from_code("Months"), Some(Unit::Month));
+        assert_eq!(Unit::from_code("dayss"), None);
+        assert_eq!(Unit::from_code("s"), None);
     }
 
     #[test]
