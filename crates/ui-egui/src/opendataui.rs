@@ -121,7 +121,7 @@ pub struct State {
     /// The Zarr stores being checked (by their result's place), which some datasets lack.
     probes: Vec<(usize, Answer)>,
     /// The result whose Zarr store is open in the pane, to pick its variable and steps.
-    zarr_open: Option<(usize, String)>,
+    zarr_open: Option<String>,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -250,7 +250,10 @@ fn poll_probes(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut landed = Vec::new();
     st.probes.retain(|(i, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(r) => {
-            landed.push((*i, r.is_ok()));
+            // Only a store that isn't there (404, or 403 as S3 says it): a passing error leaves
+            // the dataset to be added.
+            let absent = r.err().and_then(|e| cache::http_status(&e)).is_some_and(|s| s == 404 || s == 403);
+            landed.push((*i, !absent));
             false
         }
         None => true,
@@ -554,7 +557,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     // A dataset's Zarr store, open to pick its variable and steps.
     let mut close_zarr = false;
-    if let Some((_, title)) = st.zarr_open.clone() {
+    if let Some(title) = st.zarr_open.clone() {
         // The frame's margins and border are outside its contents: they're kept within the pane.
         let inner = ui.available_width() - 18.0;
         egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.accent)).corner_radius(6).inner_margin(egui::Margin::same(8)).show(
@@ -624,9 +627,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         }
         Some(Act::Add(url, Use::Zarr, title)) => {
             // Its variable and steps are picked in the pane.
-            let i = app.ui.opendata.found.iter().position(|d| d.title == title).unwrap_or(0);
             app.ui.zarr.title = Some(title.clone());
-            app.ui.opendata.zarr_open = Some((i, title));
+            app.ui.opendata.zarr_open = Some(title);
             app.ui.zarr.address = url;
             crate::zarrui::connect(app);
         }

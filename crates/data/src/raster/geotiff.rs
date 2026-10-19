@@ -269,6 +269,10 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
 fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, String)> {
     let params: Vec<(&str, &str)> = proj4.split_whitespace().take(64).filter_map(|t| t.trim_start_matches('+').split_once('=')).collect();
     let get = |k: &str| params.iter().find(|(n, _)| *n == k).map(|(_, v)| *v);
+    // The keys are written in metres: a definition in other units isn't written.
+    if get("units").is_some_and(|u| u != "m") || get("to_meter").is_some() {
+        return None;
+    }
     let num = |k: &str| get(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
     let (lat0, lon0) = (num("lat_0").unwrap_or(0.0), num("lon_0").unwrap_or(0.0));
     let (x0, y0, k0) = (num("x_0").unwrap_or(0.0), num("y_0").unwrap_or(0.0), num("k_0").or(num("k")).unwrap_or(1.0));
@@ -294,8 +298,9 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
         ),
         "aeqd" => (12, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0)]),
         // Polar: the latitude of true scale is the key's latitude.
+        // Its longitude is the straight vertical pole's (3095), as GDAL writes it.
         "stere" if lat0.abs() == 90.0 => {
-            (15, vec![(3080, lon0), (3081, num("lat_ts").unwrap_or(lat0)), (3082, x0), (3083, y0), (3092, k0)])
+            (15, vec![(3081, num("lat_ts").unwrap_or(lat0)), (3082, x0), (3083, y0), (3092, k0), (3095, lon0)])
         }
         "stere" => (14, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
         "sterea" => (16, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
@@ -1179,6 +1184,12 @@ mod tests {
         // One the keys can't say is refused, as before.
         assert!(keys_from_proj4("+proj=robin +lon_0=0 +datum=WGS84", "x").is_none());
         assert!(keys_from_proj4("junk", "x").is_none());
+        assert!(keys_from_proj4("+proj=tmerc +lon_0=0 +units=us-ft +datum=WGS84", "x").is_none(), "only metres");
+        // A polar stereographic round trip: the pole's longitude comes back.
+        let (k, d, a) =
+            keys_from_proj4("+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m", "NSIDC").unwrap();
+        let back = custom_crs(&k, &d, &a).unwrap().custom_def().unwrap().proj4.clone();
+        assert!(back.contains("+lat_0=90") && back.contains("+lat_ts=70") && back.contains("+lon_0=-45"), "{back}");
     }
 
     #[test]

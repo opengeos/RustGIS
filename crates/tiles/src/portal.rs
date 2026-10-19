@@ -237,7 +237,7 @@ impl Portal {
                     "dynamical" => (Kind::Dynamical, DYNAMICAL),
                     other => {
                         return Err(format!(
-                            "unknown portal '{other}' (ckan, socrata, arcgis-hub, arcgis-portal, earthdata-gis, openaerialmap, usgs-dem, ign-lidar, geolens, huggingface or ocean-data)"
+                            "unknown portal '{other}' (ckan, socrata, arcgis-hub, arcgis-portal, earthdata-gis, openaerialmap, usgs-dem, ign-lidar, geolens, huggingface, ocean-data or dynamical)"
                         ));
                     }
                 };
