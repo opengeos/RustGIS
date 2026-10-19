@@ -2586,6 +2586,7 @@ impl RustGisApp {
                 self.dialogs.open("zarr", &self.session)?;
                 if let Some(a) = p.get("address").and_then(Value::as_str) {
                     self.ui.zarr.address = a.to_string();
+                    self.ui.zarr.title = None;
                     zarrui::connect(self);
                 }
             }

@@ -34,7 +34,7 @@ pub struct Service {
 }
 
 /// The services.
-pub const SERVICES: [Service; 11] = [
+pub const SERVICES: [Service; 12] = [
     Service {
         id: "arcgis-portal",
         title: "ArcGIS Portal",
@@ -42,6 +42,7 @@ pub const SERVICES: [Service; 11] = [
         address: Some("ArcGIS Online, or a portal such as https://gis.example.org/portal"),
         sets: None,
     },
+    Service { id: "dynamical", title: "Dynamical", portal: "dynamical", address: None, sets: None },
     Service { id: "earthdata-gis", title: "Earthdata GIS", portal: "earthdata-gis", address: None, sets: None },
     Service {
         id: "geolens",
@@ -117,6 +118,10 @@ pub struct State {
     /// The results whose details are shown.
     open: std::collections::HashSet<usize>,
     thumbs: std::collections::HashMap<String, Thumb>,
+    /// The Zarr stores being checked (by their result's place), which some datasets lack.
+    probes: Vec<(usize, Answer)>,
+    /// The result whose Zarr store is open in the pane, to pick its variable and steps.
+    zarr_open: Option<(usize, String)>,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -140,6 +145,8 @@ impl Default for State {
             next: None,
             open: Default::default(),
             thumbs: Default::default(),
+            probes: Vec::new(),
+            zarr_open: None,
             error: None,
             info: None,
         }
@@ -176,6 +183,7 @@ fn fetch(url: &str) -> Answer {
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     poll_listing(app, ctx);
     poll_thumbs(app, ctx);
+    poll_probes(app, ctx);
     let Some(w) = &app.ui.opendata.waiting else { return };
     let Some(r) = w.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -185,10 +193,18 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let st = &mut app.ui.opendata;
     match r.and_then(|b| w.portal.parse(&w.url, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b)))) {
         Ok((found, (total, next))) => {
+            let first = if w.more { st.found.len() } else { 0 };
             if w.more {
                 st.found.extend(found);
             } else {
                 st.found = found;
+                st.zarr_open = None;
+            }
+            // A Zarr store is checked before it is offered.
+            for (i, d) in st.found.iter().enumerate().skip(first) {
+                if let Some(r) = d.resources.iter().find(|r| r.using == Use::Zarr) {
+                    st.probes.push((i, fetch(&format!("{}/zarr.json", r.url))));
+                }
             }
             st.total = total;
             st.next = next.map(|n| (w.portal.clone(), n, w.area, w.query.clone(), w.source.clone()));
@@ -225,6 +241,28 @@ fn poll_listing(app: &mut RustGisApp, ctx: &egui::Context) {
             }
         }
         Err(e) => st.error = Some(e),
+    }
+}
+
+/// Lands the Zarr stores' checks: a dataset without one is shown as such.
+fn poll_probes(app: &mut RustGisApp, ctx: &egui::Context) {
+    let st = &mut app.ui.opendata;
+    let mut landed = Vec::new();
+    st.probes.retain(|(i, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => {
+            landed.push((*i, r.is_ok()));
+            false
+        }
+        None => true,
+    });
+    for (i, ok) in landed {
+        if !ok && let Some(d) = st.found.get_mut(i) {
+            d.resources.clear();
+            d.kind = format!("{} · {}", d.kind, tl!("Icechunk only, not read yet"));
+        }
+    }
+    if !st.probes.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
 }
 
@@ -373,6 +411,9 @@ fn about(id: Option<&str>) -> &'static str {
         Some("arcgis-portal") => {
             "Public layers on ArcGIS Online or another ArcGIS portal: feature, map, image and vector tile services, web maps and GeoJSON files."
         }
+        Some("dynamical") => {
+            "Weather and climate data from dynamical.org (NOAA GFS, GEFS and HRRR, ECMWF, DWD ICON…) as Zarr stores: open a dataset, pick a variable and its time steps, and add it."
+        }
         Some("earthdata-gis") => "NASA's Earthdata GIS: imagery, maps, features and web maps of Earth science data.",
         Some("geolens") => "A GeoLens server's datasets, read as features (the first 1,000 of each).",
         Some("huggingface") => {
@@ -509,6 +550,28 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
     if let Some(i) = &st.info {
         ui.label(egui::RichText::new(i).color(t.text_dim));
     }
+    // A dataset's Zarr store, open to pick its variable and steps.
+    let mut close_zarr = false;
+    if let Some((_, title)) = st.zarr_open.clone() {
+        egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.accent)).corner_radius(6).inner_margin(egui::Margin::same(8)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.add(egui::Label::new(egui::RichText::new(&title).strong()).wrap());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        close_zarr = ui.button(tl!("Close")).clicked();
+                    });
+                });
+                crate::zarrui::picker(app, ui);
+            },
+        );
+        ui.add_space(4.0);
+    }
+    let st = &mut app.ui.opendata;
+    if close_zarr {
+        st.zarr_open = None;
+    }
     let listing = st.listing.is_some();
     let mut act = None;
     let mut wanted = Vec::new();
@@ -555,10 +618,18 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
             app.ui.opendata.error = None;
             list_files(app, i);
         }
+        Some(Act::Add(url, Use::Zarr, title)) => {
+            // Its variable and steps are picked in the pane.
+            let i = app.ui.opendata.found.iter().position(|d| d.title == title).unwrap_or(0);
+            app.ui.zarr.title = Some(title.clone());
+            app.ui.opendata.zarr_open = Some((i, title));
+            app.ui.zarr.address = url;
+            crate::zarrui::connect(app);
+        }
         Some(Act::Add(url, using, title)) => {
             app.ui.opendata.error = None;
             let r = match using {
-                Use::File => app.run("ui.addUrl", json!({"url": url, "name": title})).map(|_| ()),
+                Use::File | Use::Zarr => app.run("ui.addUrl", json!({"url": url, "name": title})).map(|_| ()),
                 // A service: Add From Service, connected, to pick its layer.
                 Use::Service { kind, .. } => app
                     .run("ui.dialog", json!({"name": "addService"}))

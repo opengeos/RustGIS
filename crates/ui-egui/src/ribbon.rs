@@ -529,6 +529,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     let svc = |id: &str| json!({"service": id});
     menu_item(ui, app, "", "ArcGIS Portal…", "ui.searchOpenData", svc("arcgis-portal"));
     menu_item(ui, app, "", "Boundaries…", "ui.dialog", json!({"name": "boundaries"}));
+    menu_item(ui, app, "", "Dynamical…", "ui.searchOpenData", svc("dynamical"));
     menu_item(ui, app, "", "Earthdata GIS…", "ui.searchOpenData", svc("earthdata-gis"));
     menu_item(ui, app, "", "GeoLens…", "ui.searchOpenData", svc("geolens"));
     menu_item(ui, app, "", "Hugging Face…", "ui.searchOpenData", svc("huggingface"));

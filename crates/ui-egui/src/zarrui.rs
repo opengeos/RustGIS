@@ -34,6 +34,9 @@ enum Phase {
 #[derive(Default)]
 pub struct State {
     pub address: String,
+    /// What the store is called in its layers' names, when it has a better name than its file's
+    /// (a Web Data dataset's title).
+    pub title: Option<String>,
     pub crs: String,
     /// The store's root: a web address or a folder, as connected.
     root: String,
@@ -228,8 +231,18 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         go |= ui.add_enabled(!app.ui.zarr.busy(), egui::Button::new(crate::tl!("Connect"))).clicked();
     });
     if go {
+        app.ui.zarr.title = None;
         connect(app);
     }
+    picker(app, ui);
+    // The dialog stays open, to add other steps.
+    false
+}
+
+/// The store's variables and their other dimensions' steps, and Add to Map: the dialog's body, and
+/// the Web Data pane's for a dataset it opens (Dynamical).
+pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
+    let wide = (ui.available_width() - 120.0).clamp(160.0, 380.0);
     let busy = app.ui.zarr.busy();
     if busy {
         ui.horizontal(|ui| {
@@ -241,11 +254,11 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     if let Some(e) = &app.ui.zarr.error {
         ui.label(egui::RichText::new(e).color(ui.visuals().error_fg_color));
     }
-    let Some(info) = app.ui.zarr.info.clone() else { return false };
+    let Some(info) = app.ui.zarr.info.clone() else { return };
     let vars: Vec<Value> = info["variables"].as_array().cloned().unwrap_or_default();
     if vars.is_empty() {
         ui.label(crate::tl!("The store has no variables with two or more dimensions."));
-        return false;
+        return;
     }
     let st = &mut app.ui.zarr;
     st.variable = st.variable.min(vars.len() - 1);
@@ -261,7 +274,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     };
     egui::Grid::new("zarr").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(crate::tl!("Variable"));
-        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(380.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(wide).show_ui(ui, |ui| {
             for (i, v) in vars.iter().enumerate() {
                 if ui.selectable_value(&mut st.variable, i, title(v)).changed() {
                     st.steps.clear();
@@ -314,15 +327,16 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             add(app, zarr::Selection { variable: var.clone(), index }, &labels);
         }
     });
-    // The dialog stays open, to add other steps.
-    false
 }
 
 /// Adds the slice: through the command for a folder, or fetches its chunks first for a web store.
 fn add(app: &mut RustGisApp, sel: zarr::Selection, labels: &[String]) {
     let st = &mut app.ui.zarr;
     st.error = None;
-    let name = rustgis_engine::cmd::zarr::layer_name(&st.root, &sel, labels);
+    let name = match &st.title {
+        Some(t) => format!("{t} {}", rustgis_engine::cmd::zarr::layer_name("", &sel, labels)),
+        None => rustgis_engine::cmd::zarr::layer_name(&st.root, &sel, labels),
+    };
     if !st.web {
         let index: serde_json::Map<String, Value> = sel.index.iter().map(|(d, i)| (d.clone(), json!(i))).collect();
         let mut p = json!({"path": st.root, "variable": sel.variable, "index": index, "name": name});

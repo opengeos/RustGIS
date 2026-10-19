@@ -19,13 +19,13 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("boundaries.countries", "List geoBoundaries Countries", "Home › Add › Web Data", boundaries_countries).view(),
         C::new("portal.search", "Search Open Data", "Home › Add › Web Data", portal_search).view().params(
-            r#"{"query"?: text (needed by ckan, socrata, arcgis-hub and huggingface), "portal"?: "ckan" (data.gov's catalogue, the default, or any CKAN site) | "socrata" | "arcgis-hub" | "arcgis-portal" (ArcGIS Online, or the portal at url) | "earthdata-gis" (NASA's) | "openaerialmap" | "usgs-dem" (3DEP elevation models) | "ign-lidar" (IGN's LiDAR HD tiles, France) | "geolens" | "huggingface" (a dataset's files: portal.files) | "ocean-data", "url"?: "the portal: a CKAN site (https://open.canada.ca/data), a Socrata site (data.cityofnewyork.us), an ArcGIS Hub site, an ArcGIS portal, a GeoLens server", "org"?: "an ArcGIS organisation's id: its public items only", "type"?: "an ArcGIS portal's kind of item: all (the default), imagery, maps, features or webmaps", "dataset"?: "usgs-dem's elevation model: 1 meter, 1/9 arc-second (about 3 m), 1/3 arc-second (about 10 m, the default), 1 arc-second (about 30 m), Alaska 5 meter", "bbox"?: [west, south, east, north] | "view", "view"?: bool (true: where the map is; openaerialmap, usgs-dem and ign-lidar search where the map is unless given a bbox), "limit"?: 1–50 (20)}"#,
+            r#"{"query"?: text (needed by ckan, socrata, arcgis-hub and huggingface), "portal"?: "ckan" (data.gov's catalogue, the default, or any CKAN site) | "socrata" | "arcgis-hub" | "arcgis-portal" (ArcGIS Online, or the portal at url) | "earthdata-gis" (NASA's) | "openaerialmap" | "usgs-dem" (3DEP elevation models) | "ign-lidar" (IGN's LiDAR HD tiles, France) | "geolens" | "huggingface" (a dataset's files: portal.files) | "ocean-data" | "dynamical" (weather and climate Zarr stores), "url"?: "the portal: a CKAN site (https://open.canada.ca/data), a Socrata site (data.cityofnewyork.us), an ArcGIS Hub site, an ArcGIS portal, a GeoLens server", "org"?: "an ArcGIS organisation's id: its public items only", "type"?: "an ArcGIS portal's kind of item: all (the default), imagery, maps, features or webmaps", "dataset"?: "usgs-dem's elevation model: 1 meter, 1/9 arc-second (about 3 m), 1/3 arc-second (about 10 m, the default), 1 arc-second (about 30 m), Alaska 5 meter", "bbox"?: [west, south, east, north] | "view", "view"?: bool (true: where the map is; openaerialmap, usgs-dem and ign-lidar search where the map is unless given a bbox), "limit"?: 1–50 (20)}"#,
         ),
         C::new("portal.files", "List a Dataset's Files", "Home › Add › Web Data", portal_files).view().params(
             r#"{"dataset": "a Hugging Face dataset, owner/name, or an ArcGIS web map's item id (portal.search lists them)", "portal"?: "huggingface" (the default) | "arcgis-portal" | "earthdata-gis", "url"?: "the ArcGIS portal"}"#,
         ),
         C::new("portal.add", "Add Open Data", "Home › Add › Web Data", portal_add).params(
-            r#"{"url": "a resource's address, as portal.search lists it", "use"?: "file" (read by address, the default) | "wms" | "wfs" | "arcgis" (a service), "layer"?: "a service's layer (default: its first)", "name"?: text, "portal"?: "the portal's address the resource came from (an address it gives may not reach into the local network)"}"#,
+            r#"{"url": "a resource's address, as portal.search lists it", "use"?: "file" (read by address, the default) | "zarr" (a store: its variable, or the first, at "index"'s steps, as layer.addZarr) | "wms" | "wfs" | "arcgis" (a service), "variable"?: "a Zarr store's variable", "index"?: {"time": 0}, "layer"?: "a service's layer (default: its first)", "name"?: text, "portal"?: "the portal's address the resource came from (an address it gives may not reach into the local network)"}"#,
         ),
     ]
 }
@@ -139,6 +139,7 @@ pub fn dataset_json(d: &portal::Dataset) -> Value {
         .iter()
         .map(|r| match &r.using {
             Use::File => json!({"format": r.format, "url": r.url, "use": "file"}),
+            Use::Zarr => json!({"format": r.format, "url": r.url, "use": "zarr"}),
             Use::Service { kind, layer } => json!({"format": r.format, "url": r.url, "use": kind, "layer": layer}),
         })
         .collect();
@@ -172,6 +173,7 @@ fn portal_files(_s: &mut Session, p: &Value) -> CmdResult {
         .iter()
         .map(|r| match &r.using {
             Use::File => json!({"path": r.format, "url": r.url, "use": "file"}),
+            Use::Zarr => json!({"path": r.format, "url": r.url, "use": "zarr"}),
             Use::Service { kind, layer } => json!({"title": r.format, "url": r.url, "use": kind, "layer": layer}),
         })
         .collect();
@@ -200,6 +202,15 @@ fn portal_add(s: &mut Session, p: &Value) -> CmdResult {
                 s.notify(format!("the dataset was cut at {} rows (Socrata's export gives at most that many)", portal::SOCRATA_ROWS), false);
             }
             Ok(r)
+        }
+        "zarr" => {
+            let mut q = json!({"url": url});
+            for k in ["variable", "index", "name"] {
+                if let Some(v) = p.get(k) {
+                    q[k] = v.clone();
+                }
+            }
+            super::zarr::add(s, &q)
         }
         kind @ ("wms" | "wfs" | "arcgis") => {
             let layer = match ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()) {

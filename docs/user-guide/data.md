@@ -367,6 +367,7 @@ Several **Home › Web Data** entries open the same search on one service, with 
 | Entry | What it finds | Added as |
 |---|---|---|
 | **ArcGIS Portal…** (`arcgis-portal`) | Public items on [ArcGIS Online](https://www.arcgis.com), or on the portal whose address is given: feature, map, image and vector tile services, and GeoJSON files | The service (Add From Service), or the file |
+| **Dynamical…** (`dynamical`) | Weather and climate datasets from [dynamical.org](https://dynamical.org) (NOAA GFS, GEFS and HRRR, ECMWF, DWD ICON…); **Add** opens the dataset's Zarr store in the pane to pick a variable and its time steps (a dataset published only as Icechunk says so) | A Zarr variable's map |
 | **Earthdata GIS…** (`earthdata-gis`) | NASA's [Earthdata GIS](https://gis.earthdata.nasa.gov/portal) portal: Earth science imagery, maps and features | The service |
 | **GeoLens…** (`geolens`) | A [GeoLens](https://getgeolens.com) server's vector datasets (`https://datasets.geolibre.app` by default) | Features, the first 1,000 |
 | **Hugging Face…** (`huggingface`) | Datasets on [Hugging Face](https://huggingface.co/datasets) by name, or one by `owner/name`; **Browse Files** (`portal.files`) lists its GeoTIFFs, GeoParquet, GeoJSON, FlatGeobuf, GeoPackage, PMTiles, LiDAR and other files (public, not gated) | The file |
