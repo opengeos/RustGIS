@@ -237,7 +237,7 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
 
 /// The features of the vector tile layers drawn under a point, topmost layer first (only the
 /// first layer with any when `first_layer`): archives, vector tiles and overlays added as data,
-/// not basemaps from the catalog or MapLibre styles. Only tiles already drawn are looked at.
+/// not basemaps from the catalog or MapLibre styles. The tiles looked at are those drawn there.
 fn tile_features(s: &Session, lon: f64, lat: f64, tol_px: f64, first_layer: bool, limit: usize) -> Vec<Value> {
     use rustgis_map::tiles::TileKind;
     use rustgis_render::rustgis_tiles::{draw, mvt};

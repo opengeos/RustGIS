@@ -201,15 +201,17 @@ pub struct Picked {
 /// The vector tile features drawn under the Web Mercator point (`x`, `y`), topmost first: those
 /// of the fill, line, circle and symbol layers shown at this scale whose shapes come within
 /// `tol_px` pixels of it (lines and circles counting their width). `m_per_px` is the map's metres
-/// per (logical) pixel. Only tiles already fetched are looked at; at most `limit` are returned,
-/// each once however many style layers draw it.
+/// per (logical) pixel, from which the tile zoom is chosen as drawing chooses it, so the tiles
+/// looked at are those the map draws there (one not fetched yet is asked for, and its features
+/// come once it arrives). At most `limit` are returned, each once however many style layers
+/// draw it.
 pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usize) -> Vec<Picked> {
     let mut out: Vec<Picked> = Vec::new();
     let Resolve::Ready(r) = resolve(spec) else { return out };
     if !(m_per_px.is_finite() && m_per_px > 0.0 && x.is_finite() && y.is_finite()) {
         return out;
     }
-    let tol_px = tol_px.clamp(0.0, 64.0);
+    let tol_px = tol_px.clamp(0.0, 50.0);
     let tol = f64::from(tol_px) * m_per_px;
     let frame = Frame { left: x - tol, top: y + tol, m_per_px, ppp: 1.0 };
     let view = Extent::new(x - tol, y - tol, x + tol, y + tol);
