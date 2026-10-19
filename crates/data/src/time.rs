@@ -196,18 +196,20 @@ const LIMIT_MS: f64 = 3.0e16;
 /// The kind most of a field's values read as, and the share of the non-empty values that do
 /// (looking at up to `sample` rows).
 pub fn detect<'a>(values: impl Iterator<Item = &'a Value>, sample: usize) -> Option<(Kind, f64)> {
-    let mut counts = [0usize; 4];
+    const KINDS: [Kind; 4] = [Kind::EpochMs, Kind::EpochS, Kind::Year, Kind::Text];
+    let mut counts = [0usize; KINDS.len()];
+    let count = |counts: &[usize], k: Kind| KINDS.iter().position(|x| *x == k).and_then(|i| counts.get(i)).copied().unwrap_or(0);
     let mut seen = 0usize;
     for v in values.filter(|v| !matches!(v, Value::Null) && !text(v).is_some_and(|s| s.trim().is_empty())).take(sample) {
         seen += 1;
-        if let Some(k) = kind_of(v) {
-            counts[k as usize] += 1;
+        if let Some(c) = kind_of(v).and_then(|k| KINDS.iter().position(|x| *x == k)).and_then(|i| counts.get_mut(i)) {
+            *c += 1;
         }
     }
     let (i, n) = counts.iter().enumerate().max_by_key(|(_, n)| **n)?;
-    let kind = [Kind::EpochMs, Kind::EpochS, Kind::Year, Kind::Text].get(i).copied()?;
+    let kind = KINDS.get(i).copied()?;
     // Years and text dates mix (`1958`, `1958-03-01`): counted together as text, which reads both.
-    let (text, years) = (counts[Kind::Text as usize], counts[Kind::Year as usize]);
+    let (text, years) = (count(&counts, Kind::Text), count(&counts, Kind::Year));
     let (kind, n) = if matches!(kind, Kind::Text | Kind::Year) && text > 0 { (Kind::Text, text + years) } else { (kind, *n) };
     (n > 0 && seen > 0).then(|| (kind, n as f64 / seen as f64))
 }
