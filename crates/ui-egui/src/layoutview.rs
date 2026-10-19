@@ -1044,7 +1044,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         p["element"] = json!(id);
         let _ = app.run("layout.update", p);
     };
-    egui::Grid::new(("layout_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    egui::Grid::new(("layout_props", id)).num_columns(2).min_col_width(crate::textform::LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name"));
         if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
             update(app, json!({"name": name}));
@@ -1252,23 +1252,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
         let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
         let fields = crate::textform::Fields { text: &mut buf, size: &mut sz, color: Some(&mut c), bold: Some(&mut bb) };
-        let settled = crate::textform::show(ui, ("layout_text", li, id), &tokens, fields);
-        if settled.typing {
-            app.layout.typing.insert(key, buf);
-        } else if settled.text && buf != *text {
-            update(app, json!({"text": buf}));
-        }
-        if settled.size {
-            update(app, json!({"size": sz}));
-        }
-        if settled.color {
-            update(app, json!({"color": crate::theme::rgba(c).hex()}));
-        }
-        if settled.bold {
-            update(app, json!({"bold": bb}));
-        }
-        ui.add_space(6.0);
-        egui::Grid::new(("layout_text_type", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        // The type settings only a layout's text has, in the form's grid so they line up.
+        let settled = crate::textform::show(ui, ("layout_text", li, id), &tokens, fields, |ui| {
             ui.label(tl!("Italic"));
             let mut it = *italic;
             // Named for assistive technology, as its label sits in the other column.
@@ -1297,6 +1282,20 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             }
             ui.end_row();
         });
+        if settled.typing {
+            app.layout.typing.insert(key, buf);
+        } else if settled.text && buf != *text {
+            update(app, json!({"text": buf}));
+        }
+        if settled.size {
+            update(app, json!({"size": sz}));
+        }
+        if settled.color {
+            update(app, json!({"color": crate::theme::rgba(c).hex()}));
+        }
+        if settled.bold {
+            update(app, json!({"bold": bb}));
+        }
     }
     // The layers a legend lists: a checkbox for each vector layer of its frame's map, ticked when
     // listed. Names gone from the map drop out of the list as it's written back.
@@ -1667,7 +1666,6 @@ mod tests {
     /// map's, each added to the text and saved; the size in the range text graphics have.
     #[test]
     fn a_layout_text_offers_the_page_s_dynamic_text() {
-        use egui::accesskit::Role;
         use egui_kittest::kittest::Queryable;
         use rustgis_engine::map::layout::ElementKind;
         let mut app = RustGisApp::with_sample();
@@ -1693,8 +1691,10 @@ mod tests {
             _ => panic!("a text"),
         };
         let before = text(&h);
-        for token in ["{page}", "{scale}"] {
-            h.get_by_role_and_label(Role::Button, token).click();
+        for item in ["Page number  {page}", "Map scale  {scale}"] {
+            h.get_by_label("Insert Dynamic Text").click();
+            h.run_steps(2);
+            h.get_by_label(item).click();
             h.run_steps(2);
         }
         assert_eq!(text(&h), format!("{before}{{page}}{{scale}}"));

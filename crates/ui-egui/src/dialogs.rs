@@ -254,7 +254,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 // graphics yet. What it settles is saved by the dialog's button.
                 let d = &mut app.dialogs;
                 let fields = crate::textform::Fields { text: &mut d.text, size: &mut d.size, color: None, bold: None };
-                crate::textform::show(ui, "graphic_text", &[rustgis_engine::map::graphics::TOKENS], fields);
+                crate::textform::show(ui, "graphic_text", &[rustgis_engine::map::graphics::TOKENS], fields, |_| {});
                 // Editing a placed text: `a` and `b` hold its layer id and row.
                 let editing = app.dialogs.mode == "edit";
                 close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {

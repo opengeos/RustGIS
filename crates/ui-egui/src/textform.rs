@@ -3,7 +3,7 @@
 //! the same text can look the same on the map and on the page. It edits the values it is lent
 //! and says what was settled; each caller runs its own command.
 
-use egui::{Color32, RichText, Ui, vec2};
+use egui::{Color32, Ui, vec2};
 
 /// What the form edits. Colour and boldness are left out where the text doesn't have them yet.
 pub struct Fields<'a> {
@@ -26,9 +26,20 @@ pub struct Settled {
     pub bold: bool,
 }
 
+/// The width the labels of a properties form take, so the controls of its grids line up in one
+/// column (a longer label, in some languages, widens its own grid only).
+pub const LABEL_W: f32 = 96.0;
+
 /// The form, its fields told apart by `id` (an element, a dialog). `tokens` are the dynamic text
-/// lists the text expands where it is shown.
-pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&[(&str, &str)]], f: Fields<'_>) -> Settled {
+/// lists the text expands where it is shown, each a section of the Dynamic Text menu. `extra`
+/// adds rows of the caller's own to the grid of Size, Color and Bold (a layout's type settings).
+pub fn show(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    tokens: &[&[(&str, &str)]],
+    f: Fields<'_>,
+    extra: impl FnOnce(&mut Ui),
+) -> Settled {
     let id = egui::Id::new(id);
     let mut out = Settled::default();
     ui.label(tl!("Text"));
@@ -40,17 +51,24 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
         out.text = true;
     }
     out.text |= r.lost_focus();
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(tl!("Dynamic text:")).small().weak());
-        for &(token, what) in tokens.iter().copied().flatten() {
-            if ui.small_button(token).on_hover_text(tl!(what)).clicked() {
-                f.text.push_str(token);
-                out.text = true;
+    // The values the text can show, as the ribbon's Dynamic Text menu lists them: one line here,
+    // and what each is said in words.
+    ui.menu_button(tl!("Insert Dynamic Text"), |ui| {
+        for (i, list) in tokens.iter().enumerate() {
+            if i > 0 {
+                ui.separator();
+            }
+            for &(token, what) in *list {
+                if ui.button(format!("{}  {token}", tl!(what))).clicked() {
+                    f.text.push_str(token);
+                    out.text = true;
+                    ui.close();
+                }
             }
         }
     });
     out.typing = r.has_focus() && !out.text;
-    egui::Grid::new(id.with("style")).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+    egui::Grid::new(id.with("style")).num_columns(2).min_col_width(LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Size"));
         let before = *f.size;
         let r = ui.add(egui::DragValue::new(f.size).range(rustgis_engine::map::graphics::FONT_SIZE).speed(0.2).suffix(" pt"));
@@ -72,6 +90,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
             out.bold = r.changed();
             ui.end_row();
         }
+        extra(ui);
     });
     out
 }
@@ -106,6 +125,7 @@ mod tests {
                         color: f.styled.then_some(&mut f.color),
                         bold: f.styled.then_some(&mut f.bold),
                     },
+                    |_| {},
                 );
                 for (on, what) in [(s.text, "text"), (s.size, "size"), (s.color, "color"), (s.bold, "bold")] {
                     if on {
@@ -117,17 +137,21 @@ mod tests {
         )
     }
 
-    /// Every token listed is a button that adds it to the text, which is then settled.
+    /// Every token listed is in the Dynamic Text menu, said in words; picking one adds it to the
+    /// text, which is then settled.
     #[test]
     fn dynamic_text_is_added_from_every_list() {
         let mut h = harness(Form { text: "Page ".into(), size: 12.0, ..Form::default() });
         h.run();
-        h.get_by_role_and_label(Role::Button, "{page}").click();
-        h.run();
-        assert_eq!((h.state().text.as_str(), h.state().settled.as_slice()), ("Page {page}", &["text"][..]));
-        h.get_by_role_and_label(Role::Button, "{scale}").click();
-        h.run();
-        assert_eq!(h.state().text, "Page {page}{scale}");
+        for (item, text) in [("Page number  {page}", "Page {page}"), ("Map scale  {scale}", "Page {page}{scale}")] {
+            h.get_by_label("Insert Dynamic Text").click();
+            h.run();
+            h.get_by_label(item).click();
+            h.run();
+            assert_eq!(h.state().text, text);
+        }
+        assert_eq!(h.state().settled, ["text", "text"]);
+        assert!(h.query_by_label("Page number  {page}").is_none(), "the menu closes");
     }
 
     /// Colour and boldness show only where the text has them; the size stays in the one range
