@@ -194,6 +194,7 @@ pub fn web_data_name(name: &str) -> Option<&'static str> {
 fn web_data_title(app: &RustGisApp) -> &'static str {
     match app.ui.web_data {
         "opendata" => app.ui.opendata.title(),
+        "stac" => crate::stacui::title(app),
         n => WEB_DATA.iter().find(|(k, _)| *k == n).map(|(_, t)| *t).unwrap_or("Web Data"),
     }
 }

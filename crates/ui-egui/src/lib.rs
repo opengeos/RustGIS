@@ -1865,6 +1865,15 @@ impl RustGisApp {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 stacui::open_link(self, url)?;
             }
+            // STAC Search (`ui.stac`), or a Web Data service that is STAC Search on one API or
+            // catalog (`ui.stac.planet`, `ui.stac.portolan`, `ui.stac.sentinel2`, `ui.stac.vantor`,
+            // `ui.stac.usgsLidar`); `{"search": true}` finds items at once.
+            "ui.stac" => stacui::open_preset(self, None, p)?,
+            other if other.starts_with("ui.stac.") => {
+                let preset =
+                    other.strip_prefix("ui.stac.").and_then(stacui::Preset::from_id).ok_or_else(|| format!("unknown command '{other}'"))?;
+                stacui::open_preset(self, Some(preset), p)?;
+            }
             // Search Open Data: the dialog, then (with a query) the search, off the frame.
             "ui.searchOpenData" => {
                 self.run("ui.dialog", json!({"name": "opendata"}))?;
