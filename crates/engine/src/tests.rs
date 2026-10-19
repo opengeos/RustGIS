@@ -8091,6 +8091,18 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
     // Named as Save names it, spaces and all.
     assert!(text.contains("\"World Atlas.rgis\""), "{text}");
+    // Saved, then changed: the script says to save it again first.
+    s.path = Some("atlas.rgis".into());
+    s.dirty = true;
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(
+        text.contains("# The project has changes that aren't saved: save it first") && !text.contains("hasn't been saved yet"),
+        "{text}"
+    );
+    s.dirty = false;
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("aren't saved") && text.contains("rustgis.Session(\"atlas.rgis\")"), "{text}");
+    s.path = None;
     // A file name every system takes, whatever the project is called.
     s.project.name = "A*B?\"C<D>|E".into();
     let out = s.run("gp.historyScript", &Value::Null).unwrap();

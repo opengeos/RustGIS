@@ -3849,6 +3849,10 @@ fn save_history_script(app: &mut RustGisApp) {
                     Err(e) => app.session.notify(e.to_string(), true),
                 }
             }
+            // The script opens the project's saved file, which lacks what changed since.
+            if app.session.dirty || app.session.path.is_none() {
+                app.session.notify(tl!("Save the project too: the script opens its saved file, without changes made since."), false);
+            }
         }
         Err(e) => app.session.notify(e, true),
     }

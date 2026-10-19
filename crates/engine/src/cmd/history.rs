@@ -46,8 +46,12 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
          # Layers are named as they were then, so this opens the project they belong to.\n",
         quoted(name)
     );
+    // The script opens the saved file: a layer added since, which a run may have used, isn't
+    // there until the project is saved again.
     if s.path.is_none() {
         text.push_str("# The project hasn't been saved yet: save it as this file first.\n");
+    } else if s.dirty {
+        text.push_str("# The project has changes that aren't saved: save it first, so its layers are there.\n");
     }
     text.push_str(&format!("import rustgis\n\ns = rustgis.Session({})\n", quoted(&project_file(s))));
     for (n, r) in runs.iter().enumerate() {

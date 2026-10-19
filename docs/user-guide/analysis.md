@@ -41,7 +41,10 @@ or the Script line). **Open in Tool** opens the tool's form with those values, t
 again. **Save as Python Script…** writes the whole history as a script that opens the project
 and runs each tool in order; a run that failed is there as a comment. The CLI command and the
 script open the project's file: for a project not saved yet, they name the file it would be
-saved as, so save it there first. Addresses lose their keys, tokens and passwords on the way
+saved as, so save it there first; and a project changed since it was saved needs saving again,
+or the script opens it without those changes (a layer added since, say). Nothing that gives
+access goes with the code: addresses lose their keys, tokens and passwords, a connection its
+password, and a parameter named as a password, key, secret or token is left empty
 (`gp.historyCode` and `gp.historyScript` do the same from a script). A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
