@@ -3749,8 +3749,14 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn history_menu(app: &mut RustGisApp, ui: &mut Ui, i: usize, h: &rustgis_engine::GpRecord) {
     let replay = rustgis_engine::cmd::history::replay(h);
     let why = replay.as_ref().err().cloned().unwrap_or_default();
-    for (label, kind) in [("Copy as Python", "python"), ("Copy as Command", "command"), ("Copy as CLI Command", "cli")] {
-        if ui.add_enabled(replay.is_ok(), egui::Button::new(tl!(label))).on_disabled_hover_text(why.as_str()).clicked() {
+    for (label, kind, hint) in [
+        ("Copy as Python", "python", "A call for the rustgis Python package"),
+        ("Copy as Command", "command", "A line for the Script pane"),
+        // Quoted for a POSIX shell: cmd.exe and PowerShell read quotes otherwise.
+        ("Copy as CLI Command", "cli", "A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)"),
+    ] {
+        let r = ui.add_enabled(replay.is_ok(), egui::Button::new(tl!(label)));
+        if r.on_hover_text(tl!(hint)).on_disabled_hover_text(why.as_str()).clicked() {
             match app.run("gp.historyCode", json!({"run": i, "as": kind})) {
                 Ok(v) => ui.ctx().copy_text(v["code"].as_str().unwrap_or("").to_string()),
                 Err(e) => app.session.notify(e, true),

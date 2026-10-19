@@ -35,12 +35,15 @@ that names the choices (Buffer's units no longer take the abbreviations `m`, `mi
 The History pane lists each run with when it ran (in UTC). Its **⋯** menu, or a right-click on
 the tool's name, copies a run as code, with the parameters it ran with: **Copy as Python** (a
 call for the [`rustgis` package](../python.md), one parameter a line), **Copy as Command** (a
-line for the Script pane) and **Copy as CLI Command** (`rustgis-cli run --project … --cmd …`).
-**Open in Tool** opens the tool's form with those values, to change and run again. **Save as
-Python Script…** writes the whole history as a script that opens the project and runs each tool
-in order; a run that failed is there as a comment. Addresses lose their keys, tokens and
-passwords on the way (`gp.historyCode` and `gp.historyScript` do the same from a script). A point
-buffered where the map was clicked is copied as the command that buffered it, with the point.
+line for the Script pane) and **Copy as CLI Command** (`rustgis-cli run --project … --cmd …`,
+quoted for a POSIX shell: macOS, Linux, WSL or Git Bash; on Windows' own shells, use the Python
+or the Script line). **Open in Tool** opens the tool's form with those values, to change and run
+again. **Save as Python Script…** writes the whole history as a script that opens the project
+and runs each tool in order; a run that failed is there as a comment. The CLI command and the
+script open the project's file: for a project not saved yet, they name the file it would be
+saved as, so save it there first. Addresses lose their keys, tokens and passwords on the way
+(`gp.historyCode` and `gp.historyScript` do the same from a script). A point buffered where the
+map was clicked is copied as the command that buffered it, with the point.
 
 The built-in tools:
 
