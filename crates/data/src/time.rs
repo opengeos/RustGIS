@@ -266,6 +266,8 @@ pub fn parse_text(s: &str) -> Option<f64> {
         c.hour = digits(hms.next()?, 1, 2)?;
         c.minute = hms.next().map(|p| digits(p, 1, 2)).unwrap_or(Some(0))?;
         c.second = match hms.next() {
+            // Up to 60.999: a leap second is accepted on purpose (it reads as the next minute's
+            // start).
             Some(p) => p.parse::<f64>().ok().filter(|x| (0.0..61.0).contains(x))?,
             None => 0.0,
         };
