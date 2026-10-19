@@ -70,82 +70,82 @@ script from the command line, a notebook or the AI Assistant.
 
 <figure markdown="span">
   [![The Style tab and the Symbology pane, with the larger African countries selected](https://assets.rustgis.app/images/symbology-table.webp)](https://assets.rustgis.app/images/symbology-table.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Symbology and tables.</strong> Selecting a layer opens its contextual tabs: symbology, effects, labeling and data. Selection is synced between the map and the attribute table.</figcaption>
+  <figcaption><strong>Symbology and tables.</strong> Graduated colours, with the selection synced to the table.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The AI Assistant selecting the five most populous African countries](https://assets.rustgis.app/images/assistant.webp)](https://assets.rustgis.app/images/assistant.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>AI Assistant.</strong> Ask about your data or tell the map what to do. The assistant runs RustGIS commands for you, and each change can be undone.</figcaption>
+  <figcaption><strong>AI Assistant.</strong> Ask about your data or tell the map what to do.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The Analyze tab's tool gallery and dissolved buffers around African cities](https://assets.rustgis.app/images/buffer-history.webp)](https://assets.rustgis.app/images/buffer-history.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Analysis.</strong> A tool gallery, the Tools pane and a run history, guided workflows, ModelBuilder, and 1,000+ GeoLibre and Whitebox tools.</figcaption>
+  <figcaption><strong>Analysis.</strong> A tool gallery, the Tools pane and 1,000+ GeoLibre tools.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![ModelBuilder: a model of buffer, clip and dissolve after a run](https://assets.rustgis.app/images/modelbuilder.webp)](https://assets.rustgis.app/images/modelbuilder.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>ModelBuilder.</strong> Chain tools on a node canvas of inputs, tools and outputs, check the model as you build, and run it in one go.</figcaption>
+  <figcaption><strong>ModelBuilder.</strong> Chain tools on a node canvas and run them in one go.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![A shaded-relief elevation model with the Style tab](https://assets.rustgis.app/images/raster.webp)](https://assets.rustgis.app/images/raster.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Rasters.</strong> GeoTIFF and COG of any pixel type, reprojected on the fly, with stretch, RGB, classified and shaded-relief symbology.</figcaption>
+  <figcaption><strong>Rasters.</strong> GeoTIFF and COG, with stretch, RGB and shaded-relief styles.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The World Atlas on the 3D globe](https://assets.rustgis.app/images/globe.webp)](https://assets.rustgis.app/images/globe.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Globe and projections.</strong> A 3D globe, Equal Earth, Robinson, polar and regional presets, or any EPSG code.</figcaption>
+  <figcaption><strong>Globe and projections.</strong> A 3D globe, Equal Earth, Robinson or any EPSG code.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![Mount Rainier in USGS imagery draped over terrain, tilted](https://assets.rustgis.app/images/terrain.webp)](https://assets.rustgis.app/images/terrain.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Terrain.</strong> Tilt and turn the map, and drape it over a DEM or elevation tiles.</figcaption>
+  <figcaption><strong>Terrain.</strong> Tilt the map and drape it over elevation.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![Mars on the 3D globe, on the Viking mosaic](https://assets.rustgis.app/images/mars-globe.webp)](https://assets.rustgis.app/images/mars-globe.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Other worlds.</strong> Map the Moon, Mars and nine other bodies on their own basemaps, measured with their own radius.</figcaption>
+  <figcaption><strong>Other worlds.</strong> The Moon, Mars and nine more bodies, on their own basemaps.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![Countries extruded by population on a tilted map](https://assets.rustgis.app/images/extrusion.webp)](https://assets.rustgis.app/images/extrusion.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Extrusion.</strong> Stand features up by a field or a height, lit and shaded, on a tilted map.</figcaption>
+  <figcaption><strong>Extrusion.</strong> Stand features up by a field, lit and shaded.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![An OpenFreeMap vector style over Paris with the Basemap gallery](https://assets.rustgis.app/images/tiles.webp)](https://assets.rustgis.app/images/tiles.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Web basemaps.</strong> XYZ, TMS and WMS tiles, Mapbox Vector Tiles and MapLibre styles, on the flat map and the globe.</figcaption>
+  <figcaption><strong>Web basemaps.</strong> XYZ, WMS and vector tiles, and MapLibre styles.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The Sentinel-2 Explorer in the Web Data pane, with scene footprints on the map](https://assets.rustgis.app/images/web-data.webp)](https://assets.rustgis.app/images/web-data.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Web Data.</strong> STAC catalogs, Overture Maps, OpenStreetMap, NASA Earthdata, open-data portals and satellite embeddings, searched where the map is.</figcaption>
+  <figcaption><strong>Web Data.</strong> STAC, Overture Maps, NASA and open-data portals, where the map is.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The Time Slider showing dated events through 2018](https://assets.rustgis.app/images/time-slider.webp)](https://assets.rustgis.app/images/time-slider.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Time Slider.</strong> Step dated features and dated imagery through time, and export the steps as a GIF.</figcaption>
+  <figcaption><strong>Time Slider.</strong> Step dated features and imagery through time.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![A page layout with a map frame, legend, north arrow and scale bar](https://assets.rustgis.app/images/layout.webp)](https://assets.rustgis.app/images/layout.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Layouts.</strong> Map frames, legends, scale bars, grids, map series and PDF export, plus reports and presentations.</figcaption>
+  <figcaption><strong>Layouts.</strong> Map frames, legends, scale bars, map series and PDF export.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The Plugin Manager browsing the plugin registry](https://assets.rustgis.app/images/plugins.webp)](https://assets.rustgis.app/images/plugins.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Plugins.</strong> Browse and install sandboxed plugins from <a href="https://plugins.rustgis.app">plugins.rustgis.app</a>, each showing the permissions it asks for.</figcaption>
+  <figcaption><strong>Plugins.</strong> Install sandboxed plugins from <a href="https://plugins.rustgis.app">plugins.rustgis.app</a>.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![Dark mode over Europe on the Midnight basemap](https://assets.rustgis.app/images/dark.webp)](https://assets.rustgis.app/images/dark.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Dark mode</strong> and the View tab: effects, scene settings, panes and linked views.</figcaption>
+  <figcaption><strong>Dark mode</strong> and the View tab's effects, panes and linked views.</figcaption>
 </figure>
 
 <figure markdown="span">
   [![The Project backstage](https://assets.rustgis.app/images/backstage.webp)](https://assets.rustgis.app/images/backstage.webp){ target="_blank" rel="noopener" title="Open the full-size image" }
-  <figcaption><strong>Projects.</strong> Start blank, from the World Atlas sample, or open a <code>.rgis</code> project.</figcaption>
+  <figcaption><strong>Projects.</strong> Start blank, from the World Atlas sample, or open a project.</figcaption>
 </figure>
 
 </div>

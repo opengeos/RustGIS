@@ -23,7 +23,7 @@ and adds or calculates a field.
 
 <figure markdown="span">
   ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
-  <figcaption>The attribute table, with the countries a SQL clause selected highlighted on the map and in the table.</figcaption>
+  <figcaption>The attribute table, with a selection highlighted on the map and in the table.</figcaption>
 </figure>
 
 Select By Attributes and definition queries use SQL `WHERE` clauses:
@@ -79,7 +79,7 @@ contribute their vertices. Leave the extent empty to use the input's, or give it
 
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
-  <figcaption>Tissot's indicatrix on Robinson: equal circles on the Earth, stretched and sheared by the projection.</figcaption>
+  <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>
 </figure>
 
 **Tissot's Indicatrix** shows what the map's projection does to the Earth. It draws the same small circle repeated over a grid: by default circles of 500 km radius every 30° over the whole world. With **Area: Map Extent** it fills the view instead (the whole Earth on the globe), for a country or a state with a smaller spacing and radius.
