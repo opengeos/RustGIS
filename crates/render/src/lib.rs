@@ -182,7 +182,7 @@ pub struct PlacedLabel {
 impl PlacedLabel {
     /// The centre of the text, by this crate's measure of its width.
     pub fn center_x(&self) -> f32 {
-        self.x - self.align * text::measure(&self.text, self.size, self.bold)
+        self.x - self.align * text::block_width(&self.text, self.size, self.bold)
     }
 }
 
@@ -2515,7 +2515,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let is_point = g.kind() == GeometryType::Point;
                 let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                 let (dx, dy) = labels.placement.offset(
-                    text::measure(&text, labels.size, labels.bold),
+                    text::block_width(&text, labels.size, labels.bold),
                     labels.size * 1.25 * text::line_count(&text) as f32,
                     marker,
                     is_point,
@@ -3106,7 +3106,7 @@ fn place_labels(mut cands: Vec<(PlacedLabel, f32, (u32, usize))>, fixed: Vec<Pla
     cands.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     // The text's box and its icon's, together.
     let bbox = |l: &PlacedLabel| {
-        let tw = text::measure(&l.text, l.size, l.bold);
+        let tw = text::block_width(&l.text, l.size, l.bold);
         let th = l.size * 1.25 * text::line_count(&l.text) as f32;
         let cx = l.center_x();
         let text = (!l.text.is_empty()).then(|| [cx - tw / 2.0 - 2.0, l.y - th / 2.0, cx + tw / 2.0 + 2.0, l.y + th / 2.0]);
@@ -3419,7 +3419,10 @@ mod tests {
         let (_, alone) = ink(&at("Atlantic", false));
         assert!(cols.first().zip(alone.first()).is_some_and(|(a, b)| a.abs_diff(*b) <= 2), "the longer line keeps its place");
         // As wide as the widest line, as tall as its lines; a trailing newline is an empty line.
-        assert_eq!(text::measure("ab\ncdef", 10.0, false), text::measure("cdef", 10.0, false));
+        assert_eq!(text::block_width("ab\ncdef", 10.0, false), text::measure("cdef", 10.0, false));
+        // Text drawn on one line (a table cell, a chart's name) is still measured whole, so it is
+        // cut to its column as it is drawn.
+        assert_eq!(text::measure("ab\ncdef", 10.0, false), text::measure("abcdef", 10.0, false));
         assert_eq!((text::line_count("a"), text::line_count("a\nb"), text::line_count("a\n")), (1, 2, 2));
         assert_eq!(text::line_count(&"\n".repeat(10_000)), 200, "lines are bounded");
         // The collision box holds both lines: a label just below the first line's box but

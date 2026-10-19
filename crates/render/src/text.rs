@@ -109,13 +109,18 @@ pub fn line_count(text: &str) -> usize {
     lines(text).count()
 }
 
-/// Text width in points at `size` (font px ≈ size × 1.33 for point sizes): its widest line.
+/// Text width in points at `size` (font px ≈ size × 1.33 for point sizes), drawn on one line.
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
-    let one = |line: &str| match font(bold) {
-        Some(_) => shape(line, size * 1.33, bold).1,
-        None => line.chars().count() as f32 * size * 0.6,
-    };
-    lines(text).map(one).fold(0.0, f32::max)
+    if font(bold).is_none() {
+        return text.chars().count() as f32 * size * 0.6;
+    }
+    shape(text, size * 1.33, bold).1
+}
+
+/// A label's width in points: its widest line, as [`draw`] lays its lines out (#577). Text drawn
+/// on one line (table cells, chart names…) is measured with [`measure`].
+pub fn block_width(text: &str, size: f32, bold: bool) -> f32 {
+    lines(text).map(|line| measure(line, size, bold)).fold(0.0, f32::max)
 }
 
 fn blend(pm: &mut Pixmap, x: i32, y: i32, c: Rgba, cov: f32) {
@@ -217,7 +222,7 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     // Several lines (#577) as the map view draws them: each from the left of a block as wide as
     // the widest, the block centred on the label's point.
     let (n, line_h) = (line_count(&l.text), px * 1.25);
-    let w = measure(&l.text, l.size, l.bold) * ppp;
+    let w = block_width(&l.text, l.size, l.bold) * ppp;
     if l.framed {
         let (h, pad) = (px * 1.2 + n.saturating_sub(1) as f32 * line_h, 3.0 * ppp);
         if let Some(r) = Rect::from_xywh(cx - w / 2.0 - pad, cy - h / 2.0 - pad, w + 2.0 * pad, h + 2.0 * pad) {
