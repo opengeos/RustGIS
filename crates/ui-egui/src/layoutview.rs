@@ -1036,7 +1036,9 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
-    ui.label(egui::RichText::new(tl!(e.kind.label())).font(semibold(14.0)));
+    // Where it is ("Layout: Text"), as the pane also formats a text on the map ("Map: Text").
+    let heading = crate::i18n::fmt("Layout: {kind}", &[("kind", tl!(e.kind.label()))]);
+    ui.label(egui::RichText::new(heading).font(semibold(14.0)));
     ui.separator();
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;

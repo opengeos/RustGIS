@@ -111,7 +111,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             current.clone()
         }
     };
-    ui.label(egui::RichText::new(tl!("Text Graphic")).font(crate::theme::semibold(14.0)));
+    let heading = crate::i18n::fmt("Map: {kind}", &[("kind", tl!("Text"))]);
+    ui.label(egui::RichText::new(heading).font(crate::theme::semibold(14.0)));
     ui.separator();
     let select = app.graphic_format.select.take_if(|s| *s == k).is_some();
     let fields = crate::textform::Fields { text: &mut text, size: &mut size, color: Some(&mut color), bold: Some(&mut bold), select };

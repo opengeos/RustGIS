@@ -7849,6 +7849,24 @@ fn text_graphics_can_be_bold() {
     assert!(graphics::bold(&ds(&s), rb) && !graphics::bold(&ds(&s), ra));
 }
 
+/// A text graphic is placed again by its points (dragged on the map, #516), as one undo step;
+/// other shapes move with `edit.move`.
+#[test]
+fn a_text_graphic_is_placed_again_by_its_points() {
+    let mut s = world();
+    let t = s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "A"})).unwrap();
+    let id = t["layer"].as_u64().unwrap() as u32;
+    let row = t["row"].as_u64().unwrap() as usize;
+    let at = |s: &Session| s.map().layer(id).unwrap().dataset.features[row].geometry.as_ref().unwrap().label_point().unwrap();
+    s.run("graphics.edit", &json!({"layer": id, "row": row, "points": [[12, 48]]})).unwrap();
+    assert_eq!((at(&s).x, at(&s).y), (12.0, 48.0));
+    assert_eq!(s.undo_label(), Some("Edit Graphic"));
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!((at(&s).x, at(&s).y), (10.0, 50.0));
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 0], [5, 5]], "layer": id})).unwrap();
+    assert!(s.run("graphics.edit", &json!({"layer": id, "row": r["row"], "points": [[1, 1]]})).is_err());
+}
+
 /// A command that opens another project part way and then fails (a plugin's command through its
 /// bridge) leaves the project before it open, counted as it was: the interface keeps what it
 /// holds for it.

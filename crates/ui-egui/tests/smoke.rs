@@ -1861,6 +1861,53 @@ fn plugin_panels_run_their_commands_when_a_slider_is_let_go() {
 }
 
 /// A primary click in the middle of the map.
+/// The selected text, grabbed by its text, is dragged to another place (#516), as one undo step;
+/// the map stays where it was.
+#[test]
+fn a_selected_text_is_dragged_on_the_map() {
+    let mut h = harness();
+    // The pane open first: opening narrows the map, which would move the text on the screen.
+    h.state_mut().run("ui.pane.format", json!({})).unwrap();
+    h.step();
+    h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
+    h.step();
+    click_map(&mut h);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
+    // The pane took the focus to type over the text: Enter ends it.
+    h.key_press(egui::Key::Enter);
+    h.step();
+    let anchor = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+        let l = h.state().session.map().layers.iter().find(|l| l.selection.len() == 1).unwrap();
+        l.dataset.features[l.selection[0]].geometry.as_ref().unwrap().label_point().unwrap()
+    };
+    let (before, camera) = (anchor(&h), h.state().session.map().camera.center);
+    let (from, to) = (egui::pos2(700.0, 500.0), egui::pos2(780.0, 500.0));
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.step();
+    for x in [720.0, 750.0, 780.0] {
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(x, 500.0)));
+        h.step();
+    }
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.step();
+    h.step();
+    let after = anchor(&h);
+    assert!(after.x > before.x + 1e-6 && (after.y - before.y).abs() < 1e-6, "{before:?} → {after:?}");
+    assert_eq!(h.state().session.map().camera.center, camera, "the map didn't pan");
+    assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
+}
+
 /// The text of the one text graphic selected, if that is what is selected.
 fn selected_text(h: &egui_kittest::Harness<'_, RustGisApp>) -> Option<String> {
     use rustgis_ui_egui::rustgis_engine::map::graphics;

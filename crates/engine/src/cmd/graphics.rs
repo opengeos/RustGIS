@@ -30,7 +30,7 @@ pub fn commands() -> Vec<C> {
             .when(super::need_selection)
             .params(r##"{"fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number, "fontSize"?: number, "bold"?: bool, "text"?: string}"##),
         C::new("graphics.edit", "Edit Graphic", "Edit › Graphics", edit).params(
-            r##"{"layer": graphics layer, "row": number, "text"?: string, "fontSize"?: number, "bold"?: bool, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
+            r##"{"layer": graphics layer, "row": number, "points"?: [[lon, lat]] (a point or a text: where it sits), "text"?: string, "fontSize"?: number, "bold"?: bool, "fill"?: "#RRGGBBAA", "outline"?: "#RRGGBBAA", "width"?: number, "size"?: number}"##,
         ),
         C::new("graphics.keepTool", "Keep the last tool active", "Edit › Graphics", |s, p| {
             s.keep_tool = b(p, "on").unwrap_or(!s.keep_tool);
@@ -292,6 +292,29 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
         }
         if t.chars().take(2000).all(char::is_whitespace) {
             return Err("text is required".into());
+        }
+    }
+    // Placed again (a text dragged on the map, #516): only what sits at one point; other shapes
+    // move with `edit.move`.
+    let placed = match p.get("points") {
+        Some(_) => {
+            let kind = graphics::kind(&l.dataset, row).to_string();
+            if !matches!(kind.as_str(), "point" | "text") {
+                return Err("only a point or a text graphic is placed again by its points".into());
+            }
+            Some(geometry(&kind, points(p)?)?)
+        }
+        None => None,
+    };
+    if let Some(g) = placed {
+        let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+        if let Some(ft) = l.dataset.features.get_mut(row) {
+            ft.geometry = Some(g);
+        }
+        l.touch_geometry();
+        let styled = ["text", "fill", "outline", "width", "size", "fontSize", "bold"].iter().any(|k| p.get(*k).is_some());
+        if !styled {
+            return Ok(json!({"placed": 1}));
         }
     }
     restyle(s, p, Some((id, row)))

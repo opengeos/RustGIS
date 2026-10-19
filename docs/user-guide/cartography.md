@@ -173,6 +173,9 @@ width, text size and bold in the layer's attributes, so you can edit them in the
 or with `graphics.style`. To change a text later, click anywhere on it (with Explore or Select):
 selected alone, it opens in the Format pane, with the same form a layout's text has there: text,
 size, colour and bold. Each change is one undo step on that text only (`graphics.edit` does the
-same by layer and row, with `text`, `fontSize`, `fill` for the colour and `bold`). Closing the
+same by layer and row, with `text`, `fontSize`, `fill` for the colour and `bold`). Once a text is selected, drag it by
+its text to move it, as one undo step (`points` on `graphics.edit`); a drag anywhere else, or on a
+text that isn't selected, pans the map as usual. A graphics layer that isn't **Selectable** keeps
+its texts from being picked, moved or edited. Closing the
 pane keeps the text selected; double-clicking it or right-clicking it › **Edit Text…** opens the
 pane again. Text sizes go from 2 to 400 points, on the map as on a layout page.
