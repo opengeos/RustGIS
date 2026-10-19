@@ -6,6 +6,8 @@
 use egui::{RichText, Ui, vec2};
 use rustgis_engine::render::rustgis_tiles::failure::{Failure, Reason, status_name};
 
+use rustgis_engine::sources::redact_text;
+
 use crate::theme::Tokens;
 
 /// What happened, and what to do next (translated).
@@ -62,25 +64,6 @@ pub fn details(f: &Failure) -> Vec<(&'static str, String)> {
         }
     }
     rows
-}
-
-/// Text with every web address in it redacted (`sources::redact`): an error's text may quote the
-/// address asked for, or one a redirect led to, keys and all. Each address is redacted alone, so
-/// the words around it stay; punctuation that ends a sentence isn't taken as part of it.
-fn redact_text(text: &str) -> String {
-    text.split_inclusive(char::is_whitespace)
-        .map(|piece| {
-            let word = piece.trim_end();
-            let Some(at) = word.find("://") else { return piece.to_string() };
-            // The address starts at its scheme, after any quote or bracket before it.
-            let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
-            let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
-            let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
-            let (before, address, after) =
-                (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
-            format!("{before}{}{after}{}", rustgis_engine::sources::redact(address), piece.get(word.len()..).unwrap_or(""))
-        })
-        .collect()
 }
 
 /// The details as text to send to the service's administrator (in English, like the server's

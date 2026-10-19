@@ -94,9 +94,10 @@ pub struct MapView {
     /// The map's controls, scale bar, sketches and pop-up are left out (a screen snapshot for the
     /// MCP relay that asked for the map alone).
     pub hide_overlays: bool,
-    /// How long the last frame drawn mid-motion took (ms), and the share of full resolution it
-    /// was drawn at: the next is spaced out by it, and drawn finer or coarser to take about 16 ms.
-    motion_cost: (f64, f64),
+    /// How long a frame of the view at full resolution takes to draw (ms), as the last one
+    /// measured it: frames drawn mid-motion are spaced out by it, and drawn coarser only when
+    /// full resolution would be too slow (see `motion_resolution`).
+    motion_cost: f64,
     labels: Vec<PlacedLabel>,
     /// On the globe, where each label stands on the Earth, so it follows the globe as it turns
     /// and zooms until the next frame places them again.
@@ -193,7 +194,7 @@ impl Default for MapView {
             tex_rect: Rect::NOTHING,
             view_rect: None,
             hide_overlays: false,
-            motion_cost: (0.0, 1.0),
+            motion_cost: 0.0,
             labels: Vec::new(),
             label_lonlat: Vec::new(),
             label_camera: Camera::world(),
@@ -591,6 +592,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 && let Some(r) = done.rendered
             {
                 app.map.render_ms = done.ms;
+                app.map.motion_cost = full_cost(done.ms as f64, &done.view, (w, h), ppp);
                 match r {
                     rustgis_engine::render::RenderOutput::Cpu(r) => {
                         app.map.gpu_frame = None;
@@ -681,11 +683,12 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     let stale = app.map.key != Some(key);
     // While the flat map moves on the CPU its last frame is shifted and scaled, until that no
-    // longer covers the view (zooming out, panning past its edge) or stretches it blurry
-    // (zooming in). Then a frame is drawn mid-motion: for a gap, over twice the width and height,
-    // so the next steps are covered too (as MapLibre keeps showing the tiles around the view);
-    // when stretched, at the view. Frames are drawn coarser while they're slow, and sharpening
-    // ones spaced out by how long the last took, so the motion between them stays smooth.
+    // longer covers the view (zooming out, panning past its edge) or stretches it noticeably
+    // (zooming in). Then a frame is drawn mid-motion: for a gap, over 1.5 times the width and
+    // height, so the next steps are covered too (as MapLibre keeps showing the tiles around the
+    // view); when stretched, at the view. They are drawn at full resolution, as QGIS draws its
+    // previews, unless that would take too long (see `motion_resolution`); sharpening ones are
+    // spaced out by how long they take, so the motion between them stays smooth.
     // Turning the map isn't a shift and a scale: each step is drawn.
     // Nor is moving a tilted map (its perspective changes).
     // The tilted map's drape stands in for both.
@@ -695,19 +698,18 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .then(|| {
             let r = tex_rect(app, cam, rect, false);
             let stretch = r.width() as f64 / app.map.tex_size.0.max(1.0);
-            let (ms, k) = app.map.motion_cost;
-            let (vw, vh, most, least) = if !r.expand(0.5).contains_rect(rect) {
-                // A gap is filled at once: each such frame covers zooming out twice as far, so
-                // they can't come often.
-                (w * 2.0, h * 2.0, 0.5, 0.2)
-            } else if stretch > 1.3 && time - app.map.last_render >= motion_gap(ms) {
-                (w, h, 1.0, 0.4)
+            let full = app.map.motion_cost;
+            let (vw, vh, k) = if !r.expand(0.5).contains_rect(rect) {
+                // A gap is filled at once.
+                (w * GAP_SPAN, h * GAP_SPAN, motion_resolution(full, GAP_SPAN * GAP_SPAN))
             } else {
-                return None;
+                let k = motion_resolution(full, 1.0);
+                if stretch <= 1.1 || time - app.map.last_render < motion_gap(full * k * k) {
+                    return None;
+                }
+                (w, h, k)
             };
-            // Aim for a 60 Hz frame budget; start coarse until a measured draw cost is available.
-            let k = if ms > 0.0 { k * (16.0 / ms).sqrt().clamp(0.5, 1.4) } else { 0.65 };
-            Some((vw, vh, ppp * (k * most).clamp(least, most) as f32))
+            Some((vw, vh, ppp * k as f32))
         })
         .flatten();
     let (vw, vh, vppp) = motion.unwrap_or((w, h, render_ppp));
@@ -775,9 +777,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         }
         app.map.render_ms = t0.elapsed().as_millis() as u64;
-        if let Some((_, _, p)) = motion {
-            let k = (p / ppp) as f64 / if vw > w { 0.5 } else { 1.0 };
-            app.map.motion_cost = (t0.elapsed().as_secs_f64() * 1000.0, k);
+        let view = View { width: vw, height: vh, pixels_per_point: vppp as f64, camera: cam, sky: true };
+        app.map.motion_cost = full_cost(t0.elapsed().as_secs_f64() * 1000.0, &view, (w, h), ppp);
+        if motion.is_some() {
             ui.ctx().request_repaint();
         } else if app.map.camera_moved {
             app.session.record_extent();
@@ -967,6 +969,32 @@ fn show_frame(
     app.map.tex_camera = cam;
     app.map.tex_size = (view.width, view.height);
     app.map.key = Some(key);
+}
+
+/// How much wider and taller than the view a frame drawn mid-motion to fill a gap is, so the
+/// next steps of zooming out or panning are covered too.
+const GAP_SPAN: f64 = 1.5;
+
+/// How long (ms) a frame drawn mid-motion may take before it is drawn coarser: about two
+/// 60 Hz frames, so a pan or zoom that redraws stays smooth.
+const MOTION_BUDGET_MS: f64 = 32.0;
+
+/// The share of full resolution for a frame drawn mid-motion over `area` times the view, when
+/// one at full resolution over the view takes `full_ms` to draw: full resolution while that
+/// fits `MOTION_BUDGET_MS`, coarser (down to half) only for maps that draw slowly.
+fn motion_resolution(full_ms: f64, area: f64) -> f64 {
+    let cost = full_ms * area;
+    if cost.is_nan() || cost <= MOTION_BUDGET_MS {
+        return 1.0;
+    }
+    (MOTION_BUDGET_MS / cost).sqrt().clamp(0.5, 1.0)
+}
+
+/// What a frame drawn for `view` in `ms` would have cost at full resolution over the `w × h`
+/// map view: drawing grows with its pixels.
+fn full_cost(ms: f64, view: &View, (w, h): (f64, f64), ppp: f32) -> f64 {
+    let pixels = (view.width * view.height) / (w * h).max(1.0) * (view.pixels_per_point / f64::from(ppp).max(0.01)).powi(2);
+    ms / pixels.max(0.01)
 }
 
 /// The least time (s) between frames drawn mid-motion, for frames taking `ms` to draw: quick
@@ -2675,6 +2703,25 @@ mod tests {
         h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide countries");
         h.step();
         assert!(h.state().map.labels.is_empty(), "the preview kept labels from the old visibility state");
+    }
+
+    /// Frames drawn mid-motion stay at full resolution unless the map draws slowly, and even
+    /// then are never drawn below half resolution (a blurry map while panning and zooming).
+    #[test]
+    fn motion_frames_stay_sharp_unless_slow() {
+        assert_eq!(motion_resolution(0.0, 1.0), 1.0, "unmeasured cost");
+        assert_eq!(motion_resolution(12.0, 1.0), 1.0, "a quick map");
+        assert_eq!(motion_resolution(12.0, GAP_SPAN * GAP_SPAN), 1.0, "a quick map's gap frame");
+        let slow = motion_resolution(64.0, 1.0);
+        assert!((0.5..1.0).contains(&slow), "a slow map draws coarser: {slow}");
+        assert_eq!(motion_resolution(10_000.0, 4.0), 0.5, "never below half");
+        assert_eq!(motion_resolution(f64::NAN, 1.0), 1.0);
+        assert_eq!(motion_resolution(f64::INFINITY, 1.0), 0.5);
+        // A gap frame over 1.5 times the view at full resolution costs 2.25 views.
+        let gap = View { width: 1200.0, height: 900.0, pixels_per_point: 2.0, camera: Camera::world(), sky: true };
+        assert!((full_cost(45.0, &gap, (800.0, 600.0), 2.0) - 20.0).abs() < 1e-9);
+        let coarse = View { pixels_per_point: 1.0, ..gap };
+        assert!((full_cost(45.0, &coarse, (800.0, 600.0), 2.0) - 80.0).abs() < 1e-9);
     }
 
     /// The GPU fast path moves the last frame's meshes only while they cover the view: zooming

@@ -140,9 +140,11 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
 - **PMTiles archives** (`.pmtiles`) of raster or vector tiles: a web address, read a tile at a
   time by byte ranges (the server must allow range requests, and CORS for the web app), or on the
-  desktop a file (**Tile Archive File…**, Add Data, or drop it on the window). A vector archive
-  that is a basemap is drawn in the built-in style; any other is drawn with each of its layers in
-  a colour of its own.
+  desktop a file (**Tile Archive File…**, Add Data, or drop it on the window). Uncompressed,
+  gzip, Brotli and Zstandard archives are read. The map moves to what the archive covers once its
+  header is read, unless it covers the whole world, and right-clicking its row in Contents gives
+  **Zoom To Layer**. A vector archive that is a basemap is drawn in the built-in style; any other
+  is drawn with each of its layers in a colour of its own.
 - **MBTiles files** (`.mbtiles`) of raster or vector tiles, drawn as PMTiles archives are: on
   the desktop read in place a tile at a time (**Tile Archive File…**, Add Data, or drop it on the
   window); in the web app added with Add Data and held in memory for the session (a project keeps
@@ -175,8 +177,8 @@ their credits are shown in the corner of the map and drawn on exports.
 
 Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
 meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the
-tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.setTiles` and
-`map.tiles`.
+tiles are reprojected. From scripts: `map.addTiles`, `map.removeTiles`, `map.setTiles`,
+`map.zoomToTiles` and `map.tiles`.
 
 ### Other worlds
 

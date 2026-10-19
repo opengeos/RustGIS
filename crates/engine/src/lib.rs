@@ -232,14 +232,30 @@ impl Tool {
 /// One geoprocessing history row.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GpRecord {
+    /// The tool's name, as shown.
     pub tool: String,
+    /// The tool's id (`buffer`), to run it again (#539); empty in projects saved before it,
+    /// where the name finds a built-in tool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub params: Value,
+    /// The command that ran the tool, when it wasn't `gp.run` with `params`: its id and its
+    /// parameters, such as a point buffered where the map was clicked (`gp.bufferPoint`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<(String, Value)>,
+    /// When it ran, in seconds since 1970 (UTC); 0 in projects saved before it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub at: u64,
     pub ok: bool,
     pub messages: Vec<String>,
     pub millis: u64,
     /// The layers the run added (by name at the time).
     #[serde(default)]
     pub outputs: Vec<String>,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 /// A topology problem found by `topology.validate` (shown in the Error Inspector).
@@ -337,7 +353,8 @@ pub struct Session {
     /// Map view size in logical points (set by the UI each frame).
     pub view_size: (f64, f64),
     /// A MapLibre style tile layer (by its address) whose own view the map goes to once it loads
-    /// (`map.addTiles` with `"view": true`), and the camera then: moved since, the map stays.
+    /// (`map.addTiles` with `"view": true`), or a PMTiles archive whose bounds it goes to, and the
+    /// camera then: moved since, the map stays.
     pub style_view: Option<(String, Camera)>,
     pub notices: Vec<Notice>,
     /// Notices given in this session, including ones no longer kept (see [`Session::notices_since`]),
@@ -449,8 +466,12 @@ const MAX_URL_REQUESTS: usize = 16;
 pub(crate) struct PendingRun {
     pub id: u64,
     pub tool: String,
+    /// The tool's id, for the history.
+    pub tool_id: String,
     pub params: serde_json::Value,
     pub result: Result<rustgis_analysis::ToolResult, String>,
+    /// When the run started, in milliseconds since 1970.
+    pub started: u64,
     pub millis: u64,
 }
 
@@ -648,8 +669,9 @@ impl Session {
         self.project.map_mut()
     }
 
-    /// Moves the map to the view of a style added with `"view": true` once the style has loaded
-    /// (the UI asks each frame). True when the map moved.
+    /// Moves the map to the view of a style added with `"view": true` once the style has loaded,
+    /// or to an archive's bounds once its header is read (the UI asks each frame). True when the
+    /// map moved.
     pub fn follow_style_view(&mut self) -> bool {
         cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
     }

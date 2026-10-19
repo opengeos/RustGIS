@@ -179,8 +179,8 @@ fn thousands(v: f64) -> String {
     out
 }
 
-/// (YYYY-MM-DD, HH:MM) in UTC.
-fn civil(secs: u64) -> (String, String) {
+/// (YYYY-MM-DD, HH:MM) in UTC, of `secs` since 1970.
+pub fn civil(secs: u64) -> (String, String) {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     // Days to civil date (proleptic Gregorian), after Howard Hinnant's algorithm.

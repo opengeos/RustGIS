@@ -4790,6 +4790,67 @@ fn identify_reports_vector_tile_features() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A tile-less PMTiles archive (an empty root directory) whose header gives these bounds
+/// (west, south, east, north).
+fn empty_pmtiles(bounds: [f64; 4]) -> Vec<u8> {
+    let mut h = b"PMTiles".to_vec();
+    h.push(3);
+    // Root directory (one byte: no entries), no metadata, leaves or tiles.
+    for v in [127u64, 1, 128, 0, 128, 0, 128, 0, 0, 0, 0] {
+        h.extend_from_slice(&v.to_le_bytes());
+    }
+    h.extend_from_slice(&[1, 1, 1, 1, 0, 6]); // clustered, no compression, vector tiles, zooms 0–6
+    for v in bounds {
+        h.extend_from_slice(&((v * 1e7) as i32).to_le_bytes());
+    }
+    h.extend_from_slice(&[0u8; 9]);
+    h.push(0);
+    h
+}
+
+/// An archive added frames the map on its bounds once its header is read, unless it covers the
+/// whole world; Zoom To Tile Layer goes there again, and a layer that can't say is refused.
+#[test]
+fn pmtiles_archives_frame_the_map_on_their_bounds() {
+    let dir = std::env::temp_dir().join(format!("rustgis-pmtiles-frame-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let iceland = dir.join("iceland.pmtiles");
+    std::fs::write(&iceland, empty_pmtiles([-24.5, 63.3, -13.5, 66.6])).unwrap();
+    let world = dir.join("world.pmtiles");
+    std::fs::write(&world, empty_pmtiles([-180.0, -85.0, 180.0, 85.0])).unwrap();
+    let center = |s: &Session| rustgis_geom::merc_to_lonlat(s.map().camera.center);
+    let wait = |s: &mut Session| {
+        let start = std::time::Instant::now();
+        while s.style_view.is_some() && start.elapsed() < std::time::Duration::from_secs(20) {
+            crate::cmd::tiles::follow_style_view(s, web_time::Duration::from_secs(5));
+        }
+    };
+
+    let mut s = Session::new(Project::default());
+    // A file's header is read as it is added: the next command sees the map moved.
+    s.run("layer.addData", &json!({"path": iceland.display().to_string()})).unwrap();
+    assert!(s.style_view.is_none());
+    let c = center(&s);
+    assert!((c.x + 19.0).abs() < 0.5 && (c.y - 65.0).abs() < 1.5, "{c:?}");
+
+    // A world archive leaves the map where it is.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let before = s.map().camera.center;
+    s.run("map.addTiles", &json!({"url": world.display().to_string()})).unwrap();
+    wait(&mut s);
+    assert_eq!(s.map().camera.center, before);
+
+    // Zoom To Tile Layer goes back to the first; a layer with no bounds is refused.
+    let r = s.run("map.zoomToTiles", &json!({"name": "iceland"})).unwrap();
+    assert_eq!(r["bounds"][0].as_f64().map(|w| (w + 24.5).abs() < 1e-6), Some(true), "{r}");
+    let c = center(&s);
+    assert!((c.x + 19.0).abs() < 0.5, "{c:?}");
+    s.run("map.addTiles", &json!({"url": "https://tile.example.com/{z}/{x}/{y}.png", "name": "xyz"})).unwrap();
+    assert!(s.run("map.zoomToTiles", &json!({"name": "xyz"})).is_err());
+    assert!(s.run("map.zoomToTiles", &json!({})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// An MBTiles file of one red picture tile: added by path or as an upload, it is a tile layer that
 /// draws, survives a project round trip (by path), and a file that isn't an archive is refused.
 #[test]
@@ -8058,6 +8119,132 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     s.run("project.new", &json!({"name": "Other"})).unwrap();
     assert_eq!((s.opened, s.undo_label(), s.path.as_deref()), (opened + 1, None, None));
     assert!(!s.trusted_tasks.contains("mine"));
+}
+
+/// A run from the history as code (#539): a Python call, a Script pane line, a CLI command. A
+/// point buffered where the map was clicked goes by the command that ran it, with the point; keys
+/// are left out; a run from before the tool's id was kept is found by its name.
+#[test]
+fn a_run_is_copied_from_the_history_as_code() {
+    let mut s = world();
+    s.run("gp.run", &json!({"tool": "buffer", "params": {"input": "Cities", "distance": 100}})).unwrap();
+    let r = &s.project.gp_history[0];
+    assert!((r.id.as_str(), r.at > 0) == ("buffer", true), "the id and when it ran are kept");
+    let code = |s: &mut Session, run: usize, kind: &str| -> Result<String, String> {
+        s.run("gp.historyCode", &json!({"run": run, "as": kind})).map(|v| v["code"].as_str().unwrap_or("").to_string())
+    };
+    let py = code(&mut s, 0, "python").unwrap();
+    assert!(py.starts_with("s.run(\n    \"gp.run\",\n    tool=\"buffer\",\n    params={\n"), "{py}");
+    assert!(py.contains("\"distance\": 100,") && py.contains("\"input\": \"Cities\",") && py.ends_with(")"), "{py}");
+    assert_eq!(code(&mut s, 0, "command").unwrap(), r#"gp.run {"params":{"distance":100,"input":"Cities"},"tool":"buffer"}"#);
+    let cli = code(&mut s, 0, "cli").unwrap();
+    assert!(
+        cli.starts_with("rustgis-cli run --project '")
+            && cli.ends_with(r#"--cmd 'gp.run={"params":{"distance":100,"input":"Cities"},"tool":"buffer"}'"#),
+        "{cli}"
+    );
+    // A point buffer: by its command, with the point.
+    s.run("gp.bufferPoint", &json!({"lon": 10, "lat": 50, "distance": 5})).unwrap();
+    let py = code(&mut s, 1, "python").unwrap();
+    assert!(py.contains("\"gp.bufferPoint\"") && py.contains("lon=10") && py.contains("lat=50") && py.contains("distance=5"), "{py}");
+    // From an older project: no id, found by its name; its address without the key.
+    let old = crate::GpRecord {
+        tool: "Buffer".into(),
+        id: String::new(),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "odbc": "DRIVER=x;UID=me;PWD=odbcpw", "libpq": "host=db user=me password=libpqpw dbname=x", "gdal": "MYSQL:db,user=me,password=gdalpw", "password": "pa55word", "api_token": "abc123", "lookup": {"key": "NAME"}, "where": "key=5 AND sig=2", "quoted": "user=me password='top secret' dbname=x", "braced": "UID=me;PWD={a;b c};X=1", "pem": "-----BEGIN RSA PRIVATE KEY-----\nMIIEpemsecret\n-----END RSA PRIVATE KEY-----\nafter", "service": {"url": "https://api.example.com", "key": "shortk"}, "escaped": "password='esc1\\' esc2' dbname=y"}),
+        command: None,
+        at: 0,
+        ok: false,
+        messages: vec!["no layer https://h.example/a?token=s3cr3t".into()],
+        millis: 0,
+        outputs: Vec::new(),
+    };
+    s.project.gp_history.push(old.clone());
+    // Open in Tool finds the tool of a `gp.run` run, an older one's by its name; not a point
+    // buffer's, which another command made.
+    use crate::cmd::history::tool_of;
+    let runs = &s.project.gp_history;
+    assert_eq!((tool_of(&runs[0]).as_deref(), tool_of(&runs[1]), tool_of(&runs[2]).as_deref()), (Some("buffer"), None, Some("buffer")));
+    let py = code(&mut s, 2, "python").unwrap();
+    assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
+    // A libpq connection keeps its words but its password, though spaces part them.
+    assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
+    // A connection with no prefix `redact` knows keeps its words but its secret-named values.
+    for pw in ["odbcpw", "libpqpw", "gdalpw"] {
+        assert!(!py.contains(pw), "{pw} in {py}");
+    }
+    assert!(
+        py.contains("UID=me;PWD=\"") && py.contains("host=db user=me password= dbname=x") && py.contains("user=me,password=\""),
+        "{py}"
+    );
+    // A quoted or braced value goes whole; a private key pasted in goes; a plain `key` beside
+    // an address is that service's key.
+    // An escaped quote (libpq's `\'`) doesn't close a quoted value.
+    for secret in ["top", "secret'", "b c", "pemsecret", "shortk", "esc1", "esc2"] {
+        assert!(!py.contains(secret), "{secret} in {py}");
+    }
+    assert!(
+        py.contains("password= dbname=x") && py.contains("PWD=;X=1") && py.contains("after") && py.contains("password= dbname=y"),
+        "{py}"
+    );
+    // A bare `key` in an expression is a field, kept.
+    assert!(py.contains("key=5 AND sig=2"), "{py}");
+    // A key is redacted as a value is.
+    assert!(py.contains("https://k.example/") && !py.contains("k3y"), "{py}");
+    // A value under a secret's name is left empty; a plain `key` that reads as a name is kept.
+    assert!(!py.contains("pa55word") && !py.contains("abc123") && py.contains("\"password\": \"\"") && py.contains("\"NAME\""), "{py}");
+    // Nothing tells which tool an unknown name was.
+    s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old.clone() });
+    assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
+    // A project file passing another command off as a run: not written into code.
+    let forged = crate::GpRecord { command: Some(("file.delete\nproject.new".into(), json!({}))), ..old };
+    s.project.gp_history.push(forged.clone());
+    assert!(code(&mut s, 4, "command").is_err());
+    assert_eq!(crate::cmd::history::tool_of(&forged), None);
+    // The whole history: the project opened, each run in order; a failed run commented out, as
+    // is one that can't be run again.
+    let out = s.run("gp.historyScript", &Value::Null).unwrap();
+    let text = out["text"].as_str().unwrap();
+    assert!(text.contains("import rustgis\n\ns = rustgis.Session(") && text.contains("# 1. Buffer ("), "{text}");
+    assert!(text.contains("UTC)\ns.run(\n    \"gp.run\""), "{text}");
+    assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
+    assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
+    assert!(text.contains("# 5. Buffer: Buffer can't be run again") && !text.contains("file.delete"), "{text}");
+    // Text from the file stays in its comment, whatever line break it holds (a lone `\r` ends a
+    // line for Python).
+    let sneaky = crate::GpRecord {
+        tool: "x\rimport os".into(),
+        id: "buffer".into(),
+        ok: false,
+        messages: vec!["boom\u{2028}import sys\nimport os".into()],
+        ..forged
+    };
+    s.project.gp_history.push(crate::GpRecord { command: None, ..sneaky });
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!text.contains(['\r', '\u{2028}']), "{text:?}");
+    assert!(text.lines().filter(|l| l.contains("import os") || l.contains("import sys")).all(|l| l.starts_with('#')), "{text}");
+    assert!(!text.contains("s3cr3t") && !text.contains("hunter2"));
+    assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
+    // Named as Save names it, spaces and all.
+    assert!(text.contains("\"World Atlas.rgis\""), "{text}");
+    // Saved, then changed: the script says to save it again first.
+    s.path = Some("atlas.rgis".into());
+    s.dirty = true;
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(
+        text.contains("# The project has changes that aren't saved: save it first") && !text.contains("hasn't been saved yet"),
+        "{text}"
+    );
+    s.dirty = false;
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("aren't saved") && text.contains("rustgis.Session(\"atlas.rgis\")"), "{text}");
+    s.path = None;
+    // A file name every system takes, whatever the project is called.
+    s.project.name = "A*B?\"C<D>|E".into();
+    let out = s.run("gp.historyScript", &Value::Null).unwrap();
+    assert_eq!(out["fileName"], "A_B__C_D__E_history.py");
+    s.project.gp_history.clear();
+    assert!(s.run("gp.historyScript", &Value::Null).is_err(), "nothing to save");
 }
 
 #[path = "../../../tests/support/ogc_server.rs"]

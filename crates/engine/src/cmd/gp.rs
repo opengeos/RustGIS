@@ -220,7 +220,16 @@ pub fn external_complete(s: &mut Session, id: u64, ran: ExternalOutput) -> Resul
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rustgis_geolibre::finish(&job, &files, &lines, None)))
                 .map_err(|_| format!("{}: its output couldn't be read", job.name))
         });
-        s.pending.push(crate::PendingRun { id, tool: job.name.clone(), params, result, millis: now_ms().saturating_sub(t0) });
+        let tool_id = format!("{}{}", rustgis_geolibre::PREFIX, job.tool);
+        s.pending.push(crate::PendingRun {
+            id,
+            tool: job.name.clone(),
+            tool_id,
+            params,
+            result,
+            started: t0,
+            millis: now_ms().saturating_sub(t0),
+        });
         if s.pending.len() > MAX_ASYNC_RUNS {
             s.pending.remove(0);
         }
@@ -257,6 +266,8 @@ impl PluginRun {
 pub(crate) struct StartedRun {
     id: u64,
     name: String,
+    /// The tool's id, for the history.
+    tool: String,
     /// The parameters, as the history records them.
     params: Value,
     t0: u64,
@@ -295,7 +306,7 @@ pub fn plugin_start(s: &mut Session, tool: &str, params: &Value) -> Result<Plugi
     s.next_pending = s.next_pending.wrapping_add(1);
     let id = s.next_pending;
     let params = recorded(Some(spec), params.clone());
-    s.plugin_runs.push(StartedRun { id, name: spec.name.to_string(), params, t0: now_ms(), full_ids, read });
+    s.plugin_runs.push(StartedRun { id, name: spec.name.to_string(), tool: spec.id.to_string(), params, t0: now_ms(), full_ids, read });
     // A run that never completes is dropped eventually.
     if s.plugin_runs.len() > MAX_ASYNC_RUNS {
         s.plugin_runs.remove(0);
@@ -326,7 +337,15 @@ pub fn plugin_complete(s: &mut Session, id: u64, result: Result<rustgis_analysis
     let mut result = result;
     fit_to_changes(s, &mut result, &run.name, &run.read);
     fit_to_windows(s, &mut result, &run.full_ids);
-    s.pending.push(crate::PendingRun { id, tool: run.name, params: run.params, result, millis: now_ms().saturating_sub(run.t0) });
+    s.pending.push(crate::PendingRun {
+        id,
+        tool: run.name,
+        tool_id: run.tool,
+        params: run.params,
+        result,
+        started: run.t0,
+        millis: now_ms().saturating_sub(run.t0),
+    });
     if s.pending.len() > MAX_ASYNC_RUNS {
         s.pending.remove(0);
     }
@@ -425,7 +444,7 @@ fn finish(s: &mut Session, p: &Value) -> CmdResult {
     let id = p.get("id").and_then(Value::as_u64).ok_or("id is required")?;
     let i = s.pending.iter().position(|r| r.id == id).ok_or("no finished run with that id")?;
     let r = s.pending.remove(i);
-    apply(s, r.tool, r.params, r.result, r.millis)
+    apply(s, Ran { name: r.tool, id: r.tool_id, command: None, started: r.started }, r.params, r.result, r.millis)
 }
 
 /// A tool's inputs on the active map.
@@ -652,16 +671,22 @@ fn buffer_point(s: &mut Session, p: &Value) -> CmdResult {
     let mut ds = Dataset::new("Clicked point", GeometryType::Point, Vec::new());
     ds.push_next(Some(Geometry::Point(rustgis_geom::Coord::new(lon, lat))), Vec::new());
     let mut params = json!({"input": ds.name, "distance": p.get("distance").cloned().unwrap_or(Value::Null)});
+    // The history keeps this command, with the point, so the run can be copied and run again
+    // (#539): its input is no layer of the project.
+    let mut command = json!({"lon": lon, "lat": lat, "distance": params["distance"]});
     if let Some(u) = p.get("units") {
         params["units"] = u.clone();
+        command["units"] = u.clone();
     }
     if let Some(n) = p.get("name") {
         params["output"] = n.clone();
+        command["name"] = n.clone();
     }
     let t0 = now_ms();
     let res = rustgis_analysis::run("buffer", &PointInput(ds), &params);
     let millis = now_ms().saturating_sub(t0);
-    apply(s, "Buffer".into(), params, res, millis)
+    let ran = Ran { name: "Buffer".into(), id: "buffer".into(), command: Some(("gp.bufferPoint".into(), command)), started: t0 };
+    apply(s, ran, params, res, millis)
 }
 
 /// Runs a (built-in) tool and applies its result, as `gp.run` does.
@@ -677,7 +702,7 @@ pub fn run_tool(s: &mut Session, tool: &str, params: &Value) -> CmdResult {
     let millis = now_ms().saturating_sub(t0);
     let spec = rustgis_analysis::tool(&tool);
     let name = spec.map(|t| t.name).unwrap_or("Tool").to_string();
-    apply(s, name, recorded(spec, params), res, millis)
+    apply(s, Ran { name, id: tool, command: None, started: t0 }, recorded(spec, params), res, millis)
 }
 
 /// Whether a tool reads a file a parameter names (a plugin's `file`).
@@ -698,11 +723,34 @@ fn recorded(spec: Option<&rustgis_analysis::ToolSpec>, mut params: Value) -> Val
     params
 }
 
+/// What ran, as the history keeps it: the tool's name and id, and the command, when not
+/// `gp.run`.
+struct Ran {
+    name: String,
+    id: String,
+    command: Option<(String, Value)>,
+    /// When it started, in milliseconds since 1970: the time the history shows, also for a run
+    /// finished later (a plugin's, a suite's).
+    started: u64,
+}
+
 /// Adds a tool's result to the map and the history.
-fn apply(s: &mut Session, name: String, params: Value, res: Result<rustgis_analysis::ToolResult, String>, millis: u64) -> CmdResult {
+fn apply(s: &mut Session, ran: Ran, params: Value, res: Result<rustgis_analysis::ToolResult, String>, millis: u64) -> CmdResult {
+    let Ran { name, id, command, started } = ran;
+    let at = started / 1000;
     let mut result = match res {
         Err(e) => {
-            s.project.gp_history.push(GpRecord { tool: name, params, ok: false, messages: vec![e.clone()], millis, outputs: Vec::new() });
+            s.project.gp_history.push(GpRecord {
+                tool: name,
+                id,
+                params,
+                command,
+                at,
+                ok: false,
+                messages: vec![e.clone()],
+                millis,
+                outputs: Vec::new(),
+            });
             return Err(e);
         }
         Ok(r) => r,
@@ -772,7 +820,7 @@ fn apply(s: &mut Session, name: String, params: Value, res: Result<rustgis_analy
         _ => Vec::new(),
     };
     let outputs = ids.iter().filter_map(|id| s.map().layer(*id).map(|l| l.name.clone())).collect();
-    s.project.gp_history.push(GpRecord { tool: name, params, ok: true, messages: result.messages, millis, outputs });
+    s.project.gp_history.push(GpRecord { tool: name, id, params, command, at, ok: true, messages: result.messages, millis, outputs });
     if s.project.gp_history.len() > 500 {
         s.project.gp_history.remove(0);
     }

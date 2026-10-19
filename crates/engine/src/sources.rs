@@ -188,7 +188,7 @@ pub fn default_name(address: &str) -> String {
 /// Whether a query or `extra` key names a secret, wherever it is: an exact list (case aside),
 /// and any key naming a password, secret or token. Short keys that are ordinary elsewhere (an
 /// ArcGIS or WMS `sr`, an OAuth `code`) are judged with the rest of the query ([`secret_in`]).
-fn secret_key(k: &str) -> bool {
+pub(crate) fn secret_key(k: &str) -> bool {
     let k = k.to_ascii_lowercase();
     matches!(
         k.as_str(),
@@ -301,7 +301,7 @@ pub fn holds_secret(params: &serde_json::Value) -> bool {
 /// lookup key, whose words and numbers come in runs (`parcel_id`, `municipalityCode2020`,
 /// `area_2010_2020_km2_total`). A hex id counts as a key on purpose: it may be one, and a step
 /// left out (with a notice) costs less than a key shared.
-fn looks_like_a_key(t: &str) -> bool {
+pub(crate) fn looks_like_a_key(t: &str) -> bool {
     #[derive(PartialEq)]
     enum Class {
         Lower,
@@ -344,6 +344,25 @@ pub fn holds_plain_key(params: &serde_json::Value) -> bool {
         }
     }
     walk(params, 0)
+}
+
+/// Text with every web address in it redacted (`sources::redact`): an error's text may quote the
+/// address asked for, or one a redirect led to, keys and all. Each address is redacted alone, so
+/// the words around it stay; punctuation that ends a sentence isn't taken as part of it.
+pub fn redact_text(text: &str) -> String {
+    text.split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end();
+            let Some(at) = word.find("://") else { return piece.to_string() };
+            // The address starts at its scheme, after any quote or bracket before it.
+            let scheme = |c: &char| c.is_ascii_alphanumeric() || "+.-".contains(*c);
+            let start = word.get(..at).and_then(|b| b.char_indices().rev().find(|(_, c)| !scheme(c))).map_or(0, |(i, c)| i + c.len_utf8());
+            let end = word.trim_end_matches([':', ',', ';', '.', ')', ']', '>', '"', '\'', '»', '›', '”', '’']).len().max(at + 3);
+            let (before, address, after) =
+                (word.get(..start).unwrap_or(""), word.get(start..end).unwrap_or(""), word.get(end..).unwrap_or(""));
+            format!("{before}{}{after}{}", redact(address), piece.get(word.len()..).unwrap_or(""))
+        })
+        .collect()
 }
 
 /// An address without what would give someone else the user's access: the user and password of

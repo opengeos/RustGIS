@@ -12,7 +12,7 @@ use rustgis_engine::map::symbology::{
     ClassRef, ClassStyle, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
     normalize_label,
 };
-use rustgis_engine::map::tiles::TileLayer;
+use rustgis_engine::map::tiles::{TileKind, TileLayer};
 use rustgis_engine::map::{
     ClassMethod, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
 };
@@ -1307,8 +1307,8 @@ fn visibility_box(ui: &Ui, cb: Rect, visible: bool, t: &Tokens) {
 }
 
 /// A web tile layer's row (index `i` of `count`, top first as the map lists them): its checkbox
-/// shows or hides it; right-click sets its opacity, moves it up or down (not with `reorder` off:
-/// the list is filtered), or removes it.
+/// shows or hides it; right-click zooms to it (an archive or GeoTIFF), sets its opacity, moves it
+/// up or down (not with `reorder` off: the list is filtered), or removes it.
 fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: bool, tile: &TileLayer, t: &Tokens) {
     let shown = if tile.overlay { format!("{} · {}", tile.name, tl!("overlay")) } else { tile.name.clone() };
     let name = row_name(ui, shown.clone(), regular(12.5), ui.available_width() - NAME_X - 8.0);
@@ -1334,6 +1334,14 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
     }
     let resp = resp.on_hover_text(if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() });
     resp.context_menu(|ui| {
+        // An archive or GeoTIFF says what it covers.
+        if matches!(tile.kind, TileKind::PmTiles | TileKind::Cog) {
+            if ui.button(tl!("Zoom To Layer")).clicked() {
+                action = Some(("map.zoomToTiles", json!({"index": i})));
+                ui.close();
+            }
+            ui.separator();
+        }
         ui.horizontal(|ui| {
             ui.label(tl!("Opacity"));
             let mut o = tile.opacity * 100.0;
@@ -2341,6 +2349,30 @@ impl GpForm {
         if let (Some(p), Some(t)) = (input, s.project.table(id)) {
             self.values.insert(p.name, t.name.clone());
             self.tables.insert(p.name, id);
+        }
+    }
+
+    /// Fills the open tool's form with `given` values by parameter name, over its own (a run
+    /// opened again from the History pane, #539), as text in the form each field takes and sends
+    /// back: several layers `;`-separated, a standalone table (given by its id) by its name and
+    /// picked by its id, a switch `true`/`false`.
+    pub fn fill(&mut self, given: &serde_json::Map<String, Value>) {
+        let Some(spec) = self.tool.and_then(rustgis_engine::analysis::tool) else { return };
+        for p in spec.params {
+            let text = match (p.kind, given.get(p.name)) {
+                (_, None | Some(Value::Null)) => continue,
+                (ParamKind::RasterLayers | ParamKind::VectorLayers, Some(Value::Array(a))) => {
+                    a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(";")
+                }
+                (ParamKind::Layer, Some(Value::Number(n))) => {
+                    let Some(id) = n.as_u64().and_then(|id| u32::try_from(id).ok()) else { continue };
+                    self.tables.insert(p.name, id);
+                    given.get(&format!("{}_name", p.name)).and_then(Value::as_str).map_or_else(|| id.to_string(), str::to_string)
+                }
+                (_, Some(Value::String(t))) => t.clone(),
+                (_, Some(other)) => other.to_string(),
+            };
+            self.values.insert(p.name, text);
         }
     }
 }
@@ -3731,7 +3763,7 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Tools you run appear here.")).color(t.text_dim));
         return;
     }
-    for h in hist.iter().rev() {
+    for (i, h) in hist.iter().enumerate().rev() {
         egui::Frame::NONE.stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
             ui,
             |ui| {
@@ -3739,11 +3771,21 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(r.center(), 4.5, if h.ok { t.green } else { t.red });
-                    ui.label(egui::RichText::new(tl!(&h.tool)).font(semibold(12.5)));
+                    // Right-clicking the tool's name, or its ⋯, gives the run as code (#539).
+                    let name = ui.add(egui::Label::new(egui::RichText::new(tl!(&h.tool)).font(semibold(12.5))).sense(Sense::click()));
+                    name.context_menu(|ui| history_menu(app, ui, i, h));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("⋯", |ui| history_menu(app, ui, i, h))
+                            .response
+                            .on_hover_text(tl!("Copy this run as code, or open it in its tool"));
                         ui.label(egui::RichText::new(format!("{} ms", h.millis)).size(11.0).color(t.text_dim));
                     });
                 });
+                // When it ran, as ArcGIS Pro's history says (UTC: the app has no time zone).
+                if h.at > 0 {
+                    let (date, time) = rustgis_engine::map::graphics::civil(h.at);
+                    ui.label(egui::RichText::new(format!("{date} {time} UTC")).size(11.0).color(t.text_dim));
+                }
                 for m in &h.messages {
                     ui.label(egui::RichText::new(m).size(11.0).color(t.text_dim));
                 }
@@ -3751,8 +3793,79 @@ fn history(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         );
         ui.add_space(4.0);
     }
-    if ui.button(tl!("Clear History")).clicked() {
-        let _ = app.run("gp.clearHistory", Value::Null);
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(tl!("Save as Python Script…")).on_hover_text(tl!("Every run, in order, as a script that opens the project")).clicked()
+        {
+            save_history_script(app);
+        }
+        if ui.button(tl!("Clear History")).clicked() {
+            let _ = app.run("gp.clearHistory", Value::Null);
+        }
+    });
+}
+
+/// What can be done with run `i` of the history (`h`): copy it as code, or open it in its tool.
+/// A run the history can't tell how to run again has them greyed out, saying why.
+fn history_menu(app: &mut RustGisApp, ui: &mut Ui, i: usize, h: &rustgis_engine::GpRecord) {
+    let replay = rustgis_engine::cmd::history::replay(h);
+    let why = replay.as_ref().err().cloned().unwrap_or_default();
+    for (label, kind, hint) in [
+        ("Copy as Python", "python", "A call for the rustgis Python package"),
+        ("Copy as Command", "command", "A line for the Script pane"),
+        // Quoted for a POSIX shell: cmd.exe and PowerShell read quotes otherwise.
+        ("Copy as CLI Command", "cli", "A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)"),
+    ] {
+        let r = ui.add_enabled(replay.is_ok(), egui::Button::new(tl!(label)));
+        if r.on_hover_text(tl!(hint)).on_disabled_hover_text(why.as_str()).clicked() {
+            match app.run("gp.historyCode", json!({"run": i, "as": kind})) {
+                Ok(v) => ui.ctx().copy_text(v["code"].as_str().unwrap_or("").to_string()),
+                Err(e) => app.session.notify(e, true),
+            }
+            ui.close();
+        }
+    }
+    ui.separator();
+    // A tool run with `gp.run` opens in its form, with the values it ran with as they were: the
+    // form is the user's own, so nothing is left out (copied code leaves keys out). A point
+    // buffered on the map has no layer to give it; a plugin's tool needs its plugin loaded.
+    let id = rustgis_engine::cmd::history::tool_of(h);
+    let known = id.as_deref().and_then(rustgis_engine::analysis::tool).is_some();
+    let why = match &id {
+        None => tl!("This run has no tool form to open"),
+        Some(_) if !known => tl!("Its tool isn't available now (a plugin's, not loaded, or a suite's, not installed)"),
+        Some(_) => "",
+    };
+    let r = ui.add_enabled(known, egui::Button::new(tl!("Open in Tool")));
+    if r.on_disabled_hover_text(why).clicked() {
+        let _ = app.run("ui.gp.open", json!({"tool": id, "values": h.params}));
+        ui.close();
+    }
+}
+
+/// Saves the history as a Python script (#539): downloaded in the browser, else where the user
+/// picks.
+fn save_history_script(app: &mut RustGisApp) {
+    match app.run("gp.historyScript", Value::Null) {
+        Ok(v) => {
+            let name = v["fileName"].as_str().unwrap_or("history.py").to_string();
+            let bytes = v["text"].as_str().unwrap_or("").as_bytes().to_vec();
+            if app.services.download.is_some() {
+                app.download_bytes(&name, bytes);
+            } else if let Some(path) = crate::dialogs::pick_save(&name, &["py"], tl!("Python script")) {
+                match rustgis_engine::data::io::write_atomic(std::path::Path::new(&path), &bytes) {
+                    Ok(()) => app.session.notify(crate::i18n::fmt("Saved {path}", &[("path", &path)]), false),
+                    Err(e) => return app.session.notify(e.to_string(), true),
+                }
+            } else {
+                // Cancelled: nothing was saved.
+                return;
+            }
+            // The script opens the project's saved file, which lacks what changed since.
+            if app.session.dirty || app.session.path.is_none() {
+                app.session.notify(tl!("Save the project too: the script opens its saved file, without changes made since."), false);
+            }
+        }
+        Err(e) => app.session.notify(e, true),
     }
 }
 
@@ -4283,6 +4396,24 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run opened again from the History pane (#539) fills its tool's form as the form would
+    /// have it: a standalone table, given by its id, by its name and picked by its id; numbers
+    /// and choices as text; what wasn't given left alone.
+    #[test]
+    fn a_run_fills_its_tool_s_form_as_the_form_takes_it() {
+        let mut f = GpForm { tool: Some("buffer"), ..GpForm::default() };
+        f.values.insert("output", "kept".into());
+        let given = json!({"input": 3, "input_name": "Trips", "distance": 100, "dissolve": "All", "output": null});
+        f.fill(given.as_object().unwrap());
+        assert_eq!(f.values.get("input").map(String::as_str), Some("Trips"));
+        assert_eq!(f.tables.get("input"), Some(&3));
+        assert_eq!(
+            (f.values.get("distance").map(String::as_str), f.values.get("dissolve").map(String::as_str)),
+            (Some("100"), Some("All"))
+        );
+        assert_eq!(f.values.get("output").map(String::as_str), Some("kept"), "not given");
+    }
 
     fn layer(app: &RustGisApp, name: &str) -> u32 {
         app.session.map().layer_by_name(name).map(|l| l.id).unwrap_or_default()

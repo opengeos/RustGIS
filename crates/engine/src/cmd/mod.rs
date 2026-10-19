@@ -13,6 +13,7 @@ pub mod geocode;
 pub mod gp;
 pub mod graphics;
 pub mod group;
+pub mod history;
 pub mod imagery;
 pub mod items;
 pub mod labels;
@@ -83,6 +84,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(view::commands());
     v.extend(workspace::commands());
     v.extend(gp::commands());
+    v.extend(history::commands());
     v.extend(share::commands());
     v.extend(sql::commands());
     v.extend(plugins::commands());
