@@ -98,7 +98,7 @@ impl TimeSlider {
         if len == 0 {
             return false;
         }
-        let i = self.index() as i64 + n;
+        let i = self.index_in(&s) as i64 + n;
         let i = if wrap { i.rem_euclid(len) } else { i.clamp(0, len - 1) };
         let t = s.get(i as usize).copied().unwrap_or(self.start);
         let moved = t != self.current;
