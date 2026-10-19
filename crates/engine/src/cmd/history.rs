@@ -191,13 +191,29 @@ fn secret_pairs_emptied(t: &str) -> String {
             _ => None,
         };
         let from = match close {
-            Some(c) => value.get(1..).and_then(|r| r.find(c)).map_or(value.len(), |i| i + 2),
+            Some(c) => closer(value, c).map_or(value.len(), |i| i + c.len_utf8()),
             None => 0,
         };
         let tail = value.get(from..).unwrap_or("");
         rest = tail.get(tail.find(parts).unwrap_or(tail.len())..).unwrap_or("");
     }
     out
+}
+
+/// Where the value `v` (opening with a quote or a brace) closes with `c`: past an escaped quote
+/// (`\'`, as libpq writes one in a quoted value), which doesn't close it.
+fn closer(v: &str, c: char) -> Option<usize> {
+    let mut escaped = false;
+    for (i, ch) in v.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' && c != '}' {
+            escaped = true;
+        } else if ch == c {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Whether `t` is a database connection `sources::redact` reads as one: PostgreSQL's (a URI, or
