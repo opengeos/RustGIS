@@ -34,7 +34,7 @@ pub struct Service {
 }
 
 /// The services.
-pub const SERVICES: [Service; 12] = [
+pub const SERVICES: [Service; 13] = [
     Service {
         id: "arcgis-portal",
         title: "ArcGIS Portal",
@@ -59,6 +59,7 @@ pub const SERVICES: [Service; 12] = [
     Service { id: "us-federal", title: "US Federal GIS", portal: "arcgis-portal", address: None, sets: Some(usgis::FEDERAL) },
     Service { id: "us-state", title: "US State GIS", portal: "arcgis-portal", address: None, sets: Some(usgis::STATE) },
     Service { id: "us-local", title: "US Local GIS", portal: "arcgis-portal", address: None, sets: Some(usgis::LOCAL) },
+    Service { id: "tennessee", title: "Tennessee GIS", portal: "arcgis-portal", address: None, sets: Some(usgis::TENNESSEE) },
 ];
 
 fn service(id: &str) -> Option<&'static Service> {
@@ -430,6 +431,9 @@ fn about(id: Option<&str>) -> &'static str {
         Some("ign-lidar") => "IGN's LiDAR HD point clouds of France: 1 km tiles where the map is, added as COPC point clouds.",
         Some("us-federal") => "Public GIS portals of US federal agencies, by department.",
         Some("us-state") => "Public GIS portals of US states and the District of Columbia.",
+        Some("tennessee") => {
+            "Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more."
+        }
         Some("us-local") => "Public GIS portals of US counties and cities, by state.",
         _ => {
             "Open data catalogues searched by text. Files are added by their address (read in place when they can be); a service opens Add From Service to pick its layer."
@@ -481,7 +485,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     ui.add(egui::TextEdit::singleline(&mut st.url).hint_text(tl!(hint)).desired_width(w));
                     ui.end_row();
                 }
-                if let Some(sets) = s.sets {
+                // A service with one portal (Tennessee) has nothing to pick.
+                if let Some(sets) = s.sets.filter(|sets| sets.len() > 1 || sets.iter().any(|s| s.catalogs.len() > 1)) {
                     catalog_picker(ui, st, sets, w);
                 }
                 if s.id == "usgs-dem" {

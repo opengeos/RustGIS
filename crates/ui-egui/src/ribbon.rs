@@ -545,6 +545,7 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
         menu_item(ui, app, "", "IGN LiDAR HD…", "ui.searchOpenData", svc("ign-lidar"));
     });
     submenu_row(ui, "", tl!("United States"), |ui| {
+        menu_item(ui, app, "", "Tennessee GIS…", "ui.searchOpenData", svc("tennessee"));
         menu_item(ui, app, "", "US Federal GIS…", "ui.searchOpenData", svc("us-federal"));
         menu_item(ui, app, "", "US Local GIS…", "ui.searchOpenData", svc("us-local"));
         menu_item(ui, app, "", "US State GIS…", "ui.searchOpenData", svc("us-state"));
