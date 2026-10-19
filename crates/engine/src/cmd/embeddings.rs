@@ -107,7 +107,7 @@ fn search(s: &mut Session, p: &Value) -> CmdResult {
         let (tiles, complete) = match d.id {
             "alphaearth" => emb::search_aef_blocking(area, year)?,
             "earth-index" => emb::search_earth_index_blocking(area)?,
-            _ => (tessera::tiles(area, year), true),
+            _ => tessera::tiles(area, year),
         };
         let mut r = json!({"dataset": d.id, "year": year, "count": tiles.len(), "complete": complete,
             "tiles": tiles.iter().map(emb::Tile::to_json).collect::<Vec<_>>()});

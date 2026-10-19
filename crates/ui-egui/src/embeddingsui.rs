@@ -212,7 +212,7 @@ fn search(app: &mut RustGisApp) {
     match st.dataset {
         "alphaearth" => emb::search_aef(bbox, st.year, done),
         "earth-index" => emb::search_earth_index(bbox, done),
-        _ => done(Ok((tessera::tiles(bbox, st.year), true))),
+        _ => done(Ok(tessera::tiles(bbox, st.year))),
     }
     st.reading = Some(Read::Search(slot));
 }

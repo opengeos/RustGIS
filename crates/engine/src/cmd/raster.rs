@@ -129,7 +129,7 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
-            r#"{"layer"?, "path": "*.tif", "band"?: 1..}"#,
+            r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands)}"#,
         ),
     ]
 }

@@ -158,12 +158,19 @@ pub fn plan(grid: Grid, bbox: [f64; 4], year: i32) -> Result<Plan, String> {
     Ok(Plan { grid, year, shard, col0, row0, width: col1 - col0, height: row1 - row0, chunks, cut })
 }
 
-/// The zones a box meets, as search results (a window of each read where the map is).
-pub fn tiles(bbox: [f64; 4], year: i32) -> Vec<Tile> {
-    let Ok([w, s, e, n]) = super::check_bbox(bbox) else { return Vec::new() };
+/// The zones a box meets, as search results (a window of each read where the map is): the three
+/// nearest the box's centre, and whether that is all of them.
+pub fn tiles(bbox: [f64; 4], year: i32) -> (Vec<Tile>, bool) {
+    let Ok([w, s, e, n]) = super::check_bbox(bbox) else { return (Vec::new(), true) };
     let (z0, z1) = (zone_of(w), zone_of(e.min(179.999)));
-    (z0..=z1.max(z0))
-        .take(3)
+    let mut zones: Vec<u32> = (z0..=z1.max(z0)).collect();
+    let centre = zone_of((w + e) / 2.0);
+    zones.sort_by_key(|z| z.abs_diff(centre));
+    let all = zones.len() <= 3;
+    zones.truncate(3);
+    zones.sort_unstable();
+    let tiles = zones
+        .into_iter()
         .map(|zone| {
             let zw = -180.0 + f64::from(zone - 1) * 6.0;
             let b = [w.max(zw), s, e.min(zw + 6.0), n];
@@ -178,7 +185,8 @@ pub fn tiles(bbox: [f64; 4], year: i32) -> Vec<Tile> {
                 footprint: Vec::new(),
             }
         })
-        .collect()
+        .collect();
+    (tiles, all)
 }
 
 /// Reads a plan's inner chunks of a shard (`bytes` decoded bytes each), `None` for a chunk the
@@ -357,7 +365,13 @@ mod tests {
         let row = 9_338_880.0 - (-3_755_000.0);
         assert!(((p.row0 as f64) * 10.0 - row).abs() < 5_000.0, "{}", p.row0);
         assert!(!p.cut && !p.chunks.is_empty());
-        assert_eq!(tiles([-84.0, 35.0, -77.0, 36.0], 2024).iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["utm17", "utm18"]);
+        let (t, all) = tiles([-84.0, 35.0, -77.0, 36.0], 2024);
+        assert_eq!(t.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["utm17", "utm18"]);
+        assert!(all);
+        // Six zones: the three around the centre, and not all of them.
+        let (t, all) = tiles([-90.0, 35.0, -54.0, 36.0], 2024);
+        assert_eq!(t.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["utm18", "utm19", "utm20"]);
+        assert!(!all);
     }
 
     #[test]

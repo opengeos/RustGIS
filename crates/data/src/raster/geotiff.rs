@@ -1005,9 +1005,10 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     Ok(r)
 }
 
-/// Writes a raster as a Deflate-compressed GeoTIFF: RGB(A) bytes for 8-bit colour rasters, the
-/// three colour bands as 32-bit floats for other colour rasters, otherwise `band` (0-based) as
-/// 32-bit floats.
+/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
+/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
+/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
+/// raster always writes its colour bands, as its 8-bit form did before.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
     let mut out = std::io::Cursor::new(Vec::new());
