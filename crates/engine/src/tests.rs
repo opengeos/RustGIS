@@ -9469,6 +9469,15 @@ fn time_slider_fills_dated_tile_addresses_and_exports_its_steps() {
     // Only tile kinds that fill dates take a dated address.
     let e = s.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.pmtiles", "start": 2000})).unwrap_err();
     assert!(e.contains("dated addresses"), "{e}");
+    // A COG's look (its bands, its range) stays when the date changes.
+    let mut look = timed_events();
+    look.run("map.addTiles", &json!({"url": "https://example.com/{YYYY}.tif", "kind": "cog", "start": 2000, "end": 2002})).unwrap();
+    look.run("map.setTiles", &json!({"index": 0, "bands": [3, 2, 1], "range": [0, 3000]})).unwrap();
+    let shown_look = look.map().tiles[0].url.split_once('#').map(|(_, l)| l.to_string()).unwrap_or_default();
+    assert!(!shown_look.is_empty(), "{}", look.map().tiles[0].url);
+    look.run("time.goTo", &json!({"date": 2002})).unwrap();
+    let url = look.map().tiles[0].url.clone();
+    assert!(url.starts_with("https://example.com/2002.tif#") && url.ends_with(&shown_look), "{url}");
     // A scheme in capitals is still a web address that follows the slider.
     let mut caps = timed_events();
     caps.run("map.addTiles", &json!({"url": "HTTPS://example.com/{date:YYYY}/{z}/{x}/{y}.png", "start": 2000, "end": 2002})).unwrap();

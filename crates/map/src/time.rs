@@ -318,8 +318,8 @@ pub fn has_dates(ds: &Dataset) -> bool {
 }
 
 /// The fields of `ds` that hold dates, best first, with the share of values that read as one
-/// (at least 60%). Text dates come first, then epoch times, then whole numbers that read as years
-/// (numbers may be counts, heights or ids).
+/// (at least 60%). Text dates come first, then epoch milliseconds, then whole numbers that read
+/// as epoch seconds or years (which may be counts, heights or ids).
 pub fn time_fields(ds: &Dataset) -> Vec<(String, f64)> {
     let n = ds.features.len();
     let mut out: Vec<(String, f64, u8, usize)> = ds
@@ -334,10 +334,11 @@ pub fn time_fields(ds: &Dataset) -> Vec<(String, f64)> {
             let mut distinct: Vec<String> = (0..n.min(500)).map(|r| ds.value(r, fi).to_string()).collect();
             distinct.sort();
             distinct.dedup();
+            // Whole numbers that read as epoch seconds or years may be ids or counts: last.
             let rank = match kind {
                 time::Kind::Text => 0,
-                time::Kind::EpochMs | time::Kind::EpochS => 1,
-                time::Kind::Year => 2,
+                time::Kind::EpochMs => 1,
+                time::Kind::EpochS | time::Kind::Year => 2,
             };
             Some((f.name.clone(), share, rank, distinct.len()))
         })

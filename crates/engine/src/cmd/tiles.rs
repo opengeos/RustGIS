@@ -424,6 +424,10 @@ fn set(s: &mut Session, p: &Value) -> CmdResult {
         t.name = r.chars().take(120).collect();
     }
     if let Some(url) = new_url {
+        // A dated layer keeps the look at every date: its template takes it too.
+        if let Some(template) = t.time_url.as_mut() {
+            *template = cog::with_look(template, &cog::split(&url).1);
+        }
         t.url = url;
     }
     if let Some(mv) = ps(p, "move") {
