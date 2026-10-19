@@ -140,9 +140,9 @@ pub fn kind_of(v: &Value) -> Option<Kind> {
         Value::Float(x) => number_kind(*x),
         Value::Text(s) => {
             let t = s.trim();
-            match t.parse::<f64>() {
-                Ok(x) => number_kind(x),
-                Err(_) => parse_text(t).map(|_| Kind::Text),
+            match plain_number(t) {
+                Some(x) => number_kind(x),
+                None => parse_text(t).map(|_| Kind::Text),
             }
         }
         Value::Null | Value::Bool(_) => None,
@@ -172,7 +172,7 @@ pub fn instant(v: &Value, kind: Kind) -> Option<f64> {
     let x = match v {
         Value::Int(i) => Some(*i as f64),
         Value::Float(x) => Some(*x),
-        Value::Text(s) => s.trim().parse::<f64>().ok(),
+        Value::Text(s) => plain_number(s.trim()),
         Value::Null | Value::Bool(_) => return None,
     };
     let t = match (kind, x) {
@@ -216,6 +216,17 @@ pub fn detect<'a>(values: impl Iterator<Item = &'a Value>, sample: usize) -> Opt
     let (text, years) = (count(&counts, Kind::Text), count(&counts, Kind::Year));
     let (kind, n) = if matches!(kind, Kind::Text | Kind::Year) && text > 0 { (Kind::Text, text + years) } else { (kind, *n) };
     (n > 0 && seen > 0).then(|| (kind, n as f64 / seen as f64))
+}
+
+/// A number written plainly (`2015`, `-12`, `1451070887.19`): text such as `1e3`, `+2015` or
+/// `inf` is no number here, so codes don't read as years.
+fn plain_number(s: &str) -> Option<f64> {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let ok = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && digits.bytes().filter(|b| *b == b'.').count() <= 1
+        && digits.bytes().any(|b| b.is_ascii_digit());
+    if ok { s.parse::<f64>().ok() } else { None }
 }
 
 /// A text value's text.
@@ -495,6 +506,9 @@ mod tests {
         assert_eq!(kind_of(&Value::Float(5e14)), None);
         assert_eq!(kind_of(&Value::Text("1958".into())), Some(Kind::Year));
         assert_eq!(kind_of(&Value::Text("1958-03-01".into())), Some(Kind::Text));
+        for code in ["1e3", "+2015", "inf", "NaN", "2.015e3"] {
+            assert_eq!(kind_of(&Value::Text(code.into())), None, "{code}");
+        }
         let vals = [Value::Text("1958".into()), Value::Text("1960-01-01".into()), Value::Null, Value::Text("n/a".into())];
         let (k, share) = detect(vals.iter(), 500).unwrap_or((Kind::EpochMs, 0.0));
         assert_eq!(k, Kind::Text);

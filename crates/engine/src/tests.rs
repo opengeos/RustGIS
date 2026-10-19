@@ -992,6 +992,7 @@ fn hostile_params_never_panic() {
             "project.save"
                 | "project.saveAs"
                 | "share.exportMap"
+                | "time.export"
                 | "share.exportLayer"
                 | "share.exportTable"
                 | "share.exportRaster"
