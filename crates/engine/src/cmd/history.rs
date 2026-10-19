@@ -43,11 +43,13 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
     let name = &s.project.name;
     let mut text = format!(
         "# The geoprocessing history of the RustGIS project {}, run again in order.\n\
-         # Layers are named as they were then, so this opens the project they belong to.\n\
-         import rustgis\n\ns = rustgis.Session({})\n",
-        quoted(name),
-        quoted(&project_file(s))
+         # Layers are named as they were then, so this opens the project they belong to.\n",
+        quoted(name)
     );
+    if s.path.is_none() {
+        text.push_str("# The project hasn't been saved yet: save it as this file first.\n");
+    }
+    text.push_str(&format!("import rustgis\n\ns = rustgis.Session({})\n", quoted(&project_file(s))));
     for (n, r) in runs.iter().enumerate() {
         let when = if r.at > 0 {
             let (date, time) = rustgis_map::graphics::civil(r.at);
@@ -68,7 +70,7 @@ fn script(s: &mut Session, _: &Value) -> CmdResult {
             Err(e) => text.push_str(&format!(": {}\n", line(&e))),
         }
     }
-    let file = format!("{} history.py", name.replace(['/', '\\', ':'], "-"));
+    let file = format!("{}_history.py", file_stem(name));
     Ok(json!({"fileName": file, "text": text}))
 }
 
@@ -109,8 +111,15 @@ fn redacted(v: &Value) -> Value {
 fn project_file(s: &Session) -> String {
     match &s.path {
         Some(p) => p.display().to_string(),
-        None => format!("{}.rgis", s.project.name.replace(['/', '\\', ':'], "-")),
+        None => format!("{}.rgis", file_stem(&s.project.name)),
     }
+}
+
+/// `name` as a file name on every system: letters, digits, `-` and `_` kept, anything else (a
+/// separator, `* ? " < > |`, a control character) `_`, as `model.export` names its file.
+fn file_stem(name: &str) -> String {
+    let stem: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    if stem.is_empty() { "project".into() } else { stem }
 }
 
 /// A call of the `rustgis` package's `Session.run`, one parameter a line (as ArcGIS Pro copies a

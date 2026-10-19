@@ -7896,7 +7896,11 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
     assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
     assert!(!text.contains("s3cr3t"));
-    assert!(out["fileName"].as_str().unwrap().ends_with(" history.py"));
+    assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
+    // A file name every system takes, whatever the project is called.
+    s.project.name = "A*B?\"C<D>|E".into();
+    let out = s.run("gp.historyScript", &Value::Null).unwrap();
+    assert_eq!(out["fileName"], "A_B__C_D__E_history.py");
     s.project.gp_history.clear();
     assert!(s.run("gp.historyScript", &Value::Null).is_err(), "nothing to save");
 }
