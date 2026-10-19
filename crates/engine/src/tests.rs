@@ -7867,6 +7867,24 @@ fn a_text_graphic_is_placed_again_by_its_points() {
     assert!(s.run("graphics.edit", &json!({"layer": id, "row": r["row"], "points": [[1, 1]]})).is_err());
 }
 
+/// A point, a text graphic's too, turns and scales on itself: Rotate and Scale leave it out, and
+/// with nothing else selected they change nothing and leave no undo step (#516).
+#[test]
+fn rotating_or_scaling_a_text_changes_nothing() {
+    let mut s = world();
+    let t = s.run("graphics.add", &json!({"shape": "text", "points": [[10, 50]], "text": "A"})).unwrap();
+    let layer = t["layer"].as_u64().unwrap();
+    s.run("select.rows", &json!({"layer": layer, "rows": [t["row"]]})).unwrap();
+    let label = s.undo_label();
+    assert!(s.run("edit.rotate", &json!({"angle": 34})).is_err());
+    assert!(s.run("edit.scale", &json!({"factor": 2})).is_err());
+    assert_eq!(s.undo_label(), label, "no undo step");
+    // With a shape beside it, the shape turns.
+    let r = s.run("graphics.add", &json!({"shape": "rectangle", "points": [[0, 0], [5, 5]], "layer": layer})).unwrap();
+    s.run("select.rows", &json!({"layer": layer, "rows": [t["row"], r["row"]]})).unwrap();
+    assert_eq!(s.run("edit.rotate", &json!({"angle": 34})).unwrap()["modified"], 1);
+}
+
 /// A command that opens another project part way and then fails (a plugin's command through its
 /// bridge) leaves the project before it open, counted as it was: the interface keeps what it
 /// holds for it.
