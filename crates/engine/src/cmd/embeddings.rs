@@ -166,24 +166,17 @@ fn handed(s: &mut Session, p: &Value) -> Result<Option<(u64, Vec<u8>)>, String> 
     Ok(Some((id, s.downloaded.remove(i).1)))
 }
 
-/// Gives back bytes handed over when they couldn't be added, so the same read can be tried again.
-fn hand_back(s: &mut Session, id: u64, bytes: Vec<u8>, e: String) -> String {
-    s.downloaded.push((id, bytes));
-    e
-}
-
 /// Earth Index's points in the view, coloured by their principal components.
 fn add_points(s: &mut Session, p: &Value, name: Option<String>) -> CmdResult {
     let ds = match handed(s, p)? {
         // The app's read: the points' GeoJSON.
-        Some((id, bytes)) => {
+        Some((_, bytes)) => {
             let read = std::str::from_utf8(&bytes)
                 .map_err(|_| "the points aren't UTF-8 text".to_string())
                 .and_then(|text| rustgis_data::io::read_geojson(text, name.as_deref().unwrap_or("Earth Index")).map_err(|e| e.to_string()));
-            match read {
-                Ok((ds, _)) => ds,
-                Err(e) => return Err(hand_back(s, id, bytes, e)),
-            }
+            // A read handed over is used once, added or not (the pane reads again), so a failed
+            // one doesn't stay in the session.
+            read?.0
         }
         None => {
             let area = bbox(s, p)?;
@@ -246,10 +239,10 @@ fn add_tessera(s: &mut Session, p: &Value, d: &emb::EmbeddingDataset, name: Opti
     let year = year(d, p)?;
     let b = bands(p, tessera::BANDS, tessera::DEFAULT_BANDS)?;
     let (r, tif) = match handed(s, p)? {
-        Some((id, tif)) => match raster::read_bytes("tessera.tif", &tif) {
+        Some((_, tif)) => match raster::read_bytes("tessera.tif", &tif) {
             Ok(r) if r.bands.iter().any(|band| band.stats.count > 0) => (r, tif),
-            Ok(_) => return Err(hand_back(s, id, tif, "Tessera has no embeddings there".into())),
-            Err(e) => return Err(hand_back(s, id, tif, e.to_string())),
+            Ok(_) => return Err("Tessera has no embeddings there".into()),
+            Err(e) => return Err(e.to_string()),
         },
         None => {
             let area = bbox(s, p)?;
@@ -329,10 +322,10 @@ mod tests {
         assert_eq!(r["features"], 3);
         let l = s.map().layers.iter().find(|l| l.dataset.name == "EI").unwrap();
         assert!(matches!(&l.renderer, rustgis_map::Renderer::Unique { field, classes, .. } if field == "color" && !classes.is_empty()));
-        // Bytes that can't be added are kept: the same read can be tried again.
+        // Bytes that can't be added are dropped, not kept in the session.
         let id = s.download_started();
         assert!(s.download_landed(id, vec![0xff, 0xfe]));
         assert!(s.run("embeddings.add", &json!({"dataset": "earth-index", "ran": id})).is_err());
-        assert!(s.downloaded.iter().any(|(d, _)| *d == id));
+        assert!(!s.downloaded.iter().any(|(d, _)| *d == id));
     }
 }

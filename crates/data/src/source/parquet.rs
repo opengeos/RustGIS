@@ -707,6 +707,8 @@ pub struct Vectors {
 
 /// The most values one vector may have.
 const MAX_DIMS: usize = 8192;
+/// The most vector values one read keeps (in all; 4 bytes each).
+const MAX_VECTOR_VALUES: usize = if cfg!(target_arch = "wasm32") { 8 << 20 } else { 32 << 20 };
 
 /// Reads the points of a GeoParquet in `extent` (longitude/latitude) with the vectors of a list
 /// column (`column`, such as `embedding`), from a file by its web address. The geometry of every
@@ -782,6 +784,11 @@ pub fn read_vectors(file: &Arc<Remote>, extent: &Extent, column: &str, max_group
                 out.dims = v.len();
             }
             if v.len() == out.dims && out.dims > 0 {
+                if out.values.len().saturating_add(v.len()) > MAX_VECTOR_VALUES {
+                    return Err(DataError::Format(format!(
+                        "the area's vectors hold more than {MAX_VECTOR_VALUES} values, more than are read at once: zoom in"
+                    )));
+                }
                 out.points.push(*p);
                 out.values.extend_from_slice(v);
             }

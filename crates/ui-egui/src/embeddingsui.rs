@@ -45,10 +45,12 @@ pub struct State {
     pub dimension: Option<usize>,
     reading: Option<Read>,
     /// The search's box and dataset.
-    searched: Option<([f64; 4], &'static str)>,
+    /// The search's box and dataset, and the project it was for (`Session::opened`).
+    searched: Option<([f64; 4], &'static str, u64)>,
     pub found: Vec<Tile>,
-    /// The footprints layer of the last search.
-    footprints: Option<u32>,
+    /// The footprints layer of the last search, and its project (`Session::opened`): layer ids
+    /// are a map's own, so another project's may be the same.
+    footprints: Option<(u32, u64)>,
     pub error: Option<String>,
     pub info: Option<String>,
 }
@@ -125,7 +127,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Ok((tiles, complete)) => {
                 let st = &mut app.ui.embeddings;
                 // A search for a dataset no longer picked: its tiles aren't this one's.
-                if st.searched.is_some_and(|(_, d)| d != st.dataset) {
+                // Or for a project since closed.
+                let opened = app.session.opened;
+                if st.searched.is_some_and(|(_, d, o)| d != st.dataset || o != opened) {
                     return;
                 }
                 st.info = Some(if tiles.is_empty() {
@@ -178,7 +182,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 
 /// Replaces the last search's footprints with this one's.
 fn show_footprints(app: &mut RustGisApp) {
-    if let Some(old) = app.ui.embeddings.footprints.take()
+    if let Some((old, opened)) = app.ui.embeddings.footprints.take()
+        && opened == app.session.opened
         && app.session.map().layer(old).is_some()
     {
         let _ = app.run("layer.remove", json!({"layer": old}));
@@ -192,7 +197,10 @@ fn show_footprints(app: &mut RustGisApp) {
     // A layer's name, like other data: not translated.
     let name = format!("{} tiles", picked(st).name.split(" (").next().unwrap_or("Embeddings"));
     match app.run("stac.addFootprints", json!({"footprints": fc, "name": name})) {
-        Ok(r) => app.ui.embeddings.footprints = r["layer"].as_u64().and_then(|i| u32::try_from(i).ok()),
+        Ok(r) => {
+            let opened = app.session.opened;
+            app.ui.embeddings.footprints = r["layer"].as_u64().and_then(|i| u32::try_from(i).ok()).map(|id| (id, opened));
+        }
         Err(e) => app.ui.embeddings.error = Some(e),
     }
     app.map.invalidate();
@@ -211,7 +219,7 @@ fn search(app: &mut RustGisApp) {
     st.error = None;
     st.info = None;
     st.found.clear();
-    st.searched = Some((bbox, st.dataset));
+    st.searched = Some((bbox, st.dataset, app.session.opened));
     let slot: Slot<Result<Found, String>> = Slot::default();
     let land = slot.clone();
     let done: Box<dyn FnOnce(Result<Found, String>) + Send> = Box::new(move |r| {

@@ -164,6 +164,9 @@ pub struct Info {
     /// The stretches being read, with who waits for each: read once, however many map tiles
     /// ask for it first.
     stretching: Mutex<HashMap<(Vec<usize>, bool), Vec<StretchThen>>>,
+    /// Stretches whose read failed, and when: drawn with the type's full range meanwhile (not
+    /// kept), read again after [`RETRY`].
+    stretch_failed: Mutex<HashMap<(Vec<usize>, bool), Instant>>,
     /// The file's own bands shown as red, green, blue (or one, grey), and alpha.
     rgb: bool,
     alpha: bool,
@@ -412,6 +415,7 @@ fn stats(url: String, header: Sparse, layout: Layout, done: Box<dyn FnOnce(Resul
         max_zoom,
         stretch: Mutex::new(HashMap::new()),
         stretching: Mutex::new(HashMap::new()),
+        stretch_failed: Mutex::new(HashMap::new()),
         rgb,
         alpha,
     });
@@ -458,9 +462,14 @@ fn type_range(layout: &Layout, aef: bool) -> (f32, f32) {
 /// Keeps a look's stretch: a few looks a file (a script trying many is hostile input); past them,
 /// the others are read again when asked for.
 fn keep_stretch(info: &Info, key: (Vec<usize>, bool), s: Vec<(f32, f32)>) {
+    let own = (info.shown(&Look::default()).into_iter().take(3).collect::<Vec<_>>(), false);
     let mut kept = info.stretch.lock().unwrap_or_else(|e| e.into_inner());
-    if kept.len() >= MAX_LOOKS {
-        kept.clear();
+    // Past the cap one other look goes, never the file's own (an 8-bit colour image's is "as it
+    // is", not read).
+    if kept.len() >= MAX_LOOKS
+        && let Some(k) = kept.keys().find(|k| **k != own).cloned()
+    {
+        kept.remove(&k);
     }
     kept.insert(key, s);
 }
@@ -499,6 +508,11 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     }
     // Read once: later asks wait for the read under way.
     let key = (colour.clone(), look.aef);
+    // A read that failed lately: the type's full range for now.
+    if info.stretch_failed.lock().unwrap_or_else(|e| e.into_inner()).get(&key).is_some_and(|at| at.elapsed() < RETRY) {
+        then(Ok(vec![type_range(&info.layout, look.aef); colour.len()]));
+        return;
+    }
     {
         let mut reading = info.stretching.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(waiting) = reading.get_mut(&key) {
@@ -510,12 +524,25 @@ fn with_stretch(info: Arc<Info>, file: String, look: Look, then: StretchThen) {
     let tiles: Vec<u32> = (0..n as u32).collect();
     let i = info.clone();
     let shown_bands = colour.len();
+    let key_aef = look.aef;
     let done = move |r: Result<Vec<(f32, f32)>, String>| {
         let waiting = i.stretching.lock().unwrap_or_else(|e| e.into_inner()).remove(&key).unwrap_or_default();
-        // An overview that can't be read: the type's full range, kept, so the map tiles that ask
-        // next don't read it again and again.
-        let s = r.unwrap_or_else(|_| vec![type_range(&i.layout, key.1); shown_bands]);
-        keep_stretch(&i, key, s.clone());
+        // An overview that can't be read: the type's full range for now (not kept: the failure may
+        // pass), and no read again until RETRY has passed.
+        let s = match r {
+            Ok(s) => {
+                keep_stretch(&i, key, s.clone());
+                s
+            }
+            Err(_) => {
+                let mut failed = i.stretch_failed.lock().unwrap_or_else(|e| e.into_inner());
+                if failed.len() >= MAX_LOOKS {
+                    failed.clear();
+                }
+                failed.insert(key, Instant::now());
+                vec![type_range(&i.layout, key_aef); shown_bands]
+            }
+        };
         for w in waiting {
             w(Ok(s.clone()));
         }
