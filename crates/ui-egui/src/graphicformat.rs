@@ -100,6 +100,8 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     let current = graphics::label(ds, row).unwrap_or_default().to_string();
     let (mut size, mut color, mut bold) =
         (f64::from(graphics::font_size(ds, row)), crate::theme::c32(graphics::text_color(ds, row)), graphics::bold(ds, row));
+    let (mut italic, mut align, mut spacing) =
+        (graphics::italic(ds, row), graphics::align(ds, row), f64::from(graphics::letter_spacing(ds, row)));
     let k = key(app, (layer, row));
     let opened = app.session.opened;
     app.graphic_format.drawn = Some(k);
@@ -115,10 +117,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.label(egui::RichText::new(heading).font(crate::theme::semibold(14.0)));
     ui.separator();
     let select = app.graphic_format.select.take_if(|s| *s == k).is_some();
-    let fields = crate::textform::Fields { text: &mut text, size: &mut size, color: Some(&mut color), bold: Some(&mut bold), select };
-    let settled =
-        crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields, |_| {}))
-            .unwrap_or_default();
+    let fields = crate::textform::Fields {
+        text: &mut text,
+        size: &mut size,
+        color: Some(&mut color),
+        bold: Some(&mut bold),
+        italic: Some(&mut italic),
+        align: Some(&mut align),
+        letter_spacing: Some(&mut spacing),
+        select,
+    };
+    let settled = crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields))
+        .unwrap_or_default();
     let save = |app: &mut RustGisApp, change: serde_json::Value| {
         let mut p = json!({"layer": layer, "row": row});
         if let (Some(p), Some(c)) = (p.as_object_mut(), change.as_object()) {
@@ -139,6 +149,15 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     if settled.bold {
         save(app, json!({"bold": bold}));
+    }
+    if settled.italic {
+        save(app, json!({"italic": italic}));
+    }
+    if settled.align {
+        save(app, json!({"align": align.code()}));
+    }
+    if settled.letter_spacing {
+        save(app, json!({"letterSpacing": spacing}));
     }
 }
 
@@ -208,6 +227,11 @@ mod tests {
         h.run_steps(2);
         assert!(graphics::bold(&ds(&h), row));
         assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
+        // Italic too, as a layout's text has it (#535), with alignment and letter spacing beside it.
+        h.get_by_role_and_label(Role::CheckBox, "Italic").click();
+        h.run_steps(2);
+        assert!(graphics::italic(&ds(&h), row));
+        assert!(h.query_by_label("Alignment").is_some() && h.query_by_role_and_label(Role::SpinButton, "Letter spacing").is_some());
         // Typed, then the pane closed: the text is saved, the text still selected.
         h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
         h.run_steps(2);

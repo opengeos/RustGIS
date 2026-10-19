@@ -1,16 +1,23 @@
 //! The text form shared by a text graphic (Add Text) and a layout's text (the Format pane, #516):
-//! its text, dynamic text, size, colour and boldness, laid out and limited the same in both, so
-//! the same text can look the same on the map and on the page. It edits the values it is lent
+//! its text, dynamic text, size, colour, boldness, italic, alignment and letter spacing (#535),
+//! laid out and limited the same in both, so the same text can look the same on the map and on
+//! the page. It edits the values it is lent
 //! and says what was settled; each caller runs its own command.
 
 use egui::{Color32, Ui, vec2};
+use rustgis_engine::map::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING, TextAlign};
 
-/// What the form edits. Colour and boldness are left out where the text doesn't have them yet.
+/// What the form edits. A style is left out where the text doesn't have it.
 pub struct Fields<'a> {
     pub text: &'a mut String,
     pub size: &'a mut f64,
     pub color: Option<&'a mut Color32>,
     pub bold: Option<&'a mut bool>,
+    pub italic: Option<&'a mut bool>,
+    /// How the lines line up: within a layout text's box, or in a text graphic's block.
+    pub align: Option<&'a mut TextAlign>,
+    /// Points between letters, from −5 (tighter) to 50.
+    pub letter_spacing: Option<&'a mut f64>,
     /// The text is focused and selected whole, so typing replaces it (a text just placed).
     pub select: bool,
 }
@@ -26,6 +33,10 @@ pub struct Settled {
     pub size: bool,
     pub color: bool,
     pub bold: bool,
+    pub italic: bool,
+    pub align: bool,
+    /// The letter spacing changed and was let go, as the size.
+    pub letter_spacing: bool,
 }
 
 /// A section of the Format pane ("Element", "Text"), folding as its other sections do (a frame's
@@ -40,15 +51,8 @@ pub fn section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> O
 pub const LABEL_W: f32 = 96.0;
 
 /// The form, its fields told apart by `id` (an element, a dialog). `tokens` are the dynamic text
-/// lists the text expands where it is shown, each a section of the Dynamic Text menu. `extra`
-/// adds rows of the caller's own to the grid of Size, Color and Bold (a layout's type settings).
-pub fn show(
-    ui: &mut Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
-    tokens: &[&[(&str, &str)]],
-    f: Fields<'_>,
-    extra: impl FnOnce(&mut Ui),
-) -> Settled {
+/// lists the text expands where it is shown, each a section of the Dynamic Text menu.
+pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&[(&str, &str)]], f: Fields<'_>) -> Settled {
     let id = egui::Id::new(id);
     let mut out = Settled::default();
     let hint = tl!("Shift+Enter starts a new line.");
@@ -106,7 +110,41 @@ pub fn show(
             out.bold = r.changed();
             ui.end_row();
         }
-        extra(ui);
+        if let Some(it) = f.italic {
+            ui.label(tl!("Italic"));
+            // Named for assistive technology, as its label sits in the other column.
+            let r = ui.checkbox(it, "");
+            let on = *it;
+            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, tl!("Italic")));
+            out.italic = r.changed();
+            ui.end_row();
+        }
+        if let Some(a) = f.align {
+            ui.label(tl!("Alignment"));
+            let shown = tl!(a.label());
+            egui::ComboBox::from_id_salt(id.with("align")).selected_text(shown).show_ui(ui, |ui| {
+                for v in TextAlign::ALL {
+                    if ui.selectable_label(*a == v, tl!(v.label())).clicked() && *a != v {
+                        *a = v;
+                        out.align = true;
+                    }
+                }
+            });
+            ui.end_row();
+        }
+        if let Some(ls) = f.letter_spacing {
+            ui.label(tl!("Letter spacing"));
+            let before = *ls;
+            let r =
+                ui.add(egui::DragValue::new(ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"));
+            let now = *ls;
+            r.widget_info(|| egui::WidgetInfo {
+                label: Some(tl!("Letter spacing").to_string()),
+                ..egui::WidgetInfo::drag_value(true, now)
+            });
+            out.letter_spacing = (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (now - before).abs() > 1e-6;
+            ui.end_row();
+        }
     });
     out
 }
@@ -123,7 +161,10 @@ mod tests {
         size: f64,
         color: Color32,
         bold: bool,
-        /// Whether colour and boldness are offered (a text graphic doesn't have them yet).
+        italic: bool,
+        align: TextAlign,
+        letter_spacing: f64,
+        /// Whether the style (colour, boldness, italic, alignment, letter spacing) is offered.
         styled: bool,
         settled: Vec<&'static str>,
     }
@@ -140,11 +181,21 @@ mod tests {
                         size: &mut f.size,
                         color: f.styled.then_some(&mut f.color),
                         bold: f.styled.then_some(&mut f.bold),
+                        italic: f.styled.then_some(&mut f.italic),
+                        align: f.styled.then_some(&mut f.align),
+                        letter_spacing: f.styled.then_some(&mut f.letter_spacing),
                         select: false,
                     },
-                    |_| {},
                 );
-                for (on, what) in [(s.text, "text"), (s.size, "size"), (s.color, "color"), (s.bold, "bold")] {
+                for (on, what) in [
+                    (s.text, "text"),
+                    (s.size, "size"),
+                    (s.color, "color"),
+                    (s.bold, "bold"),
+                    (s.italic, "italic"),
+                    (s.align, "align"),
+                    (s.letter_spacing, "letterSpacing"),
+                ] {
                     if on {
                         f.settled.push(what);
                     }
@@ -184,5 +235,24 @@ mod tests {
         h.run();
         assert!(h.state().bold);
         assert_eq!(h.state().settled, ["bold"]);
+    }
+
+    /// Italic, alignment and letter spacing show only where the text has them, under the same
+    /// names for a layout's text and a text graphic (#535); a change is settled.
+    #[test]
+    fn italic_alignment_and_spacing_show_only_when_lent() {
+        let mut h = harness(Form { text: "T".into(), size: 12.0, ..Form::default() });
+        h.run();
+        for name in ["Italic", "Alignment", "Letter spacing"] {
+            assert!(h.query_by_label(name).is_none(), "{name} offered unlent");
+        }
+        let mut h = harness(Form { text: "T".into(), size: 12.0, styled: true, ..Form::default() });
+        h.run();
+        assert!(h.query_by_label("Alignment").is_some());
+        assert!(h.query_by_role_and_label(Role::SpinButton, "Letter spacing").is_some());
+        h.get_by_role_and_label(Role::CheckBox, "Italic").click();
+        h.run();
+        assert!(h.state().italic);
+        assert_eq!(h.state().settled, ["italic"]);
     }
 }
