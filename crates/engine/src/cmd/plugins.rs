@@ -253,6 +253,8 @@ const NEVER: &[&str] = &[
     // Credentials: a plugin never sets where the user's are sent.
     "s3.connect",
     "s3.disconnect",
+    "earthdata.login",
+    "earthdata.logout",
 ];
 
 /// Commands that write files without naming one in their parameters.

@@ -381,6 +381,48 @@ pub fn download_public_within(url: &str, max: usize, timeout: std::time::Duratio
     native::get(&native::public_agent(timeout), &download_address(url, max))
 }
 
+/// How a JSON document is POSTed and its answer read (the browser's `fetch`): the address, the
+/// body and what to call once, as [`set_poster`] installs it.
+pub type Poster = Box<dyn Fn(String, String, Done) + Send + Sync>;
+
+fn poster() -> &'static Mutex<Option<Arc<Poster>>> {
+    static P: OnceLock<Mutex<Option<Arc<Poster>>>> = OnceLock::new();
+    P.get_or_init(Mutex::default)
+}
+
+/// Replaces how JSON documents are POSTed (the browser's `fetch`). `done` must be called once,
+/// with at most [`MAX_BYTES`] of the answer, and an error status as `HTTP <status>`.
+pub fn set_poster(f: impl Fn(String, String, Done) + Send + Sync + 'static) {
+    *poster().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
+}
+
+/// POSTs a JSON document to `url` (for a service that takes its request as one, the NLDI's
+/// flowtrace) and hands over the answer, off the frame (a thread natively, the browser's fetch
+/// on the web), counted as a fetch under way. Redirects aren't followed.
+pub fn post_json(url: &str, body: String, done: Done) {
+    if let Err(e) = crate::address::check(url, None) {
+        done(Err(e));
+        return;
+    }
+    IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    let done: Done = Box::new(move |r| {
+        done(r);
+        finished();
+    });
+    let p = poster().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match p {
+        Some(p) => p(url.to_string(), body, done),
+        None => native::post(url.to_string(), body, done),
+    }
+}
+
+/// Like [`post_json`], waiting for the answer (at most [`BLOCKING_TIMEOUT`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn post_json_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
+    crate::address::check(url, None)?;
+    native::post_with(&native::download_agent(BLOCKING_TIMEOUT), url, body)
+}
+
 /// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
 pub(crate) fn fetch_bytes(url: String, done: Done) {
     let f = fetcher().lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -716,6 +758,42 @@ mod native {
         ureq::Agent::with_parts(config, ureq::unversioned::transport::DefaultConnector::default(), PublicOnly::default())
     }
 
+    /// POSTs a JSON document on a thread of its own.
+    pub(super) fn post(url: String, body: String, done: Done) {
+        std::thread::spawn(move || done(post_with(&download_agent(std::time::Duration::from_secs(60)), &url, &body)));
+    }
+
+    /// POSTs a JSON document and reads the answer (at most [`MAX_BYTES`]); an error status is
+    /// `http status: <status>`, and a redirect isn't followed.
+    pub(super) fn post_with(agent: &ureq::Agent, url: &str, body: &str) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let mut resp = agent
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .send(body)
+            .map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(format!("http status: {status}"));
+        }
+        let mut buf = Vec::new();
+        resp.body_mut()
+            .with_config()
+            .limit(MAX_BYTES as u64 + 2)
+            .reader()
+            .take(MAX_BYTES as u64 + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        if buf.len() > MAX_BYTES {
+            return Err(format!("larger than {MAX_BYTES} bytes"));
+        }
+        Ok(buf)
+    }
+
     /// Downloads on a thread of its own, so a large file doesn't hold up the tiles.
     pub(super) fn download(url: String, done: DoneDetailed) {
         std::thread::spawn(move || done(get_detailed(&download_agent(std::time::Duration::from_secs(900)), &url)));
@@ -836,9 +914,20 @@ mod native {
                     req = req.header(k.as_str(), v.as_str());
                 }
             }
+            // An Earthdata Login token goes to NASA's Earthdata data hosts only, asked for at
+            // each hop: a redirect that leaves them (to a presigned address) goes without it.
+            if !prepared.signed
+                && let Some(auth) = crate::earthdata::authorization(&at)
+            {
+                req = req.header("Authorization", &auth);
+            }
             // An error status is answered, not failed: its headers and body say who refused.
             let mut resp = req.config().http_status_as_error(false).build().call().map_err(unanswered)?;
             let status = resp.status().as_u16();
+            // A data host refusing the request (or the token): say what to do.
+            if status == 401 && crate::earthdata::is_data_host(&at) {
+                return Err(Failure::without_answer("", crate::earthdata::refused_message(url), Reason::Status(status)));
+            }
             if status >= 400 {
                 return Err(if detail {
                     refused(&mut resp)
@@ -858,6 +947,10 @@ mod native {
             }
             let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).ok_or("a redirect with no Location")?;
             let next = crate::template::join(&at, location);
+            // An Earthdata data host sends a request it didn't accept to Earthdata Login.
+            if crate::earthdata::is_data_host(&at) && crate::earthdata::is_login(&next) {
+                return Err(Failure::without_answer("", crate::earthdata::refused_message(url), Reason::Status(401)));
+            }
             // Where a redirect leads is the server's choice, not the user's.
             crate::address::check(&next, Some(&at))?;
             // Never from HTTPS down to plain HTTP.
@@ -938,6 +1031,10 @@ mod native {
     pub(super) fn download(url: String, done: DoneDetailed) {
         let message = format!("{url}: this build has no way to fetch tiles");
         done(Err(crate::failure::Failure::new(&url, message)));
+    }
+
+    pub(super) fn post(url: String, _body: String, done: Done) {
+        done(Err(format!("{url}: this build has no way to send requests")));
     }
 
     pub(super) fn fetch_local(url: String, done: Done) {

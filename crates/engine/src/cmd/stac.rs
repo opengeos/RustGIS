@@ -76,7 +76,7 @@ fn add_footprints_cmd(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
-fn add_collection(s: &mut Session, fc: &Value, name: &str) -> Result<Option<u32>, String> {
+pub(crate) fn add_collection(s: &mut Session, fc: &Value, name: &str) -> Result<Option<u32>, String> {
     if fc["features"].as_array().is_none_or(Vec::is_empty) {
         return Ok(None);
     }
