@@ -21,6 +21,7 @@ pub mod mvt;
 pub mod nldi;
 pub mod overpass;
 pub mod overture;
+mod picture;
 pub mod pmtiles;
 pub mod portal;
 pub mod remote;

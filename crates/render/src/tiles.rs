@@ -141,7 +141,8 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         for t in layers {
             if let Some(g) = gpu.as_mut()
                 && t.blend == Blend::Normal
-                && let Some(p) = rustgis_tiles::place(&spec(t), t.opacity, &frame, &fetch, &reach)
+                && let Some(p) =
+                    rustgis_tiles::place(&spec(t), t.opacity, &frame, &fetch, &reach, labels.then_some((pm.width(), pm.height())))
             {
                 // What the accumulator holds goes first, under the tiles; with no room for a new
                 // accumulator the layer is drawn into this one instead.
@@ -150,7 +151,7 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
                     if !p.tiles.is_empty() {
                         g.cmds.push(DrawCmd::Tiles { origin, tiles: p.tiles.iter().map(|q| quad(q, origin)).collect() });
                     }
-                    let d = rustgis_tiles::Drawn { labels: Vec::new(), attribution: p.attribution, pending: p.pending, error: p.error };
+                    let d = rustgis_tiles::Drawn { labels: p.labels, attribution: p.attribution, pending: p.pending, error: p.error };
                     collect(d, &t.name, &mut out);
                     continue;
                 }
