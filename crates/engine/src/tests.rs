@@ -8035,7 +8035,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     let old = crate::GpRecord {
         tool: "Buffer".into(),
         id: String::new(),
-        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "password": "pa55word", "api_token": "abc123", "key": "NAME"}),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "odbc": "DRIVER=x;UID=me;PWD=odbcpw", "libpq": "host=db user=me password=libpqpw dbname=x", "gdal": "MYSQL:db,user=me,password=gdalpw", "password": "pa55word", "api_token": "abc123", "key": "NAME"}),
         command: None,
         at: 0,
         ok: false,
@@ -8053,6 +8053,14 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(py.contains("tool=\"buffer\"") && py.contains("https://h.example/a") && !py.contains("s3cr3t"), "{py}");
     // A libpq connection keeps its words but its password, though spaces part them.
     assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
+    // A connection with no prefix `redact` knows keeps its words but its secret-named values.
+    for pw in ["odbcpw", "libpqpw", "gdalpw"] {
+        assert!(!py.contains(pw), "{pw} in {py}");
+    }
+    assert!(
+        py.contains("UID=me;PWD=\"") && py.contains("host=db user=me password= dbname=x") && py.contains("user=me,password=\""),
+        "{py}"
+    );
     // A key is redacted as a value is.
     assert!(py.contains("https://k.example/") && !py.contains("k3y"), "{py}");
     // A value under a secret's name is left empty; a plain `key` that reads as a name is kept.

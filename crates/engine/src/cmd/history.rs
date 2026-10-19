@@ -128,9 +128,30 @@ fn redacted(v: &Value) -> Value {
 
 /// `t` without its secrets. A connection is taken whole, though a libpq one (`PG:host=db
 /// password=…`) has spaces in it: `redact` takes its password out. Other text with spaces may
-/// name addresses among its words; a single word may be one.
+/// name addresses among its words; a single word may be one. Any text may still be a connection
+/// in a form `redact` doesn't read (libpq's words alone, GDAL's `MYSQL:db,user=…,password=…`,
+/// ODBC's `UID=…;PWD=…`): its secret-named values go too.
 fn redacted_text(t: &str) -> String {
-    if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) }
+    let r = if connection(t) || !t.contains(char::is_whitespace) { crate::sources::redact(t) } else { crate::sources::redact_text(t) };
+    // After `redact` too: a prefix it knows may come in a form it doesn't (GDAL's `MYSQL:`).
+    secret_pairs_emptied(&r)
+}
+
+/// `t` with the value of each `name=value` pair whose name says it's a secret
+/// (`sources::secret_key`) left empty, pairs being parted by spaces, commas or semicolons. A
+/// value quoted with a space in it (`password='a b'`) loses its first word only.
+fn secret_pairs_emptied(t: &str) -> String {
+    let parts = |c: char| c.is_whitespace() || c == ',' || c == ';';
+    t.split_inclusive(parts)
+        .map(|piece| {
+            let item = piece.trim_end_matches(parts);
+            let sep = piece.get(item.len()..).unwrap_or("");
+            match item.split_once('=') {
+                Some((k, _)) if crate::sources::secret_key(k.trim()) => format!("{k}={sep}"),
+                _ => piece.to_string(),
+            }
+        })
+        .collect()
 }
 
 /// Whether `t` is a database connection `sources::redact` reads as one: PostgreSQL's (a URI, or
