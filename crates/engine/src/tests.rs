@@ -7851,7 +7851,10 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     let undo = s.undo_label();
     let r = s.guarded("Task", true, |s| {
         s.run("project.new", &json!({"name": "Other"}))?;
-        assert!(s.run("layer.remove", &json!({"layer": "no such layer"})).is_err());
+        // A step that runs (no condition stops it first) and fails inside, rolled back on its own.
+        let rev = s.revision;
+        assert!(s.run("map.rename", &json!({"name": ""})).is_err());
+        assert!(s.revision > rev, "it ran as a command");
         assert_eq!(s.project.name, "Other");
         Err("a later step failed".into())
     });
