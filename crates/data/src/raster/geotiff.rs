@@ -283,7 +283,8 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
         return None;
     }
     // A latitude of true scale is said only for the projections that take one.
-    if get("lat_ts").is_some() && !matches!(get("proj"), Some("stere" | "eqc" | "cea")) {
+    let polar = get("lat_0").and_then(|v| v.parse::<f64>().ok()).is_some_and(|l| l.abs() == 90.0);
+    if get("lat_ts").is_some() && !(matches!(get("proj"), Some("eqc" | "cea")) || (get("proj") == Some("stere") && polar)) {
         return None;
     }
     let num = |k: &str| get(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
@@ -293,10 +294,18 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
     let (ct, mut doubles_by_key): (u16, Vec<(u16, f64)>) = match get("proj")? {
         "tmerc" => (1, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
         "merc" => (7, vec![(3080, lon0), (3082, x0), (3083, y0), (3092, k0)]),
-        "lcc" => match num("lat_2") {
-            Some(lat2) => (8, vec![(3078, num("lat_1").unwrap_or(lat0)), (3079, lat2), (3084, lon0), (3085, lat0), (3086, x0), (3087, y0)]),
-            None => (9, vec![(3080, lon0), (3081, num("lat_1").unwrap_or(lat0)), (3082, x0), (3083, y0), (3092, k0)]),
-        },
+        // Two standard parallels (CT 8) carry no scale factor: one that isn't 1 is said by the
+        // one-parallel form (CT 9), when the parallels are one, or not at all.
+        "lcc" => {
+            let lat1 = num("lat_1").unwrap_or(lat0);
+            match num("lat_2") {
+                Some(lat2) if (k0 - 1.0).abs() < 1e-12 => {
+                    (8, vec![(3078, lat1), (3079, lat2), (3084, lon0), (3085, lat0), (3086, x0), (3087, y0)])
+                }
+                Some(lat2) if (lat2 - lat1).abs() > 1e-12 => return None,
+                _ => (9, vec![(3080, lon0), (3081, lat1), (3082, x0), (3083, y0), (3092, k0)]),
+            }
+        }
         "laea" => (10, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0)]),
         "aea" => (
             11,
@@ -336,7 +345,8 @@ fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, Stri
         doubles_by_key.extend([(2057, a), (2058, b)]);
     }
     // The key directory: sorted by key, doubles and ASCII at their offsets.
-    let label: String = label.chars().filter(|c| *c != '|').take(200).collect();
+    // TIFF's ASCII is 7-bit.
+    let label: String = label.chars().filter(|c| c.is_ascii() && !c.is_ascii_control() && *c != '|').take(200).collect();
     let mut entries: Vec<[u16; 4]> = shorts.iter().map(|(k, v)| [*k, 0, 1, *v]).collect();
     doubles_by_key.sort_by_key(|(k, _)| *k);
     let doubles: Vec<f64> = doubles_by_key.iter().map(|(_, v)| *v).collect();
@@ -1199,12 +1209,19 @@ mod tests {
         assert!(keys_from_proj4("junk", "x").is_none());
         assert!(keys_from_proj4("+proj=tmerc +lon_0=0 +units=us-ft +datum=WGS84", "x").is_none(), "only metres");
         for unsaid in [
+            "+proj=stere +lat_0=45 +lat_ts=30 +datum=WGS84",
+            "+proj=lcc +lat_1=30 +lat_2=40 +k_0=0.9996 +datum=WGS84",
             "+proj=merc +lat_ts=33 +datum=WGS84",
             "+proj=tmerc +ellps=bessel +towgs84=598.1,73.7,418.2",
             "+proj=lcc +lat_1=40 +pm=paris +a=6378249.2 +b=6356515",
         ] {
             assert!(keys_from_proj4(unsaid, "x").is_none(), "{unsaid}");
         }
+        // A one-parallel conic with a scale factor (as WKT's 1SP gives it, both parallels the same)
+        // keeps it.
+        let (k, d, a) =
+            keys_from_proj4("+proj=lcc +lat_1=46.8 +lat_2=46.8 +lat_0=46.8 +lon_0=2.3 +k_0=0.99987742 +datum=WGS84", "x").unwrap();
+        assert!(custom_crs(&k, &d, &a).unwrap().custom_def().unwrap().proj4.contains("+k_0=0.99987742"));
         // A polar stereographic round trip: the pole's longitude comes back.
         let (k, d, a) =
             keys_from_proj4("+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m", "NSIDC").unwrap();

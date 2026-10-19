@@ -191,6 +191,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         return;
     };
     let Some(w) = app.ui.opendata.waiting.take() else { return };
+    let replaced = !w.more && app.ui.opendata.zarr_open.is_some();
     let st = &mut app.ui.opendata;
     match r.and_then(|b| w.portal.parse(&w.url, &b, w.area, &w.query).map(|found| (found, w.portal.paging(&w.url, &b)))) {
         Ok((found, (total, next))) => {
@@ -203,9 +204,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
                 // The earlier list's checks would land on these results' places.
                 st.probes.clear();
             }
-            // A Zarr store is checked before it is offered.
+            // A dynamical.org store (Zarr 3) is checked before it is offered.
             for (i, d) in st.found.iter().enumerate().skip(first) {
-                if let Some(r) = d.resources.iter().find(|r| r.using == Use::Zarr) {
+                if let Some(r) = d.resources.iter().find(|r| r.using == Use::Zarr && r.url.starts_with("https://data.dynamical.org/")) {
                     st.probes.push((i, fetch(&format!("{}/zarr.json", r.url))));
                 }
             }
@@ -222,6 +223,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             });
         }
         Err(e) => st.error = Some(e),
+    }
+    // A new list closes the open store, and the Zarr picker's dataset mode with it.
+    if replaced && app.ui.opendata.zarr_open.is_none() {
+        app.ui.zarr.title = None;
     }
 }
 
@@ -255,7 +260,8 @@ fn poll_probes(app: &mut RustGisApp, ctx: &egui::Context) {
         Some(r) => {
             // Only a store that isn't there (404, or 403 as S3 says it): a passing error leaves
             // the dataset to be added.
-            let absent = r.err().and_then(|e| cache::http_status(&e)).is_some_and(|s| s == 404 || s == 403);
+            // (A 403 may be a passing refusal: only 404 says so.)
+            let absent = r.err().and_then(|e| cache::http_status(&e)) == Some(404);
             landed.push((*i, !absent));
             false
         }
@@ -582,10 +588,12 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         );
         ui.add_space(4.0);
     }
-    let st = &mut app.ui.opendata;
     if close_zarr {
-        st.zarr_open = None;
+        // The Zarr picker's dataset mode goes with the dataset.
+        app.ui.opendata.zarr_open = None;
+        app.ui.zarr.title = None;
     }
+    let st = &mut app.ui.opendata;
     let listing = st.listing.is_some();
     let mut act = None;
     let mut wanted = Vec::new();

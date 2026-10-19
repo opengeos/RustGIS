@@ -255,8 +255,10 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
 pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
     // Beside the dimensions' names.
     let wide = (ui.available_width() - 230.0).clamp(120.0, 380.0);
-    // A Web Data dataset (a forecast or analysis archive) opens on its latest complete time (the
-    // newest may still be being written), as GeoLibre's does; a store added by hand on its first.
+    // A Web Data dataset (a forecast or analysis archive: `title` is set while the Web Data pane
+    // has it open, cleared when it closes) opens on its latest complete time, as GeoLibre's does:
+    // the step before the newest, which may still be being written (an archive whose newest is
+    // complete opens one step early). A store added by hand opens on its first.
     let latest = app.ui.zarr.title.is_some();
     let busy = app.ui.zarr.busy();
     if busy {

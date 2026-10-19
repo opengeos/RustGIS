@@ -1191,6 +1191,9 @@ fn dynamical_dataset(l: &Value) -> Option<Dataset> {
     // `noaa-gfs-forecast-35-day` → `noaa/gfs/forecast-35-day`: the provider, the model up to
     // the kind (forecast or analysis), the rest.
     let parts: Vec<&str> = id.split('-').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return None;
+    }
     let k = parts.iter().position(|p| *p == "forecast" || *p == "analysis").filter(|k| *k >= 2)?;
     let path = format!("{}/{}/{}", parts.first()?, parts.get(1..k)?.join("-"), parts.get(k..)?.join("-"));
     let provider = parts.first().map(|p| p.to_uppercase()).unwrap_or_default();
