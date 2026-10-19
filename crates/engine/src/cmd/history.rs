@@ -163,7 +163,8 @@ fn private_keys_removed(t: &str) -> String {
 }
 
 /// `t` with the value of each `name=value` pair whose name says it's a secret
-/// (`sources::secret_key`) left empty, pairs being parted by spaces, commas or semicolons. A
+/// (`sources::secret_key`; a bare `key`, `sig` or `sas` when its value reads as a key) left
+/// empty, pairs being parted by spaces, commas or semicolons. A
 /// value in quotes or braces (`password='a b'`, ODBC's `PWD={a;b}`) goes whole, to its closer
 /// (to the end of the text when it has none).
 fn secret_pairs_emptied(t: &str) -> String {
@@ -173,7 +174,15 @@ fn secret_pairs_emptied(t: &str) -> String {
     while !rest.is_empty() {
         let end = rest.find(parts).unwrap_or(rest.len());
         let item = rest.get(..end).unwrap_or(rest);
-        let Some((k, v)) = item.split_once('=').filter(|(k, _)| crate::sources::secret_key(k.trim())) else {
+        // A bare `key`, `sig` or `sas` is as likely a field in an expression (`key=5`): a secret
+        // only when its value reads as one.
+        let secret = |(k, v): &(&str, &str)| {
+            let k = k.trim();
+            crate::sources::secret_key(k)
+                && (!["key", "sig", "sas"].iter().any(|p| k.eq_ignore_ascii_case(p))
+                    || crate::sources::looks_like_a_key(v.trim_matches(['\'', '"', '{', '}'])))
+        };
+        let Some((k, v)) = item.split_once('=').filter(secret) else {
             // Not a secret: the item and the separator after it, as they are.
             let next = rest.get(end..).and_then(|r| r.chars().next()).map_or(end, |c| end + c.len_utf8());
             out.push_str(rest.get(..next).unwrap_or(rest));

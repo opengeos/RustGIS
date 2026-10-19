@@ -3846,8 +3846,11 @@ fn save_history_script(app: &mut RustGisApp) {
             } else if let Some(path) = crate::dialogs::pick_save(&name, &["py"], tl!("Python script")) {
                 match rustgis_engine::data::io::write_atomic(std::path::Path::new(&path), &bytes) {
                     Ok(()) => app.session.notify(crate::i18n::fmt("Saved {path}", &[("path", &path)]), false),
-                    Err(e) => app.session.notify(e.to_string(), true),
+                    Err(e) => return app.session.notify(e.to_string(), true),
                 }
+            } else {
+                // Cancelled: nothing was saved.
+                return;
             }
             // The script opens the project's saved file, which lacks what changed since.
             if app.session.dirty || app.session.path.is_none() {
