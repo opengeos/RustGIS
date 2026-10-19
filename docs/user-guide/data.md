@@ -404,7 +404,7 @@ rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/
 **EnviroAtlas…** shows the US EPA's [EnviroAtlas](https://www.epa.gov/enviroatlas) services
 (`https://enviroatlas.epa.gov/arcgis/rest/services`) as a tree: folders, their services (**Add**
 adds a service's whole map or image), and each service's layers, each with an **Add** of its own
-(drawn alone). A search looks through every folder's services. **Add From Service** also browses
+(drawn alone). A search looks through the services of every folder and of the folders in them, a few folders at a time. **Add From Service** also browses
 any ArcGIS services directory: its folders and the map, feature, image and vector tile services in them are listed
 with **Open**, which lists that folder or service (**Back** returns). A map service offers its
 whole map, each of its layers drawn alone (`… (map)`) and its layers' features. With commands,

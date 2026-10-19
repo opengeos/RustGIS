@@ -28,6 +28,8 @@ pub const FEMA_NFHL: &str = "https://hazards.fema.gov/arcgis/rest/services/publi
 const ENVIROATLAS_HIDDEN: [&str; 3] = ["test_services", "monitor", "Utilities"];
 /// Most search results listed.
 const MAX_RESULTS: usize = 200;
+/// Most folder documents a search fetches at once.
+const MAX_FETCHES: usize = 3;
 
 /// A service document: on its way, read (its text and what `service.layers` made of it), or failed.
 enum Doc {
@@ -57,6 +59,8 @@ pub struct State {
     /// Fields of the World's year and lowest score.
     year: Option<i64>,
     min_score: f64,
+    /// GIBS's layers' search text (title and name, lower case), read once per document.
+    gibs_hay: Option<(usize, Arc<Vec<String>>)>,
     /// The National Map's catalog (`nationalMap.services`), read once.
     national_map: Option<Arc<Value>>,
     /// What was last done, or went wrong.
@@ -255,8 +259,23 @@ pub fn nasa_earthdata(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let look = listing(app, NASA_GIBS, "wmts");
     let mut add = None;
     if let Look::Ready(_, v) = &look {
+        // Each layer's search text, made once for the document (not every frame).
+        let key = Arc::as_ptr(v) as usize;
+        let hay = match &app.ui.web_services.gibs_hay {
+            Some((k, h)) if *k == key => h.clone(),
+            _ => {
+                let h: Arc<Vec<String>> = Arc::new(
+                    layers_of(v)
+                        .iter()
+                        .map(|l| format!("{} {}", text(l, "title"), text(l, "name")).replace('_', " ").to_lowercase())
+                        .collect(),
+                );
+                app.ui.web_services.gibs_hay = Some((key, h.clone()));
+                h
+            }
+        };
         let layers: Vec<&Value> =
-            layers_of(v).iter().filter(|l| matches(&words, &format!("{} {}", text(l, "title"), text(l, "name")))).collect();
+            layers_of(v).iter().zip(hay.iter()).filter(|(_, h)| words.iter().all(|w| h.contains(w.as_str()))).map(|(l, _)| l).collect();
         // Categories by the name's first part; ones with fewer than three layers go in Other.
         let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
         for l in &layers {
@@ -297,6 +316,16 @@ pub fn nasa_earthdata(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 .id_salt(("gibs", group.as_str()))
                 .open(searching.then_some(true))
                 .show(ui, |ui| {
+                    if ls.len() > MAX_RESULTS {
+                        ui.label(
+                            RichText::new(crate::i18n::fmt(
+                                "The first {n} are shown: search to narrow them.",
+                                &[("n", &MAX_RESULTS.to_string())],
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
                     for l in ls.iter().take(MAX_RESULTS) {
                         let name = text(l, "name");
                         let mut meta = name.to_string();
@@ -375,14 +404,31 @@ pub fn enviroatlas(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 });
             }
         } else {
-            // A search reads every folder, then lists the services whose names match.
+            // A search reads every folder and the folders in them (one level), a few at a time,
+            // then lists the services whose names match.
             let mut found = 0;
             let mut loading = false;
-            let mut failed: Vec<&str> = Vec::new();
-            for folder in &folders {
-                match listing(app, folder, "arcgis") {
+            let mut failed: Vec<String> = Vec::new();
+            let mut to_search: Vec<(String, bool)> = folders.iter().map(|f| (f.clone(), true)).collect();
+            let mut i = 0;
+            while let Some((folder, top)) = to_search.get(i).cloned() {
+                i += 1;
+                let known = app.ui.web_services.docs.contains_key(&folder);
+                let waiting = app.ui.web_services.docs.values().filter(|d| matches!(d, Doc::Waiting(_))).count();
+                if !known && waiting >= MAX_FETCHES {
+                    loading = true;
+                    continue;
+                }
+                match listing(app, &folder, "arcgis") {
                     Look::Ready(_, v) => {
                         for s in layers_of(&v) {
+                            // A folder in the folder: searched too, once.
+                            if top && text(s, "name").ends_with('/') {
+                                if let Some((url, _)) = service_of(s) {
+                                    to_search.push((url, false));
+                                }
+                                continue;
+                            }
                             if found < MAX_RESULTS && matches(&words, text(s, "name")) {
                                 found += 1;
                                 if let Some(a) = service_tree(app, ui, s) {
@@ -392,7 +438,7 @@ pub fn enviroatlas(app: &mut RustGisApp, ui: &mut egui::Ui) {
                         }
                     }
                     Look::Loading => loading = true,
-                    Look::Failed(_) => failed.push(folder.rsplit('/').next().unwrap_or(folder)),
+                    Look::Failed(_) => failed.push(folder.rsplit('/').next().unwrap_or(&folder).to_string()),
                 }
             }
             if !failed.is_empty() {

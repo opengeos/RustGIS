@@ -536,14 +536,15 @@ fn wmts(url: &str, root: &Node) -> Service {
         let time = children(&layer, "Dimension")
             .find(|d| child_text(d, "Identifier").is_some_and(|i| i.eq_ignore_ascii_case("time")))
             .and_then(|d| {
-                let values: Vec<String> =
-                    children(&d, "Value").take(MAX_TIME_VALUES).map(|v| text_of(&v)).filter(|v| v.len() <= 100).collect();
-                let listed = values.iter().rev().find_map(|v| {
+                // Every listed value is read for the latest; the first few are kept.
+                let all: Vec<String> = children(&d, "Value").take(MAX_LAYERS).map(|v| text_of(&v)).filter(|v| v.len() <= 100).collect();
+                let listed = all.iter().rev().find_map(|v| {
                     let mut parts = v.split('/');
                     let first = parts.next().unwrap_or("");
                     checked_time(parts.next().unwrap_or(first)).ok()
                 });
                 let default = child_text(&d, "Default").and_then(|t| checked_time(&t).ok()).or(listed)?;
+                let values = all.into_iter().take(MAX_TIME_VALUES).collect();
                 Some(LayerTime { default, values })
             });
         let templates: Vec<String> = children(&layer, "ResourceURL")
@@ -1329,9 +1330,11 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
         });
     }
     for s in v.get("services").and_then(|s| s.as_array()).into_iter().flatten().take(MAX_LAYERS) {
-        let (Some(name), Some(kind)) =
-            (s.get("name").and_then(|n| n.as_str()).and_then(arcgis_name), s.get("type").and_then(|t| t.as_str()))
-        else {
+        let Some(kind) = s.get("type").and_then(|t| t.as_str()) else {
+            skipped += 1;
+            continue;
+        };
+        let Some(name) = s.get("name").and_then(|n| n.as_str()).and_then(arcgis_name) else {
             unnamed += 1;
             continue;
         };
@@ -1350,7 +1353,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
         });
     }
     if skipped > 0 {
-        service.notes.push(format!("{skipped} services of other types (geoprocessing, geometry, …) are left out"));
+        service.notes.push(format!("{skipped} services of other or unknown types (geoprocessing, geometry, …) are left out"));
     }
     if unnamed > 0 {
         service.notes.push(format!("{unnamed} folders or services with names RustGIS can't put in an address are left out"));
@@ -2197,6 +2200,12 @@ mod tests {
         let listed = GIBS.replace("<Default>../../x?y</Default>", "<Default>?</Default><Value>2020-01-01/2020-02-01/P1D</Value>");
         let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", listed.as_bytes()).unwrap();
         assert_eq!(s.layers[2].time.as_ref().map(|t| t.default.as_str()), Some("2020-02-01"));
+        // The latest of many listed times, past the few kept.
+        let many: String = (0..100).map(|i| format!("<Value>{}-01-01</Value>", 1900 + i)).collect();
+        let late = GIBS.replace("<Default>../../x?y</Default>", &many);
+        let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", late.as_bytes()).unwrap();
+        let t = s.layers[2].time.as_ref().unwrap();
+        assert_eq!((t.default.as_str(), t.values.len()), ("1999-01-01", MAX_TIME_VALUES));
         assert!(checked_time("2024-06-01").is_ok() && checked_time("2024-06-01T10:00:00Z").is_ok());
         assert!(checked_time("default").is_ok());
         for bad in ["", "..", ".", "../x", "2024-06-01/../..", "a b", "x?y=1", "latest", &"9".repeat(50)] {
