@@ -40,10 +40,9 @@ Tools for working across maps and views, and for setting up the app the way you 
     tools' outputs are refused.
 - **Thumbnails** for the project and for each map, from the view or an image.
 - **Animation**: add keyframes (views), play them, and export the moves as PNG frames.
+![The Time Slider under the map at 2018, showing a layer of dated events cumulatively, with a bar for each year](https://assets.rustgis.app/images/time-slider.webp)
+
 - **Time Slider** (View › Time) shows data through time, in a timeline docked under the map.
-
-  ![The Time Slider under the map at 2018, showing a layer of dated events cumulatively, with a bar for each year](https://assets.rustgis.app/images/time-slider.webp)
-
   - **Bind To Time Slider** (a layer's context menu, or the bar's **Layers** menu) picks the
     layer's date field: the one most of whose values read as dates. Text dates (`2015-03-01`,
     `2015-03-01T12:00:00Z`, `2015/3/1`), epoch milliseconds or seconds, and years (`1958`) all

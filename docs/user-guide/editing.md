@@ -34,7 +34,8 @@ read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest
 - **Snapping** (**Edit › Snapping**): new and dragged vertices snap to nearby vertices, edges and
   line ends (magenta marker). Each of the three can be turned off, and the tolerance is how near,
   in screen pixels, a vertex must come to snap (10 by default, 1 to 100):
-  `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}`.
+  `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}` (without `"on"` it turns
+  snapping on or off).
 - **Settings**: **Show Vertices** marks the vertices of the selected features even when Edit
   Vertices isn't on (`edit.settings={"showVertices": true}`).
 - **Elevation**: new features get a `z` value, constant or sampled from a raster surface.
