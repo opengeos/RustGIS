@@ -2343,6 +2343,30 @@ impl GpForm {
             self.tables.insert(p.name, id);
         }
     }
+
+    /// Fills the open tool's form with `given` values by parameter name, over its own (a run
+    /// opened again from the History pane, #539), as text in the form each field takes and sends
+    /// back: several layers `;`-separated, a standalone table (given by its id) by its name and
+    /// picked by its id, a switch `true`/`false`.
+    pub fn fill(&mut self, given: &serde_json::Map<String, Value>) {
+        let Some(spec) = self.tool.and_then(rustgis_engine::analysis::tool) else { return };
+        for p in spec.params {
+            let text = match (p.kind, given.get(p.name)) {
+                (_, None | Some(Value::Null)) => continue,
+                (ParamKind::RasterLayers | ParamKind::VectorLayers, Some(Value::Array(a))) => {
+                    a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(";")
+                }
+                (ParamKind::Layer, Some(Value::Number(n))) => {
+                    let Some(id) = n.as_u64().and_then(|id| u32::try_from(id).ok()) else { continue };
+                    self.tables.insert(p.name, id);
+                    given.get(&format!("{}_name", p.name)).and_then(Value::as_str).map_or_else(|| id.to_string(), str::to_string)
+                }
+                (_, Some(Value::String(t))) => t.clone(),
+                (_, Some(other)) => other.to_string(),
+            };
+            self.values.insert(p.name, text);
+        }
+    }
 }
 
 /// Where to get the GeoLibre tools when the runner isn't installed (desktop and CLI builds only).
@@ -4357,6 +4381,24 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run opened again from the History pane (#539) fills its tool's form as the form would
+    /// have it: a standalone table, given by its id, by its name and picked by its id; numbers
+    /// and choices as text; what wasn't given left alone.
+    #[test]
+    fn a_run_fills_its_tool_s_form_as_the_form_takes_it() {
+        let mut f = GpForm { tool: Some("buffer"), ..GpForm::default() };
+        f.values.insert("output", "kept".into());
+        let given = json!({"input": 3, "input_name": "Trips", "distance": 100, "dissolve": "All", "output": null});
+        f.fill(given.as_object().unwrap());
+        assert_eq!(f.values.get("input").map(String::as_str), Some("Trips"));
+        assert_eq!(f.tables.get("input"), Some(&3));
+        assert_eq!(
+            (f.values.get("distance").map(String::as_str), f.values.get("dissolve").map(String::as_str)),
+            (Some("100"), Some("All"))
+        );
+        assert_eq!(f.values.get("output").map(String::as_str), Some("kept"), "not given");
+    }
 
     fn layer(app: &RustGisApp, name: &str) -> u32 {
         app.session.map().layer_by_name(name).map(|l| l.id).unwrap_or_default()
