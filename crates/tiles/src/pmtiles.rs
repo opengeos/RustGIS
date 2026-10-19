@@ -110,12 +110,34 @@ impl Compression {
             Compression::None => Ok(b),
             Compression::Gzip => gunzip(&b),
             Compression::Brotli => bounded(&mut brotli_decompressor::Decompressor::new(b.as_slice(), 4096), "Brotli"),
-            Compression::Zstd => {
-                let mut d = ruzstd::decoding::StreamingDecoder::new(b.as_slice()).map_err(|e| format!("Zstandard: {e}"))?;
-                bounded(&mut d, "Zstandard")
-            }
+            Compression::Zstd => unzstd(&b, limit),
         }
     }
+}
+
+/// Decompresses Zstandard bytes: every frame of them, in turn (skippable frames skipped), at
+/// most `limit` bytes in all.
+fn unzstd(b: &[u8], limit: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut src = b;
+    let mut out = Vec::new();
+    while !src.is_empty() {
+        // A skippable frame: its magic (0x184D2A50 to 0x184D2A5F), its length, its bytes.
+        if let Some(magic) = src.get(..4).and_then(|m| <[u8; 4]>::try_from(m).ok()).map(u32::from_le_bytes)
+            && magic & 0xFFFF_FFF0 == 0x184D_2A50
+        {
+            let len = src.get(4..8).and_then(|l| <[u8; 4]>::try_from(l).ok()).map(u32::from_le_bytes).ok_or("Zstandard: a cut frame")?;
+            src = src.get(8 + len as usize..).ok_or("Zstandard: a cut frame")?;
+            continue;
+        }
+        let room = (limit + 1).saturating_sub(out.len() as u64);
+        let d = ruzstd::decoding::StreamingDecoder::new(&mut src).map_err(|e| format!("Zstandard: {e}"))?;
+        d.take(room).read_to_end(&mut out).map_err(|e| format!("Zstandard: {e}"))?;
+        if out.len() as u64 > limit {
+            return Err("Zstandard: too large once decompressed".into());
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -230,6 +252,15 @@ pub fn info(archive: &str) -> Result<Option<Arc<Info>>, String> {
     drop(all);
     load(archive.to_string());
     Ok(None)
+}
+
+/// The archive's info, read now if it hasn't been, waiting up to `timeout` (natively: the
+/// browser can't wait).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn info_blocking(archive: &str, timeout: std::time::Duration) -> Result<Arc<Info>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    with_info(archive, Box::new(move |r| tx.send(r).unwrap_or_default()));
+    rx.recv_timeout(timeout).map_err(|_| format!("{archive}: no answer in {} s", timeout.as_secs()))?
 }
 
 /// Calls `f` with the archive's info, once it is read.
@@ -640,6 +671,14 @@ mod tests {
         for n in 0..b.len() {
             let _ = parse_dir(&b[..n]);
         }
+        // Zstandard in several frames, a skippable one among them: all of it.
+        let zstd = |b: &[u8]| ruzstd::encoding::compress_to_vec(b, ruzstd::encoding::CompressionLevel::Fastest);
+        let mut frames = zstd(b"first ");
+        frames.extend([0x5a, 0x2a, 0x4d, 0x18, 2, 0, 0, 0, 9, 9]);
+        frames.extend(zstd(b"second"));
+        assert_eq!(Compression::Zstd.decode(frames.clone()).unwrap(), b"first second");
+        assert!(Compression::Zstd.decode(frames[..frames.len() - 3].to_vec()).is_err());
+        assert!(unzstd(&frames, 8).is_err());
         // Junk that claims to be compressed fails rather than panics.
         for c in [Compression::Gzip, Compression::Brotli, Compression::Zstd] {
             for junk in [&b""[..], b"\x1f\x8b", b"\xff\xff\xff\xff", b"\x28\xb5\x2f\xfd\x00"] {

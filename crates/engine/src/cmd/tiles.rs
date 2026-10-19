@@ -232,14 +232,17 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         out["dated"] = json!(true);
     }
     let archive = t.kind == TileKind::PmTiles && t.id.is_empty();
-    // A file's header is read at once (natively), so a script's next command sees the map moved.
-    let wait = if archive && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) { 5 } else { 0 };
     m.tiles.insert(at, t);
+    // A file's header is read now (natively), so a script's next command sees the map moved.
+    #[cfg(not(target_arch = "wasm32"))]
+    if archive && rustgis_render::rustgis_tiles::pmtiles::is_local(&url) {
+        let _ = rustgis_render::rustgis_tiles::pmtiles::info_blocking(&url, std::time::Duration::from_secs(5));
+    }
     // A style goes to the view it gives, an archive to its bounds, once read (see
     // follow_style_view); a catalog's archive leaves the map where it is.
     if view || archive {
         s.style_view = Some((url, s.map().camera));
-        follow_style_view(s, web_time::Duration::from_secs(wait));
+        follow_style_view(s, web_time::Duration::ZERO);
     }
     Ok(out)
 }
