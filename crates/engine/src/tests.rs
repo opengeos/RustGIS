@@ -1361,7 +1361,7 @@ fn graphics_draw_shapes_text_and_pictures() {
     // A size is kept within the range it is drawn at, so Edit Text shows what the map draws.
     s.run("graphics.edit", &json!({"layer": id, "row": text, "fontSize": 0})).unwrap();
     let ds = &s.map().layer(id).unwrap().dataset;
-    assert_eq!(ds.value(row, ds.field_index("font_size").unwrap()), &rustgis_data::Value::Float(4.0));
+    assert_eq!(ds.value(row, ds.field_index("font_size").unwrap()), &rustgis_data::Value::Float(*rustgis_map::graphics::FONT_SIZE.start()));
     s.run("edit.undo", &Value::Null).unwrap();
     s.run("edit.undo", &Value::Null).unwrap();
     let ds = &s.map().layer(id).unwrap().dataset;

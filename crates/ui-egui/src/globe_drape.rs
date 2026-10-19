@@ -26,6 +26,23 @@ const TILE_REFRESH: f64 = 0.5;
 /// are smooth gradients, so scaling doesn't show).
 const SPRITE_R: f32 = 512.0;
 
+/// The view a drape of `boxes` is drawn with: the camera's scale, at up to `ppp` pixels per
+/// point and no finer than `detail` (metres per point at `ppp`).
+fn drape_view(map: &Map, w: f64, h: f64, ppp: f32, detail: f64, boxes: &[Extent]) -> View {
+    // A whole-world drape can otherwise grow to tens of millions of pixels as the camera
+    // zooms in, despite showing only a screen's worth of detail. Bound the combined area,
+    // including both antimeridian patches, as well as each side. Its margins and Web
+    // Mercator's stretched high latitudes take a few screens' worth of pixels to show the view
+    // near screen density; more sharpens it little and stalls the frames that draw it.
+    let area: f64 = boxes.iter().map(extent_to_merc).map(|b| b.width() * b.height()).sum();
+    let p = f64::from(ppp);
+    let pixels = (2.0 * w * h * p * p).clamp(131_072.0, 2_097_152.0);
+    let sample_res = detail.max((area / pixels).sqrt() * p);
+    // Coarsen the pixels, never the camera's scale: symbols and strokes are sized in points,
+    // so drawing at a coarser scale would bake them in larger than they are.
+    View { width: w, height: h, pixels_per_point: p * map.camera.res / sample_res, camera: map.camera, sky: true }
+}
+
 /// What a drape shows, besides the view: a change draws it again.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct DrapeKey {
@@ -96,15 +113,7 @@ impl GlobeDrape {
             let (detail, margin) = if zooming_out { (res * ZOOM_OUT_COARSER, ZOOM_OUT_MARGIN) } else { (res, MARGIN) };
             let boxes = g.drape_extents(w, h, margin);
             let max_side = ctx.input(|i| i.max_texture_side).clamp(256, 4096) as u32;
-            // A whole-world drape can otherwise grow to tens of millions of pixels as the
-            // camera zooms in, despite showing only a screen's worth of detail. Bound the
-            // combined area, including both antimeridian patches, as well as each side.
-            let area: f64 = boxes.iter().map(extent_to_merc).map(|b| b.width() * b.height()).sum();
-            let p = f64::from(drape_ppp);
-            let pixels = (w * h * p * p).clamp(65_536.0, 1_048_576.0);
-            let render_res = detail.max((area / pixels).sqrt() * p);
-            let camera = rustgis_engine::map::Camera { res: render_res, ..map.camera };
-            let view = View { width: w, height: h, pixels_per_point: f64::from(drape_ppp), camera, sky: true };
+            let view = drape_view(map, w, h, drape_ppp, detail, &boxes);
             let pictures = render::render_globe_drape(map, &view, &boxes, max_side);
             if pictures.is_empty() {
                 self.drape = None;
@@ -281,6 +290,24 @@ mod tests {
     }
 
     #[test]
+    fn a_drape_keeps_the_camera_scale() {
+        // Zoomed out over the whole globe, and zooming out further: the drape is coarse, but
+        // drawn at the camera's scale, or its point symbols would grow on the moving globe.
+        let m = globe(15.0, 10_000.0);
+        let (w, h) = (1100.0, 800.0);
+        let g = Globe::new(&m.camera, w, h);
+        for (detail, margin) in [(10_000.0, MARGIN), (10_000.0 * ZOOM_OUT_COARSER, ZOOM_OUT_MARGIN)] {
+            let boxes = g.drape_extents(w, h, margin);
+            let view = drape_view(&m, w, h, 1.0, detail, &boxes);
+            assert_eq!(view.camera, m.camera);
+            assert!(view.pixels_per_point < 1.0, "a whole-globe drape is coarser than the screen");
+            let pixels: f64 = boxes.iter().map(extent_to_merc).map(|b| b.width() * b.height()).sum::<f64>()
+                * (view.pixels_per_point / m.camera.res).powi(2);
+            assert!(pixels <= 2_097_152.0 * 1.001, "{pixels} pixels");
+        }
+    }
+
+    #[test]
     fn navigating_a_planet_reuses_the_drape() {
         for lat in [0.0, 25.0, 70.0] {
             let ctx = egui::Context::default();
@@ -298,7 +325,7 @@ mod tests {
                 assert!(d.prepare(&ctx, &mut m, key, 0, 1100.0, 800.0, 2.0, i as f64 / 60.0));
                 let pixels: usize =
                     d.drape.as_ref().into_iter().flat_map(|d| &d.patches).map(|p| p.2.size().iter().product::<usize>()).sum();
-                assert!(pixels <= 1_048_576, "navigation textures grew to {pixels} pixels");
+                assert!(pixels <= 2_097_152, "navigation textures grew to {pixels} pixels");
                 rebuilt += usize::from(d.drape.as_ref().map(|d| d.built) != built);
                 let g = Globe::new(&m.camera, 1100.0, 800.0);
                 let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 800.0));

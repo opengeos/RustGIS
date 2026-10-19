@@ -61,8 +61,10 @@ pub fn label(ds: &Dataset, row: usize) -> Option<&str> {
     if kind(ds, row) == "text" { text(ds, row, "text").filter(|t| !t.is_empty()) } else { None }
 }
 
-/// The font sizes a text graphic is drawn at, in points (`graphics.add`, `graphics.edit`, Add Text).
-pub const FONT_SIZE: std::ops::RangeInclusive<f64> = 4.0..=200.0;
+/// The font sizes text is drawn at, in points: a text graphic (`graphics.add`, `graphics.edit`,
+/// Add Text) and a layout's text (`layout.addElement`, `layout.update`), so the same text can
+/// look the same on the map and on the page (#516).
+pub const FONT_SIZE: std::ops::RangeInclusive<f64> = 2.0..=400.0;
 
 /// The font size of a text graphic, in points.
 pub fn font_size(ds: &Dataset, row: usize) -> f32 {

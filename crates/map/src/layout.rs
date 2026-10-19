@@ -15,6 +15,11 @@ pub const PT_PER_MM: f64 = 96.0 / 25.4;
 /// Metres of paper per logical point.
 pub const PAPER_M_PER_PT: f64 = 0.0254 / 96.0;
 
+/// The tokens a layout's text expands besides the map's ([`crate::graphics::TOKENS`], from its
+/// first map frame), with what each shows.
+pub const PAGE_TOKENS: &[(&str, &str)] =
+    &[("{page}", "Page number"), ("{pages}", "Number of pages"), ("{pageName}", "Page name"), ("{layout}", "Layout name")];
+
 /// The smallest element side, in mm: thin enough for a hairline rule (a 0.05 mm rectangle).
 pub const MIN_ELEMENT_MM: f64 = 0.05;
 
@@ -876,7 +881,7 @@ impl Layout {
                     exclude.truncate(MAX_LEGEND_EXCLUDED);
                 }
                 ElementKind::Text { text, size, letter_spacing, .. } => {
-                    *size = finite_or(*size, 12.0).clamp(2.0, 400.0);
+                    *size = finite_or(*size, 12.0).clamp(*crate::graphics::FONT_SIZE.start(), *crate::graphics::FONT_SIZE.end());
                     *letter_spacing = finite_or(*letter_spacing, 0.0).clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING);
                     text.truncate(text.char_indices().nth(5000).map_or(text.len(), |(i, _)| i));
                 }
