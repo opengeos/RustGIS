@@ -1,6 +1,7 @@
 //! A text graphic in the Format pane (#516): the one text selected on the map, edited with the
-//! form a layout's text has, each change one `graphics.edit` (one undo step). The pane shows a
-//! layout's element instead while a layout is on screen.
+//! form a layout's text has, each change one `graphics.edit` (one undo step). A text is placed as
+//! a layout's is: the Text tool puts one down, selected, and the pane opens on it with the text
+//! ready to type over. The pane shows a layout's element instead while a layout is on screen.
 
 use serde_json::json;
 
@@ -23,6 +24,8 @@ pub struct GraphicFormat {
     /// The graphic the pane drew the form of this frame: a draft for any other is saved at the
     /// end of the frame (`save_draft`).
     drawn: Option<Key>,
+    /// A text just placed: its field is focused and selected whole, so typing replaces it.
+    select: Option<Key>,
 }
 
 /// The text graphic the Format pane edits: the one selected on the map, when it is the only
@@ -50,6 +53,22 @@ pub(crate) fn follow(app: &mut RustGisApp, ctx: &egui::Context) {
             ctx.request_repaint();
         }
     }
+}
+
+/// Places a text at `lon`/`lat` with the Text tool: `text` (a dynamic text picked from the ribbon),
+/// else "Text", selected and open in the Format pane to be typed over. The tool goes back to
+/// Explore unless Keep Tool is on.
+pub(crate) fn place(app: &mut RustGisApp, lon: f64, lat: f64, text: Option<&str>) -> Result<(), String> {
+    let text = text.unwrap_or("Text");
+    let added = app.run("graphics.add", json!({"shape": "text", "points": [[lon, lat]], "text": text}))?;
+    let layer = added["layer"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("no layer")?;
+    let row = added["row"].as_u64().and_then(|v| usize::try_from(v).ok()).ok_or("no row")?;
+    edit(app, layer, row)?;
+    app.graphic_format.select = Some(key(app, (layer, row)));
+    if !app.session.keep_tool {
+        app.session.tool = rustgis_engine::Tool::Explore;
+    }
+    Ok(())
 }
 
 /// Selects a placed text and opens the Format pane on it (a double-click, Edit Text…, or
@@ -94,7 +113,9 @@ pub fn show(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
     };
     ui.label(egui::RichText::new(tl!("Text Graphic")).font(crate::theme::semibold(14.0)));
     ui.separator();
-    let fields = crate::textform::Fields { text: &mut text, size: &mut size, color: Some(&mut color), bold: Some(&mut bold) };
+    crate::textform::section(ui, "Text");
+    let select = app.graphic_format.select.take_if(|s| *s == k).is_some();
+    let fields = crate::textform::Fields { text: &mut text, size: &mut size, color: Some(&mut color), bold: Some(&mut bold), select };
     let settled = crate::textform::show(ui, ("graphic_format", k), &[graphics::TOKENS], fields, |_| {});
     let save = |app: &mut RustGisApp, change: serde_json::Value| {
         let mut p = json!({"layer": layer, "row": row});

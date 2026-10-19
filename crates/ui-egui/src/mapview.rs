@@ -1506,12 +1506,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                 let _ = app.run("edit.addFeature", with_template(app, json!({"geometry": {"type": "Point", "coordinates": [c.x, c.y]}})));
             }
             Tool::Graphic("point") => finish_graphic(app, "point", vec![c]),
+            // Placed, selected and open in the Format pane, as a layout's text (#516).
             Tool::Graphic("text") => {
-                let mut params = json!({"name": "graphicText", "lon": c.x, "lat": c.y});
-                if let Some(t) = app.ui.dynamic_text {
-                    params["text"] = json!(t);
+                let text = app.ui.dynamic_text;
+                if let Err(e) = crate::graphicformat::place(app, c.x, c.y, text) {
+                    app.session.notify(e, true);
                 }
-                let _ = app.run("ui.dialog", params);
             }
             // Dragged shapes ignore plain clicks.
             Tool::Graphic(s) if !vertex_shape(Tool::Graphic(s)) => {}

@@ -1072,36 +1072,29 @@ fn a_placed_text_is_edited_in_the_format_pane() {
     assert_eq!(h.state().dialogs.open, None);
 }
 
-/// Add Text, sharing its form with a layout's text (#516): Shift+Enter starts a new line, Enter
-/// adds the text, with the colour and boldness picked.
+/// The Text tool places a text, as a layout's is placed (#516): "Text", selected, in the Format
+/// pane with its text selected, so typing replaces it; Shift+Enter starts a new line, Enter ends
+/// it. The tool goes back to Explore.
 #[test]
-fn enter_adds_the_text_and_shift_enter_breaks_the_line() {
-    use egui::accesskit::Role;
-    use rustgis_ui_egui::rustgis_engine::map::graphics;
+fn a_placed_text_is_typed_over_in_the_format_pane() {
     let mut h = harness();
-    h.state_mut().run("ui.dialog", json!({"name": "graphicText", "lon": 10, "lat": 50})).unwrap();
-    // A window measures itself on its first frame and settles on the next.
+    h.state_mut().run("tool.set", json!({"tool": "graphicText"})).unwrap();
     h.step();
-    h.step();
-    h.get_by_role_and_label(Role::CheckBox, "Bold").click_accesskit();
-    h.step();
-    assert!(h.state().dialogs.bold, "ticked");
-    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Text")).unwrap().focus();
+    click_map(&mut h);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
+    assert_eq!((h.state().ui.right, h.state().dialogs.open), (Some(rustgis_ui_egui::RightPane::Format), None));
+    assert_eq!(h.state().session.tool.code(), "explore");
+    h.event(egui::Event::Text("Hello".into()));
     h.step();
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
-    h.event(egui::Event::Text("Line".into()));
+    h.event(egui::Event::Text("World".into()));
     h.step();
-    assert_eq!(h.state().dialogs.open, Some("graphicText"), "Shift+Enter doesn't add");
-    assert!(h.state().dialogs.text.contains('\n'), "{:?}", h.state().dialogs.text);
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"), "still being typed");
     h.key_press(egui::Key::Enter);
     h.step();
     h.step();
-    assert_eq!(h.state().dialogs.open, None, "Enter adds");
-    let l = h.state().session.map().layers.iter().find(|l| l.graphics).unwrap();
-    let row = l.dataset.features.len() - 1;
-    let saved = graphics::label(&l.dataset, row).unwrap_or_default();
-    assert!(saved.contains('\n') && saved.contains("Line") && saved.contains("Text"), "{saved:?}");
-    assert!(graphics::bold(&l.dataset, row), "bold, as picked");
+    assert_eq!(selected_text(&h).as_deref(), Some("Hello\nWorld"));
+    assert_eq!(h.state().session.undo_label(), Some("Edit Graphic"));
 }
 
 /// Add Data From URL downloads off the frame and adds the file when it lands; a failed download
@@ -1868,6 +1861,14 @@ fn plugin_panels_run_their_commands_when_a_slider_is_let_go() {
 }
 
 /// A primary click in the middle of the map.
+/// The text of the one text graphic selected, if that is what is selected.
+fn selected_text(h: &egui_kittest::Harness<'_, RustGisApp>) -> Option<String> {
+    use rustgis_ui_egui::rustgis_engine::map::graphics;
+    let mut rows = h.state().session.map().layers.iter().flat_map(|l| l.selection.iter().map(move |r| (l, *r)));
+    let (l, row) = rows.next().filter(|_| rows.next().is_none())?;
+    graphics::label(&l.dataset, row).map(str::to_string)
+}
+
 fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     let at = egui::pos2(700.0, 500.0);
     h.input_mut().events.push(egui::Event::PointerMoved(at));
@@ -1896,21 +1897,17 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.step();
     assert_eq!(h.state().session.tool.code(), "graphicText");
     assert_eq!(h.state().ui.dynamic_text, Some("{scale}"));
-    // The dialog a click on the map opens starts with the value.
+    // The text a click on the map places starts with the value (#516: selected, in the Format
+    // pane).
     click_map(&mut h);
-    assert_eq!(h.state().dialogs.open, Some("graphicText"));
-    assert_eq!(h.state().dialogs.text, "{scale}");
-    h.state_mut().dialogs.open = None;
-    h.step();
-    // Text starts with "Text" again (the button: the dialog's box is labelled Text too).
+    assert_eq!(selected_text(&h).as_deref(), Some("{scale}"));
+    assert_eq!(h.state().ui.right, Some(rustgis_ui_egui::RightPane::Format));
+    // Text starts with "Text" again (the button: the pane's box is labelled Text too).
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Text").click_accesskit();
     h.step();
     assert_eq!(h.state().ui.dynamic_text, None);
     click_map(&mut h);
-    assert_eq!(h.state().dialogs.open, Some("graphicText"));
-    assert_eq!(h.state().dialogs.text, "Text");
-    h.state_mut().dialogs.open = None;
-    h.step();
+    assert_eq!(selected_text(&h).as_deref(), Some("Text"));
     // Another tool forgets the value.
     h.get_by_label("Dynamic Text").click_accesskit();
     h.step();

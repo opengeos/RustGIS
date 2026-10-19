@@ -2594,7 +2594,8 @@ impl RustGisApp {
                     zarrui::connect(self);
                 }
             }
-            // Edit › Dynamic Text: the text tool, its dialog starting with one of the map's values.
+            // Edit › Dynamic Text: the text tool, the text it places starting with one of the map's
+            // values.
             "ui.dynamicText" => {
                 let text = p.get("text").and_then(Value::as_str).unwrap_or("");
                 let token = rustgis_engine::map::graphics::TOKENS
@@ -2605,6 +2606,22 @@ impl RustGisApp {
                 self.run("tool.set", json!({"tool": "graphicText"}))?;
                 self.ui.dynamic_text = Some(token);
             }
+            // A text graphic has no dialog any more (#516): by its layer and row it opens in the
+            // Format pane; at `lon`/`lat` it is placed there (with `text`, else "Text") and opens.
+            "ui.dialog" if p.get("name").and_then(Value::as_str) == Some("graphicText") => {
+                let num = |k: &str| p.get(k).and_then(Value::as_f64);
+                match (p.get("layer").and_then(Value::as_u64), p.get("row").and_then(Value::as_u64), num("lon"), num("lat")) {
+                    (Some(layer), Some(row), ..) => {
+                        let (layer, row) = (u32::try_from(layer).unwrap_or(u32::MAX), usize::try_from(row).unwrap_or(usize::MAX));
+                        graphicformat::edit(self, layer, row)?;
+                    }
+                    (.., Some(lon), Some(lat)) => {
+                        let text: Option<String> = p.get("text").and_then(Value::as_str).map(|t| t.chars().take(2000).collect());
+                        graphicformat::place(self, lon, lat, text.as_deref())?;
+                    }
+                    _ => return Err("give the text's layer and row, or the lon and lat to place one".into()),
+                }
+            }
             "ui.dialog" => {
                 let which = p.get("name").and_then(Value::as_str).unwrap_or("");
                 // A Web Data service opens in the right pane, beside the map it searches.
@@ -2614,21 +2631,6 @@ impl RustGisApp {
                     return Ok(Value::Null);
                 }
                 self.dialogs.open(which, &self.session)?;
-                // The text graphic dialog remembers where the map was clicked.
-                if which == "graphicText" {
-                    self.dialogs.a = p.get("lon").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
-                    self.dialogs.b = p.get("lat").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default();
-                    // Dynamic Text starts it with the value picked.
-                    if let Some(t) = p.get("text").and_then(Value::as_str) {
-                        self.dialogs.text = t.chars().take(2000).collect();
-                    }
-                    // A placed text (its layer and row) is edited in the Format pane, not here (#516).
-                    if let (Some(layer), Some(row)) = (p.get("layer").and_then(Value::as_u64), p.get("row").and_then(Value::as_u64)) {
-                        self.dialogs.open = None;
-                        let (layer, row) = (u32::try_from(layer).unwrap_or(u32::MAX), usize::try_from(row).unwrap_or(usize::MAX));
-                        return graphicformat::edit(self, layer, row).map(|()| Value::Null);
-                    }
-                }
                 // Rename Map / Rename Layout remember which one (`target`, by name; default the
                 // one in view), so renaming another from the Browser leaves the view alone.
                 if matches!(which, "renameMap" | "renameLayout") {

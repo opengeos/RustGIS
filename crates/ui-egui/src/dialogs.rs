@@ -16,11 +16,6 @@ pub struct Dialogs {
     pub a: String,
     pub b: String,
     pub c: String,
-    /// Add/Edit Text's font size, in points: a number, so it can't be mistyped (#457).
-    pub size: f64,
-    /// Add Text's colour and boldness.
-    pub color: egui::Color32,
-    pub bold: bool,
     pub mode: &'static str,
     pub flag: bool,
     pub error: Option<String>,
@@ -60,7 +55,6 @@ impl Dialogs {
             "renameServiceGroup" => "renameServiceGroup",
             "renameGroup" => "renameGroup",
             "coordinateSystem" => "coordinateSystem",
-            "graphicText" => "graphicText",
             "camera" => "camera",
             "addTiles" => "addTiles",
             "addCsv" => "addCsv",
@@ -105,11 +99,6 @@ impl Dialogs {
                 self.b = format!("{:.5}", c.y);
                 self.c = format!("{:.0}", s.scale());
             }
-            "graphicText" => {
-                self.text = "Text".into();
-                self.size = 14.0;
-                self.color = crate::theme::c32(rustgis_engine::map::graphics::TEXT_COLOR);
-            }
             "addField" => self.b = "Double".into(),
             "calculateField" => self.a = active.and_then(|l| l.dataset.fields.last()).map(|f| f.name.clone()).unwrap_or_default(),
             "definitionQuery" => self.text = active.and_then(|l| l.definition_query.clone()).unwrap_or_default(),
@@ -140,7 +129,6 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "calculateField" => "Calculate Field",
         "definitionQuery" => "Definition Query",
         "coordinateSystem" => "Coordinate System",
-        "graphicText" => "Add Text",
         "camera" => "Camera",
         "addTiles" => "Add Tile Layer",
         "addCsv" => "Add Delimited Text",
@@ -232,25 +220,6 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     };
                     let (lon, lat, scale) = (n(&app.dialogs.a, "Longitude")?, n(&app.dialogs.b, "Latitude")?, n(&app.dialogs.c, "Scale")?);
                     app.run("map.camera", json!({"lon": lon, "lat": lat, "scale": scale})).map(|_| ())
-                });
-            }
-            "graphicText" => {
-                // Adds a text where the map was clicked (`a` and `b`: its longitude and latitude), with
-                // the form a layout's text has too (#516); a placed text is edited in the Format
-                // pane. What the form settles is saved by the dialog's button.
-                let d = &mut app.dialogs;
-                let fields = crate::textform::Fields { text: &mut d.text, size: &mut d.size, color: Some(&mut d.color), bold: Some(&mut d.bold) };
-                crate::textform::show(ui, "graphic_text", &[rustgis_engine::map::graphics::TOKENS], fields, |_| {});
-                close = buttons(app, ui, "Add", |app| {
-                    let (lon, lat) = (app.dialogs.a.parse::<f64>().unwrap_or(f64::NAN), app.dialogs.b.parse::<f64>().unwrap_or(f64::NAN));
-                    let d = &app.dialogs;
-                    let fill = crate::theme::rgba(d.color).hex8();
-                    let p = json!({"shape": "text", "points": [[lon, lat]], "text": d.text, "fontSize": d.size, "fill": fill, "bold": d.bold});
-                    let r = app.run("graphics.add", p);
-                    if r.is_ok() && !app.session.keep_tool {
-                        app.session.tool = rustgis_engine::Tool::Explore;
-                    }
-                    r.map(|_| ())
                 });
             }
             "bookmark" => {

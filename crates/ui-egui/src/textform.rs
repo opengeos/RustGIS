@@ -11,6 +11,8 @@ pub struct Fields<'a> {
     pub size: &'a mut f64,
     pub color: Option<&'a mut Color32>,
     pub bold: Option<&'a mut bool>,
+    /// The text is focused and selected whole, so typing replaces it (a text just placed).
+    pub select: bool,
 }
 
 /// What the user settled this frame.
@@ -24,6 +26,14 @@ pub struct Settled {
     pub size: bool,
     pub color: bool,
     pub bold: bool,
+}
+
+/// A section's title in the Format pane ("Element", "Text"): what the rows below it are about.
+pub fn section(ui: &mut Ui, title: &str) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!(title)).font(crate::theme::semibold(12.0)).color(t.text_dim));
+    ui.add_space(2.0);
 }
 
 /// The width the labels of a properties form take, so the controls of its grids line up in one
@@ -42,9 +52,16 @@ pub fn show(
 ) -> Settled {
     let id = egui::Id::new(id);
     let mut out = Settled::default();
-    ui.label(tl!("Text"));
     let hint = tl!("Shift+Enter starts a new line.");
-    let r = ui.add(crate::dialogs::text_box(f.text).id_salt(id.with("text")).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY));
+    let mut edit =
+        crate::dialogs::text_box(f.text).id_salt(id.with("text")).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).show(ui);
+    if f.select {
+        edit.response.request_focus();
+        let end = f.text.chars().count();
+        edit.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(end))));
+        edit.state.store(ui.ctx(), edit.response.id);
+    }
+    let r = edit.response;
     // Enter is done typing, as in the dialogs; Shift+Enter starts a line.
     if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift) {
         r.surrender_focus();
@@ -124,6 +141,7 @@ mod tests {
                         size: &mut f.size,
                         color: f.styled.then_some(&mut f.color),
                         bold: f.styled.then_some(&mut f.bold),
+                        select: false,
                     },
                     |_| {},
                 );

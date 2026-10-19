@@ -1044,6 +1044,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         p["element"] = json!(id);
         let _ = app.run("layout.update", p);
     };
+    crate::textform::section(ui, "Element");
     egui::Grid::new(("layout_props", id)).num_columns(2).min_col_width(crate::textform::LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Name"));
         if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
@@ -1246,12 +1247,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     // A layout's text: the form a text graphic has too (#516), with the page's dynamic text, and
     // the type settings only a layout's text has.
     if let ElementKind::Text { text, size, color, bold, italic, align, letter_spacing } = &e.kind {
-        ui.add_space(6.0);
+        crate::textform::section(ui, "Text");
         let key = (li, id, "text");
         let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| text.clone());
         let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
         let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
-        let fields = crate::textform::Fields { text: &mut buf, size: &mut sz, color: Some(&mut c), bold: Some(&mut bb) };
+        let fields = crate::textform::Fields { text: &mut buf, size: &mut sz, color: Some(&mut c), bold: Some(&mut bb), select: false };
         // The type settings only a layout's text has, in the form's grid so they line up.
         let settled = crate::textform::show(ui, ("layout_text", li, id), &tokens, fields, |ui| {
             ui.label(tl!("Italic"));
