@@ -253,6 +253,8 @@ fn raster_tiles_move_with_the_camera_on_the_gpu() {
     m.layers.clear();
     m.graticule = false;
     m.tiles.push(TileLayer::new("Tiles", TileKind::Raster, "https://flat.test/{z}/{x}/{y}.png"));
+    // The harness drew a first frame of the sample: these edits bypass commands, so draw again.
+    h.state_mut().map.invalidate();
     wait_for_frame(&mut h);
     assert!(h.state().map.moves_on_gpu(), "the tiles are placed on the GPU, not drawn into a picture of the view");
     let before = h.state().map.full_frame_camera();
