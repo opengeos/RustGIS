@@ -202,7 +202,9 @@ fn shell(t: &str) -> String {
     format!("'{}'", t.replace('\'', "'\\''"))
 }
 
-/// `t` on one line, for a comment.
+/// `t` on one line, for a comment. What may end a line (a lone `\r` does, for Python), or any
+/// other control character, becomes a space: the text comes from the project file, and a line
+/// break in it would leave the rest of it outside the comment, as code.
 fn line(t: &str) -> String {
-    t.lines().next().unwrap_or("").chars().take(300).collect()
+    t.chars().map(|c| if c.is_control() || c == '\u{2028}' || c == '\u{2029}' { ' ' } else { c }).take(300).collect()
 }

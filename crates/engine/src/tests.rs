@@ -7903,6 +7903,19 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("# 3. Buffer: failed when it ran (no layer https://h.example/a)\n# s.run("), "{text}");
     assert!(text.contains("# 4. Mystery: Mystery can't be run again"), "{text}");
     assert!(text.contains("# 5. Buffer: Buffer can't be run again") && !text.contains("file.delete"), "{text}");
+    // Text from the file stays in its comment, whatever line break it holds (a lone `\r` ends a
+    // line for Python).
+    let sneaky = crate::GpRecord {
+        tool: "x\rimport os".into(),
+        id: "buffer".into(),
+        ok: false,
+        messages: vec!["boom\u{2028}import sys\nimport os".into()],
+        ..forged
+    };
+    s.project.gp_history.push(crate::GpRecord { command: None, ..sneaky });
+    let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!text.contains(['\r', '\u{2028}']), "{text:?}");
+    assert!(text.lines().filter(|l| l.contains("import os") || l.contains("import sys")).all(|l| l.starts_with('#')), "{text}");
     assert!(!text.contains("s3cr3t") && !text.contains("hunter2"));
     assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
     // A file name every system takes, whatever the project is called.
