@@ -213,7 +213,6 @@ databases.
 in one alphabetical list, and those that cover one country in a submenu named after it. Each is
 described below.
 
-
 ## STAC catalogs
 
 **Home › Web Data › STAC Search…** searches a [STAC](https://stacspec.org) API for imagery and
