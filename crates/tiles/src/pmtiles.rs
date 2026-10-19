@@ -229,6 +229,10 @@ pub struct NewArchive {
 /// stored once, its directories uncompressed, in leaf directories when the root would pass the
 /// first 16 KB. Tiles given twice keep the last.
 pub fn write(tiles: Vec<(u8, u32, u32, Vec<u8>)>, a: &NewArchive) -> Result<Vec<u8>, String> {
+    // A tile outside its zoom would take the id of another zoom's; readers stop at zoom 30.
+    if let Some((z, x, y, _)) = tiles.iter().find(|(z, x, y, _)| *z > 30 || u64::from(*x) >= 1u64 << z || u64::from(*y) >= 1u64 << z) {
+        return Err(format!("{z}/{x}/{y} isn't a tile (zoom 0–30, x and y below 2^zoom)"));
+    }
     let mut tiles: Vec<(u64, u8, Vec<u8>)> = tiles.into_iter().map(|(z, x, y, b)| (tile_id(z, x, y), z, b)).collect();
     tiles.sort_by_key(|t| t.0);
     // The last of each id (a stable sort keeps them in the order given).
@@ -950,6 +954,9 @@ pub(crate) mod tests {
             assert_eq!(get(&format!("pmtiles:{z}/{x}/{y}@{a}")).unwrap(), format!("{z}/{x}/{y}").into_bytes());
         }
         assert!(write(Vec::new(), &new(TileType::Mvt)).is_err());
+        for (z, x, y) in [(0, 1, 0), (2, 0, 4), (31, 0, 0)] {
+            assert!(write(vec![(0, 0, 0, b"ok".to_vec()), (z, x, y, b"bad".to_vec())], &new(TileType::Mvt)).is_err(), "{z}/{x}/{y}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

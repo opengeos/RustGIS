@@ -200,7 +200,8 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     }
     let lon = f(p, "lon").ok_or("lon is required")?;
     let lat = f(p, "lat").ok_or("lat is required")?;
-    let tol = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0) * s.map().camera.res;
+    let tol_px = f(p, "tolerancePx").unwrap_or(4.0).clamp(0.0, 50.0);
+    let tol = tol_px * s.map().camera.res;
     let scale = s.scale();
     let active = s.active_layer;
     let keep = |l: &rustgis_map::Layer| match mode {
@@ -219,7 +220,7 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     // Then the features of vector tile layers, beneath the layers; tiles are never selectable.
     if matches!(mode, PopupMode::Topmost | PopupMode::Visible) && !(first_layer && !results.is_empty()) {
         let room = MAX_IDENTIFIED.saturating_sub(results.len());
-        results.extend(tile_features(s, lon, lat, f(p, "tolerancePx").unwrap_or(4.0), first_layer, room));
+        results.extend(tile_features(s, lon, lat, tol_px, first_layer, room));
     }
     let Some(first) = results.first().cloned() else {
         // No feature: report the pixel of the topmost raster instead.
@@ -252,8 +253,7 @@ fn tile_features(s: &Session, lon: f64, lat: f64, tol_px: f64, first_layer: bool
         if !data || !t.visible || t.opacity <= 0.0 {
             continue;
         }
-        let picked =
-            draw::pick(&rustgis_render::tile_spec(t), at.x, at.y, map.camera.res, tol_px.clamp(0.0, 50.0) as f32, limit - out.len());
+        let picked = draw::pick(&rustgis_render::tile_spec(t), at.x, at.y, map.camera.res, tol_px as f32, limit - out.len());
         for p in &picked {
             let attrs: serde_json::Map<String, Value> = p
                 .props

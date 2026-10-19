@@ -218,13 +218,21 @@ pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usiz
     let zoom = template::style_zoom(m_per_px);
     let mut items: HashMap<String, Vec<Item>> = HashMap::new();
     let mut pending = false;
+    // A feature drawn by several style layers (a fill and its outline) is reported once: known by
+    // its source, tile and place in the tile.
+    let mut seen: std::collections::HashSet<(String, usize, String, usize)> = std::collections::HashSet::new();
     // The layer drawn last is on top.
     for layer in r.style.layers.iter().rev() {
         if out.len() >= limit {
             break;
         }
-        let kind_ok =
-            matches!(layer.kind, LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle | LayerKind::Symbol);
+        // The layers `draw` draws, and labels only where they are placed at points.
+        let kind_ok = match layer.kind {
+            LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Circle => true,
+            LayerKind::Line => drawable(layer),
+            LayerKind::Symbol => matches!(layer.symbol_placement(&FeatureCtx::zoom_only(zoom)), crate::style::SymbolPlacement::Point),
+            _ => false,
+        };
         if !kind_ok || !layer.visible_at(zoom) {
             continue;
         }
@@ -238,32 +246,50 @@ pub fn pick(spec: &Spec, x: f64, y: f64, m_per_px: f64, tol_px: f32, limit: usiz
         }
         let Some(list) = items.get(src_id) else { continue };
         // The real tile under the point last (stand-ins come first), so it is looked at first.
-        for it in list.iter().rev().filter(|it| it.clip.contains(rustgis_geom::Coord::new(x, y))) {
+        for (ti, it) in list.iter().enumerate().rev().filter(|(_, it)| it.clip.contains(rustgis_geom::Coord::new(x, y))) {
             let Payload::Vector(tile) = &*it.payload else { continue };
             let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { continue };
             // The point and tolerance in the tile's units.
             let units = f64::from(l.extent.max(1)) / TileId::span(it.z);
             let p = [((x - it.at.min_x) * units) as f32, ((it.at.max_y - y) * units) as f32];
             let px = (m_per_px * units) as f32;
-            for f in &l.features {
+            for (fi, f) in l.features.iter().enumerate() {
                 let ctx = FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
-                let reach = match layer.kind {
-                    LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon => tol_px,
-                    LayerKind::Line if matches!(f.kind, GeomKind::LineString | GeomKind::Polygon) => tol_px + layer.line_width(&ctx) / 2.0,
-                    LayerKind::Circle if f.kind == GeomKind::Point => tol_px + layer.circle_radius(&ctx),
-                    // A label's point: as near as a small symbol.
-                    LayerKind::Symbol if f.kind == GeomKind::Point => tol_px + 6.0,
-                    _ => continue,
-                };
-                if !layer.matches(&ctx) || !hits(f, layer.kind, p, reach * px) {
+                if !layer.matches(&ctx) {
                     continue;
                 }
-                let picked = Picked { source_layer: l.name.clone(), id: f.id, kind: f.kind, props: f.props.clone() };
-                if !out.contains(&picked) {
-                    out.push(picked);
-                    if out.len() >= limit {
-                        return out;
+                // How near counts, for what `draw` would draw of it (nothing: not reported).
+                let reach = match layer.kind {
+                    LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon && layer.fill_color(&ctx).is_some() => tol_px,
+                    LayerKind::Line if matches!(f.kind, GeomKind::LineString | GeomKind::Polygon) && layer.line_color(&ctx).is_some() => {
+                        let w = layer.line_width(&ctx);
+                        if !(w.is_finite() && w > 0.0) {
+                            continue;
+                        }
+                        tol_px + w / 2.0
                     }
+                    LayerKind::Circle if f.kind == GeomKind::Point && layer.circle_color(&ctx).is_some() => {
+                        let r = layer.circle_radius(&ctx);
+                        if !(r.is_finite() && r > 0.0) {
+                            continue;
+                        }
+                        tol_px + r
+                    }
+                    // A label or icon's point, as near as a small symbol.
+                    LayerKind::Symbol
+                        if f.kind == GeomKind::Point
+                            && (layer.has_layout("icon-image") || layer.text_field(&ctx).is_some_and(|t| !t.trim().is_empty())) =>
+                    {
+                        tol_px + 6.0
+                    }
+                    _ => continue,
+                };
+                if !hits(f, layer.kind, p, reach * px) || !seen.insert((src_id.to_string(), ti, l.name.clone(), fi)) {
+                    continue;
+                }
+                out.push(Picked { source_layer: l.name.clone(), id: f.id, kind: f.kind, props: f.props.clone() });
+                if out.len() >= limit {
+                    return out;
                 }
             }
         }
@@ -945,12 +971,26 @@ mod tests {
                 mvt_layer("parks", GeomKind::Polygon, &[[1024.0, 1024.0], [3072.0, 1024.0], [3072.0, 3072.0], [1024.0, 3072.0]], "Central"),
                 mvt_layer("roads", GeomKind::LineString, &[[0.0, 500.0], [4096.0, 500.0]], "Main Street"),
                 mvt_layer("pois", GeomKind::Point, &[[3500.0, 3500.0]], "Cafe"),
+                // Two unnamed squares alike in every property, one over the other.
+                crate::mvt::Layer {
+                    name: "plots".into(),
+                    extent: 4096,
+                    features: vec![
+                        crate::mvt::Feature {
+                            id: None,
+                            kind: GeomKind::Polygon,
+                            geometry: vec![vec![[200.0, 2500.0], [800.0, 2500.0], [800.0, 3100.0], [200.0, 3100.0], [200.0, 2500.0]]],
+                            props: Vec::new(),
+                        };
+                        2
+                    ],
+                },
             ],
         });
         let dir = std::env::temp_dir().join(format!("rustgis-pick-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("pick.pmtiles");
-        let meta = r#"{"vector_layers":[{"id":"parks"},{"id":"roads"},{"id":"pois"}]}"#;
+        let meta = r#"{"vector_layers":[{"id":"parks"},{"id":"roads"},{"id":"pois"},{"id":"plots"}]}"#;
         std::fs::write(&path, crate::pmtiles::tests::archive(&[(0, 0, 0, tile)], 1, false, meta)).unwrap();
         let spec = Spec {
             kind: crate::source::Kind::PmTiles,
@@ -982,12 +1022,40 @@ mod tests {
         assert_eq!(names(at(2048.0, 2048.0)), vec![r#"parks:Some(String("Central"))"#]);
         assert_eq!(names(at(200.0, 505.0)), vec![r#"roads:Some(String("Main Street"))"#]);
         assert_eq!(names(at(3510.0, 3495.0)), vec![r#"pois:Some(String("Cafe"))"#]);
+        // Alike, but two features: both.
+        assert_eq!(names(at(500.0, 2800.0)), vec!["plots:None", "plots:None"]);
         // On the park's edge, from outside: within the tolerance. Farther: nothing (the tile is in).
         assert_eq!(names(at(1024.0 - 40.0, 2048.0)).len(), 1);
         let (x, y) = at(100.0, 3900.0);
         assert!(pick(&spec, x, y, m_per_px, 3.0, 10).is_empty());
         let (x, y) = at(1024.0 - 80.0, 2048.0);
         assert!(pick(&spec, x, y, m_per_px, 3.0, 10).is_empty());
+        // What a style doesn't draw isn't picked: a label with no text, a line drawn with a pattern.
+        let styled = Spec {
+            style_layers: r#"[{"id": "l", "type": "symbol", "source": "x", "source-layer": "pois", "layout": {"text-field": "{missing}"}},
+                {"id": "r", "type": "line", "source": "x", "source-layer": "roads", "paint": {"line-pattern": "dots"}},
+                {"id": "p", "type": "fill", "source": "x", "source-layer": "plots", "paint": {"fill-color": "green"}}]"#
+                .into(),
+            ..spec.clone()
+        };
+        // (The style is read: its fill is picked.)
+        let (x, y) = at(500.0, 2800.0);
+        let mut got = Vec::new();
+        for _ in 0..500 {
+            got = pick(&styled, x, y, m_per_px, 3.0, 10);
+            if !got.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(got.len(), 2);
+        for (u, v) in [(3510.0, 3495.0), (200.0, 505.0)] {
+            let (x, y) = at(u, v);
+            for _ in 0..50 {
+                assert!(pick(&styled, x, y, m_per_px, 3.0, 10).is_empty());
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
         // Hostile scales and points pick nothing.
         for (x, y, m) in [(f64::NAN, 0.0, m_per_px), (0.0, 0.0, 0.0), (0.0, 0.0, f64::INFINITY)] {
             assert!(pick(&spec, x, y, m, 3.0, 10).is_empty());
