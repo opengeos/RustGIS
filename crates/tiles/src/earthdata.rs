@@ -121,10 +121,19 @@ fn within(host: &str, suffix: &str) -> bool {
     host == suffix || host.strip_suffix(suffix).is_some_and(|h| h.ends_with('.'))
 }
 
+/// Earthdata's public services, which never need the token: the searches, Earthdata Search,
+/// GIBS imagery tiles and the Earthdata GIS portal.
+const PUBLIC_HOSTS: &[&str] = &["cmr.earthdata.nasa.gov", "search.earthdata.nasa.gov", "gibs.earthdata.nasa.gov", "gis.earthdata.nasa.gov"];
+
 /// Whether `url` is on an Earthdata data host, the only place the token is sent: HTTPS on
-/// `*.earthdatacloud.nasa.gov` or `*.earthdata.nasa.gov`, never the login host.
+/// `*.earthdatacloud.nasa.gov` or `*.earthdata.nasa.gov`, never the login host or a public
+/// service ([`PUBLIC_HOSTS`]).
 pub fn is_data_host(url: &str) -> bool {
-    https_host(url).is_some_and(|h| h != LOGIN_HOST && (within(&h, "earthdatacloud.nasa.gov") || within(&h, "earthdata.nasa.gov")))
+    https_host(url).is_some_and(|h| {
+        h != LOGIN_HOST
+            && !PUBLIC_HOSTS.iter().any(|p| within(&h, p))
+            && (within(&h, "earthdatacloud.nasa.gov") || within(&h, "earthdata.nasa.gov"))
+    })
 }
 
 /// Whether `url` is Earthdata Login (where a data host sends a request it didn't accept).
@@ -454,7 +463,12 @@ fn geometry(e: &Value) -> Option<Value> {
             let n: Vec<f64> = b.split_whitespace().map(str::parse).collect::<Result<_, _>>().ok()?;
             let [s, w, n, e] = <[f64; 4]>::try_from(n).ok()?;
             ([s, w, n, e].iter().all(|x| x.is_finite()) && s.abs() <= 90.0 && n.abs() <= 90.0 && w.abs() <= 180.0 && e.abs() <= 180.0)
-                .then(|| json!([[[w, s], [e, s], [e, n], [w, n], [w, s]]]))
+                .then_some([s, w, n, e])
+        })
+        .flat_map(|[s, w, n, e]| {
+            let ring = |w: f64, e: f64| json!([[[w, s], [e, s], [e, n], [w, n], [w, s]]]);
+            // West past east crosses the antimeridian: a box either side of it.
+            if w > e { vec![ring(w, 180.0), ring(-180.0, e)] } else { vec![ring(w, e)] }
         })
         .collect();
     if !boxes.is_empty() {
@@ -544,6 +558,10 @@ mod tests {
             "https://user@data.lpdaac.earthdatacloud.nasa.gov/a",
             "https://data.lpdaac.earthdatacloud.nasa.gov:8443/a",
             "https://d1nklfio7vscoe.cloudfront.net/x.tif",
+            "https://cmr.earthdata.nasa.gov/search/granules.json",
+            "https://gibs.earthdata.nasa.gov/wmts/x.png",
+            "https://search.earthdata.nasa.gov/search",
+            "https://gis.earthdata.nasa.gov/portal",
             "https://lp-prod-protected.s3.us-west-2.amazonaws.com/a.tif",
             "s3://lp-prod-protected/a.tif",
             "https://",
@@ -676,7 +694,11 @@ mod tests {
         assert_eq!(geom["type"], "MultiPolygon");
         assert_eq!(geom["coordinates"][0][0][0], json!([-89.29, 41.40]));
         assert_eq!((g[1].size_mb, g[1].cloud_cover), (None, None));
-        assert_eq!(g[1].geometry.as_ref().unwrap()["coordinates"][0][0][0], json!([170.0, -10.0]));
+        // Across the antimeridian: two boxes, 170–180 and −180 to −170.
+        let across = &g[1].geometry.as_ref().unwrap()["coordinates"];
+        assert_eq!(across.as_array().unwrap().len(), 2);
+        assert_eq!(across[0][0], json!([[170.0, -10.0], [180.0, -10.0], [180.0, 10.0], [170.0, 10.0], [170.0, -10.0]]));
+        assert_eq!(across[1][0], json!([[-180.0, -10.0], [-170.0, -10.0], [-170.0, 10.0], [-180.0, 10.0], [-180.0, -10.0]]));
         assert_eq!(g[2].geometry.as_ref().unwrap()["type"], "MultiLineString");
         // Only the points that read are kept.
         assert_eq!(g[3].geometry.as_ref().unwrap()["coordinates"], json!([[6.0, 5.0]]));

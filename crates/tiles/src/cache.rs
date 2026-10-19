@@ -420,7 +420,7 @@ pub fn post_json(url: &str, body: String, done: Done) {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn post_json_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
     crate::address::check(url, None)?;
-    native::post_with(&native::download_agent(BLOCKING_TIMEOUT), url, body)
+    native::post_with(&native::public_agent(BLOCKING_TIMEOUT), url, body)
 }
 
 /// Fetches an address's bytes, uncached (through the browser's fetcher, or the worker threads).
@@ -760,7 +760,8 @@ mod native {
 
     /// POSTs a JSON document on a thread of its own.
     pub(super) fn post(url: String, body: String, done: Done) {
-        std::thread::spawn(move || done(post_with(&download_agent(std::time::Duration::from_secs(60)), &url, &body)));
+        // Internet addresses only: a name that resolves into the local network gets no body.
+        std::thread::spawn(move || done(post_with(&public_agent(std::time::Duration::from_secs(60)), &url, &body)));
     }
 
     /// POSTs a JSON document and reads the answer (at most [`MAX_BYTES`]); an error status is

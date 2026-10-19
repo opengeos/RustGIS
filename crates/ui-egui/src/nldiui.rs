@@ -117,7 +117,8 @@ fn active(app: &RustGisApp) -> bool {
 
 /// Whether a map click goes to the NLDI (the crosshair shows).
 pub fn wants_click(app: &RustGisApp) -> bool {
-    active(app) && app.ui.nldi.picking && app.ui.nldi.waiting.is_none()
+    // Other map tools (measuring, selecting, zooming, editing) keep their clicks.
+    active(app) && app.ui.nldi.picking && app.ui.nldi.waiting.is_none() && app.session.tool == rustgis_engine::Tool::Explore
 }
 
 /// A map click while the pane waits for one: traces the flowline there.

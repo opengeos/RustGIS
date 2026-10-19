@@ -28,11 +28,11 @@ enum Thumb {
 /// What is being fetched.
 enum Asked {
     /// Datasets by keyword: the next page (true) or a new search.
-    Collections { more: bool },
+    Collections { more: bool, page: usize },
     /// A popular dataset's versions, to pick the best.
     Preset(String),
     /// Granules: the next page (true) or a new search.
-    Granules { more: bool },
+    Granules { more: bool, page: usize },
 }
 
 /// The pane's choices, results and the request under way.
@@ -133,8 +133,10 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     };
     let Some((asked, _)) = app.ui.earthaccess.waiting.take() else { return };
     let done = match asked {
-        Asked::Collections { more } => r.and_then(|b| earthdata::parse_collections(&b)).map(|found| {
+        Asked::Collections { more, page } => r.and_then(|b| earthdata::parse_collections(&b)).map(|found| {
             let st = &mut app.ui.earthaccess;
+            // The page counts once it has come.
+            st.collections_page = page;
             st.collections_more = found.len() >= 20;
             match (&mut st.collections, more) {
                 (Some(list), true) => list.extend(found),
@@ -148,8 +150,9 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             choose(app, c);
             Ok(())
         }),
-        Asked::Granules { more } => r.and_then(|b| earthdata::parse_granules(&b)).and_then(|found| {
+        Asked::Granules { more, page } => r.and_then(|b| earthdata::parse_granules(&b)).and_then(|found| {
             let st = &mut app.ui.earthaccess;
+            st.page = page;
             st.more = found.len() >= PAGE;
             st.searched = true;
             if !more {
@@ -183,13 +186,23 @@ fn draw_footprints(app: &mut RustGisApp) -> Result<(), String> {
     Ok(())
 }
 
-/// Picks a dataset: its granules are searched next.
-fn choose(app: &mut RustGisApp, c: Collection) {
+/// Takes the footprints layer drawn off the map, with the granules it showed.
+fn clear_granules(app: &mut RustGisApp) {
+    if let Some(id) = app.ui.earthaccess.footprints.take()
+        && app.session.map().layer(id).is_some()
+    {
+        let _ = app.run("layer.remove", json!({"layer": id}));
+    }
     let st = &mut app.ui.earthaccess;
-    st.collection = Some(c);
     st.granules.clear();
     st.searched = false;
     st.more = false;
+}
+
+/// Picks a dataset: its granules are searched next.
+fn choose(app: &mut RustGisApp, c: Collection) {
+    clear_granules(app);
+    app.ui.earthaccess.collection = Some(c);
 }
 
 fn search_collections(app: &mut RustGisApp, more: bool) {
@@ -200,8 +213,7 @@ fn search_collections(app: &mut RustGisApp, more: bool) {
         &json!({"keyword": st.keyword, "cloudHosted": st.cloud, "limit": 20, "page": page}),
     ) {
         Ok(url) => {
-            st.collections_page = page;
-            st.waiting = Some((Asked::Collections { more }, fetch(&url)));
+            st.waiting = Some((Asked::Collections { more, page }, fetch(&url)));
         }
         Err(e) => st.error = Some(e),
     }
@@ -216,8 +228,7 @@ fn search_granules(app: &mut RustGisApp, more: bool) {
         Ok(url) => {
             let st = &mut app.ui.earthaccess;
             st.error = None;
-            st.page = page;
-            st.waiting = Some((Asked::Granules { more }, fetch(&url)));
+            st.waiting = Some((Asked::Granules { more, page }, fetch(&url)));
         }
         Err(e) => app.ui.earthaccess.error = Some(e),
     }
@@ -236,8 +247,28 @@ fn bounds(g: &Value) -> Option<[f64; 4]> {
             _ => {}
         }
     }
-    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    walk(g.get("coordinates")?, &mut b, 0);
+    let empty = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let coords = g.get("coordinates")?;
+    let mut b = empty;
+    walk(coords, &mut b, 0);
+    // A footprint split at the antimeridian (its parts at both ±180) would span the world: the
+    // widest part is zoomed to instead.
+    let multi = matches!(g.get("type").and_then(Value::as_str), Some("MultiPolygon" | "MultiLineString"));
+    if multi && b[0] <= -180.0 && b[2] >= 180.0 {
+        let parts = coords.as_array().map(|p| {
+            p.iter()
+                .map(|part| {
+                    let mut pb = empty;
+                    walk(part, &mut pb, 1);
+                    pb
+                })
+                .filter(|pb| pb.iter().all(|x| x.is_finite()))
+                .max_by(|a, c| (a[2] - a[0]).total_cmp(&(c[2] - c[0])))
+        });
+        if let Some(Some(widest)) = parts {
+            return Some(widest);
+        }
+    }
     b.iter().all(|x| x.is_finite()).then_some(b)
 }
 
@@ -331,10 +362,8 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
         }
     }
     if change {
-        let st = &mut app.ui.earthaccess;
-        st.collection = None;
-        st.granules.clear();
-        st.searched = false;
+        clear_granules(app);
+        app.ui.earthaccess.collection = None;
     }
     if let Some(c) = chosen {
         choose(app, c);
@@ -569,6 +598,11 @@ mod tests {
         let g = json!({"type": "MultiPolygon", "coordinates": [[[[1.0, 2.0], [3.0, -4.0], [0.5, 9.0]]]]});
         assert_eq!(bounds(&g), Some([0.5, -4.0, 3.0, 9.0]));
         assert_eq!(bounds(&json!({"coordinates": []})), None);
+        // Split at the antimeridian: its widest part, not the whole world.
+        let across = json!({"type": "MultiPolygon", "coordinates": [
+            [[[170.0, -10.0], [180.0, -10.0], [180.0, 10.0], [170.0, 10.0], [170.0, -10.0]]],
+            [[[-180.0, -10.0], [-175.0, -10.0], [-175.0, 10.0], [-180.0, 10.0], [-180.0, -10.0]]]]});
+        assert_eq!(bounds(&across), Some([170.0, -10.0, 180.0, 10.0]));
         assert_eq!(bounds(&json!({"coordinates": "x"})), None);
         assert_eq!(short_name("https://x/p/HLS.L30.T1.v2.0.B04.tif", "HLS.L30.T1.v2.0"), "B04.tif");
         assert_eq!(short_name("https://x/p/other.tif?x=1", "HLS"), "other.tif");
