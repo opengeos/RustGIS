@@ -3397,18 +3397,7 @@ mod tests {
     /// view shows it, not run together on one (#577); its box and frame hold every line.
     #[test]
     fn a_text_of_several_lines_is_drawn_on_as_many() {
-        let at = |text: &str, framed: bool| PlacedLabel {
-            text: text.into(),
-            x: 200.0,
-            y: 150.0,
-            size: 20.0,
-            color: Rgba::rgb(0, 0, 0),
-            halo: None,
-            bold: false,
-            icon: None,
-            align: 0.0,
-            framed,
-        };
+        let at = |text: &str, framed: bool| PlacedLabel { y: 150.0, size: 20.0, framed, ..label(text, 200.0, None, 0.0) };
         // The rows and columns with ink.
         let ink = |l: &PlacedLabel| {
             let mut pm = Pixmap::new(400, 300).unwrap();
