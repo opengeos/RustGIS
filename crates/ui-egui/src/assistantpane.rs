@@ -579,40 +579,26 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             });
         });
     });
-    let plan = app.assistant.agent.as_ref().is_some_and(|a| a.config.login());
-    if plan {
-        composer_panel(app, ui, t, busy, &ctx);
-    }
+    // The composer first, so tall settings scroll above it instead of running under it.
+    composer_panel(app, ui, t, busy, &ctx);
     // Closed settings look for the agents again when they next open.
     #[cfg(not(target_arch = "wasm32"))]
     if !app.assistant.settings {
         app.assistant.agents_found = None;
     }
     if app.assistant.settings {
-        let mut draw = |ui: &mut Ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)).show(ui, |ui| settings(app, ui, t));
-        };
-        if plan {
-            egui::ScrollArea::vertical()
-                .id_salt("assistant_plan_settings")
-                .auto_shrink([false, true])
-                .min_scrolled_height(0.0)
-                .max_height((ui.available_height() - 8.0).max(0.0))
-                .show(ui, draw);
-        } else {
-            draw(ui);
-        }
+        egui::ScrollArea::vertical()
+            .id_salt("assistant_settings_scroll")
+            .auto_shrink([false, true])
+            .min_scrolled_height(0.0)
+            .max_height((ui.available_height() - 8.0).max(0.0))
+            .show(ui, |ui| {
+                egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)).show(ui, |ui| settings(app, ui, t));
+            });
         ui.separator();
     }
-    if !plan {
-        composer_panel(app, ui, t, busy, &ctx);
-    }
     // The conversation in between.
-    let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true);
-    if plan {
-        scroll = scroll.min_scrolled_height(0.0);
-    }
-    scroll.show(ui, |ui| {
+    egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).min_scrolled_height(0.0).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
             // Text in a row (a list item, a quote, the user's message) wraps too, instead of widening the pane.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
@@ -1026,7 +1012,8 @@ fn skills_setting(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         for p in &problems {
             ui.label(RichText::new(p).small().color(t.red));
         }
-        ui.horizontal(|ui| {
+        // Wrapped, so the buttons never widen the settings past the pane.
+        ui.horizontal_wrapped(|ui| {
             let mut picked = None;
             if ui.button(tl!("Add skill…")).clicked() {
                 picked = rfd::FileDialog::new()
@@ -1567,10 +1554,20 @@ mod tests {
     }
 
     #[test]
-    fn tall_plan_settings_keep_transcript_above_composer() {
+    fn tall_settings_keep_transcript_above_composer() {
         use egui_kittest::kittest::Queryable;
-        for (width, height) in [(960.0, 700.0), (800.0, 600.0)] {
-            let mut app = plan_app();
+        // A ChatGPT plan and a provider with a key: the settings scroll above the composer either way.
+        for (plan, width, height) in [(true, 960.0, 700.0), (true, 800.0, 600.0), (false, 800.0, 420.0)] {
+            let mut app = if plan {
+                plan_app()
+            } else {
+                let mut app = RustGisApp::with_sample();
+                app.assistant.agent = Some(Agent::new(Config::from_env("custom"), &app.session));
+                app.assistant.loaded = true;
+                app.run("ui.pane.assistant", serde_json::Value::Null).unwrap();
+                app.assistant.settings = true;
+                app
+            };
             app.assistant.login_error = Some(rustgis_assistant::Error::new(rustgis_assistant::Recovery::Auth, ""));
             let mut h = egui_kittest::Harness::builder().with_size(vec2(width, height)).build_ui_state(
                 |ui, app: &mut RustGisApp| {
