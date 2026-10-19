@@ -3425,13 +3425,13 @@ mod tests {
         assert_eq!(text::measure("ab\ncdef", 10.0, false), text::measure("abcdef", 10.0, false));
         assert_eq!((text::line_count("a"), text::line_count("a\nb"), text::line_count("a\n")), (1, 2, 2));
         assert_eq!(text::line_count(&"\n".repeat(10_000)), 200, "lines are bounded");
-        // The collision box holds both lines: a label just below the first line's box but
-        // overlapping the second line is left out.
-        // Its lines are as far apart there as drawn: a line pitch each, not one line's height.
+        // The collision box spaces its lines as they are drawn, a line pitch apart, not one
+        // line's height (1.25 × size) each: a label whose top is just past where two such
+        // heights would end, but still over the drawn second line, is left out.
         assert!((text::block_height("a\nb\nc", 20.0) - text::block_height("a", 20.0) - 2.0 * text::line_pitch(20.0)).abs() < 1e-3);
-        // Just below where two lines' height would end (2 × 1.25 × 20 = 50 points), but over
-        // the drawn second line: left out.
-        let below = PlacedLabel { y: 150.0 + 25.0 + 2.0 + 12.5, ..at("Below", false) };
+        let one_line = 20.0 * 1.25;
+        let (old_bottom, gap) = (150.0 + one_line, 2.0);
+        let below = PlacedLabel { y: old_bottom + gap + one_line / 2.0, ..at("Below", false) };
         let p = place_labels(vec![(below, 0.0, (1, 0))], vec![at("Atlantic\nOcean", false)], 400.0, 300.0, false);
         assert!(p.labels.iter().all(|l| l.text != "Below"), "placed over the second line");
         // The selection frame goes round both lines.
