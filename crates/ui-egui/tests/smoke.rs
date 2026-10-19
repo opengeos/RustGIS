@@ -1090,7 +1090,7 @@ fn enter_saves_the_text_dialog_and_shift_enter_breaks_the_line() {
     let (layer, row) = (added["layer"].clone(), added["row"].clone());
     h.state_mut().run("ui.dialog", json!({"name": "graphicText", "layer": layer, "row": row})).unwrap();
     h.step();
-    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
+    h.query_all_by_role(Role::MultilineTextInput).find(|n| n.value().as_deref() == Some("Old")).unwrap().focus();
     h.step();
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Enter);
     h.event(egui::Event::Text("Line".into()));
