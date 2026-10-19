@@ -8035,7 +8035,7 @@ fn a_run_is_copied_from_the_history_as_code() {
     let old = crate::GpRecord {
         tool: "Buffer".into(),
         id: String::new(),
-        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1}),
+        params: json!({"input": "https://h.example/a?token=s3cr3t", "distance": 1, "connection": "PG:host=db user=me password=hunter2 dbname=x", "https://k.example/?token=k3y": 1, "password": "pa55word", "api_token": "abc123", "key": "NAME"}),
         command: None,
         at: 0,
         ok: false,
@@ -8055,6 +8055,8 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(py.contains("host=db") && !py.contains("hunter2"), "{py}");
     // A key is redacted as a value is.
     assert!(py.contains("https://k.example/") && !py.contains("k3y"), "{py}");
+    // A value under a secret's name is left empty; a plain `key` that reads as a name is kept.
+    assert!(!py.contains("pa55word") && !py.contains("abc123") && py.contains("\"password\": \"\"") && py.contains("\"NAME\""), "{py}");
     // Nothing tells which tool an unknown name was.
     s.project.gp_history.push(crate::GpRecord { tool: "Mystery".into(), ..old.clone() });
     assert!(code(&mut s, 3, "python").is_err() && code(&mut s, 9, "python").is_err());
@@ -8087,6 +8089,8 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.lines().filter(|l| l.contains("import os") || l.contains("import sys")).all(|l| l.starts_with('#')), "{text}");
     assert!(!text.contains("s3cr3t") && !text.contains("hunter2"));
     assert!(text.contains("# The project hasn't been saved yet: save it as this file first.\nimport rustgis"), "{text}");
+    // Named as Save names it, spaces and all.
+    assert!(text.contains("\"World Atlas.rgis\""), "{text}");
     // A file name every system takes, whatever the project is called.
     s.project.name = "A*B?\"C<D>|E".into();
     let out = s.run("gp.historyScript", &Value::Null).unwrap();

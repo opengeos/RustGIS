@@ -188,7 +188,7 @@ pub fn default_name(address: &str) -> String {
 /// Whether a query or `extra` key names a secret, wherever it is: an exact list (case aside),
 /// and any key naming a password, secret or token. Short keys that are ordinary elsewhere (an
 /// ArcGIS or WMS `sr`, an OAuth `code`) are judged with the rest of the query ([`secret_in`]).
-fn secret_key(k: &str) -> bool {
+pub(crate) fn secret_key(k: &str) -> bool {
     let k = k.to_ascii_lowercase();
     matches!(
         k.as_str(),
@@ -301,7 +301,7 @@ pub fn holds_secret(params: &serde_json::Value) -> bool {
 /// lookup key, whose words and numbers come in runs (`parcel_id`, `municipalityCode2020`,
 /// `area_2010_2020_km2_total`). A hex id counts as a key on purpose: it may be one, and a step
 /// left out (with a notice) costs less than a key shared.
-fn looks_like_a_key(t: &str) -> bool {
+pub(crate) fn looks_like_a_key(t: &str) -> bool {
     #[derive(PartialEq)]
     enum Class {
         Lower,

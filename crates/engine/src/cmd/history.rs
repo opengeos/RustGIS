@@ -102,12 +102,22 @@ pub fn tool_of(r: &GpRecord) -> Option<String> {
 }
 
 /// `v` without what would give someone else the user's access: an address's keys, tokens and
-/// passwords, a connection's password. An object's keys too: the file may put anything there.
+/// passwords, a connection's password, and a value under a name that says it is a secret (a
+/// `password`, an `api_token`; a plain `key` only when it reads as one), left empty. An
+/// object's keys too: the file may put anything there.
 fn redacted(v: &Value) -> Value {
+    use crate::sources::{looks_like_a_key, secret_key};
+    let secret = |k: &str, v: &Value| {
+        secret_key(k)
+            && !matches!(v, Value::Bool(_) | Value::Null)
+            && (!k.eq_ignore_ascii_case("key") || v.as_str().is_some_and(looks_like_a_key))
+    };
     match v {
         Value::String(t) => Value::String(redacted_text(t)),
         Value::Array(a) => Value::Array(a.iter().map(redacted).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (redacted_text(k), redacted(v))).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter().map(|(k, v)| (redacted_text(k), if secret(k, v) { Value::String(String::new()) } else { redacted(v) })).collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -136,11 +146,13 @@ fn project_file(s: &Session) -> String {
     }
 }
 
-/// `name` as a file name on every system: letters, digits, `-` and `_` kept, anything else (a
-/// separator, `* ? " < > |`, a control character) `_`, as `model.export` names its file.
+/// `name` as a file name on every system: letters, digits, spaces, `-` and `_` kept (so a
+/// project saved under its own name, "World Atlas.rgis", is the file the script opens), anything
+/// else (a separator, `* ? " < > |`, a control character) `_`.
 fn file_stem(name: &str) -> String {
-    let stem: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    if stem.is_empty() { "project".into() } else { stem }
+    let stem: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ') { c } else { '_' }).collect();
+    let stem = stem.trim();
+    if stem.is_empty() { "project".into() } else { stem.to_string() }
 }
 
 /// A call of the `rustgis` package's `Session.run`, one parameter a line (as ArcGIS Pro copies a
