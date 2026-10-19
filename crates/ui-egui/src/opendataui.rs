@@ -382,6 +382,8 @@ fn search(app: &mut RustGisApp, more: bool) {
             let st = &mut app.ui.opendata;
             st.found.clear();
             st.open.clear();
+            // Pictures of the earlier results go (and their textures).
+            st.thumbs.clear();
             st.listing = None;
             st.total = None;
             st.next = None;

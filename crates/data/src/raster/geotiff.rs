@@ -263,6 +263,76 @@ fn custom_crs(keys: &[u16], doubles: &[f64], ascii: &str) -> Result<Crs> {
     .map_err(err)
 }
 
+/// GeoKeys for a user-defined projection from its PROJ definition (one read from WKT, which
+/// came with no keys), the inverse of [`custom_crs`]: the key directory, its double parameters and
+/// its ASCII parameters. `None` for a projection the keys can't say.
+fn keys_from_proj4(proj4: &str, label: &str) -> Option<(Vec<u16>, Vec<f64>, String)> {
+    let params: Vec<(&str, &str)> = proj4.split_whitespace().take(64).filter_map(|t| t.trim_start_matches('+').split_once('=')).collect();
+    let get = |k: &str| params.iter().find(|(n, _)| *n == k).map(|(_, v)| *v);
+    let num = |k: &str| get(k).and_then(|v| v.parse::<f64>().ok()).filter(|v| v.is_finite());
+    let (lat0, lon0) = (num("lat_0").unwrap_or(0.0), num("lon_0").unwrap_or(0.0));
+    let (x0, y0, k0) = (num("x_0").unwrap_or(0.0), num("y_0").unwrap_or(0.0), num("k_0").or(num("k")).unwrap_or(1.0));
+    // The transformation, and its parameters by key (in metres and degrees).
+    let (ct, mut doubles_by_key): (u16, Vec<(u16, f64)>) = match get("proj")? {
+        "tmerc" => (1, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
+        "merc" => (7, vec![(3080, lon0), (3082, x0), (3083, y0), (3092, k0)]),
+        "lcc" => match num("lat_2") {
+            Some(lat2) => (8, vec![(3078, num("lat_1").unwrap_or(lat0)), (3079, lat2), (3084, lon0), (3085, lat0), (3086, x0), (3087, y0)]),
+            None => (9, vec![(3080, lon0), (3081, num("lat_1").unwrap_or(lat0)), (3082, x0), (3083, y0), (3092, k0)]),
+        },
+        "laea" => (10, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0)]),
+        "aea" => (
+            11,
+            vec![
+                (3078, num("lat_1").unwrap_or(lat0)),
+                (3079, num("lat_2").unwrap_or(lat0)),
+                (3084, lon0),
+                (3085, lat0),
+                (3086, x0),
+                (3087, y0),
+            ],
+        ),
+        "aeqd" => (12, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0)]),
+        // Polar: the latitude of true scale is the key's latitude.
+        "stere" if lat0.abs() == 90.0 => {
+            (15, vec![(3080, lon0), (3081, num("lat_ts").unwrap_or(lat0)), (3082, x0), (3083, y0), (3092, k0)])
+        }
+        "stere" => (14, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
+        "sterea" => (16, vec![(3080, lon0), (3081, lat0), (3082, x0), (3083, y0), (3092, k0)]),
+        "eqc" => (17, vec![(3078, num("lat_ts").unwrap_or(0.0)), (3080, lon0), (3082, x0), (3083, y0)]),
+        "cea" => (28, vec![(3078, num("lat_ts").unwrap_or(0.0)), (3080, lon0), (3082, x0), (3083, y0)]),
+        _ => return None,
+    };
+    // The earth: WGS 84 by code, any other by its axes.
+    let mut shorts: Vec<(u16, u16)> = vec![(1024, 1), (1025, 1), (3072, 32767), (3074, 32767), (3075, ct), (3076, 9001)];
+    if get("datum") == Some("WGS84") || (get("ellps") == Some("WGS84") && get("a").is_none()) {
+        shorts.push((2048, 4326));
+    } else {
+        let (a, b) = match (num("a").or(num("R")), num("b"), num("rf")) {
+            (Some(a), Some(b), _) => (a, b),
+            (Some(a), None, Some(rf)) if rf > 0.0 => (a, a - a / rf),
+            (Some(r), None, _) => (r, r),
+            _ => return None,
+        };
+        shorts.extend([(2048, 32767), (2050, 32767), (2056, 32767)]);
+        doubles_by_key.extend([(2057, a), (2058, b)]);
+    }
+    // The key directory: sorted by key, doubles and ASCII at their offsets.
+    let label: String = label.chars().filter(|c| *c != '|').take(200).collect();
+    let mut entries: Vec<[u16; 4]> = shorts.iter().map(|(k, v)| [*k, 0, 1, *v]).collect();
+    doubles_by_key.sort_by_key(|(k, _)| *k);
+    let doubles: Vec<f64> = doubles_by_key.iter().map(|(_, v)| *v).collect();
+    for (i, (k, _)) in doubles_by_key.iter().enumerate() {
+        entries.push([*k, 34736, 1, i as u16]);
+    }
+    let ascii = format!("{label}|");
+    entries.push([3073, 34737, ascii.len() as u16, 0]);
+    entries.sort_by_key(|e| e[0]);
+    let mut keys = vec![1, 1, 0, entries.len() as u16];
+    keys.extend(entries.iter().flatten());
+    Some((keys, doubles, ascii))
+}
+
 fn to_f32(buf: DecodingResult) -> (Vec<f32>, &'static str) {
     match buf {
         DecodingResult::U8(v) => (v.into_iter().map(f32::from).collect(), "UInt8"),
@@ -893,9 +963,18 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
     let geographic = r.crs.is_geographic();
     // A file's own projection is written back as the keys it came in.
-    let custom = r.crs.custom_def();
+    let custom = r.crs.custom_def().map(|d| {
+        // A system read from WKT (or a saved project) has no keys: they're made from its PROJ
+        // definition when they can be.
+        if d.geokeys.is_empty()
+            && let Some((geokeys, doubles, ascii)) = keys_from_proj4(&d.proj4, &d.label)
+        {
+            std::sync::Arc::new(CustomCrs { geokeys, doubles, ascii, ..(*d).clone() })
+        } else {
+            d
+        }
+    });
     let keys: Vec<u16> = match &custom {
-        // A system read from a saved project has no keys to write.
         Some(d) if d.geokeys.is_empty() => {
             return Err(err(format!("{}: a coordinate system without GeoTIFF keys can't be written", d.label)));
         }
@@ -1081,6 +1160,25 @@ mod tests {
         // One that doesn't fit a byte keeps the file honest by writing floats (band 1 only).
         let back = read(std::io::Cursor::new(write(&mk(-9999.0), 0).unwrap()), "f").unwrap();
         assert_eq!((back.band_count(), back.value(0, 1, 0), back.nodata), (1, None, Some(-9999.0)));
+    }
+
+    #[test]
+    fn a_wkt_projection_is_written_as_keys() {
+        // HRRR's grid, as its Zarr store's WKT says it: Lambert conformal conic on a sphere.
+        let wkt = r#"PROJCS["unnamed",GEOGCS["GRIB",DATUM["unnamed",SPHEROID["Sphere",6371229,0]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic_2SP"],PARAMETER["latitude_of_origin",38.5],PARAMETER["central_meridian",-97.5],PARAMETER["standard_parallel_1",38.5],PARAMETER["standard_parallel_2",38.5],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["Metre",1]]"#;
+        let crs = Crs::parse(wkt).unwrap();
+        let gt = GeoTransform { origin_x: -2_699_020.0, origin_y: 1_588_193.0, pixel_width: 3000.0, pixel_height: -3000.0 };
+        let r = Raster::new("hrrr", 2, 2, vec![vec![1.0, 2.0, 3.0, 4.0]], gt, crs, None, ColorHint::Gray, "Float32").unwrap();
+        let back = read(std::io::Cursor::new(write(&r, 0).unwrap()), "hrrr").unwrap();
+        let p = back.crs.custom_def().unwrap().proj4.clone();
+        assert!(p.contains("+proj=lcc") && p.contains("+lon_0=-97.5") && p.contains("+a=6371229"), "{p}");
+        // The same place either way.
+        let c = rustgis_geom::Coord { x: 0.0, y: 0.0 };
+        let (a, b) = (r.crs.transformer().unwrap().to_lonlat(c).unwrap(), back.crs.transformer().unwrap().to_lonlat(c).unwrap());
+        assert!((a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && (a.x + 97.5).abs() < 1e-6, "{a:?} {b:?}");
+        // One the keys can't say is refused, as before.
+        assert!(keys_from_proj4("+proj=robin +lon_0=0 +datum=WGS84", "x").is_none());
+        assert!(keys_from_proj4("junk", "x").is_none());
     }
 
     #[test]

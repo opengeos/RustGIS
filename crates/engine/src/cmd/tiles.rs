@@ -38,6 +38,7 @@ pub const NETWORK: &[&str] = &[
     "sourcecoop.list",
     "portal.search",
     "portal.add",
+    "portal.files",
 ];
 
 pub fn commands() -> Vec<C> {

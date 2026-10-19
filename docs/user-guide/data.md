@@ -384,9 +384,12 @@ portals keep a search to **All**, **Imagery**, **Maps**, **Features** or **Web m
 newest items when opened, and page with **Load more**.
 
 The search by place (OpenAerialMap, LiDAR HD, 3DEP) is always where the map is, and its words, when
-given, keep to the images or tiles that have them. In the web app, the Ocean Data Platform's
-features are read through GeoLibre's relay (`tiles.geolibre.app`), the platform answering only its
-own site.
+given, keep to the images or tiles that have them: OpenAerialMap's to 200 images where the map is
+at a time (**Load more** looks at older ones), LiDAR HD's to the first 50 tiles. A Hugging Face
+dataset lists its first 1,000 files, and the Ocean Data Platform's catalogue is read whole (a few
+hundred datasets) and searched in RustGIS. In the web app, the Ocean Data Platform's features are
+read through GeoLibre's relay (`tiles.geolibre.app`), the platform answering only its own site, so
+those requests pass through it.
 
 ```sh
 rustgis-cli run --cmd 'portal.search={"portal":"usgs-dem","bbox":[-122.25,46.15,-122.15,46.25]}'

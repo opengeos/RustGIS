@@ -263,3 +263,26 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
 fn fetch(_url: &str) -> Result<Vec<u8>, String> {
     Err("in the web app, use Home › Web Data › OpenStreetMap…, Boundaries… or Search Open Data…".into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_queries() {
+        let (_, url) = files_query(&json!({"dataset": "giswqs/geospatial"})).unwrap();
+        assert!(url.starts_with("https://huggingface.co/api/datasets/giswqs/geospatial/tree/main"));
+        let (_, url) = files_query(&json!({"portal": "earthdata-gis", "dataset": "abc123"})).unwrap();
+        assert_eq!(url, "https://gis.earthdata.nasa.gov/portal/sharing/rest/content/items/abc123/data?f=json");
+        for bad in [
+            json!({}),
+            json!({"dataset": ""}),
+            json!({"dataset": "../x"}),
+            json!({"portal": "ckan", "dataset": "a/b"}),
+            json!({"portal": "nope", "dataset": "a/b"}),
+            json!({"portal": "arcgis-portal", "dataset": "a b"}),
+        ] {
+            assert!(files_query(&bad).is_err(), "{bad}");
+        }
+    }
+}

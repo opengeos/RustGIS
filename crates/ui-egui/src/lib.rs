@@ -52,6 +52,7 @@ mod sourcespane;
 mod sqlpane;
 mod stacui;
 mod table;
+mod textform;
 pub mod theme;
 mod tilt_drape;
 mod tilt_settle;

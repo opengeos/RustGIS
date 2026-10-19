@@ -487,7 +487,8 @@ impl Portal {
             }
             Kind::OpenAerialMap => {
                 let r = v.get("results").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
-                r.iter().take(MAX_RESULTS * 4).filter_map(oam_dataset).filter(|d| has_words(d)).take(MAX_RESULTS).collect()
+                // Every match on the page: the next page starts after all the images fetched.
+                r.iter().take(MAX_RESULTS * 4).filter_map(oam_dataset).filter(|d| has_words(d)).collect()
             }
             Kind::UsgsDem => {
                 let r = v.get("items").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
@@ -495,7 +496,7 @@ impl Portal {
             }
             Kind::IgnLidar => {
                 let r = v.get("features").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
-                r.iter().take(IGN_MAX_TILES).filter_map(ign_dataset).filter(|d| has_words(d)).collect()
+                r.iter().take(IGN_MAX_TILES).filter_map(ign_dataset).filter(|d| has_words(d)).take(MAX_RESULTS).collect()
             }
             Kind::GeoLens => {
                 let r = v.get("features").and_then(Value::as_array).ok_or_else(|| self.not_portal())?;
@@ -528,6 +529,8 @@ impl Portal {
             // The portal's answer is hostile input: an address it gives may not reach into the
             // local network (unless the portal is there) or a forbidden address.
             d.resources.retain(|r| crate::address::check(&r.url, Some(from)).is_ok());
+            // So may its pictures', fetched as results are shown.
+            d.thumbnail = d.thumbnail.take().filter(|u| crate::address::check(u, Some(from)).is_ok());
             d.resources.sort_by_key(|r| rank(&r.format));
             d.resources.truncate(MAX_RESOURCES);
         }
@@ -884,7 +887,9 @@ fn bbox4(v: &Value) -> Option<[f64; 4]> {
     let a = v.as_array()?;
     let n = |i: usize| a.get(i).and_then(Value::as_f64);
     let b = [n(0)?, n(1)?, n(2)?, n(3)?];
-    (b.iter().all(|x| x.is_finite()) && (-180.0..=180.0).contains(&b[0]) && (-90.0..=90.0).contains(&b[1]) && b[1] <= b[3]).then_some(b)
+    let lon = |x: f64| (-180.0..=180.0).contains(&x);
+    let lat = |y: f64| (-90.0..=90.0).contains(&y);
+    (lon(b[0]) && lon(b[2]) && lat(b[1]) && lat(b[3]) && b[1] <= b[3]).then_some(b)
 }
 
 /// An id safe in an address's path: letters, digits, dashes, underscores and dots.

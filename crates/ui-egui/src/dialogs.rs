@@ -232,23 +232,11 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 });
             }
             "graphicText" => {
-                ui.label(tl!("Text"));
-                let hint = tl!("Shift+Enter starts a new line.");
-                ui.add(text_box(&mut app.dialogs.text).hint_text(hint).desired_rows(2).desired_width(f32::INFINITY));
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(tl!("Dynamic text:")).small().weak());
-                    for (token, what) in rustgis_engine::map::graphics::TOKENS {
-                        if ui.small_button(*token).on_hover_text(tl!(*what)).clicked() {
-                            app.dialogs.text.push_str(token);
-                        }
-                    }
-                });
-                // The size in points, within what text graphics draw (#457).
-                let fonts = rustgis_engine::map::graphics::FONT_SIZE;
-                ui.horizontal(|ui| {
-                    ui.label(tl!("Size"));
-                    ui.add(egui::DragValue::new(&mut app.dialogs.size).range(fonts).speed(0.1).suffix(" pt"));
-                });
+                // The form a layout's text has too (#516); colour and boldness aren't kept by text
+                // graphics yet. What it settles is saved by the dialog's button.
+                let d = &mut app.dialogs;
+                let fields = crate::textform::Fields { text: &mut d.text, size: &mut d.size, color: None, bold: None };
+                crate::textform::show(ui, "graphic_text", &[rustgis_engine::map::graphics::TOKENS], fields, |_| {});
                 // Editing a placed text: `a` and `b` hold its layer id and row.
                 let editing = app.dialogs.mode == "edit";
                 close = buttons(app, ui, if editing { "Save" } else { "Add" }, |app| {
