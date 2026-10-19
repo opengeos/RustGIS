@@ -160,7 +160,10 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
             }
             slot.1 = Some(picture);
         }
-        evict(&mut s);
+        // Only when pictures were added: a frame of pictures already drawn costs nothing here.
+        if !missing.is_empty() {
+            evict(&mut s);
+        }
     }
     Some(found.into_iter().filter_map(|(p, picture)| Some(Item { payload: picture?, at: p.extent(), z, clip: p.extent() })).collect())
 }
