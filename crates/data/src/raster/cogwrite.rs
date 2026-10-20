@@ -155,7 +155,9 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
     }
     let b = r.bands.get(band).ok_or_else(|| err(format!("the raster has no band {}", band + 1)))?;
     if let ColorHint::Palette(colors) = &r.color {
-        if band != 0 || !fits_bytes(r, 0) {
+        // Whole numbers (the band's categories), not just a byte type: an index of 1.5 isn't a class.
+        let whole = b.stats.categories.is_some() || b.stats.count == 0;
+        if band != 0 || !fits_bytes(r, 0) || !whole {
             return Err(err("a palette raster's indexes must be whole numbers from 0 to 255 to keep its colour table"));
         }
         // Pixels with no value (a warp's collar) take an index the raster doesn't use, as its
@@ -498,6 +500,8 @@ fn build_head(levels: &[Vec<Entry>], big: bool) -> Head {
 /// Writes a raster as a cloud-optimised GeoTIFF into `out` (which must be empty: offsets are from
 /// its start). `band` (0-based) is the band of a raster that isn't a colour one.
 pub fn write_to<W: Write + Seek>(r: &Raster, band: usize, flavour: Flavour, out: &mut W) -> Result<CogInfo> {
+    // A scan's place is only where it was laid on the view: not coordinates to write into a file.
+    r.require_coordinates().map_err(err)?;
     let gt = r.transform;
     if gt.pixel_height > 0.0 || gt.pixel_width < 0.0 {
         return Err(err("only north-up rasters can be exported for now"));
@@ -913,7 +917,17 @@ mod tests {
         let colors: Vec<[u8; 4]> = (0..=255u8).map(|i| [i, 0, 0, 255]).collect();
         let mut idx: Vec<f32> = (0..=255u8).map(f32::from).collect();
         idx.push(nan);
-        let full = utm(257, 1, vec![idx], ColorHint::Palette(colors), "UInt8", None);
+        let full = utm(257, 1, vec![idx], ColorHint::Palette(colors.clone()), "UInt8", None);
         assert!(write(&full, 0).is_err());
+        // An index that isn't a whole number isn't a class, even in a band called UInt8.
+        let half = utm(2, 1, vec![vec![1.0, 1.5]], ColorHint::Palette(colors), "UInt8", None);
+        assert!(write(&half, 0).is_err());
+    }
+
+    #[test]
+    fn a_scan_is_not_written() {
+        let scan = utm(2, 1, vec![vec![1.0, 2.0]], ColorHint::Gray, "UInt8", None).into_scan().unwrap();
+        let e = write(&scan, 0).unwrap_err().to_string();
+        assert!(e.contains("no coordinates"), "{e}");
     }
 }

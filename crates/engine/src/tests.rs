@@ -10729,6 +10729,8 @@ fn scans_have_no_coordinates_to_give_away() {
     let _ = std::fs::remove_file(&out);
     let e = s.run("share.exportRaster", &json!({"path": out.display().to_string()})).unwrap_err();
     assert!(e.contains("georeference it first") && !out.exists(), "{e}");
+    let e = s.run("share.exportRaster", &json!({"path": out.display().to_string(), "cog": true})).unwrap_err();
+    assert!(e.contains("georeference it first") && !out.exists(), "as a COG: {e}");
     let before = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap().placement;
     let tools: [(&str, Value); 14] = [
         ("raster.function", json!({"layer": "flat", "function": "hillshade"})),
