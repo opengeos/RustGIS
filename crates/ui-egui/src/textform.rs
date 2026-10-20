@@ -5,9 +5,9 @@
 //! and says what was settled; each caller runs its own command.
 
 use egui::{Color32, Ui, vec2};
+use rustgis_engine::map::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING, TextAlign};
 
 use crate::widgets::Dragged;
-use rustgis_engine::map::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING, TextAlign};
 
 /// What the form edits. A style is left out where the text doesn't have it.
 pub struct Fields<'a> {
