@@ -287,14 +287,17 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
                 continue;
             }
             // A raster tile layer placed for every frame by the GPU map: the scene holds the layer.
+            // Placed here too for what the scene reports (credits, tiles on their way, errors),
+            // and to start fetching them.
+            let s = spec(t);
             if let Some(g) = gpu.as_mut()
                 && g.live
                 && north_up
                 && t.blend == Blend::Normal
-                && let Some(p) = rustgis_tiles::place_raster(&spec(t), t.opacity, &frame, &fetch, &reach)
+                && let Some(p) = rustgis_tiles::place_raster(&s, t.opacity, &frame, &fetch, &reach)
                 && crate::flush_acc(pm, g.cmds, g.dirty).is_some()
             {
-                g.cmds.push(DrawCmd::LiveTiles { spec: spec(t), opacity: t.opacity });
+                g.cmds.push(DrawCmd::LiveTiles { spec: s, opacity: t.opacity });
                 let d = rustgis_tiles::Drawn { labels: Vec::new(), attribution: p.attribution, pending: p.pending, error: p.error };
                 collect(d, &t.name, &mut out);
                 continue;

@@ -288,6 +288,8 @@ fn place_as(
     let mut out = PlacedTiles::default();
     let r = match resolve(spec) {
         Resolve::Ready(r) => r,
+        // A style still loading may draw more than raster tiles: not placed raster-only yet.
+        Resolve::Pending if !pictures => return None,
         Resolve::Pending => {
             out.pending = true;
             return Some(out);

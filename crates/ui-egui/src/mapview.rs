@@ -462,6 +462,7 @@ fn split_view(app: &mut RustGisApp, ui: &mut Ui, other: usize, rect: Rect, t: &T
                 target: app.map.gpu_target_split.clone(),
                 uv: Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                 live: None,
+                repaint: None,
             },
         ));
         for l in labels {
@@ -920,7 +921,14 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if let (Some(gf), Some(gr)) = (app.map.gpu_frame.as_ref().filter(|_| !tilt_draped), &app.map.gpu_renderer) {
         // Live tile layers, placed for this frame's camera; drawn again while tiles are uploaded.
         let (live_frame, live_pending) = match gf.live_frame(cam) {
-            Some((f, pending)) => (Some(f), pending),
+            Some((f, pending, declined)) => {
+                // A layer no longer drawn live (its style turned out to draw more than raster
+                // tiles): the map is drawn again, as tiles arriving would draw it.
+                if declined && app.map.live_rev.take().is_some() {
+                    ui.ctx().request_repaint();
+                }
+                (Some(f), pending)
+            }
             None => (None, false),
         };
         let backlog = live_frame.is_some() && gr.live_backlog.load(std::sync::atomic::Ordering::Relaxed);
@@ -948,6 +956,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
                 },
                 live: live_frame,
+                repaint: Some(ui.ctx().clone()),
             },
         ));
     } else if let Some(tex) = app.map.texture.as_ref().filter(|_| !draped && !tilt_draped) {

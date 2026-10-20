@@ -22,6 +22,8 @@ struct Bench {
     last: Instant,
     dragging: bool,
     intervals: Vec<f64>,
+    /// When the last wheel turn was sent: the wheel turns at a rate, whatever the frame rate.
+    last_wheel: f64,
     ui_ms: Vec<f64>,
     reported: bool,
 }
@@ -71,11 +73,14 @@ impl eframe::App for Bench {
         let z = t - LOAD - PAN;
         if (0.0..ZOOM).contains(&z) {
             input.events.push(egui::Event::PointerMoved(from));
-            // Out for a third, in for a third, out again.
-            let dir = if z < ZOOM / 3.0 || z >= 2.0 * ZOOM / 3.0 { -6.0 } else { 6.0 };
+            // Out for a third, in for a third, out again, at 600 points a second, so a run at any
+            // frame rate zooms the same.
+            let dt = (t - self.last_wheel).clamp(0.0, 0.1);
+            self.last_wheel = t;
+            let dir = if z < ZOOM / 3.0 || z >= 2.0 * ZOOM / 3.0 { -1.0 } else { 1.0 };
             input.events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
-                delta: egui::vec2(0.0, dir),
+                delta: egui::vec2(0.0, (dir * 600.0 * dt) as f32),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
             });
@@ -113,14 +118,15 @@ fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
     let gpu = args.iter().any(|a| a == "--gpu");
     let case = args.iter().position(|a| a == "--case").and_then(|i| args.get(i + 1)).map_or("liberty", String::as_str);
+    let fail = |e: String| eframe::Error::AppCreation(e.into());
     let (tiles, at) = match case {
         "imagery" => (
             json!({"url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"}),
             "#13/48.8566/2.3522",
         ),
-        _ => (json!({"url": "https://tiles.openfreemap.org/styles/liberty", "kind": "style"}), "#14/40.7549/-73.9840"),
+        "liberty" => (json!({"url": "https://tiles.openfreemap.org/styles/liberty", "kind": "style"}), "#14/40.7549/-73.9840"),
+        other => return Err(fail(format!("--case {other}: liberty or imagery"))),
     };
-    let fail = |e: String| eframe::Error::AppCreation(e.into());
     let mut app = RustGisApp::with_sample();
     app.run("project.new", json!({"name": "Navigation benchmark"})).map_err(fail)?;
     app.run("ui.map.gpu", json!({"on": gpu})).map_err(fail)?;
@@ -136,7 +142,16 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |_| {
             let now = Instant::now();
-            Ok(Box::new(Bench { app, start: now, last: now, dragging: false, intervals: Vec::new(), ui_ms: Vec::new(), reported: false }))
+            Ok(Box::new(Bench {
+                app,
+                start: now,
+                last: now,
+                dragging: false,
+                intervals: Vec::new(),
+                last_wheel: 0.0,
+                ui_ms: Vec::new(),
+                reported: false,
+            }))
         }),
     )
 }

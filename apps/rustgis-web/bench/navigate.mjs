@@ -38,6 +38,14 @@ const opt = (name, fallback) => {
 const flag = (name) => args.includes(`--${name}`);
 
 const base = opt("url", "http://127.0.0.1:8780/");
+// A device pixel ratio and a CPU slowdown that the run really uses, or an error.
+const number = (name, fallback, min) => {
+  const v = Number(opt(name, String(fallback)));
+  if (!Number.isFinite(v) || v < min) throw new Error(`--${name} takes a number of at least ${min}`);
+  return v;
+};
+const dpr = number("dpr", 1, 0.5);
+const throttle = number("throttle", 1, 1);
 const which = opt("case", "all");
 const CASES = {
   liberty: { query: "?style=https://tiles.openfreemap.org/styles/liberty", hash: "#14/40.7549/-73.9840" },
@@ -89,7 +97,7 @@ async function run(name) {
   const launchArgs = ["--enable-unsafe-webgpu", "--use-gl=angle", "--use-angle=gl-egl", "--ignore-gpu-blocklist", "--enable-gpu"];
   const browser = await chromium.launch({ headless: flag("headless"), args: launchArgs });
   opened = browser;
-  const page = await browser.newPage({ viewport: { width: 1480, height: 900 }, deviceScaleFactor: Number(opt("dpr", "1")) });
+  const page = await browser.newPage({ viewport: { width: 1480, height: 900 }, deviceScaleFactor: dpr });
   const console = { error: 0, warning: 0, samples: [] };
   page.on("console", (m) => {
     const t = m.type();
@@ -123,7 +131,6 @@ async function run(name) {
   await page.waitForTimeout(8000);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
-  const throttle = Number(opt("throttle", "1"));
   if (throttle > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
   const heap = async () => {
     const m = await cdp.send("Performance.getMetrics");
@@ -185,6 +192,8 @@ async function run(name) {
     for (const [id, us] of dt) {
       const f = byId.get(id)?.callFrame;
       const name = f ? f.functionName || `(${f.url.split("/").pop()})` : "?";
+      // The main thread waiting (the script's pauses) isn't work.
+      if (name === "(idle)") continue;
       self.set(name, (self.get(name) ?? 0) + us);
     }
     const total = [...self.values()].reduce((a, b) => a + b, 0);
@@ -201,8 +210,8 @@ async function run(name) {
   return {
     case: name,
     gpu: flag("gpu"),
-    dpr: Number(opt("dpr", "1")),
-    throttle: Number(opt("throttle", "1")),
+    dpr,
+    throttle,
     webgl: flag("webgl"),
     crashed,
     seconds: Math.round(seconds * 10) / 10,

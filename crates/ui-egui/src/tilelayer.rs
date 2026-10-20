@@ -60,6 +60,9 @@ struct Chunk {
     bind: wgpu::BindGroup,
     #[cfg_attr(not(test), allow(dead_code))]
     layers: u32,
+    /// Its pictures' side, and its bytes.
+    side: u32,
+    bytes: u64,
 }
 
 /// Where a picture is: its chunk (index into all chunks) and layer.
@@ -86,12 +89,16 @@ struct Pool {
 }
 
 /// The live tile layers' textures, pipeline and per-frame instances, kept by the GPU map renderer.
+/// One map view places live layers per frame: the instances and uniform are written in its
+/// paint callback's `prepare` and read by its scene pass, so a second view placing live layers in
+/// the same frame would need its own (the split view's scenes have none).
 pub(crate) struct LiveTiles {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
-    chunks: Vec<Chunk>,
+    /// Every chunk, by the index an [`At`] names; `None` once given back to the budget.
+    chunks: Vec<Option<Chunk>>,
     pools: HashMap<u32, Pool>,
     instances: Option<(wgpu::Buffer, u64)>,
     /// What each live layer of the frame draws, by its place among the scene's live layers.
@@ -320,7 +327,7 @@ impl LiveTiles {
         }
         let at = self.take(device, side)?;
         let size = wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 };
-        let texture = &self.chunks.get(at.chunk)?.texture;
+        let texture = &self.chunks.get(at.chunk)?.as_ref()?.texture;
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture,
@@ -339,7 +346,9 @@ impl LiveTiles {
     }
 
     /// A free layer for a picture `side` pixels square: one let go by the tile cache, a new
-    /// chunk's while the budget allows, else the least recently used one not drawn this frame.
+    /// chunk's while the budget allows, else the least recently used one of this size not drawn
+    /// this frame, else one of a new chunk made from the budget of another size's chunk that this
+    /// frame doesn't draw from (a layer of another tile size, added after the budget was spent).
     fn take(&mut self, device: &wgpu::Device, side: u32) -> Option<At> {
         let frame = self.frame;
         let pool = self.pools.entry(side).or_default();
@@ -354,43 +363,95 @@ impl LiveTiles {
         if let Some(at) = pool.free.pop() {
             return Some(at);
         }
+        if let Some(at) = self.grow(device, side) {
+            return Some(at);
+        }
+        let pool = self.pools.entry(side).or_default();
+        let oldest = pool.by_picture.iter().filter(|(_, s)| s.used != frame).min_by_key(|(_, s)| s.used).map(|(k, _)| *k);
+        if let Some(at) = oldest.and_then(|k| pool.by_picture.remove(&k)).map(|s| s.at) {
+            return Some(at);
+        }
+        if self.reclaim(side) { self.grow(device, side) } else { None }
+    }
+
+    /// A new chunk for pictures `side` pixels square while the budget allows: its first layer.
+    fn grow(&mut self, device: &wgpu::Device, side: u32) -> Option<At> {
         let picture = u64::from(side) * u64::from(side) * 4;
         let layers = (CHUNK_BYTES / picture).clamp(1, u64::from(self.max_layers.max(1))) as u32;
         let chunk_bytes = picture * u64::from(layers);
-        if self.bytes + chunk_bytes <= self.budget {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("live_tiles_chunk"),
-                size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: layers },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture
-                .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
-            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("live_tiles_chunk"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                ],
-            });
-            let chunk = self.chunks.len();
-            self.chunks.push(Chunk { texture, bind, layers });
-            self.bytes += chunk_bytes;
-            let pool = self.pools.entry(side).or_default();
-            pool.chunks.push(chunk);
-            pool.free.extend((1..layers).rev().map(|layer| At { chunk, layer }));
-            return Some(At { chunk, layer: 0 });
+        if self.bytes + chunk_bytes > self.budget {
+            return None;
         }
-        // The budget is spent: the least recently used picture of this size not drawn this frame.
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("live_tiles_chunk"),
+            size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: layers },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture
+            .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("live_tiles_chunk"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        let c = Chunk { texture, bind, layers, side, bytes: chunk_bytes };
+        // A slot given back earlier is reused, so the list doesn't grow with every exchange.
+        let chunk = match self.chunks.iter().position(Option::is_none) {
+            Some(i) => {
+                if let Some(slot) = self.chunks.get_mut(i) {
+                    *slot = Some(c);
+                }
+                i
+            }
+            None => {
+                self.chunks.push(Some(c));
+                self.chunks.len() - 1
+            }
+        };
+        self.bytes += chunk_bytes;
         let pool = self.pools.entry(side).or_default();
-        let oldest = pool.by_picture.iter().filter(|(_, s)| s.used != frame).min_by_key(|(_, s)| s.used).map(|(k, _)| *k)?;
-        pool.by_picture.remove(&oldest).map(|s| s.at)
+        pool.chunks.push(chunk);
+        pool.free.extend((1..layers).rev().map(|layer| At { chunk, layer }));
+        Some(At { chunk, layer: 0 })
+    }
+
+    /// Gives the budget of another size's chunk back, the one whose pictures were drawn least
+    /// recently, so long as this frame draws none of them: whether there was one.
+    fn reclaim(&mut self, side: u32) -> bool {
+        let frame = self.frame;
+        let mut best: Option<(u64, usize)> = None;
+        for (s, pool) in &self.pools {
+            if *s == side {
+                continue;
+            }
+            for &c in &pool.chunks {
+                let used = pool.by_picture.values().filter(|p| p.at.chunk == c).map(|p| p.used).max().unwrap_or(0);
+                if used != frame && best.is_none_or(|(u, _)| used < u) {
+                    best = Some((used, c));
+                }
+            }
+        }
+        let Some((_, c)) = best else { return false };
+        let Some(chunk) = self.chunks.get_mut(c).and_then(Option::take) else { return false };
+        if let Some(pool) = self.pools.get_mut(&chunk.side) {
+            pool.by_picture.retain(|_, p| p.at.chunk != c);
+            pool.free.retain(|a| a.chunk != c);
+            pool.chunks.retain(|&x| x != c);
+        }
+        // Not drawn this frame; work already submitted that reads it still completes (WebGPU and
+        // wgpu free it only after).
+        chunk.texture.destroy();
+        self.bytes = self.bytes.saturating_sub(chunk.bytes);
+        true
     }
 
     /// Draws the `n`th live layer of the frame placed last ([`update`](Self::update)).
@@ -402,7 +463,7 @@ impl LiveTiles {
         rp.set_pipeline(&self.pipeline);
         rp.set_vertex_buffer(0, instances.slice(..));
         for (chunk, range) in &runs.0 {
-            if let Some(c) = self.chunks.get(*chunk) {
+            if let Some(Some(c)) = self.chunks.get(*chunk) {
                 rp.set_bind_group(0, &c.bind, &[]);
                 rp.draw(0..6, range.clone());
             }
@@ -431,14 +492,14 @@ impl LiveTiles {
     /// Layers in all chunks.
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> u32 {
-        self.chunks.iter().map(|c| c.layers).sum()
+        self.chunks.iter().flatten().map(|c| c.layers).sum()
     }
 }
 
 impl Drop for LiveTiles {
     fn drop(&mut self) {
         // The browser's WebGPU frees a texture only once its handle is collected: free them now.
-        for c in &self.chunks {
+        for c in self.chunks.iter().flatten() {
             c.texture.destroy();
         }
         if let Some((b, _)) = &self.instances {
