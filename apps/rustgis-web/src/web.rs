@@ -110,6 +110,13 @@ pub fn start() {
                     if let Err(e) = app.start(&start) {
                         log::warn!("start-up: {e}");
                     }
+                    // `?gpu` (or `?gpu=0`) turns the GPU map on (off) for this visit.
+                    if let Some(v) = param(&q, "gpu").or_else(|| flag(&q, "gpu").then(String::new)) {
+                        let on = !matches!(v.as_str(), "0" | "false" | "off");
+                        if let Err(e) = app.run("ui.map.gpu", serde_json::json!({"on": on, "remember": false})) {
+                            log::warn!("?gpu: {e}");
+                        }
+                    }
                     // `?lang=de` picks the interface language for this visit.
                     if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
                         match rustgis_ui_egui::i18n::Lang::from_code(code) {
@@ -422,6 +429,39 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
+/// How long a tile or document fetch may go without anything coming in: the answer's headers,
+/// or the next part of its body. A slow but steady answer is never cut off; one that stalls is
+/// given up, so it doesn't stay under way forever, holding its server's place in the queue.
+/// Downloads the user asked for have none.
+const STALL_MS: i32 = 30_000;
+
+/// What a step of a fetch waits for, or `None` once it has gone [`STALL_MS`] with nothing (the
+/// fetch is then aborted through `abort`).
+async fn unless_stalled(
+    step: js_sys::Promise,
+    abort: Option<&web_sys::AbortController>,
+) -> Option<Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>> {
+    let Some(abort) = abort else { return Some(wasm_bindgen_futures::JsFuture::from(step).await) };
+    let stalled = wasm_bindgen::JsValue::from_str("rustgis-stalled");
+    let marker = stalled.clone();
+    let handle = std::cell::Cell::new(None);
+    let timer = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = web_sys::window() {
+            handle.set(w.set_timeout_with_callback_and_timeout_and_arguments_1(&resolve, STALL_MS, &marker).ok());
+        }
+    });
+    let raced = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::race(&js_sys::Array::of2(&step, &timer))).await;
+    // Answered in time: the timer goes, rather than one waiting out every step of every fetch.
+    if let (Some(w), Some(h)) = (web_sys::window(), handle.get()) {
+        w.clear_timeout_with_handle(h);
+    }
+    if raced.as_ref().is_ok_and(|v| *v == stalled) {
+        abort.abort();
+        return None;
+    }
+    Some(raced)
+}
+
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
 /// `rustgis_tiles::cache::split_range`).
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
@@ -442,8 +482,14 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         (None, Some(n)) => Some(format!("bytes=-{n}")),
         (None, None) => None,
     };
-    let promise = if asked.is_some() || !prepared.headers.is_empty() {
-        let init = web_sys::RequestInit::new();
+    let init = web_sys::RequestInit::new();
+    // A tile or document that stalls is given up (see `STALL_MS`).
+    let abort = if limit.is_none() { web_sys::AbortController::new().ok() } else { None };
+    if let Some(a) = &abort {
+        init.set_signal(Some(&a.signal()));
+    }
+    let stalled = || format!("nothing came in {} seconds", STALL_MS / 1000);
+    if asked.is_some() || !prepared.headers.is_empty() {
         let headers = web_sys::Headers::new().map_err(err)?;
         if let Some(r) = &asked {
             headers.set("Range", r).map_err(err)?;
@@ -456,14 +502,13 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         if prepared.signed {
             init.set_redirect(web_sys::RequestRedirect::Error);
         }
-        window.fetch_with_str_and_init(url, &init)
-    } else {
-        window.fetch_with_str(url)
-    };
+    }
+    let promise = window.fetch_with_str_and_init(url, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.
-    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
+    let resp: web_sys::Response = unless_stalled(promise, abort.as_ref())
         .await
+        .ok_or_else(stalled)?
         .map_err(|e| {
             let why = e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| err(e));
             format!(
@@ -507,7 +552,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         let reader: web_sys::ReadableStreamDefaultReader =
             body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;
         loop {
-            let chunk = wasm_bindgen_futures::JsFuture::from(reader.read()).await.map_err(err)?;
+            // Headers came and then the body stalled: given up as a fetch that doesn't answer.
+            // (Aborting the fetch has cancelled its body too.)
+            let Some(chunk) = unless_stalled(reader.read(), abort.as_ref()).await else { return Err(stalled()) };
+            let chunk = chunk.map_err(err)?;
             if js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
                 break;
             }

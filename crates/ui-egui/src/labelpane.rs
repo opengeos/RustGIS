@@ -4,7 +4,7 @@
 //! own (it reads the layer each frame, as the Symbology pane does) and every change undoes.
 
 use egui::{RichText, Ui, vec2};
-use rustgis_engine::map::symbology::LABEL_SIZE;
+use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE};
 use rustgis_engine::map::{LabelPlacement, Layer, Rgba};
 use serde_json::{Value, json};
 
@@ -63,10 +63,13 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     section(ui, "Class", |ui| {
         grid(ui, "class", |ui| {
             ui.label(tl!("Class"));
-            ui.label(RichText::new(tl!("Default")).color(t.text_dim));
+            // Its own name once renamed (`labels.class.rename`), else "Default" translated.
+            let name = &l.labels.default.name;
+            let name = if name == DEFAULT_LABEL_CLASS { tl!("Default").to_string() } else { name.clone() };
+            ui.label(RichText::new(name).color(t.text_dim));
             ui.end_row();
             ui.label(tl!("Field"));
-            let cur = &l.labels.field;
+            let cur = &l.labels.default.field;
             egui::ComboBox::from_id_salt("label_pane_field").selected_text(cur.as_str()).width(180.0).show_ui(ui, |ui| {
                 for f in &l.dataset.fields {
                     if ui.selectable_label(f.name == *cur, &f.name).clicked() {
@@ -85,36 +88,36 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
             ui.label(tl!("Size"));
             // The whole range `labels.style` accepts (#457); the map follows a drag and letting
             // go runs the command once, so a drag is one undo step.
-            let mut size = f64::from(l.labels.size);
+            let mut size = f64::from(l.labels.default.size);
             let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt"));
             let id = l.id;
             crate::ribbon::live_drag(
                 app,
                 ui,
                 &r,
-                f64::from(l.labels.size),
+                f64::from(l.labels.default.size),
                 size,
                 |app, x| {
                     if let Some(l) = app.session.map_mut().layer_mut(id) {
-                        l.labels.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
+                        l.labels.default.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
                     }
                 },
                 |app, x| run(app, "labels.style", json!({"size": x})),
             );
             ui.end_row();
             ui.label(tl!("Color"));
-            let mut c = c32(l.labels.color);
+            let mut c = c32(l.labels.default.color);
             if crate::widgets::color_button(ui, &mut c).changed() {
                 color_drag(app, ui, l, rgba(c));
             }
             ui.end_row();
             ui.label("");
             ui.horizontal(|ui| {
-                let mut bold = l.labels.bold;
+                let mut bold = l.labels.default.bold;
                 if ui.checkbox(&mut bold, tl!("Bold")).changed() {
                     run(app, "labels.style", json!({"bold": bold}));
                 }
-                let mut halo = l.labels.halo;
+                let mut halo = l.labels.default.halo;
                 if ui.checkbox(&mut halo, tl!("Halo")).changed() {
                     run(app, "labels.style", json!({"halo": halo}));
                 }
@@ -126,7 +129,7 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
 
 fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     section(ui, "Position", |ui| {
-        let cur = l.labels.placement;
+        let cur = l.labels.default.placement;
         let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
             if ui.add_sized(vec2(92.0, 22.0), egui::Button::selectable(cur == pl, tl!(pl.label())).truncate()).clicked() && cur != pl {
                 run(app, "labels.placement", json!({"position": pl.code()}));
@@ -148,7 +151,7 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
 fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     section(ui, "Visibility Range", |ui| {
         grid(ui, "range", |ui| {
-            for (label, cur, key) in [("Out Beyond", l.labels.min_scale, "min"), ("In Beyond", l.labels.max_scale, "max")] {
+            for (label, cur, key) in [("Out Beyond", l.labels.default.min_scale, "min"), ("In Beyond", l.labels.default.max_scale, "max")] {
                 ui.label(tl!(label));
                 egui::ComboBox::from_id_salt(("label_pane_scale", key))
                     .selected_text(crate::ribbon::scale_label(cur))
@@ -162,7 +165,8 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                     });
                 ui.end_row();
             }
-            for (label, cur, key) in [("Closest", l.labels.closest, "closest"), ("Farthest", l.labels.farthest, "farthest")] {
+            for (label, cur, key) in [("Closest", l.labels.default.closest, "closest"), ("Farthest", l.labels.default.farthest, "farthest")]
+            {
                 ui.label(tl!(label));
                 let text = |d: Option<f64>| d.map(rustgis_engine::geom::format_distance).unwrap_or_else(|| tl!("<None>").to_string());
                 egui::ComboBox::from_id_salt(("label_pane_distance", key)).selected_text(text(cur)).width(140.0).show_ui(ui, |ui| {
@@ -175,7 +179,9 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 ui.end_row();
             }
         });
-        let limited = [l.labels.min_scale, l.labels.max_scale, l.labels.closest, l.labels.farthest].iter().any(Option::is_some);
+        let limited = [l.labels.default.min_scale, l.labels.default.max_scale, l.labels.default.closest, l.labels.default.farthest]
+            .iter()
+            .any(Option::is_some);
         if ui
             .add_enabled(limited, egui::Button::new(tl!("Clear Limits")))
             .on_hover_text(tl!("Draw labels at every scale and distance."))
@@ -230,10 +236,10 @@ fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
         apply_color_drag(app, other);
     }
     // The colour before the first frame of this pick, kept while it goes on.
-    let before = pending.map_or(l.labels.color, |d| d.before);
+    let before = pending.map_or(l.labels.default.color, |d| d.before);
     ui.data_mut(|d| d.insert_temp(key, ColorDrag { layer: l.id, before, color }));
     if let Some(layer) = app.session.map_mut().layer_mut(l.id) {
-        layer.labels.color = color;
+        layer.labels.default.color = color;
     }
     app.session.revision = app.session.revision.wrapping_add(1);
 }
@@ -263,7 +269,7 @@ pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
 fn apply_color_drag(app: &mut RustGisApp, drag: ColorDrag) {
     // A layer removed mid-pick took its preview with it: there is nothing to restore or style.
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
-    layer.labels.color = drag.before;
+    layer.labels.default.color = drag.before;
     if drag.before != drag.color {
         // On the layer the pick was made on, as the active one: the command reaches it by id
         // (a name two layers share would reach the first), and a recorded step names it, as
@@ -353,14 +359,14 @@ mod tests {
         let app = h.state();
         let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap();
         assert_ne!(l.labels.enabled, before.enabled, "the checkbox toggles labels");
-        assert_eq!(l.labels.placement, rustgis_engine::map::LabelPlacement::BelowRight);
-        assert_ne!(l.labels.bold, before.bold, "bold toggles");
+        assert_eq!(l.labels.default.placement, rustgis_engine::map::LabelPlacement::BelowRight);
+        assert_ne!(l.labels.default.bold, before.default.bold, "bold toggles");
         // Each change is its own command, so each undoes on its own.
         let app = h.state_mut();
         app.run("edit.undo", json!(null)).unwrap();
         let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap();
-        assert_eq!(l.labels.bold, before.bold, "undo takes back the last change only");
-        assert_eq!(l.labels.placement, rustgis_engine::map::LabelPlacement::BelowRight);
+        assert_eq!(l.labels.default.bold, before.default.bold, "undo takes back the last change only");
+        assert_eq!(l.labels.default.placement, rustgis_engine::map::LabelPlacement::BelowRight);
     }
 
     /// Record Task names the layer in a step made from the pane, as it does for the ribbon, so the
@@ -392,7 +398,7 @@ mod tests {
         app.ws.recording = Some(Vec::new());
         let cities = app.session.active_layer.unwrap();
         let countries = layer_id(&app, "Countries");
-        let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.color;
+        let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.color;
         let (cities_before, countries_before) = (color(&app, cities), color(&app, countries));
         let steps = app.session.undo_depth();
         let mut h = egui_kittest::Harness::builder().build_ui_state(
@@ -446,7 +452,7 @@ mod tests {
     fn a_colour_pick_is_one_undo_step() {
         let app = with_cities();
         let id = app.session.active_layer.unwrap();
-        let before = app.session.map().layer(id).unwrap().labels.color;
+        let before = app.session.map().layer(id).unwrap().labels.default.color;
         let steps = app.session.undo_depth();
         // The picker's colour each frame, if it reports one, as `text_symbol` hands it on.
         let mut h = egui_kittest::Harness::builder().build_ui_state(
@@ -473,15 +479,15 @@ mod tests {
             h.state_mut().1 = Some(picked);
             h.step();
             let app = &h.state().0;
-            assert_eq!(app.session.map().layer(id).unwrap().labels.color, picked, "the map previews the pick");
+            assert_eq!(app.session.map().layer(id).unwrap().labels.default.color, picked, "the map previews the pick");
             assert_eq!(app.session.undo_depth(), steps, "no command while the pointer is down");
         }
         h.event(button(false));
         h.step();
         let app = &mut h.state_mut().0;
-        assert_eq!(app.session.map().layer(id).unwrap().labels.color, picked);
+        assert_eq!(app.session.map().layer(id).unwrap().labels.default.color, picked);
         assert_eq!(app.session.undo_depth(), steps + 1, "letting go runs labels.style once");
         app.run("edit.undo", json!(null)).unwrap();
-        assert_eq!(app.session.map().layer(id).unwrap().labels.color, before, "one undo takes the whole pick back");
+        assert_eq!(app.session.map().layer(id).unwrap().labels.default.color, before, "one undo takes the whole pick back");
     }
 }

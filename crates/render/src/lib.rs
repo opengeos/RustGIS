@@ -21,6 +21,7 @@ pub mod terrain;
 mod text;
 pub mod tile_mesh;
 mod tiles;
+pub use tiles::{Live, live as live_tiles};
 
 pub use rustgis_tiles;
 pub use tiles::{spec as tile_spec, style_view};
@@ -228,6 +229,16 @@ pub enum Backend {
     #[default]
     Cpu,
     Gpu,
+    /// A GPU scene whose raster tile layers, on a flat north-up map, are left for the GPU map to
+    /// place for every frame it shows ([`gpu_scene::DrawCmd::LiveTiles`], #635).
+    GpuLive,
+}
+
+impl Backend {
+    /// Whether this is a GPU scene.
+    pub fn is_gpu(self) -> bool {
+        matches!(self, Backend::Gpu | Backend::GpuLive)
+    }
 }
 
 /// A finished render in either backend.
@@ -1115,7 +1126,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     }
     {
         let view = View { camera, ..*view };
-        if matches!(backend, Backend::Gpu)
+        if backend.is_gpu()
             && (camera.pitch != 0.0 || camera.bearing != 0.0)
             && let Some(scene) = gpu_turned(map, &view)
         {
@@ -1407,7 +1418,11 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
                 match c {
                     DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
                     DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
-                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } | DrawCmd::Tiles { .. } | DrawCmd::TileMeshes { .. } => {}
+                    DrawCmd::Image { .. }
+                    | DrawCmd::Extrusion { .. }
+                    | DrawCmd::Tiles { .. }
+                    | DrawCmd::LiveTiles { .. }
+                    | DrawCmd::TileMeshes { .. } => {}
                 }
             }
         }
@@ -1485,7 +1500,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
         || !map.view.effects.is_none()
         || map.view.color_vision != rustgis_map::view::ColorVision::Normal
-        || map.tiles.iter().any(|t| t.visible)
+        || map.tiles.iter().any(|t| t.draws())
         // The GPU draws the ground flat: a view over terrain stays on the CPU.
         || terrain::Ground::of(map, &view.camera).is_some()
     {
@@ -2130,12 +2145,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         sprites: Default::default(),
     };
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
-    let gpu = matches!(backend, Backend::Gpu)
+    let gpu = backend.is_gpu()
         && globe.is_none()
         && map.view.effects.is_none()
         && map.view.color_vision == rustgis_map::view::ColorVision::Normal;
     // The effective backend: the Gpu arm at the end only runs when the frame is compatible.
-    let backend = if gpu { Backend::Gpu } else { Backend::Cpu };
+    let backend = if gpu { backend } else { Backend::Cpu };
     // GPU draw commands; between them, tiny-skia-only content accumulates in `pm` and is
     // flushed as ordered Image commands (`flush_acc`, gated by `cpu_dirty`).
     let mut cmds: Vec<gpu_scene::DrawCmd> = Vec::new();
@@ -2257,15 +2272,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     // Hidden tile layers draw nothing: marking dirty anyway would emit an empty full-screen
     // Image command (a pointless upload, and it poisons the camera fast path's `has_images`).
     // On the GPU raster tile layers are placed as tiles, which move with the camera.
-    let tile_gpu = (gpu && map.tiles.iter().any(|t| t.visible && t.opacity > 0.0)).then_some(tiles::Gpu {
+    let tile_gpu = (gpu && map.tiles.iter().any(|t| t.draws() && t.opacity > 0.0)).then_some(tiles::Gpu {
         cmds: &mut cmds,
         dirty: &mut cpu_dirty,
         // A tilted view's bands are drawn at their own densities: their tiles as pictures.
         meshes: !matches!(labels_to, Labels::Tilted(..)),
+        // Only a frame for the view itself (not a turned or tilted view's north-up stand-in).
+        live: backend == Backend::GpuLive && matches!(labels_to, Labels::Own),
     });
     let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none(), tile_gpu);
     if !gpu {
-        cpu_dirty |= map.tiles.iter().any(|t| t.visible);
+        cpu_dirty |= map.tiles.iter().any(|t| t.draws());
     }
 
     // Layers, bottom first.
@@ -2507,19 +2524,19 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 }
             }
         }
-        if labels.enabled
-            && !display.paused
-            && labels.in_range(scale, distance)
-            && let Some(fi) = ds_ptr.field_index(&labels.field)
-        {
+        // Each feature is labelled by the first label class whose clause takes it, Default last;
+        // that class draws it when shown, in range and on a field the layer has (#618).
+        let label_fields: Vec<Option<usize>> = if labels.enabled && !display.paused {
+            labels.in_order().map(|c| ds_ptr.field_index(&c.field).filter(|_| c.visible && c.in_range(scale, distance))).collect()
+        } else {
+            Vec::new()
+        };
+        if label_fields.iter().any(Option::is_some) {
+            let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
             let lid = layer.id;
             for (row, g) in geoms.iter().enumerate() {
                 let Some(g) = g else { continue };
                 if rows.get(row) != Some(&true) || lock.as_ref().is_some_and(|k| !k.contains(&(lid, row))) {
-                    continue;
-                }
-                let v = ds_ptr.value(row, fi);
-                if v.is_null() {
                     continue;
                 }
                 let Some(c) = g.label_point() else { continue };
@@ -2527,12 +2544,19 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     continue;
                 }
                 let Some((x, y)) = ctx.screen(c) else { continue };
+                // The clauses are read for the features in view only.
+                let Some((ci, class)) = classes.class_of(ds_ptr, row) else { continue };
+                let Some(fi) = label_fields.get(ci).copied().flatten() else { continue };
+                let v = ds_ptr.value(row, fi);
+                if v.is_null() {
+                    continue;
+                }
                 let text = v.to_string();
                 let is_point = g.kind() == GeometryType::Point;
                 let marker = if is_point { layer.symbol(row).size } else { 0.0 };
-                let (dx, dy) = labels.placement.offset(
-                    text::block_width(&text, labels.size, labels.bold),
-                    text::block_height(&text, labels.size),
+                let (dx, dy) = class.placement.offset(
+                    text::block_width(&text, class.size, class.bold),
+                    text::block_height(&text, class.size),
                     marker,
                     is_point,
                 );
@@ -2549,10 +2573,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         text,
                         x: x as f32 + dx,
                         y: y as f32 + dy,
-                        size: labels.size,
-                        color: labels.color,
-                        halo: labels.halo.then_some(halo_for(labels.color)),
-                        bold: labels.bold,
+                        size: class.size,
+                        color: class.color,
+                        halo: class.halo.then_some(halo_for(class.color)),
+                        bold: class.bold,
                         icon: None,
                         align: 0.0,
                         framed: false,
@@ -2654,7 +2678,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         Backend::Cpu => {
             Some(RenderOutput::Cpu(Rendered { pixmap: pm, labels, unplaced, attribution, tiles_pending, data_pending, tile_errors }))
         }
-        Backend::Gpu => {
+        Backend::Gpu | Backend::GpuLive => {
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
             // Pathological CPU/GPU alternation (rasters, masks, blends between every vector
             // layer) costs more full-screen uploads than a plain CPU rasterization.
@@ -3371,6 +3395,42 @@ mod tests {
         assert!(starfield(1e9).is_some_and(|t| t.width() == 2048));
     }
 
+    /// Each feature is labelled by the first label class whose clause takes it, Default last; a
+    /// hidden class keeps its features unlabelled, and a clause that no longer reads takes none
+    /// (#618).
+    #[test]
+    fn label_classes_label_their_features() {
+        let mut m = Map::new("Map");
+        let fields = vec![Field::new("name", FieldType::Text), Field::new("capital", FieldType::Integer)];
+        let mut d = Dataset::new("pts", GeometryType::Point, fields);
+        d.push(Some(Geometry::Point(Coord::new(2.35, 48.85))), vec![Value::Text("Paris".into()), Value::Int(1)]);
+        d.push(Some(Geometry::Point(Coord::new(4.83, 45.76))), vec![Value::Text("Lyon".into()), Value::Int(0)]);
+        let id = m.add_dataset(d);
+        let capitals = |l: &mut rustgis_map::Layer, w: &str| {
+            let base = l.labels.default.clone();
+            l.labels.classes = vec![rustgis_map::LabelClass { name: "Capitals".into(), where_: Some(w.into()), size: 20.0, ..base }];
+        };
+        if let Some(l) = m.layer_mut(id) {
+            l.labels.enabled = true;
+            capitals(l, "capital = 1");
+        }
+        let camera = Camera { center: lonlat_to_merc(Coord::new(3.6, 47.3)), res: 5000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false };
+        let sizes = |m: &mut Map| {
+            let mut v: Vec<(String, f32)> = render(m, &view).unwrap().labels.into_iter().map(|l| (l.text, l.size)).collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+        let default = m.layer(id).unwrap().labels.default.size;
+        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default), ("Paris".to_string(), 20.0)], "Paris is a capital, Lyon the rest");
+        // Hidden, the class still has Paris: it goes unlabelled, not to Default.
+        m.layer_mut(id).unwrap().labels.classes[0].visible = false;
+        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default)]);
+        // A clause that doesn't read takes no feature: both go to Default.
+        capitals(m.layer_mut(id).unwrap(), "gone = 1");
+        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default), ("Paris".to_string(), default)]);
+    }
+
     #[test]
     fn renders_world_and_layers() {
         let mut m = Map::new("Map");
@@ -3631,6 +3691,7 @@ mod tests {
                 gpu_scene::DrawCmd::Extrusion { .. } => "extrusion",
                 gpu_scene::DrawCmd::Image { .. } => "image",
                 gpu_scene::DrawCmd::Tiles { .. } => "tiles",
+                gpu_scene::DrawCmd::LiveTiles { .. } => "live tiles",
                 gpu_scene::DrawCmd::TileMeshes { .. } => "tile meshes",
             })
             .collect()

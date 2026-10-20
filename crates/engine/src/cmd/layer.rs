@@ -206,33 +206,34 @@ pub fn commands() -> Vec<C> {
             let id = s.layer_id(p)?;
             let fname = s.map().layer(id).and_then(|l| l.dataset.field_index(&name).and_then(|i| l.dataset.fields.get(i)).map(|f| f.name.clone()));
             let fname = fname.ok_or_else(|| format!("no field named '{name}'"))?;
-            with(s, p, |l| {
-                l.labels.field = fname.clone();
-                l.labels.enabled = true;
+            super::labels::with_labels(s, p, |labels| {
+                super::labels::class_in(labels, p)?.field = fname;
+                labels.enabled = true;
+                Ok(())
             })
-        }).params(r#"{"layer"?, "field": name}"#)
+        }).params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "field": name}"#)
         .when(need_feature_layer),
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
             let color = s.get_color(p, "color")?;
             let (halo, bold) = (b(p, "halo"), b(p, "bold"));
-            with(s, p, |l| {
+            super::labels::with_class(s, p, |c| {
                 if let Some(v) = size {
-                    l.labels.size = v;
+                    c.size = v;
                 }
-                if let Some(c) = color {
-                    l.labels.color = c;
+                if let Some(col) = color {
+                    c.color = col;
                 }
                 if let Some(h) = halo {
-                    l.labels.halo = h;
+                    c.halo = h;
                 }
                 if let Some(bb) = bold {
-                    l.labels.bold = bb;
+                    c.bold = bb;
                 }
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;
@@ -344,7 +345,7 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"strokes": l.line_strokes.len()}))
 }
 
-fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {
+pub(crate) fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {
     ps(p, k).ok_or_else(|| format!("{k} is required"))
 }
 

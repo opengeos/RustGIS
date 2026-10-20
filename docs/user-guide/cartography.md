@@ -156,6 +156,21 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
+- **Label classes** label different features differently, such as capitals larger than other
+  cities. Each class has a SQL clause (the language of definition queries) choosing its
+  features, and its own field, text symbol, placement and visibility range. A feature is
+  labelled by the first class whose clause it matches; the **Default** class, checked last,
+  labels the rest (or, given a clause of its own, those of the rest it matches). A class that
+  is hidden, or out of its visibility range, leaves its features unlabelled: they don't go on
+  to the next class. For now, classes are made with commands: `labels.class.add={"layer":
+  "Cities", "name": "Capitals", "where": "pop_max > 5000000"}`, then `labels.class.rename`,
+  `labels.class.update` (its `where` or `visible`), `labels.class.move`, `labels.class.remove`
+  and `labels.class.clear` (every class but Default; no error when there are none, so a script
+  can start with it). The other label commands take a `class` (`labels.style={"layer":
+  "Cities", "class": "Capitals", "size": 14}`), and change Default without one (a renamed
+  Default is named by its new name, or left out). Convert keeps the classes, with a `CLASS`
+  field saying which labelled each point; a web style (Share › Web Style) labels with Default
+  only, and has no labels when Default is hidden.
 
 <figure markdown="span">
   ![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)

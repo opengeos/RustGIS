@@ -266,9 +266,30 @@ pub struct PlacedTiles {
 /// as pictures of their shapes (see `picture`); their labels are collected for a `labels`-sized
 /// pixmap at `frame` when that is given.
 pub fn place(spec: &Spec, opacity: f32, frame: &Frame, view: &Extent, reach: &Extent, labels: Option<(u32, u32)>) -> Option<PlacedTiles> {
+    place_as(spec, opacity, frame, view, reach, labels, true)
+}
+
+/// `spec`'s raster tiles placed over `view` and out to `reach`, as [`place`] places them, or
+/// `None` when it draws anything but raster tiles. Cheap (cache lookups, nothing drawn): the GPU
+/// map's tile layer places them again for every frame it shows (#635).
+pub fn place_raster(spec: &Spec, opacity: f32, frame: &Frame, view: &Extent, reach: &Extent) -> Option<PlacedTiles> {
+    place_as(spec, opacity, frame, view, reach, None, false)
+}
+
+fn place_as(
+    spec: &Spec,
+    opacity: f32,
+    frame: &Frame,
+    view: &Extent,
+    reach: &Extent,
+    labels: Option<(u32, u32)>,
+    pictures: bool,
+) -> Option<PlacedTiles> {
     let mut out = PlacedTiles::default();
     let r = match resolve(spec) {
         Resolve::Ready(r) => r,
+        // A style still loading may draw more than raster tiles: not placed raster-only yet.
+        Resolve::Pending if !pictures => return None,
         Resolve::Pending => {
             out.pending = true;
             return Some(out);
@@ -282,7 +303,8 @@ pub fn place(spec: &Spec, opacity: f32, frame: &Frame, view: &Extent, reach: &Ex
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0) || opacity <= 0.0 {
         return Some(out);
     }
-    if let Some(pictures) = crate::picture::cover(&r, frame, view, Some(reach), &mut out.pending) {
+    // Without pictures, a style drawing shapes is left to the check below (no raster layers only).
+    if let Some(pictures) = pictures.then(|| crate::picture::cover(&r, frame, view, Some(reach), &mut out.pending)).flatten() {
         let opacity = opacity.clamp(0.0, 1.0);
         out.tiles = pictures.into_iter().map(|it| Placement { picture: it.payload, at: it.at, clip: it.clip, opacity }).collect();
         if let Some(size) = labels {
