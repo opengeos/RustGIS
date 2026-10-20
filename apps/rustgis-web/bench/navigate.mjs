@@ -5,11 +5,13 @@
 //   python3 -m http.server -d ../../dist/web 8780 &
 //   node bench/navigate.mjs [--url http://127.0.0.1:8780/] [--case liberty|imagery|all]
 //                           [--gpu] [--webgl] [--headless] [--json out.json]
+//                           [--dpr 2] [--throttle 4] [--profile]
 //
 // Needs Playwright (`npm i -g playwright`, then `playwright install chromium`) and the network:
 // the cases draw OpenFreeMap's Liberty style over Manhattan and Esri World Imagery over Paris.
 // Each case loads the app, waits for the first tiles, then runs the same scripted drags and wheel
-// zooms. Frame intervals are measured with requestAnimationFrame in the page, so they include
+// zooms. `--dpr` sets the device pixel ratio (a laptop's 2), `--throttle` slows the CPU that many
+// times (Chrome's CPU throttling) to stand in for a slower machine. Frame intervals are measured with requestAnimationFrame in the page, so they include
 // every stall of the main thread (fetch callbacks, decoding, drawing, uploads).
 
 import { createRequire } from "node:module";
@@ -87,7 +89,7 @@ async function run(name) {
   const launchArgs = ["--enable-unsafe-webgpu", "--use-gl=angle", "--use-angle=gl-egl", "--ignore-gpu-blocklist", "--enable-gpu"];
   const browser = await chromium.launch({ headless: flag("headless"), args: launchArgs });
   opened = browser;
-  const page = await browser.newPage({ viewport: { width: 1480, height: 900 }, deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1480, height: 900 }, deviceScaleFactor: Number(opt("dpr", "1")) });
   const console = { error: 0, warning: 0, samples: [] };
   page.on("console", (m) => {
     const t = m.type();
@@ -121,6 +123,8 @@ async function run(name) {
   await page.waitForTimeout(8000);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("Performance.enable");
+  const throttle = Number(opt("throttle", "1"));
+  if (throttle > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
   const heap = async () => {
     const m = await cdp.send("Performance.getMetrics");
     const js = m.metrics.find((x) => x.name === "JSHeapUsedSize")?.value ?? 0;
@@ -133,6 +137,11 @@ async function run(name) {
   const cx = 740;
   const cy = 520;
   await page.mouse.move(cx, cy);
+  if (flag("profile")) {
+    await cdp.send("Profiler.enable");
+    await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+    await cdp.send("Profiler.start");
+  }
   await page.evaluate(() => (window.__bench.recording = true));
   requests.recording = true;
   const started = Date.now();
@@ -164,12 +173,36 @@ async function run(name) {
     return { frames: b.frames, longTasks: b.longTasks, longest: b.longest };
   });
   requests.recording = false;
+  // `--profile`: the functions the main thread spent most of its own time in while navigating
+  // (a build with names: trunk's `data-keep-debug`, no wasm-opt).
+  let profile = null;
+  if (flag("profile")) {
+    const { profile: p } = await cdp.send("Profiler.stop");
+    const self = new Map();
+    const byId = new Map(p.nodes.map((n) => [n.id, n]));
+    const dt = new Map();
+    p.samples.forEach((id, i) => dt.set(id, (dt.get(id) ?? 0) + (p.timeDeltas[i] ?? 0)));
+    for (const [id, us] of dt) {
+      const f = byId.get(id)?.callFrame;
+      const name = f ? f.functionName || `(${f.url.split("/").pop()})` : "?";
+      self.set(name, (self.get(name) ?? 0) + us);
+    }
+    const total = [...self.values()].reduce((a, b) => a + b, 0);
+    profile = [...self.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([n, us]) => `${((100 * us) / total).toFixed(1)}% ${n.slice(0, 140)}`);
+  }
+  const shot = opt("shot", null);
+  if (shot) await page.screenshot({ path: shot.replace(/(\.png)?$/, `-${name}.png`) });
   const after = await heap();
   await browser.close();
   const f = s.frames;
   return {
     case: name,
     gpu: flag("gpu"),
+    dpr: Number(opt("dpr", "1")),
+    throttle: Number(opt("throttle", "1")),
     webgl: flag("webgl"),
     crashed,
     seconds: Math.round(seconds * 10) / 10,
@@ -187,6 +220,7 @@ async function run(name) {
     jsHeapMB: [mb(before.js), mb(after.js)],
     wasmMB: [mb(before.wasm), mb(after.wasm)],
     console: { errors: console.error, warnings: console.warning, samples: console.samples },
+    profile,
   };
 }
 

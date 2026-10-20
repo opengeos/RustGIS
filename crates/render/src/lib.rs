@@ -21,6 +21,7 @@ pub mod terrain;
 mod text;
 pub mod tile_mesh;
 mod tiles;
+pub use tiles::{Live, live as live_tiles};
 
 pub use rustgis_tiles;
 pub use tiles::{spec as tile_spec, style_view};
@@ -228,6 +229,16 @@ pub enum Backend {
     #[default]
     Cpu,
     Gpu,
+    /// A GPU scene whose raster tile layers, on a flat north-up map, are left for the GPU map to
+    /// place for every frame it shows ([`gpu_scene::DrawCmd::LiveTiles`], #635).
+    GpuLive,
+}
+
+impl Backend {
+    /// Whether this is a GPU scene.
+    pub fn is_gpu(self) -> bool {
+        matches!(self, Backend::Gpu | Backend::GpuLive)
+    }
 }
 
 /// A finished render in either backend.
@@ -1115,7 +1126,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     }
     {
         let view = View { camera, ..*view };
-        if matches!(backend, Backend::Gpu)
+        if backend.is_gpu()
             && (camera.pitch != 0.0 || camera.bearing != 0.0)
             && let Some(scene) = gpu_turned(map, &view)
         {
@@ -1407,7 +1418,11 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
                 match c {
                     DrawCmd::Mesh { vertices, .. } => vertices.iter_mut().for_each(|v| v.stroke_px *= k),
                     DrawCmd::Points { instances, .. } => instances.iter_mut().for_each(|p| p.radius_px *= k),
-                    DrawCmd::Image { .. } | DrawCmd::Extrusion { .. } | DrawCmd::Tiles { .. } | DrawCmd::TileMeshes { .. } => {}
+                    DrawCmd::Image { .. }
+                    | DrawCmd::Extrusion { .. }
+                    | DrawCmd::Tiles { .. }
+                    | DrawCmd::LiveTiles { .. }
+                    | DrawCmd::TileMeshes { .. } => {}
                 }
             }
         }
@@ -2130,12 +2145,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         sprites: Default::default(),
     };
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
-    let gpu = matches!(backend, Backend::Gpu)
+    let gpu = backend.is_gpu()
         && globe.is_none()
         && map.view.effects.is_none()
         && map.view.color_vision == rustgis_map::view::ColorVision::Normal;
     // The effective backend: the Gpu arm at the end only runs when the frame is compatible.
-    let backend = if gpu { Backend::Gpu } else { Backend::Cpu };
+    let backend = if gpu { backend } else { Backend::Cpu };
     // GPU draw commands; between them, tiny-skia-only content accumulates in `pm` and is
     // flushed as ordered Image commands (`flush_acc`, gated by `cpu_dirty`).
     let mut cmds: Vec<gpu_scene::DrawCmd> = Vec::new();
@@ -2262,6 +2277,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         dirty: &mut cpu_dirty,
         // A tilted view's bands are drawn at their own densities: their tiles as pictures.
         meshes: !matches!(labels_to, Labels::Tilted(..)),
+        // Only a frame for the view itself (not a turned or tilted view's north-up stand-in).
+        live: backend == Backend::GpuLive && matches!(labels_to, Labels::Own),
     });
     let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none(), tile_gpu);
     if !gpu {
@@ -2654,7 +2671,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         Backend::Cpu => {
             Some(RenderOutput::Cpu(Rendered { pixmap: pm, labels, unplaced, attribution, tiles_pending, data_pending, tile_errors }))
         }
-        Backend::Gpu => {
+        Backend::Gpu | Backend::GpuLive => {
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
             // Pathological CPU/GPU alternation (rasters, masks, blends between every vector
             // layer) costs more full-screen uploads than a plain CPU rasterization.
@@ -3631,6 +3648,7 @@ mod tests {
                 gpu_scene::DrawCmd::Extrusion { .. } => "extrusion",
                 gpu_scene::DrawCmd::Image { .. } => "image",
                 gpu_scene::DrawCmd::Tiles { .. } => "tiles",
+                gpu_scene::DrawCmd::LiveTiles { .. } => "live tiles",
                 gpu_scene::DrawCmd::TileMeshes { .. } => "tile meshes",
             })
             .collect()

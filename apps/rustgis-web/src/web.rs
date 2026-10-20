@@ -110,6 +110,13 @@ pub fn start() {
                     if let Err(e) = app.start(&start) {
                         log::warn!("start-up: {e}");
                     }
+                    // `?gpu` (or `?gpu=0`) turns the GPU map on (off), as the status bar's toggle does.
+                    if let Some(v) = param(&q, "gpu").or_else(|| flag(&q, "gpu").then(String::new)) {
+                        let on = !matches!(v.as_str(), "0" | "false" | "off");
+                        if let Err(e) = app.run("ui.map.gpu", serde_json::json!({"on": on})) {
+                            log::warn!("?gpu: {e}");
+                        }
+                    }
                     // `?lang=de` picks the interface language for this visit.
                     if let Some(code) = q.trim_start_matches('?').split('&').find_map(|kv| kv.strip_prefix("lang=")) {
                         match rustgis_ui_egui::i18n::Lang::from_code(code) {

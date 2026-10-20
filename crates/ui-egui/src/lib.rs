@@ -60,6 +60,7 @@ mod stacui;
 mod table;
 mod textform;
 pub mod theme;
+mod tilelayer;
 mod tilt_drape;
 mod tilt_settle;
 mod timebar;

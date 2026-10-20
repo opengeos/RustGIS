@@ -152,6 +152,47 @@ pub(crate) struct Gpu<'a> {
     pub dirty: &'a mut bool,
     /// Vector tile styles may be drawn as meshes ([`DrawCmd::TileMeshes`]).
     pub meshes: bool,
+    /// Raster tile layers are left for the GPU map to place for each frame ([`DrawCmd::LiveTiles`]).
+    pub live: bool,
+}
+
+/// How far past the view a live raster tile layer's tiles are fetched, a share of its size.
+const LIVE_FETCH_MARGIN: f64 = 0.25;
+
+/// A live raster tile layer's tiles for one frame (see [`live`]).
+pub struct Live {
+    /// Bottom first, from the camera's centre.
+    pub quads: Vec<TileQuad>,
+    /// Tiles in view are still on their way.
+    pub pending: bool,
+}
+
+/// A live raster tile layer's tiles for `view` ([`DrawCmd::LiveTiles`]): over the view, fetching
+/// those missing, and out to the margin a moving camera reaches, from the cache only, with
+/// parents and children standing in for tiles on their way, placed from the camera's centre.
+/// `None` when the layer draws anything but raster tiles (its style changed since the scene was
+/// drawn). Cheap: cache lookups.
+pub fn live(spec: &Spec, opacity: f32, view: &View) -> Option<Live> {
+    let res = view.camera.res;
+    let ppp = view.pixels_per_point as f32;
+    let frame = Frame {
+        left: view.camera.center.x - view.width / 2.0 * res,
+        top: view.camera.center.y + view.height / 2.0 * res,
+        m_per_px: res / view.pixels_per_point.max(0.01),
+        ppp,
+    };
+    // Fetched a quarter of the view past each side, so a pan finds its tiles waiting, and held
+    // out to the reach of a moving camera.
+    let fetch = crate::cull_extent(view, LIVE_FETCH_MARGIN);
+    let reach = crate::cull_extent(view, crate::GPU_CULL_MARGIN);
+    let p = rustgis_tiles::place_raster(spec, opacity, &frame, &fetch, &reach)?;
+    // The view's tiles three levels up (a tile or two) are fetched too: a coarse picture of
+    // anywhere the camera goes next stands in until its own tiles arrive, so the map shows no
+    // holes while they load (as the root tile is kept in forge3d's tile streaming).
+    let coarse = Frame { m_per_px: frame.m_per_px * 8.0, ..frame };
+    let _ = rustgis_tiles::place_raster(spec, opacity, &coarse, &fetch, &fetch);
+    let origin = [view.camera.center.x, view.camera.center.y];
+    Some(Live { quads: p.tiles.iter().map(|q| quad(q, origin)).collect(), pending: p.pending })
 }
 
 /// Draws the map's visible tile layers, bottom first. With `gpu`, on the flat Web Mercator map,
@@ -242,6 +283,19 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
                     g.cmds.push(DrawCmd::TileMeshes { tiles });
                 }
                 let d = rustgis_tiles::Drawn { labels: v.labels, attribution: v.attribution, pending: v.pending || waiting, error: None };
+                collect(d, &t.name, &mut out);
+                continue;
+            }
+            // A raster tile layer placed for every frame by the GPU map: the scene holds the layer.
+            if let Some(g) = gpu.as_mut()
+                && g.live
+                && north_up
+                && t.blend == Blend::Normal
+                && let Some(p) = rustgis_tiles::place_raster(&spec(t), t.opacity, &frame, &fetch, &reach)
+                && crate::flush_acc(pm, g.cmds, g.dirty).is_some()
+            {
+                g.cmds.push(DrawCmd::LiveTiles { spec: spec(t), opacity: t.opacity });
+                let d = rustgis_tiles::Drawn { labels: Vec::new(), attribution: p.attribution, pending: p.pending, error: p.error };
                 collect(d, &t.name, &mut out);
                 continue;
             }

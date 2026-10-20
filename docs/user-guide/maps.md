@@ -335,10 +335,11 @@ Mode** switches it by hand.
 **View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU: vector
 layers are tessellated once and re-projected per frame, so panning and zooming stay smooth on
 large datasets. Raster tile layers (XYZ, TMS and WMS tiles, and raster PMTiles, MBTiles and
-styles) are drawn there as one texture per tile, moved with the camera like the vector layers,
-rather than as a picture of the view stretched until the map settles; zoomed in a little past the
-tiles' own zoom, the next zoom's tiles are placed, their parents and cached children standing in
-until they arrive. Vector tile styles and blended tile layers are still drawn as a picture of the
+styles) are placed again for every frame the map shows, from textures uploaded once and kept in
+a fixed pool, as MapLibre draws its tiles: panning and zooming never redraw the map for them, the
+tiles of each zoom are placed as the zoom passes, and parents and cached children stand in until
+they arrive (the view's tiles a few levels up are fetched too, so a coarse picture is always at
+hand). Vector tile styles and blended tile layers are still drawn as a picture of the
 view, shifted and scaled while the map moves. GPU Rendering is off by default, and the setting is
 remembered across sessions (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for
 development). The globe, view effects and the colour-vision simulator always render on the CPU,
