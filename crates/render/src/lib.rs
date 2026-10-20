@@ -23,7 +23,7 @@ pub mod tile_mesh;
 mod tiles;
 
 pub use rustgis_tiles;
-pub use tiles::{TILE_MESHES, spec as tile_spec, style_view};
+pub use tiles::{spec as tile_spec, style_view};
 
 /// Natural Earth 1:110m sample data (public domain), fetched by `build.rs` from rustgis-assets.
 pub mod sample_data {

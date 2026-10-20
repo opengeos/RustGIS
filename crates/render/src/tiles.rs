@@ -64,10 +64,6 @@ pub fn style_view(t: &TileLayer) -> Result<Option<rustgis_tiles::style::StyleVie
     }
 }
 
-/// Whether the GPU map draws vector tile styles as meshes (else as pictures): on, but for
-/// comparisons.
-pub static TILE_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
 /// A tile last drawn as a mesh: its mesh held weakly (the mesh cache decides how long it
 /// stays), where it is and the square it was drawn in, and its level.
 type LastTile = (std::sync::Weak<crate::tile_mesh::TileMesh>, [f64; 2], [f32; 4], u8);
@@ -235,7 +231,6 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
             if let Some(g) = gpu.as_mut()
                 && north_up
                 && g.meshes
-                && TILE_MESHES.load(std::sync::atomic::Ordering::Relaxed)
                 && t.blend == Blend::Normal
                 && t.opacity >= 0.999
                 && let Some(v) =
