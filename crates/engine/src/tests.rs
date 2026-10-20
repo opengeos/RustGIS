@@ -1399,6 +1399,12 @@ fn label_classes_by_command() {
     assert!(s.run("labels.class.update", &json!({"class": "Big", "where": "(("})).is_err());
     assert!(s.run("labels.style", &json!({"class": "Nope", "size": 30})).is_err());
     assert_eq!(labels(&s), l, "refusals change nothing");
+    // A field for a class that isn't there turns nothing on; one for a class labels the layer.
+    s.run("labels.enable", &json!({"on": false})).unwrap();
+    assert!(s.run("labels.field", &json!({"class": "Nope", "field": "name"})).is_err());
+    assert!(!labels(&s).enabled);
+    s.run("labels.field", &json!({"class": "Big", "field": "name"})).unwrap();
+    assert!(labels(&s).enabled && labels(&s).classes[0].field == "name");
     // The labels.* commands change the class named, Default when none is.
     s.run("labels.style", &json!({"class": "big", "size": 20, "bold": true})).unwrap();
     s.run("labels.placement", &json!({"class": "Big", "position": "right"})).unwrap();
@@ -4161,6 +4167,17 @@ fn deep_learning_hosted_imagery_and_sharing() {
     let style: Value = serde_json::from_slice(&std::fs::read(path("Countries.json")).unwrap()).unwrap();
     assert_eq!(style["version"], 8);
     assert_eq!(style["layers"][0]["paint"]["fill-color"][0], "step", "graduated colours as a step expression");
+    // What a style leaves out of the labels is the last notice, after the one saying it's shared.
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big", "where": "pop_max > 5000000"})).unwrap();
+    let last_two = |s: &Session| s.notices.iter().rev().take(2).map(|n| n.text.clone()).collect::<Vec<_>>();
+    s.run("share.webStyle", &json!({"layer": "Cities"})).unwrap();
+    let said = last_two(&s);
+    assert!(said[0].contains("labels every feature with its Default class") && said[1].starts_with("Shared Cities"), "{said:?}");
+    s.run("labels.class.update", &json!({"layer": "Cities", "visible": false})).unwrap();
+    s.run("share.webStyle", &json!({"layer": "Cities"})).unwrap();
+    let said = last_two(&s);
+    assert!(said[0].contains("has no labels") && said[1].starts_with("Shared Cities"), "{said:?}");
     s.run("share.locator", &json!({"layer": "Cities", "fields": ["name"]})).unwrap();
     let r = s.run("locator.find", &json!({"text": "paris", "zoom": true})).unwrap();
     assert_eq!(r["matches"][0]["text"], "Paris");
@@ -4426,6 +4443,14 @@ fn web_style_carries_the_layers_scale_limits_as_zooms() {
     assert!(zooms(&s).iter().all(|(a, b)| a.is_none() && b.is_none()));
     s.map_mut().layer_mut(id).unwrap().max_scale = Some(100_000.0);
     assert!(zooms(&s).iter().all(|(a, b)| a.is_none() && b.is_some()));
+    // A hidden Default class labels nothing on the map, nor in the style.
+    let labelled = |s: &Session| {
+        let style = crate::cmd::sharing::web_style(s.map().layer(id).unwrap());
+        style["layers"].as_array().unwrap().iter().any(|l| l["type"] == "symbol")
+    };
+    assert!(labelled(&s));
+    s.map_mut().layer_mut(id).unwrap().labels.default.visible = false;
+    assert!(!labelled(&s));
 }
 
 #[test]

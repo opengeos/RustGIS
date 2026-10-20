@@ -284,7 +284,9 @@ fn target(s: &Session, p: &Value, name: &str, ext: &str) -> Result<String, Strin
 }
 
 fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
+    let mark = s.notice_mark();
     let (name, bytes, source) = share_bytes(s, kind, p)?;
+    let told = s.notices_since(mark).len();
     let ext = KINDS.iter().find(|k| k.0 == kind).map_or("bin", |k| k.1);
     let path = target(s, p, &name, ext)?;
     // A share of another kind (or an uploaded file) at that path isn't replaced.
@@ -319,6 +321,12 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
         }
     };
     s.notify(format!("Shared {name} to {path}"), false);
+    // What the share left out (see `note_label_classes`) comes after it, so the status bar, which
+    // shows the last notice, keeps saying it.
+    let len = s.notices.len();
+    if let Some(tail) = s.notices.get_mut(len.saturating_sub(told + 1)..) {
+        tail.rotate_right(1);
+    }
     Ok(json!({"item": id, "path": path, "bytes": bytes.len()}))
 }
 
@@ -548,14 +556,22 @@ onresize=draw;draw();
 }
 
 /// Says when a web style labels differently from the map: it labels every feature with the
-/// Default class's field and text symbol, since no SQL clause has a MapLibre filter written for it.
+/// Default class's field and text symbol, since no SQL clause has a MapLibre filter written for it,
+/// and nothing when Default is hidden.
 fn note_label_classes(s: &mut Session, l: &Layer) {
     if !l.labels.enabled {
         return;
     }
     let n = l.labels.in_order().count() - 1;
     let clause = l.labels.default.where_.as_deref().is_some_and(|w| !w.trim().is_empty());
-    if n > 0 || clause {
+    if !l.labels.default.visible {
+        if n > 0 {
+            s.notify(
+                format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name),
+                false,
+            );
+        }
+    } else if n > 0 || clause {
         s.notify(
             format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name),
             false,
@@ -564,7 +580,7 @@ fn note_label_classes(s: &mut Session, l: &Layer) {
 }
 
 /// A MapLibre (version 8) style for a layer, its symbology as expressions over a GeoJSON source.
-/// Its labels are the Default class's (see `note_label_classes`).
+/// Its labels are the Default class's, none when it is hidden (see `note_label_classes`).
 pub fn web_style(l: &Layer) -> Value {
     let src = safe(&l.name);
     let gt = l.geometry_type();
@@ -633,7 +649,7 @@ pub fn web_style(l: &Layer) -> Value {
                 "circle-color": color(|s| s.fill), "circle-radius": radius, "circle-stroke-color": color(|s| s.stroke), "circle-stroke-width": width, "circle-opacity": opacity}}));
         }
     }
-    if l.labels.enabled && !l.labels.default.field.is_empty() {
+    if l.labels.enabled && l.labels.default.visible && !l.labels.default.field.is_empty() {
         layers.push(json!({"id": format!("{src}-labels"), "type": "symbol", "source": src,
             "layout": {"text-field": ["to-string", prop(&l.labels.default.field)], "text-size": l.labels.default.size},
             "paint": {"text-color": l.labels.default.color.hex(), "text-halo-color": "#ffffff", "text-halo-width": if l.labels.default.halo { 1.5 } else { 0.0 }}}));

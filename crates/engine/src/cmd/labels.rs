@@ -122,19 +122,22 @@ pub fn commands() -> Vec<C> {
 
 /// Changes the label class `p` names (`"class"`; Default when none) of the layer it names.
 pub(crate) fn with_class(s: &mut Session, p: &Value, f: impl FnOnce(&mut LabelClass)) -> CmdResult {
-    let name = ps(p, "class").map(str::trim).filter(|n| !n.is_empty()).map(String::from);
     with_labels(s, p, |labels| {
-        let c = match &name {
-            None => &mut labels.default,
-            Some(n) => labels.class_mut(n).ok_or_else(|| format!("no label class named '{n}'"))?,
-        };
-        f(c);
+        f(class_in(labels, p)?);
         Ok(())
     })
 }
 
+/// The label class `p` names (`"class"`; Default when none).
+pub(crate) fn class_in<'a>(labels: &'a mut Labeling, p: &Value) -> Result<&'a mut LabelClass, String> {
+    match ps(p, "class").map(str::trim).filter(|n| !n.is_empty()) {
+        None => Ok(&mut labels.default),
+        Some(n) => labels.class_mut(n).ok_or_else(|| format!("no label class named '{n}'")),
+    }
+}
+
 /// Changes the labels of the layer `p` names; nothing changes when `f` refuses.
-fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeling) -> Result<(), String>) -> CmdResult {
+pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeling) -> Result<(), String>) -> CmdResult {
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let mut labels = l.labels.clone();
@@ -143,13 +146,14 @@ fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeling) -> Resu
     Ok(Value::Null)
 }
 
-/// The place of the class named `name` among those checked before Default. Any of them, also
-/// past the `MAX_LABEL_CLASSES` that count (a project file listing more), so it can be removed.
+/// The place of the class named `name` among those checked before Default (of the
+/// `MAX_LABEL_CLASSES` that count, as `Labeling::class` finds them).
 fn extra_class(labels: &Labeling, name: &str) -> Result<usize, String> {
     if labels.default.name.eq_ignore_ascii_case(name) {
         return Err(format!("{name} is the Default class: it labels the rest of the features, and stays last"));
     }
-    labels.classes.iter().position(|c| c.name.eq_ignore_ascii_case(name)).ok_or_else(|| format!("no label class named '{name}'"))
+    let mut counted = labels.classes.iter().take(MAX_LABEL_CLASSES);
+    counted.position(|c| c.name.eq_ignore_ascii_case(name)).ok_or_else(|| format!("no label class named '{name}'"))
 }
 
 /// The longest label class name kept (characters).

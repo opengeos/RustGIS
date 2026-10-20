@@ -206,8 +206,11 @@ pub fn commands() -> Vec<C> {
             let id = s.layer_id(p)?;
             let fname = s.map().layer(id).and_then(|l| l.dataset.field_index(&name).and_then(|i| l.dataset.fields.get(i)).map(|f| f.name.clone()));
             let fname = fname.ok_or_else(|| format!("no field named '{name}'"))?;
-            super::labels::with_class(s, p, |c| c.field = fname)?;
-            with(s, p, |l| l.labels.enabled = true)
+            super::labels::with_labels(s, p, |labels| {
+                super::labels::class_in(labels, p)?.field = fname;
+                labels.enabled = true;
+                Ok(())
+            })
         }).params(r#"{"layer"?, "class"?: name (default: Default), "field": name}"#)
         .when(need_feature_layer),
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {

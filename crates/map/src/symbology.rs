@@ -868,8 +868,17 @@ pub struct Labeling {
     pub enabled: bool,
     #[serde(flatten)]
     pub default: LabelClass,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "de_label_classes")]
     pub classes: Vec<LabelClass>,
+}
+
+/// Reads a layer's label classes as the commands would leave them: at most
+/// [`MAX_LABEL_CLASSES`]. A project file is hostile input, and every feature drawn is matched
+/// against them.
+fn de_label_classes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<LabelClass>, D::Error> {
+    let mut v: Vec<LabelClass> = Vec::deserialize(d)?;
+    v.truncate(MAX_LABEL_CLASSES);
+    Ok(v)
 }
 
 /// One class of a layer's labels: the features it labels, the field it labels them with, its text
@@ -1075,8 +1084,8 @@ impl<'a> LabelMatcher<'a> {
 
 impl Labeling {
     /// The classes in the order a feature is matched: the listed ones, then Default. At most
-    /// `MAX_LABEL_CLASSES` of them count, whatever a project file holds, since every feature drawn
-    /// is matched against them.
+    /// `MAX_LABEL_CLASSES` of them count (a project file is read with no more), also for a
+    /// `Labeling` built in code, since every feature drawn is matched against them.
     pub fn in_order(&self) -> impl Iterator<Item = &LabelClass> {
         self.classes.iter().take(MAX_LABEL_CLASSES).chain(std::iter::once(&self.default))
     }
@@ -1138,7 +1147,8 @@ mod tests {
         assert_eq!(serde_json::from_value::<Labeling>(v).unwrap(), with);
     }
 
-    /// A project file can list any number of classes; only `MAX_LABEL_CLASSES` count. A class on
+    /// A project file is read with at most `MAX_LABEL_CLASSES` classes, and only that many count
+    /// in a `Labeling` built with more. A class on
     /// a field the data doesn't have is pointed at Default's, and kept.
     #[test]
     fn classes_are_bounded_and_follow_missing_fields() {
@@ -1146,6 +1156,10 @@ mod tests {
         let mut l = Labeling::default_for(&ds);
         let class = |i: usize| LabelClass { name: format!("c{i}"), field: "gone".into(), ..LabelClass::default_for(&ds) };
         l.classes = (0..MAX_LABEL_CLASSES + 5).map(class).collect();
+        // A project file listing more is read with the first ones.
+        let read: Labeling = serde_json::from_value(serde_json::to_value(&l).unwrap()).unwrap();
+        assert_eq!(read.classes.len(), MAX_LABEL_CLASSES);
+        assert_eq!(read.classes.last().map(|c| c.name.clone()), Some(format!("c{}", MAX_LABEL_CLASSES - 1)));
         assert_eq!(l.in_order().count(), MAX_LABEL_CLASSES + 1, "the counted classes, then Default");
         assert_eq!(l.in_order().last().map(|c| c.name.as_str()), Some(DEFAULT_LABEL_CLASS));
         assert!(l.class(&format!("c{}", MAX_LABEL_CLASSES + 1)).is_none() && l.class_mut("c70").is_none());

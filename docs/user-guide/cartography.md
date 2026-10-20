@@ -167,7 +167,8 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   no error when there are none, so a script can start with it). The other label commands take a `class`
   (`labels.style={"layer": "Cities", "class": "Capitals", "size": 14}`), and change Default
   without one. Convert keeps the classes, with a `CLASS` field saying which labelled each
-  point; a web style (Share › Web Style) labels with Default only.
+  point; a web style (Share › Web Style) labels with Default only, and has no labels when
+  Default is hidden.
 
 <figure markdown="span">
   ![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)
