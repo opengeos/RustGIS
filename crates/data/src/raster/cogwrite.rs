@@ -123,7 +123,9 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
             // no-data value the samples hold. Otherwise they are written as floats, with NaN.
             let n = r.width as usize * r.height as usize;
             let holes = (0..3).any(|b| r.bands.get(b).is_some_and(|band| band.stats.count < n));
-            if alpha || !holes || int_nodata(max).is_some() {
+            // An alpha band that can't share the colour bands' type keeps its place through the
+            // float plan below rather than being dropped.
+            if alpha == has_alpha && (alpha || !holes || int_nodata(max).is_some()) {
                 return Ok(Plan {
                     bands: (0..if alpha { 4 } else { 3 }).collect(),
                     sample,
@@ -890,6 +892,17 @@ mod tests {
         bytes[at + 8] = 0;
         let back = geotiff::read(Cursor::new(bytes), "b").unwrap();
         assert_eq!((back.band_count(), back.color.clone()), (2, ColorHint::Gray));
+        // Byte colours with a fractional alpha keep the alpha, as floats, rather than dropping it.
+        let f = utm(
+            2,
+            1,
+            vec![vec![10.0, 20.0], vec![30.0, 40.0], vec![50.0, 60.0], vec![0.5, 1.0]],
+            ColorHint::Rgb { alpha: true },
+            "Float32",
+            None,
+        );
+        let back = geotiff::read(Cursor::new(write(&f, 0).unwrap()), "b").unwrap();
+        assert_eq!((back.band_count(), back.value(3, 0, 0), back.value(0, 1, 0)), (4, Some(0.5), Some(20.0)));
     }
 
     #[test]
