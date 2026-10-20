@@ -452,6 +452,15 @@ fn build_library() -> Vec<(&'static str, Source)> {
             "Maps",
             s("service", "GEBCO bathymetry", "https://wms.gebco.net/mapserv?request=getcapabilities&service=wms", json!({"type": "wms"})),
         ),
+        (
+            "Maps",
+            s(
+                "service",
+                "swisstopo (geo.admin.ch)",
+                "https://wmts.geo.admin.ch/EPSG/3857/1.0.0/WMTSCapabilities.xml",
+                json!({"type": "wmts"}),
+            ),
+        ),
         ("Catalogs", s("stac", "Earth Search (AWS)", "https://earth-search.aws.element84.com/v1", json!({"api": "true"}))),
         (
             "Catalogs",

@@ -2529,6 +2529,8 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("maptab", i)), Sense::click());
+        // Painted, so named for screen readers (and tests).
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, n));
         let is = i == active;
         // A project keeps at least one map (`map.remove` refuses the last).
         let last = names.len() < 2;
@@ -2561,6 +2563,11 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let _ = app.run("map.activate", json!({"name": n}));
             app.map.popup = None;
         }
+        // Right-click for the map's menu, as in the Browser; double-click renames.
+        if resp.double_clicked() {
+            let _ = app.run("ui.dialog", json!({"name": "renameMap", "target": n}));
+        }
+        resp.context_menu(|ui| crate::panes::map_menu(app, ui, n));
         x += w + 2.0;
     }
     // Layouts, after the maps.
@@ -2569,6 +2576,7 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let w = crate::widgets::text_w(ui, n, regular(12.0)) + 46.0 + TAB_CLOSE_W;
         let tr = Rect::from_min_size(pos2(x, r.min.y + 4.0), vec2(w, r.height() - 4.0));
         let resp = ui.interact(tr, egui::Id::new(("layouttab", i)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, n));
         let is = app.session.active_layout == Some(i) && !app.mb.shown();
         if is {
             ui.painter().rect_filled(tr, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, t.ribbon);
@@ -2603,6 +2611,10 @@ fn view_tabs(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let _ = app.run("layout.activate", json!({"name": n}));
             app.ui.tab = "Publish".into();
         }
+        if resp.double_clicked() {
+            let _ = app.run("ui.dialog", json!({"name": "renameLayout", "target": n}));
+        }
+        resp.context_menu(|ui| crate::panes::layout_menu(app, ui, n));
         x += w + 2.0;
     }
     // ModelBuilder, after the layouts.

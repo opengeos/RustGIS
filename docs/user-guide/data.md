@@ -335,7 +335,7 @@ places data comes from:
 - **S3**: this session's connections; a click opens the S3 browser on it.
 - **Library**: well-known public sources: OpenStreetMap tiles, EOX Sentinel-2 cloudless and
   NASA GIBS (WMTS), USGS imagery, topographic and hydrography maps (ArcGIS), GEBCO bathymetry
-  (WMS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
+  (WMS), swisstopo's maps and imagery (geo.admin.ch, WMTS), Earth Search and Planetary Computer (STAC), and the Natural Earth sample layers.
 
 A click on a file, a web address, a tile layer or a sample adds it at once. The lists are kept
 with the app's preferences, never in a project. They hold no secrets: a web address loses its
