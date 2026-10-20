@@ -4,6 +4,19 @@ use rustgis_geom::{Coord, lonlat_to_merc};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[test]
+fn file_geodatabase_names() {
+    assert!(is_gdb_name("/x/roads.gdb") && is_gdb_name("Roads.GDB/") && is_gdb_name(r"C:\x\roads.gdb\"));
+    assert!(!is_gdb_name("roads.gdbtable") && !is_gdb_name("gdb") && !is_gdb_name("roads.shp"));
+    // A file picked inside a geodatabase stands for the geodatabase.
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a00000001.gdbtable")), Some(Path::new("/x/roads.gdb")));
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/gdb")), Some(Path::new("/x/roads.gdb")));
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.shp")), None);
+    assert_eq!(gdb_of(Path::new("a00000001.gdbtable")), None);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn tls_provider_builds_client_config() {

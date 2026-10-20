@@ -82,6 +82,18 @@ pub fn is_source_name(name: &str) -> bool {
     EXTENSIONS.contains(&ext.as_str())
 }
 
+/// Whether a folder is an Esri File Geodatabase (`roads.gdb`): added as data, not browsed.
+pub fn is_gdb_name(name: &str) -> bool {
+    ext(Path::new(name.trim_end_matches(['/', '\\']))) == "gdb"
+}
+
+/// The File Geodatabase a file inside it belongs to (`roads.gdb/a00000001.gdbtable`, or the `gdb`
+/// file every one holds): file dialogs pick files, not the folder.
+pub fn gdb_of(path: &Path) -> Option<&Path> {
+    let parent = path.parent()?;
+    (!is_gdb_name(&path.to_string_lossy()) && is_gdb_name(&parent.to_string_lossy())).then_some(parent)
+}
+
 /// What a source holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceInfo {

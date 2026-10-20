@@ -47,7 +47,7 @@ GDAL](data.md#formats-through-gdal).
 
 | Format | Extensions or source | Notes |
 | --- | --- | --- |
-| Esri File Geodatabase | `.gdb` folder | Every feature class becomes a layer. |
+| Esri File Geodatabase | `.gdb` folder | Every feature class becomes a layer. A file dialog can't pick a folder: pick any `.gdbtable` file inside it, double-click the `.gdb` in the Browser, or drop the folder on the window. |
 | AutoCAD DWG | `.dwg` | Through GDAL's CAD driver, when it is built in. Give `"crs"` (such as `EPSG:2263`) when the drawing doesn't say its coordinate system. |
 | MapInfo tables | `.tab` | Keep the companion files together. |
 | OpenStreetMap XML | `.osm` | |

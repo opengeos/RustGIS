@@ -472,6 +472,9 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
 
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // A file picked inside a File Geodatabase adds the geodatabase.
+    let gdb = rustgis_data::source::gdb_of(Path::new(path)).map(|d| d.display().to_string());
+    let path = gdb.as_deref().unwrap_or(path);
     // A geotagged photo: a point in the photo layer.
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::photo::is_photo_name(path) {
