@@ -3331,7 +3331,7 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                         // Kept across a drag until it is let go (#607).
                         let drag = Dragged::lend(ui, egui::Id::new(("extrusion_factor", layer.id)), &mut k);
                         let r = ui.add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02));
-                        if drag.settled(ui, &r, &mut k) {
+                        if drag.settled(ui, &r, &mut k) && k != xx.factor {
                             let t = if xx.field.is_some() { "field" } else { "height" };
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
                         }
@@ -3771,7 +3771,7 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 // Kept across a drag until it is let go (#607).
                 let drag = Dragged::lend(ui, egui::Id::new(("raster_rotation", layer.id)), &mut a);
                 let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.0).speed(1.0).suffix("°"));
-                if drag.settled(ui, &r, &mut a) {
+                if drag.settled(ui, &r, &mut a) && a != style.rotation {
                     let _ = app.run("raster.rotation", json!({"angle": a}));
                 }
                 ui.label(egui::RichText::new(tl!("Rotation")).size(11.5));
