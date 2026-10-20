@@ -547,12 +547,19 @@ onresize=draw;draw();
     ))
 }
 
-/// Says that a web style labels with the Default class only: a class's SQL clause has no
-/// MapLibre filter written for it.
+/// Says when a web style labels differently from the map: it labels every feature with the
+/// Default class's field and text symbol, since no SQL clause has a MapLibre filter written for it.
 fn note_label_classes(s: &mut Session, l: &Layer) {
-    if l.labels.enabled && !l.labels.classes.is_empty() {
-        let n = l.labels.classes.len();
-        s.notify(format!("{}'s style labels with its Default class only; its other {n} label classes aren't in it.", l.name), false);
+    if !l.labels.enabled {
+        return;
+    }
+    let n = l.labels.in_order().count() - 1;
+    let clause = l.labels.default.where_.as_deref().is_some_and(|w| !w.trim().is_empty());
+    if n > 0 || clause {
+        s.notify(
+            format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name),
+            false,
+        );
     }
 }
 

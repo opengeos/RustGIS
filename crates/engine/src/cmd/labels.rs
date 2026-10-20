@@ -143,7 +143,8 @@ fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeling) -> Resu
     Ok(Value::Null)
 }
 
-/// The place of the class named `name` among those checked before Default.
+/// The place of the class named `name` among those checked before Default. Any of them, also
+/// past the `MAX_LABEL_CLASSES` that count (a project file listing more), so it can be removed.
 fn extra_class(labels: &Labeling, name: &str) -> Result<usize, String> {
     if labels.default.name.eq_ignore_ascii_case(name) {
         return Err(format!("{name} is the Default class: it labels the rest of the features, and stays last"));
@@ -158,6 +159,8 @@ const MAX_CLASS_NAME: usize = 100;
 /// renamed, which may keep its own).
 fn class_name(labels: &Labeling, name: &str, renaming: Option<&str>) -> Result<String, String> {
     let name: String = name.trim().chars().take(MAX_CLASS_NAME).collect();
+    // Cut short, it may end in a space.
+    let name = name.trim_end().to_string();
     if name.is_empty() {
         return Err("a label class needs a name".into());
     }

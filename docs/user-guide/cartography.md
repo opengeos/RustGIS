@@ -160,7 +160,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   cities. Each class has a SQL clause (the language of definition queries) choosing its
   features, and its own field, text symbol, placement and visibility range. A feature is
   labelled by the first class whose clause it matches; the **Default** class, checked last,
-  labels the rest. A hidden class leaves its features unlabelled. For now, classes are made
+  labels the rest (or, given a clause of its own, those of the rest it matches). A hidden class leaves its features unlabelled. For now, classes are made
   with commands: `labels.class.add={"layer": "Cities", "name": "Capitals", "where": "pop_max >
   5000000"}`, then `labels.class.rename`, `labels.class.update` (its `where` or `visible`),
   `labels.class.move`, `labels.class.remove` and `labels.class.clear` (every class but Default;

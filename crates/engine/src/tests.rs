@@ -1427,6 +1427,9 @@ fn label_classes_by_command() {
     assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 1);
     assert_eq!(order(&s), ["Default"]);
     assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 0);
+    // A long name is cut at 100 characters, and doesn't end in the space it was cut at.
+    let long = format!("{} tail", "a".repeat(99));
+    assert_eq!(s.run("labels.class.add", &json!({"name": long})).unwrap()["class"], "a".repeat(99));
 }
 
 /// Converting labels with classes keeps each class's features apart: the annotation has the same
