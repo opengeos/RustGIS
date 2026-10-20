@@ -470,7 +470,7 @@ fn tiles_for(src: &Source, view: &Extent, frame: &Frame, zoom: f32, pending: &mu
 
 /// The tiles of a source in view and out to `reach` (those in the cache only), with stand-ins
 /// for those not here yet.
-fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, zoom: f32, pending: &mut bool) -> Vec<Item> {
+pub(crate) fn tiles_in(src: &Source, view: &Extent, reach: Option<&Extent>, frame: &Frame, zoom: f32, pending: &mut bool) -> Vec<Item> {
     let (tiles, min_z, max_z, want, z) = match src {
         Source::Raster { tiles, tile_size, min_zoom, max_zoom, .. } => {
             let z = template::zoom_for(frame.m_per_px * f64::from(frame.ppp), *tile_size, *max_zoom);

@@ -27,6 +27,7 @@ pub mod portal;
 pub mod remote;
 pub mod routing;
 pub mod s3;
+pub mod shapes;
 pub mod source;
 pub mod sourcecoop;
 pub mod sprite;

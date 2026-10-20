@@ -19,6 +19,7 @@ mod raster;
 pub mod report;
 pub mod terrain;
 mod text;
+pub mod tile_mesh;
 mod tiles;
 
 pub use rustgis_tiles;
