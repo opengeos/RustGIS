@@ -470,11 +470,18 @@ fn add_photos(s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
+/// A file picked inside a File Geodatabase stands for the geodatabase (file dialogs pick files,
+/// not the folder): `layer.addData` adds it and `info.fileLayers` lists its layers.
+fn gdb_path(path: &str) -> std::borrow::Cow<'_, str> {
+    match rustgis_data::source::gdb_of(Path::new(path)) {
+        Some(d) => d.display().to_string().into(),
+        None => path.into(),
+    }
+}
+
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
-    // A file picked inside a File Geodatabase adds the geodatabase.
-    let gdb = rustgis_data::source::gdb_of(Path::new(path)).map(|d| d.display().to_string());
-    let path = gdb.as_deref().unwrap_or(path);
+    let path = &*gdb_path(path);
     // A geotagged photo: a point in the photo layer.
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::photo::is_photo_name(path) {
@@ -816,9 +823,7 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
 /// layers, or the one layer of other files. `layer.addData` takes a name with `"layer"`.
 fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
-    // A file picked inside a File Geodatabase lists the geodatabase's, as `layer.addData` adds it.
-    let gdb = rustgis_data::source::gdb_of(Path::new(path)).map(|d| d.display().to_string());
-    let path = gdb.as_deref().unwrap_or(path);
+    let path = &*gdb_path(path);
     let err = |e: rustgis_data::DataError| format!("{path}: {e}");
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::source::gdal::is_gdal_name(path) {

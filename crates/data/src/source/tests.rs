@@ -12,6 +12,11 @@ fn file_geodatabase_names() {
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/a00000001.gdbtable")), Some(Path::new("/x/roads.gdb")));
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/gdb")), Some(Path::new("/x/roads.gdb")));
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/a0000000A.spx")), Some(Path::new("/x/roads.gdb")));
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a00000004.CatItemsByType.atx")), Some(Path::new("/x/roads.gdb")));
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/timestamps")), Some(Path::new("/x/roads.gdb")));
+    // A file named like a table, but of another kind, is itself.
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a00000001.csv")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a0000000b.bak")), None);
     // Other files kept in the folder are themselves.
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/readme.txt")), None);
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/export.csv")), None);
