@@ -2196,7 +2196,7 @@ mod tests {
         }
     }
 
-    /// A tile picture is uploaded once, and drawn again from its texture by the next scenes.
+    /// Owned GPU resources are destroyed when the last holder drops them.
     #[test]
     fn owned_resources_are_destroyed_once_dropped() {
         // In the browser a dropped wgpu resource keeps its GPU memory until the garbage
@@ -2217,6 +2217,7 @@ mod tests {
         assert_eq!(n.load(Ordering::Relaxed), 1);
     }
 
+    /// A tile picture is uploaded once, and drawn again from its texture by the next scenes.
     #[test]
     fn tile_textures_are_kept_across_scenes() {
         let Some(rs) = headless_render_state() else { return };
