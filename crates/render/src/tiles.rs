@@ -89,6 +89,8 @@ fn mesh_tiles(v: &rustgis_tiles::shapes::VectorTiles, centre: [f64; 2]) -> (Vec<
     let key = std::sync::Arc::as_ptr(&v.style) as usize;
     let last: Vec<MeshTile> = lock()
         .get(&key)
+        // The same style still, not a new one at a freed address.
+        .filter(|(s, _)| s.upgrade().is_some_and(|s| std::sync::Arc::ptr_eq(&s, &v.style)))
         .map(|(_, t)| {
             t.iter()
                 .filter_map(|(m, origin, clip, level)| Some(MeshTile { mesh: m.upgrade()?, origin: *origin, clip: *clip, level: *level }))

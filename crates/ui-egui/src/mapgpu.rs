@@ -1928,8 +1928,8 @@ mod tests {
         );
     }
 
-    /// A map of raster tiles (#568): the GPU places each tile as its own texture, and draws
-    /// what the CPU draws, at a tile's own size and zoomed between levels, and see-through.
+    /// A vector tile style drawn as meshes (#596): the GPU draws what the CPU draws, each tile
+    /// clipped to its square.
     #[test]
     fn parity_vector_tile_meshes() {
         use rustgis_engine::geom::lonlat_to_merc;
@@ -2028,6 +2028,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A map of raster tiles (#568): the GPU places each tile as its own texture, and draws
+    /// what the CPU draws, at a tile's own size and zoomed between levels, and see-through.
     #[test]
     fn parity_raster_tiles() {
         use rustgis_engine::geom::lonlat_to_merc;
