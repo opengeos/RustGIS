@@ -110,6 +110,10 @@ pub struct MapView {
     /// The camera the labels were placed for.
     label_camera: Camera,
     last_interaction: f64,
+    /// The view's size (physical pixels) on the last frame, and when it last changed: while a
+    /// side pane is dragged the last frame is shown as it is, drawn again once the size holds.
+    view_px: [usize; 2],
+    resized_at: f64,
     drag: Option<(Pos2, DragKind)>,
     sketch: Vec<Coord>,
     /// A finished measurement stays on screen until the next click.
@@ -203,6 +207,8 @@ impl Default for MapView {
             label_lonlat: Vec::new(),
             label_camera: Camera::world(),
             last_interaction: -10.0,
+            view_px: [0, 0],
+            resized_at: -10.0,
             drag: None,
             sketch: Vec::new(),
             sketch_done: false,
@@ -579,6 +585,27 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
+    if app.map.view_px != key.size {
+        // Not the first size: the view has a picture to hold only after that.
+        if app.map.view_px != [0, 0] {
+            app.map.resized_at = time;
+        }
+        app.map.view_px = key.size;
+    }
+    // A side pane being dragged resizes the view every frame. Drawing the map each time made the
+    // drag stutter: the last frame stays centred at its own scale (the uncovered edge shows the
+    // map's background) until the size holds for a moment, as a pan shows its last frame.
+    let resizing = time - app.map.resized_at < RESIZE_SETTLE;
+    let hold = resizing
+        && !moving
+        && !globe_view
+        && cam.bearing == 0.0
+        && cam.pitch == 0.0
+        && (app.map.texture.is_some() || app.map.gpu_frame.is_some())
+        && app.map.key.is_some_and(|k| (Key { size: k.size, draft: k.draft, ..key }) == k);
+    if hold {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(RESIZE_SETTLE));
+    }
     // Labels belong to the rendered contents. When visibility or data change, old labels
     // must disappear with their layers while a preview stands in for the exact frame.
     if app.map.key.is_none_or(|k| k.rev != key.rev) {
@@ -589,7 +616,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
     // cached flat picture keeps navigation and layer changes responsive while they finish.
     let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
-    let settling = (tilted || globe_view || tiled_flat) && !moving && app.ws.playing.is_none();
+    let settling = (tilted || globe_view || tiled_flat) && !moving && app.ws.playing.is_none() && !hold;
     let mut tilt_draped = tilt_draped;
     // A frame finishing during a new gesture is obsolete. Drain it now so it neither holds
     // the worker slot nor keeps screenshot/idle waiters waiting for a frame we will not show.
@@ -742,6 +769,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if stale
         && !fast_engaged
         && !settling
+        && !hold
         && !draped
         && !tilt_draped
         && (motion.is_some()
@@ -827,7 +855,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.session.record_extent();
             app.map.camera_moved = false;
         }
-    } else if stale && !settling {
+    } else if stale && !settling && !hold {
         ui.ctx().request_repaint();
     }
 
@@ -859,7 +887,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 renderer: gr.clone(),
                 buffers: gf.clone(),
                 target: app.map.gpu_target.clone(),
-                uv: if gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && gf.has_images {
+                // A scene drawn for another size (a pane being dragged) is placed as a picture too.
+                uv: if gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && (gf.has_images || gf.size != [w, h]) {
                     Rect::from_min_max(
                         ((rect.min - tex_rect.min) / tex_rect.size()).to_pos2(),
                         ((rect.max - tex_rect.min) / tex_rect.size()).to_pos2(),
@@ -1016,6 +1045,9 @@ fn show_frame(
 /// How much wider and taller than the view a frame drawn mid-motion to fill a gap is, so the
 /// next steps of zooming out or panning are covered too.
 const GAP_SPAN: f64 = 1.5;
+
+/// How long (s) the view's size holds before the map is drawn at it again (see `hold`).
+const RESIZE_SETTLE: f64 = 0.15;
 
 /// How long (ms) a frame drawn mid-motion may take before it is drawn coarser: about two
 /// 60 Hz frames, so a pan or zoom that redraws stays smooth.
@@ -2794,6 +2826,41 @@ mod tests {
         h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide countries");
         h.step();
         assert!(h.state().map.labels.is_empty(), "the preview kept labels from the old visibility state");
+    }
+
+    /// Dragging a side pane resizes the map view every frame. The map is not drawn again for
+    /// each size, which made the drag stutter: the last frame stays until the size holds, then
+    /// the map is drawn once at it.
+    #[test]
+    fn a_pane_drag_draws_the_map_once_it_stops() {
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).with_step_dt(1.0 / 60.0).with_max_steps(10_000).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                RustGisApp::with_sample(),
+            );
+        let settled = |h: &mut egui_kittest::Harness<'_, RustGisApp>, what: &str| {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while h.state().map.key.is_none_or(|k| k.draft || k.size != h.state().map.view_px) || h.state().map.drawing() {
+                assert!(std::time::Instant::now() < end, "{what}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                h.step();
+            }
+        };
+        settled(&mut h, "the first frame did not arrive");
+        let before = h.state().map.key.map(|k| k.size);
+        // The window narrowing a little each frame, as the map does while a pane is dragged.
+        for i in 1..=8 {
+            h.set_size(vec2(1200.0 - 10.0 * i as f32, 700.0));
+            h.step();
+            assert_eq!(h.state().map.key.map(|k| k.size), before, "the map was drawn again mid-drag (frame {i})");
+        }
+        // Held still: drawn at the new size.
+        settled(&mut h, "the map was not drawn once the drag stopped");
+        assert_ne!(h.state().map.key.map(|k| k.size), before);
     }
 
     /// Frames drawn mid-motion stay at full resolution unless the map draws slowly, and even

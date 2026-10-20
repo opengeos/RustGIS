@@ -1608,7 +1608,11 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
 /// A layer's right-click menu (its row in any Layers view). Move Up and Move Down only with
 /// `reorder` (the drawing order view, unfiltered).
 fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
-    let _ = app.session.run("layer.select", &json!({"layer": l.id}));
+    // Once, as the menu opens: a command each frame it stays open would draw the map again each
+    // time (a command moves the session's revision).
+    if app.session.active_layer != Some(l.id) {
+        let _ = app.session.run("layer.select", &json!({"layer": l.id}));
+    }
     let service_child = app.session.map().service_groups.iter().any(|g| g.children.iter().any(|c| c.layer == l.id));
     if service_child && ui.add_enabled(app.ui.service_import.is_none(), egui::Button::new(tl!("Refresh"))).clicked() {
         let _ = app.run("ui.refreshService", json!({"layer":l.id}));
@@ -4578,5 +4582,21 @@ mod tests {
         assert_eq!(transparency(&h), mid, "letting go keeps the value");
         h.state_mut().run("edit.undo", Value::Null).unwrap();
         assert_eq!(transparency(&h), start, "one undo takes the whole drag back");
+    }
+
+    /// The layer menu selects its layer as it opens, not on every frame it stays open: each
+    /// command moves the session's revision, which drew the whole map again every frame.
+    #[test]
+    fn an_open_layer_menu_leaves_the_map_alone() {
+        let app = RustGisApp::with_sample();
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        h.step();
+        assert_eq!(h.state().session.active_layer, Some(layer.id));
+        let rev = h.state().session.revision;
+        for _ in 0..5 {
+            h.step();
+        }
+        assert_eq!(h.state().session.revision, rev, "the menu ran a command on every frame");
     }
 }
