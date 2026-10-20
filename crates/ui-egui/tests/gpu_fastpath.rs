@@ -20,6 +20,7 @@ fn wait_for_frame(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
     // Tiles still arriving would draw the map again: until none arrived since the last frames.
     loop {
+        assert!(std::time::Instant::now() < end, "tiles kept arriving");
         let tiles = cache::generation();
         for _ in 0..40 {
             h.step();
