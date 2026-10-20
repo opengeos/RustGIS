@@ -7186,6 +7186,22 @@ fn params_name_every_key_a_command_reads() {
 }
 
 #[test]
+fn needs_input_reads_descriptions() {
+    use crate::needs_input;
+    assert!(!needs_input("{}"));
+    assert!(!needs_input(r#"{"layer"?, "name"?: text}"#));
+    // One required key among optional ones is enough (Georeference's layer, beside its points).
+    assert!(needs_input(r#"{"layer": raster, "points"?: [[column, row, lon, lat], …], "extent"?: [w, s, e, n]}"#));
+    assert!(needs_input(r#"{"path": folder | "url": "https://…", "name"?: text}"#));
+    // A "?" inside a value doesn't make the key optional.
+    assert!(needs_input(r#"{"url": "https://…/x.json?f=json"}"#));
+    assert!(needs_input("a GeoJSON text: {type: …}") && !needs_input("a GeoJSON text"));
+    let s = Session::new(Project::default());
+    assert!(s.registry.get("raster.georeference").is_some_and(crate::CommandSpec::needs_input));
+    assert!(!s.registry.get("map.zoomIn").is_none_or(crate::CommandSpec::needs_input));
+}
+
+#[test]
 fn param_keys_reads_descriptions() {
     use crate::param_keys;
     assert_eq!(param_keys("{}"), Some(vec![]));

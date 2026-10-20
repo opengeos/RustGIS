@@ -58,6 +58,11 @@ impl CommandSpec {
         param_keys(self.params)
     }
 
+    /// Whether it can't run without parameters: see [`needs_input`].
+    pub fn needs_input(&self) -> bool {
+        needs_input(self.params)
+    }
+
     pub const fn new(id: &'static str, label: &'static str, location: &'static str, run: fn(&mut Session, &Value) -> CmdResult) -> Self {
         CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, enabled: always, run }
     }
@@ -85,6 +90,21 @@ impl CommandSpec {
 /// alternative (after `|`, followed by `?` or `:`, as in `"path": folder | "url": …` or
 /// `"lon" | "x": number`).
 pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
+    Some(param_entries(desc)?.into_iter().map(|(key, _)| key).collect())
+}
+
+/// Whether a description names a parameter a command can't run without: a key with no `?` in a
+/// `{"key": …}` description. One that isn't such an object needs input when it describes a value
+/// (`:`) and marks nothing optional.
+pub fn needs_input(desc: &str) -> bool {
+    match param_entries(desc) {
+        Some(entries) => entries.iter().any(|(_, optional)| !optional),
+        None => desc.contains(':') && !desc.contains('?'),
+    }
+}
+
+/// [`param_keys`], each with whether it is optional (`"key"?`).
+fn param_entries(desc: &str) -> Option<Vec<(&str, bool)>> {
     #[derive(PartialEq)]
     enum At {
         Value,
@@ -106,8 +126,11 @@ pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
                     At::Alternative => matches!(next, Some(b'?' | b':')),
                     At::Value => false,
                 };
-                if depth == 1 && key {
-                    keys.extend(desc.get(i + 1..end));
+                if depth == 1
+                    && key
+                    && let Some(k) = desc.get(i + 1..end)
+                {
+                    keys.push((k, next == Some(&b'?')));
                 }
                 at = At::Value;
                 i = end;

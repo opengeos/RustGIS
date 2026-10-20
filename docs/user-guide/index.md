@@ -75,7 +75,9 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   degrees and DMS), the selection count and the draw time.
 
 **Command Search** (++ctrl+k++, or the box at the top right) finds any command or geoprocessing
-tool by name and runs it.
+tool by name and runs it. A command that needs input the search can't give it, such as a layer,
+is listed greyed out, with the reason on hover; the Workflows pane's tools (Georeference, Change
+Detection and the rest) open in that pane.
 
 To give the map more room, collapse the ribbon to its tab row with the chevron at its right
 end, by double-clicking a tab, or with ++ctrl+f1++ (++cmd+f1++ on macOS, where F1 may need the Fn

@@ -677,6 +677,8 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.separator();
         let ql = q.to_lowercase();
         let mut hits: Vec<(String, String, String)> = Vec::new();
+        // Commands listed but not runnable from here: they need input the palette can't give.
+        let mut needs_input = std::collections::HashSet::new();
         // Geoprocessing tools first when the query names one (a few dozen at most: the GeoLibre
         // suite has a thousand).
         for tool in rustgis_engine::analysis::tools() {
@@ -695,6 +697,15 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 ));
             }
         }
+        // The Workflows pane's tools (Georeference, Change Detection…) open in the pane, which asks
+        // for the layer and settings their commands need.
+        if !ql.is_empty() {
+            for &(section, label) in crate::analysispane::SECTIONS {
+                if label.to_lowercase().contains(&ql) || section.to_lowercase().contains(&ql) || tl!(label).to_lowercase().contains(&ql) {
+                    hits.push((format!("pane:{section}"), tl!(label).to_string(), crate::i18n::location("Workflows")));
+                }
+            }
+        }
         for c in &app.session.registry.commands {
             if ql.is_empty()
                 || c.label.to_lowercase().contains(&ql)
@@ -703,6 +714,11 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             {
                 if c.params.contains(':') && !c.params.contains("?") && c.params != "{}" {
                     continue; // needs parameters: not runnable from the palette
+                }
+                // A required parameter beside optional ones: listed, so it can be found (Tasks' Show
+                // Me opens the palette on a step's command), but not run without what it needs.
+                if c.needs_input() {
+                    needs_input.insert(c.id);
                 }
                 hits.push((c.id.to_string(), tl!(c.label).to_string(), crate::i18n::location(c.location)));
             }
@@ -756,7 +772,8 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             let mut first = true;
             for (id, label, loc) in hits.iter().take(40) {
                 // Unavailable commands stay listed, greyed out, with the reason on hover.
-                let on = id.starts_with("gp:") || id.starts_with("panel:") || enabled(app, id);
+                let opens = id.starts_with("gp:") || id.starts_with("panel:") || id.starts_with("pane:");
+                let on = opens || (enabled(app, id) && !needs_input.contains(id.as_str()));
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 // The command's shortcut after its location.
                 let keys = if id.contains(':') { String::new() } else { crate::keymap::shortcut_text(app, id, &Value::Null) };
@@ -770,7 +787,12 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
                 // The scroll area would clip a fill wider than the row.
                 let mut resp = row_button(ui, on, b, 0.0);
-                if let Some(why) = why_disabled(app, id) {
+                let why = why_disabled(app, id).or_else(|| {
+                    needs_input
+                        .contains(id.as_str())
+                        .then_some("it needs input: open it from its pane or button, or run it from a script or the assistant")
+                });
+                if let Some(why) = why {
                     resp = resp.on_disabled_hover_text(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl_raw!(why))]));
                 }
                 let enter = on && first && ui.input(|i| i.key_pressed(Key::Enter));
@@ -794,6 +816,8 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             let _ = app.run("ui.gp.open", json!({"tool": tool}));
         } else if let Some(plugin) = id.strip_prefix("panel:") {
             let _ = app.run("ui.pane.plugin", json!({"id": plugin}));
+        } else if let Some(section) = id.strip_prefix("pane:") {
+            let _ = app.run("ui.pane.workflows", json!({"section": section}));
         } else {
             let _ = app.run(&id, Value::Null);
         }
