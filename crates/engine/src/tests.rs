@@ -1004,8 +1004,9 @@ fn hostile_params_never_panic() {
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
         json!({"database": "mssql://u:p#@[::1/x?encrypt=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MSSQL://u@h:99999999/%zz?ca=/nonexistent", "sql": "SELECT 1"}),
-        // Control points that parse far enough to reach a fit.
-        json!({"points": [[], 7, [1, 2, 3, 4, "x"], [0, 0, 1e308, -1e308]], "transform": "spline"}),
+        // Control points that don't parse, then ones that reach a fit.
+        json!({"points": [[], 7, [1, 2, 3, 4, "x"]], "transform": "spline"}),
+        json!({"points": [[0, 0, 1e308, -1e308], [1, 0, -1e308, 1e308], [0, 1, 1e308, 1e308], [1, 1, 0, 0, 0]], "transform": "spline"}),
         json!({"points": vec![json!([5, 5, 1, 1]); 1000], "compare": true}),
         json!({"points": [[0, 0, f64::MAX, f64::MAX], [1, 0, -f64::MAX, f64::MAX], [0, 1, f64::MAX, -f64::MAX]], "compare": true}),
     ];
