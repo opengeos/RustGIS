@@ -115,6 +115,16 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
             want.label()
         ));
     }
+    // Pasted graphics (they have a `kind`) keep their style in a graphics layer made before a style
+    // field (#583): it gains the fields they carry, as `graphics.add` and `graphics.edit` add one
+    // when it is first set. Other features pasted into it add none.
+    if l.graphics && src.field_index("kind").is_some() {
+        for (name, ty) in rustgis_map::graphics::FIELDS {
+            if src.field_index(name).is_some() {
+                l.dataset.ensure_field(name, *ty);
+            }
+        }
+    }
     // Fields are matched by name; the rest are left empty.
     let map: Vec<Option<usize>> = l.dataset.fields.iter().map(|f| src.field_index(&f.name)).collect();
     let mut next = l.dataset.features.iter().map(|f| f.id).max().unwrap_or(0);
