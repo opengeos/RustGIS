@@ -1002,6 +1002,10 @@ fn hostile_params_never_panic() {
         // MySQL addresses that can't be read, so nothing connects.
         json!({"database": "mysql://u:p#@[::1/x?ssl-mode=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
+        // Control points that parse far enough to reach a fit.
+        json!({"points": [[], 7, [1, 2, 3, 4, "x"], [0, 0, 1e308, -1e308]], "transform": "spline"}),
+        json!({"points": vec![json!([5, 5, 1, 1]); 1000], "compare": true}),
+        json!({"points": [[0, 0, f64::MAX, f64::MAX], [1, 0, -f64::MAX, f64::MAX], [0, 1, f64::MAX, -f64::MAX]], "compare": true}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
     let streamed = grid_fgb("hostile", 20);
@@ -2704,6 +2708,26 @@ fn layer_effects_and_imagery_tools() {
         "north up only"
     );
     s.run("raster.georeference", &json!({"layer": dem, "extent": [10.0, 45.0, 10.04, 45.04]})).unwrap();
+    // Control point fits: a sheared grid is affine, a point switched off still gets a residual,
+    // and comparing the transforms recommends the simplest that predicts the points left out.
+    let sheared: Vec<Value> = (0..16)
+        .map(|i| {
+            let (c, r) = (f64::from(i % 4) * 100.0, f64::from(i / 4) * 100.0);
+            json!([c, r, 20.0 + c * 0.001 + r * 0.0002, 50.0 - r * 0.001])
+        })
+        .collect();
+    let mut pts = sheared.clone();
+    pts[5] = json!([100, 100, 20.5, 49.0, 0]);
+    let fit = s.run("raster.gcpFit", &json!({"points": pts, "transform": "affine"})).unwrap();
+    assert_eq!(fit["used"], 15);
+    assert!(fit["rmse"]["map"].as_f64().unwrap() < 1e-9, "{fit}");
+    assert!(fit["residuals"][5]["map"][0].as_f64().unwrap() < -0.3, "the switched-off point misses");
+    let g: Vec<f64> = fit["affine"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!((g[1] - 0.001).abs() < 1e-12 && (g[2] - 0.0002).abs() < 1e-12 && (g[5] + 0.001).abs() < 1e-12, "{g:?}");
+    let cmp = s.run("raster.gcpFit", &json!({"points": sheared, "compare": true})).unwrap();
+    assert_eq!(cmp["recommended"], "affine", "{cmp}");
+    assert!(s.run("raster.gcpFit", &json!({"points": [[0, 0, 1, 1]]})).is_err());
+    assert!(s.run("raster.gcpFit", &json!({"points": [[0, 0, 1, 1], [1, 1, 2, 2]], "transform": "magic"})).is_err());
     let sp = s.run("raster.spectral", &json!({"layer": dem, "lon": 10.0205, "lat": 45.0195})).unwrap();
     assert!(sp["values"][0].as_f64().unwrap() > 290.0);
     s.run("raster.index", &json!({"layer": dem, "index": "ndvi", "nir": 1, "red": 1})).unwrap();
