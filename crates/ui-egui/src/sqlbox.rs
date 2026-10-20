@@ -28,7 +28,7 @@ struct Draft {
     open: bool,
     /// The box takes the keyboard on the next frame (just opened).
     focus: bool,
-    /// The last Check: the text it checked, the project's revision then, and how many of how many
+    /// The last Check: the text it checked, the caller's `version` then, and how many of how many
     /// features match, or why the text doesn't read. Shown while both are unchanged.
     check: Option<(String, u64, Result<(usize, usize), String>)>,
 }
@@ -38,14 +38,15 @@ const MAX_CHIPS: usize = 40;
 
 /// The box in `slot` for `owner`'s clause, `stored` in the project, over the fields of `ds`.
 /// `count` runs only on Check: how many features match a clause that reads, of how many; its
-/// answer shows while the project's `revision` is the same. A draft is kept while the same owner
+/// answer shows while `version` (whatever the count depends on: the project's revision, the
+/// scale) is the same. A draft is kept while the same owner
 /// is shown in the slot and dropped for another; it follows the stored clause until it is edited,
 /// and then says it isn't applied.
 pub fn show(
     ui: &mut Ui,
     slot: &str,
     owner: egui::Id,
-    revision: u64,
+    version: u64,
     stored: Option<&str>,
     ds: &Dataset,
     count: impl FnOnce(&str) -> Result<(usize, usize), String>,
@@ -77,7 +78,7 @@ pub fn show(
             (d.open, d.focus) = (true, true);
         }
     } else {
-        apply = editor(ui, t, &mut d, revision, stored, ds, count);
+        apply = editor(ui, t, &mut d, version, stored, ds, count);
     }
     ui.data_mut(|m| m.insert_temp(key, d));
     apply
@@ -87,7 +88,7 @@ fn editor(
     ui: &mut Ui,
     t: &Tokens,
     d: &mut Draft,
-    revision: u64,
+    version: u64,
     stored: Option<&str>,
     ds: &Dataset,
     count: impl FnOnce(&str) -> Result<(usize, usize), String>,
@@ -124,16 +125,16 @@ fn editor(
                 Ok(()) => count(&text),
                 Err(e) => Err(e.clone()),
             };
-            d.check = Some((text.clone(), revision, result));
+            d.check = Some((text.clone(), version, result));
         }
         let can_apply = changed && reads.is_ok();
-        let hover = if text.is_empty() { tl!("Label every feature.") } else { tl!("Label only the features that match.") };
+        let hover = if text.is_empty() { tl!("Remove the clause.") } else { tl!("Label only the features that match.") };
         if ui.add_enabled(can_apply, egui::Button::new(tl!("Apply"))).on_hover_text(hover).clicked() || (ctrl_enter && can_apply) {
             apply = Some(if text.is_empty() { Apply::Clear } else { Apply::Clause(text.clone()) });
         }
         if ui
             .add_enabled(stored.is_some() || !text.is_empty(), egui::Button::new(tl!("Clear")))
-            .on_hover_text(tl!("Remove the clause: label every feature."))
+            .on_hover_text(tl!("Remove the clause."))
             .clicked()
         {
             d.text.clear();
@@ -156,11 +157,11 @@ fn editor(
             };
             ui.label(RichText::new(said).small().color(t.red));
         }
-        (Ok(()), Some((checked, at, Ok((n, of))))) if *checked == text && *at == revision => {
+        (Ok(()), Some((checked, at, Ok((n, of))))) if *checked == text && *at == version => {
             let said = crate::i18n::fmt("Valid: {n} of {of} features match", &[("n", &n.to_string()), ("of", &of.to_string())]);
             ui.label(RichText::new(said).small().color(t.green));
         }
-        (Ok(()), Some((checked, at, Err(e)))) if *checked == text && *at == revision => {
+        (Ok(()), Some((checked, at, Err(e)))) if *checked == text && *at == version => {
             ui.label(RichText::new(crate::i18n::fmt("Invalid: {error}", &[("error", e)])).small().color(t.red));
         }
         _ => {}

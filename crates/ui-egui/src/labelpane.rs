@@ -80,8 +80,8 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         let key = egui::Id::new("label_pane_class_tab");
         let mut tab = ui.data(|d| d.get_temp::<ClassTab>(key)).unwrap_or(ClassTab::Field);
         ui.horizontal(|ui| {
-            for (label, it) in [("Field", ClassTab::Field), ("SQL", ClassTab::Sql)] {
-                if ui.add(egui::Button::selectable(tab == it, tl!(label))).clicked() {
+            for (label, it) in [(tl!("Field"), ClassTab::Field), (tl!("SQL"), ClassTab::Sql)] {
+                if ui.add(egui::Button::selectable(tab == it, label)).clicked() {
                     tab = it;
                 }
             }
@@ -145,8 +145,9 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     };
     // A draft belongs to this layer of this project: another project may reuse the layer's id.
     let owner = egui::Id::new((app.session.opened, l.id));
-    let revision = app.session.revision;
-    match crate::sqlbox::show(ui, "label_sql", owner, revision, labels.default.where_.as_deref(), &l.dataset, count) {
+    // A count holds for this project state at this scale (display filters follow the scale).
+    let version = egui::Id::new((app.session.revision, scale.to_bits())).value();
+    match crate::sqlbox::show(ui, "label_sql", owner, version, labels.default.where_.as_deref(), &l.dataset, count) {
         Some(crate::sqlbox::Apply::Clause(w)) => run(app, "labels.class.update", json!({"where": w})),
         Some(crate::sqlbox::Apply::Clear) => run(app, "labels.class.update", json!({"where": null})),
         None => {}
@@ -698,6 +699,13 @@ mod tests {
         h.state_mut().run("labels.enable", json!({"on": true})).unwrap();
         h.run();
         assert!(h.query_by_label_contains("features match").is_none(), "the count may be stale");
+        // A zoom changes no revision, but the scale: display filters may draw other features.
+        h.get_by_label("Check").click();
+        h.run();
+        assert!(h.query_by_label_contains("features match").is_some());
+        h.state_mut().session.map_mut().camera.res *= 2.0;
+        h.run();
+        assert!(h.query_by_label_contains("features match").is_none(), "the count was for another scale");
     }
 
     /// A clause whose field was deleted since says so: it no longer reads, and labels nothing.
