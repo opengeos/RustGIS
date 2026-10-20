@@ -1398,6 +1398,11 @@ fn label_classes_by_command() {
     assert!(s.run("labels.class.rename", &json!({"class": "Big", "name": "medium"})).is_err());
     assert!(s.run("labels.class.update", &json!({"class": "Big", "where": "(("})).is_err());
     assert!(s.run("labels.style", &json!({"class": "Nope", "size": 30})).is_err());
+    // A class that isn't a name is refused, not taken for Default.
+    for bad in [json!(3), json!("  "), json!(["Big"])] {
+        assert!(s.run("labels.style", &json!({"class": bad, "size": 30})).is_err(), "{bad}");
+        assert!(s.run("labels.class.add", &json!({"name": "X", "from": bad})).is_err(), "{bad}");
+    }
     assert_eq!(labels(&s), l, "refusals change nothing");
     // A field for a class that isn't there turns nothing on; one for a class labels the layer.
     s.run("labels.enable", &json!({"on": false})).unwrap();

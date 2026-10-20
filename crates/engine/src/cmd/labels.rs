@@ -130,9 +130,20 @@ pub(crate) fn with_class(s: &mut Session, p: &Value, f: impl FnOnce(&mut LabelCl
 
 /// The label class `p` names (`"class"`; Default when none).
 pub(crate) fn class_in<'a>(labels: &'a mut Labeling, p: &Value) -> Result<&'a mut LabelClass, String> {
-    match ps(p, "class").map(str::trim).filter(|n| !n.is_empty()) {
+    match class_param(p, "class")? {
         None => Ok(&mut labels.default),
         Some(n) => labels.class_mut(n).ok_or_else(|| format!("no label class named '{n}'")),
+    }
+}
+
+/// The class name `p` gives as `key`: none when it's missing or null (the Default class), and a
+/// refusal when it isn't a name, rather than changing Default by mistake.
+fn class_param<'a>(p: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => {
+            v.as_str().map(str::trim).filter(|n| !n.is_empty()).map(Some).ok_or_else(|| format!("{key} must be a label class's name"))
+        }
     }
 }
 
@@ -192,7 +203,7 @@ fn clause(p: &Value, ds: &Dataset) -> Result<Option<Option<String>>, String> {
 
 fn add_class(s: &mut Session, p: &Value) -> CmdResult {
     let name = s_req(p, "name")?.to_string();
-    let from = ps(p, "from").map(str::trim).filter(|n| !n.is_empty()).map(String::from);
+    let from = class_param(p, "from")?.map(String::from);
     let id = s.layer_id(p)?;
     let clause = s.map().layer(id).map(|l| clause(p, &l.dataset)).transpose()?.flatten().flatten();
     let mut added = String::new();

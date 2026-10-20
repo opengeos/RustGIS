@@ -864,21 +864,44 @@ pub const DEFAULT_LABEL_CLASS: &str = "Default";
 /// and the other classes are listed only when there are any, so a project without them keeps
 /// its old form.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "LabelingFile")]
 pub struct Labeling {
     pub enabled: bool,
     #[serde(flatten)]
     pub default: LabelClass,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "de_label_classes")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub classes: Vec<LabelClass>,
 }
 
-/// Reads a layer's label classes as the commands would leave them: at most
-/// [`MAX_LABEL_CLASSES`]. A project file is hostile input, and every feature drawn is matched
-/// against them.
-fn de_label_classes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<LabelClass>, D::Error> {
-    let mut v: Vec<LabelClass> = Vec::deserialize(d)?;
-    v.truncate(MAX_LABEL_CLASSES);
-    Ok(v)
+/// A layer's labels as a file holds them, read into what the commands would leave (see `From`).
+#[derive(Deserialize)]
+struct LabelingFile {
+    enabled: bool,
+    #[serde(flatten)]
+    default: LabelClass,
+    #[serde(default)]
+    classes: Vec<LabelClass>,
+}
+
+impl From<LabelingFile> for Labeling {
+    /// A project file is hostile input, and every feature drawn is matched against the classes:
+    /// at most [`MAX_LABEL_CLASSES`] are kept, each named, by a name no class before it nor
+    /// Default has (ASCII case aside), as the commands keep them. The others are dropped, since
+    /// commands and annotation classes (`"CLASS" = 'name'`) tell classes apart by name.
+    fn from(f: LabelingFile) -> Self {
+        let mut classes: Vec<LabelClass> = Vec::new();
+        for mut c in f.classes {
+            if classes.len() >= MAX_LABEL_CLASSES {
+                break;
+            }
+            c.name = c.name.trim().to_string();
+            let same = |n: &str| n.eq_ignore_ascii_case(&c.name);
+            if !c.name.is_empty() && !same(&f.default.name) && !classes.iter().any(|o| same(&o.name)) {
+                classes.push(c);
+            }
+        }
+        Labeling { enabled: f.enabled, default: f.default, classes }
+    }
 }
 
 /// One class of a layer's labels: the features it labels, the field it labels them with, its text
@@ -1113,11 +1136,16 @@ impl Labeling {
         (self.default.name, self.default.visible, self.default.where_) = (old.name, old.visible, old.where_);
     }
 
-    /// Points every class on a field `ds` doesn't have at the Default class's field (a field
-    /// deleted, a style from another layer, a service's fields changed). The class is kept, with
-    /// its clause and text symbol.
+    /// Points every class on a field `ds` doesn't have at the Default class's field, or the first
+    /// name-like one when Default's is gone too (a field deleted, a style from another layer, a
+    /// service's fields changed). The class is kept, with its clause and text symbol.
     pub fn repoint_missing_fields(&mut self, ds: &Dataset) {
-        let fallback = self.default.field.clone();
+        // Default's field, or (it is gone too, cleared by a refresh) the first name-like one, so
+        // a class isn't left on no field.
+        let fallback = match ds.field_index(&self.default.field) {
+            Some(_) => self.default.field.clone(),
+            None => LabelClass::default_for(ds).field,
+        };
         for c in self.classes.iter_mut().filter(|c| ds.field_index(&c.field).is_none()) {
             c.field.clone_from(&fallback);
         }
@@ -1169,11 +1197,31 @@ mod tests {
         let read: Labeling = serde_json::from_value(serde_json::to_value(&l).unwrap()).unwrap();
         assert_eq!(read.classes.len(), MAX_LABEL_CLASSES);
         assert_eq!(read.classes.last().map(|c| c.name.clone()), Some(format!("c{}", MAX_LABEL_CLASSES - 1)));
+        // And with one class to a name, as the commands keep them: none blank, nor named as one
+        // before it or Default.
+        let mut v = serde_json::to_value(Labeling::default_for(&ds)).unwrap();
+        // A class saved without a name (its name is Default's, which is skipped) too.
+        let named = |n: Option<&str>| {
+            let mut c = serde_json::to_value(LabelClass::default_for(&ds)).unwrap();
+            if let Some(n) = n {
+                c["name"] = n.into();
+            }
+            c
+        };
+        let names = [Some(" A "), Some("a"), Some("  "), Some("default"), None, Some("B")];
+        v["classes"] = names.into_iter().map(named).collect();
+        let read: Labeling = serde_json::from_value(v).unwrap();
+        assert_eq!(read.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
         assert_eq!(l.in_order().count(), MAX_LABEL_CLASSES + 1, "the counted classes, then Default");
         assert_eq!(l.in_order().last().map(|c| c.name.as_str()), Some(DEFAULT_LABEL_CLASS));
         assert!(l.class(&format!("c{}", MAX_LABEL_CLASSES + 1)).is_none() && l.class_mut("c70").is_none());
         l.repoint_missing_fields(&ds);
         assert!(l.classes.iter().all(|c| c.field == "name"));
+        // With Default's field gone too (a refresh clears it), they take the first name-like one.
+        l.default.field.clear();
+        l.classes[0].field = "gone".into();
+        l.repoint_missing_fields(&ds);
+        assert_eq!(l.classes[0].field, "name");
         // Default on a field that's gone starts again on a name-like one, keeping its own settings.
         (l.enabled, l.default.name, l.default.visible, l.default.where_) = (true, "Rest".into(), false, Some("name = 'x'".into()));
         l.default.field = "gone".into();
