@@ -597,7 +597,10 @@ mod tests {
         // Settling, the exact pictures are drawn while there's time (a round at least).
         let g = frame(2.35, 1.0);
         let (items, lacks) = paced(Pace::Settling, || cover(&r, &g, &view, None, &mut pending).unwrap());
-        assert!(lacks != Some(Unfinished::Later) && !items.is_empty() && !theirs(&items));
+        // A round at least is new; complete, nothing held stands in.
+        let held_in = |i: &Item| held.iter().any(|h| Arc::ptr_eq(h, &i.payload));
+        assert!(lacks != Some(Unfinished::Later) && items.iter().any(|i| !held_in(i)));
+        assert!(lacks.is_some() || !items.iter().any(held_in));
         // Inside nested calls, the outer one hears of pictures standing in.
         let ((_, inner), outer) = paced(Pace::Settling, || paced(Pace::Moving, || cover(&r, &frame(2.25, 1.0), &view, None, &mut pending)));
         assert!(inner == Some(Unfinished::Later) && outer == inner);
