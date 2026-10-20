@@ -256,6 +256,14 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
     TileMesh { vertices: out.vertices, indices: out.indices, runs: mesh_runs, waiting: false }
 }
 
+/// The most points of a ring fanned rather than given to lyon: the walk round it stays cheap,
+/// and rings past it are rarely convex.
+const FAN_POINTS: usize = 64;
+
+/// How far (radians) a ring's turns may add up away from once round and still be convex: f32
+/// rounding, far less than a turn's worth.
+const TURN_TOLERANCE: f32 = 0.1;
+
 /// A ring's points without its closing one, when they make a convex polygon of some area
 /// (turning one way all round, once): a fan of them fills it. A spike (going back on itself)
 /// turns half round more, so it fails the count and goes to lyon.
@@ -265,7 +273,7 @@ fn convex(ring: &[[f32; 2]]) -> Option<&[[f32; 2]]> {
         _ => ring,
     };
     let n = pts.len();
-    if !(3..=64).contains(&n) {
+    if !(3..=FAN_POINTS).contains(&n) {
         return None;
     }
     let (mut sign, mut turned) = (0.0f32, 0.0f32);
@@ -285,7 +293,7 @@ fn convex(ring: &[[f32; 2]]) -> Option<&[[f32; 2]]> {
         let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
         turned += cross.atan2(u[0] * v[0] + u[1] * v[1]);
     }
-    (sign != 0.0 && (turned.abs() - std::f32::consts::TAU).abs() < 0.1).then_some(pts)
+    (sign != 0.0 && (turned.abs() - std::f32::consts::TAU).abs() < TURN_TOLERANCE).then_some(pts)
 }
 
 /// Takes back what a shape lyon refused left in `out`: shapes lyon refuses are left out, not
@@ -687,6 +695,10 @@ mod tests {
         let edgy = [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]];
         assert_eq!(convex(&edgy).map(<[_]>::len), Some(5));
         assert!(convex(&[[0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]).is_none());
+        // A sliver, nearly flat but turning one way: convex, and the fan covers it.
+        assert_eq!(convex(&[[0.0, 0.0], [4096.0, 0.0], [4096.0, 1.0]]).map(<[_]>::len), Some(3));
+        // Nearly flat, turning both ways: lyon's.
+        assert!(convex(&[[0.0, 0.0], [2048.0, 1.0], [4096.0, 0.0], [4096.0, 1.0]]).is_none());
         // A convex building fills as lyon fills it: the same area.
         let area = |m: &TileMesh| {
             m.indices
