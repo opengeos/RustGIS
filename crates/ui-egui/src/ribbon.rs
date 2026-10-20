@@ -3989,7 +3989,7 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
         big(
             ui,
             app,
-            "settings",
+            "label_properties",
             "Properties",
             "Every label setting of this layer, in the Labeling pane.",
             "ui.pane.labeling",
