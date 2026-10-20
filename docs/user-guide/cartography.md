@@ -166,7 +166,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   `labels.class.move`, `labels.class.remove` and `labels.class.clear` (every class but Default;
   no error when there are none, so a script can start with it). The other label commands take a `class`
   (`labels.style={"layer": "Cities", "class": "Capitals", "size": 14}`), and change Default
-  without one. Convert keeps the classes, with a `CLASS` field saying which labelled each
+  without one (a renamed Default is named by its new name, or left out). Convert keeps the classes, with a `CLASS` field saying which labelled each
   point; a web style (Share › Web Style) labels with Default only, and has no labels when
   Default is hidden.
 

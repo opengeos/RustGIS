@@ -182,12 +182,10 @@ pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
         "webLayer" => {
             let mut l = layer_of(s, p)?;
             load_whole(&mut l)?;
-            note_label_classes(s, &l);
             Ok((l.name.clone(), web_layer_zip(s, &l)?, l.name.clone()))
         }
         "webStyle" => {
             let l = layer_of(s, p)?;
-            note_label_classes(s, &l);
             let style = web_style(&l);
             Ok((l.name.clone(), serde_json::to_vec_pretty(&style).map_err(|e| e.to_string())?, l.name.clone()))
         }
@@ -284,9 +282,7 @@ fn target(s: &Session, p: &Value, name: &str, ext: &str) -> Result<String, Strin
 }
 
 fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
-    let mark = s.notice_mark();
     let (name, bytes, source) = share_bytes(s, kind, p)?;
-    let told = s.notices_since(mark).len();
     let ext = KINDS.iter().find(|k| k.0 == kind).map_or("bin", |k| k.1);
     let path = target(s, p, &name, ext)?;
     // A share of another kind (or an uploaded file) at that path isn't replaced.
@@ -321,12 +317,8 @@ fn share(s: &mut Session, p: &Value, kind: &str) -> CmdResult {
         }
     };
     s.notify(format!("Shared {name} to {path}"), false);
-    // What the share left out (see `note_label_classes`) comes after it, so the status bar, which
-    // shows the last notice, keeps saying it.
-    let len = s.notices.len();
-    if let Some(tail) = s.notices.get_mut(len.saturating_sub(told + 1)..) {
-        tail.rotate_right(1);
-    }
+    // After it, so the status bar, which shows the last notice, keeps saying it.
+    note_label_classes(s, kind, p);
     Ok(json!({"item": id, "path": path, "bytes": bytes.len()}))
 }
 
@@ -555,27 +547,26 @@ onresize=draw;draw();
     ))
 }
 
-/// Says when a web style labels differently from the map: it labels every feature with the
-/// Default class's field and text symbol, since no SQL clause has a MapLibre filter written for it,
-/// and nothing when Default is hidden.
-fn note_label_classes(s: &mut Session, l: &Layer) {
-    if !l.labels.enabled {
+/// Says when a web layer or style (`kind`) labels differently from the map: it labels every
+/// feature with the Default class's field and text symbol, since no SQL clause has a MapLibre
+/// filter written for it, and nothing when Default is hidden. Run once the share is made, so its
+/// own notice comes after the one saying it's made.
+pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
+    if !matches!(kind, "webLayer" | "webStyle") {
         return;
     }
+    let Some(l) = s.layer_id(p).ok().and_then(|id| s.map().layer(id)).filter(|l| l.labels.enabled) else { return };
     let n = l.labels.in_order().count() - 1;
     let clause = l.labels.default.where_.as_deref().is_some_and(|w| !w.trim().is_empty());
-    if !l.labels.default.visible {
-        if n > 0 {
-            s.notify(
-                format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name),
-                false,
-            );
-        }
-    } else if n > 0 || clause {
-        s.notify(
-            format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name),
-            false,
-        );
+    let text = if !l.labels.default.visible {
+        (n > 0).then(|| format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name))
+    } else {
+        (n > 0 || clause).then(|| {
+            format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name)
+        })
+    };
+    if let Some(text) = text {
+        s.notify(text, false);
     }
 }
 

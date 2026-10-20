@@ -211,7 +211,7 @@ pub fn commands() -> Vec<C> {
                 labels.enabled = true;
                 Ok(())
             })
-        }).params(r#"{"layer"?, "class"?: name (default: Default), "field": name}"#)
+        }).params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "field": name}"#)
         .when(need_feature_layer),
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
@@ -233,7 +233,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (default: Default), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;

@@ -38,10 +38,10 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?, "name"?: string}"#),
         C::new("labels.scaleRange", "Label Visibility Range", "Style › Label Range", scale_range)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "class"?: name (default: Default), "min"?: scale|null (out beyond), "max"?: scale|null (in beyond), "clear"?: bool (clears the scale and distance limits, as Clear Limits does)}"#),
+            .params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "min"?: scale|null (out beyond), "max"?: scale|null (in beyond), "clear"?: bool (clears the scale and distance limits, as Clear Limits does)}"#),
         C::new("labels.distanceRange", "Label Distance Range", "Style › Label Range", distance_range)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "class"?: name (default: Default), "closest"?: metres|null, "farthest"?: metres|null, "clear"?: bool}"#),
+            .params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "closest"?: metres|null, "farthest"?: metres|null, "clear"?: bool}"#),
         C::new("labels.placement", "Label Placement", "Style › Label Placement", |s, p| {
             let code = ps(p, "position").ok_or("position is required")?;
             let pos = LabelPlacement::from_code(code).ok_or_else(|| format!("unknown placement '{code}'"))?;
@@ -49,13 +49,13 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(
-            r#"{"layer"?, "class"?: name (default: Default), "position": "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"}"#,
+            r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "position": "auto"|"center"|"above"|"below"|"left"|"right"|"aboveRight"|"aboveLeft"|"belowRight"|"belowLeft"}"#,
         ),
         // Label classes: a feature is labelled by the first class whose clause takes it, Default
         // last (`Labeling`).
         C::new("labels.class.add", "Add Label Class", "Style › Label Class", add_class)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "name": string, "where"?: sql (a definition query's language; none takes every feature that reaches it), "from"?: class (whose field and text symbol it starts with; default: Default)}"#),
+            .params(r#"{"layer"?, "name": string, "where"?: sql (a definition query's language; none takes every feature that reaches it), "from"?: class (whose field and text symbol it starts with; none: the Default class)}"#),
         C::new("labels.class.remove", "Remove Label Class", "Style › Label Class", |s, p| {
             let name = s_req(p, "class")?.trim().to_string();
             with_labels(s, p, |labels| {
@@ -103,7 +103,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r#"{"layer"?, "class"?: name (default: Default), "where"?: sql|null, "visible"?: bool}"#),
+        .params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "where"?: sql|null, "visible"?: bool}"#),
         C::new("labels.class.move", "Move Label Class", "Style › Label Class", |s, p| {
             let name = s_req(p, "class")?.trim().to_string();
             let to = f(p, "to").filter(|v| v.is_finite()).ok_or("to is required: the class's place, 0 checked first")?;
