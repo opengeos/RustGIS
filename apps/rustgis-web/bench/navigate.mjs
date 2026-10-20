@@ -11,8 +11,9 @@
 // the cases draw OpenFreeMap's Liberty style over Manhattan and Esri World Imagery over Paris.
 // Each case loads the app, waits for the first tiles, then runs the same scripted drags and wheel
 // zooms. `--dpr` sets the device pixel ratio (a laptop's 2), `--throttle` slows the CPU that many
-// times (Chrome's CPU throttling) to stand in for a slower machine. Frame intervals are measured with requestAnimationFrame in the page, so they include
-// every stall of the main thread (fetch callbacks, decoding, drawing, uploads).
+// times (Chrome's CPU throttling) to stand in for a slower machine. Frame intervals are measured
+// with requestAnimationFrame in the page, so they include every stall of the main thread (fetch
+// callbacks, decoding, drawing, uploads).
 
 import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
@@ -33,7 +34,10 @@ const { chromium } = loadPlaywright();
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith("--") ? args[i + 1] : fallback;
+  if (i < 0) return fallback;
+  // Given without its value (`--dpr --gpu`): an error rather than the default.
+  if (!args[i + 1] || args[i + 1].startsWith("--")) throw new Error(`--${name} needs a value`);
+  return args[i + 1];
 };
 const flag = (name) => args.includes(`--${name}`);
 

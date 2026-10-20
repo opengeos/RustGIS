@@ -123,7 +123,7 @@ override that for one visit: add `?blank` to start with an empty project,
 `?projection=EPSG:3010` (a supported projected EPSG or ESRI code, a preset id such as `robinson`, or `globe`) to
 start in another projection, `?extent=10.5,55,24.5,69.5` (west, south, east, north in degrees) to
 open on an area, `?lang=de` (or any language code) to pick the interface language, `?gpu` (or
-`?gpu=0`) to turn GPU Rendering on (off; remembered, as the toggle is), or `?webgl` to force
+`?gpu=0`) to turn GPU Rendering on (off) for the visit, or `?webgl` to force
 WebGL2. Combine them with `&`, so a self-hosted build can link to
 `?blank&projection=EPSG:3010&extent=10.5,55,24.5,69.5`.
 

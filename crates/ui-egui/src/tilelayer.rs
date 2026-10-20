@@ -255,6 +255,17 @@ impl LiveTiles {
         let mut uploads = Uploads { n: 0, started: web_time::Instant::now() };
         let mut instances: Vec<Instance> = Vec::new();
         self.runs.clear();
+        // Every picture of the frame already here is marked drawn first, so making room for a
+        // new one never takes one the frame draws further on.
+        let frame = self.frame;
+        for q in layers.iter().flatten() {
+            let Some(pm) = q.pixmap() else { continue };
+            if let Some(s) = self.pools.get_mut(&pm.width()).and_then(|p| p.by_picture.get_mut(&(Arc::as_ptr(&q.picture) as usize)))
+                && s.picture.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &q.picture))
+            {
+                s.used = frame;
+            }
+        }
         for quads in layers {
             let mut by_chunk: Vec<(usize, Vec<Instance>)> = Vec::new();
             for q in quads {

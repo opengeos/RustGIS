@@ -110,10 +110,10 @@ pub fn start() {
                     if let Err(e) = app.start(&start) {
                         log::warn!("start-up: {e}");
                     }
-                    // `?gpu` (or `?gpu=0`) turns the GPU map on (off), as the status bar's toggle does.
+                    // `?gpu` (or `?gpu=0`) turns the GPU map on (off) for this visit.
                     if let Some(v) = param(&q, "gpu").or_else(|| flag(&q, "gpu").then(String::new)) {
                         let on = !matches!(v.as_str(), "0" | "false" | "off");
-                        if let Err(e) = app.run("ui.map.gpu", serde_json::json!({"on": on})) {
+                        if let Err(e) = app.run("ui.map.gpu", serde_json::json!({"on": on, "remember": false})) {
                             log::warn!("?gpu: {e}");
                         }
                     }
