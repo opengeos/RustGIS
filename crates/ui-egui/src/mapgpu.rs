@@ -570,6 +570,11 @@ fn tile_vertices(q: &TileQuad) -> [TileVertex; 6] {
 /// again (each scene uploads its own images and meshes) ran the GPU out of memory
 /// (`VK_ERROR_OUT_OF_DEVICE_MEMORY`) and crashed the page. Work already submitted still
 /// completes: WebGPU and wgpu free the memory once it has.
+///
+/// Nothing is destroyed between recording a frame and submitting it: a [`SceneCallback`] holds
+/// its scene (and through it the tile caches' textures and meshes it draws, shared by `Arc`) in
+/// egui's paint list until egui-wgpu has submitted the frame, and the [`SceneTarget`] replaced in
+/// `prepare` was last drawn in an earlier frame (each view has its own).
 pub(crate) struct Owned<T: Destroy>(T);
 
 /// What [`Owned`] destroys.
