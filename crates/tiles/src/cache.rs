@@ -5,9 +5,10 @@
 //! the waker (the app's repaint) is called, so the map draws again with the new tile. Exports
 //! and the command line, which can't draw a half-loaded map, [`wait`] for the fetches first.
 //!
-//! Natively, tiles are fetched on worker threads, the newest request first (the view the user is
-//! looking at now, not the one they panned away from), a limited number at a time from each
-//! server. The browser app installs its own fetcher with [`set_fetcher`].
+//! Tiles are fetched a limited number at a time from each server, the newest request first (the
+//! view the user is looking at now, not the one they panned away from), and a waiting tile the
+//! map stopped asking for is dropped unfetched ([`crate::schedule`]). Natively they are fetched on
+//! worker threads; the browser app installs its own fetcher with [`set_fetcher`].
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -18,6 +19,7 @@ use web_time::{Duration, Instant};
 
 use crate::failure::Failure;
 use crate::mvt;
+use crate::schedule::{Queue, Waiting};
 
 /// What a fetched address is decoded as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +81,8 @@ enum Entry {
 struct Slot {
     entry: Entry,
     used: u64,
+    /// When the map last asked for it ([`get`]): a waiting tile not asked for lately is dropped.
+    asked: Instant,
 }
 
 #[derive(Default)]
@@ -86,6 +90,8 @@ struct Cache {
     slots: HashMap<String, Slot>,
     bytes: usize,
     tick: u64,
+    /// When the map last asked for any address.
+    latest: Option<Instant>,
 }
 
 fn cache() -> &'static Mutex<Cache> {
@@ -160,11 +166,14 @@ pub fn in_flight() -> usize {
 /// What the cache holds for `url`, fetching it when it holds nothing (or a failure old enough
 /// to try again).
 pub fn get(url: &str, want: Want) -> State {
+    let now = Instant::now();
     let mut c = lock();
     c.tick += 1;
     let tick = c.tick;
+    c.latest = Some(now);
     if let Some(slot) = c.slots.get_mut(url) {
         slot.used = tick;
+        slot.asked = now;
         match &slot.entry {
             Entry::Ready(p, _) => return State::Ready(p.clone()),
             Entry::Pending => return State::Pending,
@@ -172,7 +181,7 @@ pub fn get(url: &str, want: Want) -> State {
             Entry::Failed(..) => {}
         }
     }
-    c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick });
+    c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick, asked: now });
     drop(c);
     start(url.to_string(), want);
     State::Pending
@@ -225,28 +234,141 @@ pub fn wait(timeout: Duration) {
     let _ = timeout;
 }
 
+fn queue() -> &'static Mutex<Queue<Want>> {
+    static Q: OnceLock<Mutex<Queue<Want>>> = OnceLock::new();
+    Q.get_or_init(Mutex::default)
+}
+
+/// Asks for a tile: fetched now when its server has room, else it waits its turn.
 fn start(url: String, want: Want) {
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
-    let key = url.clone();
-    let done: Done = Box::new(move |bytes| {
-        if matches!(&bytes, Err(e) if e == DROPPED) {
-            lock().slots.remove(&key);
-            finished();
+    let mut swept = Vec::new();
+    let now = {
+        let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = lock();
+        let latest = c.latest.unwrap_or_else(Instant::now);
+        let now = q.push(url, want, |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept);
+        // Under the same lock as the choice: a tile asked for again meanwhile isn't forgotten.
+        forget(&mut c, &swept);
+        now
+    };
+    launch(now.into_iter().collect());
+}
+
+/// A fetch from `host` is over: starts the waiting tiles that take its place and forgets those
+/// the map stopped asking for.
+fn release(host: &str) {
+    let next = {
+        let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = lock();
+        let latest = c.latest.unwrap_or_else(Instant::now);
+        let next = q.done(host, |url| c.slots.get(url).map(|s| s.asked), latest);
+        forget(&mut c, &next.drop);
+        next
+    };
+    launch(next.start);
+}
+
+/// Forgets tiles dropped unfetched: no longer under way, and fetched again when next asked for.
+/// Called holding the cache's lock taken to choose them, so a tile can't be asked for between.
+fn forget(c: &mut Cache, dropped: &[Waiting<Want>]) {
+    for w in dropped {
+        if matches!(c.slots.get(&w.url), Some(Slot { entry: Entry::Pending, .. })) {
+            c.slots.remove(&w.url);
+        }
+    }
+    IN_FLIGHT.fetch_sub(dropped.len(), Ordering::Release);
+}
+
+/// Starts fetches one after another, never inside each other: a fetch can be over at once (a
+/// local read, an archive that failed), and each one over starts the next waiting tile, so a
+/// long queue would otherwise go as deep into the stack as it is long.
+fn launch(jobs: Vec<Waiting<Want>>) {
+    static TO_START: Mutex<Vec<Waiting<Want>>> = Mutex::new(Vec::new());
+    static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let pop = || TO_START.lock().unwrap_or_else(|e| e.into_inner()).pop();
+    if !jobs.is_empty() {
+        // Newest first: `pop` takes from the end.
+        TO_START.lock().unwrap_or_else(|e| e.into_inner()).extend(jobs.into_iter().rev());
+    }
+    loop {
+        // Another call (this thread further up, or another thread) is starting them already.
+        if STARTING.swap(true, Ordering::AcqRel) {
             return;
         }
+        {
+            // Lowered however this ends: a fetcher that panics must not stop every later fetch.
+            struct Lower;
+            impl Drop for Lower {
+                fn drop(&mut self) {
+                    STARTING.store(false, Ordering::Release);
+                }
+            }
+            let _lower = Lower;
+            while let Some(w) = pop() {
+                fetch_tile(w.url, w.host, w.job);
+            }
+        }
+        // A tile queued after the last `pop` and before the flag went down is started here.
+        if TO_START.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+            return;
+        }
+    }
+}
+
+/// A tile fetch's answer: stored once it comes, and however the fetch ends (answered, dropped
+/// unanswered by its fetcher, or unwound by a panic) its server's place goes to the next tile
+/// and the fetch no longer counts as under way.
+struct Answer {
+    key: String,
+    host: String,
+    entry: Option<Entry>,
+}
+
+impl Answer {
+    /// Stored when the answer is dropped, after the fetch.
+    fn set(&mut self, entry: Entry) {
+        self.entry = Some(entry);
+    }
+}
+
+impl Drop for Answer {
+    fn drop(&mut self) {
+        match self.entry.take() {
+            Some(entry) => store(&self.key, entry),
+            // Never answered (or dropped by the fetcher): forgotten, fetched again when asked for.
+            None => {
+                let mut c = lock();
+                if matches!(c.slots.get(&self.key), Some(Slot { entry: Entry::Pending, .. })) {
+                    c.slots.remove(&self.key);
+                }
+            }
+        }
+        release(&self.host);
+        finished();
+    }
+}
+
+fn fetch_tile(url: String, host: String, want: Want) {
+    let answer = Answer { key: url.clone(), host, entry: None };
+    let done: Done = Box::new(move |bytes| {
+        if matches!(&bytes, Err(e) if e == DROPPED) {
+            return;
+        }
+        // Stored once decoded, which the browser's decoder may finish later (the answer is held
+        // till then, and dropped unanswered if the decoder never calls back).
         let settle = move |decoded: Result<Payload, String>| {
-            let entry = match decoded {
+            let mut answer = answer;
+            answer.set(match decoded {
                 Ok(p) => {
                     let size = payload_bytes(&p);
                     Entry::Ready(Arc::new(p), size)
                 }
                 Err(e) => {
-                    log::debug!("{key}: {e}");
+                    log::debug!("{}: {e}", answer.key);
                     Entry::Failed(e, Instant::now())
                 }
-            };
-            store(&key, entry);
-            finished();
+            });
         };
         let decoder = image_decoder().lock().unwrap_or_else(|e| e.into_inner()).clone();
         decode_with(bytes, want, decoder.as_deref(), settle);
@@ -547,7 +669,8 @@ fn store(url: &str, entry: Entry) {
     let added = if let Entry::Ready(_, n) = &entry { *n } else { 0 };
     // Dropped while it was fetched (cleared, or evicted): kept anyway, it was asked for.
     let tick = c.tick;
-    let old = c.slots.insert(url.to_string(), Slot { entry, used: tick });
+    let asked = c.slots.get(url).map_or_else(Instant::now, |s| s.asked);
+    let old = c.slots.insert(url.to_string(), Slot { entry, used: tick, asked });
     if let Some(Slot { entry: Entry::Ready(_, n), .. }) = old {
         c.bytes = c.bytes.saturating_sub(n);
     }
@@ -1384,5 +1507,51 @@ mod tests {
         assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending));
         assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending), "fetched again");
         assert_eq!(CALLS.load(Ordering::Relaxed), 4);
+
+        // A server has a few fetches under way at once; the newest waiting tile goes next (#635).
+        static HELD: Mutex<Vec<(String, Done)>> = Mutex::new(Vec::new());
+        set_fetcher(|url, done| {
+            if url.starts_with("test://held/") {
+                HELD.lock().unwrap().push((url, done));
+            } else {
+                done(Ok(b"1".to_vec()));
+            }
+        });
+        let n = crate::schedule::PER_HOST + 3;
+        for i in 0..n {
+            assert!(matches!(get(&format!("test://held/{i}.json"), Want::Json), State::Pending));
+        }
+        assert_eq!(HELD.lock().unwrap().len(), crate::schedule::PER_HOST);
+        let (_, done) = HELD.lock().unwrap().remove(0);
+        done(Ok(b"2".to_vec()));
+        let held: Vec<String> = HELD.lock().unwrap().iter().map(|(u, _)| u.clone()).collect();
+        assert_eq!(held.len(), crate::schedule::PER_HOST);
+        assert_eq!(held.last().map(String::as_str), Some(format!("test://held/{}.json", n - 1).as_str()));
+        assert!(matches!(get("test://held/0.json", Want::Json), State::Ready(_)));
+        // The rest finish, and so do the waiting ones they make room for.
+        loop {
+            let Some((_, done)) = HELD.lock().unwrap().pop() else { break };
+            done(Ok(b"3".to_vec()));
+        }
+        for i in 0..n {
+            assert!(matches!(get(&format!("test://held/{i}.json"), Want::Json), State::Ready(_)), "{i}");
+        }
+
+        // A fetcher that drops a request unanswered (or panics) gives its server's place back:
+        // more requests than the cap still all reach it, and each is forgotten, not stuck.
+        static SEEN: AtomicUsize = AtomicUsize::new(0);
+        set_fetcher(|url, done| {
+            if url.starts_with("test://lost/") {
+                SEEN.fetch_add(1, Ordering::Relaxed);
+                drop(done);
+            } else {
+                done(Ok(b"1".to_vec()));
+            }
+        });
+        for i in 0..3 * crate::schedule::PER_HOST {
+            assert!(matches!(get(&format!("test://lost/{i}.json"), Want::Json), State::Pending));
+        }
+        assert_eq!(SEEN.load(Ordering::Relaxed), 3 * crate::schedule::PER_HOST);
+        assert!(peek("test://lost/0.json").is_none());
     }
 }

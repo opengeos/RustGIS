@@ -395,6 +395,51 @@ fn project_extension_is_rgis_and_legacy_rgisx_opens() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A table file picked inside a File Geodatabase stands for the geodatabase, in `layer.addData`
+/// and `info.fileLayers` alike; through GDAL when it is installed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_file_inside_a_geodatabase_adds_the_geodatabase() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gdb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let gdb = dir.join("roads.gdb");
+    let table = gdb.join("a00000001.gdbtable").display().to_string();
+    let mut s = Session::new(Project::default());
+    if rustgis_data::source::gdal::available() {
+        let geojson = dir.join("cities.geojson");
+        std::fs::write(
+            &geojson,
+            r#"{"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"name":"a"},"geometry":{"type":"Point","coordinates":[8.5,47.4]}},
+{"type":"Feature","properties":{"name":"b"},"geometry":{"type":"Point","coordinates":[7.4,46.9]}}]}"#,
+        )
+        .unwrap();
+        let made = std::process::Command::new("ogr2ogr")
+            .args(["-f", "OpenFileGDB", "-nln", "cities"])
+            .arg(&gdb)
+            .arg(&geojson)
+            .status()
+            .is_ok_and(|st| st.success());
+        if made {
+            let listed = s.run("info.fileLayers", &json!({"path": table})).unwrap();
+            assert_eq!(listed["layers"], json!(["cities"]), "{listed}");
+            let added = s.run("layer.addData", &json!({"path": table})).unwrap();
+            assert_eq!(added["features"], json!(2), "{added}");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+    }
+    // Without GDAL the geodatabase can't be read, but the error names it, not the table.
+    std::fs::create_dir_all(&gdb).unwrap();
+    std::fs::write(&table, b"").unwrap();
+    for cmd in ["layer.addData", "info.fileLayers"] {
+        let e = s.run(cmd, &json!({"path": table})).unwrap_err();
+        assert!(e.contains("roads.gdb") && !e.contains("gdbtable"), "{cmd}: {e}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn save_clears_dirty_and_open_clears_history() {
     let mut s = world();
@@ -6076,6 +6121,175 @@ fn serve_gated(
     (format!("http://{addr}"), sent)
 }
 
+/// A STAC collection's band as a data cube on the time slider (#559), from a local API: a tile
+/// layer per grid tile, each a file per date; the slider on over their dates; a fixed range in the
+/// band's own units, through its scale; a tile with no date in the window drawn as nothing.
+#[test]
+fn a_stac_data_cube_on_the_time_slider() {
+    let (cog, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let item = |id: &str, tile: &str, date: &str, band: bool| {
+        let asset = if band {
+            format!(
+                r#""NDVI": {{"href": "{cog}/{id}.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized", "eo:bands": [{{"scale": 0.0001}}]}}"#
+            )
+        } else {
+            format!(r#""EVI": {{"href": "{cog}/{id}.tif"}}"#)
+        };
+        format!(
+            r#"{{"type": "Feature", "id": "{id}", "collection": "cube", "bbox": [10, 45, 11, 46], "geometry": null,
+               "properties": {{"datetime": "{date}T00:00:00Z", "bdc:tiles": ["{tile}"]}}, "assets": {{{asset}}}}}"#
+        )
+    };
+    let features = [
+        item("a1", "T1", "2024-01-01", true),
+        item("a2", "T1", "2024-01-17", true),
+        item("b1", "T2", "2024-01-01", true),
+        item("b2", "T2", "2024-01-01", true),
+        item("c1", "T3", "2024-01-17", false),
+    ]
+    .join(",");
+    let base = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{features}]}}"#))], 4);
+    let api = format!("{base}/v1");
+    let mut s = Session::new(Project::default());
+    let r = s
+        .run(
+            "stac.addCube",
+            &json!({"url": api, "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-31", "range": [0, 0.9]}),
+        )
+        .unwrap();
+    assert_eq!(
+        (r["items"].as_u64(), r["tiles"].as_u64(), r["dates"].as_u64(), r["layers"].as_u64(), r["skipped"].as_u64()),
+        (Some(5), Some(2), Some(2), Some(2), Some(1)),
+        "{r}"
+    );
+    assert_eq!(r["duplicates"], 1, "the second item of T2 on 2024-01-01 is left out and counted");
+    assert!(crate::cmd::tiles::NETWORK.contains(&"stac.addCube"), "a network command: a plugin needs the network permission to run it");
+    // An end given as a year or a month takes all of it: "end": "2024-01" reaches 31 January.
+    // Read as 1 January, it would be before this start and refused.
+    let mut by_month = Session::new(Project::default());
+    let r2 = by_month
+        .run(
+            "stac.addCube",
+            &json!({"url": api, "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-15", "end": "2024-01"}),
+        )
+        .unwrap();
+    assert_eq!(r2["dates"], 2, "an end given as a year or a month reaches its last day: {r2}");
+    // A slider already on takes the cube's dates in: one over other dates gains these two.
+    let mut busy = Session::new(Project::default());
+    busy.run("time.set", &json!({"dates": ["2023-06-01", "2023-07-01"]})).unwrap();
+    busy.run(
+        "stac.addCube",
+        &json!({"url": api, "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-31"}),
+    )
+    .unwrap();
+    assert_eq!(busy.run("time.info", &Value::Null).unwrap()["steps"], 4, "the slider takes the cube's dates in");
+    let tiles = s.map().tiles.clone();
+    assert_eq!(tiles.len(), 2);
+    let t1 = tiles.iter().find(|t| t.name.ends_with("T1")).unwrap();
+    let t2 = tiles.iter().find(|t| t.name.ends_with("T2")).unwrap();
+    // A file per date (the first item of a tile and day), the range in stored values (0.9 / 0.0001).
+    assert_eq!(t1.time_urls.len(), 2);
+    assert_eq!(t2.time_urls.len(), 1);
+    assert!(t1.time_urls.iter().all(|(_, u)| u.ends_with("#range=0,9000")), "{:?}", t1.time_urls);
+    assert!(t2.time_urls[0].1.contains("/b1.tif"));
+    // The slider: on, over the two dates; at the first, both tiles draw.
+    assert_eq!(s.run("time.info", &Value::Null).unwrap()["steps"], 2);
+    assert!(t1.draws() && t2.draws() && t1.url.contains("/a1.tif"));
+    // The second date: T1's second file; T2 has none then and draws nothing.
+    s.run("time.goTo", &json!({"step": 1})).unwrap();
+    let t1 = s.map().tiles.iter().find(|t| t.name.ends_with("T1")).unwrap();
+    let t2 = s.map().tiles.iter().find(|t| t.name.ends_with("T2")).unwrap();
+    assert!(t1.url.contains("/a2.tif") && t1.draws(), "{}", t1.url);
+    assert!(!t2.draws());
+    // Saved and opened again, each tile's dates and the slider's step come back.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().tiles.iter().find(|x| x.name.ends_with("T1")).unwrap();
+    assert_eq!(again.time_urls.len(), 2);
+    assert!(again.url.contains("/a2.tif"), "{}", again.url);
+    // T2, with no file at that step, draws nothing from the start: opening takes the window.
+    assert!(!t.map().tiles.iter().find(|x| x.name.ends_with("T2")).unwrap().draws());
+    for bad in [
+        json!({"url": api, "asset": "ndvi", "start": "2024-01-01", "end": "2024-01-31"}),
+        json!({"url": api, "collection": "cube", "start": "2024-01-01", "end": "2024-01-31"}),
+        json!({"url": api, "collection": "cube", "asset": "ndvi", "start": "2024-02-01", "end": "2024-01-01"}),
+        json!({"url": api, "collection": "cube", "asset": "ndvi", "start": "2024-01-01", "end": "2024-01-31", "range": [1, 0]}),
+        json!({"url": api, "collection": "cube", "asset": "ndvi", "start": "June", "end": "2024-01-31"}),
+        json!({"url": api, "collection": "cube", "asset": "ndvi", "start": "2024-01-01", "end": "2024-01-31", "range": ["a", 0, 1]}),
+        json!({"url": api, "collection": "cube", "asset": "ndvi", "start": "2024-01-01", "end": "2024-01-31", "range": [0, "x", 1]}),
+    ] {
+        assert!(s.run("stac.addCube", &bad).is_err(), "{bad}");
+    }
+    // A file read whole (a GeoTIFF that isn't cloud-optimised) can't follow the slider: the cube
+    // is refused, and what it added is taken back, the view its first tile framed included.
+    let gt = rustgis_data::raster::GeoTransform { origin_x: 10.0, origin_y: 46.0, pixel_width: 0.5, pixel_height: -0.5 };
+    let plain = rustgis_data::raster::Raster::new(
+        "p",
+        2,
+        2,
+        vec![vec![1.0; 4]],
+        gt,
+        rustgis_data::raster::Crs::LonLat,
+        None,
+        rustgis_data::raster::ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let (file, _) = serve_ranges(rustgis_data::raster::geotiff::write(&plain, 0).unwrap());
+    let one = format!(
+        r#"{{"type": "Feature", "id": "p1", "collection": "cube", "bbox": [10, 45, 11, 46], "geometry": null,
+           "properties": {{"datetime": "2024-01-01T00:00:00Z", "bdc:tiles": ["P"]}}, "assets": {{"NDVI": {{"href": "{file}/p.tif"}}}}}}"#
+    );
+    let first = item("q1", "A", "2024-01-01", true);
+    let plain_api = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{first},{one}]}}"#))], 2);
+    s.zoom_to(&rustgis_geom::Extent::new(-60.0, -30.0, -50.0, -20.0));
+    let (tiles, layers) = (s.map().tiles.len(), s.map().layers.len());
+    let (camera, time) = (s.map().camera, s.map().time.clone());
+    let e = s
+        .run(
+            "stac.addCube",
+            &json!({"url": format!("{plain_api}/v1"), "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-31"}),
+        )
+        .unwrap_err();
+    assert!(e.contains("not a cloud-optimised"), "{e}");
+    assert_eq!((s.map().tiles.len(), s.map().layers.len()), (tiles, layers));
+    // The view tile A framed and the slider are put back too.
+    assert_eq!(s.map().camera, camera);
+    assert_eq!(s.map().time, time);
+    // Files stored at another scale partway: one range can't fit them all, so it's refused.
+    let rescaled = |id: &str, date: &str, scale: f64| {
+        format!(
+            r#"{{"type": "Feature", "id": "{id}", "collection": "cube", "bbox": [10, 45, 11, 46], "geometry": null,
+               "properties": {{"datetime": "{date}T00:00:00Z", "bdc:tiles": ["T1"]}},
+               "assets": {{"NDVI": {{"href": "{cog}/{id}.tif", "type": "image/tiff; profile=cloud-optimized", "eo:bands": [{{"scale": {scale}}}]}}}}}}"#
+        )
+    };
+    let two = [rescaled("r1", "2024-01-01", 0.0001), rescaled("r2", "2024-01-17", 0.001)].join(",");
+    let rescaled_api = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{two}]}}"#))], 2);
+    let e = s
+        .run(
+            "stac.addCube",
+            &json!({"url": format!("{rescaled_api}/v1"), "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-31", "range": [0, 0.9]}),
+        )
+        .unwrap_err();
+    assert!(e.contains("same scale and offset"), "{e}");
+    // Files behind signed addresses (Planetary Computer's) are refused before anything is added.
+    let signed = r#"{"type": "Feature", "id": "pc1", "collection": "cube", "bbox": [10, 45, 11, 46], "geometry": null,
+        "properties": {"datetime": "2024-01-01T00:00:00Z", "bdc:tiles": ["S"]},
+        "assets": {"NDVI": {"href": "https://sentinel2l2a01.blob.core.windows.net/sentinel2-l2/a.tif"}}}"#;
+    let signed_api = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{signed}]}}"#))], 2);
+    let (tiles, layers) = (s.map().tiles.len(), s.map().layers.len());
+    let e = s
+        .run(
+            "stac.addCube",
+            &json!({"url": format!("{signed_api}/v1"), "collection": "cube", "asset": "ndvi", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-31"}),
+        )
+        .unwrap_err();
+    assert!(e.contains("signed addresses"), "{e}");
+    assert_eq!((s.map().tiles.len(), s.map().layers.len()), (tiles, layers));
+}
+
 /// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
 /// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
 #[test]
@@ -6124,6 +6338,18 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // Opened as a scan, it is downloaded whole and has no coordinates, never read in place.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "as": "scan", "name": "Scan"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    assert_eq!(r["georeferenced"], false, "{r}");
+    // A dated address is read in place with its coordinates, so it can't be a scan.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{{date:YYYY}}.tif"), "as": "scan"})).unwrap_err();
+    assert!(e.contains("scan"), "{e}");
+    // Anything else in "as" is refused, not ignored, and tiles can't be a scan.
+    for (url, as_) in [("scene.tif", json!("pdf")), ("scene.tif", json!(3)), ("a.pmtiles", json!("scan")), ("a.fgb", json!("scan"))] {
+        let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{url}"), "as": as_})).unwrap_err();
+        assert!(e.contains("\"as\"") || e.contains("scan"), "{url}: {e}");
+    }
     // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
     let r = rustgis_data::raster::Raster::new(
         "strips",
@@ -10520,4 +10746,169 @@ fn zoom_level_matches_the_map_link() {
     s.run("map.goToLink", &json!({"url": "#7.5/48/10"})).unwrap();
     let z = s.zoom().unwrap();
     assert!((z - 7.5).abs() < 0.01, "{z}");
+}
+
+/// A 2×2 grey TIFF with no GeoTIFF tags, written by hand (little-endian, one strip).
+fn tagless_tiff() -> Vec<u8> {
+    // (tag, type 3 = short / 4 = long, value)
+    let entries: [(u16, u16, u32); 8] =
+        [(256, 3, 2), (257, 3, 2), (258, 3, 8), (262, 3, 1), (273, 4, 110), (277, 3, 1), (278, 3, 2), (279, 4, 4)];
+    let mut out = b"II*\0\x08\0\0\0".to_vec();
+    out.extend((entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        out.extend(tag.to_le_bytes());
+        out.extend(kind.to_le_bytes());
+        out.extend(1u32.to_le_bytes());
+        out.extend(value.to_le_bytes());
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend([10, 20, 30, 40]);
+    out
+}
+
+/// A raster with no coordinates (a TIFF without tags, a PNG, a JPEG) opens as a layer drawn over
+/// the view and marked as not georeferenced, from a path or from bytes; a project keeps where it
+/// was laid; a photo with a GPS position is still a photo.
+#[test]
+fn rasters_without_coordinates_open_laid_over_the_view() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-scans-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let encode = |format| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(40, 20, |x, y| image::Rgb([x as u8, y as u8, 9])))
+            .write_to(&mut out, format)
+            .unwrap();
+        out.into_inner()
+    };
+    let files = [
+        ("map.tif", tagless_tiff(), (2, 2, 1)),
+        ("plate.png", encode(image::ImageFormat::Png), (40, 20, 3)),
+        ("print.jpg", encode(image::ImageFormat::Jpeg), (40, 20, 3)),
+    ];
+    let mut s = world();
+    let view = crate::cmd::workspace::view_extent(&s);
+    for (name, bytes, (w, h, bands)) in &files {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        // A JPEG is a photo by default (without a GPS position it is named and left out).
+        let jpeg = name.ends_with(".jpg");
+        let mut q = json!({"path": path.display().to_string()});
+        if jpeg {
+            assert!(s.run("layer.addData", &q).is_err(), "a photo without a position is not added");
+            assert!(s.map().layer_by_name("print").is_none());
+            q["as"] = json!("scan");
+        }
+        let r = s.run("layer.addData", &q).unwrap();
+        let stem = name.split('.').next().unwrap();
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64(), r["bands"].as_u64()), (Some(*w), Some(*h), Some(*bands)), "{r}");
+        assert_eq!(r["georeferenced"], false, "{r}");
+        assert!(r["note"].as_str().is_some_and(|t| t.contains("no coordinates")), "{r}");
+        assert!(s.notices.iter().any(|n| n.text.contains(stem) && n.text.contains("no coordinates")));
+        let rl = s.map().layer_by_name(stem).unwrap().raster.clone().unwrap();
+        let data = rl.data.clone().unwrap();
+        assert!(!data.georeferenced);
+        let e = data.extent();
+        assert!(e.min_x >= view.min_x && e.max_x <= view.max_x && e.min_y >= view.min_y && e.max_y <= view.max_y, "{e:?} in {view:?}");
+        assert!(rl.placement.is_some());
+        // The web app's way: the bytes.
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let mut q = json!({"fileName": name, "data": b64, "name": format!("{stem} upload")});
+        if jpeg {
+            q["as"] = json!("scan");
+        }
+        let r = s.run("layer.addDataBytes", &q).unwrap();
+        assert_eq!((r["georeferenced"].clone(), r["width"].as_u64()), (json!(false), Some(*w)), "{r}");
+    }
+    // The project lays a reopened scan where it was.
+    let before = s.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().extent();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert!(!again.georeferenced);
+    let (a, b) = (again.extent(), before);
+    assert!((a.min_x - b.min_x).abs() < 1e-9 && (a.max_y - b.max_y).abs() < 1e-9, "{a:?} vs {b:?}");
+    // Georeferencing it gives it coordinates for real.
+    let l = s.run("raster.georeference", &json!({"layer": "plate", "extent": [10.0, 40.0, 12.0, 41.0]})).unwrap();
+    assert!(l["extent"].is_array());
+    assert!(s.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().georeferenced);
+    // Damaged ones are errors, and add nothing.
+    let count = s.map().layers.len();
+    for (name, bytes, _) in &files {
+        let cut = base64::engine::general_purpose::STANDARD.encode(&bytes[..bytes.len() / 2]);
+        assert!(s.run("layer.addDataBytes", &json!({"fileName": name, "data": cut, "as": "scan"})).is_err(), "{name}");
+        std::fs::write(dir.join("cut"), &bytes[..bytes.len() / 2]).unwrap();
+        let cut_path = dir.join(format!("cut.{}", name.split('.').nth(1).unwrap()));
+        std::fs::rename(dir.join("cut"), &cut_path).unwrap();
+        assert!(s.run("layer.addData", &json!({"path": cut_path.display().to_string(), "as": "scan"})).is_err(), "{name}");
+    }
+    assert_eq!(s.map().layers.len(), count);
+    assert!(s.run("layer.addData", &json!({"path": dir.join("map.tif").display().to_string(), "as": "pdf"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A scan never leaves with coordinates it doesn't have: it can't be exported, and the tools that
+/// would give their result a place on the ground refuse it; a GeoTIFF opened `as` a scan is one
+/// too, in the project as well.
+#[test]
+fn scans_have_no_coordinates_to_give_away() {
+    let mut s = Session::new(Project::default());
+    let info = |s: &mut Session| s.run("raster.info", &json!({"layer": "utm"})).unwrap();
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "utm.tif", "data": utm_tiff_b64()})).unwrap();
+    assert!(r.get("georeferenced").is_none());
+    assert_eq!(info(&mut s)["georeferenced"], true);
+    s.run("raster.editPixels", &json!({"layer": "utm", "polygon": [[-81.5, 41.5], [-80.5, 41.5], [-81.0, 42.5]], "value": 1})).unwrap();
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "utm.tif", "data": utm_tiff_b64(), "as": "scan", "name": "flat"})).unwrap();
+    assert_eq!(r["georeferenced"], false, "{r}");
+    let flat = |s: &mut Session| s.run("raster.info", &json!({"layer": "flat"})).unwrap();
+    assert_eq!(flat(&mut s)["georeferenced"], false);
+    let dir = std::env::temp_dir().join(format!("rustgis-scan-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.active_layer = s.map().layer_by_name("flat").map(|l| l.id);
+    let out = dir.join("flat.tif");
+    // A file left by an earlier, interrupted run would pass for one written now.
+    let _ = std::fs::remove_file(&out);
+    let e = s.run("share.exportRaster", &json!({"path": out.display().to_string()})).unwrap_err();
+    assert!(e.contains("georeference it first") && !out.exists(), "{e}");
+    let before = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap().placement;
+    let tools: [(&str, Value); 14] = [
+        ("raster.function", json!({"layer": "flat", "function": "hillshade"})),
+        ("raster.editPixels", json!({"layer": "flat", "polygon": [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]], "value": 1})),
+        ("raster.process", json!({"layer": "flat", "operation": "resample", "factor": 2})),
+        ("raster.process", json!({"layer": "flat", "operation": "clip"})),
+        // Refused before the polygons are looked for, let alone placed on it.
+        ("raster.process", json!({"layer": "flat", "operation": "clip", "polygon": "Nowhere"})),
+        ("raster.mosaic", json!({"inputs": ["flat", "utm"]})),
+        ("raster.change", json!({"before": "flat", "after": "flat"})),
+        ("raster.classify", json!({"layer": "flat", "classes": 2})),
+        ("raster.classifySupervised", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("raster.index", json!({"layer": "flat", "index": "ndvi", "red": 1, "nir": 1})),
+        ("raster.measure", json!({"layer": "flat", "kind": "distance", "points": [[0.0, 0.0], [0.1, 0.1]]})),
+        ("imagery.mesh", json!({"layer": "flat"})),
+        ("dl.classify", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("dl.train", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+    ];
+    let missed: Vec<String> = tools
+        .iter()
+        .filter_map(|(cmd, q)| match s.run(cmd, q) {
+            Err(e) if e.contains("no coordinates") => None,
+            other => Some(format!("{cmd}: {other:?}")),
+        })
+        .collect();
+    assert!(missed.is_empty(), "{missed:#?}");
+    let l = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap();
+    assert_eq!(l.placement, before);
+    assert!(!l.data.as_ref().unwrap().georeferenced, "still a scan");
+    // The project opens it as a scan, laid where it was, not as the GeoTIFF it came from.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("flat").unwrap().raster.clone().unwrap().data.unwrap();
+    assert!(!again.georeferenced);
+    // Georeferencing it gives it coordinates, and then it exports.
+    s.run("raster.georeference", &json!({"layer": "flat", "extent": [10.0, 40.0, 12.0, 41.0]})).unwrap();
+    assert!(s.run("share.exportRaster", &json!({"path": out.display().to_string()})).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
 }

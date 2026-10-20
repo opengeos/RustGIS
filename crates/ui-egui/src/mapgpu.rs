@@ -221,7 +221,7 @@ impl BackdropUniforms {
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 /// Premultiplied-alpha blending, the same arithmetic tiny-skia composites with.
-const PREMULTIPLIED_BLEND: wgpu::BlendState = wgpu::BlendState {
+pub(crate) const PREMULTIPLIED_BLEND: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
         src_factor: wgpu::BlendFactor::One,
         dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
@@ -265,6 +265,10 @@ pub(crate) struct GpuMapRenderer {
     tile_textures: std::sync::Mutex<TileTextures>,
     /// The vector tile meshes uploaded so far, kept across scenes.
     tile_meshes: std::sync::Mutex<TileMeshBuffers>,
+    /// The live raster tile layers' pictures and per-frame instances (#635).
+    pub(crate) live: std::sync::Mutex<crate::tilelayer::LiveTiles>,
+    /// The last frame left live tile pictures to upload: draw again.
+    pub(crate) live_backlog: std::sync::atomic::AtomicBool,
 }
 
 impl GpuMapRenderer {
@@ -540,6 +544,8 @@ impl GpuMapRenderer {
             samples,
             tile_textures: Default::default(),
             tile_meshes: Default::default(),
+            live: std::sync::Mutex::new(crate::tilelayer::LiveTiles::new(device, scene_format, samples, DEPTH_FORMAT)),
+            live_backlog: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -973,6 +979,10 @@ pub(crate) enum SceneDraw {
         bind: wgpu::BindGroup,
         _texture: Owned<wgpu::Texture>,
     },
+    /// The `n`th live raster tile layer of the scene, placed for each frame shown (#635).
+    LiveTiles {
+        n: usize,
+    },
     /// A raster tile layer: its tiles' corners in one buffer, six per tile, and each tile's
     /// texture (from [`TileTextures`]) with the first of its corners.
     Tiles {
@@ -1000,6 +1010,51 @@ pub(crate) struct SceneBuffers {
     pub has_tiles: bool,
     /// A turned or tilted scene: the camera it was drawn for, its sky and fog.
     pub tilt: Option<SceneTilt>,
+    /// Its live raster tile layers, in order, placed for each frame shown ([`LiveFrame`]).
+    pub live: Vec<(rustgis_engine::render::rustgis_tiles::Spec, f32)>,
+    /// Every tile layer of the scene is live: a tile arriving needs no new scene.
+    pub tiles_live: bool,
+}
+
+/// The live raster tile layers of a scene placed for the camera of the frame shown.
+pub(crate) struct LiveFrame {
+    pub camera: Camera,
+    /// Per live layer, its tiles from the camera's centre, bottom first.
+    pub layers: Vec<Vec<TileQuad>>,
+}
+
+impl SceneBuffers {
+    /// The scene's live layers placed for `camera` (see [`LiveFrame`]), whether tiles in view
+    /// are still on their way, and whether a layer can no longer be placed live (its style changed
+    /// since the scene was drawn: the map needs a new scene); `None` when it has none.
+    pub(crate) fn live_frame(&self, camera: Camera) -> Option<(LiveFrame, bool, bool)> {
+        if self.live.is_empty() {
+            return None;
+        }
+        let view = rustgis_engine::render::View {
+            width: self.size[0],
+            height: self.size[1],
+            pixels_per_point: f64::from(self.ppp),
+            camera,
+            sky: false,
+        };
+        let (mut pending, mut declined) = (false, false);
+        let layers = self
+            .live
+            .iter()
+            .map(|(spec, opacity)| match rustgis_engine::render::live_tiles(spec, *opacity, &view) {
+                Some(l) => {
+                    pending |= l.pending;
+                    l.quads
+                }
+                None => {
+                    declined = true;
+                    Vec::new()
+                }
+            })
+            .collect();
+        Some((LiveFrame { camera, layers }, pending, declined))
+    }
 }
 
 impl SceneBuffers {
@@ -1051,6 +1106,8 @@ fn cmd_fits(limits: &wgpu::Limits, cmd: &DrawCmd) -> bool {
             let (w, h) = (pixmap.width(), pixmap.height());
             (1..=max_dim).contains(&w) && (1..=max_dim).contains(&h) && pixmap.data().len() as u64 == w as u64 * h as u64 * 4
         }
+        // A tile the device can't hold is left out (`LiveTiles::slot`).
+        DrawCmd::LiveTiles { .. } => true,
         // A tile the device can't hold is left out (`TileTextures::bind`).
         DrawCmd::Tiles { tiles, .. } => tiles.len().checked_mul(6 * std::mem::size_of::<TileVertex>()).is_some_and(fits),
         DrawCmd::TileMeshes { tiles, .. } => tiles.iter().all(|t| {
@@ -1081,6 +1138,7 @@ impl SceneBuffers {
         let mut draws = Vec::with_capacity(scene.cmds.len() + 1);
         let mut has_images = false;
         let mut has_tiles = false;
+        let mut live = Vec::new();
         let tilt = scene.tilt.as_ref();
         let mut tile_textures = r.tile_textures.lock().unwrap_or_else(|e| e.into_inner());
         let mut tile_meshes = r.tile_meshes.lock().unwrap_or_else(|e| e.into_inner());
@@ -1274,6 +1332,10 @@ impl SceneBuffers {
                     draws.push(SceneDraw::Image { bind, _texture: texture });
                     has_images = true;
                 }
+                DrawCmd::LiveTiles { spec, opacity } => {
+                    draws.push(SceneDraw::LiveTiles { n: live.len() });
+                    live.push((spec.clone(), *opacity));
+                }
                 DrawCmd::Tiles { origin, tiles } => {
                     let mut vertices = Vec::with_capacity(tiles.len() * 6);
                     let mut textures = Vec::with_capacity(tiles.len());
@@ -1351,7 +1413,9 @@ impl SceneBuffers {
         }
         tile_textures.end_scene();
         tile_meshes.end_scene();
-        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, has_tiles, tilt: scene.tilt })
+        let tiles_live =
+            !live.is_empty() && !has_images && !has_tiles && !scene.cmds.iter().any(|c| matches!(c, DrawCmd::TileMeshes { .. }));
+        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, has_tiles, tilt: scene.tilt, live, tiles_live })
     }
 
     /// Rewrites every command's camera uniforms for a moved camera — pan/zoom without
@@ -1380,7 +1444,7 @@ impl SceneBuffers {
                     }
                     continue;
                 }
-                SceneDraw::Image { .. } => continue,
+                SceneDraw::Image { .. } | SceneDraw::LiveTiles { .. } => continue,
             };
             let u = CmdUniforms::new(cam, self.size, self.ppp, *origin, self.tilt.as_ref(), *clip);
             queue.write_buffer(uniforms, 0, bytemuck::bytes_of(&u));
@@ -1397,6 +1461,10 @@ pub(crate) struct SceneCallback {
     /// The part of the cached picture in the current view. Keeping the callback's viewport
     /// fixed avoids egui clamping oversized/shifted viewports to the window and stretching it.
     pub uv: egui::Rect,
+    /// The scene's live tile layers placed for this frame.
+    pub live: Option<LiveFrame>,
+    /// Asked to draw again when pictures are left to upload.
+    pub repaint: Option<egui::Context>,
 }
 
 /// The draw loop, shared by the egui paint callback and the offscreen parity harness.
@@ -1460,6 +1528,7 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
                     squares(rp, false);
                 }
             }
+            SceneDraw::LiveTiles { n } => renderer.live.lock().unwrap_or_else(|e| e.into_inner()).paint(*n, rp),
             SceneDraw::Tiles { vertices, textures, bind, .. } => {
                 rp.set_pipeline(&renderer.tile_pipeline);
                 rp.set_bind_group(0, bind, &[]);
@@ -1487,6 +1556,17 @@ impl CallbackTrait for SceneCallback {
         let mut guard = self.target.lock().unwrap_or_else(|e| e.into_inner());
         if guard.as_ref().map(|t| t.size) != Some([w, h]) {
             *guard = SceneTarget::new(device, &self.renderer, [w, h]);
+        }
+        if let Some(f) = &self.live {
+            let backlog =
+                self.renderer.live.lock().unwrap_or_else(|e| e.into_inner()).update(device, queue, &f.layers, &f.camera, self.buffers.size);
+            self.renderer.live_backlog.store(backlog.uploads, std::sync::atomic::Ordering::Relaxed);
+            // The view asked for this frame before these uploads were known: the next is asked here.
+            if backlog.uploads
+                && let Some(ctx) = &self.repaint
+            {
+                ctx.request_repaint();
+            }
         }
         if let Some(tgt) = guard.as_ref() {
             queue.write_buffer(
@@ -1661,7 +1741,8 @@ mod tests {
     fn gpu_render_offscreen_on(map: &mut Map, view: &View, backends: wgpu::Backends) -> Option<Vec<u8>> {
         let rs = headless_render_state_on(backends)?;
         let r = GpuMapRenderer::new(&rs);
-        let Some(RenderOutput::Gpu(scene)) = render::render_backend(map, view, Backend::Gpu) else { panic!("gpu-compatible scene") };
+        // As the map view draws: raster tile layers live, placed for the frame (#635).
+        let Some(RenderOutput::Gpu(scene)) = render::render_backend(map, view, Backend::GpuLive) else { panic!("gpu-compatible scene") };
         let bufs = SceneBuffers::from_scene(
             &rs.device,
             &rs.queue,
@@ -1677,6 +1758,10 @@ mod tests {
         }
         // The production path: MSAA offscreen pass, resolved to a plain texture.
         let tgt = SceneTarget::new(&rs.device, &r, [w, h])?;
+        if let Some((f, _, _)) = bufs.live_frame(view.camera) {
+            // Every picture uploaded, however many frames the pacing would take.
+            while r.live.lock().unwrap().update(&rs.device, &rs.queue, &f.layers, &f.camera, bufs.size).uploads {}
+        }
         let mut enc = rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("parity") });
         record_scene(&r, &bufs.draws, bufs.clear, &tgt, &mut enc);
         // Buffer copies need 256-aligned rows; pad and strip on readback.
@@ -2197,6 +2282,10 @@ mod tests {
             let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
             assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Image { .. })), "no picture of the view at {res}");
             assert!(scene.cmds.iter().any(|c| matches!(c, DrawCmd::Tiles { .. })), "tiles at {res}");
+            // The map view's scenes leave them live, placed for each frame (#635).
+            let Some(RenderOutput::Gpu(scene)) = render::render_backend(&mut m, &view, Backend::GpuLive) else { panic!("gpu scene") };
+            assert!(scene.cmds.iter().any(|c| matches!(c, DrawCmd::LiveTiles { .. })), "live tiles at {res}");
+            assert!(!scene.cmds.iter().any(|c| matches!(c, DrawCmd::Tiles { .. } | DrawCmd::Image { .. })), "only live tiles at {res}");
             assert_parity(&format!("raster tiles {res} {opacity}"), build(opacity), &view);
         }
     }
@@ -2256,6 +2345,95 @@ mod tests {
         let q = TileQuad { picture: Arc::new(Payload::Image(other)), rect: [0.0, 0.0, 1.0, 1.0], uv: [0.0, 0.0, 1.0, 1.0], opacity: 1.0 };
         let _third = upload(&scene(&q)).expect("fits");
         assert_eq!(r.tile_textures.lock().expect("textures").by_picture.len(), 1);
+    }
+
+    /// Live tile pictures are uploaded once and drawn again from the pool, a few new ones a
+    /// frame; the pool stays within its budget, reusing the pictures unused longest but never
+    /// one the frame draws, and a picture the tile cache lets go frees its layer (#635).
+    #[test]
+    fn live_tile_pictures_are_pooled_paced_and_bounded() {
+        let Some(rs) = headless_render_state() else { return };
+        let picture = |c: u8| {
+            let mut pm = rustgis_engine::render::Pixmap::new(256, 256).expect("pixmap");
+            pm.data_mut().chunks_mut(4).for_each(|p| p.copy_from_slice(&[c, 30, 30, 255]));
+            Arc::new(Payload::Image(pm))
+        };
+        let quad = |p: &Arc<Payload>| TileQuad { picture: p.clone(), rect: [0.0, 0.0, 10.0, 10.0], uv: [0.0, 0.0, 1.0, 1.0], opacity: 1.0 };
+        // Two chunks of 64 pictures of 256 pixels.
+        let chunk = 64 * 256 * 256 * 4;
+        let mut live =
+            crate::tilelayer::LiveTiles::new(&rs.device, wgpu::TextureFormat::Rgba8Unorm, 4, DEPTH_FORMAT).with_budget(2 * chunk);
+        let cam = Camera::world();
+        let pictures: Vec<_> = (0..100).map(|i| picture(i as u8)).collect();
+        let layer: Vec<TileQuad> = pictures.iter().map(quad).collect();
+        // Paced: a few a frame, then nothing left to upload.
+        let mut frames = 0;
+        while live.update(&rs.device, &rs.queue, std::slice::from_ref(&layer), &cam, [400.0, 300.0]).uploads {
+            frames += 1;
+            assert!(frames < 100, "uploads never finish");
+        }
+        assert!(frames >= 100 / 32, "{frames} frames");
+        assert_eq!(live.pictures(), 100);
+        assert_eq!(live.capacity(), 128);
+        assert_eq!(live.bytes(), 2 * chunk);
+        // Drawn again: nothing new is uploaded.
+        assert!(!live.update(&rs.device, &rs.queue, std::slice::from_ref(&layer), &cam, [400.0, 300.0]).uploads);
+        // Sixty new pictures: the budget is spent, so the 28 free layers and then 32 of those not
+        // drawn this frame take them; the pool doesn't grow.
+        let more: Vec<_> = (0..60).map(|i| picture((200 + i) as u8)).collect();
+        let next: Vec<TileQuad> = more.iter().map(quad).chain(layer.iter().take(10).cloned()).collect();
+        while live.update(&rs.device, &rs.queue, std::slice::from_ref(&next), &cam, [400.0, 300.0]).uploads {}
+        assert_eq!(live.bytes(), 2 * chunk, "within the budget");
+        assert_eq!(live.capacity(), 128);
+        assert_eq!(live.pictures(), 128);
+        // A frame drawing more pictures than the pool holds draws those it has room for.
+        let many: Vec<_> = (0..140).map(|i| picture(i as u8)).collect();
+        let crowd: Vec<TileQuad> = many.iter().map(quad).collect();
+        for _ in 0..20 {
+            live.update(&rs.device, &rs.queue, std::slice::from_ref(&crowd), &cam, [400.0, 300.0]);
+        }
+        assert_eq!(live.bytes(), 2 * chunk, "within the budget");
+        // Pictures the cache lets go free their layers for new ones, without growing the pool.
+        drop((pictures, layer, more, next, crowd, many));
+        let fresh: Vec<_> = (0..50).map(|i| picture(i as u8)).collect();
+        let fresh_layer: Vec<TileQuad> = fresh.iter().map(quad).collect();
+        while live.update(&rs.device, &rs.queue, std::slice::from_ref(&fresh_layer), &cam, [400.0, 300.0]).uploads {}
+        assert_eq!(live.bytes(), 2 * chunk);
+    }
+
+    /// With the budget spent on one tile size, another size takes the budget of a chunk the
+    /// frame doesn't draw from, rather than drawing nothing (#635).
+    #[test]
+    fn live_tiles_of_another_size_take_back_budget() {
+        let Some(rs) = headless_render_state() else { return };
+        let picture = |side: u32, c: u8| {
+            let mut pm = rustgis_engine::render::Pixmap::new(side, side).expect("pixmap");
+            pm.data_mut().chunks_mut(4).for_each(|p| p.copy_from_slice(&[c, 30, 30, 255]));
+            Arc::new(Payload::Image(pm))
+        };
+        let quad = |p: &Arc<Payload>| TileQuad { picture: p.clone(), rect: [0.0, 0.0, 10.0, 10.0], uv: [0.0, 0.0, 1.0, 1.0], opacity: 1.0 };
+        let chunk = 16u64 << 20;
+        let mut live =
+            crate::tilelayer::LiveTiles::new(&rs.device, wgpu::TextureFormat::Rgba8Unorm, 4, DEPTH_FORMAT).with_budget(2 * chunk);
+        let cam = Camera::world();
+        let small: Vec<_> = (0..128).map(|i| picture(256, i as u8)).collect();
+        let small_layer: Vec<TileQuad> = small.iter().map(quad).collect();
+        while live.update(&rs.device, &rs.queue, std::slice::from_ref(&small_layer), &cam, [400.0, 300.0]).uploads {}
+        assert_eq!((live.pictures(), live.bytes()), (128, 2 * chunk), "the budget spent on 256-pixel tiles");
+        // A frame of 512-pixel tiles only: one 256-pixel chunk goes, a 512-pixel one takes its place.
+        let big: Vec<_> = (0..10).map(|i| picture(512, i as u8)).collect();
+        let big_layer: Vec<TileQuad> = big.iter().map(quad).collect();
+        while live.update(&rs.device, &rs.queue, std::slice::from_ref(&big_layer), &cam, [400.0, 300.0]).uploads {}
+        assert_eq!(live.pictures(), 64 + 10, "the 512-pixel tiles drawn");
+        assert_eq!(live.bytes(), 2 * chunk, "within the budget");
+        // And the other way round, while the frame draws the big ones too: the small ones that no
+        // longer fit wait, nothing the frame draws is taken.
+        let both: Vec<TileQuad> = big_layer.iter().cloned().chain(small_layer.iter().cloned()).collect();
+        for _ in 0..10 {
+            live.update(&rs.device, &rs.queue, std::slice::from_ref(&both), &cam, [400.0, 300.0]);
+        }
+        assert_eq!(live.bytes(), 2 * chunk);
+        assert!(live.pictures() >= 10 + 64);
     }
 
     #[test]

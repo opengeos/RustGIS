@@ -1329,7 +1329,9 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
     x += 22.0;
     icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 9.0, cy), vec2(18.0, 16.0)), "basemap", t.icon, t.accent);
     x += 24.0;
-    let color = if tile.visible && tile.opacity > 0.0 { t.text } else { t.text_disabled };
+    // Greyed when it draws nothing: hidden, transparent, or a data cube tile with no file at the
+    // slider's step (the box still shows the choice to show it).
+    let color = if tile.draws() && tile.opacity > 0.0 { t.text } else { t.text_disabled };
     let elided = name.elided;
     name.paint(ui, r, x, color);
     let mut action: Option<(&str, Value)> = None;
@@ -1760,29 +1762,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         if resp.clicked() {
                             let _ = app.run("map.activate", json!({"name": m}));
                         }
-                        resp.context_menu(|ui| {
-                            if ui.button(tl!("Rename…")).clicked() {
-                                let _ = app.run("ui.dialog", json!({"name": "renameMap", "target": m}));
-                                ui.close();
-                            }
-                            // The copy comes into view, out of an open layout like a map tab.
-                            if ui.button(tl!("Duplicate")).clicked() {
-                                if app.run("map.duplicate", json!({"map": m})).is_ok() {
-                                    let _ = app.run("layout.close", Value::Null);
-                                    app.map.popup = None;
-                                }
-                                ui.close();
-                            }
-                            // Copied layers go on top of this map's, whichever map is in view (#491).
-                            if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, false))).clicked() {
-                                let _ = app.run("layer.paste", json!({"map": m}));
-                                ui.close();
-                            }
-                            if ui.button(tl!("Delete")).clicked() {
-                                app.map.deleting = Some(crate::mapview::Deletion::Map(m.clone()));
-                                ui.close();
-                            }
-                        });
+                        resp.context_menu(|ui| map_menu(app, ui, m));
                     });
                 }
             });
@@ -1834,23 +1814,7 @@ fn catalog(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 let _ = app.run("layout.activate", json!({"name": n}));
                                 app.ui.tab = "Publish".into();
                             }
-                            resp.context_menu(|ui| {
-                                if ui.button(tl!("Rename…")).clicked() {
-                                    let _ = app.run("ui.dialog", json!({"name": "renameLayout", "target": n}));
-                                    ui.close();
-                                }
-                                // The copy opens, on the Publish tab like a click on a layout.
-                                if ui.button(tl!("Duplicate")).clicked() {
-                                    if app.run("layout.duplicate", json!({"layout": n})).is_ok() {
-                                        app.ui.tab = "Publish".into();
-                                    }
-                                    ui.close();
-                                }
-                                if ui.button(tl!("Delete")).clicked() {
-                                    app.map.deleting = Some(crate::mapview::Deletion::Layout(n.clone()));
-                                    ui.close();
-                                }
-                            });
+                            resp.context_menu(|ui| layout_menu(app, ui, &n));
                         });
                     }
                 });
@@ -2001,7 +1965,11 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
         .filter_map(|e| e.ok())
-        .map(|e| (e.path().is_dir(), e.file_name().to_string_lossy().to_string(), e.path()))
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            // A File Geodatabase's folder is data, listed and added like a file.
+            (e.path().is_dir() && !rustgis_engine::data::source::is_gdb_name(&name), name, e.path())
+        })
         .filter(|(d, n, _)| {
             !n.starts_with('.')
                 && (*d
@@ -2014,6 +1982,8 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "tif",
                         "tiff",
                         "asc",
+                        // A File Geodatabase's folder, listed as data above.
+                        "gdb",
                         "rgis",
                         "rgisx",
                         "rgispkg",
@@ -4414,6 +4384,52 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
                 let _ = app.run("raster.mask", json!({"clear": true}));
             }
         });
+}
+
+/// A map's menu, in the Browser and on its view tab: rename, duplicate, paste layers, delete.
+pub(crate) fn map_menu(app: &mut RustGisApp, ui: &mut Ui, m: &str) {
+    if ui.button(tl!("Rename…")).clicked() {
+        let _ = app.run("ui.dialog", json!({"name": "renameMap", "target": m}));
+        ui.close();
+    }
+    // The copy comes into view, out of an open layout like a map tab.
+    if ui.button(tl!("Duplicate")).clicked() {
+        if app.run("map.duplicate", json!({"map": m})).is_ok() {
+            let _ = app.run("layout.close", Value::Null);
+            app.map.popup = None;
+        }
+        ui.close();
+    }
+    // Copied layers go on top of this map's, whichever map is in view (#491).
+    if ui.add_enabled(app.session.layer_clipboard.is_some(), egui::Button::new(paste_label(app, false))).clicked() {
+        let _ = app.run("layer.paste", json!({"map": m}));
+        ui.close();
+    }
+    // A project keeps at least one map (`map.remove` refuses the last).
+    let delete = ui.add_enabled(app.session.project.maps.len() > 1, egui::Button::new(tl!("Delete")));
+    if delete.on_disabled_hover_text(tl!("A project keeps at least one map")).clicked() {
+        app.map.deleting = Some(crate::mapview::Deletion::Map(m.to_string()));
+        ui.close();
+    }
+}
+
+/// A layout's menu, in the Browser and on its view tab: rename, duplicate, delete.
+pub(crate) fn layout_menu(app: &mut RustGisApp, ui: &mut Ui, n: &str) {
+    if ui.button(tl!("Rename…")).clicked() {
+        let _ = app.run("ui.dialog", json!({"name": "renameLayout", "target": n}));
+        ui.close();
+    }
+    // The copy opens, on the Publish tab like a click on a layout.
+    if ui.button(tl!("Duplicate")).clicked() {
+        if app.run("layout.duplicate", json!({"layout": n})).is_ok() {
+            app.ui.tab = "Publish".into();
+        }
+        ui.close();
+    }
+    if ui.button(tl!("Delete")).clicked() {
+        app.map.deleting = Some(crate::mapview::Deletion::Layout(n.to_string()));
+        ui.close();
+    }
 }
 
 #[cfg(test)]

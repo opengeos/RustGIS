@@ -72,6 +72,31 @@ of the layer's address, so a project saved with one reads it again only while th
 collection ([web app links](../installation.md)). Searches reach the network, so the [AI
 Assistant](assistant.md) asks before it runs them, and plugins need the network permission.
 
+### Data cubes on the time slider
+
+When the items found span several dates, **Add as Time Series** (desktop; `stac.addCube`) adds a
+band of them as a data cube: a collection's cloud-optimised GeoTIFFs, with one file per tile, date
+and band, such as INPE's [Brazil Data Cube](https://data.inpe.br/bdc/) or Sentinel-2 on Earth Search.
+
+- **Search:** the collection is searched over the area (the map's, or `"bbox"`) and the period
+  (`"start"`, `"end"`), page after page, up to 2,000 items.
+- **Grouping:** items go by the grid tile they cover (`grid:code`, `s2:mgrs_tile`, Landsat's WRS
+  path and row, the Brazil Data Cube's `bdc:tiles`, else their bounding box), and by day.
+- **Layers:** each tile becomes a tile layer read in place, a file per date. The time slider shows
+  the last date in its window, and a tile with no date in it draws nothing. The slider turns on
+  over the dates when it is off.
+- **Range:** a fixed `"range"` (`[0, 0.9]` for NDVI) is the same for every date and tile, so a grey
+  means one value throughout. It is in the band's own units: its `raster:bands` (or `eo:bands`)
+  scale and offset turn it into the files' stored values. Without one, each file is stretched on
+  its own, between its 2nd and 98th percentiles.
+- **Saved with the project:** each tile's dates and addresses.
+- **Web app:** a server that doesn't allow the browser to fetch its files (CORS), as the Brazil Data
+  Cube's doesn't, works on the desktop only.
+
+```sh
+rustgis-cli run --cmd 'stac.addCube={"url":"https://data.inpe.br/bdc/stac/v1","collection":"S2-16D-2","asset":"NDVI","bbox":[-55.9,-12.6,-55.5,-12.35],"start":"2024-08-01","end":"2025-06-30","range":[0,0.9]}' --cmd 'time.export={"path":"ndvi.gif"}'
+```
+
 ### Static catalogs
 
 Many catalogs are plain files rather than an API: a `catalog.json` linking to child catalogs and
@@ -256,6 +281,14 @@ and with commands `service.add` takes `"time"`:
 
 ```sh
 rustgis-cli run --cmd 'service.add={"url":"https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/WMTSCapabilities.xml","layer":"MODIS_Terra_CorrectedReflectance_TrueColor","time":"2024-06-01"}' --cmd 'share.exportMap={"path":"gibs.png"}'
+```
+
+A service may name its time instead of dating it: swisstopo's layers on
+[geo.admin.ch](https://docs.geo.admin.ch/visualize-data/wmts.html) are drawn at `current`, their
+default, so they need no `"time"`:
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://wmts.geo.admin.ch/EPSG/3857/1.0.0/WMTSCapabilities.xml","layer":"ch.swisstopo.pixelkarte-farbe"}' --cmd 'share.exportMap={"path":"swisstopo.png"}'
 ```
 
 ### NASA Earthaccess
