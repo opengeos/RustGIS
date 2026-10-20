@@ -31,10 +31,10 @@ const TOLERANCE: f32 = 0.02;
 /// Segments of a circle's rim.
 const RIM: usize = 16;
 
-/// The most vertices a tile's mesh holds (Liberty's densest tiles take about a tenth): the
-/// shapes past them are left out, so a hostile tile can't take the memory, and its indices stay
-/// far within `u32`.
-const MAX_VERTICES: usize = 2 << 20;
+/// The most vertices a tile's mesh holds, about (Liberty's densest tiles take a tenth of it
+/// natively, 100 MB; a fifth in the browser, within its budget): the shapes past are left out, so
+/// a hostile tile can't take the memory, and its indices stay far within `u32`.
+const MAX_VERTICES: usize = if cfg!(target_arch = "wasm32") { 512 << 10 } else { 2 << 20 };
 
 /// The most mesh memory kept, bytes.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 128 << 20 } else { 512 << 20 };
@@ -150,7 +150,10 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                         }
                     }
                     let options = FillOptions::default().with_fill_rule(FillRule::EvenOdd);
-                    let _ = fill.tessellate_path(&b.build(), &options, &mut BuffersBuilder::new(&mut out, vertex));
+                    let mark = (out.vertices.len(), out.indices.len());
+                    if fill.tessellate_path(&b.build(), &options, &mut BuffersBuilder::new(&mut out, vertex)).is_err() {
+                        undo(&mut out, mark);
+                    }
                 }
                 Paint::Line { color, width, cap, join, dashes, rings } => {
                     let Some(lines) = geometry else { continue };
@@ -194,7 +197,10 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                                 ..base
                             }
                         };
-                        let _ = stroke.tessellate_path(&b.build(), &options, &mut BuffersBuilder::new(&mut out, vertex));
+                        let mark = (out.vertices.len(), out.indices.len());
+                        if stroke.tessellate_path(&b.build(), &options, &mut BuffersBuilder::new(&mut out, vertex)).is_err() {
+                            undo(&mut out, mark);
+                        }
                     }
                 }
                 Paint::Circle { color, radius, stroke: ring } => {
@@ -224,6 +230,13 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
         }
     }
     TileMesh { vertices: out.vertices, indices: out.indices, runs: mesh_runs }
+}
+
+/// Takes back what a shape lyon refused left in `out`: shapes lyon refuses are left out, not
+/// drawn in part.
+fn undo(out: &mut VertexBuffers<TileVertex, u32>, (vertices, indices): (usize, usize)) {
+    out.vertices.truncate(vertices);
+    out.indices.truncate(indices);
 }
 
 /// A disc (`inner == outer`, a fan about its centre) or a ring between two widths, centred at
