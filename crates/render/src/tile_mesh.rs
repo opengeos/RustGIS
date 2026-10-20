@@ -127,11 +127,12 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                         let p = v.position();
                         TileMeshVertex { position: map(p.x, p.y), color: c0, color_next: c1, ..TileMeshVertex::default() }
                     };
-                    // One convex ring (most buildings): a fan, without lyon's sweep.
+                    // One convex ring (most buildings): a fan, without lyon's sweep. Either winding
+                    // fills alike: the pipeline culls no faces.
                     if let Some([ring]) = geometry
                         && let Some(pts) = convex(ring)
                     {
-                        let Ok(first) = u32::try_from(out.vertices.len()) else { break };
+                        let Ok(base) = u32::try_from(out.vertices.len()) else { break };
                         out.vertices.extend(pts.iter().map(|p| TileMeshVertex {
                             position: map(p[0], p[1]),
                             color: c0,
@@ -139,7 +140,7 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                             ..TileMeshVertex::default()
                         }));
                         for i in 1..pts.len() as u32 - 1 {
-                            out.indices.extend_from_slice(&[first, first + i, first + i + 1]);
+                            out.indices.extend_from_slice(&[base, base + i, base + i + 1]);
                         }
                         continue;
                     }
@@ -256,7 +257,8 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
 }
 
 /// A ring's points without its closing one, when they make a convex polygon of some area
-/// (turning one way all round, once): a fan of them fills it.
+/// (turning one way all round, once): a fan of them fills it. A spike (going back on itself)
+/// turns half round more, so it fails the count and goes to lyon.
 fn convex(ring: &[[f32; 2]]) -> Option<&[[f32; 2]]> {
     let pts = match ring {
         [first, .., last] if first == last => ring.get(..ring.len() - 1)?,
@@ -356,9 +358,9 @@ fn lock() -> MutexGuard<'static, Store> {
 
 /// The meshes of `tiles` (bottom first) for `style`'s `source` at `level`, each kept once made
 /// (while its tile and the style are, and within a memory budget; one made while the sprite was
-/// on its way until the tile cache has more); `None` for one that is no vector tile, or not made yet: with `until`, those
-/// missing are made nearest `centre` first until then (a round of them at least). Natively, they
-/// are made on several threads.
+/// on its way until the tile cache has more); `None` for one that is no vector tile, or not made
+/// yet: with `until`, those missing are made nearest `centre` first until then (a round of them
+/// at least). Natively, they are made on several threads.
 pub fn meshes(
     style: &Arc<Resolved>,
     source: &str,
