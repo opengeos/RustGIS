@@ -277,7 +277,23 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
 - **Ortho Mapping** and **Reality Mapping** workspaces mosaic georeferenced images into an
   orthomosaic, or elevation rasters into a surface model that exports as a 3D mesh (OBJ).
 - **Georeference** places a raster from control points (column, row, longitude, latitude) or
-  stretches it over the map view.
+  stretches it over the map view. Those only shift and scale a north-up grid, as RustGIS's
+  geotransform has no rotation. With `transform` (`raster.georeference`) the points are fitted by any
+  of the Control Point Fit transforms and the raster is warped onto a new north-up grid covering the
+  warped image: `{"layer": "scan", "transform": "spline", "points": [[column, row, x, y], …],
+  "pointsCrs": "EPSG:4326", "crs": 32613, "resampling": "bilinear", "cellSize": 5, "name": "warped",
+  "path": "warped.tif"}`. `pointsCrs` is the coordinate system the points' x and y are in (default
+  EPSG:4326) and `crs` the output's (default `pointsCrs`, so nothing is reprojected unless asked).
+  Each output cell is taken back through the fit, after reprojection, to the image and sampled there
+  with `nearest`, `bilinear` (the default) or `cubic`; cells that fall outside the image are no
+  data, or see-through for a colour image, which gains an alpha band for it (a grey byte image
+  becomes grey with alpha; alpha is 0–255 in every pixel type). An image warped into a geographic
+  `crs` gets square cells in degrees, and one that would span more than 180° of longitude is
+  refused: give a projected `crs`. The cell is about the source pixel's size on the ground unless
+  `cellSize` (output units) says otherwise. The result replaces the layer's raster, or becomes a new
+  layer with `name`; `path` also writes it as a cloud-optimised GeoTIFF, which then is the layer's
+  file. A raster opened from an overview is warped at that reduced resolution, and the result says
+  so.
 - **Control Point Fit** (`raster.gcpFit`) fits a similarity, affine, projective, second- or
   third-order polynomial, or thin plate spline transform to control points and reports how well
   it holds: each point's residual in pixels and map units, the RMSE, and each point's error when
