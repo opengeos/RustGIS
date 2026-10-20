@@ -757,7 +757,10 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             match decode_picture(&bytes).await {
                 Ok(raw) => done(Ok(raw)),
                 // The browser can't: decoded in WebAssembly instead.
-                Err(_) => done(Err(bytes)),
+                Err(e) => {
+                    log::debug!("the browser didn't decode a picture: {e:?}");
+                    done(Err(bytes))
+                }
             }
         });
     });

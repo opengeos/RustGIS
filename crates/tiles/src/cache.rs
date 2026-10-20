@@ -1339,10 +1339,8 @@ mod tests {
         decode_with(Ok(json), Want::Json, Some(&raw), |p| assert!(matches!(p, Ok(Payload::Json(_)))));
         decode_with(Ok(b"junk".to_vec()), Want::Image, Some(&raw), |p| assert!(p.is_err()));
         // Larger than a tile may be, by its header: refused here, never handed to the decoder.
-        let mut big = png.clone();
-        if let Some(ihdr) = big.get_mut(16..24) {
-            ihdr.copy_from_slice(&[0, 0, 0x40, 0, 0, 0, 0x40, 0]);
-        }
+        let big = Pixmap::new(4097, 1).unwrap_or_else(|| panic!("pixmap")).encode_png().unwrap_or_else(|e| panic!("{e}"));
+        assert!(!encoded_picture(&big));
         decode_with(Ok(big), Want::Image, Some(&raw), |p| assert!(p.is_err()));
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
