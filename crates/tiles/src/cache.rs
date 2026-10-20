@@ -128,11 +128,18 @@ pub fn set_image_decoder(f: impl Fn(Vec<u8>, Decoded) + Send + Sync + 'static) {
     *image_decoder().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
 }
 
-/// Whether `bytes` start as a PNG, JPEG or WebP picture.
+/// Whether `bytes` are a PNG, JPEG or WebP picture of at most 4096 pixels a side, by its header:
+/// a larger one is left to [`decode_image`], whose limits refuse it before it takes the memory.
 fn encoded_picture(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+    let known = bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         || bytes.starts_with(&[0xff, 0xd8, 0xff])
-        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"));
+    known
+        && image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+            .is_some_and(|(w, h)| (1..=4096).contains(&w) && (1..=4096).contains(&h))
 }
 
 /// Sets what is called whenever a fetch finishes (the app asks for a repaint).
@@ -1208,6 +1215,12 @@ mod tests {
         let json = br#"{"a": 1}"#.to_vec();
         decode_with(Ok(json), Want::Json, Some(&raw), |p| assert!(matches!(p, Ok(Payload::Json(_)))));
         decode_with(Ok(b"junk".to_vec()), Want::Image, Some(&raw), |p| assert!(p.is_err()));
+        // Larger than a tile may be, by its header: refused here, never handed to the decoder.
+        let mut big = png.clone();
+        if let Some(ihdr) = big.get_mut(16..24) {
+            ihdr.copy_from_slice(&[0, 0, 0x40, 0, 0, 0, 0x40, 0]);
+        }
+        decode_with(Ok(big), Want::Image, Some(&raw), |p| assert!(p.is_err()));
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 

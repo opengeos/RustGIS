@@ -509,8 +509,9 @@ mod tests {
     use crate::View;
 
     /// The warp interpolating across cells puts every pixel where working it out pixel by pixel
-    /// does: on a globe zoomed in, on a whole one with its edge in view, and across the
-    /// antimeridian (where the mosaic's longitudes jump from one side to the other).
+    /// does: on a globe zoomed in, on a whole one with its edge in view, across the antimeridian
+    /// (where the mosaic's longitudes jump from one side to the other), and with a pole in sight
+    /// (where latitudes are clamped to Web Mercator's limit).
     #[test]
     fn the_warp_matches_the_exact_projection() {
         use rustgis_geom::MERCATOR_R;
@@ -523,7 +524,14 @@ mod tests {
             px.copy_from_slice(&[(x / 4) as u8, (y / 4) as u8, 128, 255]);
         }
         let frame = rustgis_tiles::Frame { left: -half, top: half, m_per_px: 2.0 * half / f64::from(side), ppp: 1.0 };
-        for (lon, lat, res) in [(10.0, 45.0, 2_000.0), (10.0, 20.0, 40_000.0), (179.0, -30.0, 5_000.0)] {
+        for (lon, lat, res) in [
+            (10.0, 45.0, 2_000.0),
+            (10.0, 20.0, 40_000.0),
+            (179.0, -30.0, 5_000.0),
+            (30.0, 80.0, 15_000.0),
+            (-60.0, -84.0, 4_000.0),
+            (0.0, 85.0, 800.0),
+        ] {
             let camera = Camera { center: lonlat_to_merc(Coord::new(lon, lat)), res, bearing: 0.0, pitch: 0.0 };
             let g = rustgis_map::globe::Globe::new(&camera, 300.0, 200.0);
             let to_lonlat = |x: f64, y: f64| g.inverse(x, y);

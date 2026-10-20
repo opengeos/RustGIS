@@ -82,7 +82,9 @@ impl log::Log for Logger {
 
 /// Whether a message is worth the console: of tiny-skia's, only errors.
 fn worth_logging(metadata: &log::Metadata<'_>) -> bool {
-    !metadata.target().starts_with("tiny_skia") || metadata.level() <= log::Level::Error
+    let target = metadata.target();
+    let tiny_skia = target == "tiny_skia" || target.starts_with("tiny_skia::");
+    !tiny_skia || metadata.level() <= log::Level::Error
 }
 
 pub fn start() {
