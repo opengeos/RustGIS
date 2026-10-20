@@ -3019,6 +3019,8 @@ pub struct DrapePatch {
     pub pixmap: Pixmap,
     /// The Web Mercator box the picture shows.
     pub merc: Extent,
+    /// Tiles were still on their way: drawing it again later shows more.
+    pub pending: bool,
 }
 
 /// Draws the longitude/latitude `boxes` (from `Globe::drape_extents`) of a globe map flat, at
@@ -3058,7 +3060,7 @@ pub fn render_globe_drape(map: &mut Map, view: &View, boxes: &[Extent], max_side
         // up to a point less: stretched by under a point, its edges stay exactly where asked, so
         // one at the Web Mercator limit is still stretched on to the pole (drape_mesh).
         if let Some(r) = render(map, &v) {
-            out.push(DrapePatch { pixmap: r.pixmap, merc });
+            out.push(DrapePatch { pixmap: r.pixmap, merc, pending: r.tiles_pending });
         }
     }
     map.projection = projection;
