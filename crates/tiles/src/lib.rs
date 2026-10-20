@@ -33,9 +33,11 @@ pub mod sourcecoop;
 pub mod sprite;
 pub mod stac;
 pub mod style;
+pub mod symbols;
 pub mod template;
 pub mod usgis;
 
-pub use draw::{Drawn, Frame, Label, PlacedTiles, Placement, draw, place};
+pub use draw::{Drawn, Frame, PlacedTiles, Placement, draw, place};
 pub use picture::{Pace, Unfinished, pace, paced, unfinished};
 pub use source::{Kind, Spec};
+pub use symbols::{Collide, Label, LabelIcon};
