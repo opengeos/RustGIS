@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{
-    CONTENT_H, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, submenu_row, text_w,
+    CONTENT_H, Dragged, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, submenu_row,
+    text_w,
 };
 use crate::{RightPane, RustGisApp, icons};
 
@@ -3327,8 +3328,10 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                     let mut k = xx.factor;
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
+                        // Kept across a drag until it is let go (#607).
+                        let drag = Dragged::lend(ui, egui::Id::new(("extrusion_factor", layer.id)), &mut k);
                         let r = ui.add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02));
-                        if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                        if drag.settled(ui, &r, &mut k) {
                             let t = if xx.field.is_some() { "field" } else { "height" };
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
                         }
@@ -3765,8 +3768,10 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
             mask_menu(ui, app, &layer);
             let mut a = style.rotation;
             ui.horizontal(|ui| {
+                // Kept across a drag until it is let go (#607).
+                let drag = Dragged::lend(ui, egui::Id::new(("raster_rotation", layer.id)), &mut a);
                 let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.0).speed(1.0).suffix("°"));
-                if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                if drag.settled(ui, &r, &mut a) {
                     let _ = app.run("raster.rotation", json!({"angle": a}));
                 }
                 ui.label(egui::RichText::new(tl!("Rotation")).size(11.5));
