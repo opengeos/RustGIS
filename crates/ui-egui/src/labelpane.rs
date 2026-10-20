@@ -265,14 +265,13 @@ fn apply_color_drag(app: &mut RustGisApp, drag: ColorDrag) {
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
     layer.labels.color = drag.before;
     if drag.before != drag.color {
-        // On the active layer, which the pick was made on, so a recorded step names it (as
-        // the pane's other commands do); by id only if the selection changed meanwhile.
-        let p = if app.session.active_layer == Some(drag.layer) {
-            json!({"color": drag.color.hex()})
-        } else {
-            json!({"layer": drag.layer, "color": drag.color.hex()})
-        };
-        run(app, "labels.style", p);
+        // On the layer the pick was made on, as the active one: the command reaches it by id
+        // (a name two layers share would reach the first), and a recorded step names it, as
+        // for the pane's other commands. The selection, if it moved mid-pick, is put back (as
+        // `Session::run` does to check a named layer's conditions).
+        let selected = app.session.active_layer.replace(drag.layer);
+        run(app, "labels.style", json!({"color": drag.color.hex()}));
+        app.session.active_layer = selected;
     }
 }
 
@@ -389,7 +388,8 @@ mod tests {
     /// Assistant, a shortcut) is finished as its own step, not left as an unrecorded preview.
     #[test]
     fn a_pick_pending_on_another_layer_is_finished_first() {
-        let app = with_cities();
+        let mut app = with_cities();
+        app.ws.recording = Some(Vec::new());
         let cities = app.session.active_layer.unwrap();
         let countries = layer_id(&app, "Countries");
         let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.color;
@@ -424,10 +424,18 @@ mod tests {
         assert_eq!(color(app, cities), red, "the first pick is kept on its layer");
         assert_eq!(app.session.undo_depth(), steps + 1, "and run as a step of its own");
         assert_eq!(color(app, countries), blue, "the new pick previews");
+        assert_eq!(app.session.active_layer, Some(countries), "the selection stays where it moved");
         h.event(button(false));
         h.step();
         let app = &mut h.state_mut().0;
         assert_eq!(app.session.undo_depth(), steps + 2);
+        // Both steps name their layer, the first one too, though it was no longer selected.
+        let steps_recorded: Vec<_> =
+            app.ws.recording.iter().flatten().map(|s| (s.command.clone(), s.params.get("layer").cloned())).collect();
+        assert_eq!(
+            steps_recorded,
+            [("labels.style".to_string(), Some(json!("Cities"))), ("labels.style".to_string(), Some(json!("Countries")))]
+        );
         app.run("edit.undo", json!(null)).unwrap();
         assert_eq!(color(app, countries), countries_before);
         app.run("edit.undo", json!(null)).unwrap();
