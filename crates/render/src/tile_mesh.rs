@@ -334,13 +334,14 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
             *slot = mesh;
         }
     }
-    if !missing.is_empty() {
-        evict(&mut s, tick);
-    }
+    // Every call, so meshes of tiles the cache let go go as the map moves over others.
+    evict(&mut s, tick);
     out
 }
 
-/// `f` of every item (`None` for one that panicked), natively shared among threads.
+/// `f` of every item (`None` for one that panicked), natively shared among threads. In the
+/// browser a panic aborts (`wasm32-unknown-unknown` unwinds nothing): there a panic is caught
+/// nowhere, as everywhere else in the web app.
 fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
