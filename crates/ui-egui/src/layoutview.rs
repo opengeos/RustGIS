@@ -2023,6 +2023,7 @@ mod tests {
         // X is the pane's first number, the topmost: Name, X, Y, Width, Height.
         let at = h.query_all_by_role(Role::SpinButton).map(|n| n.rect()).min_by(|a, b| a.min.y.total_cmp(&b.min.y)).unwrap().center();
         let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let undo = h.state().session.undo_depth();
         h.event(Event::PointerMoved(at));
         h.step();
         h.event(button(at, true));
@@ -2037,7 +2038,9 @@ mod tests {
         let e = h.state().session.project.layouts[li].element(title.id).unwrap().clone();
         assert!(e.x - title.x > 10.0, "moved from {} to {}", title.x, e.x);
         assert_eq!(e.y, title.y, "only X changed");
-        assert_eq!(h.state().session.undo_label(), Some("Element Properties"), "one undo step");
+        // Applied once, on release: one undo step, not one a frame of the drag.
+        assert_eq!(h.state().session.undo_depth(), undo + 1, "one undo step");
+        assert_eq!(h.state().session.undo_label(), Some("Element Properties"));
     }
 
     /// A layout's text has the shared text form (#516): the page's dynamic text as well as the
