@@ -592,8 +592,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         app.map.view_px = key.size;
     }
-    // A side pane being dragged resizes the view every frame. Drawing the map each time made the
-    // drag stutter: the last frame stays centred at its own scale (the uncovered edge shows the
+    // A side pane being dragged (or the window resized) resizes the view every frame. Drawing the
+    // map each time made the drag stutter: the last frame stays centred at its own scale (the uncovered edge shows the
     // map's background) until the size holds for a moment, as a pan shows its last frame.
     let resizing = time - app.map.resized_at < RESIZE_SETTLE;
     let hold = resizing
@@ -2852,8 +2852,9 @@ mod tests {
         };
         settled(&mut h, "the first frame did not arrive");
         let before = h.state().map.key.map(|k| k.size);
-        // The window narrowing a little each frame, as the map does while a pane is dragged.
-        for i in 1..=8 {
+        // The window narrowing a little each frame, as the map does while a pane is dragged:
+        // 5 frames at 1/60 s each, well inside `RESIZE_SETTLE`.
+        for i in 1..=5 {
             h.set_size(vec2(1200.0 - 10.0 * i as f32, 700.0));
             h.step();
             assert_eq!(h.state().map.key.map(|k| k.size), before, "the map was drawn again mid-drag (frame {i})");
