@@ -130,7 +130,7 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                     if let Some([ring]) = geometry
                         && let Some(pts) = convex(ring)
                     {
-                        let first = out.vertices.len() as u32;
+                        let Ok(first) = u32::try_from(out.vertices.len()) else { break };
                         out.vertices.extend(pts.iter().map(|p| TileMeshVertex {
                             position: map(p[0], p[1]),
                             color: c0,
@@ -403,8 +403,11 @@ pub fn meshes(
         let s = shapes(style, source, tile, level);
         Some(Arc::new(TileMesh { waiting: s.waiting, ..tessellate(tile, &s.runs, t.z) }))
     };
+    // A tile that panicked (hostile data) is done: an empty mesh, kept, so it isn't made again
+    // every frame, and the map settles.
+    let done = |m: Option<Option<Arc<TileMesh>>>| m.unwrap_or_else(|| Some(Arc::new(TileMesh::default())));
     let made: Vec<Option<Arc<TileMesh>>> = match until {
-        None => parallel(&missing, make).into_iter().map(Option::flatten).collect(),
+        None => parallel(&missing, make).into_iter().map(done).collect(),
         Some((until, centre)) => {
             let far = |i: &usize| {
                 tiles.get(*i).map_or(f64::MAX, |t| {
@@ -423,7 +426,7 @@ pub fn meshes(
                 let picked: Vec<usize> = some.iter().filter_map(|&j| missing.get(j).copied()).collect();
                 for (&j, m) in some.iter().zip(parallel(&picked, make)) {
                     if let Some(slot) = made.get_mut(j) {
-                        *slot = m.flatten();
+                        *slot = done(m);
                     }
                 }
             }
@@ -668,6 +671,11 @@ mod tests {
         assert!(convex(&star).is_none());
         assert!(convex(&[[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]).is_none());
         assert!(convex(&[[0.0, 0.0], [f32::NAN, 1.0], [2.0, 0.0]]).is_none());
+        // Points along an edge: still convex, the fan covers it. A point twice over (an edge of
+        // no length, no turn to read) is left to lyon.
+        let edgy = [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]];
+        assert_eq!(convex(&edgy).map(<[_]>::len), Some(5));
+        assert!(convex(&[[0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]).is_none());
         // A convex building fills as lyon fills it: the same area.
         let area = |m: &TileMesh| {
             m.indices

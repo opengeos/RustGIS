@@ -68,9 +68,14 @@ pub fn style_view(t: &TileLayer) -> Result<Option<rustgis_tiles::style::StyleVie
 /// comparisons.
 pub static TILE_MESHES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// A tile last drawn as a mesh: its mesh held weakly (the mesh cache decides how long it
+/// stays), where it is and the square it was drawn in, and its level.
+type LastTile = (std::sync::Weak<crate::tile_mesh::TileMesh>, [f64; 2], [f32; 4], u8);
+
 /// The tiles of each style last drawn as meshes (by the resolved style's address), which stand in
-/// for tiles whose meshes are still to be made.
-type Last = std::collections::HashMap<usize, (std::sync::Weak<rustgis_tiles::source::Resolved>, Vec<MeshTile>)>;
+/// for tiles whose meshes are still to be made. Any map's do: a mesh is the same wherever it is
+/// drawn, and only its square's part of it is.
+type Last = std::collections::HashMap<usize, (std::sync::Weak<rustgis_tiles::source::Resolved>, Vec<LastTile>)>;
 static LAST: std::sync::OnceLock<std::sync::Mutex<Last>> = std::sync::OnceLock::new();
 
 /// The meshes of `v`'s tiles, and whether some were made while the sprite was on its way. A map
@@ -82,7 +87,14 @@ fn mesh_tiles(v: &rustgis_tiles::shapes::VectorTiles, centre: [f64; 2]) -> (Vec<
     let meshes = crate::tile_mesh::meshes(&v.style, &v.source, &v.tiles, v.level, pace.map(|(_, until)| (until, centre)));
     let lock = || LAST.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     let key = std::sync::Arc::as_ptr(&v.style) as usize;
-    let last: Vec<MeshTile> = lock().get(&key).map(|(_, t)| t.clone()).unwrap_or_default();
+    let last: Vec<MeshTile> = lock()
+        .get(&key)
+        .map(|(_, t)| {
+            t.iter()
+                .filter_map(|(m, origin, clip, level)| Some(MeshTile { mesh: m.upgrade()?, origin: *origin, clip: *clip, level: *level }))
+                .collect()
+        })
+        .unwrap_or_default();
     let (mut stood_in, mut tiles, mut waiting) = (Vec::new(), Vec::new(), false);
     for (d, m) in v.tiles.iter().zip(meshes) {
         let o = [d.at.min_x, d.at.max_y];
@@ -129,7 +141,8 @@ fn mesh_tiles(v: &rustgis_tiles::shapes::VectorTiles, centre: [f64; 2]) -> (Vec<
     stood_in.extend(tiles);
     let mut l = lock();
     l.retain(|_, (s, _)| s.strong_count() > 0);
-    l.insert(key, (std::sync::Arc::downgrade(&v.style), stood_in.clone()));
+    let kept = stood_in.iter().map(|t| (std::sync::Arc::downgrade(&t.mesh), t.origin, t.clip, t.level)).collect();
+    l.insert(key, (std::sync::Arc::downgrade(&v.style), kept));
     (stood_in, waiting)
 }
 
