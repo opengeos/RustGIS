@@ -180,6 +180,10 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                             style::LineJoin::Miter => LineJoin::Miter,
                         });
                     for line in lines.iter().filter(|l| l.len() >= 2) {
+                        // Within a shape too: one feature can hold any number of parts.
+                        if out.vertices.len() >= MAX_VERTICES {
+                            break;
+                        }
                         let Some((head, rest)) = line.split_first() else { continue };
                         let mut b = Path::builder();
                         b.begin(at(head));
@@ -207,6 +211,9 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                     let Some(points) = geometry else { continue };
                     let disc = [radius[0] * 2.0, radius[1] * 2.0];
                     for p in points.iter().flatten() {
+                        if out.vertices.len() >= MAX_VERTICES {
+                            break;
+                        }
                         let c = map(p[0], p[1]);
                         circle(&mut out, c, color, disc, disc);
                         if let Some((sc, sw)) = ring {
@@ -489,9 +496,9 @@ mod tests {
         t.layers[0].features[2].geometry = points;
         let dots = Paint::Circle { color: RED, radius: [1.0, 1.0], stroke: None };
         let runs: Vec<Run> = (0..20).map(|l| run(l, 0.0, Some(2), dots.clone())).collect();
-        // 200,000 circles of 17 vertices: stopped at the cap, give or take a shape.
+        // 200,000 circles of 17 vertices: stopped at the cap, give or take a circle.
         let m = tessellate(&t, &runs, 1);
-        assert!(m.vertices.len() >= MAX_VERTICES && m.vertices.len() < MAX_VERTICES + 10_000 * (RIM + 1));
+        assert!(m.vertices.len() >= MAX_VERTICES && m.vertices.len() <= MAX_VERTICES + RIM + 1);
         assert!(m.indices.iter().all(|&i| (i as usize) < m.vertices.len()));
     }
 

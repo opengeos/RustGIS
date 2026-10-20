@@ -173,6 +173,9 @@ fn shown_in(l: &StyleLayer, lo: f32, hi: f32) -> bool {
 /// square.
 pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run> {
     let (lo, hi) = (f32::from(level), f32::from(level) + 1.0);
+    // The level's last zoom (the next level excluded): a step at the next level isn't blended
+    // across this one; an interpolation is the same there, near enough.
+    let top = hi.next_down();
     let shown = |l: &StyleLayer| shown_in(l, lo, hi);
     let mut runs = Vec::new();
     for (li, layer) in style.style.layers.iter().enumerate() {
@@ -181,7 +184,7 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run
         }
         if layer.kind == LayerKind::Background {
             let at = |z: f32| layer.background_color(z).map(|c| rgba(c, layer.background_opacity(z)));
-            if let (Some(a), Some(b)) = (at(lo), at(hi)) {
+            if let (Some(a), Some(b)) = (at(lo), at(top)) {
                 let paint = Paint::Fill { color: [a, b], pattern: None };
                 let extent = tile.layers.first().map_or(4096, |l| l.extent);
                 runs.push(Run {
@@ -208,7 +211,7 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run
             if !layer.matches(&ctx(lo)) {
                 continue;
             }
-            let (a, b) = (ctx(lo), ctx(hi));
+            let (a, b) = (ctx(lo), ctx(top));
             let paint = match layer.kind {
                 LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon => {
                     let (Some(ca), Some(cb)) = (layer.fill_color(&a), layer.fill_color(&b)) else { continue };
@@ -400,7 +403,8 @@ mod tests {
         // Each road by its filter, the major one's width at the level and the next.
         assert_eq!(runs[2].shapes.len(), 1);
         let Paint::Line { width, cap, join, dashes, .. } = &runs[2].shapes[0].paint else { panic!("a line") };
-        assert_eq!((*width, *cap, *join, dashes.is_none()), ([6.0, 8.0], LineCap::Round, LineJoin::Round, true));
+        assert!((width[0] - 6.0).abs() < 1e-3 && (width[1] - 8.0).abs() < 1e-3);
+        assert_eq!((*cap, *join, dashes.is_none()), (LineCap::Round, LineJoin::Round, true));
         assert!(matches!(&runs[3].shapes[0].paint, Paint::Line { dashes: Some(d), .. } if d == &[3.0, 2.0]));
         let Paint::Circle { radius, stroke: Some((_, w)), .. } = &runs[4].shapes[0].paint else { panic!("a circle") };
         assert_eq!((*radius, *w), ([7.0, 7.0], [2.0, 2.0]));
@@ -424,6 +428,20 @@ mod tests {
             matches!(&runs[0].shapes[0].paint, Paint::Fill { pattern: Some(p), color } if p == "dots" && (color[0][3] - 0.8).abs() < 1e-3)
         );
         assert!(runs.iter().all(|r| r.layer != 1), "line patterns aren't drawn");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_step_at_the_next_level_holds_over_this_one() {
+        let style = STYLE.replace(r#""line-width": 2,"#, r#""line-width": ["step", ["zoom"], 2, 3, 6],"#);
+        let (spec, dir) = archive("step", &style);
+        ready(&spec);
+        let v = tile(&spec, 2.5);
+        let Payload::Vector(t) = &*v.tiles[0].payload else { panic!("a vector tile") };
+        let runs = shapes(&v.style, &v.source, t, v.level);
+        assert!(matches!(&runs[3].shapes[0].paint, Paint::Line { width, .. } if *width == [2.0, 2.0]));
+        // An interpolation, still at the next level's value.
+        assert!(matches!(&runs[2].shapes[0].paint, Paint::Line { width, .. } if (width[1] - 8.0).abs() < 1e-3));
         let _ = std::fs::remove_dir_all(dir);
     }
 
