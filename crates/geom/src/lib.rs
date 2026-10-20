@@ -394,8 +394,11 @@ mod tests {
         assert_eq!(format_distance(999.6), "1.0 km");
         assert_eq!(format_distance(12_500.0), "12.5 km");
         assert_eq!(format_distance(99_960.0), "100 km");
+        assert_eq!(format_distance(99_949.0), "99.9 km");
+        assert_eq!(format_distance(1_000.0), "1.0 km");
         assert_eq!(format_area(999_999.4), "999999 m²");
         assert_eq!(format_area(999_999.6), "1.0 km²");
+        assert_eq!(format_area(1.0e6), "1.0 km²");
     }
 
     #[test]
