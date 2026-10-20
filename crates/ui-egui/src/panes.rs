@@ -563,7 +563,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // The celestial body switcher, lit off the Earth (#223).
             ui.add_space(6.0);
             let body = app.session.map().body();
-            let tip = crate::i18n::fmt("Celestial body: {body}", &[("body", tl!(body.name))]);
+            let tip = crate::i18n::fmt("Celestial body: {body}", &[("body", tl_raw!(body.name))]);
             let resp = view_button(ui, "planet", &tip, !body.is_earth(), t);
             egui::Popup::menu(&resp).show(|ui| {
                 ui.set_min_width(150.0);
@@ -1354,7 +1354,7 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
                 action = Some(("map.setTiles", json!({"index": i, "opacity": o / 100.0})));
             }
         });
-        ui.menu_button(crate::i18n::fmt("Blend: {mode}", &[("mode", tl!(tile.blend.label()))]), |ui| {
+        ui.menu_button(crate::i18n::fmt("Blend: {mode}", &[("mode", tl_raw!(tile.blend.label()))]), |ui| {
             for b in rustgis_engine::map::effects::Blend::ALL {
                 if ui.radio(tile.blend == b, tl!(b.label())).clicked() {
                     action = Some(("map.setTiles", json!({"index": i, "blend": b.code()})));
@@ -1537,7 +1537,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
                     ("w", &d.width.to_string()),
                     ("h", &d.height.to_string()),
                     ("n", &d.band_count().to_string()),
-                    ("renderer", tl!(rl.style.renderer.label())),
+                    ("renderer", tl_raw!(rl.style.renderer.label())),
                 ],
             ),
             None => crate::i18n::fmt("The raster's data couldn't be read: {path}", &[("path", rl.path.as_deref().unwrap_or(""))]),
@@ -1553,21 +1553,21 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
                     Some((n, matched)) => crate::i18n::fmt(
                         "{type} · {format}, read in place · a sample of {n} of the {matched} features in view (zoom in to see them all) · {renderer}",
                         &[
-                            ("type", tl!(l.geometry_type().label())),
+                            ("type", tl_raw!(l.geometry_type().label())),
                             ("format", format),
                             ("n", &n.to_string()),
                             ("matched", &matched.to_string()),
-                            ("renderer", tl!(l.renderer.kind_label())),
+                            ("renderer", tl_raw!(l.renderer.kind_label())),
                         ],
                     ),
                     None => crate::i18n::fmt(
                         "{type} · {format}, read in place · {n} of {total} features in view · {renderer}",
                         &[
-                            ("type", tl!(l.geometry_type().label())),
+                            ("type", tl_raw!(l.geometry_type().label())),
                             ("format", format),
                             ("n", &l.dataset.features.len().to_string()),
                             ("total", &total),
-                            ("renderer", tl!(l.renderer.kind_label())),
+                            ("renderer", tl_raw!(l.renderer.kind_label())),
                         ],
                     ),
                 }
@@ -1575,9 +1575,9 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             None => crate::i18n::fmt(
                 "{type} · {n} features · {renderer}",
                 &[
-                    ("type", tl!(l.geometry_type().label())),
+                    ("type", tl_raw!(l.geometry_type().label())),
                     ("n", &l.dataset.features.len().to_string()),
-                    ("renderer", tl!(l.renderer.kind_label())),
+                    ("renderer", tl_raw!(l.renderer.kind_label())),
                 ],
             ),
         },
@@ -2001,7 +2001,11 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     let mut entries: Vec<(bool, String, std::path::PathBuf)> = rd
         .filter_map(|e| e.ok())
-        .map(|e| (e.path().is_dir(), e.file_name().to_string_lossy().to_string(), e.path()))
+        .map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            // A File Geodatabase's folder is data, listed and added like a file.
+            (e.path().is_dir() && !rustgis_engine::data::source::is_gdb_name(&name), name, e.path())
+        })
         .filter(|(d, n, _)| {
             !n.starts_with('.')
                 && (*d
@@ -2014,6 +2018,8 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "tif",
                         "tiff",
                         "asc",
+                        // A File Geodatabase's folder, listed as data above.
+                        "gdb",
                         "rgis",
                         "rgisx",
                         "rgispkg",
@@ -2194,7 +2200,7 @@ fn finished(app: &mut RustGisApp, tool: &'static str, r: Result<Value, String>) 
         app.session.notify(last.1.join("\n"), true);
     } else {
         let name = rustgis_engine::analysis::tool(tool).map(|t| t.name).unwrap_or(tool);
-        app.session.notify(crate::i18n::fmt("Finished: {tool}", &[("tool", tl!(name))]), false);
+        app.session.notify(crate::i18n::fmt("Finished: {tool}", &[("tool", tl_raw!(name))]), false);
     }
     app.map.invalidate();
 }

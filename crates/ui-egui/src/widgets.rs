@@ -85,7 +85,7 @@ pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &s
             ui.label(egui::RichText::new(desc).size(11.5).weak());
         }
         if let Some(w) = why {
-            ui.label(egui::RichText::new(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl!(w))])).size(11.0).italics().weak());
+            ui.label(egui::RichText::new(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl_raw!(w))])).size(11.0).italics().weak());
         }
     })
 }

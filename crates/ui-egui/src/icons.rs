@@ -1009,6 +1009,10 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
         "g_line" => {
             p.line(&[(3.0, 19.0), (10.0, 8.0), (15.0, 14.0), (21.0, 5.0)], 1.8, ink);
         }
+        "g_arrow" => {
+            p.line(&[(4.0, 20.0), (16.0, 8.0)], 1.8, ink);
+            p.fill(&[(21.0, 3.0), (11.5, 6.5), (17.5, 12.5)], ink);
+        }
         "g_curve" => {
             let pts: Vec<(f32, f32)> = (0..=20)
                 .map(|i| {
