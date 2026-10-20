@@ -541,7 +541,9 @@ pub(crate) fn pole_of_inaccessibility(poly: &[Vec<(f32, f32)>], precision: f32) 
         return None;
     }
     let cell = w.min(h);
-    let precision = precision.max(cell / 1e4).max(1e-3);
+    // A label needs its point to about a pixel, or a two-hundredth of the polygon when that is
+    // coarser: a large polygon isn't searched to a fraction of a pixel.
+    let precision = precision.max(w.max(h) / 200.0).max(1e-3);
     let make = |c: (f32, f32), h: f32| {
         let d = signed_distance(c, poly);
         Cell { c, h, d, max: d + h * std::f32::consts::SQRT_2 }
@@ -570,7 +572,7 @@ pub(crate) fn pole_of_inaccessibility(poly: &[Vec<(f32, f32)>], precision: f32) 
         if c.max - best.d <= precision {
             continue;
         }
-        if steps > 10_000 {
+        if steps > 1_000 {
             break;
         }
         let h = c.h / 2.0;

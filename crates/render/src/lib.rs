@@ -2550,7 +2550,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let pri = match g {
                     Geometry::Polygon(_) => {
                         let e = g.extent();
-                        (e.width() * e.height()).sqrt().clamp(0.0, 1e8)
+                        // (An extent of no number counts as none.)
+                        let a = (e.width() * e.height()).sqrt();
+                        if a.is_finite() { a.clamp(0.0, 1e8) } else { 0.0 }
                     }
                     _ => 0.0,
                 } + (n_layers - li) as f64 * 1e9;
@@ -3166,7 +3168,9 @@ struct Placement {
 /// keeping the others off it. Labels reaching past the view's edge are placed (only those wholly
 /// outside it are left out), and the boxes are kept in a grid so a crowded view stays quick.
 fn place_labels(mut cands: Vec<Candidate>, fixed: Vec<PlacedLabel>, w: f32, h: f32, locked: bool) -> Placement {
-    cands.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // A priority of no number places last, not first (`total_cmp` puts NaN above everything).
+    let rank = |p: f64| if p.is_nan() { f64::NEG_INFINITY } else { p };
+    cands.sort_by(|a, b| rank(b.1).total_cmp(&rank(a.1)));
     let mut grid = LabelGrid::new(w, h);
     for l in &fixed {
         let (text, icon) = label_boxes(l);
