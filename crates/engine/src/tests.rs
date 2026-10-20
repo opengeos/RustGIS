@@ -1466,13 +1466,19 @@ fn label_classes_convert_and_outlive_a_deleted_field() {
     assert_eq!(l.classes.len(), 1);
     assert_eq!(l.classes[0].field, l.default.field);
     assert!(l.default.field != "pop_max");
+    assert!(l.enabled, "another class's field going leaves the labels on");
     // Default on a deleted field starts again on another, keeping its name, clause and visibility.
     assert_eq!(l.default.field, "name");
     s.run("labels.class.rename", &json!({"class": "Default", "name": "Rest"})).unwrap();
     s.run("labels.class.update", &json!({"where": "name <> 'x'", "visible": false})).unwrap();
     s.run("edit.deleteField", &json!({"layer": cities, "field": "name"})).unwrap();
     let l = &s.map().layer(cities).unwrap().labels;
-    assert!(!l.enabled && l.default.field != "name");
+    assert!(!l.enabled && l.default.field != "name", "Default's field going turns the labels off, as before classes");
+    assert_eq!(
+        (l.classes.len(), l.classes[0].field.as_str()),
+        (1, l.default.field.as_str()),
+        "the other classes are kept, on its new field"
+    );
     assert_eq!((l.default.name.as_str(), l.default.visible, l.default.where_.as_deref()), ("Rest", false, Some("name <> 'x'")));
 }
 

@@ -311,6 +311,8 @@ fn convert(s: &mut Session, p: &Value) -> CmdResult {
     let n = ds.features.len();
     let mut labels = l.labels.clone();
     labels.enabled = true;
+    // The classes that count, as for the layer's own labels.
+    labels.classes.truncate(MAX_LABEL_CLASSES);
     for c in std::iter::once(&mut labels.default).chain(labels.classes.iter_mut()) {
         c.field = "TEXT".into();
         c.placement = LabelPlacement::Center;
