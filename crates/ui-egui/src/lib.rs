@@ -31,6 +31,7 @@ mod globe_drape;
 mod graphicformat;
 pub mod icons;
 mod keymap;
+mod labelpane;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
 mod localagents;
@@ -404,6 +405,8 @@ pub enum RightPane {
     Bookmarks,
     /// The selected layout element's properties (#516).
     Format,
+    /// The selected feature layer's labels (#617).
+    Labeling,
     /// A Home › Web Data service: the one `UiState::web_data` names.
     WebData,
     /// A plugin's panel: the one `UiState::plugin_panel` names.
@@ -1584,6 +1587,28 @@ impl RustGisApp {
             "ui.pane.webData" => toggle_right(&mut self.ui, RightPane::WebData),
             "ui.pane.bookmarks" => toggle_right(&mut self.ui, RightPane::Bookmarks),
             "ui.pane.format" => toggle_right(&mut self.ui, RightPane::Format),
+            // The Labeling pane, on `{"layer": id}` when given (a layer's right-click menu).
+            "ui.pane.labeling" => {
+                // The layer given, else the selected one; checked before it is selected, so a
+                // refusal leaves the selection as it was.
+                let given = match p.get("layer").filter(|l| !l.is_null()) {
+                    Some(_) => Some(self.session.layer_id(p)?),
+                    None => None,
+                };
+                // Showing its tab already open needs no layer.
+                if given.is_some() || !self.ui.right_open.contains(&RightPane::Labeling) {
+                    match given.or(self.session.active_layer).and_then(|id| self.session.map().layer(id)) {
+                        None => return Err("select a layer in the Layers pane first".into()),
+                        Some(l) if l.is_raster() => return Err("labels are drawn for feature layers, not rasters".into()),
+                        Some(_) => {}
+                    }
+                }
+                if let Some(id) = given {
+                    self.session.run("layer.select", &json!({"layer": id}))?;
+                }
+                // A layer's menu asks for that layer's labels: shown, even when already in view.
+                if given.is_some() { self.ui.open_right(RightPane::Labeling) } else { toggle_right(&mut self.ui, RightPane::Labeling) }
+            }
             // A plugin's panel: `{"id": plugin}`.
             "ui.pane.plugin" => return pluginpanel::open(self, p),
             // The SQL pane; with "sql" (and "database"), opened on that query, run with "run".

@@ -61,10 +61,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             ui.advance_cursor_after_rect(rect);
         });
     }
-    // Here rather than in the Symbology pane, so a drag still finishes if the pane closes
-    // meanwhile; and after the panes, so a change the picker reports as the pointer is let go
-    // joins the drag instead of running a command of its own.
+    // Here rather than in the Symbology and Labeling panes, so a drag still finishes if the pane
+    // closes meanwhile; and after the panes, so a change the picker reports as the pointer is let
+    // go joins the drag instead of running a command of its own.
     finish_class_color_drag(app, ui);
+    crate::labelpane::finish_color_drag(app, ui);
 }
 
 /// Closes the pane that command `id` (a `ui.pane.*`) opens, on its side; false when `id` isn't a
@@ -110,6 +111,7 @@ fn right_title(pane: RightPane) -> (&'static str, &'static str) {
         RightPane::Directions => ("Directions", "ui.pane.directions"),
         RightPane::Bookmarks => ("Bookmarks", "ui.pane.bookmarks"),
         RightPane::Format => ("Format", "ui.pane.format"),
+        RightPane::Labeling => ("Labeling", "ui.pane.labeling"),
         // Its tab says which service it shows (see `right_name`).
         RightPane::WebData => ("Web Data", "ui.pane.webData"),
         // Its tab says whose panel it is (see `right_name`).
@@ -161,6 +163,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
             RightPane::Format => crate::graphicformat::show(app, ui, t),
+            RightPane::Labeling => crate::labelpane::show(app, ui, t),
             RightPane::Plugin => crate::pluginpanel::show(app, ui, t),
             RightPane::WebData => web_data(app, ui),
         });
@@ -1632,6 +1635,12 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     if !l.is_raster() && ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
         let _ = app.run("labels.enable", json!({"layer": l.id}));
+        ui.close();
+    }
+    if !l.is_raster() && ui.button(tl!("Labeling Properties…")).clicked() {
+        if let Err(e) = app.run("ui.pane.labeling", json!({"layer": l.id})) {
+            app.session.notify(e, true);
+        }
         ui.close();
     }
     if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {

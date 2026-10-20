@@ -1905,6 +1905,16 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 Value::Null,
                 app.ui.right == Some(RightPane::Bookmarks),
             );
+            small(
+                ui,
+                app,
+                "label",
+                "Labeling",
+                "Show the Labeling pane for the selected layer.",
+                "ui.pane.labeling",
+                Value::Null,
+                app.ui.right == Some(RightPane::Labeling),
+            );
         });
         small(
             ui,
@@ -3196,10 +3206,10 @@ fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
 // ---------------------------------------------------------------------------------------------
 // Style and Data groups for the selected layer
 
-const SCALES: [f64; 10] =
+pub(crate) const SCALES: [f64; 10] =
     [1_000.0, 10_000.0, 50_000.0, 100_000.0, 500_000.0, 1_000_000.0, 5_000_000.0, 10_000_000.0, 50_000_000.0, 100_000_000.0];
 
-fn scale_label(s: Option<f64>) -> String {
+pub(crate) fn scale_label(s: Option<f64>) -> String {
     match s {
         None => tl!("<None>").into(),
         Some(v) => format!("1:{}", fmt_thousands(v)),
@@ -3969,6 +3979,18 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Labels", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "settings",
+                "Properties",
+                "Every label setting of this layer, in the Labeling pane.",
+                "ui.pane.labeling",
+                Value::Null,
+                app.ui.right == Some(RightPane::Labeling),
+            );
+        });
     });
     group(ui, "Label Range", |ui| {
         ui.vertical(|ui| {
