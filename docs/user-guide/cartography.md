@@ -147,6 +147,12 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size, colour, halo
   and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **SQL**: label only the features that match a SQL clause (the language of definition
+  queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
+  expression**: write the clause (the field and operator buttons add to it), **Check** says
+  whether it reads and how many of the features drawn match, and **Apply** sets it in one undo
+  step; **Clear** labels every feature again
+  (`labels.class.update={"layer": "Cities", "where": "pop_max > 5000000"}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
 - **Placement**: automatic (above points, centred on lines and polygons), centred, or one of

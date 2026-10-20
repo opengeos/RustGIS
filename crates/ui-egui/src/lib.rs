@@ -55,6 +55,7 @@ mod searchbox;
 mod serviceui;
 mod showme;
 mod sourcespane;
+mod sqlbox;
 mod sqlpane;
 mod stacui;
 mod table;
