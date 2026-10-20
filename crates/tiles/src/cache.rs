@@ -52,6 +52,10 @@ pub type Done = Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>;
 /// Called once with a download's bytes or what is known of its failure (#509).
 pub type DoneDetailed = Box<dyn FnOnce(Result<Vec<u8>, Failure>) + Send>;
 type Fetcher = Box<dyn Fn(String, Done) + Send + Sync>;
+/// Hands back a decoded picture: [`RAW`] pixels, or the encoded bytes it was given when it
+/// couldn't decode them (they are decoded here then).
+pub type Decoded = Box<dyn FnOnce(Result<Vec<u8>, Vec<u8>>) + Send>;
+type ImageDecoder = Box<dyn Fn(Vec<u8>, Decoded) + Send + Sync>;
 
 /// Bytes the cache keeps before dropping the least recently used entries.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 160 << 20 } else { 384 << 20 };
@@ -101,6 +105,11 @@ fn fetcher() -> &'static Mutex<Option<Arc<Fetcher>>> {
     F.get_or_init(Mutex::default)
 }
 
+fn image_decoder() -> &'static Mutex<Option<Arc<ImageDecoder>>> {
+    static D: OnceLock<Mutex<Option<Arc<ImageDecoder>>>> = OnceLock::new();
+    D.get_or_init(Mutex::default)
+}
+
 fn waker() -> &'static Mutex<Option<Arc<dyn Fn() + Send + Sync>>> {
     static W: OnceLock<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = OnceLock::new();
     W.get_or_init(Mutex::default)
@@ -110,6 +119,20 @@ fn waker() -> &'static Mutex<Option<Arc<dyn Fn() + Send + Sync>>> {
 /// Decode download markers with [`split_download_limit`] and enforce their budget while reading.
 pub fn set_fetcher(f: impl Fn(String, Done) + Send + Sync + 'static) {
     *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
+}
+
+/// Replaces how tile pictures (PNG, JPEG, WebP) are decoded: the browser's own decoder works
+/// off the page's thread, where decoding them here held up every frame tiles arrived in. `done`
+/// must be called once, with the picture as [`RAW`] pixels, or with the bytes given back.
+pub fn set_image_decoder(f: impl Fn(Vec<u8>, Decoded) + Send + Sync + 'static) {
+    *image_decoder().lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Box::new(f)));
+}
+
+/// Whether `bytes` start as a PNG, JPEG or WebP picture.
+fn encoded_picture(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xff, 0xd8, 0xff])
+        || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
 }
 
 /// Sets what is called whenever a fetch finishes (the app asks for a repaint).
@@ -204,18 +227,22 @@ fn start(url: String, want: Want) {
             finished();
             return;
         }
-        let entry = match bytes.and_then(|b| decode(&b, want)) {
-            Ok(p) => {
-                let size = payload_bytes(&p);
-                Entry::Ready(Arc::new(p), size)
-            }
-            Err(e) => {
-                log::debug!("{key}: {e}");
-                Entry::Failed(e, Instant::now())
-            }
+        let settle = move |decoded: Result<Payload, String>| {
+            let entry = match decoded {
+                Ok(p) => {
+                    let size = payload_bytes(&p);
+                    Entry::Ready(Arc::new(p), size)
+                }
+                Err(e) => {
+                    log::debug!("{key}: {e}");
+                    Entry::Failed(e, Instant::now())
+                }
+            };
+            store(&key, entry);
+            finished();
         };
-        store(&key, entry);
-        finished();
+        let decoder = image_decoder().lock().unwrap_or_else(|e| e.into_inner()).clone();
+        decode_with(bytes, want, decoder.as_deref(), settle);
     });
     // A tile from a PMTiles archive is read from the archive, by range.
     if crate::pmtiles::is_tile(&url) {
@@ -233,6 +260,28 @@ fn start(url: String, want: Want) {
         return;
     }
     fetch_bytes(url, done);
+}
+
+/// Decodes what a fetch gave as `want` and hands it to `settle`: a picture through `decoder`, if
+/// one is set (see [`set_image_decoder`]), which may answer later.
+fn decode_with(
+    bytes: Result<Vec<u8>, String>,
+    want: Want,
+    decoder: Option<&ImageDecoder>,
+    settle: impl FnOnce(Result<Payload, String>) + Send + 'static,
+) {
+    match (bytes, decoder) {
+        (Ok(b), Some(decoder)) if want == Want::Image && b.len() <= MAX_BYTES && encoded_picture(&b) => decoder(
+            b,
+            Box::new(move |r| {
+                settle(match r {
+                    Ok(raw) => decode_image(&raw).map(Payload::Image),
+                    Err(b) => decode(&b, want),
+                })
+            }),
+        ),
+        (bytes, _) => settle(bytes.and_then(|b| decode(&b, want))),
+    }
 }
 
 /// Marks the part of an address that asks for a byte range, `#rustgis-range=<first>-<last>`:
@@ -551,9 +600,10 @@ pub fn decode(bytes: &[u8], want: Want) -> Result<Payload, String> {
     }
 }
 
-/// Starts a picture drawn by RustGIS itself (a COG's map tile): its width and height (u32, little
-/// end first), then straight RGBA pixels. No encoding, so no PNG encoder in the browser build.
-pub(crate) const RAW: &[u8] = b"RUSTGIS-RGBA";
+/// Starts a picture drawn by RustGIS itself (a COG's map tile) or decoded by the browser (see
+/// [`set_image_decoder`]): its width and height (u32, little end first), then straight RGBA
+/// pixels. No encoding, so no PNG encoder in the browser build.
+pub const RAW: &[u8] = b"RUSTGIS-RGBA";
 
 /// Decodes a PNG, JPEG or WebP picture into a premultiplied pixmap (at most 4096 pixels a side).
 pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, String> {
@@ -1124,6 +1174,41 @@ mod tests {
         assert_eq!(http_status("https://x.org/404/a.zarr: timed out"), None);
         assert_eq!(http_status("HTTP 4040"), None);
         assert_eq!(http_status("io: connection reset (read 404 bytes)"), None);
+    }
+
+    #[test]
+    fn a_decoder_set_for_pictures_decodes_them() {
+        let mut pm = Pixmap::new(3, 2).unwrap_or_else(|| panic!("pixmap"));
+        pm.fill(tiny_skia::Color::from_rgba8(200, 100, 50, 255));
+        let png = pm.encode_png().unwrap_or_else(|e| panic!("{e}"));
+        let calls = Arc::new(AtomicUsize::new(0));
+        // Stands in for the browser's decoder: the picture as RAW pixels, or the bytes back.
+        let counted = calls.clone();
+        let raw: ImageDecoder = Box::new(move |b: Vec<u8>, done: Decoded| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            let p = decode_image(&b).unwrap_or_else(|e| panic!("{e}"));
+            let mut out = RAW.to_vec();
+            out.extend(p.width().to_le_bytes());
+            out.extend(p.height().to_le_bytes());
+            out.extend(p.data());
+            done(Ok(out));
+        });
+        let back: ImageDecoder = Box::new(|b: Vec<u8>, done: Decoded| done(Err(b)));
+        for decoder in [&raw, &back] {
+            let got = Arc::new(Mutex::new(None));
+            let slot = got.clone();
+            decode_with(Ok(png.clone()), Want::Image, Some(decoder), move |p| *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(p));
+            let got = got.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let Some(Ok(Payload::Image(p))) = got else { panic!("no picture") };
+            assert_eq!((p.width(), p.height()), (3, 2));
+            assert_eq!(p.pixel(1, 1).map(|c| (c.red(), c.green(), c.blue(), c.alpha())), Some((200, 100, 50, 255)));
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        // Not a picture, or not wanted as one: decoded here.
+        let json = br#"{"a": 1}"#.to_vec();
+        decode_with(Ok(json), Want::Json, Some(&raw), |p| assert!(matches!(p, Ok(Payload::Json(_)))));
+        decode_with(Ok(b"junk".to_vec()), Want::Image, Some(&raw), |p| assert!(p.is_err()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
