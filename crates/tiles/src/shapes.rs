@@ -212,6 +212,8 @@ fn average(img: &tiny_skia::Pixmap) -> Option<[f32; 4]> {
 pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileShapes {
     // The sprite, loaded the first time a pattern needs it.
     let mut sheet: Option<Option<Arc<Sprite>>> = None;
+    // Each pattern's average colour, found once (a pass over its pixels).
+    let mut averages: std::collections::HashMap<String, Option<[f32; 4]>> = std::collections::HashMap::new();
     let mut waiting = false;
     let (lo, hi) = (f32::from(level), f32::from(level) + 1.0);
     // The level's last zoom (the next level excluded): a step at the next level isn't blended
@@ -284,8 +286,18 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileSha
                                     }
                                     _ => None,
                                 });
-                                let Some(avg) = sprite.as_ref().and_then(|s| s.image(&name, None)).and_then(|img| average(&img.pixmap))
-                                else {
+                                let found = match averages.get(&name) {
+                                    Some(a) => *a,
+                                    None => {
+                                        let a = sprite.as_ref().and_then(|s| s.image(&name, None)).and_then(|img| average(&img.pixmap));
+                                        // Only once the sprite is here: until then it isn't known.
+                                        if sprite.is_some() {
+                                            averages.insert(name.clone(), a);
+                                        }
+                                        a
+                                    }
+                                };
+                                let Some(avg) = found else {
                                     break 'p out;
                                 };
                                 color = [
