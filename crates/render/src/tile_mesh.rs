@@ -46,7 +46,8 @@ pub struct TileMesh {
     pub indices: Vec<u32>,
     /// Bottom first.
     pub runs: Vec<MeshRun>,
-    /// Made while the sprite was on its way, without the pattern fills: not kept, made again.
+    /// Made while the sprite was on its way, without the pattern fills: made again once the tile
+    /// cache has more.
     pub waiting: bool,
 }
 
@@ -336,6 +337,9 @@ struct Entry {
     style: Weak<Resolved>,
     mesh: Arc<TileMesh>,
     used: u64,
+    /// Made while the sprite was on its way, at this tile cache generation: made again once
+    /// the cache has more (the sprite, say), not before.
+    waiting: Option<u64>,
 }
 
 #[derive(Default)]
@@ -351,8 +355,8 @@ fn lock() -> MutexGuard<'static, Store> {
 }
 
 /// The meshes of `tiles` (bottom first) for `style`'s `source` at `level`, each kept once made
-/// (while its tile and the style are, and within a memory budget; not one made while the sprite
-/// was on its way); `None` for one that is no vector tile, or not made yet: with `until`, those
+/// (while its tile and the style are, and within a memory budget; one made while the sprite was
+/// on its way until the tile cache has more); `None` for one that is no vector tile, or not made yet: with `until`, those
 /// missing are made nearest `centre` first until then (a round of them at least). Natively, they
 /// are made on several threads.
 pub fn meshes(
@@ -362,6 +366,7 @@ pub fn meshes(
     level: u8,
     until: Option<(web_time::Instant, [f64; 2])>,
 ) -> Vec<Option<Arc<TileMesh>>> {
+    let generation = rustgis_tiles::cache::generation();
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
@@ -376,6 +381,7 @@ pub fn meshes(
             let found = s.entries.get_mut(&key(t)).filter(|e| {
                 e.payload.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &t.payload))
                     && e.style.upgrade().is_some_and(|x| Arc::ptr_eq(&x, style))
+                    && e.waiting.is_none_or(|g| g == generation)
             });
             match found {
                 Some(e) => {
@@ -436,13 +442,8 @@ pub fn meshes(
     let mut s = lock();
     for (&i, mesh) in missing.iter().zip(made) {
         let (Some(mesh), Some(t)) = (mesh, tiles.get(i)) else { continue };
-        if mesh.waiting {
-            if let Some(slot) = out.get_mut(i) {
-                *slot = Some(mesh);
-            }
-            continue;
-        }
-        let entry = Entry { payload: Arc::downgrade(&t.payload), style: Arc::downgrade(style), mesh: mesh.clone(), used: tick };
+        let waiting = mesh.waiting.then_some(generation);
+        let entry = Entry { payload: Arc::downgrade(&t.payload), style: Arc::downgrade(style), mesh: mesh.clone(), used: tick, waiting };
         // The bytes are counted again by `evict`, below.
         s.entries.insert(key(t), entry);
         if let Some(slot) = out.get_mut(i) {
