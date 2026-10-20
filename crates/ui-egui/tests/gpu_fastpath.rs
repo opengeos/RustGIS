@@ -17,15 +17,21 @@ fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
 
 fn wait_for_frame(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache;
-    for _ in 0..40 {
-        h.step();
-    }
     let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    // Tiles still arriving would draw the map again.
-    while h.state().map.drawing() || cache::in_flight() > 0 {
-        assert!(std::time::Instant::now() < end, "frame worker did not finish");
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        h.step();
+    // Tiles still arriving would draw the map again: until none arrived since the last frames.
+    loop {
+        let tiles = cache::generation();
+        for _ in 0..40 {
+            h.step();
+        }
+        while h.state().map.drawing() || cache::in_flight() > 0 {
+            assert!(std::time::Instant::now() < end, "frame worker did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            h.step();
+        }
+        if cache::generation() == tiles {
+            break;
+        }
     }
 }
 
