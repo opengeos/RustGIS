@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::Coord;
-use rustgis_map::symbology::Renderer;
+use rustgis_map::symbology::{MAX_LABEL_CLASSES, Renderer};
 use rustgis_map::{Layer, Map, Rgba};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -556,7 +556,7 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
         return;
     }
     let Some(l) = s.layer_id(p).ok().and_then(|id| s.map().layer(id)).filter(|l| l.labels.enabled) else { return };
-    let n = l.labels.in_order().count() - 1;
+    let n = l.labels.classes.len().min(MAX_LABEL_CLASSES);
     let clause = l.labels.default.where_.as_deref().is_some_and(|w| !w.trim().is_empty());
     let text = if !l.labels.default.visible {
         (n > 0).then(|| format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name))
