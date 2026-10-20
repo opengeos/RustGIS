@@ -6169,6 +6169,13 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // Opened as a scan, it is downloaded whole and has no coordinates, never read in place.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "as": "scan", "name": "Scan"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    assert_eq!(r["georeferenced"], false, "{r}");
+    // A dated address is read in place with its coordinates, so it can't be a scan.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{{date:YYYY}}.tif"), "as": "scan"})).unwrap_err();
+    assert!(e.contains("scan"), "{e}");
     // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
     let r = rustgis_data::raster::Raster::new(
         "strips",
@@ -10687,14 +10694,18 @@ fn scans_have_no_coordinates_to_give_away() {
     std::fs::create_dir_all(&dir).unwrap();
     s.active_layer = s.map().layer_by_name("flat").map(|l| l.id);
     let out = dir.join("flat.tif");
+    // A file left by an earlier, interrupted run would pass for one written now.
+    let _ = std::fs::remove_file(&out);
     let e = s.run("share.exportRaster", &json!({"path": out.display().to_string()})).unwrap_err();
     assert!(e.contains("georeference it first") && !out.exists(), "{e}");
     let before = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap().placement;
-    let tools: [(&str, Value); 5] = [
+    let tools: [(&str, Value); 6] = [
         ("raster.function", json!({"layer": "flat", "function": "hillshade"})),
         ("raster.editPixels", json!({"layer": "flat", "polygon": [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]], "value": 1})),
         ("raster.process", json!({"layer": "flat", "operation": "resample", "factor": 2})),
         ("raster.process", json!({"layer": "flat", "operation": "clip"})),
+        // Refused before the polygons are looked for, let alone placed on it.
+        ("raster.process", json!({"layer": "flat", "operation": "clip", "polygon": "Nowhere"})),
         ("raster.mosaic", json!({"inputs": ["flat", "utm"]})),
     ];
     for (cmd, q) in tools {

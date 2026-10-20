@@ -425,6 +425,8 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
     match ps(p, "operation").ok_or("operation is required")? {
         "clip" if p.get("polygon").is_some_and(|v| !v.is_null()) => {
+            // Before the mask, which places the polygons on the raster's coordinates.
+            r.require_coordinates()?;
             let pl = ps(p, "polygon").ok_or("polygon is a polygon layer's name")?;
             let l = s
                 .map()

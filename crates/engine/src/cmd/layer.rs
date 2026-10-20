@@ -484,8 +484,8 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = &*gdb_path(path);
     // `"as": "scan"` opens a TIFF, PNG or JPEG as a picture with no coordinates, a photo too.
     let scan = super::raster::wants_scan(p, path)?;
-    // A photo: a point in the photo layer (one without a GPS position is named and left out).
-    #[cfg(not(target_arch = "wasm32"))]
+    // A photo: a point in the photo layer (one without a GPS position is named and left out). In the
+    // browser `add_photos` asks for an upload, so a JPEG isn't taken for a scan there either.
     if !scan && rustgis_data::photo::is_photo_name(path) {
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
         return add_photos(s, &json!({"paths": [path], "name": name}));
@@ -1912,6 +1912,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://")) {
         return Err(format!("{url}: give an http://, https:// or s3:// address (Add Data opens files)"));
     }
+    // A scan (`"as"`) keeps the pixels and none of the coordinates: the file is downloaded whole and
+    // read as one (`add_named_bytes` checks the value), never read in place.
+    let scan = p.get("as").is_some_and(|v| !v.is_null());
     // A PMTiles archive is read a tile at a time, never downloaded whole.
     if lower.split(['?', '#']).next().is_some_and(|p| p.ends_with(".pmtiles")) {
         let mut q = json!({"url": url, "kind": "pmtiles"});
@@ -1923,6 +1926,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     // A dated address (one file per date, `{date:YYYY}`) is read in place, following the time
     // slider: a GeoTIFF on the web, before anything fetches the address as it is.
     if rustgis_data::time::is_template(url) {
+        if scan {
+            return Err(format!("{url}: a dated address is read in place with its coordinates, so it can't be opened as a scan"));
+        }
         let web = lower.starts_with("https://") || lower.starts_with("http://");
         return if is_tiff_url(url) && web {
             add_cog(s, p, url)
@@ -1954,7 +1960,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(target_arch = "wasm32")]
     {
         // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
-        if tiff && !super::b(p, "whole").unwrap_or(false) {
+        if tiff && !scan && !super::b(p, "whole").unwrap_or(false) {
             return add_cog(s, p, url);
         }
         // Downloaded by the app off the frame and added when it lands.
@@ -1964,7 +1970,11 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     {
         // Errors about the address itself name it already.
         let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
-        if tiff && !super::b(p, "whole").unwrap_or(false) && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)? {
+        if tiff
+            && !scan
+            && !super::b(p, "whole").unwrap_or(false)
+            && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)?
+        {
             return add_cog(s, p, url);
         }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
