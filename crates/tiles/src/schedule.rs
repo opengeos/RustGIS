@@ -24,8 +24,10 @@ pub(crate) const PER_HOST_OSM: usize = if cfg!(target_arch = "wasm32") { 4 } els
 pub(crate) const LOCAL: usize = 32;
 /// A waiting tile is dropped once the map has gone this long asking for others but not for it.
 pub(crate) const STALE: Duration = Duration::from_millis(1500);
-/// The most tiles waiting: beyond it the oldest are dropped (the view moved on long ago).
-pub(crate) const MAX_WAITING: usize = 2048;
+/// The most tiles waiting: beyond it the oldest are dropped (the view moved on long ago). A
+/// view asks for at most `template::MAX_TILES` (400) a source, so an export waiting for its
+/// tiles never comes near it.
+pub(crate) const MAX_WAITING: usize = 8192;
 
 /// The server an address is fetched from (`host[:port]`, lowercase), or `""` for a local read,
 /// which no server limits. An archive's tile (`pmtiles:z/x/y@https://…`) is its archive's server.
