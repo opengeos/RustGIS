@@ -104,7 +104,8 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
         // units at a low zoom run to millions), then put in map units, y north.
         let at = |p: &[f32; 2]| lyon::math::point(p[0], p[1]);
         let map = |x: f32, y: f32| [x * k, -y * k];
-        let first = out.indices.len() as u32;
+        // Indices are u32: a tile past them (none is, but tiles are hostile) stops there.
+        let Ok(first) = u32::try_from(out.indices.len()) else { break };
         for shape in &run.shapes {
             let geometry: Option<&[Vec<[f32; 2]>]> =
                 shape.feature.and_then(|(l, f)| tile.layers.get(l).and_then(|l| l.features.get(f))).map(|f| f.geometry.as_slice());
@@ -199,12 +200,14 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                 }
             }
         }
-        let count = out.indices.len() as u32 - first;
+        let count = u32::try_from(out.indices.len()).map_or(0, |n| n.saturating_sub(first));
         if count == 0 {
             continue;
         }
         match mesh_runs.last_mut() {
-            Some(last) if last.first + last.count == first && last.min_zoom == run.min_zoom && last.max_zoom == run.max_zoom => {
+            Some(last)
+                if last.first.saturating_add(last.count) == first && last.min_zoom == run.min_zoom && last.max_zoom == run.max_zoom =>
+            {
                 last.count += count;
             }
             _ => mesh_runs.push(MeshRun { first, count, min_zoom: run.min_zoom, max_zoom: run.max_zoom }),
@@ -221,7 +224,7 @@ fn circle(out: &mut VertexBuffers<TileVertex, u32>, c: [f32; 2], color: &[[f32; 
         let a = i as f32 / RIM as f32 * std::f32::consts::TAU;
         TileVertex { normal: [a.cos(), a.sin()], width: width.map(|w| w.max(0.0)), ..base }
     };
-    let first = out.vertices.len() as u32;
+    let Ok(first) = u32::try_from(out.vertices.len()) else { return };
     let ring = inner != outer;
     if ring {
         for i in 0..RIM {
@@ -319,11 +322,9 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     let mut s = lock();
     for (&i, mesh) in missing.iter().zip(made) {
         let (Some(mesh), Some(t)) = (mesh, tiles.get(i)) else { continue };
-        s.bytes += mesh.bytes();
         let entry = Entry { payload: Arc::downgrade(&t.payload), style: Arc::downgrade(style), mesh: mesh.clone(), used: tick };
-        if let Some(old) = s.entries.insert(key(t), entry) {
-            s.bytes = s.bytes.saturating_sub(old.mesh.bytes());
-        }
+        // The bytes are counted again by `evict`, below.
+        s.entries.insert(key(t), entry);
         if let Some(slot) = out.get_mut(i) {
             *slot = Some(mesh);
         }
