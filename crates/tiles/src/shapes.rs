@@ -64,29 +64,31 @@ pub fn vector_tiles(spec: &Spec, frame: &Frame, view: &Extent) -> Option<VectorT
         return None;
     }
     let zoom = template::style_zoom(frame.m_per_px * f64::from(frame.ppp));
-    let source = drawn_source(&r, zoom)?;
+    let level = zoom.floor().clamp(0.0, 30.0) as u8;
+    let source = drawn_source(&r, level)?;
     let src = r.style.sources.iter().find(|(id, _)| *id == source).map(|(_, s)| s)?;
     let mut pending = false;
     let tiles = tiles_in(src, view, None, frame, zoom, &mut pending)
         .into_iter()
         .map(|it| DataTile { payload: it.payload, at: it.at, z: it.z, clip: it.clip })
         .collect();
-    let level = zoom.floor().clamp(0.0, 30.0) as u8;
     Some(VectorTiles { style: r, source, tiles, level, pending })
 }
 
-/// The one vector source whose shapes are all a style shows at `zoom` (besides its background
-/// and labels), if there is one.
-fn drawn_source(r: &Resolved, zoom: f32) -> Option<String> {
+/// The one vector source whose shapes are all a style shows at any zoom of `level` (besides its
+/// background and labels), if there is one: a mesh made for the level serves all of them.
+fn drawn_source(r: &Resolved, level: u8) -> Option<String> {
+    let (lo, hi) = (f32::from(level), f32::from(level) + 1.0);
     let mut source: Option<&str> = None;
-    for l in r.style.layers.iter().filter(|l| l.visible_at(zoom)) {
+    for l in r.style.layers.iter().filter(|l| shown_in(l, lo, hi)) {
         match l.kind {
             LayerKind::Background | LayerKind::Symbol | LayerKind::Other => {}
             // Lines painted with a pattern aren't drawn (see `draw::drawable`).
             LayerKind::Line if l.has_paint("line-pattern") => {}
             LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
-                if let Some(d) = l.line_dasharray(&FeatureCtx::zoom_only(zoom))
-                    && d.len() * (1 + d.len() % 2) > MAX_DASHES
+                if [lo, hi]
+                    .iter()
+                    .any(|&z| l.line_dasharray(&FeatureCtx::zoom_only(z)).is_some_and(|d| d.len() * (1 + d.len() % 2) > MAX_DASHES))
                 {
                     return None;
                 }
@@ -152,12 +154,17 @@ fn sane(v: f32, max: f32) -> f32 {
     if v.is_finite() { v.clamp(0.0, max) } else { 0.0 }
 }
 
+/// Whether `l` shows at some zoom from `lo` up to `hi`.
+fn shown_in(l: &StyleLayer, lo: f32, hi: f32) -> bool {
+    l.visible && l.min_zoom < hi && l.max_zoom > lo
+}
+
 /// The fills, lines and circles `style` draws from `tile` of `source` at zooms `level` up to
 /// the next level, in its order. Its background, when it has one, is the first run, filling the
 /// square.
 pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run> {
     let (lo, hi) = (f32::from(level), f32::from(level) + 1.0);
-    let shown = |l: &StyleLayer| l.visible && l.min_zoom < hi && l.max_zoom > lo;
+    let shown = |l: &StyleLayer| shown_in(l, lo, hi);
     let mut runs = Vec::new();
     for (li, layer) in style.style.layers.iter().enumerate() {
         if !shown(layer) {
@@ -409,6 +416,32 @@ mod tests {
         );
         assert!(runs.iter().all(|r| r.layer != 1), "line patterns aren't drawn");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn styles_are_judged_over_the_whole_level() {
+        // A raster layer from the middle of the level: its meshes would serve where it shows.
+        let style = STYLE.replacen('[', r#"[{"id": "r", "type": "raster", "source": "x", "minzoom": 2.8},"#, 1);
+        let (spec, dir) = archive("level", &style);
+        ready(&spec);
+        let f = frame(2.5);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        // Shown from the next level only: these meshes are fine.
+        let style = STYLE.replacen('[', r#"[{"id": "r", "type": "raster", "source": "x", "minzoom": 3},"#, 1);
+        let (spec, dir2) = archive("next-level", &style);
+        ready(&spec);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_some());
+        // A long dash pattern from the end of the level.
+        let style = STYLE.replace(
+            r#""line-dasharray": [3, 2]"#,
+            r#""line-dasharray": ["step", ["zoom"], ["literal", [3, 2]], 2.9, ["literal", [3, 2, 1]]]"#,
+        );
+        let (spec, dir3) = archive("late-dashes", &style);
+        ready(&spec);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        for d in [dir, dir2, dir3] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
