@@ -222,8 +222,15 @@ struct ColorDrag {
 
 fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
     let key = egui::Id::new(COLOR_DRAG);
+    let mut pending = ui.data(|d| d.get_temp::<ColorDrag>(key));
+    // One left pending on another layer (the selection changed mid-pick, from the Assistant or a
+    // shortcut) is finished first rather than dropped with its preview in place.
+    if let Some(other) = pending.take_if(|d| d.layer != l.id) {
+        ui.data_mut(|d| d.remove::<ColorDrag>(key));
+        apply_color_drag(app, other);
+    }
     // The colour before the first frame of this pick, kept while it goes on.
-    let before = ui.data(|d| d.get_temp::<ColorDrag>(key)).filter(|d| d.layer == l.id).map_or(l.labels.color, |d| d.before);
+    let before = pending.map_or(l.labels.color, |d| d.before);
     ui.data_mut(|d| d.insert_temp(key, ColorDrag { layer: l.id, before, color }));
     if let Some(layer) = app.session.map_mut().layer_mut(l.id) {
         layer.labels.color = color;
@@ -249,6 +256,11 @@ pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
     }) else {
         return;
     };
+    apply_color_drag(app, drag);
+}
+
+/// Puts the pre-pick colour back and runs the pick's labels.style: one undo step.
+fn apply_color_drag(app: &mut RustGisApp, drag: ColorDrag) {
     // A layer removed mid-pick took its preview with it: there is nothing to restore or style.
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
     layer.labels.color = drag.before;
@@ -371,6 +383,55 @@ mod tests {
             [("labels.placement", Some(&json!("Cities"))), ("labels.style", Some(&json!("Cities")))],
             "each step names the layer, not its id"
         );
+    }
+
+    /// A pick left pending on one layer when the selection moves to another mid-pick (the
+    /// Assistant, a shortcut) is finished as its own step, not left as an unrecorded preview.
+    #[test]
+    fn a_pick_pending_on_another_layer_is_finished_first() {
+        let app = with_cities();
+        let cities = app.session.active_layer.unwrap();
+        let countries = layer_id(&app, "Countries");
+        let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.color;
+        let (cities_before, countries_before) = (color(&app, cities), color(&app, countries));
+        let steps = app.session.undo_depth();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
+                if let Some(c) = pick.take() {
+                    let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
+                    super::color_drag(app, ui, &l, c);
+                }
+                super::finish_color_drag(app, ui);
+            },
+            (app, None),
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(4.0, 4.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (red, blue) = (Rgba::new(200, 10, 10, 255), Rgba::new(10, 10, 200, 255));
+        h.event(button(true));
+        h.step();
+        h.state_mut().1 = Some(red);
+        h.step();
+        // The pointer still down, the selection moves and the picker reports a colour for it.
+        h.state_mut().0.session.run("layer.select", &json!({"layer": countries})).unwrap();
+        h.state_mut().1 = Some(blue);
+        h.step();
+        let app = &h.state().0;
+        assert_eq!(color(app, cities), red, "the first pick is kept on its layer");
+        assert_eq!(app.session.undo_depth(), steps + 1, "and run as a step of its own");
+        assert_eq!(color(app, countries), blue, "the new pick previews");
+        h.event(button(false));
+        h.step();
+        let app = &mut h.state_mut().0;
+        assert_eq!(app.session.undo_depth(), steps + 2);
+        app.run("edit.undo", json!(null)).unwrap();
+        assert_eq!(color(app, countries), countries_before);
+        app.run("edit.undo", json!(null)).unwrap();
+        assert_eq!(color(app, cities), cities_before, "each pick undoes on its own");
     }
 
     #[test]
