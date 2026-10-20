@@ -282,28 +282,55 @@ fn launch(jobs: Vec<Waiting<Want>>) {
     }
 }
 
+/// A tile fetch's answer: stored once it comes, and however the fetch ends (answered, dropped
+/// unanswered by its fetcher, or unwound by a panic) its server's place goes to the next tile
+/// and the fetch no longer counts as under way.
+struct Answer {
+    key: String,
+    host: String,
+    entry: Option<Entry>,
+}
+
+impl Answer {
+    /// Stored when the answer is dropped, after the fetch.
+    fn set(&mut self, entry: Entry) {
+        self.entry = Some(entry);
+    }
+}
+
+impl Drop for Answer {
+    fn drop(&mut self) {
+        match self.entry.take() {
+            Some(entry) => store(&self.key, entry),
+            // Never answered (or dropped by the fetcher): forgotten, fetched again when asked for.
+            None => {
+                let mut c = lock();
+                if matches!(c.slots.get(&self.key), Some(Slot { entry: Entry::Pending, .. })) {
+                    c.slots.remove(&self.key);
+                }
+            }
+        }
+        release(&self.host);
+        finished();
+    }
+}
+
 fn fetch_tile(url: String, host: String, want: Want) {
-    let key = url.clone();
+    let mut answer = Answer { key: url.clone(), host, entry: None };
     let done: Done = Box::new(move |bytes| {
         if matches!(&bytes, Err(e) if e == DROPPED) {
-            lock().slots.remove(&key);
-            release(&host);
-            finished();
             return;
         }
-        let entry = match bytes.and_then(|b| decode(&b, want)) {
+        answer.set(match bytes.and_then(|b| decode(&b, want)) {
             Ok(p) => {
                 let size = payload_bytes(&p);
                 Entry::Ready(Arc::new(p), size)
             }
             Err(e) => {
-                log::debug!("{key}: {e}");
+                log::debug!("{}: {e}", answer.key);
                 Entry::Failed(e, Instant::now())
             }
-        };
-        store(&key, entry);
-        release(&host);
-        finished();
+        });
     });
     // A tile from a PMTiles archive is read from the archive, by range.
     if crate::pmtiles::is_tile(&url) {
@@ -1404,5 +1431,22 @@ mod tests {
         for i in 0..n {
             assert!(matches!(get(&format!("test://held/{i}.json"), Want::Json), State::Ready(_)), "{i}");
         }
+
+        // A fetcher that drops a request unanswered (or panics) gives its server's place back:
+        // more requests than the cap still all reach it, and each is forgotten, not stuck.
+        static SEEN: AtomicUsize = AtomicUsize::new(0);
+        set_fetcher(|url, done| {
+            if url.starts_with("test://lost/") {
+                SEEN.fetch_add(1, Ordering::Relaxed);
+                drop(done);
+            } else {
+                done(Ok(b"1".to_vec()));
+            }
+        });
+        for i in 0..3 * crate::schedule::PER_HOST {
+            assert!(matches!(get(&format!("test://lost/{i}.json"), Want::Json), State::Pending));
+        }
+        assert_eq!(SEEN.load(Ordering::Relaxed), 3 * crate::schedule::PER_HOST);
+        assert!(peek("test://lost/0.json").is_none());
     }
 }

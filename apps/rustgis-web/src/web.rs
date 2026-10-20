@@ -438,7 +438,8 @@ fn abort_timeout_supported() -> bool {
 
 /// Whether a fetch failed because its `AbortSignal.timeout` ran out.
 fn timed_out(e: &wasm_bindgen::JsValue) -> bool {
-    e.dyn_ref::<js_sys::Error>().is_some_and(|e| e.name() == "TimeoutError")
+    // A `DOMException` named `TimeoutError`, read by name whatever its prototype.
+    js_sys::Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).is_some_and(|n| n == "TimeoutError")
 }
 
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see

@@ -75,11 +75,13 @@ const pct = (xs, p) => {
 };
 const mb = (n) => Math.round((n / (1 << 20)) * 10) / 10;
 
-// The browser of the case under way, closed if the case fails.
+// The browser of the case under way, closed if the case fails, and whether its page crashed.
 let opened = null;
+let pageCrashed = false;
 
 async function run(name) {
   const c = CASES[name];
+  pageCrashed = false;
   // Headless Chrome on Linux draws WebGL2 on the real GPU through ANGLE's EGL backend; its WebGPU
   // is SwiftShader's software adapter there, so headless runs want `--webgl`.
   const launchArgs = ["--enable-unsafe-webgpu", "--use-gl=angle", "--use-angle=gl-egl", "--ignore-gpu-blocklist", "--enable-gpu"];
@@ -102,7 +104,10 @@ async function run(name) {
     if (requests.recording && !r.url().startsWith(base)) requests.failed += 1;
   });
   let crashed = false;
-  page.on("crash", () => (crashed = true));
+  page.on("crash", () => {
+    crashed = true;
+    pageCrashed = true;
+  });
   page.on("pageerror", (e) => {
     console.error += 1;
     if (console.samples.length < 8) console.samples.push(`pageerror: ${String(e).slice(0, 200)}`);
@@ -190,7 +195,7 @@ for (const name of names) {
   // A crashed page rejects the next Playwright call: reported as a crash, not lost.
   const r = await run(name).catch(async (e) => {
     await opened?.close().catch(() => {});
-    return { case: name, crashed: true, error: String(e).slice(0, 300) };
+    return { case: name, crashed: pageCrashed, failed: true, error: String(e).slice(0, 300) };
   });
   results.push(r);
   process.stdout.write(JSON.stringify(r, null, 2) + "\n");
