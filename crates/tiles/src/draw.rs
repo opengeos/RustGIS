@@ -212,6 +212,8 @@ pub(crate) fn draw_layers(
             _ => {}
         }
     }
+    // The cap keeps the labels placed first, whichever layers they came from.
+    crate::symbols::keep_first(&mut out.labels, crate::symbols::MAX_LABELS);
 }
 
 /// One raster tile placed on the map, for a renderer that draws each tile itself (the GPU map

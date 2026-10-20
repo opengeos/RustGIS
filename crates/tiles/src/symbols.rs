@@ -105,6 +105,19 @@ impl Default for Collide {
     }
 }
 
+/// Keeps the `n` labels placed first (highest [`Label::priority`]), in no particular order.
+pub(crate) fn keep_first(labels: &mut Vec<Label>, n: usize) {
+    keep_highest(labels, n, |l| l.priority);
+}
+
+/// Keeps the `n` items of highest `priority`, in no particular order.
+fn keep_highest<T>(items: &mut Vec<T>, n: usize, priority: impl Fn(&T) -> f64) {
+    if items.len() > n {
+        items.select_nth_unstable_by(n, |a, b| priority(b).total_cmp(&priority(a)));
+        items.truncate(n);
+    }
+}
+
 /// How early a symbol layer's labels are placed: later layers first, as in MapLibre (styles
 /// list their most important labels last, like Liberty's POIs by rank and then its cities).
 /// Each layer's labels are ordered within it by their sort key, which is kept to ±1e5.
@@ -125,9 +138,6 @@ pub(crate) fn collect(
     sheet: Option<&Sprite>,
     view: (f32, f32),
 ) {
-    if out.len() >= MAX_LABELS {
-        return;
-    }
     let Payload::Vector(tile) = &*it.payload else { return };
     let Some(src_layer) = layer.source_layer.as_deref() else { return };
     let Some(l) = tile.layers.iter().find(|l| l.name == src_layer) else { return };
@@ -203,8 +213,11 @@ pub(crate) fn collect(
                 }
             }
             out.push(label);
-            if out.len() >= MAX_LABELS {
-                return;
+            // Bounded however many features there are, keeping those placed first: style layers
+            // are collected in order, the most important last, so a cap on arrival would keep the
+            // least important.
+            if out.len() >= 2 * MAX_LABELS {
+                keep_first(out, MAX_LABELS);
             }
         }
     }
@@ -829,6 +842,14 @@ mod tests {
             assert!(((a - deg.to_radians()).rem_euclid(PI)).min(PI - (a - deg.to_radians()).rem_euclid(PI)) < 1e-3);
         }
         assert_eq!(upright(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn the_cap_keeps_the_labels_placed_first() {
+        let mut kept: Vec<f64> = (0..10).map(f64::from).collect();
+        keep_highest(&mut kept, 3, |p| *p);
+        kept.sort_by(f64::total_cmp);
+        assert_eq!(kept, vec![7.0, 8.0, 9.0], "the last layers' labels, placed first, are kept");
     }
 
     #[test]
