@@ -8351,11 +8351,16 @@ fn pasted_graphics_keep_their_style_in_an_older_graphics_layer() {
         s.run("edit.paste", &p).unwrap();
         assert_eq!(style(&s, to), (true, true, TextAlign::Right, 4.0), "via text: {via_text}");
     }
-    // Features that aren't graphics (no `kind`) add no field, though one is named as a style.
-    let to = old(&mut s, "Notes");
-    let plain = r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[1,2]},"properties":{"align":"N"}}]}"#;
-    s.run("edit.paste", &json!({"layer": to, "text": plain})).unwrap();
-    assert!(s.map().layer(to).unwrap().dataset.field_index("align").is_none());
+    // Features that aren't graphics add no field, though one is named as a style: with no `kind`,
+    // or with a `kind` of their own that isn't a graphic's.
+    for properties in [r#"{"align":"N"}"#, r#"{"kind":"inspection","align":"center"}"#] {
+        let to = old(&mut s, "Notes");
+        let plain = format!(
+            r#"{{"type":"FeatureCollection","features":[{{"type":"Feature","geometry":{{"type":"Point","coordinates":[1,2]}},"properties":{properties}}}]}}"#
+        );
+        s.run("edit.paste", &json!({"layer": to, "text": plain})).unwrap();
+        assert!(s.map().layer(to).unwrap().dataset.field_index("align").is_none(), "{properties}");
+    }
 }
 
 /// A text graphic is placed again by its points (dragged on the map, #516), as one undo step;

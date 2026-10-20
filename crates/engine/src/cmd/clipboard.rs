@@ -115,10 +115,12 @@ fn paste(s: &mut Session, p: &Value) -> CmdResult {
             want.label()
         ));
     }
-    // Pasted graphics (they have a `kind`) keep their style in a graphics layer made before a style
-    // field (#583): it gains the fields they carry, as `graphics.add` and `graphics.edit` add one
-    // when it is first set. Other features pasted into it add none.
-    if l.graphics && src.field_index("kind").is_some() {
+    // Pasted graphics (a row's `kind` is a graphic's) keep their style in a graphics layer made
+    // before a style field (#583): it gains the fields they carry, as `graphics.add` and
+    // `graphics.edit` add one when it is first set. Other features pasted into it add none, though
+    // they have a `kind` of their own.
+    let graphics = (0..src.features.len()).any(|r| rustgis_map::graphics::SHAPES.contains(&rustgis_map::graphics::kind(&src, r)));
+    if l.graphics && graphics {
         for (name, ty) in rustgis_map::graphics::FIELDS {
             if src.field_index(name).is_some() {
                 l.dataset.ensure_field(name, *ty);
