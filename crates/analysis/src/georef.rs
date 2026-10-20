@@ -475,7 +475,7 @@ fn spline(src: &[(f64, f64)], dst: &[(f64, f64)]) -> Option<Model> {
     solve(&mut a, size, &mut b, 2)?;
     // Points a hair apart with different map positions solve without a zero pivot but lose the
     // fit: check that the spline still passes through its points.
-    for (row, want) in a0.chunks_exact(size).zip(b0.chunks_exact(2)) {
+    for (row, want) in a0.chunks_exact(size).zip(b0.as_chunks::<2>().0) {
         for (k, w) in want.iter().enumerate() {
             let got: f64 = row.iter().enumerate().map(|(j, v)| v * b.get(j * 2 + k).copied().unwrap_or(f64::NAN)).sum();
             if !got.is_finite() || (got - w).abs() > 1e-6 {
