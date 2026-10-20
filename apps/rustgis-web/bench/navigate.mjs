@@ -75,12 +75,16 @@ const pct = (xs, p) => {
 };
 const mb = (n) => Math.round((n / (1 << 20)) * 10) / 10;
 
+// The browser of the case under way, closed if the case fails.
+let opened = null;
+
 async function run(name) {
   const c = CASES[name];
   // Headless Chrome on Linux draws WebGL2 on the real GPU through ANGLE's EGL backend; its WebGPU
   // is SwiftShader's software adapter there, so headless runs want `--webgl`.
   const launchArgs = ["--enable-unsafe-webgpu", "--use-gl=angle", "--use-angle=gl-egl", "--ignore-gpu-blocklist", "--enable-gpu"];
   const browser = await chromium.launch({ headless: flag("headless"), args: launchArgs });
+  opened = browser;
   const page = await browser.newPage({ viewport: { width: 1480, height: 900 }, deviceScaleFactor: 1 });
   const console = { error: 0, warning: 0, samples: [] };
   page.on("console", (m) => {
@@ -183,7 +187,11 @@ async function run(name) {
 
 const results = [];
 for (const name of names) {
-  const r = await run(name);
+  // A crashed page rejects the next Playwright call: reported as a crash, not lost.
+  const r = await run(name).catch(async (e) => {
+    await opened?.close().catch(() => {});
+    return { case: name, crashed: true, error: String(e).slice(0, 300) };
+  });
   results.push(r);
   process.stdout.write(JSON.stringify(r, null, 2) + "\n");
 }

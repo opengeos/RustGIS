@@ -262,10 +262,19 @@ fn launch(jobs: Vec<Waiting<Want>>) {
         if STARTING.swap(true, Ordering::AcqRel) {
             return;
         }
-        while let Some(w) = pop() {
-            fetch_tile(w.url, w.host, w.job);
+        {
+            // Lowered however this ends: a fetcher that panics must not stop every later fetch.
+            struct Lower;
+            impl Drop for Lower {
+                fn drop(&mut self) {
+                    STARTING.store(false, Ordering::Release);
+                }
+            }
+            let _lower = Lower;
+            while let Some(w) = pop() {
+                fetch_tile(w.url, w.host, w.job);
+            }
         }
-        STARTING.store(false, Ordering::Release);
         // A tile queued after the last `pop` and before the flag went down is started here.
         if TO_START.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
             return;

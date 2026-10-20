@@ -422,8 +422,24 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
-/// How long a tile or document may take to come in.
+/// How long a tile or document (at most `cache::MAX_BYTES`; data the user adds is a download,
+/// without a timeout) may take to come in, its body included.
 const TILE_TIMEOUT_MS: u32 = 30_000;
+
+/// Whether this browser has `AbortSignal.timeout`.
+fn abort_timeout_supported() -> bool {
+    let global = js_sys::global();
+    js_sys::Reflect::get(&global, &"AbortSignal".into())
+        .ok()
+        .filter(|c| !c.is_undefined())
+        .and_then(|c| js_sys::Reflect::get(&c, &"timeout".into()).ok())
+        .is_some_and(|f| f.is_function())
+}
+
+/// Whether a fetch failed because its `AbortSignal.timeout` ran out.
+fn timed_out(e: &wasm_bindgen::JsValue) -> bool {
+    e.dyn_ref::<js_sys::Error>().is_some_and(|e| e.name() == "TimeoutError")
+}
 
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
 /// `rustgis_tiles::cache::split_range`).
@@ -449,7 +465,8 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // A tile or document that hasn't come in 30 seconds (as natively) is given up, so it doesn't
     // stay under way forever, holding its server's place in the queue (`cache`). Downloads the
     // user asked for may take longer.
-    if limit.is_none() {
+    // (`AbortSignal.timeout` is missing from older browsers, Safari before 16: no timeout there.)
+    if limit.is_none() && abort_timeout_supported() {
         init.set_signal(Some(&web_sys::AbortSignal::timeout_with_u32(TILE_TIMEOUT_MS)));
     }
     if asked.is_some() || !prepared.headers.is_empty() {
@@ -472,7 +489,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
         .await
         .map_err(|e| {
-            if e.dyn_ref::<js_sys::Error>().is_some_and(|e| e.name() == "TimeoutError") {
+            if timed_out(&e) {
                 return format!("no answer in {} seconds", TILE_TIMEOUT_MS / 1000);
             }
             let why = e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| err(e));
@@ -517,7 +534,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         let reader: web_sys::ReadableStreamDefaultReader =
             body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;
         loop {
-            let chunk = wasm_bindgen_futures::JsFuture::from(reader.read()).await.map_err(err)?;
+            // Headers came and then the body stalled: given up as a fetch that doesn't answer.
+            let chunk = wasm_bindgen_futures::JsFuture::from(reader.read())
+                .await
+                .map_err(|e| if timed_out(&e) { format!("no answer in {} seconds", TILE_TIMEOUT_MS / 1000) } else { err(e) })?;
             if js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
                 break;
             }
