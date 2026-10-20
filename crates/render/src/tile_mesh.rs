@@ -123,8 +123,9 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                     match geometry {
                         Some(rings) => {
                             for ring in rings.iter().filter(|r| r.len() >= 3) {
-                                b.begin(at(&ring[0]));
-                                for p in &ring[1..] {
+                                let Some((head, rest)) = ring.split_first() else { continue };
+                                b.begin(at(head));
+                                for p in rest {
                                     b.line_to(at(p));
                                 }
                                 b.close();
@@ -168,9 +169,10 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                             style::LineJoin::Miter => LineJoin::Miter,
                         });
                     for line in lines.iter().filter(|l| l.len() >= 2) {
+                        let Some((head, rest)) = line.split_first() else { continue };
                         let mut b = Path::builder();
-                        b.begin(at(&line[0]));
-                        for p in &line[1..] {
+                        b.begin(at(head));
+                        for p in rest {
                             b.line_to(at(p));
                         }
                         b.end(*rings);
