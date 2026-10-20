@@ -178,9 +178,7 @@ fn delete_field(s: &mut Session, p: &Json) -> CmdResult {
     // labels with Default's field instead. A class clause naming it no longer reads, and takes no
     // features, which go on to the next class: it is kept to edit, not dropped with its text symbol.
     if l.labels.default.field.eq_ignore_ascii_case(&removed) {
-        l.labels.enabled = false;
-        let old = std::mem::replace(&mut l.labels.default, rustgis_map::LabelClass::default_for(&l.dataset));
-        (l.labels.default.name, l.labels.default.visible, l.labels.default.where_) = (old.name, old.visible, old.where_);
+        l.labels.restart_default(&l.dataset);
     }
     l.labels.repoint_missing_fields(&l.dataset);
     if let Some(q) = &l.definition_query

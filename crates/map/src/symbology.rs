@@ -1104,6 +1104,15 @@ impl Labeling {
         self.classes.iter_mut().take(MAX_LABEL_CLASSES).find(|c| c.name.eq_ignore_ascii_case(name))
     }
 
+    /// Turns the labels off and starts the Default class again on `ds`'s first name-like field
+    /// (`LabelClass::default_for`), keeping its name, clause and visibility: its field was
+    /// deleted. (A service refresh keeps Default's text symbol instead, and clears its field.)
+    pub fn restart_default(&mut self, ds: &Dataset) {
+        self.enabled = false;
+        let old = std::mem::replace(&mut self.default, LabelClass::default_for(ds));
+        (self.default.name, self.default.visible, self.default.where_) = (old.name, old.visible, old.where_);
+    }
+
     /// Points every class on a field `ds` doesn't have at the Default class's field (a field
     /// deleted, a style from another layer, a service's fields changed). The class is kept, with
     /// its clause and text symbol.
@@ -1165,6 +1174,15 @@ mod tests {
         assert!(l.class(&format!("c{}", MAX_LABEL_CLASSES + 1)).is_none() && l.class_mut("c70").is_none());
         l.repoint_missing_fields(&ds);
         assert!(l.classes.iter().all(|c| c.field == "name"));
+        // Default on a field that's gone starts again on a name-like one, keeping its own settings.
+        (l.enabled, l.default.name, l.default.visible, l.default.where_) = (true, "Rest".into(), false, Some("name = 'x'".into()));
+        l.default.field = "gone".into();
+        l.restart_default(&ds);
+        assert!(!l.enabled);
+        assert_eq!(
+            (l.default.field.as_str(), l.default.name.as_str(), l.default.visible, l.default.where_.as_deref()),
+            ("name", "Rest", false, Some("name = 'x'"))
+        );
     }
 
     #[test]

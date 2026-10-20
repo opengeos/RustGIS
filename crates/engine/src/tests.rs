@@ -1433,6 +1433,17 @@ fn label_classes_by_command() {
     assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 1);
     assert_eq!(order(&s), ["Default"]);
     assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 0);
+    // info.project lists the classes also for a Default alone that is hidden (or has a clause).
+    let listed = |s: &mut Session| {
+        let info = s.run("info.project", &json!(null)).unwrap();
+        info["layers"].as_array().unwrap().iter().find(|l| l["name"] == "Cities").unwrap()["labelClasses"].clone()
+    };
+    assert!(listed(&mut s).is_null(), "a plain Default isn't listed");
+    s.run("labels.class.update", &json!({"visible": false})).unwrap();
+    assert_eq!(listed(&mut s)[0]["visible"], false);
+    s.run("labels.class.update", &json!({"visible": true, "where": "pop_max > 0"})).unwrap();
+    assert_eq!(listed(&mut s)[0]["where"], "pop_max > 0");
+    s.run("labels.class.update", &json!({"where": null})).unwrap();
     // A long name is cut at 100 characters, and doesn't end in the space it was cut at.
     let long = format!("{} tail", "a".repeat(99));
     assert_eq!(s.run("labels.class.add", &json!({"name": long})).unwrap()["class"], "a".repeat(99));
