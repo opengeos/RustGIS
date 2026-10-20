@@ -114,21 +114,28 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
         }
     };
     if matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3 {
+        // A fourth band is alpha only when the raster says so (RGB and near-infrared isn't).
+        let has_alpha = r.bands.len() >= 4 && matches!(r.color, ColorHint::Rgb { alpha: true });
         if let Some(sample) = sample_of(&[0, 1, 2]) {
-            let alpha = r.bands.len() >= 4 && sample_of(&[0, 1, 2, 3]) == Some(sample);
-            let n = if alpha { 4 } else { 3 };
+            let alpha = has_alpha && sample_of(&[0, 1, 2, 3]) == Some(sample);
             let max = if sample == Sample::Byte { 255.0 } else { 65_535.0 };
-            return Ok(Plan {
-                bands: (0..n).collect(),
-                sample,
-                rgb: true,
-                alpha: alpha.then_some(3),
-                nodata_int: int_nodata(max),
-                palette: None,
-                categorical: false,
-            });
+            // Pixels with no value need a way to say so: alpha (see-through, in tile_samples), or a
+            // no-data value the samples hold. Otherwise they are written as floats, with NaN.
+            let n = r.width as usize * r.height as usize;
+            let holes = (0..3).any(|b| r.bands.get(b).is_some_and(|band| band.stats.count < n));
+            if alpha || !holes || int_nodata(max).is_some() {
+                return Ok(Plan {
+                    bands: (0..if alpha { 4 } else { 3 }).collect(),
+                    sample,
+                    rgb: true,
+                    alpha: alpha.then_some(3),
+                    nodata_int: int_nodata(max),
+                    palette: None,
+                    categorical: false,
+                });
+            }
         }
-        let alpha = r.bands.len() > 3 && matches!(r.color, ColorHint::Rgb { alpha: true });
+        let alpha = has_alpha;
         let n = if alpha { 4 } else { 3 };
         return Ok(Plan {
             bands: (0..n).collect(),
@@ -156,6 +163,9 @@ fn plan(r: &Raster, band: usize) -> Result<Plan> {
         let n = r.width as usize * r.height as usize;
         let unused = || (0..=255u16).find(|v| !b.stats.categories.as_ref().is_some_and(|c| c.contains(&f64::from(*v))));
         let nodata_int = int_nodata(255.0).or_else(|| if b.stats.count < n { unused() } else { None });
+        if nodata_int.is_none() && b.stats.count < n {
+            return Err(err("the palette's 256 indexes are all used, so none is left for the cells with no value"));
+        }
         return Ok(Plan {
             bands: vec![0],
             sample: Sample::Byte,
@@ -267,6 +277,13 @@ fn tile_samples(r: &Raster, plan: &Plan, lv: &Level, tx: u32, ty: u32) -> Vec<u8
                 block(r, plan, lv.factor, ox, oy, &mut px);
             } else {
                 px.fill(f32::NAN);
+            }
+            // A colour with no value is see-through, never a black pixel that reads as real.
+            if let Some(a) = plan.alpha
+                && px.iter().enumerate().any(|(i, v)| i != a && v.is_nan())
+                && let Some(alpha) = px.get_mut(a)
+            {
+                *alpha = 0.0;
             }
             for v in &px {
                 match plan.sample {
@@ -869,5 +886,34 @@ mod tests {
         bytes[at + 8] = 0;
         let back = geotiff::read(Cursor::new(bytes), "b").unwrap();
         assert_eq!((back.band_count(), back.color.clone()), (2, ColorHint::Gray));
+    }
+
+    #[test]
+    fn pixels_with_no_value_stay_without_one() {
+        let nan = f32::NAN;
+        // Colour bytes with a hole and no alpha or no-data: floats, so the hole is still one.
+        let rgb = utm(2, 1, vec![vec![10.0, nan], vec![20.0, nan], vec![30.0, nan]], ColorHint::Rgb { alpha: false }, "UInt8", None);
+        let back = geotiff::read(Cursor::new(write(&rgb, 0).unwrap()), "b").unwrap();
+        assert_eq!((back.value(0, 0, 0), back.value(0, 1, 0)), (Some(10.0), None));
+        // With alpha, a hole in a colour is see-through, and the file stays bytes.
+        let rgba = utm(
+            2,
+            1,
+            vec![vec![10.0, nan], vec![20.0, 5.0], vec![30.0, 5.0], vec![255.0, 255.0]],
+            ColorHint::Rgb { alpha: true },
+            "UInt8",
+            None,
+        );
+        let back = geotiff::read(Cursor::new(write(&rgba, 0).unwrap()), "b").unwrap();
+        assert_eq!((back.data_type.as_str(), back.value(3, 0, 0), back.value(3, 1, 0)), ("UInt8", Some(255.0), Some(0.0)));
+        // A fourth band the raster doesn't call alpha isn't written as one.
+        let rgbi = utm(1, 1, vec![vec![10.0], vec![20.0], vec![30.0], vec![0.0]], ColorHint::Rgb { alpha: false }, "UInt8", None);
+        assert_eq!(geotiff::read(Cursor::new(write(&rgbi, 0).unwrap()), "b").unwrap().band_count(), 3);
+        // Every palette index used and a cell with none: no index is left to mark it, so refused.
+        let colors: Vec<[u8; 4]> = (0..=255u8).map(|i| [i, 0, 0, 255]).collect();
+        let mut idx: Vec<f32> = (0..=255u8).map(f32::from).collect();
+        idx.push(nan);
+        let full = utm(257, 1, vec![idx], ColorHint::Palette(colors), "UInt8", None);
+        assert!(write(&full, 0).is_err());
     }
 }
