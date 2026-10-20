@@ -194,6 +194,15 @@ database live, talking to the server itself: see [MySQL and MariaDB](data.md#mys
 | --- | --- | --- |
 | MySQL or MariaDB table or view | Add Data › Database… (`layer.addDatabase`) with a `mysql://user@host:3306/database` or `mariadb://…` address | Large tables read a view at a time by their spatial index, others loaded whole. Converted to longitude/latitude by RustGIS from the column's SRID; `"crs"` for an SRID of 0. A column of mixed types becomes a layer per type. `ssl-mode` sets the encryption. The password is kept for the session only. |
 
+## SQL Server and Azure SQL
+
+The desktop app reads SQL Server 2012 or later and Azure SQL spatial tables live, without an
+external client: see [SQL Server and Azure SQL](data.md#sql-server-and-azure-sql).
+
+| Source | How to add it | Notes |
+| --- | --- | --- |
+| SQL Server table or view | Add Data › Database… (`layer.addDatabase`) with an `mssql://user@host:1433/database` address | Read only; large tables read a view at a time. Geometry and geography, including curves, are converted to longitude/latitude. `"crs"` supplies SRID 0; mixed types become separate layers. TLS and certificate checking are on by default. SQL Server logins on every desktop platform; Windows logins on Windows only. Passwords are kept for the session, never in projects. |
+
 ## SQL queries and DuckDB databases
 
 With [DuckDB](https://duckdb.org) installed (the `duckdb` program on the `PATH`, DuckDB 1.5 or

@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{
-    CONTENT_H, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, submenu_row, text_w,
+    CONTENT_H, Dragged, LABEL_H, big, big_form_menu, big_menu, col, group, menu_item, small, small_form_menu, small_menu, submenu_row,
+    text_w,
 };
 use crate::{RightPane, RustGisApp, icons};
 
@@ -1904,6 +1905,16 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 Value::Null,
                 app.ui.right == Some(RightPane::Bookmarks),
             );
+            small(
+                ui,
+                app,
+                "label",
+                "Labeling",
+                "Show the Labeling pane for the selected layer.",
+                "ui.pane.labeling",
+                Value::Null,
+                app.ui.right == Some(RightPane::Labeling),
+            );
         });
         small(
             ui,
@@ -3195,10 +3206,10 @@ fn help_tab(app: &mut RustGisApp, ui: &mut Ui) {
 // ---------------------------------------------------------------------------------------------
 // Style and Data groups for the selected layer
 
-const SCALES: [f64; 10] =
+pub(crate) const SCALES: [f64; 10] =
     [1_000.0, 10_000.0, 50_000.0, 100_000.0, 500_000.0, 1_000_000.0, 5_000_000.0, 10_000_000.0, 50_000_000.0, 100_000_000.0];
 
-fn scale_label(s: Option<f64>) -> String {
+pub(crate) fn scale_label(s: Option<f64>) -> String {
     match s {
         None => tl!("<None>").into(),
         Some(v) => format!("1:{}", fmt_thousands(v)),
@@ -3327,8 +3338,10 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                     let mut k = xx.factor;
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
+                        // Kept across a drag until it is let go (#607).
+                        let drag = Dragged::lend(ui, egui::Id::new(("extrusion_factor", layer.id)), &mut k);
                         let r = ui.add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02));
-                        if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                        if drag.settled(ui, &r, &mut k) && k != xx.factor {
                             let t = if xx.field.is_some() { "field" } else { "height" };
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
                         }
@@ -3765,8 +3778,10 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
             mask_menu(ui, app, &layer);
             let mut a = style.rotation;
             ui.horizontal(|ui| {
+                // Kept across a drag until it is let go (#607).
+                let drag = Dragged::lend(ui, egui::Id::new(("raster_rotation", layer.id)), &mut a);
                 let r = ui.add(egui::DragValue::new(&mut a).range(0.0..=359.0).speed(1.0).suffix("°"));
-                if r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged()) {
+                if drag.settled(ui, &r, &mut a) && a != style.rotation {
                     let _ = app.run("raster.rotation", json!({"angle": a}));
                 }
                 ui.label(egui::RichText::new(tl!("Rotation")).size(11.5));
@@ -3964,6 +3979,18 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Labels", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "settings",
+                "Properties",
+                "Every label setting of this layer, in the Labeling pane.",
+                "ui.pane.labeling",
+                Value::Null,
+                app.ui.right == Some(RightPane::Labeling),
+            );
+        });
     });
     group(ui, "Label Range", |ui| {
         ui.vertical(|ui| {

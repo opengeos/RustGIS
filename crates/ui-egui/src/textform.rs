@@ -7,6 +7,8 @@
 use egui::{Color32, Ui, vec2};
 use rustgis_engine::map::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING, TextAlign};
 
+use crate::widgets::Dragged;
+
 /// What the form edits. A style is left out where the text doesn't have it.
 pub struct Fields<'a> {
     pub text: &'a mut String,
@@ -37,41 +39,6 @@ pub struct Settled {
     pub align: bool,
     /// The letter spacing changed and was let go, as the size.
     pub letter_spacing: bool,
-}
-
-/// A number the caller lends saved each frame, kept across a drag. The caller saves it only once
-/// it is settled, so each frame lends the saved value again, and egui forgets the value dragged so
-/// far when the pointer is released: without this, a drag would end back where it started. Kept
-/// with the saved value it was dragged from, it goes stale when that changes (another element).
-struct Dragged {
-    key: egui::Id,
-    saved: f64,
-}
-
-impl Dragged {
-    /// Lends the value dragged so far in place of the saved one, mid-drag.
-    fn lend(ui: &Ui, key: egui::Id, value: &mut f64) -> Self {
-        let saved = *value;
-        if let Some((_, dragged)) = ui.data(|d| d.get_temp::<(f64, f64)>(key)).filter(|(from, _)| *from == saved) {
-            *value = dragged;
-        }
-        Dragged { key, saved }
-    }
-
-    /// Whether the number is settled: let go after a drag (`value` is then the dragged one),
-    /// typed in, or set by assistive technology; and differs from the saved one.
-    fn settled(self, ui: &Ui, r: &egui::Response, value: &mut f64) -> bool {
-        if r.dragged() {
-            ui.data_mut(|d| d.insert_temp(self.key, (self.saved, *value)));
-            return false;
-        }
-        if let Some((from, dragged)) = ui.data_mut(|d| d.remove_temp::<(f64, f64)>(self.key))
-            && from == self.saved
-        {
-            *value = dragged;
-        }
-        (r.drag_stopped() || r.lost_focus() || r.changed()) && (*value - self.saved).abs() > 1e-6
-    }
 }
 
 /// A section of the Format pane ("Element", "Text"), folding as its other sections do (a frame's
@@ -125,12 +92,13 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
     out.typing = r.has_focus() && !out.text;
     egui::Grid::new(id.with("style")).num_columns(2).min_col_width(LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Size"));
+        let saved = *f.size;
         let drag = Dragged::lend(ui, id.with("size"), f.size);
         let r = ui.add(egui::DragValue::new(f.size).range(rustgis_engine::map::graphics::FONT_SIZE).speed(0.2).suffix(" pt"));
         // Named for assistive technology, as its label sits in the other column.
         let size = *f.size;
         r.widget_info(|| egui::WidgetInfo { label: Some(tl!("Size").to_string()), ..egui::WidgetInfo::drag_value(true, size) });
-        out.size = drag.settled(ui, &r, f.size);
+        out.size = drag.settled(ui, &r, f.size) && (*f.size - saved).abs() > 1e-6;
         ui.end_row();
         if let Some(c) = f.color {
             ui.label(tl!("Color"));
@@ -169,6 +137,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
         }
         if let Some(ls) = f.letter_spacing {
             ui.label(tl!("Letter spacing"));
+            let saved = *ls;
             let drag = Dragged::lend(ui, id.with("letter_spacing"), ls);
             let r =
                 ui.add(egui::DragValue::new(ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"));
@@ -177,7 +146,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
                 label: Some(tl!("Letter spacing").to_string()),
                 ..egui::WidgetInfo::drag_value(true, now)
             });
-            out.letter_spacing = drag.settled(ui, &r, ls);
+            out.letter_spacing = drag.settled(ui, &r, ls) && (*ls - saved).abs() > 1e-6;
             ui.end_row();
         }
     });

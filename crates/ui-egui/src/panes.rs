@@ -19,6 +19,7 @@ use rustgis_engine::map::{
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, c32, regular, rgba, semibold};
+use crate::widgets::Dragged;
 use crate::{LayersView, LeftPane, RightPane, RustGisApp, icons};
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
@@ -60,10 +61,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             ui.advance_cursor_after_rect(rect);
         });
     }
-    // Here rather than in the Symbology pane, so a drag still finishes if the pane closes
-    // meanwhile; and after the panes, so a change the picker reports as the pointer is let go
-    // joins the drag instead of running a command of its own.
+    // Here rather than in the Symbology and Labeling panes, so a drag still finishes if the pane
+    // closes meanwhile; and after the panes, so a change the picker reports as the pointer is let
+    // go joins the drag instead of running a command of its own.
     finish_class_color_drag(app, ui);
+    crate::labelpane::finish_color_drag(app, ui);
 }
 
 /// Closes the pane that command `id` (a `ui.pane.*`) opens, on its side; false when `id` isn't a
@@ -109,6 +111,7 @@ fn right_title(pane: RightPane) -> (&'static str, &'static str) {
         RightPane::Directions => ("Directions", "ui.pane.directions"),
         RightPane::Bookmarks => ("Bookmarks", "ui.pane.bookmarks"),
         RightPane::Format => ("Format", "ui.pane.format"),
+        RightPane::Labeling => ("Labeling", "ui.pane.labeling"),
         // Its tab says which service it shows (see `right_name`).
         RightPane::WebData => ("Web Data", "ui.pane.webData"),
         // Its tab says whose panel it is (see `right_name`).
@@ -160,6 +163,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),
             RightPane::Format => crate::graphicformat::show(app, ui, t),
+            RightPane::Labeling => crate::labelpane::show(app, ui, t),
             RightPane::Plugin => crate::pluginpanel::show(app, ui, t),
             RightPane::WebData => web_data(app, ui),
         });
@@ -1607,7 +1611,11 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
 /// A layer's right-click menu (its row in any Layers view). Move Up and Move Down only with
 /// `reorder` (the drawing order view, unfiltered).
 fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
-    let _ = app.session.run("layer.select", &json!({"layer": l.id}));
+    // Once, as the menu opens: a command each frame it stays open would draw the map again each
+    // time (a command moves the session's revision).
+    if app.session.active_layer != Some(l.id) {
+        let _ = app.session.run("layer.select", &json!({"layer": l.id}));
+    }
     let service_child = app.session.map().service_groups.iter().any(|g| g.children.iter().any(|c| c.layer == l.id));
     if service_child && ui.add_enabled(app.ui.service_import.is_none(), egui::Button::new(tl!("Refresh"))).clicked() {
         let _ = app.run("ui.refreshService", json!({"layer":l.id}));
@@ -1631,6 +1639,12 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     if !l.is_raster() && ui.button(tl!(if l.labels.enabled { "Turn Labels Off" } else { "Label" })).clicked() {
         let _ = app.run("labels.enable", json!({"layer": l.id}));
+        ui.close();
+    }
+    if !l.is_raster() && ui.button(tl!("Labeling Properties…")).clicked() {
+        if let Err(e) = app.run("ui.pane.labeling", json!({"layer": l.id})) {
+            app.session.notify(e, true);
+        }
         ui.close();
     }
     if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {
@@ -4169,8 +4183,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 {
                     ui.label(tl!(label));
                     let mut x = v;
+                    // Kept across a drag until it is let go (#607).
+                    let drag = Dragged::lend(ui, egui::Id::new(("relief_drag", l.id, which)), &mut x);
                     let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3));
-                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                    if drag.settled(ui, &r, &mut x) && x != v {
                         let (a, b, c) = match which {
                             0 => (x, alt, zf),
                             1 => (az, x, zf),
@@ -4213,11 +4229,16 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             Stretch::PercentClip { low, high } => {
                 ui.horizontal(|ui| {
                     let (mut lo, mut hi) = (low, high);
+                    // Each kept across a drag until it is let go (#607); both are sent together.
                     ui.label(tl!("Min %"));
+                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "low")), &mut lo);
                     let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    let low_settled = drag.settled(ui, &a, &mut lo);
                     ui.label(tl!("Max %"));
+                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "high")), &mut hi);
                     let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2));
-                    if a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged()) {
+                    let high_settled = drag.settled(ui, &b, &mut hi);
+                    if (low_settled || high_settled) && (lo != low || hi != high) {
                         let _ = app.run("raster.stretch", json!({"type": "percentClip", "low": lo, "high": hi}));
                     }
                 });
@@ -4250,8 +4271,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 ui.horizontal(|ui| {
                     let mut nn = n;
                     ui.label(tl!("Deviations"));
+                    // Kept across a drag until it is let go (#607).
+                    let drag = Dragged::lend(ui, egui::Id::new(("deviations_drag", l.id)), &mut nn);
                     let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2));
-                    if a.drag_stopped() || (a.changed() && !a.dragged()) {
+                    if drag.settled(ui, &a, &mut nn) && nn != n {
                         let _ = app.run("raster.stretch", json!({"type": "standardDeviation", "n": nn}));
                     }
                 });
@@ -4568,5 +4591,21 @@ mod tests {
         assert_eq!(transparency(&h), mid, "letting go keeps the value");
         h.state_mut().run("edit.undo", Value::Null).unwrap();
         assert_eq!(transparency(&h), start, "one undo takes the whole drag back");
+    }
+
+    /// The layer menu selects its layer as it opens, not on every frame it stays open: each
+    /// command moves the session's revision, which drew the whole map again every frame.
+    #[test]
+    fn an_open_layer_menu_leaves_the_map_alone() {
+        let app = RustGisApp::with_sample();
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        h.step();
+        assert_eq!(h.state().session.active_layer, Some(layer.id));
+        let rev = h.state().session.revision;
+        for _ in 0..5 {
+            h.step();
+        }
+        assert_eq!(h.state().session.revision, rev, "the menu ran a command on every frame");
     }
 }

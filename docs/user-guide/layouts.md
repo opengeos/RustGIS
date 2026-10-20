@@ -90,7 +90,8 @@ the maps; while one is open, its groups lead the Publish tab:
   the element selected; selecting an element, or clicking the selected one, opens it again. The
   wheel zooms the page. **Delete** (or **Backspace**, the delete key on a
   Mac) deletes the selected element, and **Ctrl+D** (**⌘D** on a Mac) duplicates it: the copy is
-  placed 5 mm down and to the right, on top, and selected.
+  placed 5 mm down and to the right, on top, and selected. The **arrow keys** nudge it 1 mm, or
+  10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo.
 - **Locked**, at the top of the Format pane, keeps a finished element from being changed by
   mistake: it can still be selected (a lock marks its corner, and it has no handles), but not
   moved, resized, deleted or edited, and a locked map frame's map isn't panned or zoomed. A map

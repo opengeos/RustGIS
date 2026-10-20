@@ -500,6 +500,20 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if element && i.consume_key(Modifiers::NONE, Key::Backspace) {
                 run.push(("edit.delete".into(), Value::Null));
             }
+            // Arrow keys nudge the selected layout element, further with Shift; held, it keeps
+            // going. Shift first: a plain arrow's pattern takes Shift-arrows too.
+            if element {
+                use crate::layoutview::{NUDGE_FAST_MM, NUDGE_MM};
+                for (key, dx, dy) in
+                    [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)]
+                {
+                    for (m, step) in [(Modifiers::SHIFT, NUDGE_FAST_MM), (Modifiers::NONE, NUDGE_MM)] {
+                        for _ in 0..i.count_and_consume_key(m, key) {
+                            run.push(("ui.layoutNudge".into(), json!({"dx": dx * step, "dy": dy * step})));
+                        }
+                    }
+                }
+            }
             // Clipboard keys arrive as events, not key presses.
             for e in &i.events {
                 match e {
@@ -520,6 +534,20 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
                 app.ui.command_search = None;
                 continue;
             }
+        }
+        // An arrow key nudged the selected layout element (unless it's locked): a held key, or
+        // taps close together, are one step to undo.
+        if id == "ui.layoutNudge" {
+            let (dx, dy) = (p["dx"].as_f64().unwrap_or(0.0), p["dy"].as_f64().unwrap_or(0.0));
+            if let (Some(li), Some(el)) = (app.session.active_layout, app.layout.selected)
+                && let Some((x, y)) =
+                    app.session.project.layouts.get(li).and_then(|l| l.element(el)).filter(|e| !e.locked).map(|e| (e.x + dx, e.y + dy))
+            {
+                let key = app.layout.nudge_key(li, el, ctx.input(|i| i.time));
+                app.session.merge_undo(key);
+                let _ = app.run("layout.update", json!({"layout": li, "element": el, "x": x, "y": y}));
+            }
+            continue;
         }
         // Ctrl+D (Cmd+D on a Mac) duplicates the selected layout element and selects the copy.
         if id == "layout.duplicateElement" {
@@ -602,6 +630,7 @@ pub(crate) const UI_COMMANDS: &[(&str, &str, &str)] = &[
     ("ui.mcpRelay", "MCP Relay", "Help › Help"),
     ("ui.pane.geoprocessing", "Tools Pane", "View › Windows"),
     ("ui.pane.symbology", "Symbology Pane", "Style › Drawing"),
+    ("ui.pane.labeling", "Labeling Pane", "View › Windows"),
     ("ui.pane.assistant", "AI Assistant", "Analyze › AI"),
     ("ui.pane.sql", "SQL Pane", "Analyze › Workflows"),
     ("ui.pane.directions", "Directions", "Home › Navigate"),

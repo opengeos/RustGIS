@@ -1002,6 +1002,13 @@ fn hostile_params_never_panic() {
         // MySQL addresses that can't be read, so nothing connects.
         json!({"database": "mysql://u:p#@[::1/x?ssl-mode=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
+        json!({"database": "mssql://u:p#@[::1/x?encrypt=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
+        json!({"database": "MSSQL://u@h:99999999/%zz?ca=/nonexistent", "sql": "SELECT 1"}),
+        // Control points that don't parse, then ones that reach a fit.
+        json!({"points": [[], 7, [1, 2, 3, 4, "x"]], "transform": "spline"}),
+        json!({"points": [[0, 0, 1e308, -1e308], [1, 0, -1e308, 1e308], [0, 1, 1e308, 1e308], [1, 1, 0, 0, 0]], "transform": "spline"}),
+        json!({"points": vec![json!([5, 5, 1, 1]); 1000], "compare": true}),
+        json!({"points": [[0, 0, f64::MAX, f64::MAX], [1, 0, -f64::MAX, f64::MAX], [0, 1, f64::MAX, -f64::MAX]], "compare": true}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
     let streamed = grid_fgb("hostile", 20);
@@ -2704,6 +2711,26 @@ fn layer_effects_and_imagery_tools() {
         "north up only"
     );
     s.run("raster.georeference", &json!({"layer": dem, "extent": [10.0, 45.0, 10.04, 45.04]})).unwrap();
+    // Control point fits: a sheared grid is affine, a point switched off still gets a residual,
+    // and comparing the transforms recommends the simplest that predicts the points left out.
+    let sheared: Vec<Value> = (0..16)
+        .map(|i| {
+            let (c, r) = (f64::from(i % 4) * 100.0, f64::from(i / 4) * 100.0);
+            json!([c, r, 20.0 + c * 0.001 + r * 0.0002, 50.0 - r * 0.001])
+        })
+        .collect();
+    let mut pts = sheared.clone();
+    pts[5] = json!([100, 100, 20.5, 49.0, 0]);
+    let fit = s.run("raster.gcpFit", &json!({"points": pts, "transform": "affine"})).unwrap();
+    assert_eq!(fit["used"], 15);
+    assert!(fit["rmse"]["map"].as_f64().unwrap() < 1e-9, "{fit}");
+    assert!(fit["residuals"][5]["map"][0].as_f64().unwrap() < -0.3, "the switched-off point misses");
+    let g: Vec<f64> = fit["affine"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!((g[1] - 0.001).abs() < 1e-12 && (g[2] - 0.0002).abs() < 1e-12 && (g[5] + 0.001).abs() < 1e-12, "{g:?}");
+    let cmp = s.run("raster.gcpFit", &json!({"points": sheared, "compare": true})).unwrap();
+    assert_eq!(cmp["recommended"], "affine", "{cmp}");
+    assert!(s.run("raster.gcpFit", &json!({"points": [[0, 0, 1, 1]]})).is_err());
+    assert!(s.run("raster.gcpFit", &json!({"points": [[0, 0, 1, 1], [1, 1, 2, 2]], "transform": "magic"})).is_err());
     let sp = s.run("raster.spectral", &json!({"layer": dem, "lon": 10.0205, "lat": 45.0195})).unwrap();
     assert!(sp["values"][0].as_f64().unwrap() > 290.0);
     s.run("raster.index", &json!({"layer": dem, "index": "ndvi", "nir": 1, "red": 1})).unwrap();
@@ -7397,6 +7424,65 @@ fn mysql_live_end_to_end() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// SQL Server project reopening and failed commands never expose credentials or add layers.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sqlserver_layers_reopen_without_secrets() {
+    let mut s = Session::new(Project::default());
+    let mut src: rustgis_map::source::SourceLayer = serde_json::from_value(json!({
+        "sqlserver": {"database": "mssql://me@127.0.0.1:1/gis?encrypt=false", "table": "roads", "family": "Lines"}
+    }))
+    .unwrap();
+    let e = src.open().unwrap_err();
+    assert!(e.contains("connect again with Add Data › Database"), "{e}");
+    assert!(!src.is_open());
+    let saved = serde_json::to_string(&src).unwrap();
+    assert!(saved.contains("\"sqlserver\":{") && saved.contains("\"table\":\"roads\"") && !saved.contains("password"), "{saved}");
+    let before = s.map().layers.len();
+    let e = s.run("layer.addDatabase", &json!({"database": "mssql://me:s3cret@127.0.0.1:1/gis", "password": "pw"})).unwrap_err();
+    assert!(e.starts_with("gis: ") && !e.contains("s3cret") && !e.contains("pw"), "{e}");
+    let e = s.run("layer.addDatabase", &json!({"database": "mssql://h:port/gis"})).unwrap_err();
+    assert!(e.contains("port 'port'"), "{e}");
+    let e = s.run("layer.addSql", &json!({"sql": "SELECT 1", "database": "mssql://h/gis"})).unwrap_err();
+    assert!(e.contains("SQL Server"), "{e}");
+    #[cfg(not(windows))]
+    {
+        let e = s.run("info.databaseTables", &json!({"database": "mssql://127.0.0.1:1/gis"})).unwrap_err();
+        assert!(e.contains("give a SQL Server login"), "{e}");
+    }
+    assert_eq!(s.map().layers.len(), before);
+}
+
+/// `RUSTGIS_TEST_MSSQL` names a live database: add every table, stream one, draw, save and reopen.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn sqlserver_live_end_to_end() {
+    let Ok(address) = std::env::var("RUSTGIS_TEST_MSSQL") else { return };
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.databaseTables", &json!({"database": address})).unwrap();
+    let names: Vec<String> = listed["layers"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    let r = s.run("layer.addDatabase", &json!({"database": address})).unwrap();
+    assert!(r["layers"].as_array().unwrap().len() >= names.len(), "{r}");
+    assert!(r["features"].as_u64().unwrap() > 0, "{r}");
+    let r = s.run("layer.addDatabase", &json!({"database": address, "layer": names[0], "stream": true, "name": "live"})).unwrap();
+    assert_eq!(r["streamed"], true);
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().sqlserver.is_some());
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-sqlserver-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string()})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let password = rustgis_data::source::msconn::split_password(&address).and_then(|(_, p)| p);
+    assert!(password.is_none_or(|p| !text.contains(&p)), "the project keeps no password");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layer_by_name("live").unwrap();
+    assert!(l.source.as_ref().unwrap().is_open(), "{:?}", l.source.as_ref().unwrap().error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Deleting a map or layout other than the one in view (a tab's close button) keeps that view;
 /// deleting the one in view falls back to the first map; the last map stays.
 #[test]
@@ -7950,6 +8036,53 @@ fn layout_shapes_are_added_restyled_and_saved() {
     // Saved and read back.
     let back: rustgis_map::layout::Layout = serde_json::from_value(serde_json::to_value(&s.project.layouts[li]).unwrap()).unwrap();
     assert_eq!(back, s.project.layouts[li]);
+}
+
+#[test]
+fn merged_undo_steps_undo_as_one() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "Merge"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let title = s.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
+    let at = |s: &Session| s.project.layouts[li].element(title.id).map(|e| (e.x, e.y)).unwrap();
+    let nudge = |s: &mut Session, key: &str, x: f64| {
+        s.merge_undo(key);
+        s.run("layout.update", &json!({"element": title.id, "x": x})).unwrap();
+    };
+    let depth = s.undo_depth();
+    // A run under one key is one step.
+    for x in [10.0, 11.0, 12.0] {
+        nudge(&mut s, "a", x);
+    }
+    assert_eq!(s.undo_depth(), depth + 1);
+    // A change in between starts a new step, even under the same key; so does another key.
+    s.run("layout.update", &json!({"element": title.id, "y": 5.0})).unwrap();
+    nudge(&mut s, "a", 13.0);
+    nudge(&mut s, "b", 14.0);
+    assert_eq!(s.undo_depth(), depth + 4);
+    // Undoing a run goes back to before its first change.
+    for _ in 0..4 {
+        s.run("edit.undo", &Value::Null).unwrap();
+    }
+    assert_eq!(at(&s), (title.x, title.y));
+    // After an undo the same key starts afresh, not merging into the step before.
+    nudge(&mut s, "a", 20.0);
+    nudge(&mut s, "a", 21.0);
+    assert_eq!(s.undo_depth(), depth + 1);
+    // A key asked for by a command that failed is gone after it: the next change is its own step.
+    s.merge_undo("a");
+    assert!(s.run("layout.update", &json!({"element": 999_999, "x": 1})).is_err());
+    s.run("layout.update", &json!({"element": title.id, "x": 30.0})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 2);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(at(&s).0, 21.0);
+    // So is one asked for by a command refused before it ran (unknown, blocked).
+    nudge(&mut s, "c", 40.0);
+    s.merge_undo("c");
+    assert!(s.run("no.such.command", &Value::Null).is_err());
+    let before = s.undo_depth();
+    s.run("layout.update", &json!({"element": title.id, "x": 41.0})).unwrap();
+    assert_eq!(s.undo_depth(), before + 1);
 }
 
 #[test]

@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::RustGisApp;
 use crate::theme::{Tokens, regular, semibold};
+use crate::widgets::Dragged;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Drag {
@@ -89,6 +90,28 @@ pub struct LayoutView {
     /// Where the primary button last went down: egui forgets it on release, and a click is
     /// judged by where it started.
     pressed: Option<Pos2>,
+    /// The arrow-key nudges so far: how many runs of them there have been, and the last one's
+    /// layout, element and time (seconds), for [`LayoutView::nudge_key`].
+    nudges: u64,
+    nudged: Option<(usize, u32, f64)>,
+}
+
+/// How far (mm) an arrow key nudges the selected layout element, and with Shift.
+pub const NUDGE_MM: f64 = 1.0;
+pub const NUDGE_FAST_MM: f64 = 10.0;
+
+impl LayoutView {
+    /// The undo key for an arrow key nudging element `id` of layout `li` at `now` (seconds): the
+    /// last nudge's while the same element keeps being nudged, at most a second apart, so a held
+    /// key (or quick taps) is one step to undo.
+    pub fn nudge_key(&mut self, li: usize, id: u32, now: f64) -> String {
+        let same = self.nudged.is_some_and(|(l, i, t)| l == li && i == id && (0.0..=1.0).contains(&(now - t)));
+        if !same {
+            self.nudges = self.nudges.wrapping_add(1);
+        }
+        self.nudged = Some((li, id, now));
+        format!("layout nudge {}", self.nudges)
+    }
 }
 
 /// Forgets the selection and the text typed into its fields once another project has replaced
@@ -1002,10 +1025,12 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
         set(app, json!(on));
     }
     let Some(g) = grid else { return };
-    let changed = |r: &egui::Response| r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged());
+    // Each number kept across a drag until it is let go (#607).
+    let key = |field: &str| egui::Id::new(("grid_drag", id, field));
     egui::Grid::new(("grid_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Interval"));
         let mut step = g.step;
+        let drag = Dragged::lend(ui, key("step"), &mut step);
         let r = ui.add(
             egui::DragValue::new(&mut step)
                 .range(0.0..=90.0)
@@ -1013,7 +1038,7 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
                 .max_decimals(4)
                 .custom_formatter(|v, _| if v <= 0.0 { tl!("Auto").to_string() } else { format!("{v}°") }),
         );
-        if changed(&r) && (step - g.step).abs() > 1e-9 {
+        if drag.settled(ui, &r, &mut step) && (step - g.step).abs() > 1e-9 {
             set(app, json!({"step": step}));
         }
         ui.end_row();
@@ -1034,16 +1059,18 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
         ui.end_row();
         ui.label(tl!("Line width"));
         let mut w = g.width;
+        let drag = Dragged::lend(ui, key("width"), &mut w);
         let r = ui.add(egui::DragValue::new(&mut w).range(0.0..=MAX_GRID_WIDTH).speed(0.05).max_decimals(2).suffix(" pt"));
-        if changed(&r) && (w - g.width).abs() > 1e-9 {
+        if drag.settled(ui, &r, &mut w) && (w - g.width).abs() > 1e-9 {
             set(app, json!({"width": w}));
         }
         ui.end_row();
         if g.style.ticks() {
             ui.label(tl!("Tick length"));
             let mut t = g.tick_length;
+            let drag = Dragged::lend(ui, key("tickLength"), &mut t);
             let r = ui.add(egui::DragValue::new(&mut t).range(0.0..=MAX_TICK_MM).speed(0.1).max_decimals(1).suffix(" mm"));
-            if changed(&r) && (t - g.tick_length).abs() > 1e-9 {
+            if drag.settled(ui, &r, &mut t) && (t - g.tick_length).abs() > 1e-9 {
                 set(app, json!({"tickLength": t}));
             }
             ui.end_row();
@@ -1141,6 +1168,8 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
+    // Each number kept across a drag until it is let go (#607): one key per layout, element and field.
+    let drag_key = |field: &str| egui::Id::new(("layout_drag", li, id, field));
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;
         p["layout"] = json!(li);
@@ -1159,8 +1188,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 for (label, key, v) in [("X (mm)", "x", e.x), ("Y (mm)", "y", e.y), ("Width (mm)", "w", e.w), ("Height (mm)", "h", e.h)] {
                     ui.label(tl!(label));
                     let mut val = v;
+                    let drag = Dragged::lend(ui, drag_key(key), &mut val);
                     let r = ui.add(egui::DragValue::new(&mut val).speed(0.5).max_decimals(1));
-                    if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (val - v).abs() > 1e-6 {
+                    if drag.settled(ui, &r, &mut val) && (val - v).abs() > 1e-6 {
                         update(app, json!({key: val}));
                     }
                     ui.end_row();
@@ -1251,8 +1281,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.end_row();
                         ui.label(tl!("Ticks"));
                         let mut n = *ticks as u64;
+                        let drag = Dragged::lend(ui, drag_key("ticks"), &mut n);
                         let r = ui.add(egui::DragValue::new(&mut n).range(2..=MAX_COLORBAR_TICKS as u64));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *ticks {
+                        if drag.settled(ui, &r, &mut n) && n as usize != *ticks {
                             update(app, json!({"ticks": n}));
                         }
                         ui.end_row();
@@ -1277,8 +1308,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.label(tl!("Scale 1:"));
                         let mut sc = *scale;
                         let speed = sc * 0.01;
+                        let drag = Dragged::lend(ui, drag_key("scale"), &mut sc);
                         let r = ui.add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (sc - scale).abs() > 0.5 {
+                        if drag.settled(ui, &r, &mut sc) && (sc - scale).abs() > 0.5 {
                             update(app, json!({"scale": sc}));
                         }
                         ui.end_row();
@@ -1288,8 +1320,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         {
                             ui.label(tl!(label));
                             let mut v = current;
+                            let drag = Dragged::lend(ui, drag_key(key), &mut v);
                             let r = ui.add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"));
-                            if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (v - current).abs() > 1e-6 {
+                            if drag.settled(ui, &r, &mut v) && (v - current).abs() > 1e-6 {
                                 update(app, json!({key: v}));
                             }
                             ui.end_row();
@@ -1335,8 +1368,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.end_row();
                         ui.label(tl!("Divisions"));
                         let mut n = *divisions as u64;
+                        let drag = Dragged::lend(ui, drag_key("divisions"), &mut n);
                         let r = ui.add(egui::DragValue::new(&mut n).range(1..=MAX_SCALE_DIVISIONS as u64));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *divisions {
+                        if drag.settled(ui, &r, &mut n) && n as usize != *divisions {
                             update(app, json!({"divisions": n}));
                         }
                         ui.end_row();
@@ -1344,8 +1378,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                     ElementKind::Table { rows, .. } => {
                         ui.label(tl!("Rows"));
                         let mut n = *rows as u64;
+                        let drag = Dragged::lend(ui, drag_key("rows"), &mut n);
                         let r = ui.add(egui::DragValue::new(&mut n).range(1..=500));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && n as usize != *rows {
+                        if drag.settled(ui, &r, &mut n) && n as usize != *rows {
                             update(app, json!({"rows": n}));
                         }
                         ui.end_row();
@@ -1362,8 +1397,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                         ui.label(tl!("Outline width"));
                         let mut wd = *width;
+                        let drag = Dragged::lend(ui, drag_key("width"), &mut wd);
                         let r = ui.add(egui::DragValue::new(&mut wd).range(0.0..=50.0).speed(0.1).max_decimals(1).suffix(" pt"));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (wd - width).abs() > 1e-6 {
+                        if drag.settled(ui, &r, &mut wd) && (wd - width).abs() > 1e-6 {
                             update(app, json!({"width": wd}));
                         }
                         ui.end_row();
@@ -1377,8 +1413,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         ui.end_row();
                         ui.label(tl!("Width"));
                         let mut wd = *width;
+                        let drag = Dragged::lend(ui, drag_key("width"), &mut wd);
                         let r = ui.add(egui::DragValue::new(&mut wd).range(0.1..=50.0).speed(0.1).max_decimals(1).suffix(" pt"));
-                        if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (wd - width).abs() > 1e-6 {
+                        if drag.settled(ui, &r, &mut wd) && (wd - width).abs() > 1e-6 {
                             update(app, json!({"width": wd}));
                         }
                         ui.end_row();
@@ -1500,6 +1537,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                 ui.end_row();
                 ui.label(tl!("Line width"));
                 let mut w = *extent_width;
+                let drag = Dragged::lend(ui, drag_key("extentWidth"), &mut w);
                 let r = ui.add(
                     egui::DragValue::new(&mut w)
                         .range(rustgis_engine::map::layout::MIN_INDICATOR_WIDTH..=rustgis_engine::map::layout::MAX_INDICATOR_WIDTH)
@@ -1507,7 +1545,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         .max_decimals(2)
                         .suffix(" pt"),
                 );
-                if (r.drag_stopped() || r.lost_focus() || (r.changed() && !r.dragged())) && (w - extent_width).abs() > 1e-6 {
+                if drag.settled(ui, &r, &mut w) && (w - extent_width).abs() > 1e-6 {
                     update(app, json!({"extentIndicator": {"width": w}}));
                 }
                 ui.end_row();
@@ -1832,6 +1870,59 @@ mod tests {
         assert_eq!(h.state().session.revision, rev, "nothing was applied");
     }
 
+    /// Arrow keys nudge the selected element 1 mm, 10 mm with Shift; a run of them, held or
+    /// tapped, is one step to undo; a locked element stays put.
+    #[test]
+    fn arrow_keys_nudge_the_selected_element_and_undo_as_one() {
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Nudge"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
+        app.layout.selected = Some(title.id);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                let ctx = ui.ctx().clone();
+                crate::chrome::shortcuts(app, &ctx);
+                super::show(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let key = |key, modifiers, repeat| Event::Key { key, physical_key: None, pressed: true, repeat, modifiers };
+        let at = |h: &egui_kittest::Harness<'_, RustGisApp>| {
+            let e = h.state().session.project.layouts[li].element(title.id).unwrap();
+            (e.x - title.x, e.y - title.y)
+        };
+        let depth = h.state().session.undo_depth();
+        h.event(key(Key::ArrowRight, Modifiers::NONE, false));
+        h.step();
+        assert_eq!(at(&h), (1.0, 0.0), "→ nudges 1 mm");
+        h.event(key(Key::ArrowDown, Modifiers::SHIFT, false));
+        h.step();
+        assert_eq!(at(&h), (1.0, 10.0), "Shift-↓ nudges 10 mm");
+        // A held key repeats, several times in a frame.
+        for _ in 0..3 {
+            h.event(key(Key::ArrowLeft, Modifiers::NONE, true));
+        }
+        h.step();
+        assert_eq!(at(&h), (-2.0, 10.0));
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "one step to undo, not five");
+        h.state_mut().run("edit.undo", serde_json::Value::Null).unwrap();
+        assert_eq!(at(&h), (0.0, 0.0), "one undo puts it back");
+
+        // A locked element stays put.
+        h.state_mut().run("layout.update", json!({"layout": li, "element": title.id, "locked": true})).unwrap();
+        h.event(key(Key::ArrowUp, Modifiers::NONE, false));
+        h.step();
+        assert_eq!(at(&h), (0.0, 0.0));
+    }
+
     /// Ctrl+D (Cmd+D) duplicates the selected element and selects the copy; Backspace, the Mac's
     /// delete key, deletes it.
     #[test]
@@ -1978,6 +2069,53 @@ mod tests {
             matches!(kind, ElementKind::Text { italic: true, align: TextAlign::Left, letter_spacing, .. } if *letter_spacing == 3.5),
             "{kind:?}"
         );
+    }
+
+    /// A number dragged in the Format pane and let go is applied (#607): X moves the element by
+    /// the drag, though the pane lends the saved X each frame (it used to end where it started).
+    #[test]
+    fn dragging_x_in_the_format_pane_moves_the_element() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Drag"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
+        app.layout.selected = Some(title.id);
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                with_format(app, ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        // X is the pane's first number, the topmost: Name, X, Y, Width, Height.
+        let at = h.query_all_by_role(Role::SpinButton).map(|n| n.rect()).min_by(|a, b| a.min.y.total_cmp(&b.min.y)).unwrap().center();
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let undo = h.state().session.undo_depth();
+        h.event(Event::PointerMoved(at));
+        h.step();
+        h.event(button(at, true));
+        h.step();
+        // Dragged right over several frames (0.5 mm a point), then let go without moving.
+        for i in 1..=4 {
+            h.event(Event::PointerMoved(at + vec2(10.0 * i as f32, 0.0)));
+            h.step();
+        }
+        h.event(button(at + vec2(40.0, 0.0), false));
+        h.run_steps(3);
+        let e = h.state().session.project.layouts[li].element(title.id).unwrap().clone();
+        assert!(e.x - title.x > 10.0, "moved from {} to {}", title.x, e.x);
+        assert_eq!(e.y, title.y, "only X changed");
+        // Applied once, on release: one undo step, not one a frame of the drag.
+        assert_eq!(h.state().session.undo_depth(), undo + 1, "one undo step");
+        assert_eq!(h.state().session.undo_label(), Some("Element Properties"));
     }
 
     /// A layout's text has the shared text form (#516): the page's dynamic text as well as the

@@ -47,6 +47,9 @@ rusqlite = { workspace = true }
 postgres = { workspace = true }
 tokio-postgres-rustls = { workspace = true }
 mysql = { workspace = true }
+tiberius = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
 

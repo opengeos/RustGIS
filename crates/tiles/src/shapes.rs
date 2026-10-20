@@ -15,9 +15,10 @@ use std::sync::Arc;
 use rustgis_geom::Extent;
 
 use crate::cache::Payload;
-use crate::draw::{Frame, tiles_in};
+use crate::draw::{Drawn, Frame, Label, Pass, draw_layers, tiles_in};
 use crate::mvt::{GeomKind, Tile};
 use crate::source::{Resolve, Resolved, Spec, resolve};
+use crate::sprite::{self, Load, Sprite};
 use crate::style::{FeatureCtx, LayerKind, LineCap, LineJoin, Rgba, Source, StyleLayer};
 use crate::template;
 
@@ -38,7 +39,10 @@ pub struct VectorTiles {
     pub tiles: Vec<DataTile>,
     /// The level the view's style zoom is at: shapes for it are drawn.
     pub level: u8,
-    /// Some tiles are still on their way.
+    /// Its labels, when asked for, for the renderer to place with the map's own.
+    pub labels: Vec<Label>,
+    pub attribution: Vec<String>,
+    /// Some tiles (or the sprite) are still on their way.
     pub pending: bool,
 }
 
@@ -55,10 +59,12 @@ pub struct DataTile {
     pub clip: Extent,
 }
 
-/// The data tiles of `spec` over `view`, drawn at `frame`'s scale, when they can be drawn from
-/// [`shapes`] alone; `None` otherwise (the style isn't ready, has more than one vector source or
-/// shows raster layers here), for the caller to draw it as before.
-pub fn vector_tiles(spec: &Spec, frame: &Frame, view: &Extent) -> Option<VectorTiles> {
+/// The data tiles of `spec` over `view` (fetching those missing) and out to `reach` (those the
+/// cache has), drawn at `frame`'s scale, when they can be drawn from [`shapes`] alone; `None`
+/// otherwise (the style isn't ready, has more than one vector source or shows raster layers
+/// here), for the caller to draw it as before. With `labels`, the labels of a pixmap that size
+/// at `frame`.
+pub fn vector_tiles(spec: &Spec, frame: &Frame, view: &Extent, reach: Option<&Extent>, labels: Option<(u32, u32)>) -> Option<VectorTiles> {
     let Resolve::Ready(r) = resolve(spec) else { return None };
     if !(frame.m_per_px.is_finite() && frame.m_per_px > 0.0 && frame.ppp.is_finite() && frame.ppp > 0.0) {
         return None;
@@ -68,11 +74,16 @@ pub fn vector_tiles(spec: &Spec, frame: &Frame, view: &Extent) -> Option<VectorT
     let source = drawn_source(&r, level)?;
     let src = r.style.sources.iter().find(|(id, _)| *id == source).map(|(_, s)| s)?;
     let mut pending = false;
-    let tiles = tiles_in(src, view, None, frame, zoom, &mut pending)
+    let tiles = tiles_in(src, view, reach, frame, zoom, &mut pending)
         .into_iter()
         .map(|it| DataTile { payload: it.payload, at: it.at, z: it.z, clip: it.clip })
         .collect();
-    Some(VectorTiles { style: r, source, tiles, level, pending })
+    let mut d = Drawn::default();
+    if let Some(size) = labels {
+        draw_layers(None, size, &frame.extent(size.0, size.1), &r, frame, Pass::Labels, &mut d);
+    }
+    let attribution = r.attribution.clone();
+    Some(VectorTiles { style: r, source, tiles, level, labels: d.labels, attribution, pending: pending || d.pending })
 }
 
 /// The one vector source whose shapes are all a style shows at any zoom of `level` (besides its
@@ -143,8 +154,8 @@ pub type Pair<T> = [T; 2];
 /// How a shape is painted. Colours are straight RGBA, 0..1, their opacity applied.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
-    /// Polygons filled (even-odd): with `color`, or with the sprite's image `pattern` (its
-    /// opacity `color`'s), repeated from the world's north-west corner at its own size in points.
+    /// Polygons filled (even-odd) with `color`. A fill with the sprite's image `pattern` (to
+    /// be repeated at its own size in points) has its image's average colour for `color`.
     Fill { color: Pair<[f32; 4]>, pattern: Option<String> },
     /// Lines, or a polygon's rings: `width` points wide, `dashes` (if any) in widths.
     Line { color: Pair<[f32; 4]>, width: Pair<f32>, cap: LineCap, join: LineJoin, dashes: Option<Vec<f32>>, rings: bool },
@@ -168,10 +179,42 @@ fn shown_in(l: &StyleLayer, lo: f32, hi: f32) -> bool {
     l.visible && l.min_zoom < hi && l.max_zoom > lo
 }
 
+/// What a tile draws (see [`shapes`]).
+pub struct TileShapes {
+    pub runs: Vec<Run>,
+    /// Pattern fills are left out until the sprite has arrived.
+    pub waiting: bool,
+}
+
+/// The average colour of a sprite's image (straight RGBA, 0..1).
+fn average(img: &tiny_skia::Pixmap) -> Option<[f32; 4]> {
+    let n = img.pixels().len();
+    if n == 0 {
+        return None;
+    }
+    let mut sum = [0.0f64; 4];
+    for p in img.pixels() {
+        for (s, v) in sum.iter_mut().zip([p.red(), p.green(), p.blue(), p.alpha()]) {
+            *s += f64::from(v);
+        }
+    }
+    let a = sum[3];
+    if a <= 0.0 {
+        return Some([0.0; 4]);
+    }
+    // Premultiplied sums: the colour is theirs over the alpha's.
+    Some([(sum[0] / a) as f32, (sum[1] / a) as f32, (sum[2] / a) as f32, (a / n as f64 / 255.0) as f32])
+}
+
 /// The fills, lines and circles `style` draws from `tile` of `source` at zooms `level` up to
 /// the next level, in its order. Its background, when it has one, is the first run, filling the
 /// square.
-pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run> {
+pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> TileShapes {
+    // The sprite, loaded the first time a pattern needs it.
+    let mut sheet: Option<Option<Arc<Sprite>>> = None;
+    // Each pattern's average colour, found once (a pass over its pixels).
+    let mut averages: std::collections::HashMap<String, Option<[f32; 4]>> = std::collections::HashMap::new();
+    let mut waiting = false;
     let (lo, hi) = (f32::from(level), f32::from(level) + 1.0);
     // The level's last zoom (the next level excluded): a step at the next level isn't blended
     // across this one; an interpolation is the same there, near enough.
@@ -206,77 +249,124 @@ pub fn shapes(style: &Resolved, source: &str, tile: &Tile, level: u8) -> Vec<Run
         let Some(name) = layer.source_layer.as_deref() else { continue };
         let Some((tli, tl)) = tile.layers.iter().enumerate().find(|(_, l)| l.name == name) else { continue };
         let mut shapes = Vec::new();
+        let free = layer.paint_feature_free();
+        let mut fixed: [Option<Vec<Paint>>; 4] = Default::default();
         for (fi, f) in tl.features.iter().enumerate() {
             let ctx = |zoom| FeatureCtx { zoom, kind: f.kind, id: f.id, props: &f.props };
             if !layer.matches(&ctx(lo)) {
                 continue;
             }
-            let (a, b) = (ctx(lo), ctx(top));
-            let paint = match layer.kind {
-                LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon => {
-                    let (Some(ca), Some(cb)) = (layer.fill_color(&a), layer.fill_color(&b)) else { continue };
-                    let (oa, ob) = (layer.fill_opacity(&a), layer.fill_opacity(&b));
-                    // A pattern names an image of the sprite; one that names none isn't drawn.
-                    let pattern = match ["fill-pattern", "fill-extrusion-pattern"].into_iter().find(|p| layer.has_paint(p)) {
-                        Some(p) => match layer.paint_value(p, &a) {
-                            Some(crate::style::Val::Str(name)) if !name.is_empty() => Some(name),
-                            _ => continue,
-                        },
-                        None => None,
-                    };
-                    let paint = Paint::Fill { color: [rgba(ca, oa), rgba(cb, ob)], pattern };
-                    shapes.push(Shape { feature: Some((tli, fi)), paint });
-                    // The outline over it, along the rings themselves.
-                    let (Some(la), Some(lb)) = (layer.fill_outline_color(&a), layer.fill_outline_color(&b)) else { continue };
-                    Paint::Line {
-                        color: [rgba(la, oa), rgba(lb, ob)],
-                        width: [OUTLINE_WIDTH; 2],
-                        cap: LineCap::Butt,
-                        join: LineJoin::Miter,
-                        dashes: None,
-                        rings: true,
-                    }
-                }
-                LayerKind::Line if matches!(f.kind, GeomKind::LineString | GeomKind::Polygon) => {
-                    let (Some(ca), Some(cb)) = (layer.line_color(&a), layer.line_color(&b)) else { continue };
-                    let width = [sane(layer.line_width(&a), 512.0), sane(layer.line_width(&b), 512.0)];
-                    if width == [0.0, 0.0] {
-                        continue;
-                    }
-                    Paint::Line {
-                        color: [rgba(ca, layer.line_opacity(&a)), rgba(cb, layer.line_opacity(&b))],
-                        width,
-                        cap: layer.line_cap(&a),
-                        join: layer.line_join(&a),
-                        dashes: layer.line_dasharray(&a),
-                        rings: f.kind == GeomKind::Polygon,
-                    }
-                }
-                LayerKind::Circle if f.kind == GeomKind::Point => {
-                    let (Some(ca), Some(cb)) = (layer.circle_color(&a), layer.circle_color(&b)) else { continue };
-                    let radius = [sane(layer.circle_radius(&a), 256.0), sane(layer.circle_radius(&b), 256.0)];
-                    if radius == [0.0, 0.0] {
-                        continue;
-                    }
-                    let (oa, ob) = (layer.circle_opacity(&a), layer.circle_opacity(&b));
-                    let stroke = match (layer.circle_stroke_color(&a), layer.circle_stroke_color(&b)) {
-                        (Some(sa), Some(sb)) => {
-                            let w = [sane(layer.circle_stroke_width(&a), 64.0), sane(layer.circle_stroke_width(&b), 64.0)];
-                            (w != [0.0, 0.0]).then_some(([rgba(sa, oa), rgba(sb, ob)], w))
+            // The same for every feature: worked out once (for each kind of geometry).
+            let kind = f.kind as usize;
+            if let Some(Some(paints)) = fixed.get(kind) {
+                shapes.extend(paints.iter().map(|paint| Shape { feature: Some((tli, fi)), paint: paint.clone() }));
+                continue;
+            }
+            let paints: Vec<Paint> = 'p: {
+                let (a, b) = (ctx(lo), ctx(top));
+                let mut out = Vec::new();
+                let paint = match layer.kind {
+                    LayerKind::Fill | LayerKind::FillExtrusion if f.kind == GeomKind::Polygon => {
+                        let (Some(ca), Some(cb)) = (layer.fill_color(&a), layer.fill_color(&b)) else { break 'p out };
+                        let (oa, ob) = (layer.fill_opacity(&a), layer.fill_opacity(&b));
+                        let mut color = [rgba(ca, oa), rgba(cb, ob)];
+                        // A pattern names an image of the sprite; one that names none isn't drawn.
+                        let pattern = match ["fill-pattern", "fill-extrusion-pattern"].into_iter().find(|p| layer.has_paint(p)) {
+                            Some(p) => {
+                                let Some(crate::style::Val::Str(name)) =
+                                    layer.paint_value(p, &a).filter(|v| v.as_str().is_some_and(|n| !n.is_empty()))
+                                else {
+                                    break 'p out;
+                                };
+                                let sprite = sheet.get_or_insert_with(|| match style.sprite.as_deref().map(|b| sprite::load(b, false)) {
+                                    Some(Load::Ready(s)) => Some(s),
+                                    Some(Load::Pending) => {
+                                        waiting = true;
+                                        None
+                                    }
+                                    _ => None,
+                                });
+                                let found = match averages.get(&name) {
+                                    Some(a) => *a,
+                                    None => {
+                                        let a = sprite.as_ref().and_then(|s| s.image(&name, None)).and_then(|img| average(&img.pixmap));
+                                        // Only once the sprite is here: until then it isn't known.
+                                        if sprite.is_some() {
+                                            averages.insert(name.clone(), a);
+                                        }
+                                        a
+                                    }
+                                };
+                                let Some(avg) = found else {
+                                    break 'p out;
+                                };
+                                color = [
+                                    [avg[0], avg[1], avg[2], avg[3] * oa.clamp(0.0, 1.0)],
+                                    [avg[0], avg[1], avg[2], avg[3] * ob.clamp(0.0, 1.0)],
+                                ];
+                                Some(name)
+                            }
+                            None => None,
+                        };
+                        let paint = Paint::Fill { color, pattern };
+                        out.push(paint);
+                        // The outline over it, along the rings themselves.
+                        let (Some(la), Some(lb)) = (layer.fill_outline_color(&a), layer.fill_outline_color(&b)) else { break 'p out };
+                        Paint::Line {
+                            color: [rgba(la, oa), rgba(lb, ob)],
+                            width: [OUTLINE_WIDTH; 2],
+                            cap: LineCap::Butt,
+                            join: LineJoin::Miter,
+                            dashes: None,
+                            rings: true,
                         }
-                        _ => None,
-                    };
-                    Paint::Circle { color: [rgba(ca, oa), rgba(cb, ob)], radius, stroke }
-                }
-                _ => continue,
+                    }
+                    LayerKind::Line if matches!(f.kind, GeomKind::LineString | GeomKind::Polygon) => {
+                        let (Some(ca), Some(cb)) = (layer.line_color(&a), layer.line_color(&b)) else { break 'p out };
+                        let width = [sane(layer.line_width(&a), 512.0), sane(layer.line_width(&b), 512.0)];
+                        if width == [0.0, 0.0] {
+                            break 'p out;
+                        }
+                        Paint::Line {
+                            color: [rgba(ca, layer.line_opacity(&a)), rgba(cb, layer.line_opacity(&b))],
+                            width,
+                            cap: layer.line_cap(&a),
+                            join: layer.line_join(&a),
+                            dashes: layer.line_dasharray(&a),
+                            rings: f.kind == GeomKind::Polygon,
+                        }
+                    }
+                    LayerKind::Circle if f.kind == GeomKind::Point => {
+                        let (Some(ca), Some(cb)) = (layer.circle_color(&a), layer.circle_color(&b)) else { break 'p out };
+                        let radius = [sane(layer.circle_radius(&a), 256.0), sane(layer.circle_radius(&b), 256.0)];
+                        if radius == [0.0, 0.0] {
+                            break 'p out;
+                        }
+                        let (oa, ob) = (layer.circle_opacity(&a), layer.circle_opacity(&b));
+                        let stroke = match (layer.circle_stroke_color(&a), layer.circle_stroke_color(&b)) {
+                            (Some(sa), Some(sb)) => {
+                                let w = [sane(layer.circle_stroke_width(&a), 64.0), sane(layer.circle_stroke_width(&b), 64.0)];
+                                (w != [0.0, 0.0]).then_some(([rgba(sa, oa), rgba(sb, ob)], w))
+                            }
+                            _ => None,
+                        };
+                        Paint::Circle { color: [rgba(ca, oa), rgba(cb, ob)], radius, stroke }
+                    }
+                    _ => break 'p out,
+                };
+                out.push(paint);
+                out
             };
-            shapes.push(Shape { feature: Some((tli, fi)), paint });
+            if free && let Some(slot) = fixed.get_mut(kind) {
+                *slot = Some(paints.clone());
+            }
+            shapes.extend(paints.into_iter().map(|paint| Shape { feature: Some((tli, fi)), paint }));
         }
         if !shapes.is_empty() {
             runs.push(Run { layer: li, min_zoom: layer.min_zoom, max_zoom: layer.max_zoom, extent: tl.extent, shapes });
         }
     }
-    runs
+    TileShapes { runs, waiting }
 }
 
 #[cfg(test)]
@@ -373,7 +463,7 @@ mod tests {
     fn tile(spec: &Spec, zoom: f64) -> VectorTiles {
         for _ in 0..500 {
             let f = frame(zoom);
-            if let Some(v) = vector_tiles(spec, &f, &f.extent(300, 200))
+            if let Some(v) = vector_tiles(spec, &f, &f.extent(300, 200), None, Some((300, 200)))
                 && !v.pending
                 && !v.tiles.is_empty()
             {
@@ -391,7 +481,7 @@ mod tests {
         let v = tile(&spec, 2.5);
         assert_eq!(v.level, 2);
         let Payload::Vector(t) = &*v.tiles[0].payload else { panic!("a vector tile") };
-        let runs = shapes(&v.style, &v.source, t, v.level);
+        let runs = shapes(&v.style, &v.source, t, v.level).runs;
         // In the style's order, the labels left to the renderer's own placement.
         assert_eq!(runs.iter().map(|r| r.layer).collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
         // The background fills the square.
@@ -412,10 +502,10 @@ mod tests {
     }
 
     #[test]
-    fn patterns_are_named_and_line_patterns_left_out() {
+    fn patterns_without_a_sprite_and_line_patterns_are_left_out() {
         let style = STYLE.replacen(
             '[',
-            r#"[{"id": "p", "type": "fill", "source": "x", "source-layer": "parks", "paint": {"fill-pattern": "dots", "fill-opacity": 0.8}},
+            r#"[{"id": "p", "type": "fill", "source": "x", "source-layer": "parks", "paint": {"fill-pattern": "dots"}},
                 {"id": "lp", "type": "line", "source": "x", "source-layer": "roads", "paint": {"line-pattern": "arrows"}},"#,
             1,
         );
@@ -423,11 +513,9 @@ mod tests {
         ready(&spec);
         let v = tile(&spec, 2.5);
         let Payload::Vector(t) = &*v.tiles[0].payload else { panic!("a vector tile") };
-        let runs = shapes(&v.style, &v.source, t, v.level);
-        assert!(
-            matches!(&runs[0].shapes[0].paint, Paint::Fill { pattern: Some(p), color } if p == "dots" && (color[0][3] - 0.8).abs() < 1e-3)
-        );
-        assert!(runs.iter().all(|r| r.layer != 1), "line patterns aren't drawn");
+        let s = shapes(&v.style, &v.source, t, v.level);
+        // As `draw` leaves them out: the style has no sprite to take the pattern from.
+        assert!(!s.waiting && s.runs.iter().all(|r| r.layer > 1));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -438,7 +526,7 @@ mod tests {
         ready(&spec);
         let v = tile(&spec, 2.5);
         let Payload::Vector(t) = &*v.tiles[0].payload else { panic!("a vector tile") };
-        let runs = shapes(&v.style, &v.source, t, v.level);
+        let runs = shapes(&v.style, &v.source, t, v.level).runs;
         assert!(matches!(&runs[3].shapes[0].paint, Paint::Line { width, .. } if *width == [2.0, 2.0]));
         // An interpolation, still at the next level's value.
         assert!(matches!(&runs[2].shapes[0].paint, Paint::Line { width, .. } if (width[1] - 8.0).abs() < 1e-3));
@@ -452,23 +540,23 @@ mod tests {
         let (spec, dir) = archive("level", &style);
         ready(&spec);
         let f = frame(2.5);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_none());
         // Shown from the next level only: these meshes are fine.
         let style = STYLE.replacen('[', r#"[{"id": "r", "type": "raster", "source": "x", "minzoom": 3},"#, 1);
         let (spec, dir2) = archive("next-level", &style);
         ready(&spec);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_some());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_some());
         // Caps changing within the level.
         let style = STYLE.replace(r#""line-cap": "round""#, r#""line-cap": ["step", ["zoom"], "butt", 2.5, "round"]"#);
         let (spec, dir4) = archive("caps", &style);
         ready(&spec);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_none());
         let _ = std::fs::remove_dir_all(dir4);
         // Caps changing at the next level: not within this one.
         let style = STYLE.replace(r#""line-cap": "round""#, r#""line-cap": ["step", ["zoom"], "butt", 3, "round"]"#);
         let (spec, dir5) = archive("next-caps", &style);
         ready(&spec);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_some());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_some());
         let _ = std::fs::remove_dir_all(dir5);
         // A long dash pattern from the end of the level.
         let style = STYLE.replace(
@@ -477,7 +565,7 @@ mod tests {
         );
         let (spec, dir3) = archive("late-dashes", &style);
         ready(&spec);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_none());
         for d in [dir, dir2, dir3] {
             let _ = std::fs::remove_dir_all(d);
         }
@@ -490,8 +578,18 @@ mod tests {
         let (spec, dir) = archive("dashes", &style);
         ready(&spec);
         let f = frame(2.5);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_none());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_pattern_fills_with_its_average_colour() {
+        // Half the pixels opaque red, half clear.
+        let mut img = tiny_skia::Pixmap::new(2, 1).unwrap();
+        img.pixels_mut()[0] = tiny_skia::PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+        let avg = average(&img).unwrap();
+        assert!((avg[0] - 1.0).abs() < 1e-6 && avg[1] == 0.0 && (avg[3] - 0.5).abs() < 1e-6);
+        assert_eq!(average(&tiny_skia::Pixmap::new(1, 1).unwrap()), Some([0.0; 4]));
     }
 
     #[test]
@@ -501,13 +599,13 @@ mod tests {
         let (spec, dir) = archive("raster", &style);
         ready(&spec);
         let f = frame(2.5);
-        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200), None, None).is_none());
         let _ = std::fs::remove_dir_all(dir);
         // Nor a broken scale.
         let (spec, dir) = archive("scale", STYLE);
         ready(&spec);
         let f = Frame { m_per_px: f64::NAN, ..frame(2.5) };
-        assert!(vector_tiles(&spec, &f, &frame(2.5).extent(300, 200)).is_none());
+        assert!(vector_tiles(&spec, &f, &frame(2.5).extent(300, 200), None, None).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

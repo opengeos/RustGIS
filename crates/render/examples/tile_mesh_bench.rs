@@ -33,12 +33,14 @@ fn main() {
         let Some(mut pm) = tiny_skia::Pixmap::new(w, h) else { return };
         // A minute at most a view.
         for _ in 0..12 {
-            if !draw(&mut pm, &spec, 1.0, &frame, false).pending && vector_tiles(&spec, &frame, &view).is_some_and(|v| !v.pending) {
+            if !draw(&mut pm, &spec, 1.0, &frame, false).pending
+                && vector_tiles(&spec, &frame, &view, None, None).is_some_and(|v| !v.pending)
+            {
                 break;
             }
             rustgis_render::rustgis_tiles::cache::wait(std::time::Duration::from_secs(5));
         }
-        let Some(v) = vector_tiles(&spec, &frame, &view) else {
+        let Some(v) = vector_tiles(&spec, &frame, &view, None, None) else {
             println!("{name}: drawn as pictures");
             continue;
         };
@@ -46,7 +48,7 @@ fn main() {
         let (mut vertices, mut indices, mut tiles) = (0, 0, 0);
         for d in &v.tiles {
             let Payload::Vector(tile) = &*d.payload else { continue };
-            let m = tessellate(tile, &shapes(&v.style, &v.source, tile, v.level), d.z);
+            let m = tessellate(tile, &shapes(&v.style, &v.source, tile, v.level).runs, d.z);
             vertices += m.vertices.len();
             indices += m.indices.len();
             tiles += 1;
@@ -54,7 +56,7 @@ fn main() {
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         println!(
             "{name}: {tiles} tiles in {ms:.0} ms on one thread, {vertices} vertices, {indices} indices, {:.1} MB",
-            (vertices * std::mem::size_of::<rustgis_render::gpu_scene::TileVertex>() + indices * 4) as f64 / 1e6
+            (vertices * std::mem::size_of::<rustgis_render::gpu_scene::TileMeshVertex>() + indices * 4) as f64 / 1e6
         );
     }
 }

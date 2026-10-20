@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use rustgis_analysis::georef::{self, Gcp, Kind};
 use rustgis_analysis::rasterops::{self, NODATA};
 use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
 use rustgis_data::{Geometry, GeometryType};
@@ -37,6 +38,10 @@ pub fn commands() -> Vec<C> {
     vec![
         C::new("raster.georeference", "Georeference", "Analyze › Alignment", georeference).params(
             r#"{"layer": raster, "points"?: [[column, row, lon, lat], …] (two or more), "extent"?: [minLon, minLat, maxLon, maxLat]}"#,
+        ),
+        // A fit is a measurement of the points, not a project change: no undo step.
+        C::new("raster.gcpFit", "Control Point Fit", "Analyze › Alignment", gcp_fit).view().params(
+            r#"{"points": [[column, row, x, y, on?], …] (on: 1/0 or true/false, default on), "transform"?: "similarity"|"affine"|"projective"|"polynomial2"|"polynomial3"|"spline" (default: similarity under 3 points, else affine), "compare"?: bool (fit every transform and recommend one; transform and leaveOneOut are then ignored), "leaveOneOut"?: bool (default true)}"#,
         ),
         C::new("raster.change", "Change Detection", "Analyze › Image Analysis", change)
             .params(r#"{"before": raster, "after": raster, "band"?: 1-based, "method"?: "difference"|"ratio"|"percent", "name"?}"#),
@@ -225,6 +230,85 @@ fn georeference(s: &mut Session, p: &Value) -> CmdResult {
     let e = out.extent();
     let v = replace(s, &layer, out)?;
     Ok(json!({"layer": v["layer"], "extent": [e.min_x, e.min_y, e.max_x, e.max_y]}))
+}
+
+/// Control points from `[column, row, x, y, on?]` entries.
+fn gcps(p: &Value) -> Result<Vec<Gcp>, String> {
+    const SHAPE: &str = "each control point is [column, row, x, y] or [column, row, x, y, on]";
+    let a = p.get("points").and_then(Value::as_array).ok_or("points is required: [[column, row, x, y], …]")?;
+    if a.len() > georef::MAX_POINTS {
+        return Err(format!("a fit takes at most {} control points", georef::MAX_POINTS));
+    }
+    a.iter()
+        .map(|v| {
+            let e = v.as_array().filter(|e| e.len() == 4 || e.len() == 5).ok_or(SHAPE)?;
+            let num = |i: usize| e.get(i).and_then(Value::as_f64).filter(|x| x.is_finite()).ok_or(SHAPE);
+            let on = match e.get(4) {
+                None => true,
+                Some(Value::Bool(b)) => *b,
+                Some(v) => v.as_f64().ok_or(SHAPE)? != 0.0,
+            };
+            Ok(Gcp { col: num(0)?, row: num(1)?, x: num(2)?, y: num(3)?, on })
+        })
+        .collect()
+}
+
+fn pair(e: (f64, f64)) -> Value {
+    json!({"pixels": e.0, "map": e.1})
+}
+
+/// A report's errors (no per-point residuals).
+fn errors(r: &georef::Report) -> Value {
+    json!({
+        "transform": r.fit.kind.id(),
+        "used": r.used,
+        "minimum": r.minimum,
+        "rmse": pair(r.rmse),
+        "meanError": pair(r.mean_error),
+        "leaveOneOut": r.leave_one_out_rmse.map(pair),
+        "leaveOneOutNote": r.leave_one_out_note,
+    })
+}
+
+/// Fits a transform to control points and reports how well it holds: each point's residual in
+/// pixels and map units, the RMSE and QGIS's mean error, and each point's error when left out.
+fn gcp_fit(_: &mut Session, p: &Value) -> CmdResult {
+    let pts = gcps(p)?;
+    if b(p, "compare").unwrap_or(false) {
+        let (reports, best) = georef::compare(&pts);
+        if reports.iter().all(|(_, r)| r.is_err()) {
+            return Err("the points can't fix any transform: give at least two, not on top of each other".into());
+        }
+        let transforms: Vec<Value> = reports
+            .iter()
+            .map(|(k, r)| match r {
+                Ok(r) => errors(r),
+                Err(e) => json!({"transform": k.id(), "error": e}),
+            })
+            .collect();
+        return Ok(json!({"recommended": best.map(Kind::id), "transforms": transforms}));
+    }
+    let kind = match ps(p, "transform") {
+        Some(t) => Kind::parse(t).ok_or_else(|| format!("unknown transform '{t}'"))?,
+        None if pts.iter().filter(|g| g.on).count() < 3 => Kind::Similarity,
+        None => Kind::Affine,
+    };
+    let r = georef::assess(kind, &pts, b(p, "leaveOneOut").unwrap_or(true))?;
+    let mut out = errors(&r);
+    out["residuals"] = r
+        .residuals
+        .iter()
+        .enumerate()
+        .map(|(i, res)| {
+            let left_out = r.leave_one_out.as_ref().and_then(|l| l.get(i).copied().flatten());
+            res.map_or(
+                Value::Null,
+                |x| json!({"pixels": [x.pixels.0, x.pixels.1], "map": [x.map.0, x.map.1], "leaveOneOut": left_out.map(pair)}),
+            )
+        })
+        .collect();
+    out["affine"] = json!(r.fit.affine());
+    Ok(out)
 }
 
 fn change(s: &mut Session, p: &Value) -> CmdResult {

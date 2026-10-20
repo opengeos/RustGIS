@@ -137,6 +137,11 @@ it unchanged.
 
 ## Labeling
 
+The **Labeling pane** has every setting below in one place, for the selected layer: right-click a
+feature layer in the Layers pane › **Labeling Properties…**, or View › Windows › **Labeling**, or
+Style › Labels › **Properties**. It runs the same commands as the ribbon, so each change undoes on
+its own (a dragged size or a colour pick is one step).
+
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Label field and text**: the field the labels show
