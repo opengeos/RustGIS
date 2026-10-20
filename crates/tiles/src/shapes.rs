@@ -24,6 +24,10 @@ use crate::template;
 /// The width of a fill's outline, points (as [`draw`](crate::draw::draw) strokes it).
 pub const OUTLINE_WIDTH: f32 = 0.75;
 
+/// The most lengths a dash pattern drawn from [`shapes`] has, an odd count repeated once over
+/// (as tiny-skia draws it): a style showing a longer one is declined.
+pub const MAX_DASHES: usize = 4;
+
 /// The data tiles of a style's vector source over a view.
 pub struct VectorTiles {
     /// The resolved style ([`shapes`] reads its layers).
@@ -81,6 +85,11 @@ fn drawn_source(r: &Resolved, zoom: f32) -> Option<String> {
             // Lines painted with a pattern aren't drawn (see `draw::drawable`).
             LayerKind::Line if l.has_paint("line-pattern") => {}
             LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
+                if let Some(d) = l.line_dasharray(&FeatureCtx::zoom_only(zoom))
+                    && d.len() * (1 + d.len() % 2) > MAX_DASHES
+                {
+                    return None;
+                }
                 let id = l.source.as_deref()?;
                 if !r.style.sources.iter().any(|(s, src)| s == id && matches!(src, Source::Vector { .. })) {
                     return None;
@@ -399,6 +408,17 @@ mod tests {
             matches!(&runs[0].shapes[0].paint, Paint::Fill { pattern: Some(p), color } if p == "dots" && (color[0][3] - 0.8).abs() < 1e-3)
         );
         assert!(runs.iter().all(|r| r.layer != 1), "line patterns aren't drawn");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn styles_with_long_dash_patterns_are_declined() {
+        // Three lengths repeat to six: more than the meshes hold.
+        let style = STYLE.replace(r#""line-dasharray": [3, 2]"#, r#""line-dasharray": [3, 2, 1]"#);
+        let (spec, dir) = archive("dashes", &style);
+        ready(&spec);
+        let f = frame(2.5);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 

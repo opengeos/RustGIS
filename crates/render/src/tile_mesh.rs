@@ -72,18 +72,22 @@ fn premul(c: [f32; 4]) -> [u8; 4] {
 }
 
 /// A dash pattern as the vertex shader takes it: an odd count repeated once over (as in SVG,
-/// and as tiny-skia draws it), at most four lengths.
-fn dash_pattern(d: Option<&[f32]>) -> [f32; 4] {
-    let Some(d) = d.filter(|d| !d.is_empty()) else { return [0.0; 4] };
+/// and as tiny-skia draws it), at most four lengths; `None` for a longer one (see
+/// `rustgis_tiles::shapes::MAX_DASHES`, past which styles are drawn otherwise).
+pub fn dash_pattern(d: Option<&[f32]>) -> Option<[f32; 4]> {
+    let Some(d) = d.filter(|d| !d.is_empty()) else { return Some([0.0; 4]) };
     let mut v: Vec<f32> = d.to_vec();
     if v.len() % 2 == 1 {
         v.extend_from_slice(d);
+    }
+    if v.len() > 4 {
+        return None;
     }
     let mut out = [0.0; 4];
     for (o, x) in out.iter_mut().zip(v) {
         *o = x.max(0.0);
     }
-    if out.iter().sum::<f32>() <= 0.0 { [0.0; 4] } else { out }
+    Some(if out.iter().sum::<f32>() <= 0.0 { [0.0; 4] } else { out })
 }
 
 /// Tessellates `runs` of `tile` (a tile at zoom `z`) into one mesh, in map units from the
@@ -102,6 +106,9 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
             let geometry: Option<&[Vec<[f32; 2]>]> =
                 shape.feature.and_then(|(l, f)| tile.layers.get(l).and_then(|l| l.features.get(f))).map(|f| f.geometry.as_slice());
             match &shape.paint {
+                // A pattern isn't drawn yet: left out, as the CPU path leaves it out without the
+                // sprite, rather than drawn in the fill's colour.
+                Paint::Fill { pattern: Some(_), .. } => {}
                 Paint::Fill { color, .. } => {
                     let (c0, c1) = (premul(color[0]), premul(color[1]));
                     let vertex = |v: FillVertex| {
@@ -138,7 +145,9 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                         color: premul(color[0]),
                         color_next: premul(color[1]),
                         width: *width,
-                        dashes: dash_pattern(dashes.as_deref()),
+                        // Declined styles aside (`shapes::vector_tiles`), a feature's own longer
+                        // pattern is drawn solid rather than with the wrong dashes.
+                        dashes: dash_pattern(dashes.as_deref()).unwrap_or_default(),
                         ..TileVertex::default()
                     };
                     let options = StrokeOptions::default()
@@ -262,7 +271,9 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
-    {
+    // This call's tick: what it uses and makes is spared by its eviction, whatever other calls
+    // (another thread's) do meanwhile.
+    let tick = {
         let mut s = lock();
         s.tick += 1;
         let tick = s.tick;
@@ -282,7 +293,8 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
                 }
             }
         }
-    }
+        tick
+    };
     let make = |i: &usize| -> Option<Arc<TileMesh>> {
         let t = tiles.get(*i)?;
         let Payload::Vector(tile) = &*t.payload else { return None };
@@ -290,7 +302,6 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     };
     let made: Vec<Option<Arc<TileMesh>>> = parallel(&missing, make);
     let mut s = lock();
-    let tick = s.tick;
     for (&i, mesh) in missing.iter().zip(made) {
         let (Some(mesh), Some(t)) = (mesh, tiles.get(i)) else { continue };
         s.bytes += mesh.bytes();
@@ -303,7 +314,7 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
         }
     }
     if !missing.is_empty() {
-        evict(&mut s);
+        evict(&mut s, tick);
     }
     out
 }
@@ -337,14 +348,13 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
 }
 
 /// Drops the meshes of tiles and styles gone, and past the budget those unused longest (but
-/// never those of the latest call).
-fn evict(s: &mut Store) {
+/// never those of the call at `tick`).
+fn evict(s: &mut Store, tick: u64) {
     if s.bytes <= BUDGET {
         return;
     }
     s.entries.retain(|_, e| e.payload.strong_count() > 0 && e.style.strong_count() > 0);
     s.bytes = s.entries.values().map(|e| e.mesh.bytes()).sum();
-    let tick = s.tick;
     let mut old: Vec<(u64, Key, usize)> =
         s.entries.iter().filter(|(_, e)| e.used != tick).map(|(k, e)| (e.used, *k, e.mesh.bytes())).collect();
     old.sort_unstable_by_key(|o| o.0);
@@ -397,6 +407,8 @@ mod tests {
             run(3, 5.0, Some(2), Paint::Circle { color: RED, radius: [3.0, 3.0], stroke: Some((RED, [1.0, 1.0])) }),
         ];
         let m = tessellate(&tile(), &runs, 1);
+        let patterned = [run(1, 0.0, Some(0), Paint::Fill { color: RED, pattern: Some("dots".into()) })];
+        assert!(tessellate(&tile(), &patterned, 1).indices.is_empty(), "patterns aren't drawn yet");
         // The background and the fill show at the same zooms: one run; the line and circle another.
         assert_eq!(m.runs.len(), 2);
         assert_eq!(m.shown(4.0).count(), 1);
@@ -419,6 +431,16 @@ mod tests {
         // The circle: a disc of its diameter and a ring across its edge.
         let widths: Vec<[f32; 2]> = m.vertices.iter().filter(|v| v.dashes == [0.0; 4] && v.width != [0.0, 0.0]).map(|v| v.width).collect();
         assert!(widths.contains(&[6.0, 6.0]) && widths.contains(&[5.0, 5.0]) && widths.contains(&[7.0, 7.0]));
+    }
+
+    #[test]
+    fn dash_patterns_fit_four_lengths_or_none() {
+        assert_eq!(dash_pattern(None), Some([0.0; 4]));
+        assert_eq!(dash_pattern(Some(&[3.0])), Some([3.0, 3.0, 0.0, 0.0]));
+        assert_eq!(dash_pattern(Some(&[3.0, 1.0, 2.0, 1.0])), Some([3.0, 1.0, 2.0, 1.0]));
+        // Three repeat to six, and five to ten: too long, not cut short.
+        assert_eq!(dash_pattern(Some(&[3.0, 2.0, 1.0])), None);
+        assert_eq!(dash_pattern(Some(&[1.0, 2.0, 3.0, 4.0, 5.0])), None);
     }
 
     #[test]
