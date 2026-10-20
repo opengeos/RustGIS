@@ -764,13 +764,13 @@ fn range_label(lo: f64, hi: f64) -> String {
 /// Compact number formatting for legends: 1.2M, 35K, 0.42.
 pub fn fmt_num(v: f64) -> String {
     let a = v.abs();
-    if a >= 1e9 {
+    if (a / 1e5).round() >= 10_000.0 {
         format!("{:.1}B", v / 1e9)
-    } else if a >= 1e6 {
+    } else if (a / 1e3).round() >= 1_000.0 {
         format!("{:.1}M", v / 1e6)
-    } else if a >= 1e4 {
+    } else if a.round() >= 1e4 {
         format!("{:.0}K", v / 1e3)
-    } else if a >= 100.0 || v.fract() == 0.0 {
+    } else if (a * 100.0).round() >= 10_000.0 || v.fract() == 0.0 {
         format!("{v:.0}")
     } else {
         format!("{v:.2}")
@@ -999,6 +999,23 @@ mod tests {
     use super::*;
     use rustgis_data::{Field, Value};
 
+    #[test]
+    fn fmt_num_switches_form_when_it_rounds_up() {
+        assert_eq!(fmt_num(0.42), "0.42");
+        assert_eq!(fmt_num(42.0), "42");
+        assert_eq!(fmt_num(99.994), "99.99");
+        assert_eq!(fmt_num(99.996), "100");
+        assert_eq!(fmt_num(9_999.4), "9999");
+        assert_eq!(fmt_num(9_999.6), "10K");
+        assert_eq!(fmt_num(35_000.0), "35K");
+        assert_eq!(fmt_num(999_400.0), "999K");
+        assert_eq!(fmt_num(999_600.0), "1.0M");
+        assert_eq!(fmt_num(1_000_000.0), "1.0M");
+        assert_eq!(fmt_num(1_234_567.0), "1.2M");
+        assert_eq!(fmt_num(999_940_000.0), "999.9M");
+        assert_eq!(fmt_num(999_960_000.0), "1.0B");
+        assert_eq!(fmt_num(-999_600.0), "-1.0M");
+    }
     #[test]
     fn the_legend_lists_only_classes_kept_features_have() {
         let mut d = Dataset::new("t", GeometryType::Polygon, vec![Field::new("g", FieldType::Text)]);
