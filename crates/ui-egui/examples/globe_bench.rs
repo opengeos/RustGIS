@@ -7,7 +7,8 @@ use serde_json::json;
 
 type H<'a> = egui_kittest::Harness<'a, RustGisApp>;
 
-fn settle(h: &mut H<'_>) {
+/// Steps until the map is drawn and every tile has arrived; false if that took over a minute.
+fn settle(h: &mut H<'_>) -> bool {
     let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
     for _ in 0..40 {
         h.step();
@@ -18,6 +19,7 @@ fn settle(h: &mut H<'_>) {
         std::thread::sleep(std::time::Duration::from_millis(5));
         h.step();
     }
+    !(h.state().map.drawing() || rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache::in_flight() > 0)
 }
 
 /// Drags and zooms, returning each frame's time (ms).
@@ -124,7 +126,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 h.step();
             }
             worst = worst.max(report(&format!("{name} gpu={gpu} cold"), navigate(&mut h)));
-            settle(&mut h);
+            if !settle(&mut h) {
+                return Err(format!("{name}: the map didn't settle within a minute (a slow network?)").into());
+            }
             worst = worst.max(report(&format!("{name} gpu={gpu} warm"), navigate(&mut h)));
         }
     }

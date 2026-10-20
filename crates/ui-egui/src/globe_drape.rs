@@ -99,6 +99,8 @@ pub(crate) struct GlobeDrape {
     /// The drape being drawn again on a worker.
     #[cfg(not(target_arch = "wasm32"))]
     job: Option<Job>,
+    /// The map a drape couldn't be drawn for on the worker.
+    failed: Option<DrapeKey>,
 }
 
 impl GlobeDrape {
@@ -107,6 +109,7 @@ impl GlobeDrape {
         self.drape = None;
         self.sprites = None;
         self.stars = None;
+        self.failed = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.job = None;
@@ -123,7 +126,7 @@ impl GlobeDrape {
     /// in the browser (no threads), is drawn at once.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey, tiles: u64, w: f64, h: f64, ppp: f32, time: f64) -> bool {
-        self.finish(ctx, map);
+        self.finish(ctx, map, key);
         let g = Globe::new(&map.camera, w, h);
         // A screen's worth of detail: at most one point per pixel, so a dense screen keeps the
         // drawing cheap (the settled frame is sharp).
@@ -138,7 +141,8 @@ impl GlobeDrape {
                 && (!d.pending || d.tiles == tiles || time - d.built < TILE_REFRESH)
                 && g.drape_covers(w, h, &boxes)
         });
-        if fresh || self.busy() {
+        // A drape that couldn't be drawn for this key isn't tried again: the old one stays.
+        if fresh || self.busy() || self.failed == Some(key) {
             return self.drape.is_some();
         }
         // Zooming out: coarser and wider, so the next steps out are covered too.
@@ -161,6 +165,8 @@ impl GlobeDrape {
                 if let Ok(done) = std::panic::catch_unwind(work) {
                     let _ = tx.send(done);
                 }
+                // Closed before the wake-up, so the frame it wakes finds the answer either way.
+                drop(tx);
                 ctx2.request_repaint();
             });
             if spawned.is_ok() {
@@ -173,7 +179,7 @@ impl GlobeDrape {
     }
 
     /// Whether a drape is being drawn on a worker.
-    fn busy(&self) -> bool {
+    pub fn busy(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         return self.job.is_some();
         #[cfg(target_arch = "wasm32")]
@@ -181,22 +187,23 @@ impl GlobeDrape {
     }
 
     /// Puts the drape the worker finished on the globe, if it has, keeping the caches its copy
-    /// of `map` filled.
+    /// of `map` filled. One drawn for an older `key` (the map changed meanwhile) is dropped, so
+    /// the next drawn shows the change.
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
-    fn finish(&mut self, ctx: &egui::Context, map: &mut Map) {
+    fn finish(&mut self, ctx: &egui::Context, map: &mut Map, key: DrapeKey) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some((_, rx)) = &self.job else { return };
             match rx.try_recv() {
                 Ok((pictures, copy)) => {
                     map.adopt_caches(&copy);
-                    if let Some((meta, _)) = self.job.take() {
+                    if let Some((meta, _)) = self.job.take().filter(|(m, _)| m.key == key) {
                         self.install(ctx, meta, pictures);
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                // The worker ended without a drape: the old one stays, and the next frame tries again.
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.job = None,
+                // The worker ended without a drape (it panicked): the old one stays.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.failed = self.job.take().map(|(m, _)| m.key),
             }
         }
     }
@@ -353,7 +360,7 @@ mod tests {
         while d.busy() {
             assert!(std::time::Instant::now() < end, "the drape never came");
             std::thread::sleep(std::time::Duration::from_millis(2));
-            d.finish(ctx, m);
+            d.finish(ctx, m, key);
         }
         shown
     }
@@ -496,5 +503,28 @@ mod tests {
         d.prepare_sprites(&ctx, &m);
         assert_eq!(d.sprites.as_ref().map(|s| s.under.id()), id);
         assert!(id.is_some());
+    }
+
+    #[test]
+    fn a_drape_drawn_for_an_older_map_is_dropped() {
+        let ctx = egui::Context::default();
+        let mut m = globe(10.0, 5_000.0);
+        let mut d = GlobeDrape::default();
+        let old = DrapeKey { rev: 0, sources: 0 };
+        assert!(d.prepare(&ctx, &mut m, old, 0, 800.0, 600.0, 1.0, 0.0));
+        // The map changes while a redraw for the old one is on the worker.
+        m.camera.center = lonlat_to_merc(Coord::new(80.0, 0.0));
+        assert!(d.prepare(&ctx, &mut m, old, 0, 800.0, 600.0, 1.0, 1.0));
+        let new = DrapeKey { rev: 1, sources: 0 };
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while d.busy() {
+            assert!(std::time::Instant::now() < end, "the drape never came");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            d.finish(&ctx, &mut m, new);
+        }
+        assert!(d.drape.as_ref().is_some_and(|d| d.built == 0.0), "the old map's redraw was put on the globe");
+        // The next drawn is the new map's.
+        assert!(prepare_now(&mut d, &ctx, &mut m, new, 0, (800.0, 600.0), 2.0));
+        assert!(d.drape.as_ref().is_some_and(|d| d.key == new && d.built == 2.0));
     }
 }

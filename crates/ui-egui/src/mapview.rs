@@ -251,7 +251,7 @@ impl MapView {
     /// Whether an exact frame is being composed off the UI thread, or the frame shown waits for
     /// tile pictures still to be drawn.
     pub fn drawing(&self) -> bool {
-        self.tilt_settle.busy() || self.filling
+        self.tilt_settle.busy() || self.filling || self.drape.busy()
     }
 
     /// egui's wgpu render state from the host (`frame.wgpu_render_state()`), for the GPU map
