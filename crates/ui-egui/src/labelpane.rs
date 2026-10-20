@@ -36,16 +36,18 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(6.0);
     let mut on = l.labels.enabled;
     if ui.checkbox(&mut on, tl!("Label features in this layer")).changed() {
-        run(app, "labels.enable", json!({"layer": l.id, "on": on}));
+        run(app, "labels.enable", json!({"on": on}));
     }
     class(app, ui, &l, t);
     text_symbol(app, ui, &l);
     position(app, ui, &l);
     visibility(app, ui, &l);
-    map_labeling(app, ui, &l);
+    map_labeling(app, ui);
 }
 
-/// Runs a label command from the pane; a refusal shows as a notice.
+/// Runs a label command from the pane on the active layer, the one it shows; a refusal shows as a
+/// notice. The commands don't name the layer, as the ribbon's don't: a step recorded from them
+/// (Record Task) then names it, so it replays on that layer by name (`RustGisApp::record_step`).
 fn run(app: &mut RustGisApp, id: &str, params: Value) {
     if let Err(e) = app.run(id, params) {
         app.session.notify(e, true);
@@ -68,7 +70,7 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             egui::ComboBox::from_id_salt("label_pane_field").selected_text(cur.as_str()).width(180.0).show_ui(ui, |ui| {
                 for f in &l.dataset.fields {
                     if ui.selectable_label(f.name == *cur, &f.name).clicked() {
-                        run(app, "labels.field", json!({"layer": l.id, "field": f.name}));
+                        run(app, "labels.field", json!({"field": f.name}));
                     }
                 }
             });
@@ -97,7 +99,7 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                         l.labels.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
                     }
                 },
-                |app, x| run(app, "labels.style", json!({"layer": id, "size": x})),
+                |app, x| run(app, "labels.style", json!({"size": x})),
             );
             ui.end_row();
             ui.label(tl!("Color"));
@@ -110,11 +112,11 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
             ui.horizontal(|ui| {
                 let mut bold = l.labels.bold;
                 if ui.checkbox(&mut bold, tl!("Bold")).changed() {
-                    run(app, "labels.style", json!({"layer": l.id, "bold": bold}));
+                    run(app, "labels.style", json!({"bold": bold}));
                 }
                 let mut halo = l.labels.halo;
                 if ui.checkbox(&mut halo, tl!("Halo")).changed() {
-                    run(app, "labels.style", json!({"layer": l.id, "halo": halo}));
+                    run(app, "labels.style", json!({"halo": halo}));
                 }
             });
             ui.end_row();
@@ -127,7 +129,7 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
         let cur = l.labels.placement;
         let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
             if ui.add_sized(vec2(92.0, 22.0), egui::Button::selectable(cur == pl, tl!(pl.label())).truncate()).clicked() && cur != pl {
-                run(app, "labels.placement", json!({"layer": l.id, "position": pl.code()}));
+                run(app, "labels.placement", json!({"position": pl.code()}));
             }
         };
         ui.horizontal(|ui| pick(app, ui, LabelPlacement::Auto));
@@ -154,7 +156,7 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                     .show_ui(ui, |ui| {
                         for c in std::iter::once(None).chain(crate::ribbon::SCALES.iter().map(|s| Some(*s))) {
                             if ui.selectable_label(c == cur, crate::ribbon::scale_label(c)).clicked() {
-                                run(app, "labels.scaleRange", json!({"layer": l.id, key: c}));
+                                run(app, "labels.scaleRange", json!({key: c}));
                             }
                         }
                     });
@@ -166,7 +168,7 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 egui::ComboBox::from_id_salt(("label_pane_distance", key)).selected_text(text(cur)).width(140.0).show_ui(ui, |ui| {
                     for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
                         if ui.selectable_label(d == cur, text(d)).clicked() {
-                            run(app, "labels.distanceRange", json!({"layer": l.id, key: d}));
+                            run(app, "labels.distanceRange", json!({key: d}));
                         }
                     }
                 });
@@ -179,13 +181,13 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
             .on_hover_text(tl!("Draw labels at every scale and distance."))
             .clicked()
         {
-            run(app, "labels.scaleRange", json!({"layer": l.id, "clear": true}));
+            run(app, "labels.scaleRange", json!({"clear": true}));
         }
     });
 }
 
 /// The settings for every layer's labels on the map, and turning this layer's into annotation.
-fn map_labeling(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+fn map_labeling(app: &mut RustGisApp, ui: &mut Ui) {
     section(ui, "Map Labeling", |ui| {
         let d = app.session.map().label_display;
         for (label, desc, id, cur) in [
@@ -200,7 +202,7 @@ fn map_labeling(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
         }
         ui.add_space(4.0);
         if ui.button(tl!("Convert to Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked() {
-            run(app, "labels.convert", json!({"layer": l.id}));
+            run(app, "labels.convert", json!({}));
         }
     });
 }
@@ -249,7 +251,14 @@ pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
     layer.labels.color = drag.before;
     if drag.before != drag.color {
-        run(app, "labels.style", json!({"layer": drag.layer, "color": drag.color.hex()}));
+        // On the active layer, which the pick was made on, so a recorded step names it (as
+        // the pane's other commands do); by id only if the selection changed meanwhile.
+        let p = if app.session.active_layer == Some(drag.layer) {
+            json!({"color": drag.color.hex()})
+        } else {
+            json!({"layer": drag.layer, "color": drag.color.hex()})
+        };
+        run(app, "labels.style", p);
     }
 }
 
@@ -339,6 +348,27 @@ mod tests {
         let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap();
         assert_eq!(l.labels.bold, before.bold, "undo takes back the last change only");
         assert_eq!(l.labels.placement, rustgis_engine::map::LabelPlacement::BelowRight);
+    }
+
+    /// Record Task names the layer in a step made from the pane, as it does for the ribbon, so the
+    /// step replays on that layer by name (#617 review).
+    #[test]
+    fn a_step_recorded_from_the_pane_names_the_layer() {
+        let mut app = with_cities();
+        app.ws.recording = Some(Vec::new());
+        let mut h = harness(app);
+        h.run();
+        h.get_by_label("Below Right").click();
+        h.run();
+        h.get_by_label("Bold").click();
+        h.run();
+        let steps = h.state().ws.recording.clone().unwrap();
+        let recorded: Vec<(&str, Option<&serde_json::Value>)> = steps.iter().map(|s| (s.command.as_str(), s.params.get("layer"))).collect();
+        assert_eq!(
+            recorded,
+            [("labels.placement", Some(&json!("Cities"))), ("labels.style", Some(&json!("Cities")))],
+            "each step names the layer, not its id"
+        );
     }
 
     #[test]
