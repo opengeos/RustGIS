@@ -161,7 +161,8 @@ pub struct TileVertex {
     pub color_next: [u8; 4],
     /// Points, at the level and at the level above.
     pub width: [f32; 2],
-    /// Map units along its line from where the line starts (dashes are laid along it).
+    /// Map units along its line from where the line starts (dashes are laid along it; the
+    /// shader takes it to pixels, as it takes `dashes` from widths).
     pub along: f32,
     /// A dashed line's dash and gap lengths, in widths; all zero for a solid one.
     pub dashes: [f32; 4],
@@ -182,4 +183,23 @@ pub struct PointInstance {
     pub radius_px: f32,
     /// `rustgis_map::Marker` as u32 (0 Circle, 1 Square, 2 Triangle, 3 Diamond, 4 Star).
     pub shape: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layout a vertex buffer of tile meshes reads (see `ui-egui`'s `mapgpu`).
+    #[test]
+    fn tile_vertices_are_laid_out_for_the_gpu() {
+        assert_eq!(std::mem::size_of::<TileVertex>(), 52);
+        let v = TileVertex::default();
+        let at = |f: *const u8| f as usize - (&v as *const TileVertex as usize);
+        assert_eq!(at(v.normal.as_ptr().cast()), 8);
+        assert_eq!(at(v.color.as_ptr()), 16);
+        assert_eq!(at(v.color_next.as_ptr()), 20);
+        assert_eq!(at(v.width.as_ptr().cast()), 24);
+        assert_eq!(at((&v.along as *const f32).cast()), 32);
+        assert_eq!(at(v.dashes.as_ptr().cast()), 36);
+    }
 }

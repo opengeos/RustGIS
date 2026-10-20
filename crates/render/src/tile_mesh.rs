@@ -31,6 +31,11 @@ const TOLERANCE: f32 = 0.02;
 /// Segments of a circle's rim.
 const RIM: usize = 16;
 
+/// The most vertices a tile's mesh holds (Liberty's densest tiles take about a tenth): the
+/// shapes past them are left out, so a hostile tile can't take the memory, and its indices stay
+/// far within `u32`.
+const MAX_VERTICES: usize = 2 << 20;
+
 /// The most mesh memory kept, bytes.
 const BUDGET: usize = if cfg!(target_arch = "wasm32") { 128 << 20 } else { 512 << 20 };
 
@@ -107,6 +112,9 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
         // Indices are u32: a tile past them (none is, but tiles are hostile) stops there.
         let Ok(first) = u32::try_from(out.indices.len()) else { break };
         for shape in &run.shapes {
+            if out.vertices.len() >= MAX_VERTICES {
+                break;
+            }
             let geometry: Option<&[Vec<[f32; 2]>]> =
                 shape.feature.and_then(|(l, f)| tile.layers.get(l).and_then(|l| l.features.get(f))).map(|f| f.geometry.as_slice());
             match &shape.paint {
@@ -459,6 +467,19 @@ mod tests {
         // The circle: a disc of its diameter and a ring across its edge.
         let widths: Vec<[f32; 2]> = m.vertices.iter().filter(|v| v.dashes == [0.0; 4] && v.width != [0.0, 0.0]).map(|v| v.width).collect();
         assert!(widths.contains(&[6.0, 6.0]) && widths.contains(&[5.0, 5.0]) && widths.contains(&[7.0, 7.0]));
+    }
+
+    #[test]
+    fn a_tile_holds_so_many_vertices() {
+        let points = vec![(0..10_000).map(|i| [i as f32 % 4096.0, (i / 4096) as f32]).collect::<Vec<_>>()];
+        let mut t = tile();
+        t.layers[0].features[2].geometry = points;
+        let dots = Paint::Circle { color: RED, radius: [1.0, 1.0], stroke: None };
+        let runs: Vec<Run> = (0..20).map(|l| run(l, 0.0, Some(2), dots.clone())).collect();
+        // 200,000 circles of 17 vertices: stopped at the cap, give or take a shape.
+        let m = tessellate(&t, &runs, 1);
+        assert!(m.vertices.len() >= MAX_VERTICES && m.vertices.len() < MAX_VERTICES + 10_000 * (RIM + 1));
+        assert!(m.indices.iter().all(|&i| (i as usize) < m.vertices.len()));
     }
 
     #[test]
