@@ -1305,7 +1305,7 @@ fn label_size_stays_within_what_text_symbol_shows() {
     // Style › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
     // anything outside is brought back to the nearest end.
     let mut s = world();
-    let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.size));
+    let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.default.size));
     for (given, kept) in [(72.0, 72.0), (100.0, 72.0), (1.0, 4.0)] {
         s.run("labels.style", &json!({"layer": "Countries", "size": given})).unwrap();
         assert_eq!(size(&s), Some(kept), "size {given}");
@@ -1348,7 +1348,7 @@ fn label_range_placement_lock_and_convert() {
     s.run("labels.viewUnplaced", &json!({"on": false})).unwrap();
     // Placement moves labels.
     s.run("labels.placement", &json!({"layer": "Cities", "position": "right"})).unwrap();
-    assert_eq!(s.map().layer_by_name("Cities").unwrap().labels.placement, crate::map::LabelPlacement::Right);
+    assert_eq!(s.map().layer_by_name("Cities").unwrap().labels.default.placement, crate::map::LabelPlacement::Right);
     assert!(s.run("labels.placement", &json!({"position": "sideways"})).is_err());
     // Lock keeps the labelled set as the map moves.
     s.run("labels.lock", &json!({"on": true})).unwrap();
@@ -1363,8 +1363,100 @@ fn label_range_placement_lock_and_convert() {
     let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
     assert!(r["annotations"].as_u64().unwrap() > 100);
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
-    assert!(a.labels.enabled && a.labels.field == "TEXT");
+    assert!(a.labels.enabled && a.labels.default.field == "TEXT");
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
+}
+
+/// Label classes by command (#618): added from Default and checked before it, renamed, given
+/// a clause, moved, styled and removed; refusals change nothing, and Default stays last.
+#[test]
+fn label_classes_by_command() {
+    use crate::map::LabelPlacement;
+    let mut s = world();
+    let cities = s.map().layer_by_name("Cities").unwrap().id;
+    s.run("layer.select", &json!({"layer": cities})).unwrap();
+    let labels = |s: &Session| s.map().layer(cities).unwrap().labels.clone();
+    let order = |s: &Session| labels(s).in_order().map(|c| c.name.clone()).collect::<Vec<_>>();
+    assert_eq!(s.run("labels.class.add", &json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap()["class"], "Big");
+    s.run("labels.class.add", &json!({"name": " Medium ", "where": "pop_max > 1000000"})).unwrap();
+    assert_eq!(order(&s), ["Big", "Medium", "Default"]);
+    let l = labels(&s);
+    assert_eq!((l.classes[0].size, l.classes[0].field.as_str()), (l.default.size, l.default.field.as_str()), "a class starts as Default");
+    for bad in [
+        json!({"name": "big"}),
+        json!({"name": "default"}),
+        json!({"name": "  "}),
+        json!({"name": "X", "where": "(("}),
+        json!({"name": "X", "where": "nope = 1"}),
+        json!({"name": "X", "where": 5}),
+        json!({"name": "X", "from": "Nope"}),
+    ] {
+        assert!(s.run("labels.class.add", &bad).is_err(), "{bad}");
+    }
+    assert!(s.run("labels.class.remove", &json!({"class": "Default"})).is_err(), "Default stays");
+    assert!(s.run("labels.class.move", &json!({"class": "Default", "to": 0})).is_err(), "and stays last");
+    assert!(s.run("labels.class.rename", &json!({"class": "Big", "name": "medium"})).is_err());
+    assert!(s.run("labels.class.update", &json!({"class": "Big", "where": "(("})).is_err());
+    assert!(s.run("labels.style", &json!({"class": "Nope", "size": 30})).is_err());
+    assert_eq!(labels(&s), l, "refusals change nothing");
+    // The labels.* commands change the class named, Default when none is.
+    s.run("labels.style", &json!({"class": "big", "size": 20, "bold": true})).unwrap();
+    s.run("labels.placement", &json!({"class": "Big", "position": "right"})).unwrap();
+    s.run("labels.scaleRange", &json!({"class": "Medium", "min": 10000000})).unwrap();
+    s.run("labels.field", &json!({"class": "Medium", "field": "pop_max"})).unwrap();
+    let l = labels(&s);
+    assert_eq!((l.classes[0].size, l.classes[0].bold, l.classes[0].placement), (20.0, true, LabelPlacement::Right));
+    assert_eq!((l.classes[1].min_scale, l.classes[1].field.as_str()), (Some(10_000_000.0), "pop_max"));
+    assert!(l.default.size < 20.0 && l.default.field == "name", "Default is left as it was");
+    // Renamed (Default too), moved, its clause cleared, hidden; each one undo step.
+    s.run("labels.class.rename", &json!({"class": "Medium", "name": "Large"})).unwrap();
+    s.run("labels.class.move", &json!({"class": "Large", "to": 0})).unwrap();
+    s.run("labels.class.update", &json!({"class": "Big", "where": null, "visible": false})).unwrap();
+    s.run("labels.class.rename", &json!({"class": "Default", "name": "Other"})).unwrap();
+    assert_eq!(order(&s), ["Large", "Big", "Other"]);
+    let l = labels(&s);
+    assert_eq!((l.classes[1].where_.as_deref(), l.classes[1].visible), (None, false));
+    s.run("edit.undo", &json!(null)).unwrap();
+    assert_eq!(order(&s), ["Large", "Big", "Default"]);
+    let info = s.run("info.project", &json!(null)).unwrap().to_string();
+    assert!(info.contains("labelClasses") && info.contains("Large"), "info.project lists the classes");
+    s.run("labels.class.remove", &json!({"class": "big"})).unwrap();
+    assert_eq!(order(&s), ["Large", "Default"]);
+    // Clear removes the rest, Default kept; again, with none left, it is no error (a script
+    // that starts with it runs again).
+    assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 1);
+    assert_eq!(order(&s), ["Default"]);
+    assert_eq!(s.run("labels.class.clear", &json!({})).unwrap()["removed"], 0);
+}
+
+/// Converting labels with classes keeps each class's features apart: the annotation has the same
+/// classes, picking their points by a CLASS field (#618). Deleting a field a class labels with
+/// moves it to another field and keeps the class.
+#[test]
+fn label_classes_convert_and_outlive_a_deleted_field() {
+    let mut s = world();
+    let cities = s.map().layer_by_name("Cities").unwrap().id;
+    s.run("layer.select", &json!({"layer": cities})).unwrap();
+    s.run("labels.enable", &json!({"on": true})).unwrap();
+    s.run("labels.class.add", &json!({"name": "Big's", "where": "pop_max > 5000000"})).unwrap();
+    s.run("labels.style", &json!({"class": "Big's", "size": 18})).unwrap();
+    let big = rustgis_data::query::select("pop_max > 5000000", &s.map().layer(cities).unwrap().dataset).unwrap().len();
+    assert!(big > 0);
+    let r = s.run("labels.convert", &json!({})).unwrap();
+    let a = s.map().layer(u32::try_from(r["layer"].as_u64().unwrap()).unwrap()).unwrap();
+    let classes: Vec<_> = a.labels.in_order().map(|c| (c.name.clone(), c.where_.clone(), c.field.clone(), c.size)).collect();
+    assert_eq!(classes[0], ("Big's".to_string(), Some(r#""CLASS" = 'Big''s'"#.to_string()), "TEXT".to_string(), 18.0));
+    assert_eq!((classes[1].1.as_ref(), classes[1].2.as_str()), (None, "TEXT"), "Default takes the rest");
+    let picked = rustgis_data::query::select(classes[0].1.as_deref().unwrap(), &a.dataset).unwrap().len();
+    assert_eq!(picked, big, "the class's clause picks the points it labelled");
+    // A deleted field: the class labels with Default's field, and is kept.
+    s.run("layer.select", &json!({"layer": cities})).unwrap();
+    s.run("labels.field", &json!({"class": "Big's", "field": "pop_max"})).unwrap();
+    s.run("edit.deleteField", &json!({"layer": cities, "field": "pop_max"})).unwrap();
+    let l = &s.map().layer(cities).unwrap().labels;
+    assert_eq!(l.classes.len(), 1);
+    assert_eq!(l.classes[0].field, l.default.field);
+    assert!(l.default.field != "pop_max");
 }
 
 #[test]
@@ -4316,7 +4408,7 @@ fn web_style_carries_the_layers_scale_limits_as_zooms() {
     l.min_scale = Some(5_000_000.0);
     l.max_scale = Some(100_000.0);
     l.labels.enabled = true;
-    l.labels.field = "name".into();
+    l.labels.default.field = "name".into();
     let z = zooms(&s);
     // The label layer is limited like the symbols.
     assert!(z.len() >= 2, "{z:?}");
@@ -9488,8 +9580,8 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             s.run("layer.symbology", &json!({"layer":layer, "type":renderer, "field":"value"})).unwrap();
             let l = s.map_mut().layer_mut(layer).unwrap();
             l.labels.enabled = true;
-            l.labels.field = "name".into();
-            l.labels.size = 19.;
+            l.labels.default.field = "name".into();
+            l.labels.default.size = 19.;
             l.definition_query = Some("value > 0".into());
             l.display_filters = ["value > 0", "keep = 1"]
                 .map(|q| rustgis_map::effects::DisplayFilter { name: q.into(), min_scale: None, max_scale: None, where_: q.into() })
@@ -9510,8 +9602,8 @@ fn ogc_refresh_reconciles_fields_and_preserves_compatible_settings() {
             let l = s.map().layer(layer).unwrap();
             assert!(matches!(l.renderer, rustgis_map::Renderer::Single(_)));
             assert!(!l.labels.enabled);
-            assert!(l.labels.field.is_empty());
-            assert_eq!(l.labels.size, 19.);
+            assert!(l.labels.default.field.is_empty());
+            assert_eq!(l.labels.default.size, 19.);
             assert!(l.definition_query.is_none());
             assert_eq!(l.display_filters.len(), 1);
             assert_eq!(l.display_filters[0].where_, "keep = 1");

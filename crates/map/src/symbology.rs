@@ -852,10 +852,40 @@ fn jenks(sorted: &[f64], k: usize) -> Vec<f64> {
 /// The label sizes `labels.style` accepts, in points (Style › Text Symbol).
 pub const LABEL_SIZE: std::ops::RangeInclusive<f64> = 4.0..=72.0;
 
-/// Label settings for a layer.
+/// The most label classes a layer keeps besides its Default class.
+pub const MAX_LABEL_CLASSES: usize = 64;
+
+/// The name the Default class goes by until it is renamed.
+pub const DEFAULT_LABEL_CLASS: &str = "Default";
+
+/// Label settings for a layer: on or off, and its label classes (#618). A feature is labelled by
+/// the first of `classes` whose SQL clause it matches, else by `default`, which is checked last
+/// (the rest of the features). Saved as before: the Default class's settings sit beside `enabled`
+/// and the other classes are listed only when there are any, so a project without them keeps
+/// its old form.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Labeling {
     pub enabled: bool,
+    #[serde(flatten)]
+    pub default: LabelClass,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<LabelClass>,
+}
+
+/// One class of a layer's labels: the features it labels, the field it labels them with, its text
+/// symbol, placement and visibility range.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LabelClass {
+    #[serde(default = "default_class_name", skip_serializing_if = "is_default_class_name")]
+    pub name: String,
+    /// A hidden class draws none of its features (they don't go on to the next class).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub visible: bool,
+    /// The SQL `WHERE` clause choosing its features (the definition query's language); none, or
+    /// blank, takes every feature that reaches it. One that no longer reads (a field since
+    /// removed) takes none, and they go on to the next class.
+    #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+    pub where_: Option<String>,
     pub field: String,
     pub size: f32,
     pub color: Rgba,
@@ -876,6 +906,22 @@ pub struct Labeling {
     /// Where a label sits relative to its feature.
     #[serde(default)]
     pub placement: LabelPlacement,
+}
+
+fn default_class_name() -> String {
+    DEFAULT_LABEL_CLASS.into()
+}
+
+fn is_default_class_name(n: &str) -> bool {
+    n == DEFAULT_LABEL_CLASS
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(b: &bool) -> bool {
+    *b
 }
 
 /// Where labels sit relative to their feature's label point.
@@ -959,17 +1005,9 @@ impl LabelPlacement {
     }
 }
 
-impl Labeling {
-    /// Whether labels draw at a scale denominator and viewing distance (metres).
-    pub fn in_range(&self, scale: f64, distance: f64) -> bool {
-        self.min_scale.is_none_or(|m| scale <= m)
-            && self.max_scale.is_none_or(|m| scale >= m)
-            && self.closest.is_none_or(|d| distance >= d)
-            && self.farthest.is_none_or(|d| distance <= d)
-    }
-
-    /// Off, on the first text field that looks like a name.
-    pub fn default_for(ds: &Dataset) -> Labeling {
+impl LabelClass {
+    /// The Default class: on the first text field that looks like a name.
+    pub fn default_for(ds: &Dataset) -> LabelClass {
         let field = ds
             .fields
             .iter()
@@ -978,8 +1016,10 @@ impl Labeling {
             .or_else(|| ds.fields.first())
             .map(|f| f.name.clone())
             .unwrap_or_default();
-        Labeling {
-            enabled: false,
+        LabelClass {
+            name: default_class_name(),
+            visible: true,
+            where_: None,
             field,
             size: 10.0,
             color: Rgba::rgb(0x2B, 0x2B, 0x2B),
@@ -992,12 +1032,149 @@ impl Labeling {
             placement: LabelPlacement::Auto,
         }
     }
+
+    /// Whether labels draw at a scale denominator and viewing distance (metres).
+    pub fn in_range(&self, scale: f64, distance: f64) -> bool {
+        self.min_scale.is_none_or(|m| scale <= m)
+            && self.max_scale.is_none_or(|m| scale >= m)
+            && self.closest.is_none_or(|d| distance >= d)
+            && self.farthest.is_none_or(|d| distance <= d)
+    }
+
+    /// Its clause, read against `ds`: `Some(None)` takes every feature, `Some(Some(e))` those
+    /// matching `e`, and `None` (a clause that doesn't read) takes none.
+    pub fn query(&self, ds: &Dataset) -> Option<Option<rustgis_data::query::Expr>> {
+        match self.where_.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+            None => Some(None),
+            Some(w) => rustgis_data::query::parse(w, ds).ok().map(Some),
+        }
+    }
+}
+
+/// A layer's label classes read against its data, in the order a feature is matched: the class
+/// labelling a row is the first whose clause takes it.
+pub struct LabelMatcher<'a> {
+    classes: Vec<(&'a LabelClass, Option<Option<rustgis_data::query::Expr>>)>,
+}
+
+impl<'a> LabelMatcher<'a> {
+    pub fn new(labels: &'a Labeling, ds: &Dataset) -> Self {
+        LabelMatcher { classes: labels.in_order().map(|c| (c, c.query(ds))).collect() }
+    }
+
+    /// The class `row` belongs to, and its place in `Labeling::in_order`; none when no class
+    /// takes it.
+    pub fn class_of(&self, ds: &Dataset, row: usize) -> Option<(usize, &'a LabelClass)> {
+        self.classes.iter().enumerate().find_map(|(i, (c, q))| match q {
+            Some(None) => Some((i, *c)),
+            Some(Some(e)) if rustgis_data::query::eval(e, ds, row) => Some((i, *c)),
+            _ => None,
+        })
+    }
+}
+
+impl Labeling {
+    /// The classes in the order a feature is matched: the listed ones, then Default. At most
+    /// `MAX_LABEL_CLASSES` of them count, whatever a project file holds, since every feature drawn
+    /// is matched against them.
+    pub fn in_order(&self) -> impl Iterator<Item = &LabelClass> {
+        self.classes.iter().take(MAX_LABEL_CLASSES).chain(std::iter::once(&self.default))
+    }
+
+    /// The class named `name` (ASCII case aside), Default included.
+    pub fn class(&self, name: &str) -> Option<&LabelClass> {
+        self.in_order().find(|c| c.name.eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// The class named `name` (ASCII case aside), Default included, to change.
+    pub fn class_mut(&mut self, name: &str) -> Option<&mut LabelClass> {
+        let name = name.trim();
+        if self.default.name.eq_ignore_ascii_case(name) {
+            return Some(&mut self.default);
+        }
+        self.classes.iter_mut().take(MAX_LABEL_CLASSES).find(|c| c.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Points every class on a field `ds` doesn't have at the Default class's field (a field
+    /// deleted, a style from another layer, a service's fields changed). The class is kept, with
+    /// its clause and text symbol.
+    pub fn repoint_missing_fields(&mut self, ds: &Dataset) {
+        let fallback = self.default.field.clone();
+        for c in self.classes.iter_mut().filter(|c| ds.field_index(&c.field).is_none()) {
+            c.field.clone_from(&fallback);
+        }
+    }
+
+    /// Off, on the first text field that looks like a name, with only its Default class.
+    pub fn default_for(ds: &Dataset) -> Labeling {
+        Labeling { enabled: false, default: LabelClass::default_for(ds), classes: Vec::new() }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustgis_data::{Field, Value};
+
+    /// Labels saved before label classes (#618) read as the Default class alone, and are written
+    /// back the same, so older versions still read a project without classes.
+    #[test]
+    fn labels_without_classes_keep_their_saved_form() {
+        let old = serde_json::json!({
+            "enabled": true, "field": "name", "size": 9.0, "color": [10, 20, 30, 255], "halo": false, "bold": true,
+            "min_scale": 500000.0, "max_scale": null, "closest": null, "farthest": null, "placement": "AboveRight"
+        });
+        let l: Labeling = serde_json::from_value(old.clone()).unwrap();
+        assert!(l.enabled && l.classes.is_empty());
+        assert_eq!((l.default.name.as_str(), l.default.visible, &l.default.where_), (DEFAULT_LABEL_CLASS, true, &None));
+        assert_eq!((l.default.field.as_str(), l.default.size, l.default.placement), ("name", 9.0, LabelPlacement::AboveRight));
+        assert_eq!(serde_json::to_value(&l).unwrap(), old);
+        // With classes, they are listed after the Default class's settings, and read back.
+        let mut with = l.clone();
+        with.classes.push(LabelClass { name: "Capitals".into(), where_: Some("capital = 1".into()), visible: false, ..l.default.clone() });
+        let v = serde_json::to_value(&with).unwrap();
+        assert_eq!(v["field"], "name");
+        assert_eq!(v["classes"][0]["where"], "capital = 1");
+        assert_eq!(serde_json::from_value::<Labeling>(v).unwrap(), with);
+    }
+
+    /// A project file can list any number of classes; only `MAX_LABEL_CLASSES` count. A class on
+    /// a field the data doesn't have is pointed at Default's, and kept.
+    #[test]
+    fn classes_are_bounded_and_follow_missing_fields() {
+        let ds = Dataset::new("t", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        let mut l = Labeling::default_for(&ds);
+        let class = |i: usize| LabelClass { name: format!("c{i}"), field: "gone".into(), ..LabelClass::default_for(&ds) };
+        l.classes = (0..MAX_LABEL_CLASSES + 5).map(class).collect();
+        assert_eq!(l.in_order().count(), MAX_LABEL_CLASSES + 1, "the counted classes, then Default");
+        assert_eq!(l.in_order().last().map(|c| c.name.as_str()), Some(DEFAULT_LABEL_CLASS));
+        assert!(l.class(&format!("c{}", MAX_LABEL_CLASSES + 1)).is_none() && l.class_mut("c70").is_none());
+        l.repoint_missing_fields(&ds);
+        assert!(l.classes.iter().all(|c| c.field == "name"));
+    }
+
+    #[test]
+    fn a_feature_takes_the_first_class_that_matches_and_default_last() {
+        let mut ds = Dataset::new("t", GeometryType::Point, vec![Field::new("pop", FieldType::Integer)]);
+        for pop in [5, 50, 500] {
+            ds.push(None, vec![Value::Int(pop)]);
+        }
+        let mut l = Labeling::default_for(&ds);
+        let class = |name: &str, w: &str| LabelClass { name: name.into(), where_: Some(w.into()), ..LabelClass::default_for(&ds) };
+        l.classes = vec![class("Big", "pop > 100"), class("Medium", "pop > 10"), class("Broken", "nope = 1")];
+        let m = LabelMatcher::new(&l, &ds);
+        let names: Vec<_> = (0..3).map(|r| m.class_of(&ds, r).map(|(i, c)| (i, c.name.clone()))).collect();
+        assert_eq!(
+            names,
+            [Some((3, "Default".to_string())), Some((1, "Medium".to_string())), Some((0, "Big".to_string()))],
+            "500 is Big before it is Medium; a clause that doesn't read takes nothing"
+        );
+        // A Default class with a clause leaves the rest unlabelled.
+        l.default.where_ = Some("pop = 50".into());
+        let m = LabelMatcher::new(&l, &ds);
+        assert!(m.class_of(&ds, 0).is_none());
+        assert_eq!(l.class("medium").map(|c| c.name.as_str()), Some("Medium"), "names match ASCII case aside");
+    }
 
     #[test]
     fn the_legend_lists_only_classes_kept_features_have() {

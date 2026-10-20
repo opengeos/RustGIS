@@ -182,10 +182,12 @@ pub fn share_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Ve
         "webLayer" => {
             let mut l = layer_of(s, p)?;
             load_whole(&mut l)?;
+            note_label_classes(s, &l);
             Ok((l.name.clone(), web_layer_zip(s, &l)?, l.name.clone()))
         }
         "webStyle" => {
             let l = layer_of(s, p)?;
+            note_label_classes(s, &l);
             let style = web_style(&l);
             Ok((l.name.clone(), serde_json::to_vec_pretty(&style).map_err(|e| e.to_string())?, l.name.clone()))
         }
@@ -545,7 +547,17 @@ onresize=draw;draw();
     ))
 }
 
+/// Says that a web style labels with the Default class only: a class's SQL clause has no
+/// MapLibre filter written for it.
+fn note_label_classes(s: &mut Session, l: &Layer) {
+    if l.labels.enabled && !l.labels.classes.is_empty() {
+        let n = l.labels.classes.len();
+        s.notify(format!("{}'s style labels with its Default class only; its other {n} label classes aren't in it.", l.name), false);
+    }
+}
+
 /// A MapLibre (version 8) style for a layer, its symbology as expressions over a GeoJSON source.
+/// Its labels are the Default class's (see `note_label_classes`).
 pub fn web_style(l: &Layer) -> Value {
     let src = safe(&l.name);
     let gt = l.geometry_type();
@@ -614,10 +626,10 @@ pub fn web_style(l: &Layer) -> Value {
                 "circle-color": color(|s| s.fill), "circle-radius": radius, "circle-stroke-color": color(|s| s.stroke), "circle-stroke-width": width, "circle-opacity": opacity}}));
         }
     }
-    if l.labels.enabled && !l.labels.field.is_empty() {
+    if l.labels.enabled && !l.labels.default.field.is_empty() {
         layers.push(json!({"id": format!("{src}-labels"), "type": "symbol", "source": src,
-            "layout": {"text-field": ["to-string", prop(&l.labels.field)], "text-size": l.labels.size},
-            "paint": {"text-color": l.labels.color.hex(), "text-halo-color": "#ffffff", "text-halo-width": if l.labels.halo { 1.5 } else { 0.0 }}}));
+            "layout": {"text-field": ["to-string", prop(&l.labels.default.field)], "text-size": l.labels.default.size},
+            "paint": {"text-color": l.labels.default.color.hex(), "text-halo-color": "#ffffff", "text-halo-width": if l.labels.default.halo { 1.5 } else { 0.0 }}}));
     }
     let (minzoom, maxzoom) = zoom_range(l);
     for layer in &mut layers {

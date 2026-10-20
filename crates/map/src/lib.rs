@@ -27,7 +27,9 @@ pub use camera::Camera;
 pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
-pub use symbology::{ClassMethod, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol};
+pub use symbology::{
+    ClassMethod, LabelClass, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
+};
 pub use tiles::{TileKind, TileLayer};
 
 use rustgis_data::{Dataset, Geometry, GeometryType};

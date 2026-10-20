@@ -217,7 +217,9 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
                     "id": l.id, "name": l.name, "type": l.geometry_type().label(), "features": l.dataset.features.len(),
                     "visible": l.visible, "renderer": l.renderer.kind_label(), "selected": l.selection.len(),
                     "definitionQuery": l.definition_query.as_deref().filter(|q| !q.trim().is_empty()),
-                    "labels": (l.labels.enabled && !l.labels.field.is_empty()).then_some(l.labels.field.as_str()),
+                    "labels": (l.labels.enabled && !l.labels.default.field.is_empty()).then_some(l.labels.default.field.as_str()),
+                    "labelClasses": (!l.labels.classes.is_empty())
+                        .then(|| l.labels.in_order().map(|c| json!({"name": c.name, "where": c.where_, "field": c.field, "visible": c.visible})).collect::<Vec<_>>()),
                     "fields": field_list(&l.dataset.fields),
                 }),
             };
