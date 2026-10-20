@@ -8361,6 +8361,14 @@ fn pasted_graphics_keep_their_style_in_an_older_graphics_layer() {
         s.run("edit.paste", &json!({"layer": to, "text": plain})).unwrap();
         assert!(s.map().layer(to).unwrap().dataset.field_index("align").is_none(), "{properties}");
     }
+    // Pasted together, a graphic with no alignment and another feature with one: the feature's
+    // value doesn't make the layer gain the field.
+    let to = old(&mut s, "Mixed");
+    let mixed = r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","geometry":{"type":"Point","coordinates":[1,2]},"properties":{"kind":"text","text":"A"}},
+        {"type":"Feature","geometry":{"type":"Point","coordinates":[3,4]},"properties":{"kind":"inspection","align":"center"}}]}"#;
+    s.run("edit.paste", &json!({"layer": to, "text": mixed})).unwrap();
+    assert!(s.map().layer(to).unwrap().dataset.field_index("align").is_none());
 }
 
 /// A text graphic is placed again by its points (dragged on the map, #516), as one undo step;
