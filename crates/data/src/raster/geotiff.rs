@@ -37,6 +37,12 @@ struct Geo {
     custom_error: Option<String>,
 }
 
+/// How `n` samples of a grey image the decoder calls multiband are shown: grey with alpha when
+/// there are two and the second is declared an extra sample, else grey.
+pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> ColorHint {
+    if n == 2 && dec.find_tag(Tag::ExtraSamples).ok().flatten().is_some() { ColorHint::GrayAlpha } else { ColorHint::Gray }
+}
+
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
     let doubles =
         |dec: &mut Decoder<R>, tag: u16| -> Option<Vec<f64>> { dec.find_tag(Tag::Unknown(tag)).ok().flatten()?.into_f64_vec().ok() };
@@ -832,7 +838,7 @@ pub fn read_file(path: &std::path::Path, name: &str) -> Result<Raster> {
 
 /// [`read`], holding at most `max` samples (the tests' small limit exercises the overviews), with
 /// `open` making more readers of the same file for decoding it on several threads.
-fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>) -> Result<Raster> {
+pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>) -> Result<Raster> {
     let palette = !r.patches.is_empty();
     let limits = {
         let mut l = Limits::default();
@@ -931,7 +937,7 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
             let table = if map.len() >= 3 * n { (0..n).map(|i| [c(i), c(n + i), c(2 * n + i), 255]).collect() } else { Vec::new() };
             (1, if table.is_empty() { ColorHint::Gray } else { ColorHint::Palette(table) })
         }
-        ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, ColorHint::Gray),
+        ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, multiband_color(&mut dec, num_samples)),
         other => return Err(err(format!("{other:?} images aren't supported"))),
     };
     let planar = dec.find_tag_unsigned::<u16>(Tag::PlanarConfiguration).ok().flatten() == Some(2);
@@ -1045,20 +1051,14 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
     Ok(r)
 }
 
-/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
-/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
-/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
-/// raster always writes its colour bands, as its 8-bit form did before.
-pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
-    use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
-    let mut out = std::io::Cursor::new(Vec::new());
-    let mut enc = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
-    let gt = r.transform;
-    if gt.pixel_height > 0.0 || gt.pixel_width < 0.0 {
-        return Err(err("only north-up rasters can be exported for now"));
-    }
-    let scale = [gt.pixel_width.abs(), gt.pixel_height.abs(), 0.0];
-    let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
+/// The GeoKey directory a raster's coordinate system is written as, and the user-defined system
+/// whose double and ASCII parameters go with it.
+pub(super) struct GeoKeys {
+    pub keys: Vec<u16>,
+    pub custom: Option<std::sync::Arc<CustomCrs>>,
+}
+
+pub(super) fn geo_keys(r: &Raster) -> Result<GeoKeys> {
     let geographic = r.crs.is_geographic();
     // A file's own projection is written back as the keys it came in.
     let custom = r.crs.custom_def().map(|d| {
@@ -1096,19 +1096,40 @@ pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
             r.crs.epsg(),
         ],
     };
+    Ok(GeoKeys { keys, custom })
+}
+
+/// Whether band `b` is written as bytes: whole numbers within 0–255 (or no valid pixels at all),
+/// and a no-data value that is one too.
+pub(super) fn fits_bytes(r: &Raster, b: usize) -> bool {
+    let Some(band) = r.bands.get(b) else { return false };
+    let s = &band.stats;
+    let whole_bytes = s.min >= 0.0 && s.max <= 255.0 && (s.categories.is_some() || r.data_type == "UInt8");
+    let nodata_ok = r.nodata.is_none_or(|d| (0.0..=255.0).contains(&d) && d.fract() == 0.0);
+    nodata_ok && (whole_bytes || s.count == 0)
+}
+
+/// Writes a raster as a Deflate-compressed GeoTIFF: a colour raster's colour bands (RGB(A) bytes
+/// when they are 8-bit, else 32-bit floats, alpha kept), so it reads back in colour; otherwise
+/// `band` (0-based) as 32-bit floats. `band` is for rasters that aren't colour ones: a colour
+/// raster always writes its colour bands, as its 8-bit form did before.
+pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
+    use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
+    let mut out = std::io::Cursor::new(Vec::new());
+    let mut enc = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
+    let gt = r.transform;
+    if gt.pixel_height > 0.0 || gt.pixel_width < 0.0 {
+        return Err(err("only north-up rasters can be exported for now"));
+    }
+    let scale = [gt.pixel_width.abs(), gt.pixel_height.abs(), 0.0];
+    let tie = [0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
+    let GeoKeys { keys, custom } = geo_keys(r)?;
     let (w, h) = (r.width, r.height);
     let bytes = |b: usize| -> Option<Vec<u8>> {
         let band = r.bands.get(b)?;
-        let s = &band.stats;
-        // Whole numbers within 0–255 (or no valid pixels at all) fit in a byte, and so must the
-        // no-data value, which no-data pixels keep so the written GDAL_NODATA tag still matches.
-        let whole_bytes = s.min >= 0.0 && s.max <= 255.0 && (s.categories.is_some() || r.data_type == "UInt8");
-        let nodata = match r.nodata {
-            Some(d) if (0.0..=255.0).contains(&d) && d.fract() == 0.0 => Some(d as u8),
-            Some(_) => return None,
-            None => None,
-        };
-        (whole_bytes || s.count == 0)
+        // No-data pixels keep the no-data value, so the written GDAL_NODATA tag still matches.
+        let nodata = r.nodata.map(|d| d as u8);
+        fits_bytes(r, b)
             .then(|| band.data.iter().map(|v| if r.is_valid(*v) { v.clamp(0.0, 255.0) as u8 } else { nodata.unwrap_or(0) }).collect())
     };
     let rgb = matches!(r.color, ColorHint::Rgb { .. }) && r.bands.len() >= 3;

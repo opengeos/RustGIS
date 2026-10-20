@@ -322,7 +322,7 @@ fn read_layout(r: Sparse) -> Result<Parse> {
             (3, ColorHint::Rgb { alpha: false })
         }
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
-        ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, ColorHint::Gray),
+        ColorType::Multiband { num_samples, .. } => (num_samples.max(1) as usize, super::geotiff::multiband_color(&mut dec, num_samples)),
         other => return Ok(Parse::NotTiled(format!("{other:?} images are read whole"))),
     };
     // Bands stored apart: each band of a tile is a chunk of its own.

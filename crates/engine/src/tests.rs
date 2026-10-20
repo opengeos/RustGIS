@@ -2661,6 +2661,32 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
 }
 
 #[test]
+fn exporting_a_raster_as_a_cog() {
+    let mut s = world();
+    s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
+    let dem = s.map().layers.iter().find(|l| l.is_raster()).unwrap().name.clone();
+    let dir = std::env::temp_dir().join(format!("rustgis-cog-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (plain, cog) = (dir.join("plain.tif"), dir.join("cog.tif"));
+    let v = s.run("share.exportRaster", &json!({"layer": dem, "path": plain.display().to_string()})).unwrap();
+    assert!(v.get("cog").is_none(), "an untiled GeoTIFF unless asked");
+    let v = s.run("share.exportRaster", &json!({"layer": dem, "path": cog.display().to_string(), "cog": true})).unwrap();
+    assert_eq!(v["cog"]["bigTiff"], false, "{v}");
+    let (a, b) = (rustgis_data::raster::read_path(&plain).unwrap(), rustgis_data::raster::read_path(&cog).unwrap());
+    assert_eq!((a.width, a.height, a.transform), (b.width, b.height, b.transform));
+    assert!(a.bands.iter().zip(&b.bands).all(|(x, y)| x.data == y.data));
+    // Tiled, not stripped: the tile tags are in the file.
+    let bytes = std::fs::read(&cog).unwrap();
+    assert!(bytes.windows(2).any(|w| w == [0x42, 0x01]), "TileWidth (322) is in a directory");
+    assert!(s.run("share.exportRaster", &json!({"layer": dem, "path": cog.display().to_string(), "cog": true, "band": 99})).is_err());
+    assert!(
+        s.run("share.exportRaster", &json!({"layer": dem, "path": dir.join("no").join("x.tif").display().to_string(), "cog": true}))
+            .is_err()
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn layer_effects_and_imagery_tools() {
     use crate::render::View;
     let mut s = world();

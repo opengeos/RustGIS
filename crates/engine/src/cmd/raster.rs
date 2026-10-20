@@ -129,7 +129,7 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
-            r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands)}"#,
+            r#"{"layer"?, "path": "*.tif", "band"?: 1.. (rasters that aren't colour ones; a colour raster writes its colour bands), "cog"?: bool (a cloud-optimised GeoTIFF: 512 px tiles, Deflate, averaged overviews; default false, an untiled GeoTIFF)}"#,
         ),
     ]
 }
@@ -565,28 +565,40 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
     }))
 }
 
-/// GeoTIFF bytes of a raster layer (band is 1-based; RGB rasters keep their colour bands).
+/// GeoTIFF bytes of a raster layer (band is 1-based; RGB rasters keep their colour bands; `cog`
+/// makes it a cloud-optimised one).
 pub fn geotiff_bytes(s: &Session, p: &Value) -> Result<(String, Vec<u8>), String> {
     let (_, r) = get(s, p)?;
     let bi = band(p, "band", &r)?.unwrap_or(0);
-    let bytes = raster::geotiff::write(&r, bi).map_err(|e| e.to_string())?;
-    Ok((r.name.clone(), bytes))
+    let bytes = if b(p, "cog") == Some(true) { raster::cogwrite::write(&r, bi) } else { raster::geotiff::write(&r, bi) };
+    Ok((r.name.clone(), bytes.map_err(|e| e.to_string())?))
 }
 
 fn export(s: &mut Session, p: &Value) -> CmdResult {
     let path = ps(p, "path").ok_or("path is required")?.to_string();
-    let (_, bytes) = geotiff_bytes(s, p)?;
-    rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
     let (_, r) = get(s, p)?;
+    let mut cog = None;
+    if b(p, "cog") == Some(true) {
+        // Tiles go to the file as they are made: the whole file is never held in memory.
+        let bi = band(p, "band", &r)?.unwrap_or(0);
+        cog = Some(raster::cogwrite::write_file(&r, bi, Path::new(&path)).map_err(|e| format!("{path}: {e}"))?);
+    } else {
+        let (_, bytes) = geotiff_bytes(s, p)?;
+        rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
+    }
     let note = match r.overview {
         Some((fw, fh)) => format!(" (the {} × {} overview of the {fw} × {fh} raster)", r.width, r.height),
         None => String::new(),
     };
     s.notify(format!("Exported {path}{note}"), false);
-    Ok(match r.overview {
+    let mut v = match r.overview {
         Some((fw, fh)) => json!({"path": path, "width": r.width, "height": r.height, "overviewOf": [fw, fh]}),
         None => json!({"path": path}),
-    })
+    };
+    if let (Some(o), Some(c)) = (v.as_object_mut(), cog) {
+        o.insert("cog".into(), json!({"overviews": c.levels.len().saturating_sub(1), "bigTiff": c.big, "bytes": c.bytes}));
+    }
+    Ok(v)
 }
 
 /// Pixel values of the topmost visible raster under a longitude/latitude point.
