@@ -5,9 +5,10 @@
 //! the waker (the app's repaint) is called, so the map draws again with the new tile. Exports
 //! and the command line, which can't draw a half-loaded map, [`wait`] for the fetches first.
 //!
-//! Natively, tiles are fetched on worker threads, the newest request first (the view the user is
-//! looking at now, not the one they panned away from), a limited number at a time from each
-//! server. The browser app installs its own fetcher with [`set_fetcher`].
+//! Tiles are fetched a limited number at a time from each server, the newest request first (the
+//! view the user is looking at now, not the one they panned away from), and a waiting tile the
+//! map stopped asking for is dropped unfetched ([`crate::schedule`]). Natively they are fetched on
+//! worker threads; the browser app installs its own fetcher with [`set_fetcher`].
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -18,6 +19,7 @@ use web_time::{Duration, Instant};
 
 use crate::failure::Failure;
 use crate::mvt;
+use crate::schedule::{Queue, Waiting};
 
 /// What a fetched address is decoded as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +77,8 @@ enum Entry {
 struct Slot {
     entry: Entry,
     used: u64,
+    /// When the map last asked for it ([`get`]): a waiting tile not asked for lately is dropped.
+    asked: Instant,
 }
 
 #[derive(Default)]
@@ -82,6 +86,8 @@ struct Cache {
     slots: HashMap<String, Slot>,
     bytes: usize,
     tick: u64,
+    /// When the map last asked for any address.
+    latest: Option<Instant>,
 }
 
 fn cache() -> &'static Mutex<Cache> {
@@ -130,11 +136,14 @@ pub fn in_flight() -> usize {
 /// What the cache holds for `url`, fetching it when it holds nothing (or a failure old enough
 /// to try again).
 pub fn get(url: &str, want: Want) -> State {
+    let now = Instant::now();
     let mut c = lock();
     c.tick += 1;
     let tick = c.tick;
+    c.latest = Some(now);
     if let Some(slot) = c.slots.get_mut(url) {
         slot.used = tick;
+        slot.asked = now;
         match &slot.entry {
             Entry::Ready(p, _) => return State::Ready(p.clone()),
             Entry::Pending => return State::Pending,
@@ -142,7 +151,7 @@ pub fn get(url: &str, want: Want) -> State {
             Entry::Failed(..) => {}
         }
     }
-    c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick });
+    c.slots.insert(url.to_string(), Slot { entry: Entry::Pending, used: tick, asked: now });
     drop(c);
     start(url.to_string(), want);
     State::Pending
@@ -195,12 +204,81 @@ pub fn wait(timeout: Duration) {
     let _ = timeout;
 }
 
+fn queue() -> &'static Mutex<Queue<Want>> {
+    static Q: OnceLock<Mutex<Queue<Want>>> = OnceLock::new();
+    Q.get_or_init(Mutex::default)
+}
+
+/// Asks for a tile: fetched now when its server has room, else it waits its turn.
 fn start(url: String, want: Want) {
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+    let mut overflow = Vec::new();
+    let now = queue().lock().unwrap_or_else(|e| e.into_inner()).push(url, want, &mut overflow);
+    forget(overflow);
+    launch(now.into_iter().collect());
+}
+
+/// A fetch from `host` is over: starts the waiting tiles that take its place and forgets those
+/// the map stopped asking for.
+fn release(host: &str) {
+    let next = {
+        let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
+        let c = lock();
+        let latest = c.latest.unwrap_or_else(Instant::now);
+        q.done(host, |url| c.slots.get(url).map(|s| s.asked), latest)
+    };
+    forget(next.drop);
+    launch(next.start);
+}
+
+/// Forgets tiles dropped unfetched: no longer under way, and fetched again when next asked for.
+fn forget(dropped: Vec<Waiting<Want>>) {
+    if dropped.is_empty() {
+        return;
+    }
+    let mut c = lock();
+    for w in &dropped {
+        if matches!(c.slots.get(&w.url), Some(Slot { entry: Entry::Pending, .. })) {
+            c.slots.remove(&w.url);
+        }
+    }
+    drop(c);
+    IN_FLIGHT.fetch_sub(dropped.len(), Ordering::Release);
+}
+
+/// Starts fetches one after another, never inside each other: a fetch can be over at once (a
+/// local read, an archive that failed), and each one over starts the next waiting tile, so a
+/// long queue would otherwise go as deep into the stack as it is long.
+fn launch(jobs: Vec<Waiting<Want>>) {
+    static TO_START: Mutex<Vec<Waiting<Want>>> = Mutex::new(Vec::new());
+    static STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let pop = || TO_START.lock().unwrap_or_else(|e| e.into_inner()).pop();
+    if !jobs.is_empty() {
+        // Newest first: `pop` takes from the end.
+        TO_START.lock().unwrap_or_else(|e| e.into_inner()).extend(jobs.into_iter().rev());
+    }
+    loop {
+        // Another call (this thread further up, or another thread) is starting them already.
+        if STARTING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        while let Some(w) = pop() {
+            fetch_tile(w.url, w.host, w.job);
+        }
+        STARTING.store(false, Ordering::Release);
+        // A tile queued after the last `pop` and before the flag went down is started here.
+        if TO_START.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+            return;
+        }
+    }
+}
+
+fn fetch_tile(url: String, host: String, want: Want) {
     let key = url.clone();
     let done: Done = Box::new(move |bytes| {
         if matches!(&bytes, Err(e) if e == DROPPED) {
             lock().slots.remove(&key);
+            release(&host);
             finished();
             return;
         }
@@ -215,6 +293,7 @@ fn start(url: String, want: Want) {
             }
         };
         store(&key, entry);
+        release(&host);
         finished();
     });
     // A tile from a PMTiles archive is read from the archive, by range.
@@ -491,7 +570,8 @@ fn store(url: &str, entry: Entry) {
     let added = if let Entry::Ready(_, n) = &entry { *n } else { 0 };
     // Dropped while it was fetched (cleared, or evicted): kept anyway, it was asked for.
     let tick = c.tick;
-    let old = c.slots.insert(url.to_string(), Slot { entry, used: tick });
+    let asked = c.slots.get(url).map_or_else(Instant::now, |s| s.asked);
+    let old = c.slots.insert(url.to_string(), Slot { entry, used: tick, asked });
     if let Some(Slot { entry: Entry::Ready(_, n), .. }) = old {
         c.bytes = c.bytes.saturating_sub(n);
     }
@@ -1286,5 +1366,34 @@ mod tests {
         assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending));
         assert!(matches!(get("test://cache/first.json", Want::Json), State::Pending), "fetched again");
         assert_eq!(CALLS.load(Ordering::Relaxed), 4);
+
+        // A server has a few fetches under way at once; the newest waiting tile goes next (#635).
+        static HELD: Mutex<Vec<(String, Done)>> = Mutex::new(Vec::new());
+        set_fetcher(|url, done| {
+            if url.starts_with("test://held/") {
+                HELD.lock().unwrap().push((url, done));
+            } else {
+                done(Ok(b"1".to_vec()));
+            }
+        });
+        let n = crate::schedule::PER_HOST + 3;
+        for i in 0..n {
+            assert!(matches!(get(&format!("test://held/{i}.json"), Want::Json), State::Pending));
+        }
+        assert_eq!(HELD.lock().unwrap().len(), crate::schedule::PER_HOST);
+        let (_, done) = HELD.lock().unwrap().remove(0);
+        done(Ok(b"2".to_vec()));
+        let held: Vec<String> = HELD.lock().unwrap().iter().map(|(u, _)| u.clone()).collect();
+        assert_eq!(held.len(), crate::schedule::PER_HOST);
+        assert_eq!(held.last().map(String::as_str), Some(format!("test://held/{}.json", n - 1).as_str()));
+        assert!(matches!(get("test://held/0.json", Want::Json), State::Ready(_)));
+        // The rest finish, and so do the waiting ones they make room for.
+        loop {
+            let Some((_, done)) = HELD.lock().unwrap().pop() else { break };
+            done(Ok(b"3".to_vec()));
+        }
+        for i in 0..n {
+            assert!(matches!(get(&format!("test://held/{i}.json"), Want::Json), State::Ready(_)), "{i}");
+        }
     }
 }

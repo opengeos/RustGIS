@@ -422,6 +422,9 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
+/// How long a tile or document may take to come in.
+const TILE_TIMEOUT_MS: u32 = 30_000;
+
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
 /// `rustgis_tiles::cache::split_range`).
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
@@ -442,8 +445,14 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         (None, Some(n)) => Some(format!("bytes=-{n}")),
         (None, None) => None,
     };
-    let promise = if asked.is_some() || !prepared.headers.is_empty() {
-        let init = web_sys::RequestInit::new();
+    let init = web_sys::RequestInit::new();
+    // A tile or document that hasn't come in 30 seconds (as natively) is given up, so it doesn't
+    // stay under way forever, holding its server's place in the queue (`cache`). Downloads the
+    // user asked for may take longer.
+    if limit.is_none() {
+        init.set_signal(Some(&web_sys::AbortSignal::timeout_with_u32(TILE_TIMEOUT_MS)));
+    }
+    if asked.is_some() || !prepared.headers.is_empty() {
         let headers = web_sys::Headers::new().map_err(err)?;
         if let Some(r) = &asked {
             headers.set("Range", r).map_err(err)?;
@@ -456,15 +465,16 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         if prepared.signed {
             init.set_redirect(web_sys::RequestRedirect::Error);
         }
-        window.fetch_with_str_and_init(url, &init)
-    } else {
-        window.fetch_with_str(url)
-    };
+    }
+    let promise = window.fetch_with_str_and_init(url, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.
     let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
         .await
         .map_err(|e| {
+            if e.dyn_ref::<js_sys::Error>().is_some_and(|e| e.name() == "TimeoutError") {
+                return format!("no answer in {} seconds", TILE_TIMEOUT_MS / 1000);
+            }
             let why = e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| err(e));
             format!(
                 "the browser couldn't reach it (offline, blocked by a browser extension or the network, or the server doesn't accept requests from web pages): {why}"
