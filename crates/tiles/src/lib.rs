@@ -36,4 +36,5 @@ pub mod template;
 pub mod usgis;
 
 pub use draw::{Drawn, Frame, Label, PlacedTiles, Placement, draw, place};
+pub use picture::{Pace, Unfinished, paced};
 pub use source::{Kind, Spec};

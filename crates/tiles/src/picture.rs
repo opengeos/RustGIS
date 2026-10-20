@@ -11,12 +11,21 @@
 //! pixels, so it is put in place stretched by a fraction of a percent at most (and copied pixel
 //! for pixel). Its square is a tile a level or more below the vector tiles drawn there: 256 to
 //! 512 pixels a side at one or two pixels a point, about as much at others (192 to 384 at 1.5).
+//!
+//! A map drawn for the screen draws the pictures it lacks at a [`Pace`], as MapLibre shows the
+//! tiles it has while it loads others: while the map moves, a missing picture isn't drawn when
+//! others already drawn cover its square (the same square at a nearby zoom or another resolution,
+//! as frames drawn mid-motion are drawn coarser, the square above it or the four below,
+//! stretched into place), and those none covers are drawn a frame's worth at a time; once it
+//! stops, the missing pictures are drawn a frame's worth at a time, nearest the middle first.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use rustgis_geom::Extent;
 use tiny_skia::Pixmap;
+use web_time::{Duration, Instant};
 
 use crate::cache::{self, Payload};
 use crate::draw::{Drawn, Frame, Item, Pass, draw_layers, overhang};
@@ -32,6 +41,12 @@ const BUDGET: usize = if cfg!(target_arch = "wasm32") { 96 << 20 } else { 384 <<
 
 /// The largest side of a picture, pixels.
 const MAX_SIDE: f32 = 2048.0;
+
+/// How many levels of zoom from its own a picture may stand in for another, stretched or shrunk.
+const STAND_IN_LEVELS: u8 = 2;
+
+/// How long a map drawn at a [`Pace`] draws pictures for in one frame.
+const FRAME: Duration = Duration::from_millis(30);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Key {
@@ -60,6 +75,63 @@ struct Store {
     bytes: usize,
     /// Counts the calls to [`cover`], for the least recently used.
     tick: u64,
+}
+
+/// How a map drawn for the screen draws the pictures it lacks (see [`paced`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// The map moves: pictures already drawn stand in, stretched, for missing ones wherever
+    /// they cover their squares; only the squares none covers are drawn, for about a frame
+    /// ([`FRAME`]), nearest the middle first, the others left out meanwhile.
+    Moving,
+    /// The map has stopped: the missing pictures are drawn for about a frame ([`FRAME`]), those
+    /// nothing covers and then those nearest the middle first; pictures already drawn stand in
+    /// for the rest meanwhile.
+    Settling,
+}
+
+/// What a map drawn at a [`Pace`] still lacks: when to draw it again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Unfinished {
+    /// Pictures stand in for others while the map moves: once it stops.
+    Later,
+    /// Pictures are still to be drawn: the next frame.
+    Next,
+}
+
+thread_local! {
+    /// Set inside [`paced`]: its pace, and what the map drawn still lacks.
+    static PACE: Cell<Option<(Pace, Option<Unfinished>)>> = const { Cell::new(None) };
+}
+
+/// Runs `f`, drawing a map for the screen, with the pictures it lacks drawn at `pace`; and what
+/// the map drawn still lacks, if anything.
+pub fn paced<R>(pace: Pace, f: impl FnOnce() -> R) -> (R, Option<Unfinished>) {
+    /// Puts back what was there before, however `f` ends.
+    struct Restore(Option<(Pace, Option<Unfinished>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let inner = PACE.with(|p| p.replace(self.0)).and_then(|p| p.1);
+            // Inside another call, it learns of these too.
+            if let Some((outer, lacks)) = self.0 {
+                PACE.with(|p| p.set(Some((outer, lacks.max(inner)))));
+            }
+        }
+    }
+    let restore = Restore(PACE.with(|p| p.replace(Some((pace, None)))));
+    let r = f();
+    let lacks = PACE.with(|p| p.get()).and_then(|p| p.1);
+    drop(restore);
+    (r, lacks)
+}
+
+/// Notes what the map drawn inside [`paced`] still lacks.
+fn unfinished(u: Unfinished) {
+    PACE.with(|p| {
+        if let Some((pace, lacks)) = p.get() {
+            p.set(Some((pace, lacks.max(Some(u)))));
+        }
+    });
 }
 
 fn lock() -> MutexGuard<'static, Store> {
@@ -139,15 +211,45 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
             }
         }
     }
-    let todo: Vec<Placed> = missing.iter().filter_map(|&i| found.get(i).map(|f| f.0)).collect();
+    // Drawn for the screen, what pictures already drawn can stand in for those missing, and
+    // which of those to draw now (see `Pace`).
+    let pace = PACE.with(|p| p.get()).map(|p| p.0);
+    let mut covers: HashMap<usize, Vec<(Key, Extent, u8, Extent)>> = HashMap::new();
+    if pace.is_some() && !missing.is_empty() {
+        let (cx, cy) = ((view.min_x + view.max_x) / 2.0, (view.min_y + view.max_y) / 2.0);
+        let far = |i: &usize| {
+            found.get(*i).map_or(f64::MAX, |f| {
+                let e = f.0.extent();
+                ((e.min_x + e.max_x) / 2.0 - cx).hypot((e.min_y + e.max_y) / 2.0 - cy)
+            })
+        };
+        missing.sort_by(|a, b| far(a).total_cmp(&far(b)));
+        let s = lock();
+        let index = stand_ins(&s, r, step as i32);
+        for &i in &missing {
+            if let Some(c) = found.get(i).and_then(|f| stand_in(f.0, &index, view)) {
+                covers.insert(i, c);
+            }
+        }
+        // Squares nothing covers first (the sort keeps them nearest the middle first).
+        missing.sort_by_key(|i| covers.contains_key(i));
+    }
+    let todo: Vec<usize> = match pace {
+        Some(Pace::Moving) => missing.iter().copied().filter(|i| !covers.contains_key(i)).collect(),
+        _ => missing.clone(),
+    };
+    let squares: Vec<Placed> = todo.iter().filter_map(|&i| found.get(i).map(|f| f.0)).collect();
     // How far past its square a picture looks for shapes, in points: a line or circle drawn from
     // a neighbouring tile reaches into it by up to half its width.
     let reach = r.style.layers.iter().filter(|l| l.visible_at(zoom)).map(|l| overhang(l, zoom)).fold(0.0f32, f32::max);
-    let drawn = draw_all(r, &todo, side, m_per_px, ppp, f64::from(reach));
+    let until = pace.map(|_| Instant::now() + FRAME);
+    let drawn = draw_all(r, &squares, side, m_per_px, ppp, f64::from(reach), until);
+    let mut stood_in = Vec::new();
     {
         let mut s = lock();
         let tick = s.tick;
-        for (&i, d) in missing.iter().zip(drawn) {
+        let mut added = false;
+        for (&i, d) in todo.iter().zip(drawn) {
             let (Some(slot), Some((pm, waiting))) = (found.get_mut(i), d) else { continue };
             *pending |= waiting;
             let bytes = pm.data().len();
@@ -159,13 +261,82 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
                 s.bytes = s.bytes.saturating_sub(old.bytes);
             }
             slot.1 = Some(picture);
+            added = true;
+        }
+        // Those still missing: stood in for, or left out until the next frame.
+        for &i in &missing {
+            if found.get(i).is_none_or(|f| f.1.is_some()) {
+                continue;
+            }
+            // Only standing in while the map moves waits for it to stop.
+            unfinished(if pace == Some(Pace::Moving) && covers.contains_key(&i) { Unfinished::Later } else { Unfinished::Next });
+            for &(k, at, z, clip) in covers.get(&i).into_iter().flatten() {
+                if let Some(e) = s.entries.get_mut(&k) {
+                    e.used = tick;
+                    stood_in.push(Item { payload: e.picture.clone(), at, z, clip });
+                }
+            }
         }
         // Only when pictures were added: a frame of pictures already drawn costs nothing here.
-        if !missing.is_empty() {
+        if added {
             evict(&mut s);
         }
     }
-    Some(found.into_iter().filter_map(|(p, picture)| Some(Item { payload: picture?, at: p.extent(), z, clip: p.extent() })).collect())
+    let mut items: Vec<Item> =
+        found.into_iter().filter_map(|(p, picture)| Some(Item { payload: picture?, at: p.extent(), z, clip: p.extent() })).collect();
+    items.extend(stood_in);
+    Some(items)
+}
+
+/// The pictures of `r` drawn [`STAND_IN_LEVELS`] of zoom or less from `step`, at any
+/// resolution, that can stand in for others: by tile, the one at the nearest zoom, then the sharpest.
+fn stand_ins(s: &Store, r: &Arc<Resolved>, step: i32) -> HashMap<TileId, Key> {
+    let style = Arc::as_ptr(r) as usize;
+    let mut best: HashMap<TileId, Key> = HashMap::new();
+    // Pixels per point are positive: their bits order as they do.
+    let rank = |k: &Key| ((k.step - step).abs(), std::cmp::Reverse(k.ppp));
+    for (k, e) in &s.entries {
+        if k.style != style
+            || (k.step - step).abs() > STEPS as i32 * i32::from(STAND_IN_LEVELS)
+            || e.style.upgrade().is_none_or(|x| !Arc::ptr_eq(&x, r))
+        {
+            continue;
+        }
+        match best.get(&k.tile) {
+            Some(b) if rank(b) <= rank(k) => {}
+            _ => {
+                best.insert(k.tile, *k);
+            }
+        }
+    }
+    best
+}
+
+/// What covers square `p` from `index` (see [`stand_ins`]) over `view`: its own picture, one of
+/// a square above it, or those of the four below it in view; each with where it is placed, its
+/// tile's zoom and the part of it shown.
+fn stand_in(p: Placed, index: &HashMap<TileId, Key>, view: &Extent) -> Option<Vec<(Key, Extent, u8, Extent)>> {
+    if let Some(k) = index.get(&p.id) {
+        return Some(vec![(*k, p.extent(), p.id.z, p.extent())]);
+    }
+    for up in 1..=STAND_IN_LEVELS + 1 {
+        if let Some(a) = p.id.ancestor(up)
+            && let Some(k) = index.get(&a)
+        {
+            return Some(vec![(*k, Placed { id: a, wx: p.wx.div_euclid(1 << up) }.extent(), a.z, p.extent())]);
+        }
+    }
+    let mut below = Vec::new();
+    for c in p.id.children() {
+        let wx = p.wx * 2 + i64::from(c.x) - 2 * i64::from(p.id.x);
+        let at = Placed { id: c, wx }.extent();
+        match index.get(&c) {
+            Some(k) => below.push((*k, at, c.z, at)),
+            None if at.intersects(view) => return None,
+            None => {}
+        }
+    }
+    (!below.is_empty()).then_some(below)
 }
 
 /// Drops the least recently used pictures past the budget, and those of styles gone. Those
@@ -189,8 +360,32 @@ fn evict(s: &mut Store) {
 }
 
 /// Draws the pictures of `squares`: each a `side`-pixel pixmap and whether some of it is still
-/// on its way. Natively the squares are shared among threads.
-fn draw_all(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f32, reach: f64) -> Vec<Option<(Pixmap, bool)>> {
+/// on its way, `None` for those not drawn. Natively the squares are shared among threads. With
+/// `until`, drawing stops once it has passed, after a picture (a round of them natively).
+fn draw_all(
+    r: &Resolved,
+    squares: &[Placed],
+    side: u32,
+    m_per_px: f64,
+    ppp: f32,
+    reach: f64,
+    until: Option<Instant>,
+) -> Vec<Option<(Pixmap, bool)>> {
+    let Some(until) = until else { return draw_some(r, squares, side, m_per_px, ppp, reach) };
+    let round = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
+    let mut out = Vec::with_capacity(squares.len());
+    for some in squares.chunks(round) {
+        if !out.is_empty() && Instant::now() >= until {
+            out.extend(some.iter().map(|_| None));
+        } else {
+            out.extend(draw_some(r, some, side, m_per_px, ppp, reach));
+        }
+    }
+    out
+}
+
+/// Draws the pictures of all of `squares` (see [`draw_all`]).
+fn draw_some(r: &Resolved, squares: &[Placed], side: u32, m_per_px: f64, ppp: f32, reach: f64) -> Vec<Option<(Pixmap, bool)>> {
     let one = |p: &Placed| draw_one(r, p, side, m_per_px, ppp, reach);
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -370,6 +565,59 @@ mod tests {
             // The labels still come out, on their own.
             assert_eq!(d.labels.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["cafe"], "zoom {zoom}");
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pictures_drawn_stand_in_while_the_map_moves() {
+        let (spec, dir) = spec("moving");
+        let r = resolved(&spec);
+        let f = frame(2.2, 1.0);
+        drawn(&spec, &f, 1.0);
+        let view = f.extent(300, 200);
+        let mut pending = false;
+        let held: Vec<Arc<Payload>> = cover(&r, &f, &view, None, &mut pending).unwrap().into_iter().map(|i| i.payload).collect();
+        let theirs = |items: &[Item]| items.iter().all(|i| held.iter().any(|h| Arc::ptr_eq(h, &i.payload)));
+        // A little further in, or coarser (as frames drawn mid-motion are): those drawn stand in.
+        // Over the same ground: the view's squares are those drawn, or above or below them.
+        for g in [frame(2.3, 1.0), frame(2.9, 1.0), frame(2.2, 0.6), frame(1.6, 1.0)] {
+            let (items, lacks) = paced(Pace::Moving, || cover(&r, &g, &view, None, &mut pending).unwrap());
+            assert!(lacks == Some(Unfinished::Later) && !items.is_empty() && theirs(&items), "stood in at {}", g.m_per_px);
+            // Each covering the view's squares, where it is.
+            assert!(items.iter().all(|i| i.at.intersects(&i.clip) && i.clip.width() > 0.0));
+        }
+        // Still, or over two levels away: drawn.
+        let g = frame(2.3, 1.0);
+        let still = cover(&r, &g, &view, None, &mut pending).unwrap();
+        assert!(!theirs(&still));
+        let far = frame(5.5, 1.0);
+        let (items, lacks) = paced(Pace::Moving, || cover(&r, &far, &view, None, &mut pending).unwrap());
+        assert!(lacks.is_none() && !theirs(&items));
+        // Settling, the exact pictures are drawn while there's time (here, all of them).
+        let g = frame(2.35, 1.0);
+        let (items, lacks) = paced(Pace::Settling, || cover(&r, &g, &view, None, &mut pending).unwrap());
+        assert!(lacks.is_none() && !items.is_empty() && !theirs(&items));
+        // Inside nested calls, the outer one hears of pictures standing in.
+        let ((_, inner), outer) = paced(Pace::Settling, || paced(Pace::Moving, || cover(&r, &frame(2.25, 1.0), &view, None, &mut pending)));
+        assert!(inner == Some(Unfinished::Later) && outer == inner);
+        assert!(PACE.with(|p| p.get()).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pictures_are_drawn_a_round_at_least_in_a_frame() {
+        let (spec, dir) = spec("round");
+        let r = resolved(&spec);
+        let squares: Vec<Placed> = template::covering(&frame(3.0, 1.0).extent(300, 200), 4);
+        assert!(squares.len() > 1);
+        let m_per_px = TileId::span(4) / 256.0;
+        // Out of time before it starts: still a round drawn, so a frame always draws more.
+        let some = draw_all(&r, &squares, 256, m_per_px, 1.0, 16.0, Some(Instant::now()));
+        assert_eq!(some.len(), squares.len());
+        assert!(some.first().is_some_and(Option::is_some));
+        // With time, all of them.
+        let all = draw_all(&r, &squares, 256, m_per_px, 1.0, 16.0, Some(Instant::now() + Duration::from_secs(60)));
+        assert!(all.iter().all(Option::is_some));
         let _ = std::fs::remove_dir_all(dir);
     }
 
