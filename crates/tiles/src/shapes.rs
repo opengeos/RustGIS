@@ -86,9 +86,16 @@ fn drawn_source(r: &Resolved, level: u8) -> Option<String> {
             // Lines painted with a pattern aren't drawn (see `draw::drawable`).
             LayerKind::Line if l.has_paint("line-pattern") => {}
             LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
-                if [lo, hi]
-                    .iter()
-                    .any(|&z| l.line_dasharray(&FeatureCtx::zoom_only(z)).is_some_and(|d| d.len() * (1 + d.len() % 2) > MAX_DASHES))
+                let at = FeatureCtx::zoom_only;
+                if [lo, hi].iter().any(|&z| l.line_dasharray(&at(z)).is_some_and(|d| d.len() * (1 + d.len() % 2) > MAX_DASHES)) {
+                    return None;
+                }
+                // Dashes, caps and joins are taken at the level: a style changing them within it
+                // is drawn otherwise.
+                if l.kind == LayerKind::Line
+                    && (l.line_dasharray(&at(lo)) != l.line_dasharray(&at(hi))
+                        || l.line_cap(&at(lo)) != l.line_cap(&at(hi))
+                        || l.line_join(&at(lo)) != l.line_join(&at(hi)))
                 {
                     return None;
                 }
@@ -431,6 +438,12 @@ mod tests {
         let (spec, dir2) = archive("next-level", &style);
         ready(&spec);
         assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_some());
+        // Caps changing within the level.
+        let style = STYLE.replace(r#""line-cap": "round""#, r#""line-cap": ["step", ["zoom"], "butt", 2.5, "round"]"#);
+        let (spec, dir4) = archive("caps", &style);
+        ready(&spec);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
+        let _ = std::fs::remove_dir_all(dir4);
         // A long dash pattern from the end of the level.
         let style = STYLE.replace(
             r#""line-dasharray": [3, 2]"#,

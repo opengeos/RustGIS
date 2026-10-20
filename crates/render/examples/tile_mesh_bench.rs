@@ -30,8 +30,9 @@ fn main() {
         let view =
             rustgis_geom::Extent::new(frame.left, frame.top - f64::from(h) * m_per_px, frame.left + f64::from(w) * m_per_px, frame.top);
         // Every tile fetched first.
-        let mut pm = tiny_skia::Pixmap::new(w, h).expect("a pixmap");
-        for _ in 0..300 {
+        let Some(mut pm) = tiny_skia::Pixmap::new(w, h) else { return };
+        // A minute at most a view.
+        for _ in 0..12 {
             if !draw(&mut pm, &spec, 1.0, &frame, false).pending && vector_tiles(&spec, &frame, &view).is_some_and(|v| !v.pending) {
                 break;
             }

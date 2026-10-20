@@ -100,7 +100,10 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
     let mut stroke = StrokeTessellator::new();
     for run in runs {
         let k = span / run.extent.max(1) as f32;
-        let at = |p: &[f32; 2]| lyon::math::point(p[0] * k, -p[1] * k);
+        // Tessellated in tile units (small numbers, where a width of 1 keeps its precision; map
+        // units at a low zoom run to millions), then put in map units, y north.
+        let at = |p: &[f32; 2]| lyon::math::point(p[0], p[1]);
+        let map = |x: f32, y: f32| [x * k, -y * k];
         let first = out.indices.len() as u32;
         for shape in &run.shapes {
             let geometry: Option<&[Vec<[f32; 2]>]> =
@@ -113,7 +116,7 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                     let (c0, c1) = (premul(color[0]), premul(color[1]));
                     let vertex = |v: FillVertex| {
                         let p = v.position();
-                        TileVertex { position: [p.x, p.y], color: c0, color_next: c1, ..TileVertex::default() }
+                        TileVertex { position: map(p.x, p.y), color: c0, color_next: c1, ..TileVertex::default() }
                     };
                     let mut b = Path::builder();
                     match geometry {
@@ -173,7 +176,12 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                         // On the line: lyon's position less half the width it was tessellated at.
                         let vertex = |v: StrokeVertex| {
                             let (p, n) = (v.position(), v.normal());
-                            TileVertex { position: [p.x - n.x * 0.5, p.y - n.y * 0.5], normal: [n.x, n.y], along: v.advancement(), ..base }
+                            TileVertex {
+                                position: map(p.x - n.x * 0.5, p.y - n.y * 0.5),
+                                normal: [n.x, -n.y],
+                                along: v.advancement() * k,
+                                ..base
+                            }
                         };
                         let _ = stroke.tessellate_path(&b.build(), &options, &mut BuffersBuilder::new(&mut out, vertex));
                     }
@@ -182,8 +190,7 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                     let Some(points) = geometry else { continue };
                     let disc = [radius[0] * 2.0, radius[1] * 2.0];
                     for p in points.iter().flatten() {
-                        let centre = at(p);
-                        let c = [centre.x, centre.y];
+                        let c = map(p[0], p[1]);
                         circle(&mut out, c, color, disc, disc);
                         if let Some((sc, sw)) = ring {
                             circle(&mut out, c, sc, [disc[0] - sw[0], disc[1] - sw[1]], [disc[0] + sw[0], disc[1] + sw[1]]);
@@ -271,6 +278,7 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
+    let (mut seen, mut repeats) = (HashMap::new(), Vec::new());
     // This call's tick: what it uses and makes is spared by its eviction, whatever other calls
     // (another thread's) do meanwhile.
     let tick = {
@@ -288,7 +296,14 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
                     out.push(Some(e.mesh.clone()));
                 }
                 None => {
-                    missing.push(i);
+                    // A tile standing in for several (the same payload) is made once.
+                    match seen.get(&key(t)) {
+                        Some(&first) => repeats.push((i, first)),
+                        None => {
+                            seen.insert(key(t), i);
+                            missing.push(i);
+                        }
+                    }
                     out.push(None);
                 }
             }
@@ -300,7 +315,7 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
         let Payload::Vector(tile) = &*t.payload else { return None };
         Some(Arc::new(tessellate(tile, &shapes(style, source, tile, level), t.z)))
     };
-    let made: Vec<Option<Arc<TileMesh>>> = parallel(&missing, make);
+    let made: Vec<Option<Arc<TileMesh>>> = parallel(&missing, make).into_iter().map(Option::flatten).collect();
     let mut s = lock();
     for (&i, mesh) in missing.iter().zip(made) {
         let (Some(mesh), Some(t)) = (mesh, tiles.get(i)) else { continue };
@@ -313,14 +328,20 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
             *slot = Some(mesh);
         }
     }
+    for (i, first) in repeats {
+        let mesh = out.get(first).cloned().flatten();
+        if let Some(slot) = out.get_mut(i) {
+            *slot = mesh;
+        }
+    }
     if !missing.is_empty() {
         evict(&mut s, tick);
     }
     out
 }
 
-/// `f` of every item, natively shared among threads.
-fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+/// `f` of every item (`None` for one a worker didn't reach), natively shared among threads.
+fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(items.len()).min(16);
@@ -341,10 +362,10 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
                     });
                 }
             });
-            return out.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().flatten().collect();
+            return out.into_inner().unwrap_or_else(|e| e.into_inner());
         }
     }
-    items.iter().map(f).collect()
+    items.iter().map(|i| Some(f(i))).collect()
 }
 
 /// Drops the meshes of tiles and styles gone, and past the budget those unused longest (but
@@ -468,6 +489,10 @@ mod tests {
         let a = meshes(&style, "s", &tiles, 3);
         assert!(a[0].as_ref().is_some_and(|m| !m.indices.is_empty()) && a[1].is_none());
         let b = meshes(&style, "s", &tiles, 3);
+        // A payload standing in twice is made once, for both.
+        let twice = [tiles[0].clone(), tiles[0].clone()];
+        let t = meshes(&style, "s", &twice, 6);
+        assert!(Arc::ptr_eq(t[0].as_ref().unwrap(), t[1].as_ref().unwrap()));
         assert!(Arc::ptr_eq(a[0].as_ref().unwrap(), b[0].as_ref().unwrap()), "kept");
         // Another level is another mesh.
         let c = meshes(&style, "s", &tiles, 4);
