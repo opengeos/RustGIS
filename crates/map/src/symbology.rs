@@ -1004,15 +1004,19 @@ mod tests {
         assert_eq!(fmt_num(0.42), "0.42");
         assert_eq!(fmt_num(42.0), "42");
         assert_eq!(fmt_num(99.994), "99.99");
+        assert_eq!(fmt_num(99.995), "100");
         assert_eq!(fmt_num(99.996), "100");
         assert_eq!(fmt_num(9_999.4), "9999");
+        assert_eq!(fmt_num(9_999.5), "10K");
         assert_eq!(fmt_num(9_999.6), "10K");
         assert_eq!(fmt_num(35_000.0), "35K");
         assert_eq!(fmt_num(999_400.0), "999K");
+        assert_eq!(fmt_num(999_500.0), "1.0M");
         assert_eq!(fmt_num(999_600.0), "1.0M");
         assert_eq!(fmt_num(1_000_000.0), "1.0M");
         assert_eq!(fmt_num(1_234_567.0), "1.2M");
         assert_eq!(fmt_num(999_940_000.0), "999.9M");
+        assert_eq!(fmt_num(999_950_000.0), "1.0B");
         assert_eq!(fmt_num(999_960_000.0), "1.0B");
         assert_eq!(fmt_num(-999_600.0), "-1.0M");
     }
