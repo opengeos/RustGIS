@@ -13,7 +13,7 @@ use crate::{CmdResult, CommandSpec as C, Session};
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "as"?: "scan" (a TIFF, PNG or JPEG, even a photo or a GeoTIFF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("layer.addPhotos", "Add Photos", "Home › Add", add_photos).params(
             r#"{"paths"?: [JPEG photo files], "folder"?: "a folder of photos (every JPEG in it)", "name"?: "the layer (default Photos; photos join it when it exists)"}"#,
         ),
@@ -34,10 +34,10 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
-            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
+            .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
         C::new("layer.addEncodedPolyline", "Add Encoded Polyline", "Home › Add", add_encoded_polyline).params(
             r#"{"polyline": "encoded polyline text" | [texts] (one line each), "precision"?: 5 (Google) | 6 (OSRM, Valhalla), "name"?: text}"#,
         ),
@@ -482,14 +482,16 @@ fn gdb_path(path: &str) -> std::borrow::Cow<'_, str> {
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
     let path = &*gdb_path(path);
-    // A geotagged photo: a point in the photo layer.
-    #[cfg(not(target_arch = "wasm32"))]
-    if rustgis_data::photo::is_photo_name(path) {
+    // `"as": "scan"` opens a TIFF, PNG or JPEG as a picture with no coordinates, a photo too.
+    let scan = super::raster::wants_scan(p, path)?;
+    // A photo: a point in the photo layer (one without a GPS position is named and left out). In the
+    // browser `add_photos` asks for an upload, so a JPEG isn't taken for a scan there either.
+    if !scan && rustgis_data::photo::is_photo_name(path) {
         let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(PHOTOS).to_string();
         return add_photos(s, &json!({"paths": [path], "name": name}));
     }
     if rustgis_data::raster::is_raster_name(path) {
-        return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()));
+        return super::raster::add_path(s, path, ps(p, "name").map(str::trim).filter(|n| !n.is_empty()), scan);
     }
     // A Zarr store's folder: its first variable, or the one "layer" names.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1910,8 +1912,14 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://")) {
         return Err(format!("{url}: give an http://, https:// or s3:// address (Add Data opens files)"));
     }
+    // A scan (`"as"`) keeps the pixels and none of the coordinates: the file is downloaded whole and
+    // read as one (`add_named_bytes` checks it is an image), never read in place.
+    let scan = super::raster::as_scan(p)?;
     // A PMTiles archive is read a tile at a time, never downloaded whole.
     if lower.split(['?', '#']).next().is_some_and(|p| p.ends_with(".pmtiles")) {
+        if scan {
+            return Err(format!("{url}: a PMTiles archive is tiles, not a picture: it can't be opened as a scan"));
+        }
         let mut q = json!({"url": url, "kind": "pmtiles"});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);
@@ -1921,6 +1929,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     // A dated address (one file per date, `{date:YYYY}`) is read in place, following the time
     // slider: a GeoTIFF on the web, before anything fetches the address as it is.
     if rustgis_data::time::is_template(url) {
+        if scan {
+            return Err(format!("{url}: a dated address is read in place with its coordinates, so it can't be opened as a scan"));
+        }
         let web = lower.starts_with("https://") || lower.starts_with("http://");
         return if is_tiff_url(url) && web {
             add_cog(s, p, url)
@@ -1932,6 +1943,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A FlatGeobuf or GeoParquet: read in place by range when it has a spatial index (or a bbox
     // covering), otherwise downloaded whole.
+    if rustgis_data::source::is_remote_name(url) && scan {
+        return Err(format!("{url}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"));
+    }
     if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) {
         // In the browser nothing may wait: the app has fetched what opening needs already.
         #[cfg(target_arch = "wasm32")]
@@ -1952,7 +1966,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(target_arch = "wasm32")]
     {
         // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
-        if tiff && !super::b(p, "whole").unwrap_or(false) {
+        if tiff && !scan && !super::b(p, "whole").unwrap_or(false) {
             return add_cog(s, p, url);
         }
         // Downloaded by the app off the frame and added when it lands.
@@ -1962,7 +1976,11 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     {
         // Errors about the address itself name it already.
         let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
-        if tiff && !super::b(p, "whole").unwrap_or(false) && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)? {
+        if tiff
+            && !scan
+            && !super::b(p, "whole").unwrap_or(false)
+            && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)?
+        {
             return add_cog(s, p, url);
         }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;

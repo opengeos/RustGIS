@@ -6169,6 +6169,18 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // Opened as a scan, it is downloaded whole and has no coordinates, never read in place.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "as": "scan", "name": "Scan"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    assert_eq!(r["georeferenced"], false, "{r}");
+    // A dated address is read in place with its coordinates, so it can't be a scan.
+    let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{{date:YYYY}}.tif"), "as": "scan"})).unwrap_err();
+    assert!(e.contains("scan"), "{e}");
+    // Anything else in "as" is refused, not ignored, and tiles can't be a scan.
+    for (url, as_) in [("scene.tif", json!("pdf")), ("scene.tif", json!(3)), ("a.pmtiles", json!("scan")), ("a.fgb", json!("scan"))] {
+        let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{url}"), "as": as_})).unwrap_err();
+        assert!(e.contains("\"as\"") || e.contains("scan"), "{url}: {e}");
+    }
     // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
     let r = rustgis_data::raster::Raster::new(
         "strips",
@@ -10565,4 +10577,169 @@ fn zoom_level_matches_the_map_link() {
     s.run("map.goToLink", &json!({"url": "#7.5/48/10"})).unwrap();
     let z = s.zoom().unwrap();
     assert!((z - 7.5).abs() < 0.01, "{z}");
+}
+
+/// A 2×2 grey TIFF with no GeoTIFF tags, written by hand (little-endian, one strip).
+fn tagless_tiff() -> Vec<u8> {
+    // (tag, type 3 = short / 4 = long, value)
+    let entries: [(u16, u16, u32); 8] =
+        [(256, 3, 2), (257, 3, 2), (258, 3, 8), (262, 3, 1), (273, 4, 110), (277, 3, 1), (278, 3, 2), (279, 4, 4)];
+    let mut out = b"II*\0\x08\0\0\0".to_vec();
+    out.extend((entries.len() as u16).to_le_bytes());
+    for (tag, kind, value) in entries {
+        out.extend(tag.to_le_bytes());
+        out.extend(kind.to_le_bytes());
+        out.extend(1u32.to_le_bytes());
+        out.extend(value.to_le_bytes());
+    }
+    out.extend(0u32.to_le_bytes());
+    out.extend([10, 20, 30, 40]);
+    out
+}
+
+/// A raster with no coordinates (a TIFF without tags, a PNG, a JPEG) opens as a layer drawn over
+/// the view and marked as not georeferenced, from a path or from bytes; a project keeps where it
+/// was laid; a photo with a GPS position is still a photo.
+#[test]
+fn rasters_without_coordinates_open_laid_over_the_view() {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("rustgis-scans-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let encode = |format| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(40, 20, |x, y| image::Rgb([x as u8, y as u8, 9])))
+            .write_to(&mut out, format)
+            .unwrap();
+        out.into_inner()
+    };
+    let files = [
+        ("map.tif", tagless_tiff(), (2, 2, 1)),
+        ("plate.png", encode(image::ImageFormat::Png), (40, 20, 3)),
+        ("print.jpg", encode(image::ImageFormat::Jpeg), (40, 20, 3)),
+    ];
+    let mut s = world();
+    let view = crate::cmd::workspace::view_extent(&s);
+    for (name, bytes, (w, h, bands)) in &files {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        // A JPEG is a photo by default (without a GPS position it is named and left out).
+        let jpeg = name.ends_with(".jpg");
+        let mut q = json!({"path": path.display().to_string()});
+        if jpeg {
+            assert!(s.run("layer.addData", &q).is_err(), "a photo without a position is not added");
+            assert!(s.map().layer_by_name("print").is_none());
+            q["as"] = json!("scan");
+        }
+        let r = s.run("layer.addData", &q).unwrap();
+        let stem = name.split('.').next().unwrap();
+        assert_eq!((r["width"].as_u64(), r["height"].as_u64(), r["bands"].as_u64()), (Some(*w), Some(*h), Some(*bands)), "{r}");
+        assert_eq!(r["georeferenced"], false, "{r}");
+        assert!(r["note"].as_str().is_some_and(|t| t.contains("no coordinates")), "{r}");
+        assert!(s.notices.iter().any(|n| n.text.contains(stem) && n.text.contains("no coordinates")));
+        let rl = s.map().layer_by_name(stem).unwrap().raster.clone().unwrap();
+        let data = rl.data.clone().unwrap();
+        assert!(!data.georeferenced);
+        let e = data.extent();
+        assert!(e.min_x >= view.min_x && e.max_x <= view.max_x && e.min_y >= view.min_y && e.max_y <= view.max_y, "{e:?} in {view:?}");
+        assert!(rl.placement.is_some());
+        // The web app's way: the bytes.
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let mut q = json!({"fileName": name, "data": b64, "name": format!("{stem} upload")});
+        if jpeg {
+            q["as"] = json!("scan");
+        }
+        let r = s.run("layer.addDataBytes", &q).unwrap();
+        assert_eq!((r["georeferenced"].clone(), r["width"].as_u64()), (json!(false), Some(*w)), "{r}");
+    }
+    // The project lays a reopened scan where it was.
+    let before = s.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().extent();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert!(!again.georeferenced);
+    let (a, b) = (again.extent(), before);
+    assert!((a.min_x - b.min_x).abs() < 1e-9 && (a.max_y - b.max_y).abs() < 1e-9, "{a:?} vs {b:?}");
+    // Georeferencing it gives it coordinates for real.
+    let l = s.run("raster.georeference", &json!({"layer": "plate", "extent": [10.0, 40.0, 12.0, 41.0]})).unwrap();
+    assert!(l["extent"].is_array());
+    assert!(s.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().georeferenced);
+    // Damaged ones are errors, and add nothing.
+    let count = s.map().layers.len();
+    for (name, bytes, _) in &files {
+        let cut = base64::engine::general_purpose::STANDARD.encode(&bytes[..bytes.len() / 2]);
+        assert!(s.run("layer.addDataBytes", &json!({"fileName": name, "data": cut, "as": "scan"})).is_err(), "{name}");
+        std::fs::write(dir.join("cut"), &bytes[..bytes.len() / 2]).unwrap();
+        let cut_path = dir.join(format!("cut.{}", name.split('.').nth(1).unwrap()));
+        std::fs::rename(dir.join("cut"), &cut_path).unwrap();
+        assert!(s.run("layer.addData", &json!({"path": cut_path.display().to_string(), "as": "scan"})).is_err(), "{name}");
+    }
+    assert_eq!(s.map().layers.len(), count);
+    assert!(s.run("layer.addData", &json!({"path": dir.join("map.tif").display().to_string(), "as": "pdf"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A scan never leaves with coordinates it doesn't have: it can't be exported, and the tools that
+/// would give their result a place on the ground refuse it; a GeoTIFF opened `as` a scan is one
+/// too, in the project as well.
+#[test]
+fn scans_have_no_coordinates_to_give_away() {
+    let mut s = Session::new(Project::default());
+    let info = |s: &mut Session| s.run("raster.info", &json!({"layer": "utm"})).unwrap();
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "utm.tif", "data": utm_tiff_b64()})).unwrap();
+    assert!(r.get("georeferenced").is_none());
+    assert_eq!(info(&mut s)["georeferenced"], true);
+    s.run("raster.editPixels", &json!({"layer": "utm", "polygon": [[-81.5, 41.5], [-80.5, 41.5], [-81.0, 42.5]], "value": 1})).unwrap();
+    let r = s.run("layer.addDataBytes", &json!({"fileName": "utm.tif", "data": utm_tiff_b64(), "as": "scan", "name": "flat"})).unwrap();
+    assert_eq!(r["georeferenced"], false, "{r}");
+    let flat = |s: &mut Session| s.run("raster.info", &json!({"layer": "flat"})).unwrap();
+    assert_eq!(flat(&mut s)["georeferenced"], false);
+    let dir = std::env::temp_dir().join(format!("rustgis-scan-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.active_layer = s.map().layer_by_name("flat").map(|l| l.id);
+    let out = dir.join("flat.tif");
+    // A file left by an earlier, interrupted run would pass for one written now.
+    let _ = std::fs::remove_file(&out);
+    let e = s.run("share.exportRaster", &json!({"path": out.display().to_string()})).unwrap_err();
+    assert!(e.contains("georeference it first") && !out.exists(), "{e}");
+    let before = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap().placement;
+    let tools: [(&str, Value); 14] = [
+        ("raster.function", json!({"layer": "flat", "function": "hillshade"})),
+        ("raster.editPixels", json!({"layer": "flat", "polygon": [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]], "value": 1})),
+        ("raster.process", json!({"layer": "flat", "operation": "resample", "factor": 2})),
+        ("raster.process", json!({"layer": "flat", "operation": "clip"})),
+        // Refused before the polygons are looked for, let alone placed on it.
+        ("raster.process", json!({"layer": "flat", "operation": "clip", "polygon": "Nowhere"})),
+        ("raster.mosaic", json!({"inputs": ["flat", "utm"]})),
+        ("raster.change", json!({"before": "flat", "after": "flat"})),
+        ("raster.classify", json!({"layer": "flat", "classes": 2})),
+        ("raster.classifySupervised", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("raster.index", json!({"layer": "flat", "index": "ndvi", "red": 1, "nir": 1})),
+        ("raster.measure", json!({"layer": "flat", "kind": "distance", "points": [[0.0, 0.0], [0.1, 0.1]]})),
+        ("imagery.mesh", json!({"layer": "flat"})),
+        ("dl.classify", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("dl.train", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+    ];
+    let missed: Vec<String> = tools
+        .iter()
+        .filter_map(|(cmd, q)| match s.run(cmd, q) {
+            Err(e) if e.contains("no coordinates") => None,
+            other => Some(format!("{cmd}: {other:?}")),
+        })
+        .collect();
+    assert!(missed.is_empty(), "{missed:#?}");
+    let l = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap();
+    assert_eq!(l.placement, before);
+    assert!(!l.data.as_ref().unwrap().georeferenced, "still a scan");
+    // The project opens it as a scan, laid where it was, not as the GeoTIFF it came from.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("flat").unwrap().raster.clone().unwrap().data.unwrap();
+    assert!(!again.georeferenced);
+    // Georeferencing it gives it coordinates, and then it exports.
+    s.run("raster.georeference", &json!({"layer": "flat", "extent": [10.0, 40.0, 12.0, 41.0]})).unwrap();
+    assert!(s.run("share.exportRaster", &json!({"path": out.display().to_string()})).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
 }

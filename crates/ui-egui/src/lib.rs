@@ -60,6 +60,7 @@ mod stacui;
 mod table;
 mod textform;
 pub mod theme;
+mod tilelayer;
 mod tilt_drape;
 mod tilt_settle;
 mod timebar;
@@ -1750,7 +1751,10 @@ impl RustGisApp {
             }
             "ui.map.gpu" => {
                 self.map.gpu_enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.gpu_enabled);
-                if let Some(save) = &self.services.save_pref {
+                // `"remember": false` turns it on or off for this visit only (a `?gpu` link).
+                if p.get("remember").and_then(Value::as_bool) != Some(false)
+                    && let Some(save) = &self.services.save_pref
+                {
                     save("ui.map.gpu", if self.map.gpu_enabled { "1" } else { "0" });
                 }
                 self.map.invalidate();

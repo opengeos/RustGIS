@@ -3986,18 +3986,17 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Labels", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
-        col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "settings",
-                "Properties",
-                "Every label setting of this layer, in the Labeling pane.",
-                "ui.pane.labeling",
-                Value::Null,
-                app.ui.right == Some(RightPane::Labeling),
-            );
-        });
+        big(
+            ui,
+            app,
+            "label_properties",
+            "Properties",
+            "Every label setting of this layer, in the Labeling pane.",
+            "ui.pane.labeling",
+            Value::Null,
+            app.ui.right == Some(RightPane::Labeling),
+            false,
+        );
     });
     group(ui, "Label Range", |ui| {
         ui.vertical(|ui| {

@@ -35,6 +35,8 @@ struct Geo {
     nodata: Option<f64>,
     /// Why the file's own projection couldn't be read, if it has one.
     custom_error: Option<String>,
+    /// `false` for a TIFF with no GeoTIFF tags at all: `transform` is then a stand-in.
+    referenced: bool,
 }
 
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
@@ -69,6 +71,9 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
         (code, code.and_then(Crs::from_epsg))
     };
 
+    // A TIFF with none of the GeoTIFF tags is a scan; one with only some of them is damaged.
+    let tagless = keys.is_empty() && [33550u16, 33922, 34264].iter().all(|t| dec.find_tag(Tag::Unknown(*t)).ok().flatten().is_none());
+    let mut referenced = true;
     let mut affine = None;
     let transform = if let Some(m) = doubles(dec, 34264).filter(|m| m.len() >= 8) {
         let at = |i: usize| m.get(i).copied().unwrap_or(0.0);
@@ -77,11 +82,18 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
         }
         GeoTransform { origin_x: at(3), origin_y: at(7), pixel_width: at(0), pixel_height: at(5) }
     } else {
-        let scale = doubles(dec, 33550).filter(|s| s.len() >= 2).ok_or_else(|| err("the file isn't georeferenced"))?;
-        let tie = doubles(dec, 33922).filter(|t| t.len() >= 6).ok_or_else(|| err("the file isn't georeferenced"))?;
-        let s = |i: usize| scale.get(i).copied().unwrap_or(0.0);
-        let t = |i: usize| tie.get(i).copied().unwrap_or(0.0);
-        GeoTransform { origin_x: t(3) - t(0) * s(0), origin_y: t(4) + t(1) * s(1), pixel_width: s(0), pixel_height: -s(1) }
+        match (doubles(dec, 33550).filter(|s| s.len() >= 2), doubles(dec, 33922).filter(|t| t.len() >= 6)) {
+            (Some(scale), Some(tie)) => {
+                let s = |i: usize| scale.get(i).copied().unwrap_or(0.0);
+                let t = |i: usize| tie.get(i).copied().unwrap_or(0.0);
+                GeoTransform { origin_x: t(3) - t(0) * s(0), origin_y: t(4) + t(1) * s(1), pixel_width: s(0), pixel_height: -s(1) }
+            }
+            _ if tagless => {
+                referenced = false;
+                GeoTransform { origin_x: 0.0, origin_y: 0.0, pixel_width: 1.0, pixel_height: -1.0 }
+            }
+            _ => return Err(err("the file isn't georeferenced")),
+        }
     };
     // A point's value is at a pixel's centre: the image starts half a pixel up and left of it.
     let affine =
@@ -105,14 +117,15 @@ fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {
         .flatten()
         .and_then(|v| v.into_string().ok())
         .and_then(|s| s.trim_matches(|c: char| c == '\0' || c.is_whitespace()).parse::<f64>().ok());
-    Ok(Geo { transform, affine, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata, custom_error })
+    Ok(Geo { transform, affine, crs, unknown_epsg: code.filter(|_| crs.is_none()), geographic_model, nodata, custom_error, referenced })
 }
 
 /// A cloud-optimised GeoTIFF's coordinate system, georeferencing and no-data value, from its first
-/// image (as [`read`] finds them); `None` for a rotated or skewed image, which is read whole.
+/// image (as [`read`] finds them); `None` for a rotated or skewed image, or one with no GeoTIFF
+/// tags (a scan), which is read whole.
 pub(crate) fn cog_geo<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Option<(Crs, GeoTransform, Option<f64>)>> {
     let geo = geo_tags(dec)?;
-    if geo.affine.is_some() {
+    if geo.affine.is_some() || !geo.referenced {
         return Ok(None);
     }
     let crs = match geo.crs {
@@ -998,6 +1011,13 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
         decimate(&mut dec, iw, ih, nbands, planar, decimate_by, open)?
     };
 
+    // A scan keeps a stand-in transform, sized to the pixels read.
+    if !geo.referenced {
+        let mut r = Raster::new(name, w, h, bands, super::unreferenced(w, h), Crs::LonLat, geo.nodata, color, data_type)?;
+        r.georeferenced = false;
+        r.overview = overview;
+        return Ok(r);
+    }
     let mut transform = geo.transform;
     // How many full-image pixels one pixel read spans, across and down.
     let (sx, sy) = if decimate_by > 1 {
@@ -1051,6 +1071,8 @@ fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<Opener<'_>>)
 /// raster always writes its colour bands, as its 8-bit form did before.
 pub fn write(r: &Raster, band: usize) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder, colortype};
+    // A scan's place is only where it was laid on the view: not coordinates to write into a file.
+    r.require_coordinates().map_err(err)?;
     let mut out = std::io::Cursor::new(Vec::new());
     let mut enc = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Deflate(DeflateLevel::Balanced));
     let gt = r.transform;
@@ -1368,12 +1390,12 @@ mod tests {
     }
 
     #[test]
-    fn plain_tiff_is_not_georeferenced() {
+    fn plain_tiff_opens_as_a_scan() {
         use tiff::encoder::{TiffEncoder, colortype};
         let mut out = std::io::Cursor::new(Vec::new());
         TiffEncoder::new(&mut out).unwrap().write_image::<colortype::Gray8>(2, 2, &[1, 2, 3, 4]).unwrap();
-        let e = read(std::io::Cursor::new(out.into_inner()), "x").unwrap_err();
-        assert!(e.to_string().contains("georeferenced"), "{e}");
+        let r = read(std::io::Cursor::new(out.into_inner()), "x").unwrap();
+        assert_eq!((r.width, r.height, r.georeferenced), (2, 2, false));
     }
 
     #[test]

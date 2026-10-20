@@ -367,6 +367,8 @@ fn spectral(s: &mut Session, p: &Value) -> CmdResult {
 
 fn supervised(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
+    // Training polygons on the map mean nothing on a scan laid there to look at.
+    r.require_coordinates()?;
     let bands = bands_param(p, &r)?;
     let tl = ps(p, "training").ok_or("training (a polygon layer) is required")?;
     let l = s
@@ -425,6 +427,8 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
     match ps(p, "operation").ok_or("operation is required")? {
         "clip" if p.get("polygon").is_some_and(|v| !v.is_null()) => {
+            // Before the mask, which places the polygons on the raster's coordinates.
+            r.require_coordinates()?;
             let pl = ps(p, "polygon").ok_or("polygon is a polygon layer's name")?;
             let l = s
                 .map()
@@ -447,6 +451,8 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
             add(s, out, false)
         }
         "clip" => {
+            // Before the extent is placed on the raster's coordinates.
+            r.require_coordinates()?;
             let e = match p.get("extent").and_then(Value::as_array) {
                 Some(a) => {
                     let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
@@ -487,6 +493,7 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
         "resample" => {
             // Never coarser than the raster itself; trailing columns and rows short of a full
             // block are left out.
+            r.require_coordinates()?;
             let k = (uint(p, "factor").unwrap_or(2).clamp(2, 64) as u32).min(r.width.min(r.height)).max(1);
             let (w, h) = ((r.width / k).max(1), (r.height / k).max(1));
             // Each output pixel is the mean of the valid pixels it covers.
@@ -645,6 +652,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Whether `r` can join a mosaic on `first`'s grid: one coordinate system, cell size and band count.
 fn mosaic_matches(first: &Raster, r: &Raster) -> Result<(), String> {
+    first.require_coordinates()?;
+    r.require_coordinates()?;
     let (pw, ph) = (first.transform.pixel_width, first.transform.pixel_height);
     let same = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(b.abs());
     if r.crs != first.crs {
@@ -682,6 +691,7 @@ fn clip_window(
     mask: Option<&[bool]>,
     name: String,
 ) -> Result<Raster, String> {
+    r.require_coordinates()?;
     let (w, h) = (cols.end.saturating_sub(cols.start), rows.end.saturating_sub(rows.start));
     let nodata = if mask.is_some() { r.nodata.or(Some(NODATA as f64)) } else { r.nodata };
     let fill = nodata.map(|v| v as f32).unwrap_or(NODATA);
@@ -736,6 +746,7 @@ fn pixel_window(r: &Raster, e: &Extent) -> Option<(std::ops::Range<u32>, std::op
 fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let layer = ps(p, "layer").ok_or("layer is required")?.to_string();
     let r = raster(s, p)?;
+    r.require_coordinates()?;
     let ring: Vec<Coord> = p
         .get("polygon")
         .and_then(Value::as_array)
@@ -801,6 +812,10 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
         p.get("points").and_then(Value::as_array).ok_or("points is required")?.iter().take(10_000).map(point).collect::<Result<_, _>>()?;
     let kind = ps(p, "kind").ok_or("kind is required")?;
     let dem = ps(p, "layer").map(|n| raster_named(s, n)).transpose()?;
+    // A scan's heights would be read at the made-up place it is laid.
+    if let Some(d) = &dem {
+        d.require_coordinates()?;
+    }
     let z = |c: Coord| dem.as_ref().and_then(|d| rasterops::elevation_at(d, 0, c));
     // Ground lengths and areas on the map's body.
     let body = s.map().body();
@@ -958,6 +973,7 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
     let imgs: Vec<Arc<Raster>> = w.images.iter().map(|i| raster_named(s, i)).collect::<Result<_, _>>()?;
     let mut e = Extent::EMPTY;
     for r in &imgs {
+        r.require_coordinates()?;
         e = e.union(&r.extent());
     }
     let finest = imgs
@@ -1017,6 +1033,8 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the mesh is written to an .obj file".into());
     }
     let r = raster(s, p)?;
+    // The mesh is laid out in metres on the ground, which a scan has none of.
+    r.require_coordinates()?;
     let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
     let (cx, cy) = r.cell_size_m();
     let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);
