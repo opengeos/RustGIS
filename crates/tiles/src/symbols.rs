@@ -173,6 +173,15 @@ pub(crate) fn collect(
             }
             (SymbolPlacement::Point, GeomKind::Polygon) => {
                 for poly in polygons(lines().collect()) {
+                    // The pole lies inside the outer ring's box: a polygon whose box misses the
+                    // part of the tile near the screen gets no label there, so isn't searched.
+                    let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+                    for &(x, y) in poly.first().into_iter().flatten() {
+                        (lo, hi) = ((lo.0.min(x), lo.1.min(y)), (hi.0.max(x), hi.1.max(y)));
+                    }
+                    if !(lo.0 <= near[2] && hi.0 >= near[0] && lo.1 <= near[3] && hi.1 >= near[1]) {
+                        continue;
+                    }
                     if let Some(p) = pole_of_inaccessibility(&poly, ppp.max(1.0)) {
                         anchors.push((p, None));
                     }
