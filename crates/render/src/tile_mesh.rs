@@ -22,7 +22,7 @@ use rustgis_tiles::source::Resolved;
 use rustgis_tiles::style;
 use rustgis_tiles::template::TileId;
 
-use crate::gpu_scene::TileVertex;
+use crate::gpu_scene::TileMeshVertex;
 
 /// Round caps and joins, in the tessellation's units (a half width of 0.5): about 16 segments
 /// a circle, smooth at the widths roads are drawn at.
@@ -42,10 +42,12 @@ const BUDGET: usize = if cfg!(target_arch = "wasm32") { 128 << 20 } else { 512 <
 /// A tile's shapes as one mesh.
 #[derive(Debug, Default)]
 pub struct TileMesh {
-    pub vertices: Vec<TileVertex>,
+    pub vertices: Vec<TileMeshVertex>,
     pub indices: Vec<u32>,
     /// Bottom first.
     pub runs: Vec<MeshRun>,
+    /// Made while the sprite was on its way, without the pattern fills: not kept, made again.
+    pub waiting: bool,
 }
 
 /// The indices of one or more style layers showing at the same zooms.
@@ -99,7 +101,7 @@ pub fn dash_pattern(d: Option<&[f32]>) -> Option<[f32; 4]> {
 /// tile's north-west corner. Shapes lyon refuses are left out.
 pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
     let span = TileId::span(z) as f32;
-    let mut out: VertexBuffers<TileVertex, u32> = VertexBuffers::new();
+    let mut out: VertexBuffers<TileMeshVertex, u32> = VertexBuffers::new();
     let mut mesh_runs: Vec<MeshRun> = Vec::new();
     let mut fill = FillTessellator::new();
     let mut stroke = StrokeTessellator::new();
@@ -118,15 +120,28 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
             let geometry: Option<&[Vec<[f32; 2]>]> =
                 shape.feature.and_then(|(l, f)| tile.layers.get(l).and_then(|l| l.features.get(f))).map(|f| f.geometry.as_slice());
             match &shape.paint {
-                // A pattern isn't drawn yet: left out, as the CPU path leaves it out without the
-                // sprite, rather than drawn in the fill's colour.
-                Paint::Fill { pattern: Some(_), .. } => {}
                 Paint::Fill { color, .. } => {
                     let (c0, c1) = (premul(color[0]), premul(color[1]));
                     let vertex = |v: FillVertex| {
                         let p = v.position();
-                        TileVertex { position: map(p.x, p.y), color: c0, color_next: c1, ..TileVertex::default() }
+                        TileMeshVertex { position: map(p.x, p.y), color: c0, color_next: c1, ..TileMeshVertex::default() }
                     };
+                    // One convex ring (most buildings): a fan, without lyon's sweep.
+                    if let Some([ring]) = geometry
+                        && let Some(pts) = convex(ring)
+                    {
+                        let first = out.vertices.len() as u32;
+                        out.vertices.extend(pts.iter().map(|p| TileMeshVertex {
+                            position: map(p[0], p[1]),
+                            color: c0,
+                            color_next: c1,
+                            ..TileMeshVertex::default()
+                        }));
+                        for i in 1..pts.len() as u32 - 1 {
+                            out.indices.extend_from_slice(&[first, first + i, first + i + 1]);
+                        }
+                        continue;
+                    }
                     let mut b = Path::builder();
                     match geometry {
                         Some(rings) => {
@@ -157,14 +172,14 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                 }
                 Paint::Line { color, width, cap, join, dashes, rings } => {
                     let Some(lines) = geometry else { continue };
-                    let base = TileVertex {
+                    let base = TileMeshVertex {
                         color: premul(color[0]),
                         color_next: premul(color[1]),
                         width: *width,
                         // Declined styles aside (`shapes::vector_tiles`), a feature's own longer
                         // pattern is drawn solid rather than with the wrong dashes.
                         dashes: dash_pattern(dashes.as_deref()).unwrap_or_default(),
-                        ..TileVertex::default()
+                        ..TileMeshVertex::default()
                     };
                     let options = StrokeOptions::default()
                         .with_line_width(1.0)
@@ -194,7 +209,7 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
                         // On the line: lyon's position less half the width it was tessellated at.
                         let vertex = |v: StrokeVertex| {
                             let (p, n) = (v.position(), v.normal());
-                            TileVertex {
+                            TileMeshVertex {
                                 position: map(p.x - n.x * 0.5, p.y - n.y * 0.5),
                                 normal: [n.x, -n.y],
                                 along: v.advancement() * k,
@@ -236,23 +251,54 @@ pub fn tessellate(tile: &Tile, runs: &[Run], z: u8) -> TileMesh {
             _ => mesh_runs.push(MeshRun { first, count, min_zoom: run.min_zoom, max_zoom: run.max_zoom }),
         }
     }
-    TileMesh { vertices: out.vertices, indices: out.indices, runs: mesh_runs }
+    TileMesh { vertices: out.vertices, indices: out.indices, runs: mesh_runs, waiting: false }
+}
+
+/// A ring's points without its closing one, when they make a convex polygon of some area
+/// (turning one way all round, once): a fan of them fills it.
+fn convex(ring: &[[f32; 2]]) -> Option<&[[f32; 2]]> {
+    let pts = match ring {
+        [first, .., last] if first == last => ring.get(..ring.len() - 1)?,
+        _ => ring,
+    };
+    let n = pts.len();
+    if !(3..=64).contains(&n) {
+        return None;
+    }
+    let (mut sign, mut turned) = (0.0f32, 0.0f32);
+    for i in 0..n {
+        let (a, b, c) = (pts[i], pts[(i + 1) % n], pts[(i + 2) % n]);
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if !cross.is_finite() {
+            return None;
+        }
+        if cross != 0.0 {
+            if sign != 0.0 && cross.signum() != sign {
+                return None;
+            }
+            sign = cross.signum();
+        }
+        // The angle turned at b: all round once for a simple convex ring, more for a star.
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        turned += cross.atan2(u[0] * v[0] + u[1] * v[1]);
+    }
+    (sign != 0.0 && (turned.abs() - std::f32::consts::TAU).abs() < 0.1).then_some(pts)
 }
 
 /// Takes back what a shape lyon refused left in `out`: shapes lyon refuses are left out, not
 /// drawn in part.
-fn undo(out: &mut VertexBuffers<TileVertex, u32>, (vertices, indices): (usize, usize)) {
+fn undo(out: &mut VertexBuffers<TileMeshVertex, u32>, (vertices, indices): (usize, usize)) {
     out.vertices.truncate(vertices);
     out.indices.truncate(indices);
 }
 
 /// A disc (`inner == outer`, a fan about its centre) or a ring between two widths, centred at
 /// `c`: its rim vertices sit at the centre, moved out by the shader.
-fn circle(out: &mut VertexBuffers<TileVertex, u32>, c: [f32; 2], color: &[[f32; 4]; 2], inner: [f32; 2], outer: [f32; 2]) {
-    let base = TileVertex { position: c, color: premul(color[0]), color_next: premul(color[1]), ..TileVertex::default() };
+fn circle(out: &mut VertexBuffers<TileMeshVertex, u32>, c: [f32; 2], color: &[[f32; 4]; 2], inner: [f32; 2], outer: [f32; 2]) {
+    let base = TileMeshVertex { position: c, color: premul(color[0]), color_next: premul(color[1]), ..TileMeshVertex::default() };
     let at = |i: usize, width: [f32; 2]| {
         let a = i as f32 / RIM as f32 * std::f32::consts::TAU;
-        TileVertex { normal: [a.cos(), a.sin()], width: width.map(|w| w.max(0.0)), ..base }
+        TileMeshVertex { normal: [a.cos(), a.sin()], width: width.map(|w| w.max(0.0)), ..base }
     };
     let Ok(first) = u32::try_from(out.vertices.len()) else { return };
     let ring = inner != outer;
@@ -305,9 +351,17 @@ fn lock() -> MutexGuard<'static, Store> {
 }
 
 /// The meshes of `tiles` (bottom first) for `style`'s `source` at `level`, each kept once made
-/// (while its tile and the style are, and within a memory budget); `None` for one that is no
-/// vector tile. Natively, those missing are made on several threads.
-pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8) -> Vec<Option<Arc<TileMesh>>> {
+/// (while its tile and the style are, and within a memory budget; not one made while the sprite
+/// was on its way); `None` for one that is no vector tile, or not made yet: with `until`, those
+/// missing are made nearest `centre` first until then (a round of them at least). Natively, they
+/// are made on several threads.
+pub fn meshes(
+    style: &Arc<Resolved>,
+    source: &str,
+    tiles: &[DataTile],
+    level: u8,
+    until: Option<(web_time::Instant, [f64; 2])>,
+) -> Vec<Option<Arc<TileMesh>>> {
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
@@ -346,12 +400,45 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     let make = |i: &usize| -> Option<Arc<TileMesh>> {
         let t = tiles.get(*i)?;
         let Payload::Vector(tile) = &*t.payload else { return None };
-        Some(Arc::new(tessellate(tile, &shapes(style, source, tile, level), t.z)))
+        let s = shapes(style, source, tile, level);
+        Some(Arc::new(TileMesh { waiting: s.waiting, ..tessellate(tile, &s.runs, t.z) }))
     };
-    let made: Vec<Option<Arc<TileMesh>>> = parallel(&missing, make).into_iter().map(Option::flatten).collect();
+    let made: Vec<Option<Arc<TileMesh>>> = match until {
+        None => parallel(&missing, make).into_iter().map(Option::flatten).collect(),
+        Some((until, centre)) => {
+            let far = |i: &usize| {
+                tiles.get(*i).map_or(f64::MAX, |t| {
+                    let c = &t.clip;
+                    ((c.min_x + c.max_x) / 2.0 - centre[0]).hypot((c.min_y + c.max_y) / 2.0 - centre[1])
+                })
+            };
+            let mut order: Vec<usize> = (0..missing.len()).collect();
+            order.sort_by(|a, b| far(&missing[*a]).total_cmp(&far(&missing[*b])));
+            let round = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(16) };
+            let mut made: Vec<Option<Arc<TileMesh>>> = vec![None; missing.len()];
+            for (n, some) in order.chunks(round).enumerate() {
+                if n > 0 && web_time::Instant::now() >= until {
+                    break;
+                }
+                let picked: Vec<usize> = some.iter().filter_map(|&j| missing.get(j).copied()).collect();
+                for (&j, m) in some.iter().zip(parallel(&picked, make)) {
+                    if let Some(slot) = made.get_mut(j) {
+                        *slot = m.flatten();
+                    }
+                }
+            }
+            made
+        }
+    };
     let mut s = lock();
     for (&i, mesh) in missing.iter().zip(made) {
         let (Some(mesh), Some(t)) = (mesh, tiles.get(i)) else { continue };
+        if mesh.waiting {
+            if let Some(slot) = out.get_mut(i) {
+                *slot = Some(mesh);
+            }
+            continue;
+        }
         let entry = Entry { payload: Arc::downgrade(&t.payload), style: Arc::downgrade(style), mesh: mesh.clone(), used: tick };
         // The bytes are counted again by `evict`, below.
         s.entries.insert(key(t), entry);
@@ -463,23 +550,24 @@ mod tests {
             run(3, 5.0, Some(2), Paint::Circle { color: RED, radius: [3.0, 3.0], stroke: Some((RED, [1.0, 1.0])) }),
         ];
         let m = tessellate(&tile(), &runs, 1);
+        // A pattern fills with its colour (its image's average, from `shapes`).
         let patterned = [run(1, 0.0, Some(0), Paint::Fill { color: RED, pattern: Some("dots".into()) })];
-        assert!(tessellate(&tile(), &patterned, 1).indices.is_empty(), "patterns aren't drawn yet");
+        assert!(!tessellate(&tile(), &patterned, 1).indices.is_empty());
         // The background and the fill show at the same zooms: one run; the line and circle another.
         assert_eq!(m.runs.len(), 2);
         assert_eq!(m.shown(4.0).count(), 1);
         assert_eq!(m.shown(6.0).map(|r| r.len()).sum::<usize>(), m.indices.len());
         assert!(m.indices.iter().all(|&i| (i as usize) < m.vertices.len()));
-        let fills: Vec<&TileVertex> = m.vertices.iter().filter(|v| v.width == [0.0, 0.0]).collect();
+        let fills: Vec<&TileMeshVertex> = m.vertices.iter().filter(|v| v.width == [0.0, 0.0]).collect();
         // Premultiplied, at the level and the next; in map units, y north from the corner.
         assert!(fills.iter().all(|v| v.color == [128, 0, 0, 128] && v.color_next == [255, 0, 0, 255]));
         assert!(fills.iter().all(|v| (0.0..=span).contains(&v.position[0]) && (-span..=0.0).contains(&v.position[1])));
         assert!(fills.iter().any(|v| v.position == [span, -span]), "the background fills the square");
         // The line's vertices lie on it, each side of it, dashed (an odd pattern repeated),
         // further along at its end.
-        let strokes: Vec<&TileVertex> = m.vertices.iter().filter(|v| v.width == [2.0, 4.0]).collect();
+        let strokes: Vec<&TileMeshVertex> = m.vertices.iter().filter(|v| v.width == [2.0, 4.0]).collect();
         // Unit normals, longer at the mitred corner.
-        let reach = |v: &&TileVertex| v.normal[0].hypot(v.normal[1]);
+        let reach = |v: &&TileMeshVertex| v.normal[0].hypot(v.normal[1]);
         assert!(strokes.iter().all(|v| (1.0 - 1e-3..=4.0).contains(&reach(v)) && v.dashes == [3.0, 3.0, 0.0, 0.0]));
         assert!(strokes.iter().any(|v| (reach(v) - std::f32::consts::SQRT_2).abs() < 1e-3));
         let quarter = span / 4.0;
@@ -540,16 +628,67 @@ mod tests {
         let at = Extent::new(0.0, 0.0, 1.0, 1.0);
         let tiles =
             [DataTile { payload: payload.clone(), at, z: 1, clip: at }, DataTile { payload: Arc::new(Payload::Empty), at, z: 1, clip: at }];
-        let a = meshes(&style, "s", &tiles, 3);
+        let a = meshes(&style, "s", &tiles, 3, None);
         assert!(a[0].as_ref().is_some_and(|m| !m.indices.is_empty()) && a[1].is_none());
-        let b = meshes(&style, "s", &tiles, 3);
+        let b = meshes(&style, "s", &tiles, 3, None);
         // A payload standing in twice is made once, for both.
         let twice = [tiles[0].clone(), tiles[0].clone()];
-        let t = meshes(&style, "s", &twice, 6);
+        let t = meshes(&style, "s", &twice, 6, None);
         assert!(Arc::ptr_eq(t[0].as_ref().unwrap(), t[1].as_ref().unwrap()));
         assert!(Arc::ptr_eq(a[0].as_ref().unwrap(), b[0].as_ref().unwrap()), "kept");
         // Another level is another mesh.
-        let c = meshes(&style, "s", &tiles, 4);
+        let c = meshes(&style, "s", &tiles, 4, None);
         assert!(!Arc::ptr_eq(a[0].as_ref().unwrap(), c[0].as_ref().unwrap()));
+        // Out of time before it starts: a round made, nearest the centre first; the rest later.
+        let many: Vec<DataTile> = (0..64)
+            .map(|i| {
+                let at = Extent::new(f64::from(i), 0.0, f64::from(i) + 1.0, 1.0);
+                DataTile { payload: Arc::new(Payload::Vector(tile_named("parks"))), at, z: 1, clip: at }
+            })
+            .collect();
+        let some = meshes(&style, "s", &many, 5, Some((web_time::Instant::now(), [63.5, 0.5])));
+        let made = some.iter().filter(|m| m.is_some()).count();
+        assert!(made >= 1 && made < many.len() && some[63].is_some() && some[0].is_none(), "{made} made");
+        let all = meshes(&style, "s", &many, 5, Some((web_time::Instant::now() + std::time::Duration::from_secs(60), [0.0, 0.0])));
+        assert!(all.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn convex_rings_are_fanned() {
+        let square = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]];
+        assert_eq!(convex(&square).map(<[_]>::len), Some(4));
+        // Not convex, a star (turning twice round), a line, nothing at all: lyon's.
+        assert!(convex(&[[0.0, 0.0], [10.0, 0.0], [5.0, 2.0], [10.0, 10.0], [0.0, 10.0]]).is_none());
+        let star: Vec<[f32; 2]> = (0..5)
+            .map(|i| {
+                let a = i as f32 * 4.0 * std::f32::consts::PI / 5.0;
+                [a.cos(), a.sin()]
+            })
+            .collect();
+        assert!(convex(&star).is_none());
+        assert!(convex(&[[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]).is_none());
+        assert!(convex(&[[0.0, 0.0], [f32::NAN, 1.0], [2.0, 0.0]]).is_none());
+        // A convex building fills as lyon fills it: the same area.
+        let area = |m: &TileMesh| {
+            m.indices
+                .chunks(3)
+                .map(|t| {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| m.vertices[i as usize].position);
+                    ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
+                })
+                .sum::<f32>()
+        };
+        let mut t = tile();
+        t.layers[0].features[0].geometry = vec![vec![[0.0, 0.0], [2048.0, 0.0], [2048.0, 2048.0], [0.0, 2048.0], [0.0, 0.0]]];
+        let m = tessellate(&t, &[run(0, 0.0, Some(0), Paint::Fill { color: RED, pattern: None })], 1);
+        let quarter = TileId::span(1) as f32 / 2.0;
+        assert_eq!(m.vertices.len(), 4);
+        assert!((area(&m) - quarter * quarter).abs() / (quarter * quarter) < 1e-4);
+    }
+
+    fn tile_named(name: &str) -> Tile {
+        let mut t = tile();
+        t.layers[0].name = name.into();
+        t
     }
 }

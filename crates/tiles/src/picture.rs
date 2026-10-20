@@ -125,8 +125,15 @@ pub fn paced<R>(pace: Pace, f: impl FnOnce() -> R) -> (R, Option<Unfinished>) {
     (r, lacks)
 }
 
+/// The pace the map being drawn on this thread draws what it lacks at (inside [`paced`]), and
+/// until when it may draw in this frame: for other renderers that draw a frame's worth at a time
+/// (the GPU map's tile meshes).
+pub fn pace() -> Option<(Pace, Instant)> {
+    PACE.with(|p| p.get()).map(|(pace, _)| (pace, Instant::now() + FRAME))
+}
+
 /// Notes what the map drawn inside [`paced`] still lacks.
-fn unfinished(u: Unfinished) {
+pub fn unfinished(u: Unfinished) {
     PACE.with(|p| {
         if let Some((pace, lacks)) = p.get() {
             p.set(Some((pace, lacks.max(Some(u)))));

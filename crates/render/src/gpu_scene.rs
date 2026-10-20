@@ -83,6 +83,22 @@ pub enum DrawCmd {
     /// texture per picture across frames and moves the tiles with the camera as it moves the
     /// meshes, so a map with a basemap stays sharp while it pans and zooms.
     Tiles { origin: [f64; 2], tiles: Vec<TileQuad> },
+    /// One vector tile layer's tiles as meshes (see `tile_mesh`): the GPU keeps each mesh's
+    /// buffers across frames, shows the layers of its runs that show at the camera's zoom and
+    /// clips each tile to its square, as MapLibre draws its tiles.
+    TileMeshes { tiles: Vec<MeshTile> },
+}
+
+/// One tile of a [`DrawCmd::TileMeshes`].
+#[derive(Clone)]
+pub struct MeshTile {
+    pub mesh: Arc<crate::tile_mesh::TileMesh>,
+    /// The tile's north-west corner, map units: the mesh's origin.
+    pub origin: [f64; 2],
+    /// The square it is drawn in, from `origin`: least x and y, greatest x and y.
+    pub clip: [f32; 4],
+    /// The level the mesh was made for.
+    pub level: u8,
 }
 
 /// One tile of a [`DrawCmd::Tiles`].
@@ -152,7 +168,7 @@ pub struct MeshVertex {
 /// by half its `width` (a disc's diameter, or across a ring's edge).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct TileVertex {
+pub struct TileMeshVertex {
     /// Map units from the tile's north-west corner (x east, y north).
     pub position: [f32; 2],
     pub normal: [f32; 2],
@@ -192,9 +208,9 @@ mod tests {
     /// The layout a vertex buffer of tile meshes reads (see `ui-egui`'s `mapgpu`).
     #[test]
     fn tile_vertices_are_laid_out_for_the_gpu() {
-        assert_eq!(std::mem::size_of::<TileVertex>(), 52);
-        let v = TileVertex::default();
-        let at = |f: *const u8| f as usize - (&v as *const TileVertex as usize);
+        assert_eq!(std::mem::size_of::<TileMeshVertex>(), 52);
+        let v = TileMeshVertex::default();
+        let at = |f: *const u8| f as usize - (&v as *const TileMeshVertex as usize);
         assert_eq!(at(v.normal.as_ptr().cast()), 8);
         assert_eq!(at(v.color.as_ptr()), 16);
         assert_eq!(at(v.color_next.as_ptr()), 20);
