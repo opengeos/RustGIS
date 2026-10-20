@@ -2201,19 +2201,20 @@ mod tests {
     fn owned_resources_are_destroyed_once_dropped() {
         // In the browser a dropped wgpu resource keeps its GPU memory until the garbage
         // collector runs: every scene's images and meshes are destroyed when it goes instead.
-        struct Counted(std::rc::Rc<std::cell::Cell<u32>>);
+        use std::sync::atomic::{AtomicU32, Ordering};
+        struct Counted(Arc<AtomicU32>);
         impl Destroy for Counted {
             fn destroy(&self) {
-                self.0.set(self.0.get() + 1);
+                self.0.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let n = std::rc::Rc::new(std::cell::Cell::new(0));
+        let n = Arc::new(AtomicU32::new(0));
         let shared = Arc::new(Owned(Counted(n.clone())));
         let held = shared.clone();
         drop(shared);
-        assert_eq!(n.get(), 0, "destroyed while a scene still draws it");
+        assert_eq!(n.load(Ordering::Relaxed), 0, "destroyed while a scene still draws it");
         drop(held);
-        assert_eq!(n.get(), 1);
+        assert_eq!(n.load(Ordering::Relaxed), 1);
     }
 
     #[test]
