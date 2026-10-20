@@ -368,13 +368,10 @@ pub fn meshes(
     level: u8,
     until: Option<(web_time::Instant, [f64; 2])>,
 ) -> Vec<Option<Arc<TileMesh>>> {
-    // Whether the style's sprite is still on its way (asked once, only if a mesh waits on it).
-    let mut sprite_pending: Option<bool> = None;
-    let mut still_waiting = || {
-        *sprite_pending.get_or_insert_with(|| {
-            style.sprite.as_deref().is_some_and(|b| matches!(rustgis_tiles::sprite::load(b, false), rustgis_tiles::sprite::Load::Pending))
-        })
-    };
+    // Whether the style's sprite is still on its way, asked before the store is locked (a
+    // lookup in the sprites the tile cache keeps).
+    let sprite_pending =
+        style.sprite.as_deref().is_some_and(|b| matches!(rustgis_tiles::sprite::load(b, false), rustgis_tiles::sprite::Load::Pending));
     let key = |t: &DataTile| Key { payload: Arc::as_ptr(&t.payload) as usize, style: Arc::as_ptr(style) as usize, level };
     let mut out: Vec<Option<Arc<TileMesh>>> = Vec::with_capacity(tiles.len());
     let mut missing = Vec::new();
@@ -389,7 +386,7 @@ pub fn meshes(
             let found = s.entries.get_mut(&key(t)).filter(|e| {
                 e.payload.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &t.payload))
                     && e.style.upgrade().is_some_and(|x| Arc::ptr_eq(&x, style))
-                    && (!e.waiting || still_waiting())
+                    && (!e.waiting || sprite_pending)
             });
             match found {
                 Some(e) => {
