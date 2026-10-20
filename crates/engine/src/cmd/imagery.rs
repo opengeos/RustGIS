@@ -403,6 +403,7 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
         "resample" => {
             // Never coarser than the raster itself; trailing columns and rows short of a full
             // block are left out.
+            r.require_coordinates()?;
             let k = (uint(p, "factor").unwrap_or(2).clamp(2, 64) as u32).min(r.width.min(r.height)).max(1);
             let (w, h) = ((r.width / k).max(1), (r.height / k).max(1));
             // Each output pixel is the mean of the valid pixels it covers.
@@ -561,6 +562,8 @@ fn raster_mosaic(s: &mut Session, p: &Value) -> CmdResult {
 
 /// Whether `r` can join a mosaic on `first`'s grid: one coordinate system, cell size and band count.
 fn mosaic_matches(first: &Raster, r: &Raster) -> Result<(), String> {
+    first.require_coordinates()?;
+    r.require_coordinates()?;
     let (pw, ph) = (first.transform.pixel_width, first.transform.pixel_height);
     let same = |a: f64, b: f64| (a - b).abs() <= 1e-6 * a.abs().max(b.abs());
     if r.crs != first.crs {
@@ -598,6 +601,7 @@ fn clip_window(
     mask: Option<&[bool]>,
     name: String,
 ) -> Result<Raster, String> {
+    r.require_coordinates()?;
     let (w, h) = (cols.end.saturating_sub(cols.start), rows.end.saturating_sub(rows.start));
     let nodata = if mask.is_some() { r.nodata.or(Some(NODATA as f64)) } else { r.nodata };
     let fill = nodata.map(|v| v as f32).unwrap_or(NODATA);
@@ -652,6 +656,7 @@ fn pixel_window(r: &Raster, e: &Extent) -> Option<(std::ops::Range<u32>, std::op
 fn edit_pixels(s: &mut Session, p: &Value) -> CmdResult {
     let layer = ps(p, "layer").ok_or("layer is required")?.to_string();
     let r = raster(s, p)?;
+    r.require_coordinates()?;
     let ring: Vec<Coord> = p
         .get("polygon")
         .and_then(Value::as_array)
@@ -874,6 +879,7 @@ fn mosaic(s: &mut Session, p: &Value) -> CmdResult {
     let imgs: Vec<Arc<Raster>> = w.images.iter().map(|i| raster_named(s, i)).collect::<Result<_, _>>()?;
     let mut e = Extent::EMPTY;
     for r in &imgs {
+        r.require_coordinates()?;
         e = e.union(&r.extent());
     }
     let finest = imgs
