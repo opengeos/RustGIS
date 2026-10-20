@@ -129,18 +129,21 @@ impl<T> Queue<T> {
                 self.active.remove(host);
             }
         }
-        self.next(asked, latest)
+        self.next(host, asked, latest)
     }
 
-    fn next(&mut self, asked: impl Fn(&str) -> Option<Instant>, latest: Instant) -> Next<T> {
+    /// The newest waiting tile of `host` to take the place it freed, and the stale tiles passed
+    /// on the way to it (dropped). Only `host` has a place free (the others were full when their
+    /// tiles waited), so the walk stops once it is taken: a long queue of tiles still wanted
+    /// (an export) costs a step a fetch, not the whole queue.
+    fn next(&mut self, host: &str, asked: impl Fn(&str) -> Option<Instant>, latest: Instant) -> Next<T> {
         let mut out = Next { start: Vec::new(), drop: Vec::new() };
         let mut i = self.waiting.len();
-        while i > 0 {
+        while i > 0 && self.active.get(host).copied().unwrap_or(0) < cap(host) {
             i -= 1;
             let Some(w) = self.waiting.get(i) else { break };
             let stale = is_stale(&asked, &w.url, latest);
-            let free = self.active.get(&w.host).copied().unwrap_or(0) < cap(&w.host);
-            if !stale && !free {
+            if !stale && w.host != host {
                 continue;
             }
             let w = self.waiting.remove(i);
@@ -150,6 +153,9 @@ impl<T> Queue<T> {
                 *self.active.entry(w.host.clone()).or_insert(0) += 1;
                 out.start.push(w);
             }
+        }
+        if self.waiting.is_empty() {
+            self.sweep_at = SWEEP_AT;
         }
         out
     }
@@ -207,9 +213,14 @@ mod tests {
         let later = then + STALE + Duration::from_millis(1);
         let waiting_old = tile(PER_HOST);
         // The newer waiting tile is still asked for, the older one was last asked for long ago.
-        let next = q.done("tiles.example.com", |u| Some(if u == waiting_old { then } else { later }), later);
-        assert_eq!(next.drop.iter().map(|w| w.job).collect::<Vec<_>>(), vec![PER_HOST]);
+        let asked = |u: &str| Some(if u == waiting_old { then } else { later });
+        let next = q.done("tiles.example.com", asked, later);
+        assert!(next.drop.is_empty());
         assert_eq!(next.start.iter().map(|w| w.job).collect::<Vec<_>>(), vec![PER_HOST + 1]);
+        // Reached on the next fetch over, the older one is dropped rather than fetched.
+        let next = q.done("tiles.example.com", asked, later);
+        assert_eq!(next.drop.iter().map(|w| w.job).collect::<Vec<_>>(), vec![PER_HOST]);
+        assert!(next.start.is_empty());
         assert_eq!(q.waiting(), 0);
     }
 
