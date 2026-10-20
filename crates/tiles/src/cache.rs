@@ -215,11 +215,13 @@ fn start(url: String, want: Want) {
     let mut swept = Vec::new();
     let now = {
         let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
-        let c = lock();
+        let mut c = lock();
         let latest = c.latest.unwrap_or_else(Instant::now);
-        q.push(url, want, |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept)
+        let now = q.push(url, want, |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept);
+        // Under the same lock as the choice: a tile asked for again meanwhile isn't forgotten.
+        forget(&mut c, &swept);
+        now
     };
-    forget(swept);
     launch(now.into_iter().collect());
 }
 
@@ -228,26 +230,23 @@ fn start(url: String, want: Want) {
 fn release(host: &str) {
     let next = {
         let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
-        let c = lock();
+        let mut c = lock();
         let latest = c.latest.unwrap_or_else(Instant::now);
-        q.done(host, |url| c.slots.get(url).map(|s| s.asked), latest)
+        let next = q.done(host, |url| c.slots.get(url).map(|s| s.asked), latest);
+        forget(&mut c, &next.drop);
+        next
     };
-    forget(next.drop);
     launch(next.start);
 }
 
 /// Forgets tiles dropped unfetched: no longer under way, and fetched again when next asked for.
-fn forget(dropped: Vec<Waiting<Want>>) {
-    if dropped.is_empty() {
-        return;
-    }
-    let mut c = lock();
-    for w in &dropped {
+/// Called holding the cache's lock taken to choose them, so a tile can't be asked for between.
+fn forget(c: &mut Cache, dropped: &[Waiting<Want>]) {
+    for w in dropped {
         if matches!(c.slots.get(&w.url), Some(Slot { entry: Entry::Pending, .. })) {
             c.slots.remove(&w.url);
         }
     }
-    drop(c);
     IN_FLIGHT.fetch_sub(dropped.len(), Ordering::Release);
 }
 

@@ -26,7 +26,8 @@ pub(crate) const LOCAL: usize = 32;
 /// A waiting tile is dropped once the map has gone this long asking for others but not for it.
 pub(crate) const STALE: Duration = Duration::from_millis(1500);
 /// Beyond this many tiles waiting, the stale ones are swept out at once rather than when their
-/// turn comes, so a long pan doesn't pile up tiles the map no longer wants.
+/// turn comes, so a long pan doesn't pile up tiles the map no longer wants (and again each time
+/// the queue doubles past what a sweep left).
 pub(crate) const SWEEP_AT: usize = 2048;
 
 /// The server an address is fetched from (`host[:port]`, lowercase), or `""` for a local read,
@@ -78,11 +79,14 @@ pub(crate) struct Next<T> {
 pub(crate) struct Queue<T> {
     waiting: Vec<Waiting<T>>,
     active: HashMap<String, usize>,
+    /// How many may wait before the next sweep: twice what a sweep left, so sweeping stays
+    /// linear in the tiles asked for however many are still wanted.
+    sweep_at: usize,
 }
 
 impl<T> Default for Queue<T> {
     fn default() -> Self {
-        Self { waiting: Vec::new(), active: HashMap::new() }
+        Self { waiting: Vec::new(), active: HashMap::new(), sweep_at: SWEEP_AT }
     }
 }
 
@@ -106,10 +110,11 @@ impl<T> Queue<T> {
             return Some(w);
         }
         self.waiting.push(w);
-        if self.waiting.len() > SWEEP_AT {
+        if self.waiting.len() > self.sweep_at {
             let (stale, kept): (Vec<_>, Vec<_>) =
                 std::mem::take(&mut self.waiting).into_iter().partition(|w| is_stale(&asked, &w.url, latest));
             self.waiting = kept;
+            self.sweep_at = (self.waiting.len() * 2).max(SWEEP_AT);
             swept.extend(stale);
         }
         None

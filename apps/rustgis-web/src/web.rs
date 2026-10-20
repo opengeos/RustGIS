@@ -422,24 +422,32 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
-/// How long a tile or document (at most `cache::MAX_BYTES`; data the user adds is a download,
-/// without a timeout) may take to come in, its body included.
-const TILE_TIMEOUT_MS: u32 = 30_000;
+/// How long a tile or document fetch may go without anything coming in: the answer's headers,
+/// or the next part of its body. A slow but steady answer is never cut off; one that stalls is
+/// given up, so it doesn't stay under way forever, holding its server's place in the queue.
+/// Downloads the user asked for have none.
+const STALL_MS: i32 = 30_000;
 
-/// Whether this browser has `AbortSignal.timeout`.
-fn abort_timeout_supported() -> bool {
-    let global = js_sys::global();
-    js_sys::Reflect::get(&global, &"AbortSignal".into())
-        .ok()
-        .filter(|c| !c.is_undefined())
-        .and_then(|c| js_sys::Reflect::get(&c, &"timeout".into()).ok())
-        .is_some_and(|f| f.is_function())
-}
-
-/// Whether a fetch failed because its `AbortSignal.timeout` ran out.
-fn timed_out(e: &wasm_bindgen::JsValue) -> bool {
-    // A `DOMException` named `TimeoutError`, read by name whatever its prototype.
-    js_sys::Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).is_some_and(|n| n == "TimeoutError")
+/// What a step of a fetch waits for, or `None` once it has gone [`STALL_MS`] with nothing (the
+/// fetch is then aborted through `abort`).
+async fn unless_stalled(
+    step: js_sys::Promise,
+    abort: Option<&web_sys::AbortController>,
+) -> Option<Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>> {
+    let Some(abort) = abort else { return Some(wasm_bindgen_futures::JsFuture::from(step).await) };
+    let stalled = wasm_bindgen::JsValue::from_str("rustgis-stalled");
+    let marker = stalled.clone();
+    let timer = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(w) = web_sys::window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_1(&resolve, STALL_MS, &marker);
+        }
+    });
+    let raced = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::race(&js_sys::Array::of2(&step, &timer))).await;
+    if raced.as_ref().is_ok_and(|v| *v == stalled) {
+        abort.abort();
+        return None;
+    }
+    Some(raced)
 }
 
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
@@ -463,13 +471,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         (None, None) => None,
     };
     let init = web_sys::RequestInit::new();
-    // A tile or document that hasn't come in 30 seconds (as natively) is given up, so it doesn't
-    // stay under way forever, holding its server's place in the queue (`cache`). Downloads the
-    // user asked for may take longer.
-    // (`AbortSignal.timeout` is missing from older browsers, Safari before 16: no timeout there.)
-    if limit.is_none() && abort_timeout_supported() {
-        init.set_signal(Some(&web_sys::AbortSignal::timeout_with_u32(TILE_TIMEOUT_MS)));
+    // A tile or document that stalls is given up (see `STALL_MS`).
+    let abort = if limit.is_none() { web_sys::AbortController::new().ok() } else { None };
+    if let Some(a) = &abort {
+        init.set_signal(Some(&a.signal()));
     }
+    let stalled = || format!("nothing came in {} seconds", STALL_MS / 1000);
     if asked.is_some() || !prepared.headers.is_empty() {
         let headers = web_sys::Headers::new().map_err(err)?;
         if let Some(r) = &asked {
@@ -487,12 +494,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let promise = window.fetch_with_str_and_init(url, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.
-    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(promise)
+    let resp: web_sys::Response = unless_stalled(promise, abort.as_ref())
         .await
+        .ok_or_else(stalled)?
         .map_err(|e| {
-            if timed_out(&e) {
-                return format!("no answer in {} seconds", TILE_TIMEOUT_MS / 1000);
-            }
             let why = e.dyn_ref::<js_sys::Error>().map(|e| String::from(e.message())).unwrap_or_else(|| err(e));
             format!(
                 "the browser couldn't reach it (offline, blocked by a browser extension or the network, or the server doesn't accept requests from web pages): {why}"
@@ -536,9 +541,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;
         loop {
             // Headers came and then the body stalled: given up as a fetch that doesn't answer.
-            let chunk = wasm_bindgen_futures::JsFuture::from(reader.read())
-                .await
-                .map_err(|e| if timed_out(&e) { format!("no answer in {} seconds", TILE_TIMEOUT_MS / 1000) } else { err(e) })?;
+            let Some(chunk) = unless_stalled(reader.read(), abort.as_ref()).await else {
+                let _ = reader.cancel();
+                return Err(stalled());
+            };
+            let chunk = chunk.map_err(err)?;
             if js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
                 break;
             }
