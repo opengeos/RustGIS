@@ -437,12 +437,17 @@ async fn unless_stalled(
     let Some(abort) = abort else { return Some(wasm_bindgen_futures::JsFuture::from(step).await) };
     let stalled = wasm_bindgen::JsValue::from_str("rustgis-stalled");
     let marker = stalled.clone();
+    let handle = std::cell::Cell::new(None);
     let timer = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(w) = web_sys::window() {
-            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_1(&resolve, STALL_MS, &marker);
+            handle.set(w.set_timeout_with_callback_and_timeout_and_arguments_1(&resolve, STALL_MS, &marker).ok());
         }
     });
     let raced = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::race(&js_sys::Array::of2(&step, &timer))).await;
+    // Answered in time: the timer goes, rather than one waiting out every step of every fetch.
+    if let (Some(w), Some(h)) = (web_sys::window(), handle.get()) {
+        w.clear_timeout_with_handle(h);
+    }
     if raced.as_ref().is_ok_and(|v| *v == stalled) {
         abort.abort();
         return None;
@@ -541,10 +546,8 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             body.get_reader().dyn_into().map_err(|_| "the response has no readable body".to_string())?;
         loop {
             // Headers came and then the body stalled: given up as a fetch that doesn't answer.
-            let Some(chunk) = unless_stalled(reader.read(), abort.as_ref()).await else {
-                let _ = reader.cancel();
-                return Err(stalled());
-            };
+            // (Aborting the fetch has cancelled its body too.)
+            let Some(chunk) = unless_stalled(reader.read(), abort.as_ref()).await else { return Err(stalled()) };
             let chunk = chunk.map_err(err)?;
             if js_sys::Reflect::get(&chunk, &"done".into()).ok().and_then(|d| d.as_bool()).unwrap_or(true) {
                 break;
