@@ -858,6 +858,16 @@ pub const MAX_LABEL_CLASSES: usize = 64;
 /// The name the Default class goes by until it is renamed.
 pub const DEFAULT_LABEL_CLASS: &str = "Default";
 
+/// The longest label class name kept (characters).
+pub const MAX_LABEL_CLASS_NAME: usize = 100;
+
+/// A label class name as it is kept: trimmed and cut to [`MAX_LABEL_CLASS_NAME`] characters (not
+/// ending in the space it was cut at). Empty when there's no name.
+pub fn label_class_name(name: &str) -> String {
+    let name: String = name.trim().chars().take(MAX_LABEL_CLASS_NAME).collect();
+    name.trim_end().to_string()
+}
+
 /// Label settings for a layer: on or off, and its label classes (#618). A feature is labelled by
 /// the first of `classes` whose SQL clause it matches, else by `default`, which is checked last
 /// (the rest of the features). Saved as before: the Default class's settings sit beside `enabled`
@@ -885,16 +895,21 @@ struct LabelingFile {
 
 impl From<LabelingFile> for Labeling {
     /// A project file is hostile input, and every feature drawn is matched against the classes:
-    /// at most [`MAX_LABEL_CLASSES`] are kept, each named, by a name no class before it nor
-    /// Default has (ASCII case aside), as the commands keep them. The others are dropped, since
-    /// commands and annotation classes (`"CLASS" = 'name'`) tell classes apart by name.
-    fn from(f: LabelingFile) -> Self {
+    /// names are kept as the commands keep them ([`label_class_name`]; Default's is "Default"
+    /// when it has none), and at most [`MAX_LABEL_CLASSES`] classes, each named, by a name no
+    /// class before it nor Default has (ASCII case aside). The others are dropped, since commands
+    /// and annotation classes (`"CLASS" = 'name'`) tell classes apart by name.
+    fn from(mut f: LabelingFile) -> Self {
+        f.default.name = label_class_name(&f.default.name);
+        if f.default.name.is_empty() {
+            f.default.name = DEFAULT_LABEL_CLASS.into();
+        }
         let mut classes: Vec<LabelClass> = Vec::new();
         for mut c in f.classes {
             if classes.len() >= MAX_LABEL_CLASSES {
                 break;
             }
-            c.name = c.name.trim().to_string();
+            c.name = label_class_name(&c.name);
             let same = |n: &str| n.eq_ignore_ascii_case(&c.name);
             if !c.name.is_empty() && !same(&f.default.name) && !classes.iter().any(|o| same(&o.name)) {
                 classes.push(c);
@@ -1208,10 +1223,18 @@ mod tests {
             }
             c
         };
-        let names = [Some(" A "), Some("a"), Some("  "), Some("default"), None, Some("B")];
+        let long = format!("{} tail", "b".repeat(99));
+        let names = [Some(" A "), Some("a"), Some("  "), Some("default"), None, Some(long.as_str())];
         v["classes"] = names.into_iter().map(named).collect();
-        let read: Labeling = serde_json::from_value(v).unwrap();
-        assert_eq!(read.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+        let read: Labeling = serde_json::from_value(v.clone()).unwrap();
+        let b = "b".repeat(99);
+        assert_eq!(read.classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["A", b.as_str()]);
+        // Default's name is kept the same way, and is Default's when blank.
+        v["name"] = "   ".into();
+        let read: Labeling = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(read.default.name, DEFAULT_LABEL_CLASS);
+        v["name"] = " Rest ".into();
+        assert_eq!(serde_json::from_value::<Labeling>(v).unwrap().default.name, "Rest");
         assert_eq!(l.in_order().count(), MAX_LABEL_CLASSES + 1, "the counted classes, then Default");
         assert_eq!(l.in_order().last().map(|c| c.name.as_str()), Some(DEFAULT_LABEL_CLASS));
         assert!(l.class(&format!("c{}", MAX_LABEL_CLASSES + 1)).is_none() && l.class_mut("c70").is_none());

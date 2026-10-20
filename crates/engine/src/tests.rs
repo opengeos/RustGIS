@@ -4208,6 +4208,11 @@ fn deep_learning_hosted_imagery_and_sharing() {
     s.run("share.webStyle", &json!({"layer": "Cities"})).unwrap();
     let said = last_two(&s);
     assert!(said[0].contains("has no labels") && said[1].starts_with("Shared Cities"), "{said:?}");
+    // A hidden Default alone is said too: the labels are on, and the style has none.
+    s.run("labels.class.clear", &json!({"layer": "Cities"})).unwrap();
+    s.run("share.webStyle", &json!({"layer": "Cities"})).unwrap();
+    let said = last_two(&s);
+    assert!(said[0].ends_with("its Default class is hidden.") && said[1].starts_with("Shared Cities"), "{said:?}");
     s.run("share.locator", &json!({"layer": "Cities", "fields": ["name"]})).unwrap();
     let r = s.run("locator.find", &json!({"text": "paris", "zoom": true})).unwrap();
     assert_eq!(r["matches"][0]["text"], "Paris");

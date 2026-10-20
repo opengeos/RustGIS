@@ -547,10 +547,10 @@ onresize=draw;draw();
     ))
 }
 
-/// Says when a web layer or style (`kind`) labels differently from the map: it labels every
-/// feature with the Default class's field and text symbol, since no SQL clause has a MapLibre
-/// filter written for it, and nothing when Default is hidden. Run once the share is made, so its
-/// own notice comes after the one saying it's made.
+/// Says what a web layer or style (`kind`) leaves out of the labels: it labels every feature with
+/// the Default class's field and text symbol, since no SQL clause has a MapLibre filter written
+/// for it, and has no labels when Default is hidden (though the layer's labels are on). Run once
+/// the share is made, so its own notice comes after the one saying it's made.
 pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
     if !matches!(kind, "webLayer" | "webStyle") {
         return;
@@ -559,7 +559,10 @@ pub(crate) fn note_label_classes(s: &mut Session, kind: &str, p: &Value) {
     let n = l.labels.classes.len().min(MAX_LABEL_CLASSES);
     let clause = l.labels.default.where_.as_deref().is_some_and(|w| !w.trim().is_empty());
     let text = if !l.labels.default.visible {
-        (n > 0).then(|| format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name))
+        Some(match n {
+            0 => format!("{}'s style has no labels: its Default class is hidden.", l.name),
+            _ => format!("{}'s style has no labels: its Default class is hidden, and its other label classes aren't in it.", l.name),
+        })
     } else {
         (n > 0 || clause).then(|| {
             format!("{}'s style labels every feature with its Default class; its label classes' SQL clauses aren't in it.", l.name)

@@ -2,7 +2,7 @@
 //! visibility range and placement, and a layer's label classes (#618).
 
 use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value as Attr};
-use rustgis_map::symbology::MAX_LABEL_CLASSES;
+use rustgis_map::symbology::{MAX_LABEL_CLASSES, label_class_name};
 use rustgis_map::{LabelClass, LabelMatcher, LabelPlacement, Labeling, Renderer, Rgba, Symbol};
 use serde_json::{Value, json};
 
@@ -167,15 +167,10 @@ fn extra_class(labels: &Labeling, name: &str) -> Result<usize, String> {
     counted.position(|c| c.name.eq_ignore_ascii_case(name)).ok_or_else(|| format!("no label class named '{name}'"))
 }
 
-/// The longest label class name kept (characters).
-const MAX_CLASS_NAME: usize = 100;
-
 /// A class name: trimmed, kept short, and not another class's (`renaming` is the class being
 /// renamed, which may keep its own).
 fn class_name(labels: &Labeling, name: &str, renaming: Option<&str>) -> Result<String, String> {
-    let name: String = name.trim().chars().take(MAX_CLASS_NAME).collect();
-    // Cut short, it may end in a space.
-    let name = name.trim_end().to_string();
+    let name = label_class_name(name);
     if name.is_empty() {
         return Err("a label class needs a name".into());
     }
