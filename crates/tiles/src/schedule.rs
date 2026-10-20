@@ -7,7 +7,8 @@
 //! starts the newest waiting one first. A waiting tile the map has stopped asking for while it
 //! went on asking for others ([`STALE`]) is dropped unfetched, and asked for again if it's wanted
 //! later. A map that only waits for its tiles (an export) asks for nothing else meanwhile, so
-//! nothing it waits for goes stale.
+//! nothing it waits for goes stale. Only stale tiles are ever dropped: however many wait, one
+//! still asked for is fetched.
 //!
 //! The queue only decides; [`crate::cache`] starts the fetches and tells it when one is over.
 
@@ -24,10 +25,9 @@ pub(crate) const PER_HOST_OSM: usize = if cfg!(target_arch = "wasm32") { 4 } els
 pub(crate) const LOCAL: usize = 32;
 /// A waiting tile is dropped once the map has gone this long asking for others but not for it.
 pub(crate) const STALE: Duration = Duration::from_millis(1500);
-/// The most tiles waiting: beyond it the oldest are dropped (the view moved on long ago). A
-/// view asks for at most `template::MAX_TILES` (400) a source, so an export waiting for its
-/// tiles never comes near it.
-pub(crate) const MAX_WAITING: usize = 8192;
+/// Beyond this many tiles waiting, the stale ones are swept out at once rather than when their
+/// turn comes, so a long pan doesn't pile up tiles the map no longer wants.
+pub(crate) const SWEEP_AT: usize = 2048;
 
 /// The server an address is fetched from (`host[:port]`, lowercase), or `""` for a local read,
 /// which no server limits. An archive's tile (`pmtiles:z/x/y@https://…`) is its archive's server.
@@ -52,6 +52,11 @@ pub(crate) fn cap(host: &str) -> usize {
     } else {
         PER_HOST
     }
+}
+
+/// Stale: no longer asked for while the map asked for others since.
+fn is_stale(asked: &impl Fn(&str) -> Option<Instant>, url: &str, latest: Instant) -> bool {
+    asked(url).is_none_or(|at| latest.saturating_duration_since(at) > STALE)
 }
 
 /// A tile waiting to be fetched.
@@ -83,8 +88,16 @@ impl<T> Default for Queue<T> {
 
 impl<T> Queue<T> {
     /// Asks for `url`: `Some` to fetch it now (counted under way), or `None` when it waits.
-    /// Waiting tiles beyond [`MAX_WAITING`] are handed back in `overflow`, oldest first, to forget.
-    pub fn push(&mut self, url: String, job: T, overflow: &mut Vec<Waiting<T>>) -> Option<Waiting<T>> {
+    /// Past [`SWEEP_AT`] waiting, those stale by `asked` and `latest` (see [`Queue::done`]) are
+    /// handed back in `swept`, to forget.
+    pub fn push(
+        &mut self,
+        url: String,
+        job: T,
+        asked: impl Fn(&str) -> Option<Instant>,
+        latest: Instant,
+        swept: &mut Vec<Waiting<T>>,
+    ) -> Option<Waiting<T>> {
         let host = host(&url);
         let w = Waiting { url, host, job };
         let n = self.active.entry(w.host.clone()).or_insert(0);
@@ -93,9 +106,11 @@ impl<T> Queue<T> {
             return Some(w);
         }
         self.waiting.push(w);
-        if self.waiting.len() > MAX_WAITING {
-            let extra = self.waiting.len() - MAX_WAITING;
-            overflow.extend(self.waiting.drain(..extra));
+        if self.waiting.len() > SWEEP_AT {
+            let (stale, kept): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut self.waiting).into_iter().partition(|w| is_stale(&asked, &w.url, latest));
+            self.waiting = kept;
+            swept.extend(stale);
         }
         None
     }
@@ -118,8 +133,7 @@ impl<T> Queue<T> {
         while i > 0 {
             i -= 1;
             let Some(w) = self.waiting.get(i) else { break };
-            // Stale: no longer asked for while the map asked for others since.
-            let stale = asked(&w.url).is_none_or(|at| latest.saturating_duration_since(at) > STALE);
+            let stale = is_stale(&asked, &w.url, latest);
             let free = self.active.get(&w.host).copied().unwrap_or(0) < cap(&w.host);
             if !stale && !free {
                 continue;
@@ -165,11 +179,11 @@ mod tests {
     fn a_server_has_a_few_fetches_under_way_and_the_newest_waiting_goes_next() {
         let mut q = Queue::default();
         let mut overflow = Vec::new();
-        let started = (0..PER_HOST + 3).filter(|&n| q.push(tile(n), n, &mut overflow).is_some()).count();
+        let started = (0..PER_HOST + 3).filter(|&n| q.push(tile(n), n, |_| None, Instant::now(), &mut overflow).is_some()).count();
         assert_eq!(started, PER_HOST);
         assert_eq!(q.waiting(), 3);
         // Another server isn't held up by this one.
-        assert!(q.push("https://other.example.net/1.png".into(), 99, &mut overflow).is_some());
+        assert!(q.push("https://other.example.net/1.png".into(), 99, |_| None, Instant::now(), &mut overflow).is_some());
         let now = Instant::now();
         let next = q.done("tiles.example.com", |_| Some(now), now);
         assert_eq!(next.start.iter().map(|w| w.job).collect::<Vec<_>>(), vec![PER_HOST + 2]);
@@ -182,7 +196,7 @@ mod tests {
         let mut q = Queue::default();
         let mut overflow = Vec::new();
         for n in 0..PER_HOST + 2 {
-            let _ = q.push(tile(n), n, &mut overflow);
+            let _ = q.push(tile(n), n, |_| None, Instant::now(), &mut overflow);
         }
         let then = Instant::now();
         let later = then + STALE + Duration::from_millis(1);
@@ -201,7 +215,7 @@ mod tests {
         let mut q = Queue::default();
         let mut overflow = Vec::new();
         for n in 0..PER_HOST + 4 {
-            let _ = q.push(tile(n), n, &mut overflow);
+            let _ = q.push(tile(n), n, |_| None, Instant::now(), &mut overflow);
         }
         let asked = Instant::now();
         for _ in 0..4 {
@@ -213,13 +227,26 @@ mod tests {
     }
 
     #[test]
-    fn the_oldest_waiting_beyond_the_limit_are_dropped() {
+    fn many_waiting_sweep_out_only_the_stale() {
         let mut q = Queue::default();
-        let mut overflow = Vec::new();
-        for n in 0..PER_HOST + MAX_WAITING + 5 {
-            let _ = q.push(tile(n), n, &mut overflow);
+        let mut swept = Vec::new();
+        let then = Instant::now();
+        let later = then + STALE + Duration::from_millis(1);
+        // The first hundred waiting were asked for long ago; the rest just now.
+        let asked = |u: &str| {
+            let n: usize = u.split('/').nth(4).and_then(|x| x.parse().ok()).unwrap_or(0);
+            Some(if n < PER_HOST + 100 { then } else { later })
+        };
+        for n in 0..PER_HOST + SWEEP_AT + 5 {
+            let _ = q.push(tile(n), n, asked, later, &mut swept);
         }
-        assert_eq!(q.waiting(), MAX_WAITING);
-        assert_eq!(overflow.iter().map(|w| w.job).collect::<Vec<_>>(), (PER_HOST..PER_HOST + 5).collect::<Vec<_>>());
+        assert_eq!(swept.iter().map(|w| w.job).collect::<Vec<_>>(), (PER_HOST..PER_HOST + 100).collect::<Vec<_>>());
+        assert_eq!(q.waiting(), SWEEP_AT + 5 - 100);
+        // Every tile still asked for waits, however many: an export loses none.
+        let mut kept = Vec::new();
+        for n in 0..3 * SWEEP_AT {
+            let _ = q.push(format!("https://export.example.com/{n}.png"), n, |_| Some(later), later, &mut kept);
+        }
+        assert!(kept.is_empty());
     }
 }

@@ -212,9 +212,14 @@ fn queue() -> &'static Mutex<Queue<Want>> {
 /// Asks for a tile: fetched now when its server has room, else it waits its turn.
 fn start(url: String, want: Want) {
     IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
-    let mut overflow = Vec::new();
-    let now = queue().lock().unwrap_or_else(|e| e.into_inner()).push(url, want, &mut overflow);
-    forget(overflow);
+    let mut swept = Vec::new();
+    let now = {
+        let mut q = queue().lock().unwrap_or_else(|e| e.into_inner());
+        let c = lock();
+        let latest = c.latest.unwrap_or_else(Instant::now);
+        q.push(url, want, |u| c.slots.get(u).map(|s| s.asked), latest, &mut swept)
+    };
+    forget(swept);
     launch(now.into_iter().collect());
 }
 
