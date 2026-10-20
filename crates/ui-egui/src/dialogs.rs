@@ -216,7 +216,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         if s.is_empty() {
                             return Ok(None);
                         }
-                        s.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some).ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl!(what))]))
+                        s.parse::<f64>().ok().filter(|v| v.is_finite()).map(Some).ok_or_else(|| crate::i18n::fmt("{what} must be a number", &[("what", tl_raw!(what))]))
                     };
                     let (lon, lat, scale) = (n(&app.dialogs.a, "Longitude")?, n(&app.dialogs.b, "Latitude")?, n(&app.dialogs.c, "Scale")?);
                     app.run("map.camera", json!({"lon": lon, "lat": lat, "scale": scale})).map(|_| ())
@@ -939,7 +939,7 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         ui.label(tl!("Type"));
         let guessed = TileKind::guess(app.dialogs.text.trim());
         let shown = match app.dialogs.mode {
-            "auto" | "new" => crate::i18n::fmt("Automatic ({kind})", &[("kind", tl!(guessed.label()))]),
+            "auto" | "new" => crate::i18n::fmt("Automatic ({kind})", &[("kind", tl_raw!(guessed.label()))]),
             code => TileKind::from_code(code).map(|k| tl!(k.label()).to_string()).unwrap_or_default(),
         };
         egui::ComboBox::from_id_salt("tiles_kind").selected_text(shown).width(260.0).show_ui(ui, |ui| {

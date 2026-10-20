@@ -1236,7 +1236,7 @@ pub fn format(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.layout.drawn = Some(drawn);
             let Some(e) = layout.element(drawn.1) else { return };
             // Where it is ("Layout: Text"), as the pane also formats a text on the map ("Map: Text").
-            let heading = crate::i18n::fmt("Layout: {kind}", &[("kind", tl!(e.kind.label()))]);
+            let heading = crate::i18n::fmt("Layout: {kind}", &[("kind", tl_raw!(e.kind.label()))]);
             ui.label(egui::RichText::new(heading).font(semibold(14.0)));
             ui.separator();
             // Locked (#536), its properties show but take no change until it is unlocked.

@@ -177,7 +177,7 @@ fn tool_indicator(app: &RustGisApp, ui: &Ui) -> Option<(String, f32)> {
     if tool == Tool::Explore {
         return None;
     }
-    let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl!(tool.label()))]);
+    let label = crate::i18n::fmt("{tool} tool active · Esc to stop", &[("tool", tl_raw!(tool.label()))]);
     let w = text_w(ui, &label, regular(11.5)) + 18.0;
     Some((label, w))
 }
@@ -2015,7 +2015,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 }
                 ui.separator();
                 for n in ["Mapping", "Editing", "Analysis"] {
-                    if ui.button(crate::i18n::fmt("Save as {name}", &[("name", tl!(n))])).clicked() {
+                    if ui.button(crate::i18n::fmt("Save as {name}", &[("name", tl_raw!(n))])).clicked() {
                         let _ = app.run("ui.paneSet", json!({"save": tl!(n)}));
                         ui.close();
                     }
@@ -3986,18 +3986,17 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Labels", |ui| {
         let on = layer.labels.enabled;
         big(ui, app, if on { "label" } else { "label_off" }, "Label", "Turn labels on or off.", "labels.enable", Value::Null, on, false);
-        col(ui, |ui| {
-            small(
-                ui,
-                app,
-                "settings",
-                "Properties",
-                "Every label setting of this layer, in the Labeling pane.",
-                "ui.pane.labeling",
-                Value::Null,
-                app.ui.right == Some(RightPane::Labeling),
-            );
-        });
+        big(
+            ui,
+            app,
+            "label_properties",
+            "Properties",
+            "Every label setting of this layer, in the Labeling pane.",
+            "ui.pane.labeling",
+            Value::Null,
+            app.ui.right == Some(RightPane::Labeling),
+            false,
+        );
     });
     group(ui, "Label Range", |ui| {
         ui.vertical(|ui| {
