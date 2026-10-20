@@ -367,6 +367,8 @@ fn spectral(s: &mut Session, p: &Value) -> CmdResult {
 
 fn supervised(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
+    // Training polygons on the map mean nothing on a scan laid there to look at.
+    r.require_coordinates()?;
     let bands = bands_param(p, &r)?;
     let tl = ps(p, "training").ok_or("training (a polygon layer) is required")?;
     let l = s
@@ -449,6 +451,8 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
             add(s, out, false)
         }
         "clip" => {
+            // Before the extent is placed on the raster's coordinates.
+            r.require_coordinates()?;
             let e = match p.get("extent").and_then(Value::as_array) {
                 Some(a) => {
                     let n: Vec<f64> = a.iter().filter_map(Value::as_f64).collect();
@@ -808,6 +812,10 @@ fn measure(s: &mut Session, p: &Value) -> CmdResult {
         p.get("points").and_then(Value::as_array).ok_or("points is required")?.iter().take(10_000).map(point).collect::<Result<_, _>>()?;
     let kind = ps(p, "kind").ok_or("kind is required")?;
     let dem = ps(p, "layer").map(|n| raster_named(s, n)).transpose()?;
+    // A scan's heights would be read at the made-up place it is laid.
+    if let Some(d) = &dem {
+        d.require_coordinates()?;
+    }
     let z = |c: Coord| dem.as_ref().and_then(|d| rasterops::elevation_at(d, 0, c));
     // Ground lengths and areas on the map's body.
     let body = s.map().body();
@@ -1025,6 +1033,8 @@ fn mesh(s: &mut Session, p: &Value) -> CmdResult {
         return Err("the mesh is written to an .obj file".into());
     }
     let r = raster(s, p)?;
+    // The mesh is laid out in metres on the ground, which a scan has none of.
+    r.require_coordinates()?;
     let step = uint(p, "step").unwrap_or(((r.width.max(r.height) / 300).max(1)) as u64).clamp(1, 1000) as i64;
     let (cx, cy) = r.cell_size_m();
     let (nc, nr) = ((r.width as i64 - 1) / step + 1, (r.height as i64 - 1) / step + 1);

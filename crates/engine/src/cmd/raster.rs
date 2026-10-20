@@ -305,17 +305,24 @@ fn scan_box(s: &Session, w: u32, h: u32) -> [f64; 4] {
 
 /// Whether `"as": "scan"` was given for a TIFF, PNG or JPEG named `name`.
 pub(crate) fn wants_scan(p: &Value, name: &str) -> Result<bool, String> {
-    match ps(p, "as") {
-        None => Ok(false),
-        Some("scan") => {
-            let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-            if matches!(ext.as_str(), "tif" | "tiff" | "png" | "jpg" | "jpeg") {
-                Ok(true)
-            } else {
-                Err(format!("{name}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"))
-            }
-        }
-        Some(other) => Err(format!("unknown \"as\": '{other}' (\"scan\")")),
+    if !as_scan(p)? {
+        return Ok(false);
+    }
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if matches!(ext.as_str(), "tif" | "tiff" | "png" | "jpg" | "jpeg") {
+        Ok(true)
+    } else {
+        Err(format!("{name}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"))
+    }
+}
+
+/// Whether `"as"` asks for a scan, before any file is known: absent or null is no, `"scan"` is
+/// yes, and anything else (another word, a number) is refused rather than ignored.
+pub(crate) fn as_scan(p: &Value) -> Result<bool, String> {
+    match p.get("as") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::String(s)) if s == "scan" => Ok(true),
+        Some(other) => Err(format!("unknown \"as\": {other} (\"scan\")")),
     }
 }
 

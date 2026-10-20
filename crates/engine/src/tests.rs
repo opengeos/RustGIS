@@ -6176,6 +6176,11 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     // A dated address is read in place with its coordinates, so it can't be a scan.
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{{date:YYYY}}.tif"), "as": "scan"})).unwrap_err();
     assert!(e.contains("scan"), "{e}");
+    // Anything else in "as" is refused, not ignored, and tiles can't be a scan.
+    for (url, as_) in [("scene.tif", json!("pdf")), ("scene.tif", json!(3)), ("a.pmtiles", json!("scan")), ("a.fgb", json!("scan"))] {
+        let e = s.run("layer.addUrl", &json!({"url": format!("{base}/{url}"), "as": as_})).unwrap_err();
+        assert!(e.contains("\"as\"") || e.contains("scan"), "{url}: {e}");
+    }
     // A GeoTIFF in strips isn't cloud-optimised: downloaded whole, a raster layer.
     let r = rustgis_data::raster::Raster::new(
         "strips",
@@ -10699,7 +10704,7 @@ fn scans_have_no_coordinates_to_give_away() {
     let e = s.run("share.exportRaster", &json!({"path": out.display().to_string()})).unwrap_err();
     assert!(e.contains("georeference it first") && !out.exists(), "{e}");
     let before = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap().placement;
-    let tools: [(&str, Value); 6] = [
+    let tools: [(&str, Value); 14] = [
         ("raster.function", json!({"layer": "flat", "function": "hillshade"})),
         ("raster.editPixels", json!({"layer": "flat", "polygon": [[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]], "value": 1})),
         ("raster.process", json!({"layer": "flat", "operation": "resample", "factor": 2})),
@@ -10707,11 +10712,23 @@ fn scans_have_no_coordinates_to_give_away() {
         // Refused before the polygons are looked for, let alone placed on it.
         ("raster.process", json!({"layer": "flat", "operation": "clip", "polygon": "Nowhere"})),
         ("raster.mosaic", json!({"inputs": ["flat", "utm"]})),
+        ("raster.change", json!({"before": "flat", "after": "flat"})),
+        ("raster.classify", json!({"layer": "flat", "classes": 2})),
+        ("raster.classifySupervised", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("raster.index", json!({"layer": "flat", "index": "ndvi", "red": 1, "nir": 1})),
+        ("raster.measure", json!({"layer": "flat", "kind": "distance", "points": [[0.0, 0.0], [0.1, 0.1]]})),
+        ("imagery.mesh", json!({"layer": "flat"})),
+        ("dl.classify", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
+        ("dl.train", json!({"layer": "flat", "training": "Nowhere", "classField": "c"})),
     ];
-    for (cmd, q) in tools {
-        let e = s.run(cmd, &q).unwrap_err();
-        assert!(e.contains("no coordinates"), "{cmd}: {e}");
-    }
+    let missed: Vec<String> = tools
+        .iter()
+        .filter_map(|(cmd, q)| match s.run(cmd, q) {
+            Err(e) if e.contains("no coordinates") => None,
+            other => Some(format!("{cmd}: {other:?}")),
+        })
+        .collect();
+    assert!(missed.is_empty(), "{missed:#?}");
     let l = s.map().layer_by_name("flat").unwrap().raster.clone().unwrap();
     assert_eq!(l.placement, before);
     assert!(!l.data.as_ref().unwrap().georeferenced, "still a scan");

@@ -1913,10 +1913,13 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("{url}: give an http://, https:// or s3:// address (Add Data opens files)"));
     }
     // A scan (`"as"`) keeps the pixels and none of the coordinates: the file is downloaded whole and
-    // read as one (`add_named_bytes` checks the value), never read in place.
-    let scan = p.get("as").is_some_and(|v| !v.is_null());
+    // read as one (`add_named_bytes` checks it is an image), never read in place.
+    let scan = super::raster::as_scan(p)?;
     // A PMTiles archive is read a tile at a time, never downloaded whole.
     if lower.split(['?', '#']).next().is_some_and(|p| p.ends_with(".pmtiles")) {
+        if scan {
+            return Err(format!("{url}: a PMTiles archive is tiles, not a picture: it can't be opened as a scan"));
+        }
         let mut q = json!({"url": url, "kind": "pmtiles"});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);
@@ -1940,6 +1943,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A FlatGeobuf or GeoParquet: read in place by range when it has a spatial index (or a bbox
     // covering), otherwise downloaded whole.
+    if rustgis_data::source::is_remote_name(url) && scan {
+        return Err(format!("{url}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"));
+    }
     if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) {
         // In the browser nothing may wait: the app has fetched what opening needs already.
         #[cfg(target_arch = "wasm32")]
