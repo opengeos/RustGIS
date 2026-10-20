@@ -564,6 +564,52 @@ fn tile_vertices(q: &TileQuad) -> [TileVertex; 6] {
     [bl, br, tr, bl, tr, tl]
 }
 
+/// A GPU buffer or texture, destroyed as soon as it is dropped. Dropping a wgpu resource
+/// frees its memory natively, but in the browser only once JavaScript's garbage collector
+/// finds its handle, and the handles are so small that it seldom looks: a map drawn again and
+/// again (each scene uploads its own images and meshes) ran the GPU out of memory
+/// (`VK_ERROR_OUT_OF_DEVICE_MEMORY`) and crashed the page. Work already submitted still
+/// completes: WebGPU and wgpu free the memory once it has.
+pub(crate) struct Owned<T: Destroy>(T);
+
+/// What [`Owned`] destroys.
+pub(crate) trait Destroy {
+    fn destroy(&self);
+}
+
+impl Destroy for wgpu::Buffer {
+    fn destroy(&self) {
+        wgpu::Buffer::destroy(self);
+    }
+}
+
+impl Destroy for wgpu::Texture {
+    fn destroy(&self) {
+        wgpu::Texture::destroy(self);
+    }
+}
+
+impl<T: Destroy> Drop for Owned<T> {
+    fn drop(&mut self) {
+        self.0.destroy();
+    }
+}
+
+impl<T: Destroy> std::ops::Deref for Owned<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+fn owned_buffer(device: &wgpu::Device, desc: &wgpu::util::BufferInitDescriptor<'_>) -> Owned<wgpu::Buffer> {
+    Owned(device.create_buffer_init(desc))
+}
+
+fn owned_texture(device: &wgpu::Device, desc: &wgpu::TextureDescriptor<'_>) -> Owned<wgpu::Texture> {
+    Owned(device.create_texture(desc))
+}
+
 /// How many bytes of tile textures are kept besides the latest scene's (a few hundred 256-pixel
 /// tiles, or a quarter as many 512-pixel ones).
 const KEPT_TILE_BYTES: u64 = 64 << 20;
@@ -584,7 +630,7 @@ struct TileTextures {
 struct TileTexture {
     picture: std::sync::Weak<Payload>,
     bind: wgpu::BindGroup,
-    _texture: wgpu::Texture,
+    texture: Arc<Owned<wgpu::Texture>>,
     used: u64,
     bytes: u64,
 }
@@ -592,13 +638,19 @@ struct TileTexture {
 impl TileTextures {
     /// The bind group of a tile's picture, uploaded the first time it is drawn; `None` when it
     /// is no picture or the device can't hold it.
-    fn bind(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, r: &GpuMapRenderer, q: &TileQuad) -> Option<wgpu::BindGroup> {
+    fn bind(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        r: &GpuMapRenderer,
+        q: &TileQuad,
+    ) -> Option<(wgpu::BindGroup, Arc<Owned<wgpu::Texture>>)> {
         let key = Arc::as_ptr(&q.picture) as usize;
         if let Some(t) = self.by_picture.get_mut(&key)
             && t.picture.upgrade().is_some_and(|p| Arc::ptr_eq(&p, &q.picture))
         {
             t.used = self.scene;
-            return Some(t.bind.clone());
+            return Some((t.bind.clone(), t.texture.clone()));
         }
         let pm = q.pixmap()?;
         let (w, h) = (pm.width(), pm.height());
@@ -607,16 +659,19 @@ impl TileTextures {
             return None;
         }
         let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("mapgpu_tile"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let texture = owned_texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("mapgpu_tile"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+        );
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             pm.data(),
@@ -632,15 +687,16 @@ impl TileTextures {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
             ],
         });
+        let texture = Arc::new(texture);
         let t = TileTexture {
             picture: Arc::downgrade(&q.picture),
             bind: bind.clone(),
-            _texture: texture,
+            texture: texture.clone(),
             used: self.scene,
             bytes: u64::from(w) * u64::from(h) * 4,
         };
         self.by_picture.insert(key, t);
-        Some(bind)
+        Some((bind, texture))
     }
 
     /// Ends a scene: drops the textures of pictures the tile cache let go, and past
@@ -676,15 +732,15 @@ struct TileMeshBuffers {
 
 struct MeshBuffers {
     mesh: std::sync::Weak<TileMesh>,
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    vertices: Arc<Owned<wgpu::Buffer>>,
+    indices: Arc<Owned<wgpu::Buffer>>,
     used: u64,
     bytes: u64,
 }
 
 impl TileMeshBuffers {
     /// A mesh's vertex and index buffers, uploaded the first time it is drawn.
-    fn buffers(&mut self, device: &wgpu::Device, mesh: &Arc<TileMesh>) -> (wgpu::Buffer, wgpu::Buffer) {
+    fn buffers(&mut self, device: &wgpu::Device, mesh: &Arc<TileMesh>) -> (Arc<Owned<wgpu::Buffer>>, Arc<Owned<wgpu::Buffer>>) {
         let key = Arc::as_ptr(mesh) as usize;
         if let Some(b) = self.by_mesh.get_mut(&key)
             && b.mesh.upgrade().is_some_and(|m| Arc::ptr_eq(&m, mesh))
@@ -692,16 +748,23 @@ impl TileMeshBuffers {
             b.used = self.scene;
             return (b.vertices.clone(), b.indices.clone());
         }
-        let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mapgpu_tile_mesh_vertices"),
-            contents: bytemuck::cast_slice(&mesh.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mapgpu_tile_mesh_indices"),
-            contents: bytemuck::cast_slice(&mesh.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let vertices = owned_buffer(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("mapgpu_tile_mesh_vertices"),
+                contents: bytemuck::cast_slice(&mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        );
+        let indices = owned_buffer(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("mapgpu_tile_mesh_indices"),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        );
+        let (vertices, indices) = (Arc::new(vertices), Arc::new(indices));
         let bytes = mesh.bytes() as u64;
         let b = MeshBuffers { mesh: Arc::downgrade(mesh), vertices: vertices.clone(), indices: indices.clone(), used: self.scene, bytes };
         self.by_mesh.insert(key, b);
@@ -732,9 +795,9 @@ impl TileMeshBuffers {
 pub(crate) struct MeshTileDraw {
     mesh: Arc<TileMesh>,
     tile: MeshTile,
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
-    uniforms: wgpu::Buffer,
+    vertices: Arc<Owned<wgpu::Buffer>>,
+    indices: Arc<Owned<wgpu::Buffer>>,
+    uniforms: Owned<wgpu::Buffer>,
     bind: wgpu::BindGroup,
 }
 
@@ -744,9 +807,12 @@ pub(crate) struct SceneTarget {
     msaa_view: wgpu::TextureView,
     /// The extrusions' depth buffer, multisampled like the colour.
     depth_view: wgpu::TextureView,
-    resolve_tex: wgpu::Texture,
+    /// The textures behind the views, destroyed with the target.
+    _msaa_tex: Owned<wgpu::Texture>,
+    _depth_tex: Owned<wgpu::Texture>,
+    resolve_tex: Owned<wgpu::Texture>,
     pub resolve_bind: wgpu::BindGroup,
-    blit_uniforms: wgpu::Buffer,
+    blit_uniforms: Owned<wgpu::Buffer>,
     blit_bind: wgpu::BindGroup,
     pub size: [u32; 2],
 }
@@ -757,36 +823,45 @@ impl SceneTarget {
         if w == 0 || h == 0 {
             return None;
         }
-        let msaa_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("mapgpu_msaa"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: r.samples,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("mapgpu_depth"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: r.samples,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let resolve_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("mapgpu_resolve"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let msaa_tex = owned_texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("mapgpu_msaa"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: r.samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+        );
+        let depth_tex = owned_texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("mapgpu_depth"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: r.samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+        );
+        let resolve_tex = owned_texture(
+            device,
+            &wgpu::TextureDescriptor {
+                label: Some("mapgpu_resolve"),
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+        );
         let resolve_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mapgpu_resolve_bind"),
             layout: &r.image_layout,
@@ -798,11 +873,14 @@ impl SceneTarget {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&r.sampler) },
             ],
         });
-        let blit_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mapgpu_blit_uv"),
-            contents: bytemuck::cast_slice(&[0.0f32, 0.0, 1.0, 1.0]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let blit_uniforms = owned_buffer(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("mapgpu_blit_uv"),
+                contents: bytemuck::cast_slice(&[0.0f32, 0.0, 1.0, 1.0]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
         let blit_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mapgpu_blit_uv_bind"),
             layout: &r.blit_layout,
@@ -811,6 +889,8 @@ impl SceneTarget {
         Some(SceneTarget {
             msaa_view: msaa_tex.create_view(&wgpu::TextureViewDescriptor::default()),
             depth_view: depth_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            _msaa_tex: msaa_tex,
+            _depth_tex: depth_tex,
             resolve_tex,
             resolve_bind,
             blit_uniforms,
@@ -846,28 +926,28 @@ fn record_scene(r: &GpuMapRenderer, draws: &[SceneDraw], clear: [f32; 4], tgt: &
 /// One uploaded draw command.
 pub(crate) enum SceneDraw {
     Mesh {
-        vertices: wgpu::Buffer,
-        indices: wgpu::Buffer,
+        vertices: Owned<wgpu::Buffer>,
+        indices: Owned<wgpu::Buffer>,
         index_count: u32,
-        uniforms: wgpu::Buffer,
+        uniforms: Owned<wgpu::Buffer>,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
     },
     Points {
-        instances: wgpu::Buffer,
+        instances: Owned<wgpu::Buffer>,
         count: u32,
-        uniforms: wgpu::Buffer,
+        uniforms: Owned<wgpu::Buffer>,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
     },
     /// Extruded features (depth-tested), or their shadows.
     Extrusion {
-        vertices: wgpu::Buffer,
-        indices: wgpu::Buffer,
+        vertices: Owned<wgpu::Buffer>,
+        indices: Owned<wgpu::Buffer>,
         index_count: u32,
-        uniforms: wgpu::Buffer,
+        uniforms: Owned<wgpu::Buffer>,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
@@ -881,19 +961,19 @@ pub(crate) enum SceneDraw {
     },
     /// A tilted view's water, fog and sky, under everything.
     Backdrop {
-        uniforms: wgpu::Buffer,
+        uniforms: Owned<wgpu::Buffer>,
         bind: wgpu::BindGroup,
     },
     Image {
         bind: wgpu::BindGroup,
-        _texture: wgpu::Texture,
+        _texture: Owned<wgpu::Texture>,
     },
     /// A raster tile layer: its tiles' corners in one buffer, six per tile, and each tile's
     /// texture (from [`TileTextures`]) with the first of its corners.
     Tiles {
-        vertices: wgpu::Buffer,
-        textures: Vec<(u32, wgpu::BindGroup)>,
-        uniforms: wgpu::Buffer,
+        vertices: Owned<wgpu::Buffer>,
+        textures: Vec<(u32, wgpu::BindGroup, Arc<Owned<wgpu::Texture>>)>,
+        uniforms: Owned<wgpu::Buffer>,
         bind: wgpu::BindGroup,
         origin: [f64; 2],
         clip: CmdClip,
@@ -1001,11 +1081,14 @@ impl SceneBuffers {
         let mut tile_meshes = r.tile_meshes.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(t) = tilt.filter(|t| t.camera.pitch != 0.0) {
             let u = BackdropUniforms::new(&camera, size, ppp, scene.clear, t);
-            let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mapgpu_backdrop_uniforms"),
-                contents: bytemuck::bytes_of(&u),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+            let uniforms = owned_buffer(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("mapgpu_backdrop_uniforms"),
+                    contents: bytemuck::bytes_of(&u),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                },
+            );
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("mapgpu_backdrop_bind"),
                 layout: &r.backdrop_layout,
@@ -1021,11 +1104,14 @@ impl SceneBuffers {
                         continue;
                     }
                     let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
-                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mapgpu_cmd_uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    });
+                    let uniforms = owned_buffer(
+                        device,
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_cmd_uniforms"),
+                            contents: bytemuck::bytes_of(&uniforms),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        },
+                    );
                     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("mapgpu_mesh_bind"),
                         layout: &r.cmd_layout,
@@ -1035,16 +1121,22 @@ impl SceneBuffers {
                         ],
                     });
                     draws.push(SceneDraw::Mesh {
-                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_mesh_vertices"),
-                            contents: bytemuck::cast_slice(vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
-                        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_mesh_indices"),
-                            contents: bytemuck::cast_slice(indices),
-                            usage: wgpu::BufferUsages::INDEX,
-                        }),
+                        vertices: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_mesh_vertices"),
+                                contents: bytemuck::cast_slice(vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        ),
+                        indices: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_mesh_indices"),
+                                contents: bytemuck::cast_slice(indices),
+                                usage: wgpu::BufferUsages::INDEX,
+                            },
+                        ),
                         index_count: indices.len() as u32,
                         uniforms,
                         bind,
@@ -1057,11 +1149,14 @@ impl SceneBuffers {
                         continue;
                     }
                     let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
-                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mapgpu_cmd_uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    });
+                    let uniforms = owned_buffer(
+                        device,
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_cmd_uniforms"),
+                            contents: bytemuck::bytes_of(&uniforms),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        },
+                    );
                     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("mapgpu_points_bind"),
                         layout: &r.cmd_layout,
@@ -1071,11 +1166,14 @@ impl SceneBuffers {
                         ],
                     });
                     draws.push(SceneDraw::Points {
-                        instances: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_point_instances"),
-                            contents: bytemuck::cast_slice(instances),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
+                        instances: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_point_instances"),
+                                contents: bytemuck::cast_slice(instances),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        ),
                         count: instances.len() as u32,
                         uniforms,
                         bind,
@@ -1088,11 +1186,14 @@ impl SceneBuffers {
                         continue;
                     }
                     let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
-                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mapgpu_cmd_uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    });
+                    let uniforms = owned_buffer(
+                        device,
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_cmd_uniforms"),
+                            contents: bytemuck::bytes_of(&uniforms),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        },
+                    );
                     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("mapgpu_extrude_bind"),
                         layout: &r.cmd_layout,
@@ -1102,16 +1203,22 @@ impl SceneBuffers {
                         ],
                     });
                     draws.push(SceneDraw::Extrusion {
-                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_extrude_vertices"),
-                            contents: bytemuck::cast_slice(vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
-                        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_extrude_indices"),
-                            contents: bytemuck::cast_slice(indices),
-                            usage: wgpu::BufferUsages::INDEX,
-                        }),
+                        vertices: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_extrude_vertices"),
+                                contents: bytemuck::cast_slice(vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        ),
+                        indices: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_extrude_indices"),
+                                contents: bytemuck::cast_slice(indices),
+                                usage: wgpu::BufferUsages::INDEX,
+                            },
+                        ),
                         index_count: indices.len() as u32,
                         uniforms,
                         bind,
@@ -1121,17 +1228,20 @@ impl SceneBuffers {
                     });
                 }
                 DrawCmd::Image { pixmap } => {
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("mapgpu_image"),
-                        size: wgpu::Extent3d { width: pixmap.width(), height: pixmap.height(), depth_or_array_layers: 1 },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        // Linear, like every egui texture: values pass through unconverted.
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
+                    let texture = owned_texture(
+                        device,
+                        &wgpu::TextureDescriptor {
+                            label: Some("mapgpu_image"),
+                            size: wgpu::Extent3d { width: pixmap.width(), height: pixmap.height(), depth_or_array_layers: 1 },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            // Linear, like every egui texture: values pass through unconverted.
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        },
+                    );
                     queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &texture,
@@ -1163,8 +1273,8 @@ impl SceneBuffers {
                     let mut vertices = Vec::with_capacity(tiles.len() * 6);
                     let mut textures = Vec::with_capacity(tiles.len());
                     for q in tiles {
-                        if let Some(bind) = tile_textures.bind(device, queue, r, q) {
-                            textures.push((vertices.len() as u32, bind));
+                        if let Some((bind, texture)) = tile_textures.bind(device, queue, r, q) {
+                            textures.push((vertices.len() as u32, bind, texture));
                             vertices.extend(tile_vertices(q));
                         }
                     }
@@ -1172,11 +1282,14 @@ impl SceneBuffers {
                         continue;
                     }
                     let uniforms = CmdUniforms::new(&camera, size, ppp, *origin, tilt, clip);
-                    let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mapgpu_cmd_uniforms"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    });
+                    let uniforms = owned_buffer(
+                        device,
+                        &wgpu::util::BufferInitDescriptor {
+                            label: Some("mapgpu_cmd_uniforms"),
+                            contents: bytemuck::bytes_of(&uniforms),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        },
+                    );
                     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("mapgpu_tiles_bind"),
                         layout: &r.cmd_layout,
@@ -1186,11 +1299,14 @@ impl SceneBuffers {
                         ],
                     });
                     draws.push(SceneDraw::Tiles {
-                        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mapgpu_tile_vertices"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        }),
+                        vertices: owned_buffer(
+                            device,
+                            &wgpu::util::BufferInitDescriptor {
+                                label: Some("mapgpu_tile_vertices"),
+                                contents: bytemuck::cast_slice(&vertices),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            },
+                        ),
                         textures,
                         uniforms,
                         bind,
@@ -1205,11 +1321,14 @@ impl SceneBuffers {
                         .map(|t| {
                             let (vertices, indices) = tile_meshes.buffers(device, &t.mesh);
                             let u = TileMeshUniforms::new(&camera, size, ppp, t, tilt);
-                            let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("mapgpu_tile_mesh_uniforms"),
-                                contents: bytemuck::bytes_of(&u),
-                                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                            });
+                            let uniforms = owned_buffer(
+                                device,
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("mapgpu_tile_mesh_uniforms"),
+                                    contents: bytemuck::bytes_of(&u),
+                                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                                },
+                            );
                             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("mapgpu_tile_mesh_bind"),
                                 layout: &r.tile_mesh_layout,
@@ -1340,7 +1459,7 @@ fn paint_draws(renderer: &GpuMapRenderer, draws: &[SceneDraw], rp: &mut wgpu::Re
                 rp.set_pipeline(&renderer.tile_pipeline);
                 rp.set_bind_group(0, bind, &[]);
                 rp.set_vertex_buffer(0, vertices.slice(..));
-                for (first, texture) in textures {
+                for (first, texture, _) in textures {
                     rp.set_bind_group(1, texture, &[]);
                     rp.draw(*first..first + 6, 0..1);
                 }
@@ -2078,6 +2197,25 @@ mod tests {
     }
 
     /// A tile picture is uploaded once, and drawn again from its texture by the next scenes.
+    #[test]
+    fn owned_resources_are_destroyed_once_dropped() {
+        // In the browser a dropped wgpu resource keeps its GPU memory until the garbage
+        // collector runs: every scene's images and meshes are destroyed when it goes instead.
+        struct Counted(std::rc::Rc<std::cell::Cell<u32>>);
+        impl Destroy for Counted {
+            fn destroy(&self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let n = std::rc::Rc::new(std::cell::Cell::new(0));
+        let shared = Arc::new(Owned(Counted(n.clone())));
+        let held = shared.clone();
+        drop(shared);
+        assert_eq!(n.get(), 0, "destroyed while a scene still draws it");
+        drop(held);
+        assert_eq!(n.get(), 1);
+    }
+
     #[test]
     fn tile_textures_are_kept_across_scenes() {
         let Some(rs) = headless_render_state() else { return };

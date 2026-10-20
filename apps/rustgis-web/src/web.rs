@@ -58,8 +58,36 @@ const DATA_EXTS: &[&str] = &[
 const CANVAS_ID: &str = "rustgis_canvas";
 const LOADING_ID: &str = "rustgis_loading";
 
+/// The console logger, without the drawing library's warnings. tiny-skia warns of every path
+/// it can't fill, stroke or dash (a vector tile's shapes shrunk to nothing, dashes past its
+/// limits): thousands a frame on a vector tile map, each written to the console with a stack
+/// trace, which made the map crawl and the page run out of memory.
+struct Logger(eframe::WebLogger);
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        worth_logging(metadata) && self.0.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if worth_logging(record.metadata()) {
+            self.0.log(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+    }
+}
+
+/// Whether a message is worth the console: of tiny-skia's, only errors.
+fn worth_logging(metadata: &log::Metadata<'_>) -> bool {
+    !metadata.target().starts_with("tiny_skia") || metadata.level() <= log::Level::Error
+}
+
 pub fn start() {
-    eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    log::set_max_level(log::LevelFilter::Info);
+    log::set_boxed_logger(Box::new(Logger(eframe::WebLogger::new(log::LevelFilter::Info)))).ok();
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
