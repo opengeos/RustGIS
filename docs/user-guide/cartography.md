@@ -150,8 +150,9 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says
-  whether it reads and how many of the layer's features match (those its definition query
-  keeps), and **Apply** sets it in one undo step; **Clear** labels every feature again
+  whether it reads and how many of the features the layer draws at the map's scale match
+  (after its definition query, display filters and time window), and **Apply** sets it in one
+  undo step; **Clear** labels every feature again
   (`labels.class.update={"layer": "Cities", "where": "pop_max > 5000000"}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
