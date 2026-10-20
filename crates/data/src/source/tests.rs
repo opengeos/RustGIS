@@ -4,6 +4,13 @@ use rustgis_geom::{Coord, lonlat_to_merc};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn tls_provider_builds_client_config() {
+    tls_provider();
+    let _ = rustls::ClientConfig::builder();
+}
+
 /// 30 × 20 points over the world, named and numbered.
 fn points() -> Vec<(Coord, String, i64)> {
     let mut v = Vec::new();

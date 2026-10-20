@@ -841,10 +841,10 @@ fn add_url(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     })
 }
 
-/// Add From Database: a PostgreSQL/PostGIS or MySQL/MariaDB connection (or a DuckDB file), its
-/// password (kept for the session only) and one table or all of them.
+/// Add From Database: a PostgreSQL/PostGIS, MySQL/MariaDB or SQL Server connection (or a DuckDB
+/// file), its password (kept for the session only) and one table or all of them.
 fn add_database(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
-    ui.label(egui::RichText::new(tl!("A PostgreSQL/PostGIS connection (host=… port=… dbname=… user=…, or a postgresql:// address), a MySQL or MariaDB address (mysql://user@host:3306/database) or a DuckDB file. PostGIS, MySQL and MariaDB tables are read live, large ones a view at a time; the password is kept until RustGIS closes, never in the project.")).weak());
+    ui.label(egui::RichText::new(tl!("A PostgreSQL/PostGIS connection (host=… port=… dbname=… user=…, or a postgresql:// address), a MySQL or MariaDB address (mysql://user@host:3306/database), a SQL Server address (mssql://user@host:1433/database) or a DuckDB file. PostGIS, MySQL, MariaDB and SQL Server tables are read live, large ones a view at a time; the password is kept until RustGIS closes, never in the project.")).weak());
     // A bare connection string is a PostgreSQL one.
     let database = |a: &str| {
         let a = a.trim();
@@ -863,7 +863,7 @@ fn add_database(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         ui.add(
             egui::TextEdit::singleline(&mut app.dialogs.b)
                 .password(true)
-                .hint_text(tl!("none, or from PGPASSWORD or MYSQL_PWD"))
+                .hint_text(tl!("none, or from PGPASSWORD, MYSQL_PWD or SQLCMDPASSWORD"))
                 .desired_width(280.0),
         );
         ui.end_row();

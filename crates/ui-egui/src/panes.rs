@@ -19,6 +19,7 @@ use rustgis_engine::map::{
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, c32, regular, rgba, semibold};
+use crate::widgets::Dragged;
 use crate::{LayersView, LeftPane, RightPane, RustGisApp, icons};
 
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
@@ -4169,8 +4170,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 {
                     ui.label(tl!(label));
                     let mut x = v;
+                    // Kept across a drag until it is let go (#607).
+                    let drag = Dragged::lend(ui, egui::Id::new(("relief_drag", l.id, which)), &mut x);
                     let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3));
-                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                    if drag.settled(ui, &r, &mut x) && x != v {
                         let (a, b, c) = match which {
                             0 => (x, alt, zf),
                             1 => (az, x, zf),
@@ -4213,11 +4216,16 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             Stretch::PercentClip { low, high } => {
                 ui.horizontal(|ui| {
                     let (mut lo, mut hi) = (low, high);
+                    // Each kept across a drag until it is let go (#607); both are sent together.
                     ui.label(tl!("Min %"));
+                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "low")), &mut lo);
                     let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    let low_settled = drag.settled(ui, &a, &mut lo);
                     ui.label(tl!("Max %"));
+                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "high")), &mut hi);
                     let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2));
-                    if a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged()) {
+                    let high_settled = drag.settled(ui, &b, &mut hi);
+                    if (low_settled || high_settled) && (lo != low || hi != high) {
                         let _ = app.run("raster.stretch", json!({"type": "percentClip", "low": lo, "high": hi}));
                     }
                 });
@@ -4250,8 +4258,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 ui.horizontal(|ui| {
                     let mut nn = n;
                     ui.label(tl!("Deviations"));
+                    // Kept across a drag until it is let go (#607).
+                    let drag = Dragged::lend(ui, egui::Id::new(("deviations_drag", l.id)), &mut nn);
                     let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2));
-                    if a.drag_stopped() || (a.changed() && !a.dragged()) {
+                    if drag.settled(ui, &a, &mut nn) && nn != n {
                         let _ = app.run("raster.stretch", json!({"type": "standardDeviation", "n": nn}));
                     }
                 });

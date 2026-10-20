@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             r#"{"sql": "one DuckDB SELECT; DuckDB Spatial's ST_ functions, read_parquet('…'), web addresses", "name"?: string, "database"?: "a .duckdb file or a PostgreSQL connection (postgres:host=… dbname=…) whose tables the query names", "password"?: "the connection's, kept for this session only", "crs"?: "EPSG:… of a geometry that doesn't say", "stream"?: bool, "ran"?: "a result the app ran (the SQL pane)"}"#,
         ),
         C::new("layer.addDatabase", "Add Data From Database", "Home › Add", add_database).params(
-            r#"{"database": "postgres:host=… dbname=… user=… (or a postgresql:// address; PostGIS tables are read live), a mysql://user@host:port/database address (MySQL or MariaDB, read live; mariadb:// too), or a .duckdb file", "password"?: "kept for this session only, never saved", "layer"?: "a table, as table or schema.table (table:column for one of several geometry columns; default: every table with a geometry column)", "crs"?: "EPSG:… of a geometry that doesn't say", "name"?: string, "stream"?: bool}"#,
+            r#"{"database": "postgres:host=… dbname=… user=… (or a postgresql:// address; PostGIS tables are read live), a mysql://user@host:port/database address (MySQL or MariaDB, read live; mariadb:// too), an mssql://user@host:1433/database address (SQL Server or Azure SQL, read live; ?encrypt=strict|false, ?trust-server-certificate=true for a self-signed certificate, ?instance=NAME; on Windows DOMAIN\\user or no user signs in with Windows), or a .duckdb file", "password"?: "kept for this session only, never saved", "layer"?: "a table, as table or schema.table (table:column for one of several geometry columns; default: every table with a geometry column)", "crs"?: "EPSG:… of a geometry that doesn't say", "name"?: string, "stream"?: bool}"#,
         ),
         C::new("info.databaseTables", "List Database Tables", "Home › Add › Add Data From Database", database_tables)
             .view()
@@ -890,6 +890,9 @@ pub(crate) enum Origin<'a> {
     /// A MySQL or MariaDB table, always opened by the caller (desktop only).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Mysql(&'a rustgis_map::source::MysqlOrigin),
+    /// A SQL Server table, always opened by the caller (desktop only).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Sqlserver(&'a rustgis_map::source::SqlServerOrigin),
 }
 
 /// Most GeoPackage tables added at once.
@@ -918,6 +921,7 @@ fn add_source_with(
         Origin::Path(p) | Origin::Bytes(p, _) => p.to_string(),
         Origin::Postgis(o) => o.database.clone(),
         Origin::Mysql(o) => o.database.clone(),
+        Origin::Sqlserver(o) => o.database.clone(),
     };
     let err = |e: rustgis_data::DataError| format!("{label}: {e}");
     // Tables past the cap, said in the result as well as in a notice, so the CLI, the MCP server
@@ -961,7 +965,9 @@ fn add_source_with(
             None => match &origin {
                 Origin::Path(path) => source::open_path(Path::new(path), table.as_deref()),
                 Origin::Bytes(name, bytes) => source::open_shared(name, bytes.clone(), table.as_deref()),
-                Origin::Postgis(_) | Origin::Mysql(_) => Err(rustgis_data::DataError::Format("the table isn't open".into())),
+                Origin::Postgis(_) | Origin::Mysql(_) | Origin::Sqlserver(_) => {
+                    Err(rustgis_data::DataError::Format("the table isn't open".into()))
+                }
             }
             .map_err(err)?,
         };
@@ -985,6 +991,7 @@ fn add_source_with(
                 Origin::Bytes(file, bytes) => rustgis_map::source::SourceLayer::from_bytes(*file, bytes.clone(), table.clone(), src),
                 Origin::Postgis(o) => rustgis_map::source::SourceLayer::from_postgis((*o).clone(), src),
                 Origin::Mysql(o) => rustgis_map::source::SourceLayer::from_mysql((*o).clone(), src),
+                Origin::Sqlserver(o) => rustgis_map::source::SourceLayer::from_sqlserver((*o).clone(), src),
             };
             let unique = unique_name(s, &name);
             for n in &info.notes {
@@ -1136,25 +1143,27 @@ pub fn database_param(p: &Value) -> Option<rustgis_data::source::duckdb::Databas
         Database::File(f) => Database::File(std::path::absolute(&f).unwrap_or(f)),
         pg => pg,
     };
-    if let (Database::Postgres(dsn) | Database::Mysql(dsn), Some(pw)) = (&db, ps(p, "password").filter(|pw| !pw.is_empty())) {
+    if let (Database::Postgres(dsn) | Database::Mysql(dsn) | Database::Sqlserver(dsn), Some(pw)) =
+        (&db, ps(p, "password").filter(|pw| !pw.is_empty()))
+    {
         remember_password(dsn, pw);
     }
     Some(db)
 }
 
 /// The database an SQL query names in `database` ([`database_param`]): a DuckDB file or a
-/// PostgreSQL connection, never a MySQL or MariaDB one (read live instead).
+/// PostgreSQL connection, never a MySQL, MariaDB or SQL Server one (read live instead).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn sql_database_param(p: &Value) -> Result<Option<rustgis_data::source::duckdb::Database>, String> {
     match database_param(p) {
-        Some(rustgis_data::source::duckdb::Database::Mysql(_)) => {
-            Err("SQL queries don't run on MySQL or MariaDB databases: add their tables with Add Data › Database…".into())
+        Some(rustgis_data::source::duckdb::Database::Mysql(_) | rustgis_data::source::duckdb::Database::Sqlserver(_)) => {
+            Err("SQL queries don't run on MySQL, MariaDB or SQL Server databases: add their tables with Add Data › Database…".into())
         }
         db => Ok(db),
     }
 }
 
-/// The tables of a database (a PostgreSQL connection or a DuckDB file) that have a geometry column.
+/// The tables of a database (a live connection or a DuckDB file) that have a geometry column.
 fn database_tables(_s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(target_arch = "wasm32")]
     {
@@ -1207,7 +1216,7 @@ fn add_tables(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Dat
         Database::File(f) => {
             (f.display().to_string(), std::path::absolute(f).map(|p| p.display().to_string()).unwrap_or_else(|_| f.display().to_string()))
         }
-        Database::Postgres(_) | Database::Mysql(_) => (db.short(), db.label()),
+        Database::Postgres(_) | Database::Mysql(_) | Database::Sqlserver(_) => (db.short(), db.label()),
     };
     let path = path.as_str();
     let err = |e: rustgis_data::DataError| format!("{path}: {e}");
@@ -1273,11 +1282,12 @@ fn add_tables(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Dat
     Ok(out)
 }
 
-/// A database whose tables are read live: PostGIS, MySQL or MariaDB.
+/// A database whose tables are read live: PostGIS, MySQL, MariaDB or SQL Server.
 #[cfg(not(target_arch = "wasm32"))]
 enum LiveDb {
     Postgis(std::sync::Arc<rustgis_data::source::postgis::Conn>),
     Mysql(std::sync::Arc<rustgis_data::source::mysql::Conn>),
+    Sqlserver(std::sync::Arc<rustgis_data::source::sqlserver::Conn>),
 }
 
 /// A geometry column of a [`LiveDb`]'s table.
@@ -1285,6 +1295,7 @@ enum LiveDb {
 enum LiveTable {
     Postgis(rustgis_data::source::postgis::Table),
     Mysql(rustgis_data::source::mysql::Table),
+    Sqlserver(rustgis_data::source::sqlserver::Table),
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1293,6 +1304,7 @@ impl LiveTable {
         match self {
             LiveTable::Postgis(t) => t.label(),
             LiveTable::Mysql(t) => t.label(),
+            LiveTable::Sqlserver(t) => t.label(),
         }
     }
 }
@@ -1302,35 +1314,39 @@ impl LiveDb {
     /// Connects to a database read live (the user adding it, so the client's own credentials
     /// serve); `None` for a DuckDB file.
     fn connect(db: &rustgis_data::source::duckdb::Database) -> Option<rustgis_data::Result<LiveDb>> {
-        use rustgis_data::source::{duckdb::Database, mysql, postgis};
+        use rustgis_data::source::{duckdb::Database, mysql, postgis, sqlserver};
         match db {
             Database::Postgres(dsn) => Some(postgis::connect(dsn, true).map(LiveDb::Postgis)),
             Database::Mysql(address) => Some(mysql::connect(address, true).map(LiveDb::Mysql)),
+            Database::Sqlserver(address) => Some(sqlserver::connect(address, true).map(LiveDb::Sqlserver)),
             Database::File(_) => None,
         }
     }
 
     fn tables(&self) -> rustgis_data::Result<Vec<LiveTable>> {
-        use rustgis_data::source::{mysql, postgis};
+        use rustgis_data::source::{mysql, postgis, sqlserver};
         Ok(match self {
             LiveDb::Postgis(c) => postgis::tables(c)?.into_iter().map(LiveTable::Postgis).collect(),
             LiveDb::Mysql(c) => mysql::tables(c)?.into_iter().map(LiveTable::Mysql).collect(),
+            LiveDb::Sqlserver(c) => sqlserver::tables(c)?.into_iter().map(LiveTable::Sqlserver).collect(),
         })
     }
 
     fn find(&self, name: &str) -> rustgis_data::Result<LiveTable> {
-        use rustgis_data::source::{mysql, postgis};
+        use rustgis_data::source::{mysql, postgis, sqlserver};
         Ok(match self {
             LiveDb::Postgis(c) => LiveTable::Postgis(postgis::find_table(c, name)?),
             LiveDb::Mysql(c) => LiveTable::Mysql(mysql::find_table(c, name)?),
+            LiveDb::Sqlserver(c) => LiveTable::Sqlserver(sqlserver::find_table(c, name)?),
         })
     }
 
     fn families(&self, t: &LiveTable) -> rustgis_data::Result<Vec<rustgis_data::source::Family>> {
-        use rustgis_data::source::{mysql, postgis};
+        use rustgis_data::source::{mysql, postgis, sqlserver};
         match (self, t) {
             (LiveDb::Postgis(c), LiveTable::Postgis(t)) => postgis::families(c, t),
             (LiveDb::Mysql(c), LiveTable::Mysql(t)) => mysql::families(c, t),
+            (LiveDb::Sqlserver(c), LiveTable::Sqlserver(t)) => sqlserver::families(c, t),
             _ => Err(rustgis_data::DataError::Format("the table is of another database".into())),
         }
     }
@@ -1341,18 +1357,21 @@ impl LiveDb {
         family: rustgis_data::source::Family,
         crs: Option<&str>,
     ) -> rustgis_data::Result<Box<dyn rustgis_data::source::FeatureSource>> {
-        use rustgis_data::source::{mysql, postgis};
+        use rustgis_data::source::{mysql, postgis, sqlserver};
         Ok(match (self, t) {
             (LiveDb::Postgis(c), LiveTable::Postgis(t)) => Box::new(postgis::PostgisSource::open(c.clone(), t.clone(), Some(family), crs)?),
             (LiveDb::Mysql(c), LiveTable::Mysql(t)) => Box::new(mysql::MysqlSource::open(c.clone(), t.clone(), Some(family), crs)?),
+            (LiveDb::Sqlserver(c), LiveTable::Sqlserver(t)) => {
+                Box::new(sqlserver::SqlServerSource::open(c.clone(), t.clone(), Some(family), crs)?)
+            }
             _ => return Err(rustgis_data::DataError::Format("the table is of another database".into())),
         })
     }
 }
 
-/// Adds the tables of a PostGIS, MySQL or MariaDB database that have a geometry column (or the
-/// one `layer` names), read live: large ones a view at a time, others loaded whole. A column of
-/// mixed geometry types becomes a layer per type.
+/// Adds the tables of a PostGIS, MySQL, MariaDB or SQL Server database that have a geometry
+/// column (or the one `layer` names), read live: large ones a view at a time, others loaded
+/// whole. A column of mixed geometry types becomes a layer per type.
 #[cfg(not(target_arch = "wasm32"))]
 fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Database, live: rustgis_data::Result<LiveDb>) -> CmdResult {
     use rustgis_data::source::duckdb::MAX_TABLES;
@@ -1411,7 +1430,7 @@ fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Datab
                 None => t.label(),
             };
             let (database, table, family, crs) = (original.clone(), t.label(), Some(family), crs.map(str::to_string));
-            let (pg, my);
+            let (pg, my, ms);
             let origin = match live {
                 LiveDb::Postgis(_) => {
                     pg = rustgis_map::source::PostgisOrigin { database, table, family, crs };
@@ -1420,6 +1439,10 @@ fn add_live(s: &mut Session, p: &Value, db: &rustgis_data::source::duckdb::Datab
                 LiveDb::Mysql(_) => {
                     my = rustgis_map::source::MysqlOrigin { database, table, family, crs };
                     Origin::Mysql(&my)
+                }
+                LiveDb::Sqlserver(_) => {
+                    ms = rustgis_map::source::SqlServerOrigin { database, table, family, crs };
+                    Origin::Sqlserver(&ms)
                 }
             };
             let mut q = json!({"name": name});

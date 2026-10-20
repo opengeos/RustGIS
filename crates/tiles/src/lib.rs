@@ -27,6 +27,7 @@ pub mod portal;
 pub mod remote;
 pub mod routing;
 pub mod s3;
+pub mod shapes;
 pub mod source;
 pub mod sourcecoop;
 pub mod sprite;
@@ -36,5 +37,5 @@ pub mod template;
 pub mod usgis;
 
 pub use draw::{Drawn, Frame, Label, PlacedTiles, Placement, draw, place};
-pub use picture::{Pace, Unfinished, paced};
+pub use picture::{Pace, Unfinished, pace, paced, unfinished};
 pub use source::{Kind, Spec};

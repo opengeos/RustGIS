@@ -1002,6 +1002,8 @@ fn hostile_params_never_panic() {
         // MySQL addresses that can't be read, so nothing connects.
         json!({"database": "mysql://u:p#@[::1/x?ssl-mode=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
+        json!({"database": "mssql://u:p#@[::1/x?encrypt=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
+        json!({"database": "MSSQL://u@h:99999999/%zz?ca=/nonexistent", "sql": "SELECT 1"}),
         // Control points that parse far enough to reach a fit.
         json!({"points": [[], 7, [1, 2, 3, 4, "x"], [0, 0, 1e308, -1e308]], "transform": "spline"}),
         json!({"points": vec![json!([5, 5, 1, 1]); 1000], "compare": true}),
@@ -7414,6 +7416,65 @@ fn mysql_live_end_to_end() {
     let text = serde_json::to_string(&s.project).unwrap();
     let password = address.split_once("://").and_then(|(_, r)| r.split_once('@')).and_then(|(u, _)| u.split_once(':')).map(|(_, p)| p);
     assert!(password.is_none_or(|p| !text.contains(&format!(":{p}@"))), "the project keeps no password");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let l = t.map().layer_by_name("live").unwrap();
+    assert!(l.source.as_ref().unwrap().is_open(), "{:?}", l.source.as_ref().unwrap().error);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// SQL Server project reopening and failed commands never expose credentials or add layers.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn sqlserver_layers_reopen_without_secrets() {
+    let mut s = Session::new(Project::default());
+    let mut src: rustgis_map::source::SourceLayer = serde_json::from_value(json!({
+        "sqlserver": {"database": "mssql://me@127.0.0.1:1/gis?encrypt=false", "table": "roads", "family": "Lines"}
+    }))
+    .unwrap();
+    let e = src.open().unwrap_err();
+    assert!(e.contains("connect again with Add Data › Database"), "{e}");
+    assert!(!src.is_open());
+    let saved = serde_json::to_string(&src).unwrap();
+    assert!(saved.contains("\"sqlserver\":{") && saved.contains("\"table\":\"roads\"") && !saved.contains("password"), "{saved}");
+    let before = s.map().layers.len();
+    let e = s.run("layer.addDatabase", &json!({"database": "mssql://me:s3cret@127.0.0.1:1/gis", "password": "pw"})).unwrap_err();
+    assert!(e.starts_with("gis: ") && !e.contains("s3cret") && !e.contains("pw"), "{e}");
+    let e = s.run("layer.addDatabase", &json!({"database": "mssql://h:port/gis"})).unwrap_err();
+    assert!(e.contains("port 'port'"), "{e}");
+    let e = s.run("layer.addSql", &json!({"sql": "SELECT 1", "database": "mssql://h/gis"})).unwrap_err();
+    assert!(e.contains("SQL Server"), "{e}");
+    #[cfg(not(windows))]
+    {
+        let e = s.run("info.databaseTables", &json!({"database": "mssql://127.0.0.1:1/gis"})).unwrap_err();
+        assert!(e.contains("give a SQL Server login"), "{e}");
+    }
+    assert_eq!(s.map().layers.len(), before);
+}
+
+/// `RUSTGIS_TEST_MSSQL` names a live database: add every table, stream one, draw, save and reopen.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn sqlserver_live_end_to_end() {
+    let Ok(address) = std::env::var("RUSTGIS_TEST_MSSQL") else { return };
+    let mut s = Session::new(Project::default());
+    let listed = s.run("info.databaseTables", &json!({"database": address})).unwrap();
+    let names: Vec<String> = listed["layers"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    let r = s.run("layer.addDatabase", &json!({"database": address})).unwrap();
+    assert!(r["layers"].as_array().unwrap().len() >= names.len(), "{r}");
+    assert!(r["features"].as_u64().unwrap() > 0, "{r}");
+    let r = s.run("layer.addDatabase", &json!({"database": address, "layer": names[0], "stream": true, "name": "live"})).unwrap();
+    assert_eq!(r["streamed"], true);
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).unwrap().source.as_ref().unwrap().sqlserver.is_some());
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-sqlserver-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string()})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let password = rustgis_data::source::msconn::split_password(&address).and_then(|(_, p)| p);
+    assert!(password.is_none_or(|p| !text.contains(&p)), "the project keeps no password");
     let mut t = Session::new(Project::default());
     t.run("project.openText", &json!({"text": text})).unwrap();
     let l = t.map().layer_by_name("live").unwrap();

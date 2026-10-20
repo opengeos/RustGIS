@@ -7,6 +7,7 @@
 //!
 //! Sources are hostile input: malformed rows are skipped and counted, never a panic.
 
+pub mod credentials;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod duckdb;
 #[cfg(not(target_arch = "wasm32"))]
@@ -21,6 +22,7 @@ pub mod gpkg;
 mod gpkg_blob;
 pub mod gpkg_mem;
 pub mod lidar;
+pub mod msconn;
 pub mod myconn;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mysql;
@@ -31,6 +33,8 @@ pub mod postgis;
 pub mod remote;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod shp;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sqlserver;
 
 use crate::raster::{Crs, Transformer};
 use crate::{DataError, Dataset, Feature, Field, Geometry, GeometryType, ReadReport, Result};
@@ -555,6 +559,14 @@ pub(crate) fn in_request(g: &Geometry, req: &Request) -> bool {
         Some(e) => g.extent().intersects(e),
         None => true,
     }
+}
+
+/// Makes ring rustls's process-wide crypto provider. SQL Server's client also builds aws-lc-rs
+/// into rustls, and with two providers built in rustls picks neither by itself (the MySQL
+/// client's `ClientConfig::builder()` would panic).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn tls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(test)]

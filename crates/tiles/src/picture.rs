@@ -99,37 +99,59 @@ pub enum Unfinished {
     Next,
 }
 
-thread_local! {
-    /// Set inside [`paced`]: its pace, and what the map drawn still lacks.
-    static PACE: Cell<Option<(Pace, Option<Unfinished>)>> = const { Cell::new(None) };
+/// A map being drawn at a pace (inside [`paced`]).
+#[derive(Clone, Copy)]
+struct Paced {
+    pace: Pace,
+    /// What it still lacks.
+    lacks: Option<Unfinished>,
+    /// Until when it draws what it lacks, in this frame: one budget for all its layers.
+    until: Instant,
 }
 
-/// Runs `f`, drawing a map for the screen, with the pictures it lacks drawn at `pace`; and what
-/// the map drawn still lacks, if anything.
+thread_local! {
+    static PACE: Cell<Option<Paced>> = const { Cell::new(None) };
+}
+
+/// Runs `f`, drawing a map for the screen, with the pictures it lacks drawn at `pace` (for about
+/// a frame, [`FRAME`], from now, shared by all its layers); and what the map drawn still lacks,
+/// if anything.
 pub fn paced<R>(pace: Pace, f: impl FnOnce() -> R) -> (R, Option<Unfinished>) {
     /// Puts back what was there before, however `f` ends.
-    struct Restore(Option<(Pace, Option<Unfinished>)>);
+    struct Restore(Option<Paced>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            let inner = PACE.with(|p| p.replace(self.0)).and_then(|p| p.1);
+            let inner = PACE.with(|p| p.replace(self.0)).and_then(|p| p.lacks);
             // Inside another call, it learns of these too.
-            if let Some((outer, lacks)) = self.0 {
-                PACE.with(|p| p.set(Some((outer, lacks.max(inner)))));
+            if let Some(outer) = self.0 {
+                PACE.with(|p| p.set(Some(Paced { lacks: outer.lacks.max(inner), ..outer })));
             }
         }
     }
-    let restore = Restore(PACE.with(|p| p.replace(Some((pace, None)))));
+    let now = Instant::now() + FRAME;
+    // Inside another call, within its frame.
+    let until = PACE.with(|p| p.get()).map_or(now, |p| p.until.min(now));
+    let restore = Restore(PACE.with(|p| p.replace(Some(Paced { pace, lacks: None, until }))));
     let r = f();
-    let lacks = PACE.with(|p| p.get()).and_then(|p| p.1);
+    let lacks = PACE.with(|p| p.get()).and_then(|p| p.lacks);
     drop(restore);
     (r, lacks)
 }
 
-/// Notes what the map drawn inside [`paced`] still lacks.
-fn unfinished(u: Unfinished) {
+/// The pace the map being drawn on this thread draws what it lacks at (inside [`paced`]), and
+/// until when it may draw in this frame (shared by all its layers): for other renderers that
+/// draw a frame's worth at a time (the GPU map's tile meshes).
+pub fn pace() -> Option<(Pace, Instant)> {
+    PACE.with(|p| p.get()).map(|p| (p.pace, p.until))
+}
+
+/// Notes, for [`paced`], what the map being drawn on this thread still lacks: a renderer drawing
+/// at its pace calls it when it left something out or stood something in, so the map is drawn
+/// again (`Next`: the next frame; `Later`: once it stops moving). Outside `paced`, nothing.
+pub fn unfinished(u: Unfinished) {
     PACE.with(|p| {
-        if let Some((pace, lacks)) = p.get() {
-            p.set(Some((pace, lacks.max(Some(u)))));
+        if let Some(paced) = p.get() {
+            p.set(Some(Paced { lacks: paced.lacks.max(Some(u)), ..paced }));
         }
     });
 }
@@ -213,7 +235,8 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
     }
     // Drawn for the screen, what pictures already drawn can stand in for those missing, and
     // which of those to draw now (see `Pace`).
-    let pace = PACE.with(|p| p.get()).map(|p| p.0);
+    let paced = PACE.with(|p| p.get());
+    let pace = paced.map(|p| p.pace);
     let mut covers: HashMap<usize, Vec<(Key, Extent, u8, Extent)>> = HashMap::new();
     if pace.is_some() && !missing.is_empty() {
         let (cx, cy) = ((view.min_x + view.max_x) / 2.0, (view.min_y + view.max_y) / 2.0);
@@ -242,7 +265,7 @@ pub(crate) fn cover(r: &Arc<Resolved>, frame: &Frame, view: &Extent, reach: Opti
     // How far past its square a picture looks for shapes, in points: a line or circle drawn from
     // a neighbouring tile reaches into it by up to half its width.
     let reach = r.style.layers.iter().filter(|l| l.visible_at(zoom)).map(|l| overhang(l, zoom)).fold(0.0f32, f32::max);
-    let until = pace.map(|_| Instant::now() + FRAME);
+    let until = paced.map(|p| p.until);
     let drawn = draw_all(r, &squares, side, m_per_px, ppp, f64::from(reach), until);
     let mut stood_in = Vec::new();
     {
@@ -605,6 +628,15 @@ mod tests {
         let ((_, inner), outer) = paced(Pace::Settling, || paced(Pace::Moving, || cover(&r, &frame(2.25, 1.0), &view, None, &mut pending)));
         assert!(inner == Some(Unfinished::Later) && outer == inner);
         assert!(PACE.with(|p| p.get()).is_none());
+        // One deadline for the frame, whoever asks; an inner call keeps within it.
+        let ((a, b, inner), _) = paced(Pace::Settling, || {
+            let a = pace().map(|p| p.1);
+            std::thread::sleep(Duration::from_millis(2));
+            let (inner, _) = paced(Pace::Moving, || pace().map(|p| p.1));
+            (a, pace().map(|p| p.1), inner)
+        });
+        assert!(a.is_some() && a == b && inner <= a);
+        assert!(pace().is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 
