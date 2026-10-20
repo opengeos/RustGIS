@@ -99,6 +99,8 @@ fn editor(
         .id(id)
         .hint_text(tl!("e.g. pop_max > 1000000"))
         .desired_rows(3)
+        // No longer than a clause can be, so a paste isn't read again each frame only to be refused.
+        .char_limit(rustgis_engine::data::query::MAX_LEN)
         .desired_width(f32::INFINITY)
         .font(egui::TextStyle::Monospace);
     let r = ui.add(edit);

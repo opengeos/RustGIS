@@ -666,6 +666,40 @@ mod tests {
         assert!(l.default.visible);
     }
 
+    /// A draft belongs to its layer in its project: another project, though it reuses the
+    /// layer's id, starts without it.
+    #[test]
+    fn a_draft_is_dropped_with_its_project() {
+        let app = with_cities();
+        let mut h = sql_tab(app);
+        h.get_by_label("+ New expression").click();
+        h.run();
+        type_clause(&mut h, "pop_max > 5000000");
+        h.get_by_label("Not applied yet.");
+        let app = h.state_mut();
+        app.run("project.sample", json!(null)).unwrap();
+        let cities = layer_id(app, "Cities");
+        app.session.run("layer.select", &json!({"layer": cities})).unwrap();
+        h.run();
+        h.get_by_label("There is no expression defined.");
+    }
+
+    /// A Check's count shows while nothing has changed since: after a change, it is asked again.
+    #[test]
+    fn a_check_is_dropped_after_a_change() {
+        let app = with_cities();
+        let mut h = sql_tab(app);
+        h.get_by_label("+ New expression").click();
+        h.run();
+        type_clause(&mut h, "pop_max > 5000000");
+        h.get_by_label("Check").click();
+        h.run();
+        assert!(h.query_by_label_contains("features match").is_some());
+        h.state_mut().run("labels.enable", json!({"on": true})).unwrap();
+        h.run();
+        assert!(h.query_by_label_contains("features match").is_none(), "the count may be stale");
+    }
+
     /// A clause whose field was deleted since says so: it no longer reads, and labels nothing.
     #[test]
     fn a_clause_that_no_longer_reads_says_so() {
