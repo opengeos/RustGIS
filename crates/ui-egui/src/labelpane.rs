@@ -232,7 +232,9 @@ fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
 }
 
 /// Ends a colour pick once the pointer is let go. Called after the panes (from `panes::show`), so
-/// it still ends if the pane closes meanwhile.
+/// it still ends if the pane closes meanwhile. A change made with no pointer down (typed in the
+/// picker's hex field, or with the keyboard) ends on the frame it is made: each is its own undo
+/// step, and none is lost, as in the Symbology pane's class colours.
 pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
     // Still dragging: the pointer is down and the window has focus (a release outside a window
     // that lost focus may never arrive).
