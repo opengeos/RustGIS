@@ -340,7 +340,7 @@ pub fn meshes(style: &Arc<Resolved>, source: &str, tiles: &[DataTile], level: u8
     out
 }
 
-/// `f` of every item (`None` for one a worker didn't reach), natively shared among threads.
+/// `f` of every item (`None` for one that panicked), natively shared among threads.
 fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Option<R>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -354,9 +354,10 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Op
                         loop {
                             let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let Some(item) = items.get(i) else { break };
-                            let r = f(item);
+                            // A tile that panics (hostile data) gives no mesh, rather than the frame.
+                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(item))).ok();
                             if let Some(slot) = out.lock().unwrap_or_else(|e| e.into_inner()).get_mut(i) {
-                                *slot = Some(r);
+                                *slot = r;
                             }
                         }
                     });
@@ -365,17 +366,19 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<Op
             return out.into_inner().unwrap_or_else(|e| e.into_inner());
         }
     }
-    items.iter().map(|i| Some(f(i))).collect()
+    items.iter().map(|i| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(i))).ok()).collect()
 }
 
 /// Drops the meshes of tiles and styles gone, and past the budget those unused longest (but
-/// never those of the call at `tick`).
+/// never those of the call at `tick`: a view's own meshes may go past the budget, bounded by
+/// the size of its tiles).
 fn evict(s: &mut Store, tick: u64) {
+    // Those of tiles the tile cache let go, and styles gone, go first, budget or not.
+    s.entries.retain(|_, e| e.payload.strong_count() > 0 && e.style.strong_count() > 0);
+    s.bytes = s.entries.values().map(|e| e.mesh.bytes()).sum();
     if s.bytes <= BUDGET {
         return;
     }
-    s.entries.retain(|_, e| e.payload.strong_count() > 0 && e.style.strong_count() > 0);
-    s.bytes = s.entries.values().map(|e| e.mesh.bytes()).sum();
     let mut old: Vec<(u64, Key, usize)> =
         s.entries.iter().filter(|(_, e)| e.used != tick).map(|(k, e)| (e.used, *k, e.mesh.bytes())).collect();
     old.sort_unstable_by_key(|o| o.0);
@@ -452,6 +455,12 @@ mod tests {
         // The circle: a disc of its diameter and a ring across its edge.
         let widths: Vec<[f32; 2]> = m.vertices.iter().filter(|v| v.dashes == [0.0; 4] && v.width != [0.0, 0.0]).map(|v| v.width).collect();
         assert!(widths.contains(&[6.0, 6.0]) && widths.contains(&[5.0, 5.0]) && widths.contains(&[7.0, 7.0]));
+    }
+
+    #[test]
+    fn a_tile_that_panics_gives_no_mesh() {
+        let out = parallel(&[1, 2, 3, 4], |&i: &i32| if i == 2 { panic!("hostile") } else { i * 10 });
+        assert_eq!(out, [Some(10), None, Some(30), Some(40)]);
     }
 
     #[test]

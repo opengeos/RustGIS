@@ -87,15 +87,17 @@ fn drawn_source(r: &Resolved, level: u8) -> Option<String> {
             LayerKind::Line if l.has_paint("line-pattern") => {}
             LayerKind::Fill | LayerKind::FillExtrusion | LayerKind::Line | LayerKind::Circle => {
                 let at = FeatureCtx::zoom_only;
-                if [lo, hi].iter().any(|&z| l.line_dasharray(&at(z)).is_some_and(|d| d.len() * (1 + d.len() % 2) > MAX_DASHES)) {
+                // The level runs up to the next, excluded: what steps there belongs to it.
+                let top = hi.next_down();
+                if [lo, top].iter().any(|&z| l.line_dasharray(&at(z)).is_some_and(|d| d.len() * (1 + d.len() % 2) > MAX_DASHES)) {
                     return None;
                 }
                 // Dashes, caps and joins are taken at the level: a style changing them within it
                 // is drawn otherwise.
                 if l.kind == LayerKind::Line
-                    && (l.line_dasharray(&at(lo)) != l.line_dasharray(&at(hi))
-                        || l.line_cap(&at(lo)) != l.line_cap(&at(hi))
-                        || l.line_join(&at(lo)) != l.line_join(&at(hi)))
+                    && (l.line_dasharray(&at(lo)) != l.line_dasharray(&at(top))
+                        || l.line_cap(&at(lo)) != l.line_cap(&at(top))
+                        || l.line_join(&at(lo)) != l.line_join(&at(top)))
                 {
                     return None;
                 }
@@ -444,6 +446,12 @@ mod tests {
         ready(&spec);
         assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_none());
         let _ = std::fs::remove_dir_all(dir4);
+        // Caps changing at the next level: not within this one.
+        let style = STYLE.replace(r#""line-cap": "round""#, r#""line-cap": ["step", ["zoom"], "butt", 3, "round"]"#);
+        let (spec, dir5) = archive("next-caps", &style);
+        ready(&spec);
+        assert!(vector_tiles(&spec, &f, &f.extent(300, 200)).is_some());
+        let _ = std::fs::remove_dir_all(dir5);
         // A long dash pattern from the end of the level.
         let style = STYLE.replace(
             r#""line-dasharray": [3, 2]"#,
