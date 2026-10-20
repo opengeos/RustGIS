@@ -600,6 +600,10 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let same_view = |a: Key, b: Key| Key { tiles: b.tiles, sources: b.sources, ..a } == b;
         if let Some((k, done)) = app.map.tilt_settle.take() {
             app.session.map_mut().adopt_caches(&done.map);
+            // A frame of this view that couldn't be drawn isn't tried again: nothing is to fill.
+            if same_view(k, key) && done.rendered.is_none() {
+                app.map.filling = false;
+            }
             // One drawn before tiles or data arrived still shows; the next follows.
             if same_view(k, key)
                 && let Some(r) = done.rendered

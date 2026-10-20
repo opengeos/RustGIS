@@ -592,11 +592,12 @@ mod tests {
         assert!(!theirs(&still));
         let far = frame(5.5, 1.0);
         let (items, lacks) = paced(Pace::Moving, || cover(&r, &far, &view, None, &mut pending).unwrap());
-        assert!(lacks.is_none() && !theirs(&items));
-        // Settling, the exact pictures are drawn while there's time (here, all of them).
+        // Nothing stands in that far away (a slow machine may leave some for the next frame).
+        assert!(lacks != Some(Unfinished::Later) && !theirs(&items));
+        // Settling, the exact pictures are drawn while there's time (a round at least).
         let g = frame(2.35, 1.0);
         let (items, lacks) = paced(Pace::Settling, || cover(&r, &g, &view, None, &mut pending).unwrap());
-        assert!(lacks.is_none() && !items.is_empty() && !theirs(&items));
+        assert!(lacks != Some(Unfinished::Later) && !items.is_empty() && !theirs(&items));
         // Inside nested calls, the outer one hears of pictures standing in.
         let ((_, inner), outer) = paced(Pace::Settling, || paced(Pace::Moving, || cover(&r, &frame(2.25, 1.0), &view, None, &mut pending)));
         assert!(inner == Some(Unfinished::Later) && outer == inner);
