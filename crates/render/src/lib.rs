@@ -3236,7 +3236,9 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         match l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3) {
             Some(a) => {
                 // Squares as tall as the text, end to end along it.
-                let n = (tw / th.max(1.0)).ceil().clamp(1.0, 200.0);
+                // (A width of no number is one square, so the label still collides.)
+                let n = (tw / th.max(1.0)).ceil();
+                let n = if n.is_finite() { n.clamp(1.0, 200.0) } else { 1.0 };
                 let step = tw / n;
                 let r = step.max(th) / 2.0 + p;
                 let (dx, dy) = (a.cos(), a.sin());
