@@ -4398,7 +4398,8 @@ pub(crate) fn map_menu(app: &mut RustGisApp, ui: &mut Ui, m: &str) {
         ui.close();
     }
     // A project keeps at least one map (`map.remove` refuses the last).
-    if ui.add_enabled(app.session.project.maps.len() > 1, egui::Button::new(tl!("Delete"))).clicked() {
+    let delete = ui.add_enabled(app.session.project.maps.len() > 1, egui::Button::new(tl!("Delete")));
+    if delete.on_disabled_hover_text(tl!("A project keeps at least one map")).clicked() {
         app.map.deleting = Some(crate::mapview::Deletion::Map(m.to_string()));
         ui.close();
     }
