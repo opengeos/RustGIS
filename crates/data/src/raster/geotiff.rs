@@ -38,9 +38,12 @@ struct Geo {
 }
 
 /// How `n` samples of a grey image the decoder calls multiband are shown: grey with alpha when
-/// there are two and the second is declared an extra sample, else grey.
+/// there are two and the second is declared alpha (extra sample 1, associated, or 2, unassociated),
+/// else grey. GDAL marks the second band of an ordinary two-band file as 0, unspecified data.
 pub(super) fn multiband_color<R: Read + Seek>(dec: &mut Decoder<R>, n: u16) -> ColorHint {
-    if n == 2 && dec.find_tag(Tag::ExtraSamples).ok().flatten().is_some() { ColorHint::GrayAlpha } else { ColorHint::Gray }
+    let alpha =
+        n == 2 && dec.find_tag_unsigned_vec::<u16>(Tag::ExtraSamples).ok().flatten().is_some_and(|v| matches!(v.first(), Some(1 | 2)));
+    if alpha { ColorHint::GrayAlpha } else { ColorHint::Gray }
 }
 
 fn geo_tags<R: Read + Seek>(dec: &mut Decoder<R>) -> Result<Geo> {

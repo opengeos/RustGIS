@@ -10,9 +10,13 @@
 //!
 //! Memory: the raster is read in place. A tile is gathered from the bands, compressed and written
 //! before the next one, so no second copy of the pixels is made, and each overview tile is made
-//! straight from the full image (a block of 2ⁿ × 2ⁿ pixels), so no pyramid is kept.
+//! straight from the full image (a block of 2ⁿ × 2ⁿ pixels), so no pyramid is kept. The price is
+//! time: every overview level reads the whole full image again, so writing takes about as many
+//! passes over the pixels as there are levels, where building each level from the one before
+//! would take about 1⅓ but hold a second copy.
 //!
-//! Classic TIFF is used when the file can't pass 4 GiB, BigTIFF otherwise.
+//! Classic TIFF is used when the file can't pass 4 GiB even with every tile left uncompressed,
+//! BigTIFF otherwise.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
@@ -201,9 +205,9 @@ impl Level {
     }
 }
 
-/// The mean (the middle pixel, for classes) of the pixels of `plan`'s bands in the block of the full image that pixel
-/// (`ox`, `oy`) of a level with `factor` covers; NaN where none is valid. A band with alpha is
-/// weighted by it, so see-through pixels don't darken the colours of an overview.
+/// The mean of the pixels of `plan`'s bands in the block of the full image that pixel (`ox`, `oy`)
+/// of a level with `factor` covers (the middle pixel, for classes); NaN where none is valid. A band
+/// with alpha is weighted by it, so see-through pixels don't darken the colours of an overview.
 fn block(r: &Raster, plan: &Plan, factor: usize, ox: usize, oy: usize, out: &mut [f32]) {
     let (w, h) = (r.width as usize, r.height as usize);
     let (x0, y0) = (ox * factor, oy * factor);
@@ -857,5 +861,13 @@ mod tests {
         let back = geotiff::read(Cursor::new(write(&g, 0).unwrap()), "b").unwrap();
         assert_eq!((back.data_type.as_str(), back.band_count(), back.color.clone()), ("UInt8", 2, ColorHint::GrayAlpha));
         assert_eq!((back.value(1, 0, 0), back.value(1, 1, 0)), (Some(255.0), Some(0.0)));
+        // A second band whose extra sample is 0, unspecified data (what GDAL writes on a plain
+        // two-band file), is a band, not alpha.
+        let mut bytes = write(&g, 0).unwrap();
+        let entry = [0x52, 0x01, 3, 0, 1, 0, 0, 0, 2, 0];
+        let at = bytes.windows(entry.len()).position(|w| w == entry).unwrap();
+        bytes[at + 8] = 0;
+        let back = geotiff::read(Cursor::new(bytes), "b").unwrap();
+        assert_eq!((back.band_count(), back.color.clone()), (2, ColorHint::Gray));
     }
 }
