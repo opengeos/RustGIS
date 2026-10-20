@@ -87,11 +87,17 @@ pub fn is_gdb_name(name: &str) -> bool {
     ext(Path::new(name.trim_end_matches(['/', '\\']))) == "gdb"
 }
 
-/// The File Geodatabase a file inside it belongs to (`roads.gdb/a00000001.gdbtable`, or the `gdb`
-/// file every one holds): file dialogs pick files, not the folder.
+/// The File Geodatabase one of its own files belongs to (`roads.gdb/a00000001.gdbtable`, or the
+/// `gdb` file every one holds): file dialogs pick files, not the folder. Another file kept in the
+/// folder is left as it is.
 pub fn gdb_of(path: &Path) -> Option<&Path> {
     let parent = path.parent()?;
-    (!is_gdb_name(&path.to_string_lossy()) && is_gdb_name(&parent.to_string_lossy())).then_some(parent)
+    let name = path.file_name()?.to_str()?;
+    // Tables and their indexes are `a` and eight hex digits: `a00000004.gdbtablx`, `a0000000a.spx`.
+    let table = name
+        .split_once('.')
+        .is_some_and(|(stem, _)| stem.len() == 9 && stem.starts_with('a') && stem.bytes().skip(1).all(|b| b.is_ascii_hexdigit()));
+    ((table || matches!(name, "gdb" | "timestamps")) && is_gdb_name(&parent.to_string_lossy())).then_some(parent)
 }
 
 /// What a source holds.

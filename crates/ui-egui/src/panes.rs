@@ -2005,6 +2005,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "tif",
                         "tiff",
                         "asc",
+                        // A File Geodatabase's folder, listed as data above.
                         "gdb",
                         "rgis",
                         "rgisx",

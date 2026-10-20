@@ -816,6 +816,9 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
 /// layers, or the one layer of other files. `layer.addData` takes a name with `"layer"`.
 fn file_layers(_s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
+    // A file picked inside a File Geodatabase lists the geodatabase's, as `layer.addData` adds it.
+    let gdb = rustgis_data::source::gdb_of(Path::new(path)).map(|d| d.display().to_string());
+    let path = gdb.as_deref().unwrap_or(path);
     let err = |e: rustgis_data::DataError| format!("{path}: {e}");
     #[cfg(not(target_arch = "wasm32"))]
     if rustgis_data::source::gdal::is_gdal_name(path) {

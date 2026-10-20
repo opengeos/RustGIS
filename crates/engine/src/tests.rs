@@ -395,6 +395,51 @@ fn project_extension_is_rgis_and_legacy_rgisx_opens() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A table file picked inside a File Geodatabase stands for the geodatabase, in `layer.addData`
+/// and `info.fileLayers` alike; through GDAL when it is installed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_file_inside_a_geodatabase_adds_the_geodatabase() {
+    let dir = std::env::temp_dir().join(format!("rustgis-gdb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let gdb = dir.join("roads.gdb");
+    let table = gdb.join("a00000001.gdbtable").display().to_string();
+    let mut s = Session::new(Project::default());
+    if rustgis_data::source::gdal::available() {
+        let geojson = dir.join("cities.geojson");
+        std::fs::write(
+            &geojson,
+            r#"{"type":"FeatureCollection","features":[
+{"type":"Feature","properties":{"name":"a"},"geometry":{"type":"Point","coordinates":[8.5,47.4]}},
+{"type":"Feature","properties":{"name":"b"},"geometry":{"type":"Point","coordinates":[7.4,46.9]}}]}"#,
+        )
+        .unwrap();
+        let made = std::process::Command::new("ogr2ogr")
+            .args(["-f", "OpenFileGDB", "-nln", "cities"])
+            .arg(&gdb)
+            .arg(&geojson)
+            .status()
+            .is_ok_and(|st| st.success());
+        if made {
+            let listed = s.run("info.fileLayers", &json!({"path": table})).unwrap();
+            assert_eq!(listed["layers"], json!(["cities"]), "{listed}");
+            let added = s.run("layer.addData", &json!({"path": table})).unwrap();
+            assert_eq!(added["features"], json!(2), "{added}");
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+    }
+    // Without GDAL the geodatabase can't be read, but the error names it, not the table.
+    std::fs::create_dir_all(&gdb).unwrap();
+    std::fs::write(&table, b"").unwrap();
+    for cmd in ["layer.addData", "info.fileLayers"] {
+        let e = s.run(cmd, &json!({"path": table})).unwrap_err();
+        assert!(e.contains("roads.gdb") && !e.contains("gdbtable"), "{cmd}: {e}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn save_clears_dirty_and_open_clears_history() {
     let mut s = world();

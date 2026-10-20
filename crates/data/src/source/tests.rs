@@ -11,6 +11,12 @@ fn file_geodatabase_names() {
     // A file picked inside a geodatabase stands for the geodatabase.
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/a00000001.gdbtable")), Some(Path::new("/x/roads.gdb")));
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/gdb")), Some(Path::new("/x/roads.gdb")));
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a0000000A.spx")), Some(Path::new("/x/roads.gdb")));
+    // Other files kept in the folder are themselves.
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/readme.txt")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/export.csv")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/a1.gdbtable")), None);
+    assert_eq!(gdb_of(Path::new("/x/roads.gdb/x0000000a.gdbtable")), None);
     assert_eq!(gdb_of(Path::new("/x/roads.gdb")), None);
     assert_eq!(gdb_of(Path::new("/x/roads.gdb/")), None);
     assert_eq!(gdb_of(Path::new("/x/roads.shp")), None);
