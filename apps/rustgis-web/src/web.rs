@@ -458,7 +458,8 @@ async fn decode_picture(bytes: &[u8]) -> Result<Vec<u8>, wasm_bindgen::JsValue> 
     let window = web_sys::window().ok_or("no window")?;
     let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
     let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)?;
-    // The picture's own values: no premultiplying or colour conversion on the way.
+    // No premultiplying or colour conversion on the way in (the canvas premultiplies, so pixels
+    // nearly transparent come back a little rounded: no matter for a map tile).
     let options = web_sys::ImageBitmapOptions::new();
     options.set_premultiply_alpha(web_sys::PremultiplyAlpha::None);
     options.set_color_space_conversion(web_sys::ColorSpaceConversion::None);
@@ -467,25 +468,30 @@ async fn decode_picture(bytes: &[u8]) -> Result<Vec<u8>, wasm_bindgen::JsValue> 
             .await?
             .dyn_into()?;
     let (w, h) = (bitmap.width(), bitmap.height());
-    if w == 0 || h == 0 || w > 4096 || h > 4096 {
-        bitmap.close();
-        return Err("a picture of the wrong size".into());
-    }
-    let canvas = web_sys::OffscreenCanvas::new(w, h)?;
-    // Read back on the CPU, which reading the pixels wants.
-    let attributes = js_sys::Object::new();
-    js_sys::Reflect::set(&attributes, &"willReadFrequently".into(), &true.into())?;
-    let ctx: web_sys::OffscreenCanvasRenderingContext2d =
-        canvas.get_context_with_context_options("2d", &attributes)?.ok_or("no 2D canvas")?.dyn_into()?;
-    ctx.draw_image_with_image_bitmap(&bitmap, 0.0, 0.0)?;
+    let pixels = read_bitmap(&bitmap, w, h);
+    // Closed whatever happened: its memory goes now, not when the garbage collector finds it.
     bitmap.close();
-    let pixels = ctx.get_image_data(0.0, 0.0, f64::from(w), f64::from(h))?.data();
+    let pixels = pixels?;
     let mut raw = Vec::with_capacity(RAW.len() + 8 + pixels.len());
     raw.extend_from_slice(RAW);
     raw.extend_from_slice(&w.to_le_bytes());
     raw.extend_from_slice(&h.to_le_bytes());
     raw.extend_from_slice(&pixels);
     Ok(raw)
+}
+
+/// The straight RGBA pixels of a `w × h` bitmap, drawn into a canvas read back on the CPU.
+fn read_bitmap(bitmap: &web_sys::ImageBitmap, w: u32, h: u32) -> Result<Vec<u8>, wasm_bindgen::JsValue> {
+    if w == 0 || h == 0 || w > 4096 || h > 4096 {
+        return Err("a picture of the wrong size".into());
+    }
+    let canvas = web_sys::OffscreenCanvas::new(w, h)?;
+    let attributes = js_sys::Object::new();
+    js_sys::Reflect::set(&attributes, &"willReadFrequently".into(), &true.into())?;
+    let ctx: web_sys::OffscreenCanvasRenderingContext2d =
+        canvas.get_context_with_context_options("2d", &attributes)?.ok_or("no 2D canvas")?.dyn_into()?;
+    ctx.draw_image_with_image_bitmap(bitmap, 0.0, 0.0)?;
+    Ok(ctx.get_image_data(0.0, 0.0, f64::from(w), f64::from(h))?.data().0)
 }
 
 /// Downloads `url`, or the byte range it asks for (a PMTiles archive's part: see
