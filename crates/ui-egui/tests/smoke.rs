@@ -2098,3 +2098,36 @@ fn help_shortcuts_lists_the_keymap() {
     assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
     assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
 }
+
+#[test]
+fn map_and_layout_tabs_rename_from_their_menus() {
+    let mut h = harness();
+    h.state_mut().run("ui.language", json!({"code":"en"})).unwrap();
+    h.state_mut().run("map.rename", json!({"name": "Tab Map"})).unwrap();
+    h.state_mut().run("layout.new", json!({"name": "Tab Layout"})).unwrap();
+    h.state_mut().run("layout.close", json!(null)).unwrap();
+    for (tab, new) in [("Tab Map", "Renamed Map"), ("Tab Layout", "Renamed Layout")] {
+        for _ in 0..4 {
+            h.step();
+        }
+        // The tab, not the map's name elsewhere in the window.
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(tab)).click_secondary();
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("Rename…").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(h.state().dialogs.a, tab);
+        h.state_mut().dialogs.text = new.into();
+        h.get_by_label("Rename").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.state().dialogs.open.is_none(), "{:?}", h.state().dialogs.error);
+    }
+    let p = &h.state().session.project;
+    assert_eq!(p.maps[0].name, "Renamed Map");
+    assert_eq!(p.layouts.last().map(|l| l.name.as_str()), Some("Renamed Layout"));
+}
