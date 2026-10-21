@@ -824,7 +824,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     // box's focus, cursor and selection.
     let box_id = egui::Id::new("script_text");
     // The suggestion list's keys (#662), taken before the box sees them.
-    if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id) {
+    if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id, &app.workflow.script) {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item);
     }
     let out = egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {

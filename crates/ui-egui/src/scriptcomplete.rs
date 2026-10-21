@@ -123,11 +123,18 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
 
 /// Before the box sees the keys: with the list open and the box focused, ↑/↓ move the highlight,
 /// Enter or Tab accept it (so Enter doesn't break the line, nor Tab indent), Escape closes the list
-/// (and the box keeps the focus). Returns the item to accept, if any.
-pub fn keys(ui: &Ui, box_id: Id) -> Option<(Offer, String)> {
+/// (and the box keeps the focus). Returns the item to accept, if any. A list worked out for
+/// another text than `script` (changed from outside the box since) is dropped, not acted on: its
+/// word could be elsewhere now.
+pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
     let mut list = load(ui, box_id);
     let (offer, selected) = list.open.clone()?;
     if !ui.memory(|m| m.has_focus(box_id)) {
+        return None;
+    }
+    if list.worked.as_ref().is_none_or(|w| w.1 != egui::util::hash(script)) {
+        list.open = None;
+        store(ui, box_id, list);
         return None;
     }
     let n = offer.items.len();
@@ -545,5 +552,19 @@ mod tests {
         h.run();
         assert!(h.query_by_label("labels.style").is_none(), "the old offer isn't reused");
         h.get_by_label("map.zoomFull");
+    }
+
+    /// A list left open over a script changed from outside the box isn't acted on: Enter doesn't
+    /// put an id where the old word was.
+    #[test]
+    fn keys_drop_a_list_for_another_text() {
+        let mut h = pane();
+        type_in(&mut h, "labels.sty");
+        // Changed under the open list, the box still focused (no code does this today); longer
+        // than the old word, so a stale pick could still be spliced in.
+        h.state_mut().workflow.script = "# a longer note".into();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(!h.state().workflow.script.contains("labels.style"), "{:?}", h.state().workflow.script);
     }
 }
