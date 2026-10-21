@@ -65,19 +65,19 @@ fn complete(start: usize, end: usize, word: &str, ids: &[String]) -> Option<Offe
     (!items.is_empty()).then_some(Offer { start, end, items })
 }
 
-/// `script_ids`, kept until the loaded plugins change (the built-in commands don't while the app
-/// runs).
+/// `script_ids`, kept until the loaded plugins or the session's commands change (the built-in
+/// commands don't while the app runs; their count tells another session's registry apart).
 fn script_ids_cached(ui: &Ui, session: &rustgis_engine::Session) -> std::sync::Arc<Vec<String>> {
-    type Kept = (u64, std::sync::Arc<Vec<String>>);
+    type Kept = ((u64, usize), std::sync::Arc<Vec<String>>);
     let key = Id::new("script_complete_ids");
-    let plugins = rustgis_engine::plugins::revision();
-    if let Some((rev, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
-        && rev == plugins
+    let now = (rustgis_engine::plugins::revision(), session.registry.commands.len());
+    if let Some((was, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
+        && was == now
     {
         return ids;
     }
     let ids = std::sync::Arc::new(script_ids(session));
-    ui.data_mut(|d| d.insert_temp::<Kept>(key, (plugins, ids.clone())));
+    ui.data_mut(|d| d.insert_temp::<Kept>(key, (now, ids.clone())));
     ids
 }
 
@@ -92,10 +92,11 @@ pub fn script_ids(session: &rustgis_engine::Session) -> Vec<String> {
 /// The list's state between frames, kept in one place.
 #[derive(Clone, Default)]
 struct List {
-    /// What was worked out to offer, and for which cursor and script length. While neither
-    /// changes (the cursor blinking, the pointer moving) it isn't worked out again: only typing or
-    /// moving the cursor can change what to offer. Kept whether the list shows or not.
-    worked: Option<(Option<usize>, usize, Option<Offer>)>,
+    /// What was worked out to offer, and for which cursor, script (its hash: one replaced from
+    /// outside the box, as long as before, still tells) and plugins (their revision: a plugin
+    /// turned off mustn't stay on offer, to be accepted). While none changes (the cursor
+    /// blinking, the pointer moving) it isn't worked out again. Kept whether the list shows or not.
+    worked: Option<(Option<usize>, u64, u64, Option<Offer>)>,
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(Offer, usize)>,
     /// The offer Escape closed: not shown again until what's typed changes.
@@ -184,8 +185,8 @@ pub fn show(
     let offer = if out.response.response.has_focus() {
         // A cursor, not a selection: with text selected, Enter and Tab act on it as usual.
         let at = out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0);
-        let unchanged = !out.response.response.changed();
-        let kept = list.worked.as_ref().filter(|(was_at, len, _)| unchanged && *was_at == at && *len == script.len()).map(|w| w.2.clone());
+        let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
+        let kept = list.worked.as_ref().filter(|w| (w.0, w.1, w.2) == (at, text, plugins)).map(|w| w.3.clone());
         match kept {
             Some(offer) => offer,
             None => {
@@ -193,7 +194,7 @@ pub fn show(
                 let offer = at
                     .and_then(|at| word_at(script, at).map(|w| (at, w)))
                     .and_then(|(at, (start, word))| complete(start, at, &word, &script_ids_cached(ui, session)));
-                list.worked = Some((at, script.len(), offer.clone()));
+                list.worked = Some((at, text, plugins, offer.clone()));
                 offer
             }
         }
@@ -275,6 +276,10 @@ pub fn accept(ui: &Ui, box_id: Id, script: &mut String, offer: &Offer, item: &st
     state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(offer.start + item.chars().count()))));
     state.store(ui.ctx(), box_id);
     ui.memory_mut(|m| m.request_focus(box_id));
+    // What was worked out was for the text before the pick.
+    let mut list = load(ui, box_id);
+    list.worked = None;
+    store(ui, box_id, list);
 }
 
 #[cfg(test)]
@@ -525,5 +530,20 @@ mod tests {
         assert!(h.query_by_label("labels.style").is_none(), "not opened again on return");
         type_in(&mut h, "l");
         h.get_by_label("labels.style");
+    }
+
+    /// A script replaced from outside the box by one as long, the cursor where it was, is worked
+    /// out again: the offer is kept by the text's hash, not its length.
+    #[test]
+    fn a_script_replaced_as_long_is_worked_out_again() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        type_in(&mut h, "labels.sty");
+        h.get_by_label("labels.style");
+        // Same length, same cursor (10 chars): another prefix, as History's "copy to script" could.
+        h.state_mut().workflow.script = "map.zoomFu".into();
+        h.run();
+        assert!(h.query_by_label("labels.style").is_none(), "the old offer isn't reused");
+        h.get_by_label("map.zoomFull");
     }
 }
