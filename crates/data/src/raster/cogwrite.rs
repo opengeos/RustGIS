@@ -404,6 +404,9 @@ fn entries(r: &Raster, plan: &Plan, lv: &Level, first: bool, geo: &GeoKeys, big:
         }
         let n = r.width as usize * r.height as usize;
         let nodata = match (plan.sample, r.nodata) {
+            // Alpha says which pixels have no value; a no-data tag would make readers that apply it
+            // per channel take a real colour (a black red channel) for an empty one.
+            _ if plan.alpha.is_some() => None,
             (Sample::Byte | Sample::Short, _) => plan.nodata_int.map(|b| b.to_string()),
             (Sample::Float, Some(d)) => Some(d.to_string()),
             // NaN marks the pixels with no value; say so for readers that don't assume it.
@@ -900,6 +903,9 @@ mod tests {
         let bands = vec![vec![0.0; n], vec![100.0; n], vec![200.0; n], vec![255.0; n]];
         let z = utm(w, h, bands, ColorHint::Rgb { alpha: true }, "UInt8", Some(0.0));
         let bytes = write(&z, 0).unwrap();
+        // No no-data tag either, so a reader doesn't take the black red channel for an empty one.
+        let back = geotiff::read(Cursor::new(bytes.as_slice()), "b").unwrap();
+        assert_eq!((back.nodata, back.value(0, 0, 0)), (None, Some(0.0)));
         let mut dec = Decoder::new(Cursor::new(bytes.as_slice())).unwrap();
         let DecodingResult::U8(px) = dec.read_image().unwrap() else { panic!("bytes") };
         assert_eq!(px.get(..4), Some(&[0, 100, 200, 255][..]));
