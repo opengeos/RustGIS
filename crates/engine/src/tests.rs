@@ -7855,10 +7855,15 @@ fn param_list_splits_a_description_into_entries() {
     assert_eq!(list[1].text, r#""class"?: name (none: the Default class, by whatever name it has)"#);
     assert_eq!(param_list("{}"), Some(Vec::<Param>::new()));
     assert_eq!(param_list("a GeoJSON text"), None);
-    // Every command's description splits into the keys `param_keys` finds first in each entry.
+    // Every command's description splits into entries, each led by a key `param_keys` finds: one
+    // cut in the wrong place (an unclosed bracket or quote in its prose) would lead with another.
     let s = Session::new(Project::default());
     for c in &s.registry.commands {
-        assert!(param_list(c.params).is_some(), "{}: {}", c.id, c.params);
+        let list = param_list(c.params).unwrap_or_else(|| panic!("{}: {}", c.id, c.params));
+        let keys = c.param_keys().unwrap_or_default();
+        for p in &list {
+            assert!(keys.contains(&p.key), "{}: entry {:?} in {}", c.id, p.text, c.params);
+        }
     }
 }
 
