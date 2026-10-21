@@ -251,7 +251,11 @@ SPEC
     mkdir -p "$stage"
     cp -R "$app" "$stage/"
     ln -s /Applications "$stage/Applications"
-    hdiutil create -volname "RustGIS $version" -srcfolder "$stage" -ov -format UDZO "$dist/$name.dmg"
+    # hdiutil's own size estimate for -srcfolder can fall short ("No space left on device" while
+    # copying the app): size the image from the folder, with room to spare. UDZO compresses the
+    # free space away.
+    size_mb=$(($(du -sm "$stage" | cut -f1) + 64))
+    hdiutil create -volname "RustGIS $version" -srcfolder "$stage" -size "${size_mb}m" -ov -format UDZO "$dist/$name.dmg"
     if [ -n "$identity" ]; then
       sign "$dist/$name.dmg"
       if notarize "$dist/$name.dmg" && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
