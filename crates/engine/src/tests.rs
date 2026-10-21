@@ -7854,6 +7854,9 @@ fn param_list_splits_a_description_into_entries() {
     assert_eq!(keys, [("layer", true), ("class", true), ("steps", true), ("where", false)]);
     assert_eq!(list[1].text, r#""class"?: name (none: the Default class, by whatever name it has)"#);
     assert_eq!(param_list("{}"), Some(Vec::<Param>::new()));
+    // An escaped quote (a plugin's description may have one) doesn't end a value early.
+    let escaped = param_list(r#"{"title"?: "a \"quoted, word\"", "n": number}"#).unwrap();
+    assert_eq!(escaped.iter().map(|p| p.key).collect::<Vec<_>>(), ["title", "n"]);
     assert_eq!(param_list("a GeoJSON text"), None);
     // Every command's description splits into entries, each led by a key `param_keys` finds: one
     // cut in the wrong place (an unclosed bracket or quote in its prose) would lead with another.

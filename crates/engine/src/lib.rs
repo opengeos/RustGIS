@@ -113,10 +113,12 @@ pub fn param_list(desc: &str) -> Option<Vec<Param<'_>>> {
     let body = desc.trim().strip_prefix('{')?;
     let inner = body.get(..body.rfind('}')?)?;
     let mut out = Vec::new();
-    let (mut depth, mut quoted, mut start) = (0usize, false, 0);
+    let (mut depth, mut quoted, mut start, mut escaped) = (0usize, false, 0, false);
     for (i, c) in inner.char_indices() {
+        // A quote after a backslash (`\"`, in a plugin's description) doesn't open or close one.
+        let was_escaped = std::mem::replace(&mut escaped, c == '\\' && !escaped);
         match c {
-            '"' => quoted = !quoted,
+            '"' if !was_escaped => quoted = !quoted,
             '(' | '[' | '{' if !quoted => depth += 1,
             ')' | ']' | '}' if !quoted => depth = depth.saturating_sub(1),
             ',' if !quoted && depth == 0 => {
