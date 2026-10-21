@@ -1,6 +1,6 @@
 //! The tools.
 
-use geo::{BooleanOps, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
+use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::{Extent, geodesic_length_m, geodesic_ring_area_m2};
@@ -11,6 +11,9 @@ use crate::geodesic::geodesic_buffer;
 use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolResult, ToolSpec};
 
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles"];
+const MATCH_OPTIONS: &[&str] = &["Intersects", "Contains", "Within"];
+const JOIN_OPERATIONS: &[&str] = &["Join one to one", "Join one to many"];
+const TARGET_RECORDS: &[&str] = &["Keep all", "Keep only matching"];
 
 pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -318,6 +321,64 @@ pub static TOOLS: &[ToolSpec] = &[
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
         run: idw_interpolation,
+    },
+    ToolSpec {
+        id: "spatialJoin",
+        name: "Spatial Join",
+        toolbox: "Analysis › Overlay",
+        summary: "Joins attributes from a join layer to a target layer based on their spatial relationship.",
+        params: &[
+            P {
+                name: "target",
+                label: "Target Features",
+                kind: K::Layer,
+                required: true,
+                default: "",
+                help: "The features that receive joined attributes.",
+            },
+            P {
+                name: "join",
+                label: "Join Features",
+                kind: K::Layer,
+                required: true,
+                default: "",
+                help: "The features whose attributes are joined.",
+            },
+            P {
+                name: "match",
+                label: "Match Option",
+                kind: K::Choice(MATCH_OPTIONS),
+                required: false,
+                default: "\"Intersects\"",
+                help: "The spatial relationship between target and join features.",
+            },
+            P {
+                name: "operation",
+                label: "Join Operation",
+                kind: K::Choice(JOIN_OPERATIONS),
+                required: false,
+                default: "\"Join one to one\"",
+                help: "One to one joins the first match and counts total matches; one to many creates a row for each match.",
+            },
+            P {
+                name: "keepAll",
+                label: "Target Records",
+                kind: K::Choice(TARGET_RECORDS),
+                required: false,
+                default: "\"Keep all\"",
+                help: "Whether target features without matching join features are kept.",
+            },
+            P {
+                name: "prefix",
+                label: "Field Prefix",
+                kind: K::Text,
+                required: false,
+                default: "\"join_\"",
+                help: "Prefix added to join feature fields to avoid collision.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
+        ],
+        run: spatial_join,
     },
 ];
 
@@ -939,6 +1000,145 @@ fn export_features(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Export Features: {n} features"))
 }
 
+fn extent_contains(a: &Extent, b: &Extent) -> bool {
+    !a.is_empty() && !b.is_empty() && a.min_x <= b.min_x && a.max_x >= b.max_x && a.min_y <= b.min_y && a.max_y >= b.max_y
+}
+
+fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let target_key = if p.get("target").is_some() { "target" } else { "input" };
+    let target = input(inp, p, target_key)?;
+    let join = input(inp, p, "join")?;
+
+    let match_opt = s(p, "match");
+    let match_opt = if match_opt.is_empty() { s(p, "relationship") } else { match_opt };
+    let match_opt = match match_opt {
+        "Contains" => "Contains",
+        "Within" => "Within",
+        _ => "Intersects",
+    };
+
+    let op_many = s(p, "operation").eq_ignore_ascii_case("Join one to many");
+    let keep_all = !s(p, "keepAll").eq_ignore_ascii_case("Keep only matching");
+
+    let prefix_raw = s(p, "prefix");
+    let prefix = if prefix_raw.is_empty() && p.get("prefix").is_none() { "join_" } else { prefix_raw };
+
+    let target_rows = rows(inp, p, target_key, target);
+    let join_rows = rows(inp, p, "join", join);
+
+    let mut join_geoms = Vec::with_capacity(join_rows.len());
+    for &jr in &join_rows {
+        if let Some(f) = join.features.get(jr)
+            && let Some(g) = f.geometry.as_ref()
+        {
+            join_geoms.push((jr, g.extent(), to_geo(g)));
+        }
+    }
+
+    let mut out = copy_schema(target, out_name(p, format!("{}_SpatialJoin", target.name)), target.geometry_type);
+    out.source = None;
+    out.crs = target.crs;
+
+    let count_field_name = {
+        let base = "join_count";
+        let mut name = base.to_string();
+        let mut k = 1usize;
+        while out.field_index(&name).is_some() {
+            k += 1;
+            name = format!("{base}_{k}");
+        }
+        name
+    };
+    out.fields.push(Field::new(count_field_name, FieldType::Integer));
+
+    let mut join_field_indices = Vec::with_capacity(join.fields.len());
+    for (orig_idx, jf) in join.fields.iter().enumerate() {
+        let raw = if prefix.is_empty() { jf.name.clone() } else { format!("{prefix}{}", jf.name) };
+        let mut name = raw.clone();
+        let mut k = 1usize;
+        while out.field_index(&name).is_some() {
+            k += 1;
+            name = format!("{raw}_{k}");
+        }
+        out.fields.push(Field::new(name, jf.ty));
+        join_field_indices.push(orig_idx);
+    }
+
+    let target_fields_len = target.fields.len();
+    let join_fields_len = join.fields.len();
+
+    let mut total_matches = 0usize;
+    let mut written_features = 0usize;
+
+    for tr in target_rows {
+        let Some(tf) = target.features.get(tr) else { continue };
+        let mut matches: Vec<usize> = Vec::new();
+
+        if let Some(tg) = tf.geometry.as_ref() {
+            let t_ext = tg.extent();
+            let t_geo = to_geo(tg);
+
+            for (jr, j_ext, j_geo) in &join_geoms {
+                let hit = match match_opt {
+                    "Contains" => extent_contains(&t_ext, j_ext) && Contains::contains(&t_geo, j_geo),
+                    "Within" => extent_contains(j_ext, &t_ext) && Contains::contains(j_geo, &t_geo),
+                    _ => t_ext.intersects(j_ext) && t_geo.intersects(j_geo),
+                };
+                if hit {
+                    matches.push(*jr);
+                }
+            }
+        }
+
+        let m_count = matches.len();
+        total_matches += m_count;
+
+        if m_count == 0 {
+            if !keep_all {
+                continue;
+            }
+            let mut attrs = Vec::with_capacity(out.fields.len());
+            for i in 0..target_fields_len {
+                attrs.push(tf.attrs.get(i).cloned().unwrap_or(Value::Null));
+            }
+            attrs.push(Value::Int(0));
+            attrs.resize(attrs.len() + join_fields_len, Value::Null);
+            out.push_next(tf.geometry.clone(), attrs);
+            written_features += 1;
+        } else if op_many {
+            for &jr in &matches {
+                let jf = join.features.get(jr);
+                let mut attrs = Vec::with_capacity(out.fields.len());
+                for i in 0..target_fields_len {
+                    attrs.push(tf.attrs.get(i).cloned().unwrap_or(Value::Null));
+                }
+                attrs.push(Value::Int(m_count as i64));
+                for &ji in &join_field_indices {
+                    let val = jf.and_then(|f| f.attrs.get(ji)).cloned().unwrap_or(Value::Null);
+                    attrs.push(val);
+                }
+                out.push_next(tf.geometry.clone(), attrs);
+                written_features += 1;
+            }
+        } else {
+            let jf = matches.first().and_then(|&jr| join.features.get(jr));
+            let mut attrs = Vec::with_capacity(out.fields.len());
+            for i in 0..target_fields_len {
+                attrs.push(tf.attrs.get(i).cloned().unwrap_or(Value::Null));
+            }
+            attrs.push(Value::Int(m_count as i64));
+            for &ji in &join_field_indices {
+                let val = jf.and_then(|f| f.attrs.get(ji)).cloned().unwrap_or(Value::Null);
+                attrs.push(val);
+            }
+            out.push_next(tf.geometry.clone(), attrs);
+            written_features += 1;
+        }
+    }
+
+    result(out, format!("Spatial Join: {written_features} features joined ({total_matches} matches)"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1003,6 +1203,11 @@ mod tests {
             Output::Selection { rows, .. } => assert_eq!(rows, vec![0, 1]),
             _ => panic!(),
         }
+        let sj = layer(crate::run("spatialJoin", &m, &j(serde_json::json!({"target": "pts", "join": "polys"}))).unwrap());
+        assert_eq!(sj.features.len(), 3);
+        assert_eq!(sj.value(0, sj.field_index("join_count").unwrap()), &Value::Int(1));
+        assert_eq!(sj.value(0, sj.field_index("join_k").unwrap()), &Value::Text("a".into()));
+        assert_eq!(sj.value(2, sj.field_index("join_count").unwrap()), &Value::Int(0));
         for id in ["convexHull", "featureToPoint", "simplify", "calculateGeometry", "exportFeatures", "erase"] {
             let r = crate::run(id, &m, &j(serde_json::json!({"input": "polys", "erase": "polys"})));
             assert!(r.is_ok(), "{id}: {r:?}");
@@ -1472,5 +1677,61 @@ mod tests {
             }
             _ => panic!("expected selection"),
         }
+    }
+
+    #[test]
+    fn spatial_join_cases() {
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![Field::new("k", FieldType::Text)]);
+        polys.push(Some(sq(0.0, 0.0, 2.0)), vec![Value::Text("a".into())]);
+        polys.push(Some(sq(1.0, 0.0, 2.0)), vec![Value::Text("b".into())]);
+
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        pts.push(Some(Geometry::Point(Coord::new(1.5, 1.0))), vec![Value::Text("both".into())]);
+        pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Text("first".into())]);
+        pts.push(Some(Geometry::Point(Coord::new(50.0, 50.0))), vec![Value::Text("outside".into())]);
+
+        let m = Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)]));
+
+        // 1. One to one join (Intersects)
+        let r1 = crate::run("spatialJoin", &m, &serde_json::json!({"target": "pts", "join": "polys"})).unwrap();
+        let ds1 = layer(r1);
+        assert_eq!(ds1.features.len(), 3);
+        let jc = ds1.field_index("join_count").unwrap();
+        let jk = ds1.field_index("join_k").unwrap();
+        assert_eq!(ds1.value(0, jc), &Value::Int(2));
+        assert!(matches!(ds1.value(0, jk), Value::Text(_)));
+        assert_eq!(ds1.value(1, jc), &Value::Int(1));
+        assert_eq!(ds1.value(1, jk), &Value::Text("a".into()));
+        assert_eq!(ds1.value(2, jc), &Value::Int(0));
+        assert_eq!(ds1.value(2, jk), &Value::Null);
+
+        // 2. One to many join
+        let r2 =
+            crate::run("spatialJoin", &m, &serde_json::json!({"target": "pts", "join": "polys", "operation": "Join one to many"})).unwrap();
+        let ds2 = layer(r2);
+        assert_eq!(ds2.features.len(), 4);
+
+        // 3. Inner join (Keep only matching)
+        let r3 =
+            crate::run("spatialJoin", &m, &serde_json::json!({"target": "pts", "join": "polys", "keepAll": "Keep only matching"})).unwrap();
+        let ds3 = layer(r3);
+        assert_eq!(ds3.features.len(), 2);
+
+        // 4. Match option Contains (target polys, join pts)
+        let r4 = crate::run("spatialJoin", &m, &serde_json::json!({"target": "polys", "join": "pts", "match": "Contains"})).unwrap();
+        let ds4 = layer(r4);
+        assert_eq!(ds4.features.len(), 2);
+        let jc4 = ds4.field_index("join_count").unwrap();
+        assert_eq!(ds4.value(0, jc4), &Value::Int(2));
+        assert_eq!(ds4.value(1, jc4), &Value::Int(1));
+
+        // 5. Match option Within (target pts, join polys)
+        let r5 = crate::run("spatialJoin", &m, &serde_json::json!({"target": "pts", "join": "polys", "match": "Within"})).unwrap();
+        let ds5 = layer(r5);
+        assert_eq!(ds5.features.len(), 3);
+        let jc5 = ds5.field_index("join_count").unwrap();
+        assert_eq!(ds5.value(0, jc5), &Value::Int(2));
+        assert_eq!(ds5.value(1, jc5), &Value::Int(1));
+        assert_eq!(ds5.value(2, jc5), &Value::Int(0));
     }
 }
