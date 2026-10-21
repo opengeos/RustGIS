@@ -3,7 +3,8 @@
   Windows Installer package (WiX 5), built by package.sh. An all-users install in Program Files:
   a Start menu shortcut, rustgis-cli on the system PATH, .rgis/.rgisx projects opened by RustGIS
   and RustGIS offered under Open with for .geojson. Variables passed with -d: Version (three
-  numbers), Stage (the folder holding the exes and LICENSE), Icon, License (RTF), Banner and
+  numbers), Stage (the folder holding the exes, LICENSE and
+  THIRD-PARTY-LICENSES.txt), Icon, License (RTF), Banner and
   Dialog (BMPs).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
@@ -53,6 +54,9 @@
       </Component>
       <Component Directory="INSTALLFOLDER">
         <File Id="LICENSE" Source="$(var.Stage)\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Id="THIRDPARTY" Source="$(var.Stage)\THIRD-PARTY-LICENSES.txt" KeyPath="yes" />
       </Component>
     </Feature>
 

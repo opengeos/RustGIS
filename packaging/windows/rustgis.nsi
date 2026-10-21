@@ -2,7 +2,7 @@
 ; rights, in %LOCALAPPDATA%\Programs\RustGIS: a Start menu shortcut, rustgis-cli on the user's
 ; PATH, .rgis/.rgisx projects opened by RustGIS and RustGIS offered under Open with for .geojson.
 ; Defines passed with -D: VERSION, VERSION4 (four numbers), STAGE (the folder holding the exes,
-; LICENSE and path.ps1), ICON, SIDEBAR (a 164x314 BMP) and OUTFILE.
+; LICENSE, THIRD-PARTY-LICENSES.txt and path.ps1), ICON, SIDEBAR (a 164x314 BMP) and OUTFILE.
 
 Unicode true
 SetCompressor /SOLID lzma
@@ -63,6 +63,7 @@ Section "Install"
   File "${STAGE}\rustgis.exe"
   File "${STAGE}\rustgis-cli.exe"
   File /oname=LICENSE.txt "${STAGE}\LICENSE"
+  File "${STAGE}\THIRD-PARTY-LICENSES.txt"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   CreateShortcut "$SMPROGRAMS\${APP}.lnk" "$INSTDIR\rustgis.exe"
@@ -126,6 +127,7 @@ Section "Uninstall"
   Delete "$INSTDIR\rustgis.exe"
   Delete "$INSTDIR\rustgis-cli.exe"
   Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\THIRD-PARTY-LICENSES.txt"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

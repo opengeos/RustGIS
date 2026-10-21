@@ -179,6 +179,7 @@ jobs:
           function Check($dir, $scope) {
             & "$dir\rustgis-cli.exe" logo "$env:RUNNER_TEMP\logo.png" --size 64
             if ($LASTEXITCODE) { throw "rustgis-cli failed in $dir" }
+            if (-not (Test-Path "$dir\THIRD-PARTY-LICENSES.txt")) { throw "no THIRD-PARTY-LICENSES.txt in $dir" }
             $path = [Environment]::GetEnvironmentVariable('Path', $scope) -split ';'
             if ($path -notcontains $dir.TrimEnd('\') -and $path -notcontains "$($dir.TrimEnd('\'))\") {
               throw "$dir is not on the $scope PATH"
@@ -220,6 +221,7 @@ jobs:
           sudo apt-get install -y ./dist/rustgis_*.deb
           dpkg-deb -f dist/rustgis_*.deb Depends
           rustgis-cli logo "$RUNNER_TEMP/logo.png" --size 64
+          test -s /usr/share/doc/rustgis/THIRD-PARTY-LICENSES.txt
 
       - name: Check the .rpm installs on Fedora
         if: runner.os == 'Linux'
@@ -251,9 +253,25 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The packages ship THIRD-PARTY-LICENSES.txt as committed: it must match Cargo.lock.
+  notices:
+    name: Third-party notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      - name: The notices are up to date
+        run: cargo xtask notices --check
+
   checksums:
     name: Checksums
-    needs: build
+    needs: [build, notices]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8

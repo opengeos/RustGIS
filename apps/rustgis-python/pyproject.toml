@@ -8,8 +8,9 @@ description = "Python bindings to RustGIS, a fast, free and open-source GIS in p
 readme = "README.md"
 license = "Apache-2.0"
 # A copy of the repository's LICENSE: license-files can't reach outside this directory, and
-# PyPI wants the file at the root of the sdist, where this puts it.
-license-files = ["LICENSE"]
+# PyPI wants the file at the root of the sdist, where this puts it. THIRD-PARTY-LICENSES.txt holds
+# the notices of the crates compiled into the package (`cargo xtask notices`).
+license-files = ["LICENSE", "THIRD-PARTY-LICENSES.txt"]
 requires-python = ">=3.12"
 authors = [{ name = "Qiusheng Wu", email = "giswqs@gmail.com" }]
 keywords = ["gis", "geospatial", "maps", "geoprocessing", "rust", "jupyter", "anywidget"]

@@ -990,6 +990,18 @@ pub(crate) fn project_links(ui: &mut egui::Ui) {
     });
 }
 
+/// Links to the licence notices of the software and data RustGIS is built with; the packages
+/// ship `THIRD-PARTY-LICENSES.txt` next to LICENSE too.
+pub(crate) fn licence_links(ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        let notices = "https://github.com/opengeos/RustGIS/blob/main/THIRD-PARTY-LICENSES.txt";
+        ui.add(egui::Hyperlink::from_label_and_url(tl!("Third-party licences"), notices).open_in_new_tab(true));
+        ui.label("·");
+        let attribution = "https://github.com/opengeos/RustGIS/blob/main/ATTRIBUTION.md";
+        ui.add(egui::Hyperlink::from_label_and_url(tl!("Attribution"), attribution).open_in_new_tab(true));
+    });
+}
+
 pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
     if app.ui.about {
         let logo_tex = app.logo(ctx);
@@ -1025,6 +1037,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
             );
             let (fonts_from, _) = (rustgis_engine::render::fonts::ui_fonts().source.clone(), ());
             ui.label(egui::RichText::new(crate::i18n::fmt("Interface font: {font}", &[("font", &fonts_from)])).small().weak());
+            licence_links(ui);
         });
         app.ui.about = open;
     }
