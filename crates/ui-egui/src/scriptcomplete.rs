@@ -35,7 +35,7 @@ pub fn offer(script: &str, at: usize, ids: &[String]) -> Option<Offer> {
 
 /// The command id being typed at char `at` of `script`, and where it starts (a char index): the
 /// cursor at the end of a line's first word (comments aside), at least `MIN_TYPED` characters.
-/// Read from the cursor's line only, so this costs no more for a long script.
+/// It reads the cursor's line only, so working an offer out costs no more for a long script.
 pub fn word_at(script: &str, at: usize) -> Option<(usize, String)> {
     // The byte the cursor is at (None past the end).
     let byte = if at == 0 { Some(0) } else { script.char_indices().nth(at - 1).map(|(b, c)| b + c.len_utf8()) }?;
@@ -96,6 +96,10 @@ struct List {
     /// outside the box, as long as before, still tells) and plugins (their revision: a plugin
     /// turned off mustn't stay on offer, to be accepted). While none changes (the cursor
     /// blinking, the pointer moving) it isn't worked out again. Kept whether the list shows or not.
+    /// The hash is taken each frame the box has focus: the length alone misses a script replaced by
+    /// one as long, and a change made by code comes with no input event to wait for. It reads the
+    /// text once, as egui's own layout already does each frame (the layouter's cache key, the
+    /// galley cache), so it adds a constant, not a new order of cost.
     worked: Option<(Option<usize>, u64, u64, Option<Offer>)>,
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(Offer, usize)>,
