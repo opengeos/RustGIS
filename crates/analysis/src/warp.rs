@@ -489,6 +489,32 @@ mod tests {
     }
 
     #[test]
+    fn cubic_leaves_unequal_alphas_to_bilinear() {
+        // Alpha rises across every column, so no sixteen pixels share one, and the colours bend.
+        let (w, h) = (30u32, 30u32);
+        let band = |f: &dyn Fn(u32, u32) -> f32| (0..w * h).map(|i| f(i % w, i / w)).collect::<Vec<f32>>();
+        let bands = vec![
+            band(&|x, _| (x * x / 4) as f32),
+            band(&|_, y| (255 - 8 * y) as f32),
+            band(&|x, y| ((x * 37 + y * 91) % 256) as f32),
+            band(&|x, _| (40 + 7 * x) as f32),
+        ];
+        let r = scan(w, h, bands, ColorHint::Rgb { alpha: true }, "UInt8");
+        let map = |c: f64, rw: f64| (500_000.0 + 7.0 * c, 4_000_000.0 - 7.0 * rw);
+        let fit = georef::fit(Kind::Affine, &gcps(30.0, 30.0, map)).unwrap();
+        let cubic = warp(&r, &fit, &opts(Some(2.0), Resampling::Cubic)).unwrap();
+        let bilinear = warp(&r, &fit, &opts(Some(2.0), Resampling::Bilinear)).unwrap();
+        for b in 0..3 {
+            let (c, l) = (&cubic.bands[b].data, &bilinear.bands[b].data);
+            assert_eq!(c.len(), l.len());
+            assert!(c.iter().filter(|v| v.is_finite()).count() > 100, "band {b} has cells to compare");
+            for (at, (x, y)) in c.iter().zip(l).enumerate() {
+                assert!(x == y || (x.is_nan() && y.is_nan()), "band {b}, cell {at}: cubic {x}, bilinear {y}");
+            }
+        }
+    }
+
+    #[test]
     fn no_data_is_kept_outside_and_skipped_inside() {
         let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
         let mut data = vec![10.0f32; 16];
