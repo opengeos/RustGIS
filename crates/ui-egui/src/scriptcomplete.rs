@@ -96,8 +96,9 @@ pub fn script_ids(session: &rustgis_engine::Session) -> Vec<String> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Help {
     pub id: String,
-    /// The id, then its keys: `labels.style {layer?, size?}`.
-    pub signature: String,
+    /// The keys after the id, as the signature reads (`labels.style` then ` {layer?, size?}`);
+    /// empty for a command with none.
+    pub keys: String,
     pub label: String,
     pub about: String,
     pub params: Vec<String>,
@@ -118,9 +119,9 @@ pub fn help(session: &rustgis_engine::Session, id: &str) -> Option<Help> {
         }
     };
     let params = rustgis_engine::param_list(&desc).unwrap_or_default();
-    let keys: Vec<String> = params.iter().map(|p| format!("{}{}", p.key, if p.optional { "?" } else { "" })).collect();
-    let signature = if keys.is_empty() { id.to_string() } else { format!("{id} {{{}}}", keys.join(", ")) };
-    Some(Help { id: id.to_string(), signature, label, about, params: params.iter().map(|p| p.text.to_string()).collect(), location })
+    let names: Vec<String> = params.iter().map(|p| format!("{}{}", p.key, if p.optional { "?" } else { "" })).collect();
+    let keys = if names.is_empty() { String::new() } else { format!(" {{{}}}", names.join(", ")) };
+    Some(Help { id: id.to_string(), keys, label, about, params: params.iter().map(|p| p.text.to_string()).collect(), location })
 }
 
 /// The help's widest line, so a long signature or parameter wraps rather than widen the list
@@ -140,8 +141,7 @@ fn draw_help(ui: &mut Ui, help: &Help) {
     };
     ui.vertical(|ui| {
         ui.set_max_width(HELP_WIDTH);
-        let keys = help.signature.get(help.id.len()..).unwrap_or_default();
-        ui.label(coloured(Some(&help.id), keys, &mono));
+        ui.label(coloured(Some(&help.id), &help.keys, &mono));
         ui.label(&help.label);
         if !help.about.is_empty() {
             ui.label(egui::RichText::new(&help.about).small());
@@ -662,15 +662,15 @@ mod tests {
     fn help_shows_the_signature_first() {
         let app = crate::RustGisApp::with_sample();
         let h = super::help(&app.session, "labels.style").unwrap();
-        assert!(h.signature.starts_with("labels.style {layer?, class?, size?"), "{}", h.signature);
+        assert!(h.keys.starts_with(" {layer?, class?, size?"), "{}", h.keys);
         assert_eq!(h.label, "Text Symbol");
         assert!(h.params.iter().any(|p| p == r#""size"?: number"#), "{:?}", h.params);
         assert_eq!(h.location, "Style › Text Symbol");
         // Required keys go bare.
-        assert!(super::help(&app.session, "labels.field").unwrap().signature.contains("field}"));
+        assert!(super::help(&app.session, "labels.field").unwrap().keys.contains("field}"));
         // No parameters: the id alone.
         let z = super::help(&app.session, "map.zoomFull").unwrap();
-        assert_eq!((z.signature.as_str(), z.params.len()), ("map.zoomFull", 0));
+        assert_eq!((z.keys.as_str(), z.params.len()), ("", 0));
         assert!(super::help(&app.session, "nope.cmd").is_none());
     }
 
@@ -681,7 +681,7 @@ mod tests {
         let mut h = pane();
         type_in(&mut h, "labels.");
         let first = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
-        let sig = |id: &str| super::help(&h.state().session, id).unwrap().signature;
+        let sig = |id: &str| super::help(&h.state().session, id).map(|h| format!("{}{}", h.id, h.keys)).unwrap();
         let (one, two) = (sig(&first[0]), sig(&first[1]));
         h.get_by_label(&one);
         h.key_press(egui::Key::ArrowDown);
