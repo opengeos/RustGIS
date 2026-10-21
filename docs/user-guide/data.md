@@ -347,13 +347,30 @@ database is kept without its password. The commands `sources.list`, `sources.sav
 ## Large files
 
 GeoPackage, GeoParquet, FlatGeobuf and (on the desktop) Shapefile files with more than 100,000
-features are read in place rather than loaded whole, so files far larger than memory open in a
-moment. The layer reads the features in view, using the file's own spatial index (the GeoPackage
-R-tree, the FlatGeobuf packed R-tree, GeoParquet row-group bounding boxes; for a Shapefile, the
-shapes' bounding boxes, read once when it opens), in the background as the map moves. When a
+features are read in place rather than loaded whole, avoiding an in-memory copy of the entire
+dataset. The layer reads features in view in the background as the map moves, using spatial
+indexes: the GeoPackage R-tree, the FlatGeobuf packed R-tree, GeoParquet row-group bounding
+boxes, or a cached Shapefile R-tree built from the shapes' bounding boxes. When a
 view holds more than 250,000 features (100,000 in the web app), the layer draws an evenly spread
 sample of them and its tooltip in Layers says so: zoom in to see them all. Smaller files load
 whole; `layer.addData` with `"stream": true` or `false` overrides the choice.
+
+On the desktop, opening a large Shapefile for the first time scans its record headers to build
+a disposable SQLite index outside the dataset directory. Reopening an unchanged file reuses
+that index; its canonical path, size and modification time identify the cached generation.
+The record directory and R-tree stay on disk, with an 8 MiB SQLite page-cache target per open
+index and memory mapping disabled. Query results retain file order and the same sampling
+rules. Attributes and the `.prj` are still read from the source files.
+
+Set `RUSTGIS_SHP_CACHE` to choose the cache directory and `RUSTGIS_SHP_CACHE_MIB` to choose
+the retained index budget (2048 MiB by default, clamped to 64–65536 MiB). Idle indexes are
+evicted in least-recently-used order. Open readers and builders hold operating-system leases,
+so another instance cannot evict their indexes; active files can temporarily exceed the
+budget. An index larger than the budget is session-only. Cache checkout and release reclaim
+abandoned builds and temporary indexes. A corrupt cache is rebuilt, and an unavailable cache
+directory falls back to the system temporary directory. If neither location works, the
+Shapefile remains readable by scanning record headers without retaining a full in-memory
+index. Deleting idle cache files does not modify the dataset.
 
 On the desktop, a GeoJSON FeatureCollection larger than 32 MB is read the same way, with no size
 limit: opening reads the file once, keeping each feature's place in it and its bounding box (a
