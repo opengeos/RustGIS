@@ -209,7 +209,8 @@ pub fn job(script: &str, unknown: &[String], palette: Palette, font: &FontId) ->
             Kind::Str => palette.string,
             Kind::Num | Kind::Literal => palette.number,
         };
-        let underline = if s.broken { Stroke::new(1.0, palette.bad) } else { Stroke::NONE };
+        // What won't run is underlined too, not told by its colour alone (WCAG 1.4.1).
+        let underline = if s.broken || s.kind == Kind::BadId { Stroke::new(1.0, palette.bad) } else { Stroke::NONE };
         let format = TextFormat { font_id: font.clone(), color, underline, italics: s.kind == Kind::Comment, ..Default::default() };
         job.append(script.get(s.range).unwrap_or_default(), 0.0, format);
     }
@@ -455,5 +456,38 @@ mod tests {
         h.run();
         let text = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
         assert!(text.height() < 300.0, "about ten lines, not the whole pane: {text:?}");
+    }
+
+    /// What won't run is underlined, not told by its colour alone: a bad id and broken JSON.
+    #[test]
+    fn what_wont_run_is_underlined() {
+        let palette = super::Palette::of(&crate::theme::Tokens::light());
+        let font = egui::FontId::monospace(12.0);
+        let script = "nope.cmd {}\nmap.zoomFull {\"a\": }";
+        let job = super::job(script, &["nope.cmd".to_string()], palette, &font);
+        let underlined = |text: &str| {
+            job.sections
+                .iter()
+                .filter(|s| &script[s.byte_range.start.0..s.byte_range.end.0] == text)
+                .all(|s| s.format.underline.width > 0.0)
+        };
+        assert!(underlined("nope.cmd") && underlined("\"a\""), "the bad id and the broken JSON");
+        assert!(!underlined("map.zoomFull"), "a good id isn't");
+    }
+
+    /// A run's results, however long, stay in view under the buttons, in a scroll of their own.
+    #[test]
+    fn long_results_stay_in_view() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = crate::RustGisApp::with_sample();
+        app.workflow.script = "map.zoomFull\n".repeat(300);
+        app.workflow.script_out = (0..12).map(|i| (format!("line {i}: {}", "a long error ".repeat(30)), true)).collect();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(500.0, 700.0))
+            .build_ui_state(|ui, app: &mut crate::RustGisApp| crate::analysispane::script(app, ui, &crate::theme::Tokens::light()), app);
+        h.run();
+        assert!(h.get_by_label("Run").rect().max.y < 700.0);
+        let first = h.get_by_label_contains("line 0:").rect();
+        assert!(first.min.y < 700.0, "the first result shows: {first:?}");
     }
 }

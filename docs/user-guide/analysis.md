@@ -224,8 +224,8 @@ extent or everywhere, and set the cell size of new rasters. The **Script** pane 
 text, one per line (`id {json}`); its box grows with the script down to the bottom of the pane,
 short of the buttons, and then scrolls, so **Run** stays in view. It colours them as you type, in
 both themes: `#` comments in green italics, the command id, and the JSON's strings and numbers; an
-id no command has, or one that can't run in a script (`ui.*`, `script.*`), shows in red, and
-parameters that aren't valid JSON are underlined in red.
+id no command has, or one that can't run in a script (`ui.*`, `script.*`), and parameters that
+aren't valid JSON are red and underlined.
 
 ## ModelBuilder
 

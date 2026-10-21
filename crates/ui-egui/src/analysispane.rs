@@ -768,8 +768,8 @@ fn result_view(ui: &mut Ui, r: &Value, t: &Tokens) {
 
 /// The lines the Script pane's box starts with; the fewest it keeps when the pane is short.
 const SCRIPT_MIN_ROWS: usize = 10;
-/// The most result lines kept in view below the Script pane's buttons (more scroll with the pane).
-const SCRIPT_OUT_ROWS: usize = 6;
+/// The most lines a run's results take below the Script pane's buttons; more scroll there.
+const SCRIPT_OUT_ROWS: f32 = 6.0;
 
 /// The Script pane: commands typed one per line, run in order, coloured as they're typed (#653).
 pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
@@ -778,11 +778,13 @@ pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let palette = crate::scriptcolor::Palette::of(t);
     let mut layouter =
         |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| crate::scriptcolor::layout(ui, buf.as_str(), &unknown, palette, wrap);
-    // The box grows with the script down to the bottom of the pane, less the room its buttons (and
-    // a run's first result lines) take; a longer script scrolls inside it, so Run stays in view.
+    // The box grows with the script down to the bottom of the pane, less the room its buttons and
+    // a run's results (their own scroll, at most SCRIPT_OUT_ROWS lines) take; a longer script
+    // scrolls inside it, so Run and the results stay in view.
     let gap = ui.spacing().item_spacing.y;
-    let results = app.workflow.script_out.len().min(SCRIPT_OUT_ROWS) as f32;
-    let below = ui.spacing().interact_size.y + gap * 3.0 + (ui.text_style_height(&egui::TextStyle::Small) + gap) * results;
+    let out_h = (ui.text_style_height(&egui::TextStyle::Small) + gap) * SCRIPT_OUT_ROWS;
+    let results = if app.workflow.script_out.is_empty() { 0.0 } else { out_h + gap };
+    let below = ui.spacing().interact_size.y + gap * 3.0 + results;
     let min = ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32;
     let room = (ui.clip_rect().bottom() - ui.cursor().top() - below).max(min);
     egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
@@ -812,8 +814,11 @@ pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let _ = app.run("ui.commandSearch", Value::Null);
         }
     });
-    for (line, err) in &app.workflow.script_out {
-        let c = if *err { egui::Color32::from_rgb(0xC0, 0x30, 0x30) } else { ui.visuals().text_color() };
-        ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
-    }
+    // In a scroll of their own, so a long error (it wraps) can't push them out of the pane.
+    egui::ScrollArea::vertical().id_salt("script_out").max_height(out_h).auto_shrink([false, true]).show(ui, |ui| {
+        for (line, err) in &app.workflow.script_out {
+            let c = if *err { egui::Color32::from_rgb(0xC0, 0x30, 0x30) } else { ui.visuals().text_color() };
+            ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
+        }
+    });
 }
