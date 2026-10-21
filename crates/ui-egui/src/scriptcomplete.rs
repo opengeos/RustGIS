@@ -242,8 +242,8 @@ struct List {
 }
 
 /// What was worked out at a cursor, and for which script (its hash) and `with` (what else it
-/// depends on: the plugins' revision for the list, the language for the help): worked out again
-/// only when one changes.
+/// depends on: the plugins' revision for the list; the language and the plugins' revision for
+/// the help): worked out again only when one changes.
 #[derive(Clone)]
 struct Worked<W, T> {
     at: Option<usize>,
@@ -268,9 +268,10 @@ struct HintState {
     dismissed: Option<Hint>,
     /// Where it was drawn last frame.
     rect: Option<egui::Rect>,
-    /// What it was worked out to show, for which cursor, script (the hash `show` takes this frame)
-    /// and language (the help is translated): not again each frame the cursor blinks.
-    worked: Option<Worked<&'static str, Option<(Hint, Help)>>>,
+    /// What it was worked out to show, for which cursor, script (its hash), language (the help is
+    /// translated) and plugins' revision (a plugin's command comes and goes with its plugin): not
+    /// again each frame the cursor blinks.
+    worked: Option<Worked<(&'static str, u64), Option<(Hint, Help)>>>,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -495,15 +496,16 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
     let mut list = load(ui, box_id);
     let focused = out.response.response.has_focus() && ui.input(|i| i.focused);
     let at = out.cursor_range.filter(|r| focused && list.open.is_none() && r.is_empty()).map(|r| r.primary.index.0);
-    // The script's hash as `show` took it this frame, for the same cursor (no second pass).
-    let text = list.worked.as_ref().filter(|w| w.at == at).map_or_else(|| egui::util::hash(script), |w| w.text);
-    let lang = crate::i18n::current().code();
-    let kept = Worked::get(&list.hint.worked, at, text, &lang);
+    // Its own hash of the script, not the list's: it mustn't depend on how `show` ran this frame.
+    let text = egui::util::hash(script);
+    // The help is translated, and a plugin's command comes and goes with its plugin.
+    let with = (crate::i18n::current().code(), rustgis_engine::plugins::revision());
+    let kept = Worked::get(&list.hint.worked, at, text, &with);
     let found = match kept {
         Some(found) => found,
         None => {
             let found = at.and_then(|at| hint_at(script, at)).and_then(|h| Some((h.clone(), help(session, &h.id)?)));
-            list.hint.worked = Some(Worked { at, text, with: lang, value: found.clone() });
+            list.hint.worked = Some(Worked { at, text, with, value: found.clone() });
             found
         }
     };
