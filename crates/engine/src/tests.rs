@@ -5367,10 +5367,20 @@ fn jpeg2000_from_a_web_address() {
     let vrt = serve(br#"<VRTDataset rasterXSize="1" rasterYSize="1"></VRTDataset>"#, 1);
     let e = s.run("layer.addUrl", &json!({"url": format!("{vrt}/TCI.jp2")})).unwrap_err();
     assert!(e.contains("not a JPEG 2000 file"), "{e}");
+    // Without a file name in the address, the contents alone say JPEG 2000 (a JP2 box or a bare
+    // codestream); the same bytes are refused where GDAL can't run. A VRT stays an unknown format.
+    let jp2_box = b"\0\0\0\x0cjP  \r\n\x87\n";
+    let codestream = [0xff, 0x4f, 0xff, 0x51, 0x00];
+    let named = |url: &str, bytes: &[u8]| crate::cmd::layer::url_file_name(url, bytes);
+    assert_eq!(named("https://x.org/api/tile?f=jp2", jp2_box).unwrap(), "tile.jp2");
+    assert_eq!(named("https://x.org/", &codestream).unwrap(), "data.j2k");
+    assert!(named("https://x.org/api/tile", br#"<VRTDataset></VRTDataset>"#).unwrap_err().contains("not a data format"));
     if !rustgis_data::raster::gdal::available() {
-        let jp2 = serve(b"\0\0\0\x0cjP  \r\n\x87\n", 1);
-        let e = s.run("layer.addUrl", &json!({"url": format!("{jp2}/TCI.jp2")})).unwrap_err();
-        assert!(e.contains("needs GDAL"), "{e}");
+        let jp2 = serve(jp2_box, 2);
+        for path in ["TCI.jp2", "api/tile"] {
+            let e = s.run("layer.addUrl", &json!({"url": format!("{jp2}/{path}")})).unwrap_err();
+            assert!(e.contains("needs GDAL"), "{path}: {e}");
+        }
         return;
     }
     let executable = if cfg!(windows) { "gdal_translate.exe" } else { "gdal_translate" };
@@ -5400,7 +5410,7 @@ fn jpeg2000_from_a_web_address() {
     // stays valid for the server thread's lifetime.
     let bytes = Vec::leak(std::fs::read(&jp2).unwrap());
     let uploaded = base64::engine::general_purpose::STANDARD.encode(&*bytes);
-    let base = serve(bytes, 1);
+    let base = serve(bytes, 2);
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/tiles/33/T/XN/TCI.jp2")})).unwrap();
     let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
     assert_eq!(l.name, "TCI");
@@ -5411,6 +5421,13 @@ fn jpeg2000_from_a_web_address() {
     assert!((e.min_x - 10.0).abs() < 1e-6 && (e.max_y - 41.5).abs() < 1e-6, "{e:?}");
     // The project keeps the converted GeoTIFF, so it opens again without GDAL.
     assert_eq!(rl.file_name.as_deref(), Some("TCI.tif"));
+    assert!(rl.embedded.is_some() && rl.path.is_none());
+    // The same file from an endpoint with no extension: named by its contents, converted alike.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/api/tile")})).unwrap();
+    let rl = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap();
+    let raster = rl.data.as_ref().unwrap();
+    assert_eq!((raster.width, raster.height, raster.georeferenced), (4, 3, true));
+    assert_eq!(rl.file_name.as_deref(), Some("tile.tif"));
     assert!(rl.embedded.is_some() && rl.path.is_none());
     for file_name in ["uploaded.jp2", "uploaded.J2K"] {
         let mut upload = Session::new(Project::default());
