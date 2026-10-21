@@ -332,7 +332,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::VectorLayer,
                 required: true,
                 default: "",
-                help: "Points, or lines and polygons whose vertices are used as points.",
+                help: "Points (or centroids for lines and polygons) with values to interpolate.",
             },
             P { name: "field", label: "Interpolation Attribute", kind: K::NumericField, required: true, default: "", help: "" },
             P {
@@ -369,7 +369,7 @@ pub static TOOLS: &[ToolSpec] = &[
             },
             P {
                 name: "range",
-                label: "Range",
+                label: "Range (Degrees)",
                 kind: K::Number,
                 required: false,
                 default: "",
@@ -869,18 +869,55 @@ fn idw_auto_cell(extent: &Extent, n: usize) -> f64 {
 /// Ordinary Kriging interpolation: builds prediction and error surfaces from spatial autocorrelation.
 fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
+    if let Some(crs) = ds.crs
+        && crs != rustgis_data::raster::Crs::LonLat
+    {
+        return Err("kriging interpolation expects coordinates in degrees (WGS 84 / EPSG:4326)".into());
+    }
     let field = s(p, "field");
     let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
-    let mut pts: Vec<(Coord, f64)> = Vec::new();
+    let mut raw_pts: Vec<(Coord, f64)> = Vec::new();
     for r in rows(inp, p, "input", ds) {
         let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
         let Some(v) = ds.value(r, fi).as_f64().filter(|v| v.is_finite()) else { continue };
-        g.for_each_coord(|c| {
-            if c.is_finite() {
-                pts.push((c, v));
+        match g {
+            Geometry::Point(c) => {
+                if c.is_finite() {
+                    raw_pts.push((*c, v));
+                }
             }
-        });
+            Geometry::MultiPoint(cs) => {
+                for c in cs {
+                    if c.is_finite() {
+                        raw_pts.push((*c, v));
+                    }
+                }
+            }
+            Geometry::Line(_) | Geometry::Polygon(_) => {
+                let ext = g.extent();
+                if !ext.is_empty() {
+                    let center = Coord::new((ext.min_x + ext.max_x) * 0.5, (ext.min_y + ext.max_y) * 0.5);
+                    if center.is_finite() {
+                        raw_pts.push((center, v));
+                    }
+                }
+            }
+        }
     }
+    // Deduplicate sample points by coordinate to prevent singular kriging matrix
+    raw_pts.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then_with(|| a.0.y.total_cmp(&b.0.y)));
+    let mut pts: Vec<(Coord, f64)> = Vec::with_capacity(raw_pts.len());
+    for (c, v) in raw_pts {
+        if let Some((last_c, last_v)) = pts.last_mut()
+            && (c.x - last_c.x).abs() < 1e-9
+            && (c.y - last_c.y).abs() < 1e-9
+        {
+            *last_v = (*last_v + v) * 0.5;
+            continue;
+        }
+        pts.push((c, v));
+    }
+
     let extent = match s(p, "extent").trim() {
         "" => {
             let mut e = Extent::EMPTY;
@@ -896,20 +933,20 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         }
     };
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
-    let cell = match num(p, "pixelSize") {
-        Some(c) if c > 0.0 => c,
-        _ if given("pixelSize") => return Err("the pixel size must be more than zero".into()),
-        _ => kriging_auto_cell(&extent, pts.len()),
-    };
-    let model = match s(p, "model") {
-        "" => crate::kriging::VariogramModel::Spherical,
-        m => crate::kriging::VariogramModel::parse(m).ok_or_else(|| format!("unknown variogram model '{m}'"))?,
-    };
     let neighbours = match num(p, "neighbours") {
-        Some(n) if n >= 2.0 => n as usize,
+        Some(n) if n >= 2.0 => (n as usize).min(32),
         Some(_) => return Err("neighbours must be at least 2".into()),
         None if given("neighbours") => return Err("neighbours must be a number".into()),
         None => 12,
+    };
+    let cell = match num(p, "pixelSize") {
+        Some(c) if c > 0.0 => c,
+        _ if given("pixelSize") => return Err("the pixel size must be more than zero".into()),
+        _ => kriging_auto_cell(&extent, pts.len(), neighbours),
+    };
+    let model = match s(p, "model") {
+        "" => crate::kriging::VariogramModel::Spherical,
+        m => m.parse::<crate::kriging::VariogramModel>().map_err(|_| format!("unknown variogram model '{m}'"))?,
     };
     let mut params = crate::kriging::auto_variogram(&pts, &extent, model);
     if let Some(nugget) = num(p, "nugget") {
@@ -946,11 +983,13 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     })
 }
 
-fn kriging_auto_cell(extent: &Extent, n: usize) -> f64 {
-    let mut cell = (extent.width().max(extent.height()) / 300.0).max(1e-5);
+fn kriging_auto_cell(extent: &Extent, n: usize, neighbours: usize) -> f64 {
+    let k = if neighbours == 0 { 12.min(n) } else { neighbours.clamp(2, n.min(32)) };
+    let work_per_cell = n.saturating_add((k * k * k) / 3);
+    let mut cell = (extent.width().max(extent.height()) / 250.0).max(1e-5);
     let cells = |c: f64| ((extent.width() / c).ceil().max(1.0) * (extent.height() / c).ceil().max(1.0)) as usize;
     for _ in 0..200 {
-        if cells(cell).saturating_mul(n) <= crate::kriging::MAX_KRIGING_WORK {
+        if cells(cell).saturating_mul(work_per_cell) <= crate::kriging::MAX_KRIGING_WORK {
             break;
         }
         cell *= 1.1;
@@ -1573,6 +1612,14 @@ mod tests {
         // Invalid models or parameters return errors cleanly
         assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "model": "UnknownModel"})).is_err());
         assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "neighbours": 1})).is_err());
+
+        // Projected layer with non-degrees CRS returns error
+        let Some(pts_layer) = m.0.get("pts") else { panic!("missing pts") };
+        let mut proj_pts = pts_layer.clone();
+        proj_pts.crs = Some(rustgis_data::raster::Crs::WebMercator);
+        let m_proj = Map(HashMap::from([("proj_pts".to_string(), proj_pts)]));
+        let err = crate::run("kriging", &m_proj, &serde_json::json!({"input": "proj_pts", "field": "v"})).unwrap_err();
+        assert!(err.contains("degrees"));
     }
 
     #[test]

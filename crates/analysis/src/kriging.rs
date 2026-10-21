@@ -63,7 +63,8 @@ pub struct VariogramParams {
     pub nugget: f64,
     /// Sill (c₀ + c): asymptotic variance at large distances.
     pub sill: f64,
-    /// Range a: spatial correlation distance in degrees or map units.
+    /// Range a: spatial correlation distance (lag) in degrees (longitude/latitude).
+    /// Semivariance reaches or approaches the sill at this distance.
     pub range: f64,
 }
 
@@ -95,6 +96,27 @@ impl VariogramParams {
                 c0 + c * (1.0 - (-3.0 * hr * hr).exp())
             }
         }
+    }
+}
+
+/// Preallocated reusable workspace buffers for solving the Kriging linear system.
+#[derive(Clone, Debug)]
+pub struct KrigingBuffers {
+    a_mat: Vec<f64>,
+    b_vec: Vec<f64>,
+    solution: Vec<f64>,
+}
+
+impl Default for KrigingBuffers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KrigingBuffers {
+    pub fn new() -> Self {
+        const MAX_M: usize = 33;
+        Self { a_mat: vec![0.0; MAX_M * MAX_M], b_vec: vec![0.0; MAX_M], solution: vec![0.0; MAX_M] }
     }
 }
 
@@ -182,23 +204,29 @@ fn solve_linear_system(n: usize, a: &mut [f64], b: &mut [f64], x: &mut [f64]) ->
 
 /// Performs Ordinary Kriging interpolation for a query point given its nearest neighbors.
 /// `near`: slice of `(distance, value, point_coord)` sorted or unsorted.
+/// `kx`: cosine of query latitude for metric consistency across both system sides.
+/// `buffers`: reusable linear system buffers to eliminate per-pixel heap allocations.
 /// Returns `(predicted_value, estimation_variance)`.
-pub fn ordinary_kriging_point(query: Coord, near: &[(f64, f64, Coord)], params: &VariogramParams) -> (f64, f64) {
+pub fn ordinary_kriging_point(
+    query: Coord,
+    near: &[(f64, f64, Coord)],
+    params: &VariogramParams,
+    kx: f64,
+    buffers: &mut KrigingBuffers,
+) -> (f64, f64) {
     if near.is_empty() {
         return (0.0, params.sill);
     }
     // Exact interpolator: if on or extremely close to a sample point, return its value exactly.
-    if let Some((_, exact_val, _)) = near.iter().find(|(d, _, _)| *d < 1e-10) {
+    // Check both metric distance and raw coordinate proximity so high latitudes don't false-trigger.
+    if let Some((_, exact_val, _)) =
+        near.iter().find(|(d, _, p)| *d < 1e-10 && (p.x - query.x).abs() < 1e-8 && (p.y - query.y).abs() < 1e-8)
+    {
         return (*exact_val, 0.0);
     }
 
     let k = near.len().min(32);
     let m = k + 1; // system size (k weights + 1 Lagrange multiplier)
-
-    // Build Kriging matrix A and vector b
-    let mut a_mat = vec![0.0; m * m];
-    let mut b_vec = vec![0.0; m];
-    let mut solution = vec![0.0; m];
 
     for i in 0..k {
         let (di, _, pi) = match near.get(i) {
@@ -210,40 +238,42 @@ pub fn ordinary_kriging_point(query: Coord, near: &[(f64, f64, Coord)], params: 
                 Some(n) => *n,
                 None => continue,
             };
-            let hij = ((pi.x - pj.x).powi(2) + (pi.y - pj.y).powi(2)).sqrt();
+            let dx = (pi.x - pj.x) * kx;
+            let dy = pi.y - pj.y;
+            let hij = (dx * dx + dy * dy).sqrt();
             let gamma = params.semivariance(hij);
-            if let Some(cell) = a_mat.get_mut(i * m + j) {
+            if let Some(cell) = buffers.a_mat.get_mut(i * m + j) {
                 *cell = gamma;
             }
         }
         // Constraint: sum(w_i) = 1
-        if let Some(cell) = a_mat.get_mut(i * m + k) {
+        if let Some(cell) = buffers.a_mat.get_mut(i * m + k) {
             *cell = 1.0;
         }
-        if let Some(cell) = a_mat.get_mut(k * m + i) {
+        if let Some(cell) = buffers.a_mat.get_mut(k * m + i) {
             *cell = 1.0;
         }
         // Right hand side: gamma(h_i0)
         let gamma_0 = params.semivariance(di);
-        if let Some(b_val) = b_vec.get_mut(i) {
+        if let Some(b_val) = buffers.b_vec.get_mut(i) {
             *b_val = gamma_0;
         }
     }
     // A_mat[k, k] = 0.0
-    if let Some(cell) = a_mat.get_mut(k * m + k) {
+    if let Some(cell) = buffers.a_mat.get_mut(k * m + k) {
         *cell = 0.0;
     }
     // b_vec[k] = 1.0
-    if let Some(b_val) = b_vec.get_mut(k) {
+    if let Some(b_val) = buffers.b_vec.get_mut(k) {
         *b_val = 1.0;
     }
 
-    if solve_linear_system(m, &mut a_mat, &mut b_vec, &mut solution) {
+    if solve_linear_system(m, &mut buffers.a_mat[..m * m], &mut buffers.b_vec[..m], &mut buffers.solution[..m]) {
         let mut est = 0.0;
-        let mut variance = solution.get(k).copied().unwrap_or(0.0); // Lagrange multiplier μ
+        let mut variance = buffers.solution.get(k).copied().unwrap_or(0.0); // Lagrange multiplier μ
 
         for i in 0..k {
-            let w = solution.get(i).copied().unwrap_or(0.0);
+            let w = buffers.solution.get(i).copied().unwrap_or(0.0);
             let (_, val, _) = near.get(i).copied().unwrap_or((0.0, 0.0, query));
             est += w * val;
             let gamma_0 = params.semivariance(near.get(i).map(|(d, _, _)| *d).unwrap_or(0.0));
@@ -290,17 +320,20 @@ pub fn kriging(
     if w.saturating_mul(h) > MAX_PIXELS / 4 {
         return Err(format!("{w} × {h} cells is too many; use a larger cell size"));
     }
-    if w.saturating_mul(h).saturating_mul(points.len()) > MAX_KRIGING_WORK {
+    let k = if neighbours == 0 { 12.min(points.len()) } else { neighbours.clamp(2, points.len().min(32)) };
+    let k3 = (k * k * k) / 3;
+    let work_per_cell = points.len().saturating_add(k3);
+    if w.saturating_mul(h).saturating_mul(work_per_cell) > MAX_KRIGING_WORK {
         return Err(format!("{w} × {h} cells from {} points is too much work; use a larger cell size", points.len()));
     }
 
-    let k = if neighbours == 0 { 12.min(points.len()) } else { neighbours.clamp(2, points.len().min(32)) };
     let mut pred_data = Vec::with_capacity(w * h);
     let mut var_data = Vec::with_capacity(w * h);
     let mut near: Vec<(f64, f64, Coord)> = Vec::with_capacity(points.len());
+    let mut buffers = KrigingBuffers::new();
 
     for row in 0..h {
-        let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos();
+        let kx = (extent.max_y - (row as f64 + 0.5) * cell_deg).to_radians().cos().abs().max(1e-6);
         for col in 0..w {
             let c = Coord::new(extent.min_x + (col as f64 + 0.5) * cell_deg, extent.max_y - (row as f64 + 0.5) * cell_deg);
             near.clear();
@@ -316,7 +349,7 @@ pub fn kriging(
                 near.truncate(k);
             }
 
-            let (val, var) = ordinary_kriging_point(c, &near, params);
+            let (val, var) = ordinary_kriging_point(c, &near, params, kx, &mut buffers);
             pred_data.push(if val.is_finite() { val as f32 } else { NODATA });
             var_data.push(if var.is_finite() { var as f32 } else { NODATA });
         }
@@ -342,13 +375,14 @@ mod tests {
         ];
         let extent = Extent::new(0.0, 0.0, 10.0, 10.0);
         let params = auto_variogram(&sample_pts, &extent, VariogramModel::Spherical);
+        let mut buffers = KrigingBuffers::new();
 
         for (pt, expected_val) in &sample_pts {
             let mut near: Vec<(f64, f64, Coord)> =
                 sample_pts.iter().map(|(p, v)| (((p.x - pt.x).powi(2) + (p.y - pt.y).powi(2)).sqrt(), *v, *p)).collect();
             near.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-            let (val, var) = ordinary_kriging_point(*pt, &near, &params);
+            let (val, var) = ordinary_kriging_point(*pt, &near, &params, 1.0, &mut buffers);
             assert!((val - expected_val).abs() < 1e-6, "Kriging at sample point {:?} gave {}, expected {}", pt, val, expected_val);
             assert!(var.abs() < 1e-6, "Variance at sample point {:?} was {}, expected 0.0", pt, var);
         }
@@ -369,6 +403,7 @@ mod tests {
         }
         let _extent = Extent::new(0.0, 0.0, 8.0, 8.0);
         let params = VariogramParams { model: VariogramModel::Spherical, nugget: 0.0, sill: 50.0, range: 12.0 };
+        let mut buffers = KrigingBuffers::new();
 
         // Test at intermediate points not in the training set
         let test_coords = vec![Coord::new(1.0, 1.0), Coord::new(3.0, 3.0), Coord::new(5.0, 1.0), Coord::new(3.0, 5.0)];
@@ -381,16 +416,31 @@ mod tests {
             // With the 4 closest symmetric neighbors, Ordinary Kriging reproduces the plane with sub-millimeter precision
             let mut near_4 = near.clone();
             near_4.truncate(4);
-            let (val_4, _) = ordinary_kriging_point(query, &near_4, &params);
+            let (val_4, _) = ordinary_kriging_point(query, &near_4, &params, 1.0, &mut buffers);
             let expected = f(query.x, query.y);
             assert!((val_4 - expected).abs() < 1e-4, "4-neighbor query at {:?}: predicted {}, expected {}", query, val_4, expected);
 
             // With 12 neighbors, smoothing bias on an un-detrended ramp is within 1.5% relative error
             near.truncate(12);
-            let (val, var) = ordinary_kriging_point(query, &near, &params);
+            let (val, var) = ordinary_kriging_point(query, &near, &params, 1.0, &mut buffers);
             let error = (val - expected).abs();
             assert!(error < 0.75, "12-neighbor query at {:?}: predicted {}, expected {}, error {}", query, val, expected, error);
             assert!(var >= 0.0, "Variance should be non-negative: {}", var);
+        }
+    }
+
+    #[test]
+    fn test_high_latitude_metric_consistency() {
+        let lat = 60.0;
+        let pts = vec![(Coord::new(0.0, lat), 10.0), (Coord::new(1.0, lat), 20.0), (Coord::new(0.0, lat + 1.0), 30.0)];
+        let extent = Extent::new(0.0, lat, 1.0, lat + 1.0);
+        let params = auto_variogram(&pts, &extent, VariogramModel::Spherical);
+        let r = kriging(&pts, &extent, 0.25, &params, 3, "kriging_hi_lat").unwrap();
+        assert_eq!(r.bands.len(), 2);
+        for band in &r.bands {
+            for v in &band.data {
+                assert!(r.is_valid(*v));
+            }
         }
     }
 
