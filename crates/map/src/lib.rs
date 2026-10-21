@@ -292,6 +292,7 @@ impl Layer {
             self.dataset.fields = info.fields.clone();
         }
         let Some(src) = &mut self.source else { return false };
+        src.window_fields = Some(self.dataset.fields.len());
         // A failed read leaves nothing drawn for it (its error shows in Layers), not the
         // previous view's features.
         match src.poll(block) {
@@ -315,9 +316,13 @@ impl Layer {
 
     /// Replaces a streamed layer's features, keeping the selection (by feature id).
     fn install(&mut self, features: Vec<rustgis_data::Feature>) {
-        let ids: std::collections::HashSet<u64> =
+        let mut ids: std::collections::HashSet<u64> =
             self.selection.iter().filter_map(|r| self.dataset.features.get(*r)).map(|f| f.id).collect();
+        if let Some(src) = &mut self.source {
+            ids.extend(std::mem::take(&mut src.saved_selection));
+        }
         let fields = self.dataset.fields.len();
+        self.clear_cache();
         self.dataset.features = features.into();
         for f in &mut self.dataset.features {
             f.attrs.resize(fields, rustgis_data::Value::Null);
@@ -332,6 +337,22 @@ impl Layer {
             self.dataset.features.iter().enumerate().filter(|(_, f)| ids.contains(&f.id)).map(|(i, _)| i).collect()
         };
         self.touch_geometry();
+        if let Some(cache) = self.source.as_mut().and_then(|s| s.ready_cache.take()) {
+            self.projected = cache.projected;
+            self.projected_extents = cache.extents;
+            self.projected_vertices = cache.vertices;
+            self.projected_for = cache.key;
+            self.projected_rev = self.geometry_rev;
+        }
+    }
+
+    /// Allocated row, projected-geometry, extent and optional display storage. Shared render
+    /// snapshots reuse these allocations rather than charging/counting them again.
+    pub fn view_cache_bytes(&self) -> usize {
+        rustgis_data::source::memory::features_bytes(&self.dataset.features)
+            .saturating_add(lod::cache_bytes(&self.projected))
+            .saturating_add(self.projected_extents.capacity().saturating_mul(std::mem::size_of::<Extent>()))
+            .saturating_add(self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum::<usize>())
     }
 
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
@@ -406,6 +427,12 @@ impl Layer {
     /// geometry itself for a small layer. Read it back with [`Layer::thinned_cache`].
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
         self.projected_in(flat, key);
+        let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
+            let base = rustgis_data::source::memory::features_bytes(&self.dataset.features)
+                .saturating_add(lod::cache_bytes(&self.projected))
+                .saturating_add(self.projected_extents.capacity().saturating_mul(std::mem::size_of::<Extent>()));
+            s.budget().saturating_sub(base).min(lod::CACHE_BYTES)
+        });
         let Some(level) = lod::level(tol).filter(|_| self.projected_vertices > lod::THIN_ABOVE) else { return &self.projected };
         let levels = std::sync::Arc::make_mut(&mut self.thinned);
         match levels.iter().position(|(l, _)| *l == level) {
@@ -415,13 +442,24 @@ impl Layer {
             }
             None => {
                 let t = lod::tolerance(level);
-                let copy: Vec<Option<Geometry>> = self.projected.iter().map(|g| g.as_ref().map(|g| lod::thin(g, t))).collect();
+                let copy = lod::thin_budgeted(&self.projected, t, budget);
                 // The saving counts against every vertex the copy holds, points included.
                 let all: usize = self.projected.iter().flatten().map(lod::vertices).sum();
-                let kept: usize = copy.iter().flatten().map(lod::vertices).sum();
-                let worth = (kept as f64) <= all as f64 * (1.0 - lod::MIN_SAVING);
-                levels.insert(0, (level, worth.then(|| std::sync::Arc::new(copy))));
+                let copy = copy.filter(|c| {
+                    let kept: usize = c.iter().flatten().map(lod::vertices).sum();
+                    (kept as f64) <= all as f64 * (1.0 - lod::MIN_SAVING)
+                });
+                levels.insert(0, (level, copy.map(std::sync::Arc::new)));
                 levels.truncate(lod::LEVELS_KEPT);
+                let mut bytes = 0usize;
+                levels.retain(|(_, copy)| {
+                    let extra = copy.as_ref().map_or(0, |c| lod::cache_bytes(c));
+                    if bytes.saturating_add(extra) > budget {
+                        return false;
+                    }
+                    bytes += extra;
+                    true
+                });
             }
         }
         self.thinned_cache(tol)
@@ -464,7 +502,13 @@ impl Layer {
     pub fn adopt_cache(&mut self, other: &Layer) -> bool {
         let fits = other.dataset.features.shares(&self.dataset.features)
             && other.geometry_rev == self.geometry_rev
-            && other.is_cached(&other.projected_for);
+            && other.is_cached(&other.projected_for)
+            && self.source.as_ref().is_none_or(|source| {
+                !source.is_pending()
+                    && other.source.as_ref().is_some_and(|old| {
+                        old.budget() <= source.budget() && old.projection == source.projection && old.full_read == source.full_read
+                    })
+            });
         if fits {
             self.projected = other.projected.clone();
             self.projected_extents = other.projected_extents.clone();
@@ -1179,6 +1223,34 @@ impl Map {
     pub fn sync_sources(&mut self, view: &Extent, scale: f64, block: bool) -> bool {
         let mut pending = false;
         let held = self.held_by_group(scale);
+        // Hidden resident layers share the budget too; toggling visibility cannot multiply it.
+        let sources = self.layers.iter().filter(|l| l.source.is_some()).count().max(1);
+        let bytes = source::VIEW_BYTES / sources;
+        for layer in &mut self.layers {
+            if let Some(src) = &mut layer.source {
+                let changed = src.projection.as_ref().is_some_and(|p| p != &self.projection);
+                let mode_changed = src.full_read != block;
+                let budget_changed = src.byte_budget != bytes;
+                src.projection = Some(self.projection.clone());
+                src.byte_budget = bytes;
+                src.full_read = block;
+                if changed || mode_changed || budget_changed {
+                    src.reset();
+                }
+                if changed || (!block && layer.view_cache_bytes() > bytes) {
+                    // Preserve ids while discarding a window that no longer fits. The next
+                    // installed window resolves the selection against its authoritative ids.
+                    let selected = layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r)).map(|f| f.id).collect();
+                    if let Some(src) = &mut layer.source {
+                        src.reset();
+                    }
+                    layer.install(Vec::new());
+                    if let Some(src) = &mut layer.source {
+                        src.saved_selection = selected;
+                    }
+                }
+            }
+        }
         for l in self.layers.iter_mut().filter(|l| l.is_streamed() && l.visible && l.in_scale_range(scale) && !held.contains(&l.id)) {
             pending |= l.sync_source(view, block);
         }

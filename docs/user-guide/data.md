@@ -374,6 +374,29 @@ open; a browser upload is kept in the project.
 | GeoPackage, the same grid (344 MB) | 1.6 million polygons | 183,000 in 0.18 s |
 | GeoParquet, global grid (190 MB) | 6.5 million polygons | a sample of 136,000 in 0.27 s |
 
+### Streamed view memory
+
+Interaction windows share a retained-memory budget across all source layers in a map,
+including hidden layers: 128 MiB on the desktop and 48 MiB in the browser. The budget
+counts allocated row capacity, attribute strings, nested geometry buffers, projected
+geometry, extent arrays and optional display geometry. Complex records can therefore
+reduce the interaction sample even below the existing feature-count limit. Source ids,
+attributes and file order are retained; the sample is marked as incomplete. An individual
+feature that cannot fit produces a layer error instead of silently disappearing.
+
+Projection is prepared with the window on the source worker. Optional thinned geometry
+uses the remaining budget, up to 64 MiB per layer; when it cannot fit, drawing uses the
+original projected geometry. Explicitly loaded layers retain their full source data and
+limit only their optional display caches.
+
+This is a budget for installed interaction caches, not a process-RSS or GPU-memory cap.
+Provider decoding scratch, in-flight reads, shared snapshots and explicit full reads are
+outside it. The generic provider adapter probes a small sample and trims the returned
+window; it does not bound the provider's transient decoding allocations. Blocking map
+exports retain their original row limits and reread instead of reusing a budget-reduced
+interaction window. Full-source loading, analysis, editing, data exports and project
+serialization continue to use the original source data and existing read limits.
+
 ## Rasters
 
 <figure markdown="span">
