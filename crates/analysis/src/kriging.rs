@@ -516,5 +516,11 @@ mod tests {
             let expected = *v_orig * (scale as f32);
             assert!((*v_scaled - expected).abs() <= 1e-10, "scaled {v_scaled} vs expected {expected}");
         }
+
+        let scale_sq = (scale * scale) as f32;
+        for (v_orig, v_scaled) in r_orig.bands[1].data.iter().zip(&r_scaled.bands[1].data) {
+            let expected = *v_orig * scale_sq;
+            assert!((*v_scaled - expected).abs() <= 1e-12, "variance {v_scaled} vs expected {expected}");
+        }
     }
 }

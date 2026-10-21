@@ -1682,10 +1682,23 @@ mod tests {
         inter_pts.push(Some(Geometry::Point(Coord::new(0.5 + 9e-13, 0.5))), vec![Value::Float(30.0)]);
         inter_pts.push(Some(Geometry::Point(Coord::new(1.5, 1.5))), vec![Value::Float(20.0)]);
         let m_inter = Map(HashMap::from([("inter".to_string(), inter_pts)]));
-        assert!(
-            crate::run("kriging", &m_inter, &serde_json::json!({"input": "inter", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5}))
-                .is_ok()
-        );
+        let r_inter = crate::run(
+            "kriging",
+            &m_inter,
+            &serde_json::json!({
+                "input": "inter",
+                "field": "v",
+                "extent": "0.25,0.25,0.75,0.75",
+                "pixelSize": 0.5
+            }),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let Output::Layers(inter_layers) = r_inter.output else { panic!("expected layers") };
+        let pred_inter = match &inter_layers[0] {
+            OutputLayer::Raster { file_name, bytes, .. } => rustgis_data::raster::read_bytes(file_name, bytes).unwrap(),
+            _ => panic!("expected raster"),
+        };
+        assert!((pred_inter.bands[0].data[0] - 20.0).abs() < 1e-4, "expected 20.0 at (0.5, 0.5), got {}", pred_inter.bands[0].data[0]);
     }
 
     #[test]
