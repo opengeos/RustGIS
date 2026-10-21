@@ -774,7 +774,7 @@ const SCRIPT_OUT_ROWS: f32 = 6.0;
 /// The Script pane: commands typed one per line, run in order, coloured as they're typed (#653).
 pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("One command per line: id {json}. Lines starting with # are comments.")).small().weak());
-    let unknown = crate::scriptcolor::unknown_ids(&app.session, &app.workflow.script);
+    let unknown = crate::scriptcolor::unknown_ids_cached(ui, &app.session, &app.workflow.script);
     let palette = crate::scriptcolor::Palette::of(t);
     let mut layouter =
         |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| crate::scriptcolor::layout(ui, buf.as_str(), &unknown, palette, wrap);

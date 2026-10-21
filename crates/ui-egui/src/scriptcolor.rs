@@ -230,8 +230,25 @@ impl egui::cache::ComputerMut<(&str, &[String], Palette, &FontId), LayoutJob> fo
 
 pub type Cache = egui::cache::FrameCache<LayoutJob, Highlighter>;
 
+/// `unknown_ids`, worked out again only when the script or the loaded plugins change (a plugin
+/// turned on or off shows at once); otherwise one hash of the script per frame. The built-in
+/// commands don't change while the app runs.
+pub fn unknown_ids_cached(ui: &egui::Ui, session: &rustgis_engine::Session, script: &str) -> std::sync::Arc<Vec<String>> {
+    type Kept = (u64, u64, std::sync::Arc<Vec<String>>);
+    let key = egui::Id::new("script_unknown_ids");
+    let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
+    if let Some((t, p, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
+        && (t, p) == (text, plugins)
+    {
+        return ids;
+    }
+    let ids = std::sync::Arc::new(unknown_ids(session, script));
+    ui.data_mut(|d| d.insert_temp::<Kept>(key, (text, plugins, ids.clone())));
+    ids
+}
+
 /// The ids `script`'s lines name that no command has (built-in, or a plugin's), each once and in
-/// order. Read each frame, so a plugin turned on or off shows at once.
+/// order.
 pub fn unknown_ids(session: &rustgis_engine::Session, script: &str) -> Vec<String> {
     let known = |id: &str| {
         session.registry.get(id).is_some()
@@ -489,5 +506,21 @@ mod tests {
         assert!(h.get_by_label("Run").rect().max.y < 700.0);
         let first = h.get_by_label_contains("line 0:").rect();
         assert!(first.min.y < 700.0, "the first result shows: {first:?}");
+    }
+
+    /// The kept unknown ids follow the script: a change is read again, the same script isn't.
+    #[test]
+    fn kept_unknown_ids_follow_the_script() {
+        let app = crate::RustGisApp::with_sample();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let first = super::unknown_ids_cached(ui, &app.session, "nope.a {}");
+            assert_eq!(*first, ["nope.a"]);
+            let again = super::unknown_ids_cached(ui, &app.session, "nope.a {}");
+            assert!(std::sync::Arc::ptr_eq(&first, &again), "the same script is kept, not read again");
+            assert_eq!(*super::unknown_ids_cached(ui, &app.session, "nope.b {}\nmap.zoomFull"), ["nope.b"]);
+        });
+        // No painter here: the frame's textures are let go, as egui asks.
+        out.textures_delta.clear();
     }
 }
