@@ -1072,7 +1072,7 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     for (_, ext, _) in &join_geoms {
         total_ext = total_ext.union(ext);
     }
-    let use_grid = join_geoms.len() > 16 && !total_ext.is_empty();
+    let mut use_grid = join_geoms.len() > 16 && !total_ext.is_empty();
     let n_cells = (join_geoms.len() as f64).sqrt().clamp(4.0, 256.0);
     let cell_w = (total_ext.width() / n_cells).max(1e-9);
     let cell_h = (total_ext.height() / n_cells).max(1e-9);
@@ -1081,6 +1081,21 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let ky = if y.is_finite() { ((y - total_ext.min_y) / cell_h).floor() } else { 0.0 };
         (kx.clamp(0.0, 512.0) as i64, ky.clamp(0.0, 512.0) as i64)
     };
+
+    const MAX_GRID_REFERENCES: usize = 1_000_000;
+    if use_grid {
+        let mut projected_refs = 0usize;
+        for (_, j_ext, _) in &join_geoms {
+            let (gx0, gy0) = key(j_ext.min_x, j_ext.min_y);
+            let (gx1, gy1) = key(j_ext.max_x, j_ext.max_y);
+            let cells = ((gx1 - gx0 + 1) as usize).saturating_mul((gy1 - gy0 + 1) as usize);
+            projected_refs = projected_refs.saturating_add(cells);
+            if projected_refs > MAX_GRID_REFERENCES {
+                use_grid = false;
+                break;
+            }
+        }
+    }
 
     let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
     if use_grid {
@@ -1799,5 +1814,50 @@ mod tests {
         assert!(ds6.field_index("k_2").is_some(), "colliding field k should be deduplicated to k_2");
         assert_eq!(ds6.value(1, ds6.field_index("k").unwrap()), &Value::Text("orig".into()));
         assert_eq!(ds6.value(1, ds6.field_index("k_2").unwrap()), &Value::Text("a".into()));
+
+        // 7. Indexed path (> 16 join geometries) for Intersects, Contains, and Within, including outside extent
+        let mut grid_polys = Dataset::new("grid_polys", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        for y in 0..5 {
+            for x in 0..5 {
+                grid_polys.push(Some(sq(x as f64, y as f64, 1.0)), vec![Value::Int(y * 5 + x)]);
+            }
+        }
+        assert_eq!(grid_polys.features.len(), 25);
+
+        let mut test_pts = Dataset::new("test_pts", GeometryType::Point, vec![Field::new("tag", FieldType::Text)]);
+        test_pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Text("in_0".into())]);
+        test_pts.push(Some(Geometry::Point(Coord::new(4.5, 4.5))), vec![Value::Text("in_24".into())]);
+        test_pts.push(Some(Geometry::Point(Coord::new(100.0, 100.0))), vec![Value::Text("far".into())]);
+
+        let m2 = Map(HashMap::from([("grid_polys".to_string(), grid_polys), ("test_pts".to_string(), test_pts)]));
+
+        let r_int = crate::run("spatialJoin", &m2, &serde_json::json!({"target": "test_pts", "join": "grid_polys", "match": "Intersects"}))
+            .unwrap();
+        let ds_int = layer(r_int);
+        assert_eq!(ds_int.features.len(), 3);
+        let jc_int = ds_int.field_index("join_count").unwrap();
+        let jid_int = ds_int.field_index("join_id").unwrap();
+        assert_eq!(ds_int.value(0, jc_int), &Value::Int(1));
+        assert_eq!(ds_int.value(0, jid_int), &Value::Int(0));
+        assert_eq!(ds_int.value(1, jc_int), &Value::Int(1));
+        assert_eq!(ds_int.value(1, jid_int), &Value::Int(24));
+        assert_eq!(ds_int.value(2, jc_int), &Value::Int(0));
+        assert_eq!(ds_int.value(2, jid_int), &Value::Null);
+
+        let r_within =
+            crate::run("spatialJoin", &m2, &serde_json::json!({"target": "test_pts", "join": "grid_polys", "match": "Within"})).unwrap();
+        let ds_within = layer(r_within);
+        assert_eq!(ds_within.value(0, jc_int), &Value::Int(1));
+        assert_eq!(ds_within.value(1, jc_int), &Value::Int(1));
+        assert_eq!(ds_within.value(2, jc_int), &Value::Int(0));
+
+        let r_contains =
+            crate::run("spatialJoin", &m2, &serde_json::json!({"target": "grid_polys", "join": "test_pts", "match": "Contains"})).unwrap();
+        let ds_contains = layer(r_contains);
+        assert_eq!(ds_contains.features.len(), 25);
+        let jc_poly = ds_contains.field_index("join_count").unwrap();
+        assert_eq!(ds_contains.value(0, jc_poly), &Value::Int(1));
+        assert_eq!(ds_contains.value(24, jc_poly), &Value::Int(1));
+        assert_eq!(ds_contains.value(12, jc_poly), &Value::Int(0));
     }
 }
