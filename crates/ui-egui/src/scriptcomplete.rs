@@ -127,20 +127,25 @@ pub fn help(session: &rustgis_engine::Session, id: &str) -> Option<Help> {
 /// The help's widest line, so a long signature or parameter wraps rather than widen the list
 /// without end.
 const HELP_WIDTH: f32 = 360.0;
+/// The narrowest the help gets beside the list; with less room it goes under the list.
+const HELP_MIN_WIDTH: f32 = 200.0;
+/// The gap between the list and the help, and the popup frame's margins (both sides).
+const GAP: f32 = 12.0;
+const FRAME: f32 = 24.0;
 
 /// Draws `help` beside the list: the signature and parameters coloured as the script is, in its
 /// monospace font (smaller for the parameters).
-fn draw_help(ui: &mut Ui, help: &Help) {
+fn draw_help(ui: &mut Ui, help: &Help, width: f32) {
     let palette = crate::scriptcolor::Palette::of(&crate::theme::Tokens::get(ui.ctx()));
     let mono = egui::TextStyle::Monospace.resolve(ui.style());
     let small = egui::FontId::monospace(mono.size * 0.85);
     let coloured = |id: Option<&str>, text: &str, font: &egui::FontId| {
         let mut job = crate::scriptcolor::help_job(id, text, palette, font);
-        job.wrap.max_width = HELP_WIDTH;
+        job.wrap.max_width = width;
         job
     };
     ui.vertical(|ui| {
-        ui.set_max_width(HELP_WIDTH);
+        ui.set_max_width(width);
         ui.label(coloured(Some(&help.id), &help.keys, &mono));
         ui.label(&help.label);
         if !help.about.is_empty() {
@@ -320,11 +325,17 @@ pub fn show(
     let screen = ui.ctx().content_rect();
     let y = if cursor.bottom() + size.y > screen.bottom() { cursor.top() - size.y } else { cursor.bottom() };
     let x = cursor.left().min(screen.right() - size.x).max(screen.left());
+    // The help beside the list in the room the screen leaves, or under it when that's too narrow
+    // to read (a narrow window), so neither is cut off at the screen's edge.
+    let beside = (screen.width() - MIN_WIDTH - GAP - FRAME).min(HELP_WIDTH);
+    let (beside, help_width) =
+        if beside >= HELP_MIN_WIDTH { (true, beside) } else { (false, (screen.width() - FRAME).clamp(0.0, HELP_WIDTH)) };
+    let layout = if beside { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
     let mut clicked = None;
     let area =
         egui::Area::new(box_id.with("complete_list")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, y)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal_top(|ui| {
+                ui.with_layout(layout, |ui| {
                     // The help follows the item under the pointer, else the highlighted one.
                     let mut hovered = None;
                     ui.vertical(|ui| {
@@ -350,8 +361,8 @@ pub fn show(
                     if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
                         // A gap, not a separator: in a row, egui's separator takes all the height it
                         // can, and would stretch the list down to the bottom of the screen.
-                        ui.add_space(12.0);
-                        draw_help(ui, &help);
+                        ui.add_space(GAP);
+                        draw_help(ui, &help, help_width);
                     }
                 });
             });
@@ -726,5 +737,27 @@ mod tests {
         h.key_press(egui::Key::ArrowDown);
         h.run();
         h.get_by_label(&sig(&h, &items[1]));
+    }
+
+    /// In a window too narrow for the help beside the list, the help goes under it: neither is
+    /// cut off at the edge.
+    #[test]
+    fn a_narrow_window_puts_the_help_under_the_list() {
+        use egui_kittest::kittest::Queryable;
+        let width = 380.0;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            crate::RustGisApp::with_sample(),
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+        h.run();
+        h.event(egui::Event::Text("labels.sty".into()));
+        h.run();
+        let item = h.get_by_role_and_label(egui::accesskit::Role::Button, "labels.style").rect();
+        let help = super::help(&h.state().session, "labels.style").unwrap();
+        let sig = h.get_by_label(&format!("{}{}", help.id, help.keys)).rect();
+        assert!(sig.min.y > item.max.y, "under the list: {sig:?} {item:?}");
+        assert!(sig.max.x <= width + 0.5, "within the window: {sig:?}");
     }
 }
