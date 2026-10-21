@@ -949,23 +949,23 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         m => m.parse::<crate::kriging::VariogramModel>().map_err(|_| format!("unknown variogram model '{m}'"))?,
     };
     let mut params = crate::kriging::auto_variogram(&pts, &extent, model);
-    if let Some(nugget) = num(p, "nugget") {
-        if !nugget.is_finite() || nugget < 0.0 {
-            return Err("nugget must be a non-negative number".into());
-        }
-        params.nugget = nugget;
+    match num(p, "nugget") {
+        Some(v) if v >= 0.0 => params.nugget = v,
+        Some(_) => return Err("nugget must be a non-negative number".into()),
+        None if given("nugget") => return Err("nugget must be a number".into()),
+        None => {}
     }
-    if let Some(sill) = num(p, "sill") {
-        if !sill.is_finite() || sill <= 0.0 {
-            return Err("sill must be a positive number".into());
-        }
-        params.sill = sill;
+    match num(p, "sill") {
+        Some(v) if v > 0.0 => params.sill = v,
+        Some(_) => return Err("sill must be a positive number".into()),
+        None if given("sill") => return Err("sill must be a number".into()),
+        None => {}
     }
-    if let Some(range) = num(p, "range") {
-        if !range.is_finite() || range <= 0.0 {
-            return Err("range must be a positive number".into());
-        }
-        params.range = range;
+    match num(p, "range") {
+        Some(v) if v > 0.0 => params.range = v,
+        Some(_) => return Err("range must be a positive number".into()),
+        None if given("range") => return Err("range must be a number".into()),
+        None => {}
     }
 
     let name = out_name(p, format!("{}_{field}_kriging", ds.name));
@@ -1612,6 +1612,12 @@ mod tests {
         // Invalid models or parameters return errors cleanly
         assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "model": "UnknownModel"})).is_err());
         assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "neighbours": 1})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "nugget": -1})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "nugget": "abc"})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "sill": 0})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "sill": "xyz"})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "range": -5})).is_err());
+        assert!(crate::run("kriging", &m, &serde_json::json!({"input": "pts", "field": "v", "range": "none"})).is_err());
 
         // Projected layer with non-degrees CRS returns error
         let Some(pts_layer) = m.0.get("pts") else { panic!("missing pts") };
