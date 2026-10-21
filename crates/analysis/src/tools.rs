@@ -332,7 +332,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::VectorLayer,
                 required: true,
                 default: "",
-                help: "Points (or centroids for lines and polygons) with values to interpolate.",
+                help: "Points (or bounding-box centres for lines and polygons) with values to interpolate.",
             },
             P { name: "field", label: "Interpolation Attribute", kind: K::NumericField, required: true, default: "", help: "" },
             P {
@@ -389,7 +389,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Number,
                 required: false,
                 default: "",
-                help: "The output cell size in degrees; 300 cells across the extent when empty.",
+                help: "The output cell size in degrees; up to 250 cells across the extent when empty.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
@@ -906,16 +906,21 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     }
     // Deduplicate sample points by coordinate to prevent singular kriging matrix
     raw_pts.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then_with(|| a.0.y.total_cmp(&b.0.y)));
-    let mut pts: Vec<(Coord, f64)> = Vec::with_capacity(raw_pts.len());
+    let mut accum: Vec<(Coord, f64, usize)> = Vec::with_capacity(raw_pts.len());
     for (c, v) in raw_pts {
-        if let Some((last_c, last_v)) = pts.last_mut()
+        if let Some((last_c, sum, count)) = accum.last_mut()
             && (c.x - last_c.x).abs() < 1e-9
             && (c.y - last_c.y).abs() < 1e-9
         {
-            *last_v = (*last_v + v) * 0.5;
+            *sum += v;
+            *count += 1;
             continue;
         }
-        pts.push((c, v));
+        accum.push((c, v, 1));
+    }
+    let pts: Vec<(Coord, f64)> = accum.into_iter().map(|(c, sum, count)| (c, sum / count as f64)).collect();
+    if pts.len() < 2 {
+        return Err("kriging needs at least two points with values".into());
     }
 
     let extent = match s(p, "extent").trim() {
@@ -984,7 +989,7 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
 }
 
 fn kriging_auto_cell(extent: &Extent, n: usize, neighbours: usize) -> f64 {
-    let k = if neighbours == 0 { 12.min(n) } else { neighbours.clamp(2, n.min(32)) };
+    let k = if neighbours == 0 { 12.min(n) } else { neighbours.clamp(2, n.clamp(2, 32)) };
     let work_per_cell = n.saturating_add((k * k * k) / 3);
     let mut cell = (extent.width().max(extent.height()) / 250.0).max(1e-5);
     let cells = |c: f64| ((extent.width() / c).ceil().max(1.0) * (extent.height() / c).ceil().max(1.0)) as usize;
@@ -1626,6 +1631,40 @@ mod tests {
         let m_proj = Map(HashMap::from([("proj_pts".to_string(), proj_pts)]));
         let err = crate::run("kriging", &m_proj, &serde_json::json!({"input": "proj_pts", "field": "v"})).unwrap_err();
         assert!(err.contains("degrees"));
+
+        // Datasets with fewer than two points are cleanly rejected
+        let mut single_pt = Dataset::new("single", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        single_pt.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(1.0)]);
+        let m_single = Map(HashMap::from([("single".to_string(), single_pt)]));
+        assert_eq!(
+            crate::run("kriging", &m_single, &serde_json::json!({"input": "single", "field": "v"})).unwrap_err(),
+            "kriging needs at least two points with values"
+        );
+
+        // Deduplication averages coincident points with true arithmetic mean
+        let mut dup_pts = Dataset::new("dup", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        dup_pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(10.0)]);
+        dup_pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(20.0)]);
+        dup_pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(30.0)]);
+        dup_pts.push(Some(Geometry::Point(Coord::new(1.5, 1.5))), vec![Value::Float(20.0)]);
+        let m_dup = Map(HashMap::from([("dup".to_string(), dup_pts)]));
+        let r_dup = crate::run(
+            "kriging",
+            &m_dup,
+            &serde_json::json!({
+                "input": "dup",
+                "field": "v",
+                "extent": "0,0,2,2",
+                "pixelSize": 0.5
+            }),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let Output::Layers(dup_layers) = r_dup.output else { panic!("expected layers") };
+        let pred = match &dup_layers[0] {
+            OutputLayer::Raster { file_name, bytes, .. } => rustgis_data::raster::read_bytes(file_name, bytes).unwrap(),
+            _ => panic!("expected raster"),
+        };
+        assert!(pred.bands[0].data.iter().all(|v| (19.99..=20.01).contains(v)), "{:?}", pred.bands[0].data);
     }
 
     #[test]
