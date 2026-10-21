@@ -766,16 +766,35 @@ fn result_view(ui: &mut Ui, r: &Value, t: &Tokens) {
     ui.label(egui::RichText::new(short).monospace().small());
 }
 
-/// The Script pane: commands typed one per line, run in order.
-pub fn script(app: &mut RustGisApp, ui: &mut Ui, _t: &Tokens) {
+/// The lines the Script pane's box starts with; the fewest it keeps when the pane is short.
+const SCRIPT_MIN_ROWS: usize = 10;
+/// The most result lines kept in view below the Script pane's buttons (more scroll with the pane).
+const SCRIPT_OUT_ROWS: usize = 6;
+
+/// The Script pane: commands typed one per line, run in order, coloured as they're typed (#653).
+pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("One command per line: id {json}. Lines starting with # are comments.")).small().weak());
-    ui.add(
-        egui::TextEdit::multiline(&mut app.workflow.script)
-            .code_editor()
-            .desired_rows(10)
-            .desired_width(f32::INFINITY)
-            .hint_text("map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"),
-    );
+    let unknown = crate::scriptcolor::unknown_ids(&app.session, &app.workflow.script);
+    let palette = crate::scriptcolor::Palette::of(t);
+    let mut layouter =
+        |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| crate::scriptcolor::layout(ui, buf.as_str(), &unknown, palette, wrap);
+    // The box grows with the script down to the bottom of the pane, less the room its buttons (and
+    // a run's first result lines) take; a longer script scrolls inside it, so Run stays in view.
+    let gap = ui.spacing().item_spacing.y;
+    let results = app.workflow.script_out.len().min(SCRIPT_OUT_ROWS) as f32;
+    let below = ui.spacing().interact_size.y + gap * 3.0 + (ui.text_style_height(&egui::TextStyle::Small) + gap) * results;
+    let min = ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32;
+    let room = (ui.clip_rect().bottom() - ui.cursor().top() - below).max(min);
+    egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+        ui.add(
+            egui::TextEdit::multiline(&mut app.workflow.script)
+                .code_editor()
+                .layouter(&mut layouter)
+                .desired_rows(SCRIPT_MIN_ROWS)
+                .desired_width(f32::INFINITY)
+                .hint_text("map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}"),
+        );
+    });
     ui.horizontal(|ui| {
         if ui.button(tl!("Run")).clicked() {
             let script = app.workflow.script.clone();

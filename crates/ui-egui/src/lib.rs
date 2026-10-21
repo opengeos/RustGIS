@@ -51,6 +51,7 @@ mod relayshot;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod scriptcolor;
 mod searchbox;
 mod serviceui;
 mod showme;
