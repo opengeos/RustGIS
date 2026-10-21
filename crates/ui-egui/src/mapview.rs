@@ -1210,6 +1210,23 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     } else {
         Align2::CENTER_CENTER
     };
+    // A label turned with the map (along a street): turned about its centre, at `at`.
+    if let Some(angle) = l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3) {
+        let (pos, _) = place_galley(Align2::CENTER_CENTER, at, &galley);
+        let shape = |offset: egui::Vec2, color: Color32| {
+            egui::epaint::TextShape::new(pos + offset, galley.clone(), color)
+                .with_override_text_color(color)
+                .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
+        };
+        if let Some(h) = l.halo {
+            let hc = c32(h);
+            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
+                p.add(shape(vec2(dx, dy), hc));
+            }
+        }
+        p.add(shape(egui::Vec2::ZERO, c32(l.color)));
+        return;
+    }
     let (pos, r) = place_galley(anchor, at, &galley);
     // A selected text graphic: framed as laid out, under the text.
     if l.framed {

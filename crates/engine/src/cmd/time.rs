@@ -32,6 +32,7 @@ pub fn commands() -> Vec<C> {
             let id = s.layer_id(p)?;
             let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
             let was = l.time.take().map(|t| t.field);
+            super::zarr::follow_time(s);
             Ok(json!({"unbound": was}))
         })
         .when(need_feature_layer)
@@ -61,6 +62,7 @@ pub fn commands() -> Vec<C> {
             };
             sl.go_to(t);
             m.apply_time();
+            super::zarr::follow_time(s);
             Ok(info(s))
         })
         .view()
@@ -72,6 +74,7 @@ pub fn commands() -> Vec<C> {
             let m = s.map_mut();
             m.time.as_mut().ok_or("the time slider is off")?.step(by, wrap);
             m.apply_time();
+            super::zarr::follow_time(s);
             Ok(info(s))
         })
         .view()
@@ -167,6 +170,7 @@ pub(crate) fn set(s: &mut Session, p: &Value) -> CmdResult {
     if b(p, "off") == Some(true) {
         s.map_mut().time = None;
         s.map_mut().apply_time();
+        super::zarr::follow_time(s);
         return Ok(info(s));
     }
     let (start, end, at) = (date(p, "start")?, date(p, "end")?, date(p, "date")?);
@@ -245,6 +249,7 @@ pub(crate) fn set(s: &mut Session, p: &Value) -> CmdResult {
     t.normalize();
     t.go_to(target);
     m.apply_time();
+    super::zarr::follow_time(s);
     Ok(info(s))
 }
 
@@ -277,6 +282,7 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frames(s, &steps, w, h, gif.then_some(speed))));
     s.map_mut().time = Some(saved);
     s.map_mut().apply_time();
+    super::zarr::follow_time(s);
     let bytes = made.map_err(|_| "exporting the time steps failed unexpectedly".to_string())??;
     rustgis_data::io::write_atomic(std::path::Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
     Ok(json!({"path": path, "frames": steps.len(), "bytes": bytes.len()}))
@@ -310,6 +316,8 @@ fn frames(s: &mut Session, steps: &[f64], w: f64, h: f64, gif: Option<u32>) -> R
                 sl.current = *t;
             }
             s.map_mut().apply_time();
+            // Zarr layers that follow the slider read this step's slice.
+            super::zarr::follow_time(s);
             // Dated tile layers have this step's address now: natively, map_png (through
             // rustgis_render::render_complete) fetches the tiles it lacks and waits for them
             // before it draws, so each frame shows its own date's imagery.

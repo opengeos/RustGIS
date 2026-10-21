@@ -22,10 +22,68 @@ const MOSAIC: f64 = 2048.0;
 /// What drawing the tile layers found.
 #[derive(Default)]
 pub(crate) struct TileOutput {
-    pub labels: Vec<(PlacedLabel, f32)>,
+    pub labels: Vec<(PlacedLabel, f64)>,
     pub attribution: Vec<String>,
     pub pending: bool,
     pub errors: Vec<String>,
+}
+
+/// A tile style's label as the map places it (in its logical points), with its priority:
+/// sized, wrapped and anchored as MapLibre lays it out. `None` when it has nothing to show.
+pub(crate) fn tile_label(l: rustgis_tiles::Label) -> Option<(PlacedLabel, f64)> {
+    // Styles often label in two scripts ("Syria\nسوريا"): only the lines the font can
+    // draw are kept, so a name never shows as boxes, and a label left with neither text
+    // nor an icon is left out.
+    let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s, l.bold)).collect();
+    if lines.is_empty() && l.icon.is_none() {
+        return None;
+    }
+    // text-size is in CSS pixels, the map's logical points; a label's size is in type
+    // points (its font is 1.33 × that many pixels tall).
+    let size = l.size / 1.33;
+    // Letter spacing in points, as a text graphic's.
+    let spacing = l.letter_spacing * size;
+    // Wrapped at spaces to text-max-width (in ems) as MapLibre wraps a point's label,
+    // its own line breaks kept.
+    let max_w = l.max_width * l.size;
+    let text = if max_w > 0.0 {
+        lines.iter().flat_map(|line| crate::text::wrap(line, size, l.bold, spacing, max_w)).collect::<Vec<_>>().join("\n")
+    } else {
+        lines.join(" ")
+    };
+    // The text sits against the point as the style anchors and offsets it (beside its
+    // icon, for instance); without either it is centred on the point. Across, it is
+    // placed by the edge it is anchored at, so each renderer lines it up with its own
+    // measure of the width.
+    let (th, em) = (crate::text::block_height(&text, size), l.size);
+    let x = l.x + l.offset[0] * em;
+    let y = l.y + l.anchor[1] * th + l.offset[1] * em;
+    let icon = l.icon.map(|i| PlacedIcon { image: i.image, x: l.x + i.dx, y: l.y + i.dy, w: i.width, h: i.height, angle: i.angle });
+    let line_align = match l.justify {
+        j if j < -0.25 => TextAlign::Left,
+        j if j > 0.25 => TextAlign::Right,
+        _ => TextAlign::Center,
+    };
+    Some((
+        PlacedLabel {
+            text,
+            x,
+            y,
+            size,
+            color: Rgba(l.color),
+            halo: l.halo.map(Rgba),
+            bold: l.bold,
+            icon,
+            align: -l.anchor[0],
+            framed: false,
+            italic: l.italic,
+            spacing,
+            line_align,
+            angle: l.angle,
+            collide: l.collide,
+        },
+        l.priority,
+    ))
 }
 
 /// How the tiles crate sees a tile layer.
@@ -214,42 +272,7 @@ pub(crate) fn draw(pm: &mut Pixmap, map: &Map, view: &View, place: Place, labels
         if let Some(e) = d.error {
             out.errors.push(format!("{name}: {e}"));
         }
-        for l in d.labels {
-            // Styles often label in two scripts ("Syria\nسوريا"): only the lines the font can
-            // draw are kept, so a name never shows as boxes, and a label left with neither text
-            // nor an icon is left out.
-            let lines: Vec<&str> = l.text.lines().map(str::trim).filter(|s| !s.is_empty() && crate::text::covers(s, l.bold)).collect();
-            if lines.is_empty() && l.icon.is_none() {
-                continue;
-            }
-            let text = lines.join(" ");
-            // The text sits against the point as the style anchors and offsets it (beside its
-            // icon, for instance); without either it is centred on the point. Across, it is
-            // placed by the edge it is anchored at, so each renderer lines it up with its own
-            // measure of the width.
-            let (th, em) = (l.size * 1.25, l.size * 1.33);
-            let x = l.x + l.offset[0] * em;
-            let y = l.y + l.anchor[1] * th + l.offset[1] * em;
-            let icon = l.icon.map(|i| PlacedIcon { image: i.image, x: l.x + i.dx, y: l.y + i.dy, w: i.width, h: i.height });
-            out.labels.push((
-                PlacedLabel {
-                    text,
-                    x,
-                    y,
-                    size: l.size,
-                    color: Rgba(l.color),
-                    halo: l.halo.map(Rgba),
-                    bold: l.bold,
-                    icon,
-                    align: -l.anchor[0],
-                    framed: false,
-                    italic: false,
-                    spacing: 0.0,
-                    line_align: TextAlign::Left,
-                },
-                l.priority,
-            ));
-        }
+        out.labels.extend(d.labels.into_iter().filter_map(tile_label));
     };
     if let Place::Flat(Flat::Mercator, _) = place {
         let res = view.camera.res;
