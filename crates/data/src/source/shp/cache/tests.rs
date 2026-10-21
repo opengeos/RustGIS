@@ -7,7 +7,14 @@ struct Folder(PathBuf);
 impl Folder {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!("rustgis-cache-test-{}", unique()));
-        std::fs::create_dir_all(&path).unwrap();
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(&path).unwrap();
         Self(path)
     }
 }
@@ -81,8 +88,20 @@ fn cache_shared_readers_and_oversized_indexes_are_protected_until_release() {
     let path = oversized.path().to_path_buf();
     assert_eq!(maintain(&root.0, 20).unwrap().pinned_bytes, 40);
     assert!(path.exists());
+    // A concurrent sweep can defer release cleanup on Unix as well as Windows.
+    let sweep = directory_lock(&root.0).unwrap();
     drop(oversized);
-    assert!(!path.exists(), "oversized indexes must remain session-only");
+    assert!(path.exists(), "release must not mutate a directory owned by a sweep");
+    drop(sweep);
+    wait_removed(&path);
+}
+
+fn wait_removed(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while path.exists() {
+        assert!(Instant::now() < deadline, "release cleanup was never retried: {}", path.display());
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -95,11 +114,7 @@ fn cache_release_racing_a_sweep_is_retried_without_another_checkout() {
     drop(lease);
     assert!(path.exists(), "a busy sweep owns directory mutations");
     drop(sweep);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while path.exists() {
-        assert!(Instant::now() < deadline, "release cleanup was never retried");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_removed(&path);
 }
 
 #[test]
@@ -219,12 +234,23 @@ fn cache_killed_process_is_reclaimed_at_checkout_but_live_instance_is_preserved(
 fn cache_child_fixture() {
     let Some(root) = std::env::var_os("RUSTGIS_CACHE_TEST_ROOT").map(PathBuf::from) else { return };
     let mode = std::env::var("RUSTGIS_CACHE_TEST_MODE").unwrap();
+    if mode == "reject-root" {
+        for result in [
+            directory_lock(&root).map(|_| ()),
+            pin_index(&root, &key(1), 4096).map(|_| ()),
+            reserve_index(&root, &key(1), 4096).map(|_| ()),
+            maintain(&root, 4096).map(|_| ()),
+        ] {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        }
+        return;
+    }
     if mode == "sweep" {
         checkout().unwrap();
         return;
     }
     if mode == "scan" {
-        std::fs::write(root.join("rustgis-shp-index"), b"keep fallback").unwrap();
+        std::fs::write(index_fallback_dir(), b"keep fallback").unwrap();
         let mut ds = crate::Dataset::new("scan", crate::GeometryType::Point, vec![]);
         ds.push(Some(crate::Geometry::Point(crate::Coord::new(1.0, 2.0))), vec![]);
         let path = root.join("source.shp");
@@ -238,7 +264,7 @@ fn cache_child_fixture() {
             assert_eq!(batch.features.len(), limit.min(1));
         }
         assert_eq!(std::fs::read(root.join("blocked")).unwrap(), b"keep");
-        assert_eq!(std::fs::read(root.join("rustgis-shp-index")).unwrap(), b"keep fallback");
+        assert_eq!(std::fs::read(index_fallback_dir()).unwrap(), b"keep fallback");
         return;
     }
     if mode == "fallback" {
@@ -322,8 +348,8 @@ fn cache_unwritable_primary_reuses_and_cleans_the_fallback_directory() {
 }
 
 fn temporary_index(root: &Path) -> (Lease, File) {
-    let _directory = directory_lock(root).unwrap();
-    create_locked(root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, 4096).unwrap()
+    let directory = directory_lock(root).unwrap();
+    create_locked(directory.root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, 4096).unwrap()
 }
 fn checkout() -> io::Result<()> {
     for root in [index_dir(), index_fallback_dir()] {
@@ -353,4 +379,138 @@ fn cache_reservation_preserves_unverified_payload_even_at_the_requested_key() {
     drop(lease);
     maintain(&root.0, 0).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"unrelated");
+}
+
+/// A predictable per-UID name still needs ownership checks before any blocking lock.
+#[cfg(unix)]
+#[test]
+fn cache_unix_unsafe_root_is_rejected_before_an_attacker_lock() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = Folder::new();
+    let lock_path = root.0.join(".rustgis-cache-v1.lock");
+    std::fs::write(&lock_path, b"sentinel").unwrap();
+    let lock = open_lock(&lock_path).unwrap();
+    lock.lock().unwrap();
+    std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let mut child = spawn(&root.0, "reject-root");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert!(status.success(), "unsafe root was accepted");
+            break;
+        }
+        assert!(Instant::now() < deadline, "unsafe root reached the attacker's blocking lock");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read(lock_path).unwrap(), b"sentinel");
+    assert_eq!(root.0.metadata().unwrap().mode() & 0o777, 0o777, "do not repair untrusted roots");
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_unix_roots_are_private_and_legacy_owned_roots_still_work() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let folder = Folder::new();
+    let root = folder.0.join("new/nested");
+    drop(directory_lock(&root).unwrap());
+    for dir in [&root, &folder.0.join("new")] {
+        let metadata = dir.metadata().unwrap();
+        assert_eq!(metadata.mode() & 0o777, 0o700);
+        assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+    }
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let lease = ready(&root, 1, 10, 4096);
+    let reopened = pin_index(&root, &key(1), 4096).unwrap().unwrap();
+    assert_eq!(lease.path(), reopened.path());
+    assert_eq!(index_fallback_dir().file_name().unwrap(), format!("rustgis-shp-index-{}", rustix::process::geteuid().as_raw()).as_str());
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_unix_release_does_not_mutate_a_root_that_became_unsafe() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = Folder::new();
+    let lease = ready(&root.0, 1, 40, 20);
+    let path = lease.path().to_path_buf();
+    std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+    drop(lease);
+    assert!(path.exists(), "Drop must validate the same boundary as checkout");
+    std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+    maintain(&root.0, 20).unwrap();
+    assert!(!path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_unix_symlink_roots_and_lock_files_are_rejected() {
+    let folder = Folder::new();
+    let other = Folder::new();
+    let root = folder.0.join("linked");
+    std::os::unix::fs::symlink(&other.0, &root).unwrap();
+    for alias in [root.clone(), root.join("."), PathBuf::from(format!("{}/", root.display()))] {
+        assert!(directory_lock(&alias).is_err(), "symlink root accepted: {}", alias.display());
+    }
+    assert!(!other.0.join(".rustgis-cache-v1.lock").exists());
+    let sentinel = other.0.join("sentinel");
+    std::fs::write(&sentinel, b"unchanged").unwrap();
+    std::os::unix::fs::symlink(&sentinel, folder.0.join(".rustgis-cache-v1.lock")).unwrap();
+    assert!(directory_lock(&folder.0).is_err());
+    assert_eq!(std::fs::read(sentinel).unwrap(), b"unchanged");
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_unix_writable_ancestors_cannot_redirect_private_roots() {
+    use std::os::unix::fs::PermissionsExt;
+    let folder = Folder::new();
+    let root = folder.0.join("private");
+    std::fs::set_permissions(&folder.0, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(directory_lock(&root).is_err());
+    assert!(!root.join(".rustgis-cache-v1.lock").exists());
+    std::fs::set_permissions(&folder.0, std::fs::Permissions::from_mode(0o1777)).unwrap();
+    drop(directory_lock(&root).unwrap());
+    std::fs::set_permissions(&folder.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+    drop(directory_lock(&root).unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_unix_foreign_owned_roots_are_rejected() {
+    let uid = rustix::process::geteuid();
+    if uid.as_raw() != 0 {
+        assert_eq!(validate_directory(Path::new("/")).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    } else {
+        let root = Folder::new();
+        rustix::fs::chown(&root.0, Some(rustix::process::Uid::from_raw(65534)), None).unwrap();
+        assert_eq!(directory_lock(&root.0).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(!root.0.join(".rustgis-cache-v1.lock").exists());
+    }
+}
+
+/// A hidden, mutable intermediate link must not redirect a pinned SQLite pathname.
+#[cfg(unix)]
+#[test]
+fn cache_unix_ancestor_symlink_retargeting_cannot_redirect_a_lease() {
+    let folder = Folder::new();
+    let original = Folder::new();
+    let replacement = Folder::new();
+    let bridge = folder.0.join("bridge");
+    let alias = folder.0.join("alias");
+    std::os::unix::fs::symlink(&original.0, &bridge).unwrap();
+    std::os::unix::fs::symlink(&bridge, &alias).unwrap();
+    let root = alias.join("index");
+    let reader = ready(&root, 1, 10, 4096);
+    let pinned = pin_index(&root, &key(1), 4096).unwrap().unwrap();
+    let replacement_root = replacement.0.join("index");
+    std::fs::create_dir(&replacement_root).unwrap();
+    let forged = replacement_root.join(reader.path().file_name().unwrap());
+    std::fs::write(forged, b"forged cache").unwrap();
+    std::fs::remove_file(&bridge).unwrap();
+    std::os::unix::fs::symlink(&replacement.0, &bridge).unwrap();
+    assert_eq!(std::fs::read(reader.path()).unwrap(), vec![0; 10]);
+    assert_eq!(std::fs::read(pinned.path()).unwrap(), vec![0; 10]);
+    assert_eq!(reader.path().parent().unwrap(), original.0.join("index").canonicalize().unwrap());
+    drop(pinned);
+    drop(reader);
+    maintain(&original.0.join("index"), 0).unwrap();
 }

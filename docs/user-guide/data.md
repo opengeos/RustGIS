@@ -368,7 +368,11 @@ evicted in least-recently-used order. Open readers and builders hold operating-s
 so another instance cannot evict their indexes; active files can temporarily exceed the
 budget. An index larger than the budget is session-only. Cache checkout and release reclaim
 abandoned builds and temporary indexes. A corrupt cache is rebuilt, and an unavailable cache
-directory falls back to the system temporary directory. If neither location works, the
+directory falls back to the system temporary directory (a per-user directory on Unix).
+New Unix cache directories are created with mode `0700`. Existing roots must belong to
+the effective user, forbid group/other writes, and have trusted parents; symlink roots
+are rejected. These checks also apply to configured locations. Unsafe locations fall
+back rather than changing their permissions. If neither location works, the
 Shapefile remains readable by scanning record headers without retaining a full in-memory
 index. Deleting idle cache files does not modify the dataset.
 

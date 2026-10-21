@@ -20,7 +20,7 @@ pub fn index_dir() -> PathBuf {
     if let Some(root) = TEST_INDEX_DIR.with(|root| root.borrow().clone()) {
         return root;
     }
-    crate::source::external::cache_dir("RUSTGIS_SHP_CACHE", "shp-index").unwrap_or_else(|| std::env::temp_dir().join("rustgis-shp-index"))
+    crate::source::external::cache_dir("RUSTGIS_SHP_CACHE", "shp-index").unwrap_or_else(index_fallback_dir)
 }
 
 // Test-local routing avoids process-wide environment mutation and interference with
@@ -40,27 +40,103 @@ pub(crate) fn with_index_dir<T>(root: PathBuf, run: impl FnOnce() -> T) -> T {
     let _restore = Restore(TEST_INDEX_DIR.with(|current| current.replace(Some(root))));
     run()
 }
+/// Separate Unix users even when the system temporary directory is shared.
 pub fn index_fallback_dir() -> PathBuf {
-    std::env::temp_dir().join("rustgis-shp-index")
+    #[cfg(unix)]
+    let name = format!("rustgis-shp-index-{}", rustix::process::geteuid().as_raw());
+    #[cfg(not(unix))]
+    let name = "rustgis-shp-index";
+    std::env::temp_dir().join(name)
 }
-fn open_lock(path: &Path) -> io::Result<File> {
+
+/// Never follow a lease symlink or open a special file, including after a rename race.
+fn lease_file(path: &Path, create: bool) -> io::Result<File> {
     if std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
         return Err(io::Error::other("cache lease is not a regular file"));
     }
     let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
+    options.read(true).write(true).create(create).truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32);
     }
-    options.open(path)
-}
-fn directory_lock(root: &Path) -> io::Result<File> {
-    std::fs::create_dir_all(root)?;
-    let file = open_lock(&root.join(".rustgis-cache-v1.lock"))?;
-    file.lock()?;
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::other("cache lease is not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "cache lease is not private to this user"));
+        }
+    }
     Ok(file)
+}
+fn open_lock(path: &Path) -> io::Result<File> {
+    lease_file(path, true)
+}
+
+/// Resolve once, validate the actual storage, and never use an unstable alias again.
+fn validate_directory(root: &Path) -> io::Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let uid = rustix::process::geteuid().as_raw();
+        // Strip trailing slash/dot spellings before lstat: those can otherwise follow
+        // a final symlink even though symlink_metadata normally does not follow it.
+        let absolute: PathBuf = std::path::absolute(root)?.components().collect();
+        let metadata = std::fs::symlink_metadata(&absolute)?;
+        if !metadata.file_type().is_dir() || metadata.uid() != uid || metadata.mode() & 0o022 != 0 {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "cache root is not private to this user"));
+        }
+        let resolved = absolute.canonicalize()?;
+        for (depth, parent) in resolved.ancestors().enumerate() {
+            let metadata = std::fs::symlink_metadata(parent)?;
+            let untrusted_owner = metadata.uid() != uid && (depth == 0 || metadata.uid() != 0);
+            let writable = metadata.mode() & 0o022 != 0;
+            if !metadata.file_type().is_dir() || untrusted_owner || (writable && (depth == 0 || metadata.mode() & 0o1000 == 0)) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "cache path is not trusted"));
+            }
+        }
+        Ok(resolved)
+    }
+    #[cfg(not(unix))]
+    {
+        // Preserve the platform's existing directory/junction behavior outside Unix.
+        if !std::fs::metadata(root)?.is_dir() {
+            return Err(io::Error::other("cache root is not a directory"));
+        }
+        Ok(root.to_path_buf())
+    }
+}
+
+#[derive(Debug)]
+struct Directory {
+    root: PathBuf,
+    file: File,
+}
+
+/// Shared validation for blocking checkout and nonblocking release paths.
+fn directory_file(root: &Path) -> io::Result<Directory> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(root)?;
+    let root = validate_directory(root)?;
+    let file = open_lock(&root.join(".rustgis-cache-v1.lock"))?;
+    Ok(Directory { root, file })
+}
+fn directory_lock(root: &Path) -> io::Result<Directory> {
+    let directory = directory_file(root)?;
+    directory.file.lock()?;
+    Ok(directory)
 }
 fn lease_path(path: &Path) -> PathBuf {
     path.with_extension("lease")
@@ -88,7 +164,19 @@ fn unique() -> String {
     )
 }
 fn regular(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+    std::fs::symlink_metadata(path).is_ok_and(|m| {
+        if !m.file_type().is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if m.uid() != rustix::process::geteuid().as_raw() || m.mode() & 0o022 != 0 {
+                return false;
+            }
+        }
+        true
+    })
 }
 fn owned(name: &str) -> bool {
     if let Some(key) = name.strip_prefix("rg-index-v1-").and_then(|s| s.strip_suffix(".sqlite")) {
@@ -106,7 +194,7 @@ fn existing_lock(path: &Path) -> io::Result<File> {
     if !regular(path) {
         return Err(io::Error::other("missing regular cache lease"));
     }
-    OpenOptions::new().read(true).write(true).open(path)
+    lease_file(path, false)
 }
 
 /// Kept after the SQLite connection. The sidecar stays locked for the
@@ -159,15 +247,15 @@ impl Drop for Lease {
             let _ = file.set_modified(SystemTime::now());
         }
         self.lock.take();
-        let Ok(directory) = open_lock(&root.join(".rustgis-cache-v1.lock")) else { return };
-        if directory.try_lock().is_err() {
+        let Ok(directory) = directory_file(root) else { return };
+        if directory.file.try_lock().is_err() {
             retry_maintenance(root, self.budget);
             return;
         }
         if self.temporary || !self.ready {
             let _ = remove_unpinned(&self.path);
         }
-        let _ = prune_locked(root, self.budget);
+        let _ = prune_locked(&directory.root, self.budget);
     }
 }
 
@@ -248,8 +336,8 @@ fn create_locked(path: PathBuf, temporary: bool, budget: u64) -> io::Result<(Lea
 
 /// Acquire a ready index before opening SQLite. Only names from this protocol are managed.
 pub fn pin_index(root: &Path, key: &str, budget: u64) -> io::Result<Option<Lease>> {
-    let path = index_path(root, key)?;
-    let _directory = directory_lock(root)?;
+    let directory = directory_lock(root)?;
+    let path = index_path(&directory.root, key)?;
     if !regular(&path) {
         return Ok(None);
     }
@@ -267,8 +355,8 @@ fn index_path(root: &Path, key: &str) -> io::Result<PathBuf> {
     Ok(root.join(format!("rg-index-v1-{key}.sqlite")))
 }
 pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
-    let path = index_path(root, key)?;
-    let _directory = directory_lock(root)?;
+    let directory = directory_lock(root)?;
+    let path = index_path(&directory.root, key)?;
     // A valid generation pinned by another reader is never replaced. Concurrent
     // builders can use a private temporary index without losing functionality.
     let mut lock = open_lock(&lease_path(&path))?;
@@ -281,7 +369,7 @@ pub fn reserve_index(root: &Path, key: &str, budget: u64) -> io::Result<Lease> {
         return Ok(lease);
     }
     drop(lock);
-    let (lease, file) = create_locked(root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
+    let (lease, file) = create_locked(directory.root.join(format!("rg-index-work-v1-{}.sqlite", unique())), true, budget)?;
     drop(file);
     Ok(lease)
 }
@@ -293,8 +381,8 @@ pub struct PruneStats {
     pub pinned_bytes: u64,
 }
 pub fn maintain(root: &Path, budget: u64) -> io::Result<PruneStats> {
-    let _directory = directory_lock(root)?;
-    prune_locked(root, budget)
+    let directory = directory_lock(root)?;
+    prune_locked(&directory.root, budget)
 }
 fn prune_locked(root: &Path, budget: u64) -> io::Result<PruneStats> {
     let mut stats = PruneStats::default();
