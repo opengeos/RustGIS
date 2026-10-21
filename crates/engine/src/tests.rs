@@ -10490,8 +10490,6 @@ fn project_info_describes_the_whole_project() {
     assert!(layers[0].get("fields").is_none(), "{some}");
 }
 
-/// A script can't edit a layer read in place from its file, as a command run on its own can't:
-/// a later line loading the layer would otherwise lose the edit without a word.
 /// A script refuses scripts, notebooks and `ui.*` commands, by the one rule the Script pane marks
 /// its lines with (#653).
 #[test]
@@ -10505,6 +10503,8 @@ fn scripts_refuse_scripts_notebooks_and_ui_commands() {
     assert!(!refused_in_script("map.zoomFull") && !refused_in_script("notebook.new"));
 }
 
+/// A script can't edit a layer read in place from its file, as a command run on its own can't:
+/// a later line loading the layer would otherwise lose the edit without a word.
 #[test]
 fn scripts_refuse_edits_to_streamed_layers() {
     let path = grid_fgb("script-streamed", 20);
