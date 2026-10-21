@@ -37,9 +37,7 @@ pub fn offer(script: &str, at: usize, ids: &[String]) -> Option<Offer> {
 /// cursor at the end of a line's first word (comments aside), at least `MIN_TYPED` characters.
 /// It reads the cursor's line only, so working an offer out costs no more for a long script.
 pub fn word_at(script: &str, at: usize) -> Option<(usize, String)> {
-    // The byte the cursor is at (None past the end).
-    let byte = if at == 0 { Some(0) } else { script.char_indices().nth(at - 1).map(|(b, c)| b + c.len_utf8()) }?;
-    let (before, after) = script.split_at(byte);
+    let (before, after) = script.split_at(byte_at(script, at)?);
     // The cursor ends the word: no word character right after it.
     if after.chars().next().is_some_and(|c| !c.is_whitespace()) {
         return None;
@@ -50,6 +48,45 @@ pub fn word_at(script: &str, at: usize) -> Option<(usize, String)> {
         return None;
     }
     Some((at - word.chars().count(), word.to_string()))
+}
+
+/// The byte char `at` of `script` starts at (its end for `at` at the end); None past it.
+fn byte_at(script: &str, at: usize) -> Option<usize> {
+    if at == 0 { Some(0) } else { script.char_indices().nth(at - 1).map(|(b, c)| b + c.len_utf8()) }
+}
+
+/// The command whose parameters the cursor at char `at` is in: the cursor inside its line's
+/// `{…}` (quoted text aside: a `}` in a string doesn't close it). Its line's start (a char index)
+/// and id; None outside the braces, or on a line with no id.
+pub fn hint_at(script: &str, at: usize) -> Option<(usize, String)> {
+    let before = script.get(..byte_at(script, at)?)?;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let line = before.get(line_start..)?;
+    let id = crate::scriptcolor::line_id(line)?;
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for c in line.get(line.find('{')?..)?.chars() {
+        let was_escaped = escaped;
+        escaped = c == '\\' && !was_escaped;
+        match c {
+            '"' if !was_escaped => quoted = !quoted,
+            '{' if !quoted => depth += 1,
+            '}' if !quoted => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    (depth > 0).then(|| (before.get(..line_start).map_or(0, |b| b.chars().count()), id.to_string()))
+}
+
+/// Where a popup of `size` (last frame's) goes by `cursor`: under it if it fits, else above if it
+/// fits, else on the side with more room; kept on screen sideways. Its corner, and the height its
+/// content may take (it scrolls beyond: a short window, a long help).
+fn place(cursor: egui::Rect, size: egui::Vec2, screen: egui::Rect, min: f32) -> (egui::Pos2, f32) {
+    let (below, above) = (screen.bottom() - cursor.bottom(), cursor.top() - screen.top());
+    let under = size.y <= below || (size.y > above && below >= above);
+    let room = (if under { below } else { above } - FRAME).max(min);
+    let y = if under { cursor.bottom() } else { cursor.top() - size.y.min(above) };
+    let x = cursor.left().min(screen.right() - size.x).max(screen.left());
+    (egui::pos2(x, y), room)
 }
 
 /// The ids in `ids` (the commands a script can run, `script_ids`) that complete `word`, typed
@@ -188,6 +225,12 @@ struct List {
     /// The highlighted item the list last scrolled to: it scrolls to a new one only (so a wheel
     /// can still move it).
     scrolled_to: Option<usize>,
+    /// The help shown by the cursor while it's in a line's `{…}` (its line start and id), what
+    /// Escape closed (not shown again until the cursor leaves those braces), and where it was
+    /// drawn last frame.
+    hint: Option<(usize, String)>,
+    hint_dismissed: Option<(usize, String)>,
+    hint_rect: Option<egui::Rect>,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -199,10 +242,11 @@ fn store(ui: &Ui, box_id: Id, list: List) {
 }
 
 /// The keys the box keeps while it has focus: code_editor's (the arrows, Tab to indent) and, with
-/// the list open, Escape, which egui would otherwise take as "drop the focus" before `keys` can
-/// read it as "close the list".
+/// the list or the help by the cursor open, Escape, which egui would otherwise take as "drop the
+/// focus" before `keys` can read it as "close it".
 pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
-    egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: load(ui, box_id).open.is_some() }
+    let list = load(ui, box_id);
+    egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: list.open.is_some() || list.hint.is_some() }
 }
 
 /// Before the box sees the keys: with the list open and the box focused, ↑/↓ move the highlight,
@@ -212,6 +256,15 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
 /// word could be elsewhere now.
 pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
     let mut list = load(ui, box_id);
+    // The help by the cursor (no list open): Escape closes it.
+    if list.open.is_none() && list.hint.is_some() && ui.memory(|m| m.has_focus(box_id)) {
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            list.hint_dismissed = list.hint.take();
+            list.hint_rect = None;
+            store(ui, box_id, list);
+        }
+        return None;
+    }
     let (offer, selected) = list.open.clone()?;
     if !ui.memory(|m| m.has_focus(box_id)) {
         return None;
@@ -330,13 +383,7 @@ pub fn show(
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y + 4.0;
     let size = list.rect.map_or(egui::vec2(MIN_WIDTH + 16.0, row * offer.items.len() as f32 + 12.0), |r| r.size());
     let screen = ui.ctx().content_rect();
-    // Under the cursor if it fits there, else above if it fits there, else on the side with more
-    // room; the list and help scroll within that room (a short window, a long help).
-    let (below, above) = (screen.bottom() - cursor.bottom(), cursor.top() - screen.top());
-    let under = size.y <= below || (size.y > above && below >= above);
-    let room = (if under { below } else { above } - FRAME).max(row * 3.0);
-    let y = if under { cursor.bottom() } else { cursor.top() - size.y.min(above) };
-    let x = cursor.left().min(screen.right() - size.x).max(screen.left());
+    let (corner, room) = place(cursor, size, screen, row * 3.0);
     // The help beside the list in the room the screen leaves, or under it when that's too narrow
     // to read (a narrow window), so neither is cut off at the screen's edge.
     let beside = (screen.width() - MIN_WIDTH - GAP - FRAME).min(HELP_WIDTH);
@@ -344,47 +391,46 @@ pub fn show(
         if beside >= HELP_MIN_WIDTH { (true, beside) } else { (false, (screen.width() - FRAME).clamp(0.0, HELP_WIDTH)) };
     let layout = if beside { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
     let mut clicked = None;
-    let area =
-        egui::Area::new(box_id.with("complete_list")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, y)).show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| {
-                    ui.with_layout(layout, |ui| {
-                        // The help follows the item under the pointer, else the highlighted one.
-                        let mut hovered = None;
-                        ui.vertical(|ui| {
-                            ui.set_min_width(MIN_WIDTH);
-                            for (i, item) in offer.items.iter().enumerate() {
-                                let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
-                                // Taken as the button goes down, as in a code editor: the press already
-                                // takes the focus from the box, and a click (down, then up a frame or more
-                                // later) could find the list gone by then. A click still counts
-                                // (assistive technology).
-                                if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
-                                    clicked = Some((offer.clone(), item.clone()));
-                                }
-                                if r.hovered() {
-                                    hovered = Some(i);
-                                }
-                                if i == selected && list.scrolled_to != Some(selected) {
-                                    r.scroll_to_me(None);
-                                    list.scrolled_to = Some(selected);
-                                }
+    let area = egui::Area::new(box_id.with("complete_list")).order(egui::Order::Foreground).fixed_pos(corner).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| {
+                ui.with_layout(layout, |ui| {
+                    // The help follows the item under the pointer, else the highlighted one.
+                    let mut hovered = None;
+                    ui.vertical(|ui| {
+                        ui.set_min_width(MIN_WIDTH);
+                        for (i, item) in offer.items.iter().enumerate() {
+                            let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                            // Taken as the button goes down, as in a code editor: the press already
+                            // takes the focus from the box, and a click (down, then up a frame or more
+                            // later) could find the list gone by then. A click still counts
+                            // (assistive technology).
+                            if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
+                                clicked = Some((offer.clone(), item.clone()));
                             }
-                        });
-                        // Worked out each frame the list shows, for one command: a registry lookup and a
-                        // short description split. Kept, it would need the id and the language as its
-                        // key (the help is translated), for next to nothing saved.
-                        let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
-                        if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
-                            // A gap, not a separator: in a row, egui's separator takes all the height it
-                            // can, and would stretch the list down to the bottom of the screen.
-                            ui.add_space(GAP);
-                            draw_help(ui, &help, help_width);
+                            if r.hovered() {
+                                hovered = Some(i);
+                            }
+                            if i == selected && list.scrolled_to != Some(selected) {
+                                r.scroll_to_me(None);
+                                list.scrolled_to = Some(selected);
+                            }
                         }
                     });
+                    // Worked out each frame the list shows, for one command: a registry lookup and a
+                    // short description split. Kept, it would need the id and the language as its
+                    // key (the help is translated), for next to nothing saved.
+                    let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
+                    if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
+                        // A gap, not a separator: in a row, egui's separator takes all the height it
+                        // can, and would stretch the list down to the bottom of the screen.
+                        ui.add_space(GAP);
+                        draw_help(ui, &help, help_width);
+                    }
                 });
             });
         });
+    });
     if clicked.is_some() {
         list.open = None;
         list.rect = None;
@@ -394,6 +440,44 @@ pub fn show(
     }
     store(ui, box_id, list);
     clicked
+}
+
+/// After the list: with no list open, the help of the command whose parameters the cursor is in
+/// (its line's `{…}`), floating by the cursor, so the signature and parameters stay in view while
+/// they're typed. Not with text selected, a cursor out of view, the window left, or once Escape
+/// closed it (until the cursor leaves those braces).
+pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, script: &str, session: &rustgis_engine::Session) {
+    let mut list = load(ui, box_id);
+    let focused = out.response.response.has_focus() && ui.input(|i| i.focused);
+    let at = out.cursor_range.filter(|r| focused && list.open.is_none() && r.is_empty()).map(|r| r.primary.index.0);
+    let found = at.and_then(|at| hint_at(script, at).map(|h| (at, h)));
+    // Out of the braces, what Escape closed may show again next time.
+    if found.is_none() {
+        list.hint_dismissed = None;
+    }
+    let shown = found.filter(|(_, h)| list.hint_dismissed.as_ref() != Some(h)).and_then(|(at, h)| {
+        let cursor = out.galley.pos_from_cursor(CCursor::new(at)).translate(out.galley_pos.to_vec2());
+        Some((cursor, h.clone(), help(session, &h.1)?)).filter(|(c, _, _)| visible.intersects(*c))
+    });
+    let Some((cursor, at_line, help)) = shown else {
+        list.hint = None;
+        list.hint_rect = None;
+        store(ui, box_id, list);
+        return;
+    };
+    let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y + 4.0;
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - FRAME).clamp(0.0, HELP_WIDTH);
+    let size = list.hint_rect.map_or(egui::vec2(width + FRAME, row * (help.params.len() + 3) as f32), |r| r.size());
+    let (corner, room) = place(cursor, size, screen, row * 3.0);
+    let area = egui::Area::new(box_id.with("complete_hint")).order(egui::Order::Foreground).fixed_pos(corner).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| draw_help(ui, &help, width));
+        });
+    });
+    list.hint = Some(at_line);
+    list.hint_rect = Some(area.response.rect);
+    store(ui, box_id, list);
 }
 
 /// Puts `item` in place of the offer's word in `script`, the cursor after it, as one undo step of
@@ -801,5 +885,45 @@ mod tests {
         }
         let last = h.get_by_role_and_label(egui::accesskit::Role::Button, items.last().unwrap()).rect();
         assert!(last.min.y >= 0.0 && last.max.y <= height, "the last item scrolled into view: {last:?}");
+    }
+
+    /// The cursor is in a command's parameters inside its line's `{…}`: not before the brace, not
+    /// past the closing one, and a `}` in a string doesn't close it.
+    #[test]
+    fn hint_at_finds_the_command_whose_braces_hold_the_cursor() {
+        use super::hint_at;
+        let at = |s: &str| hint_at(s, s.chars().count());
+        assert_eq!(at(r#"labels.style {"size": 1"#), Some((0, "labels.style".into())));
+        assert_eq!(at("map.zoomFull\nlabels.style {"), Some((13, "labels.style".into())), "its line's start");
+        assert_eq!(at(r#"labels.style {"x": "a}b", "#), Some((0, "labels.style".into())), "a brace in a string");
+        assert_eq!(at(r#"labels.style {"size": 1}"#), None, "past the closing brace");
+        assert_eq!(at("labels.style "), None, "before the brace");
+        assert_eq!(at("# labels.style {"), None, "a comment");
+        assert_eq!(at(r#"labels.style {"a": {"b": 1"#), Some((0, "labels.style".into())), "nested");
+        assert!(hint_at("x", 99).is_none(), "a cursor past the text");
+    }
+
+    /// Typing a command's parameters keeps its help by the cursor; past the closing brace it's
+    /// gone, and Escape closes it until the cursor leaves the braces.
+    #[test]
+    fn the_help_stays_by_the_cursor_in_the_braces() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        let help = super::help(&h.state().session, "labels.style").unwrap();
+        let sig = format!("{}{}", help.id, help.keys);
+        type_in(&mut h, "labels.style {");
+        h.get_by_label(&sig);
+        type_in(&mut h, r#""size": 12"#);
+        h.get_by_label(&sig);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_label(&sig).is_none(), "Escape closes it");
+        assert!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).is_focused(), "and the box keeps the focus");
+        type_in(&mut h, ", ");
+        assert!(h.query_by_label(&sig).is_none(), "not again in the same braces");
+        type_in(&mut h, "}");
+        assert!(h.query_by_label(&sig).is_none(), "past the closing brace");
+        type_in(&mut h, "\nlabels.style {");
+        h.get_by_label(&sig);
     }
 }

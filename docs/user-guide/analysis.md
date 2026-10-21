@@ -229,7 +229,9 @@ both themes: `#` comments in green italics, the command id, and the JSON's strin
 its 10,000th line; any further are dimmed, as Run doesn't read them. Typing a line's first word
 opens a list of the commands it starts, under the cursor: ↑/↓ to move, Enter or Tab to accept,
 Escape to close, or a click. Beside it, the highlighted command's help: its signature (keys with `?`
-may be left out), its name, its parameters one per line, and where it sits in the interface.
+may be left out), its name, its parameters one per line, and where it sits in the interface. While
+you type a command's parameters (the cursor inside its `{…}`), the same help stays by the cursor;
+Escape closes it.
 
 ## ModelBuilder
 

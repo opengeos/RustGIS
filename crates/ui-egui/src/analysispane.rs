@@ -839,6 +839,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             .show(ui)
     });
     let clicked = crate::scriptcomplete::show(ui, box_id, &out.inner, out.inner_rect, &app.workflow.script, &app.session);
+    crate::scriptcomplete::hint(ui, box_id, &out.inner, out.inner_rect, &app.workflow.script, &app.session);
     if let Some((offer, item)) = clicked {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item);
     }
