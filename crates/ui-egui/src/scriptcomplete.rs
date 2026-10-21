@@ -185,6 +185,9 @@ struct List {
     /// (an arrow key moved it last): a pointer resting on the list mustn't hold the help while
     /// the arrows move the highlight.
     pointer_leads: bool,
+    /// The highlighted item the list last scrolled to: it scrolls to a new one only (so a wheel
+    /// can still move it).
+    scrolled_to: Option<usize>,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -315,6 +318,10 @@ pub fn show(
         list.pointer_leads = true;
     }
     let pointer_leads = list.pointer_leads;
+    // A new list starts from its top: its scroll is the old list's otherwise.
+    if list.open.as_ref().is_none_or(|(o, _)| o.items != offer.items) {
+        list.scrolled_to = None;
+    }
     let kept = list.open.as_ref().and_then(|(o, s)| o.items.get(*s));
     let selected = kept.and_then(|item| offer.items.iter().position(|i| i == item)).unwrap_or(0);
     // Just under the cursor, or above it when the list would run off the bottom; kept on screen
@@ -323,7 +330,12 @@ pub fn show(
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y + 4.0;
     let size = list.rect.map_or(egui::vec2(MIN_WIDTH + 16.0, row * offer.items.len() as f32 + 12.0), |r| r.size());
     let screen = ui.ctx().content_rect();
-    let y = if cursor.bottom() + size.y > screen.bottom() { cursor.top() - size.y } else { cursor.bottom() };
+    // Under the cursor if it fits there, else above if it fits there, else on the side with more
+    // room; the list and help scroll within that room (a short window, a long help).
+    let (below, above) = (screen.bottom() - cursor.bottom(), cursor.top() - screen.top());
+    let under = size.y <= below || (size.y > above && below >= above);
+    let room = (if under { below } else { above } - FRAME).max(row * 3.0);
+    let y = if under { cursor.bottom() } else { cursor.top() - size.y.min(above) };
     let x = cursor.left().min(screen.right() - size.x).max(screen.left());
     // The help beside the list in the room the screen leaves, or under it when that's too narrow
     // to read (a narrow window), so neither is cut off at the screen's edge.
@@ -335,35 +347,41 @@ pub fn show(
     let area =
         egui::Area::new(box_id.with("complete_list")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, y)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.with_layout(layout, |ui| {
-                    // The help follows the item under the pointer, else the highlighted one.
-                    let mut hovered = None;
-                    ui.vertical(|ui| {
-                        ui.set_min_width(MIN_WIDTH);
-                        for (i, item) in offer.items.iter().enumerate() {
-                            let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
-                            // Taken as the button goes down, as in a code editor: the press already
-                            // takes the focus from the box, and a click (down, then up a frame or more
-                            // later) could find the list gone by then. A click still counts
-                            // (assistive technology).
-                            if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
-                                clicked = Some((offer.clone(), item.clone()));
+                egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| {
+                    ui.with_layout(layout, |ui| {
+                        // The help follows the item under the pointer, else the highlighted one.
+                        let mut hovered = None;
+                        ui.vertical(|ui| {
+                            ui.set_min_width(MIN_WIDTH);
+                            for (i, item) in offer.items.iter().enumerate() {
+                                let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                                // Taken as the button goes down, as in a code editor: the press already
+                                // takes the focus from the box, and a click (down, then up a frame or more
+                                // later) could find the list gone by then. A click still counts
+                                // (assistive technology).
+                                if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
+                                    clicked = Some((offer.clone(), item.clone()));
+                                }
+                                if r.hovered() {
+                                    hovered = Some(i);
+                                }
+                                if i == selected && list.scrolled_to != Some(selected) {
+                                    r.scroll_to_me(None);
+                                    list.scrolled_to = Some(selected);
+                                }
                             }
-                            if r.hovered() {
-                                hovered = Some(i);
-                            }
+                        });
+                        // Worked out each frame the list shows, for one command: a registry lookup and a
+                        // short description split. Kept, it would need the id and the language as its
+                        // key (the help is translated), for next to nothing saved.
+                        let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
+                        if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
+                            // A gap, not a separator: in a row, egui's separator takes all the height it
+                            // can, and would stretch the list down to the bottom of the screen.
+                            ui.add_space(GAP);
+                            draw_help(ui, &help, help_width);
                         }
                     });
-                    // Worked out each frame the list shows, for one command: a registry lookup and a
-                    // short description split. Kept, it would need the id and the language as its
-                    // key (the help is translated), for next to nothing saved.
-                    let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
-                    if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
-                        // A gap, not a separator: in a row, egui's separator takes all the height it
-                        // can, and would stretch the list down to the bottom of the screen.
-                        ui.add_space(GAP);
-                        draw_help(ui, &help, help_width);
-                    }
                 });
             });
         });
@@ -759,5 +777,29 @@ mod tests {
         let sig = h.get_by_label(&format!("{}{}", help.id, help.keys)).rect();
         assert!(sig.min.y > item.max.y, "under the list: {sig:?} {item:?}");
         assert!(sig.max.x <= width + 0.5, "within the window: {sig:?}");
+    }
+
+    /// In a short window the list and help scroll within the room by the cursor: the popup stays
+    /// on screen, and ↓ to the last item scrolls it into view.
+    #[test]
+    fn a_short_window_scrolls_the_list() {
+        use egui_kittest::kittest::Queryable;
+        let (width, height) = (380.0, 300.0);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            crate::RustGisApp::with_sample(),
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+        h.run();
+        h.event(egui::Event::Text("labels.".into()));
+        h.run();
+        let items = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
+        for _ in 1..items.len() {
+            h.key_press(egui::Key::ArrowDown);
+            h.run_steps(10);
+        }
+        let last = h.get_by_role_and_label(egui::accesskit::Role::Button, items.last().unwrap()).rect();
+        assert!(last.min.y >= 0.0 && last.max.y <= height, "the last item scrolled into view: {last:?}");
     }
 }
