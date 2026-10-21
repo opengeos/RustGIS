@@ -95,6 +95,50 @@ pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
     Some(keys)
 }
 
+/// One entry of a parameter description: its key, whether it may be left out, and its text as
+/// written (`"size"?: number`), for help that lists the parameters one per line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param<'a> {
+    pub key: &'a str,
+    pub optional: bool,
+    pub text: &'a str,
+}
+
+/// The entries of a `{"key": …, "other"?: …}` description, split at its top-level commas (commas
+/// inside quotes, parentheses, brackets or braces belong to an entry's text). The key is an
+/// entry's first quoted word; an entry without one (prose) is left out. None when the
+/// description isn't an object.
+pub fn param_list(desc: &str) -> Option<Vec<Param<'_>>> {
+    // Up to the last brace: a note may follow the object, as in `{"path"?: file} (a style)`.
+    let body = desc.trim().strip_prefix('{')?;
+    let inner = body.get(..body.rfind('}')?)?;
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0usize, false, 0);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 => {
+                out.extend(inner.get(start..i).and_then(param));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.extend(inner.get(start..).and_then(param));
+    Some(out)
+}
+
+/// An entry of a parameter description (see `param_list`): None for prose without a key.
+fn param(part: &str) -> Option<Param<'_>> {
+    let text = part.trim();
+    let rest = text.strip_prefix('"')?;
+    let (key, after) = rest.split_at(rest.find('"')?);
+    let optional = after.get(1..).is_some_and(|a| a.trim_start().starts_with('?'));
+    Some(Param { key, optional, text })
+}
+
 /// Whether a parameter description has a required key. Question marks in values do not count.
 pub fn needs_input(desc: &str) -> bool {
     let mut required = false;

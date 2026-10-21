@@ -89,6 +89,74 @@ pub fn script_ids(session: &rustgis_engine::Session) -> Vec<String> {
     builtin.chain(plugins).filter(|id| !refused_in_script(id)).collect()
 }
 
+/// What the help beside the list says about a command (#662), most useful first: its signature
+/// (required keys bare, optional ones with `?`), its name and help (a plugin's command has a help
+/// text; a built-in one, its label), its parameters one per line as described, and last where it
+/// sits in the interface.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Help {
+    pub id: String,
+    /// The id, then its keys: `labels.style {layer?, size?}`.
+    pub signature: String,
+    pub label: String,
+    pub about: String,
+    pub params: Vec<String>,
+    pub location: String,
+}
+
+/// The help for command `id`, as Command Search names and places it (translated); None for an id
+/// no command has.
+pub fn help(session: &rustgis_engine::Session, id: &str) -> Option<Help> {
+    let lang = crate::i18n::current().code();
+    let (label, about, location, desc) = match session.registry.get(id) {
+        Some(c) => (tl!(c.label).to_string(), String::new(), crate::i18n::location(c.location), c.params.to_string()),
+        None => {
+            let c = rustgis_engine::plugins::command(id)?;
+            let m = &c.plugin.manifest;
+            let location = format!("{} › {}", tl!("Plugins"), m.translate(lang, &m.name));
+            (m.translate(lang, &c.decl.label).to_string(), m.translate(lang, &c.decl.help).to_string(), location, c.decl.params.clone())
+        }
+    };
+    let params = rustgis_engine::param_list(&desc).unwrap_or_default();
+    let keys: Vec<String> = params.iter().map(|p| format!("{}{}", p.key, if p.optional { "?" } else { "" })).collect();
+    let signature = if keys.is_empty() { id.to_string() } else { format!("{id} {{{}}}", keys.join(", ")) };
+    Some(Help { id: id.to_string(), signature, label, about, params: params.iter().map(|p| p.text.to_string()).collect(), location })
+}
+
+/// The help's widest line, so a long signature or parameter wraps rather than widen the list
+/// without end.
+const HELP_WIDTH: f32 = 360.0;
+
+/// Draws `help` beside the list: the signature and parameters coloured as the script is, in its
+/// monospace font (smaller for the parameters).
+fn draw_help(ui: &mut Ui, help: &Help) {
+    let palette = crate::scriptcolor::Palette::of(&crate::theme::Tokens::get(ui.ctx()));
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let small = egui::FontId::monospace(mono.size * 0.85);
+    let coloured = |id: Option<&str>, text: &str, font: &egui::FontId| {
+        let mut job = crate::scriptcolor::help_job(id, text, palette, font);
+        job.wrap.max_width = HELP_WIDTH;
+        job
+    };
+    ui.vertical(|ui| {
+        ui.set_max_width(HELP_WIDTH);
+        let keys = help.signature.get(help.id.len()..).unwrap_or_default();
+        ui.label(coloured(Some(&help.id), keys, &mono));
+        ui.label(&help.label);
+        if !help.about.is_empty() {
+            ui.label(egui::RichText::new(&help.about).small());
+        }
+        if !help.params.is_empty() {
+            ui.add_space(4.0);
+            for p in &help.params {
+                ui.label(coloured(None, p, &small));
+            }
+        }
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(&help.location).small().weak());
+    });
+}
+
 /// The list's state between frames, kept in one place.
 #[derive(Clone, Default)]
 struct List {
@@ -247,16 +315,32 @@ pub fn show(
     let area =
         egui::Area::new(box_id.with("complete_list")).order(egui::Order::Foreground).fixed_pos(egui::pos2(x, y)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(MIN_WIDTH);
-                for (i, item) in offer.items.iter().enumerate() {
-                    let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
-                    // Taken as the button goes down, as in a code editor: the press already takes the
-                    // focus from the box, and a click (down, then up a frame or more later) could find
-                    // the list gone by then. A click still counts (assistive technology).
-                    if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
-                        clicked = Some((offer.clone(), item.clone()));
+                ui.horizontal_top(|ui| {
+                    // The help follows the item under the pointer, else the highlighted one.
+                    let mut hovered = None;
+                    ui.vertical(|ui| {
+                        ui.set_min_width(MIN_WIDTH);
+                        for (i, item) in offer.items.iter().enumerate() {
+                            let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                            // Taken as the button goes down, as in a code editor: the press already
+                            // takes the focus from the box, and a click (down, then up a frame or more
+                            // later) could find the list gone by then. A click still counts
+                            // (assistive technology).
+                            if r.clicked() || (r.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
+                                clicked = Some((offer.clone(), item.clone()));
+                            }
+                            if r.hovered() {
+                                hovered = Some(i);
+                            }
+                        }
+                    });
+                    if let Some(help) = offer.items.get(hovered.unwrap_or(selected)).and_then(|id| help(session, id)) {
+                        // A gap, not a separator: in a row, egui's separator takes all the height it
+                        // can, and would stretch the list down to the bottom of the screen.
+                        ui.add_space(12.0);
+                        draw_help(ui, &help);
                     }
-                }
+                });
             });
         });
     if clicked.is_some() {
@@ -417,7 +501,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut h = pane();
         type_in(&mut h, "map.zoomF");
-        let at = h.get_by_label("map.zoomFull").rect().center();
+        let at = h.get_by_role_and_label(egui::accesskit::Role::Button, "map.zoomFull").rect().center();
         let button = |pressed| egui::Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
@@ -555,7 +639,7 @@ mod tests {
         h.state_mut().workflow.script = "map.zoomFu".into();
         h.run();
         assert!(h.query_by_label("labels.style").is_none(), "the old offer isn't reused");
-        h.get_by_label("map.zoomFull");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "map.zoomFull");
     }
 
     /// A list left open over a script changed from outside the box isn't acted on: Enter doesn't
@@ -570,5 +654,39 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert!(!h.state().workflow.script.contains("labels.style"), "{:?}", h.state().workflow.script);
+    }
+
+    /// The help puts the signature first, then the name, the parameters one per line and the
+    /// location last.
+    #[test]
+    fn help_shows_the_signature_first() {
+        let app = crate::RustGisApp::with_sample();
+        let h = super::help(&app.session, "labels.style").unwrap();
+        assert!(h.signature.starts_with("labels.style {layer?, class?, size?"), "{}", h.signature);
+        assert_eq!(h.label, "Text Symbol");
+        assert!(h.params.iter().any(|p| p == r#""size"?: number"#), "{:?}", h.params);
+        assert_eq!(h.location, "Style › Text Symbol");
+        // Required keys go bare.
+        assert!(super::help(&app.session, "labels.field").unwrap().signature.contains("field}"));
+        // No parameters: the id alone.
+        let z = super::help(&app.session, "map.zoomFull").unwrap();
+        assert_eq!((z.signature.as_str(), z.params.len()), ("map.zoomFull", 0));
+        assert!(super::help(&app.session, "nope.cmd").is_none());
+    }
+
+    /// The help shows beside the list, for the highlighted item, and follows the arrows.
+    #[test]
+    fn the_help_follows_the_highlight() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        type_in(&mut h, "labels.");
+        let first = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
+        let sig = |id: &str| super::help(&h.state().session, id).unwrap().signature;
+        let (one, two) = (sig(&first[0]), sig(&first[1]));
+        h.get_by_label(&one);
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        assert!(h.query_by_label(&one).is_none());
+        h.get_by_label(&two);
     }
 }
