@@ -1067,6 +1067,34 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let target_fields_len = target.fields.len();
     let join_fields_len = join.fields.len();
 
+    // Spatial grid index over join geometries for efficient candidate pruning
+    let mut total_ext = Extent::EMPTY;
+    for (_, ext, _) in &join_geoms {
+        total_ext = total_ext.union(ext);
+    }
+    let use_grid = join_geoms.len() > 16 && !total_ext.is_empty();
+    let n_cells = (join_geoms.len() as f64).sqrt().clamp(4.0, 256.0);
+    let cell_w = (total_ext.width() / n_cells).max(1e-9);
+    let cell_h = (total_ext.height() / n_cells).max(1e-9);
+    let key = |x: f64, y: f64| -> (i64, i64) {
+        let kx = if x.is_finite() { ((x - total_ext.min_x) / cell_w).floor() } else { 0.0 };
+        let ky = if y.is_finite() { ((y - total_ext.min_y) / cell_h).floor() } else { 0.0 };
+        (kx.clamp(0.0, 512.0) as i64, ky.clamp(0.0, 512.0) as i64)
+    };
+
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<usize>> = std::collections::HashMap::new();
+    if use_grid {
+        for (idx, (_, j_ext, _)) in join_geoms.iter().enumerate() {
+            let (gx0, gy0) = key(j_ext.min_x, j_ext.min_y);
+            let (gx1, gy1) = key(j_ext.max_x, j_ext.max_y);
+            for gx in gx0..=gx1 {
+                for gy in gy0..=gy1 {
+                    grid.entry((gx, gy)).or_default().push(idx);
+                }
+            }
+        }
+    }
+
     let mut total_matches = 0usize;
     let mut written_features = 0usize;
 
@@ -1078,14 +1106,44 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let t_ext = tg.extent();
             let t_geo = to_geo(tg);
 
-            for (jr, j_ext, j_geo) in &join_geoms {
-                let hit = match match_opt {
-                    "Contains" => extent_contains(&t_ext, j_ext) && Contains::contains(&t_geo, j_geo),
-                    "Within" => extent_contains(j_ext, &t_ext) && Contains::contains(j_geo, &t_geo),
-                    _ => t_ext.intersects(j_ext) && t_geo.intersects(j_geo),
-                };
-                if hit {
-                    matches.push(*jr);
+            if use_grid {
+                if t_ext.intersects(&total_ext) {
+                    let (tx0, ty0) = key(t_ext.min_x, t_ext.min_y);
+                    let (tx1, ty1) = key(t_ext.max_x, t_ext.max_y);
+                    let mut candidates = Vec::new();
+                    for gx in tx0..=tx1 {
+                        for gy in ty0..=ty1 {
+                            if let Some(indices) = grid.get(&(gx, gy)) {
+                                candidates.extend_from_slice(indices);
+                            }
+                        }
+                    }
+                    candidates.sort_unstable();
+                    candidates.dedup();
+
+                    for idx in candidates {
+                        if let Some((jr, j_ext, j_geo)) = join_geoms.get(idx) {
+                            let hit = match match_opt {
+                                "Contains" => extent_contains(&t_ext, j_ext) && Contains::contains(&t_geo, j_geo),
+                                "Within" => extent_contains(j_ext, &t_ext) && Contains::contains(j_geo, &t_geo),
+                                _ => t_ext.intersects(j_ext) && t_geo.intersects(j_geo),
+                            };
+                            if hit {
+                                matches.push(*jr);
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (jr, j_ext, j_geo) in &join_geoms {
+                    let hit = match match_opt {
+                        "Contains" => extent_contains(&t_ext, j_ext) && Contains::contains(&t_geo, j_geo),
+                        "Within" => extent_contains(j_ext, &t_ext) && Contains::contains(j_geo, &t_geo),
+                        _ => t_ext.intersects(j_ext) && t_geo.intersects(j_geo),
+                    };
+                    if hit {
+                        matches.push(*jr);
+                    }
                 }
             }
         }
@@ -1685,10 +1743,10 @@ mod tests {
         polys.push(Some(sq(0.0, 0.0, 2.0)), vec![Value::Text("a".into())]);
         polys.push(Some(sq(1.0, 0.0, 2.0)), vec![Value::Text("b".into())]);
 
-        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
-        pts.push(Some(Geometry::Point(Coord::new(1.5, 1.0))), vec![Value::Text("both".into())]);
-        pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Text("first".into())]);
-        pts.push(Some(Geometry::Point(Coord::new(50.0, 50.0))), vec![Value::Text("outside".into())]);
+        let mut pts = Dataset::new("pts", GeometryType::Point, vec![Field::new("name", FieldType::Text), Field::new("k", FieldType::Text)]);
+        pts.push(Some(Geometry::Point(Coord::new(1.5, 1.0))), vec![Value::Text("both".into()), Value::Text("orig".into())]);
+        pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Text("first".into()), Value::Text("orig".into())]);
+        pts.push(Some(Geometry::Point(Coord::new(50.0, 50.0))), vec![Value::Text("outside".into()), Value::Text("orig".into())]);
 
         let m = Map(HashMap::from([("polys".to_string(), polys), ("pts".to_string(), pts)]));
 
@@ -1733,5 +1791,13 @@ mod tests {
         assert_eq!(ds5.value(0, jc5), &Value::Int(2));
         assert_eq!(ds5.value(1, jc5), &Value::Int(1));
         assert_eq!(ds5.value(2, jc5), &Value::Int(0));
+
+        // 6. Custom/empty prefix and field name collision deduplication
+        let r6 = crate::run("spatialJoin", &m, &serde_json::json!({"target": "pts", "join": "polys", "prefix": ""})).unwrap();
+        let ds6 = layer(r6);
+        assert!(ds6.field_index("k").is_some());
+        assert!(ds6.field_index("k_2").is_some(), "colliding field k should be deduplicated to k_2");
+        assert_eq!(ds6.value(1, ds6.field_index("k").unwrap()), &Value::Text("orig".into()));
+        assert_eq!(ds6.value(1, ds6.field_index("k_2").unwrap()), &Value::Text("a".into()));
     }
 }
