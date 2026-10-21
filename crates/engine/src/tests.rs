@@ -7822,7 +7822,7 @@ fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
 #[test]
 fn params_name_every_key_a_command_reads() {
     // Read by a shared helper but of no use to the command.
-    let unused = [("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
+    let unused = [("gp.spatialJoin", "input"), ("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
     let s = Session::new(Project::default());
     let mut missing = Vec::new();
     let found = keys_read_by_commands();
