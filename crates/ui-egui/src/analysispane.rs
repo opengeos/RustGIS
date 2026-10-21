@@ -838,8 +838,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             .hint_text("map.goToXY {\"lon\": 2.35, \"lat\": 48.85, \"scale\": 5000000}\nselect.byAttributes {\"layer\": \"Cities\", \"where\": \"pop_max > 1000000\"}")
             .show(ui)
     });
-    let session = &app.session;
-    let clicked = crate::scriptcomplete::show(ui, box_id, &out.inner, &app.workflow.script, || crate::scriptcomplete::script_ids(session));
+    let clicked = crate::scriptcomplete::show(ui, box_id, &out.inner, out.inner_rect, &app.workflow.script, &app.session);
     if let Some((offer, item)) = clicked {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item);
     }
