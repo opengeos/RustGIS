@@ -226,7 +226,9 @@ short of the buttons, and then scrolls, so **Run** stays in view. It colours the
 both themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
 `true`/`false`/`null`; an id no command has, or one that can't run in a script (`ui.*`, `script.*`,
 `notebook.run`), and parameters that aren't valid JSON are red and underlined. A script is read to
-its 10,000th line; any further are dimmed, as Run doesn't read them.
+its 10,000th line; any further are dimmed, as Run doesn't read them. Typing a line's first word
+opens a list of the commands it starts, under the cursor: ↑/↓ to move, Enter or Tab to accept,
+Escape to close, or a click.
 
 ## ModelBuilder
 
