@@ -222,7 +222,7 @@ struct List {
     /// one as long, and a change made by code comes with no input event to wait for. It reads the
     /// text once, as egui's own layout already does each frame (the layouter's cache key, the
     /// galley cache), so it adds a constant, not a new order of cost.
-    worked: Option<(Option<usize>, u64, u64, Option<Offer>)>,
+    worked: Option<Worked<u64, Option<Offer>>>,
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(Offer, usize)>,
     /// The offer Escape closed: not shown again until what's typed changes.
@@ -237,16 +237,40 @@ struct List {
     /// The highlighted item the list last scrolled to: it scrolls to a new one only (so a wheel
     /// can still move it).
     scrolled_to: Option<usize>,
-    /// The help shown by the cursor while it's in a line's `{…}` (its line start and id), what
-    /// Escape closed (not shown again until the cursor leaves those braces), and where it was
-    /// drawn last frame.
-    hint: Option<Hint>,
-    hint_dismissed: Option<Hint>,
-    hint_rect: Option<egui::Rect>,
-    /// What the help by the cursor was worked out to show, and for which cursor, script (the
-    /// hash `show` takes this frame) and language (the help is translated): worked out again only
-    /// when one changes, not each frame the cursor blinks.
-    hint_worked: Option<(Option<usize>, u64, &'static str, Option<(Hint, Help)>)>,
+    /// The help by the cursor (`hint`).
+    hint: HintState,
+}
+
+/// What was worked out at a cursor, and for which script (its hash) and `with` (what else it
+/// depends on: the plugins' revision for the list, the language for the help): worked out again
+/// only when one changes.
+#[derive(Clone)]
+struct Worked<W, T> {
+    at: Option<usize>,
+    text: u64,
+    with: W,
+    value: T,
+}
+
+impl<W: PartialEq, T: Clone> Worked<W, T> {
+    /// The value, if worked out for this cursor, script and `with`.
+    fn get(this: &Option<Self>, at: Option<usize>, text: u64, with: &W) -> Option<T> {
+        this.as_ref().filter(|w| w.at == at && w.text == text && w.with == *with).map(|w| w.value.clone())
+    }
+}
+
+/// The help shown by the cursor while it's in a line's `{…}`.
+#[derive(Clone, Default)]
+struct HintState {
+    /// The command it's for: what Escape acts on.
+    shown: Option<Hint>,
+    /// What Escape closed: not shown again until the cursor leaves those braces.
+    dismissed: Option<Hint>,
+    /// Where it was drawn last frame.
+    rect: Option<egui::Rect>,
+    /// What it was worked out to show, for which cursor, script (the hash `show` takes this frame)
+    /// and language (the help is translated): not again each frame the cursor blinks.
+    worked: Option<Worked<&'static str, Option<(Hint, Help)>>>,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -262,7 +286,12 @@ fn store(ui: &Ui, box_id: Id, list: List) {
 /// focus" before `keys` can read it as "close it".
 pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
     let list = load(ui, box_id);
-    egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: list.open.is_some() || list.hint.is_some() }
+    egui::EventFilter {
+        tab: true,
+        horizontal_arrows: true,
+        vertical_arrows: true,
+        escape: list.open.is_some() || list.hint.shown.is_some(),
+    }
 }
 
 /// Before the box sees the keys: with the list open and the box focused, ↑/↓ move the highlight,
@@ -273,10 +302,10 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
 pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
     let mut list = load(ui, box_id);
     // The help by the cursor (no list open): Escape closes it.
-    if list.open.is_none() && list.hint.is_some() && ui.memory(|m| m.has_focus(box_id)) {
+    if list.open.is_none() && list.hint.shown.is_some() && ui.memory(|m| m.has_focus(box_id)) {
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            list.hint_dismissed = list.hint.take();
-            list.hint_rect = None;
+            list.hint.dismissed = list.hint.shown.take();
+            list.hint.rect = None;
             store(ui, box_id, list);
         }
         return None;
@@ -285,7 +314,7 @@ pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
     if !ui.memory(|m| m.has_focus(box_id)) {
         return None;
     }
-    if list.worked.as_ref().is_none_or(|w| w.1 != egui::util::hash(script)) {
+    if list.worked.as_ref().is_none_or(|w| w.text != egui::util::hash(script)) {
         list.open = None;
         store(ui, box_id, list);
         return None;
@@ -347,7 +376,7 @@ pub fn show(
         // A cursor, not a selection: with text selected, Enter and Tab act on it as usual.
         let at = out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0);
         let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
-        let kept = list.worked.as_ref().filter(|w| (w.0, w.1, w.2) == (at, text, plugins)).map(|w| w.3.clone());
+        let kept = Worked::get(&list.worked, at, text, &plugins);
         match kept {
             Some(offer) => offer,
             None => {
@@ -355,7 +384,7 @@ pub fn show(
                 let offer = at
                     .and_then(|at| word_at(script, at).map(|w| (at, w)))
                     .and_then(|(at, (start, word))| complete(start, at, &word, &script_ids_cached(ui, session)));
-                list.worked = Some((at, text, plugins, offer.clone()));
+                list.worked = Some(Worked { at, text, with: plugins, value: offer.clone() });
                 offer
             }
         }
@@ -467,47 +496,48 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
     let focused = out.response.response.has_focus() && ui.input(|i| i.focused);
     let at = out.cursor_range.filter(|r| focused && list.open.is_none() && r.is_empty()).map(|r| r.primary.index.0);
     // The script's hash as `show` took it this frame, for the same cursor (no second pass).
-    let text = list.worked.as_ref().filter(|w| w.0 == at).map_or_else(|| egui::util::hash(script), |w| w.1);
+    let text = list.worked.as_ref().filter(|w| w.at == at).map_or_else(|| egui::util::hash(script), |w| w.text);
     let lang = crate::i18n::current().code();
-    let kept = list.hint_worked.as_ref().filter(|w| (w.0, w.1, w.2) == (at, text, lang)).map(|w| w.3.clone());
+    let kept = Worked::get(&list.hint.worked, at, text, &lang);
     let found = match kept {
         Some(found) => found,
         None => {
             let found = at.and_then(|at| hint_at(script, at)).and_then(|h| Some((h.clone(), help(session, &h.id)?)));
-            list.hint_worked = Some((at, text, lang, found.clone()));
+            list.hint.worked = Some(Worked { at, text, with: lang, value: found.clone() });
             found
         }
     };
     // Out of the braces, what Escape closed may show again next time.
     if found.is_none() {
-        list.hint_dismissed = None;
+        list.hint.dismissed = None;
     }
     // Anchored at the line's `{` sideways, so it doesn't slide with each key typed; on the
     // cursor's line, which it doesn't cover.
     let galley_rect = |i: usize| out.galley.pos_from_cursor(CCursor::new(i)).translate(out.galley_pos.to_vec2());
-    let shown = found.filter(|(h, _)| list.hint_dismissed.as_ref() != Some(h)).and_then(|(h, help)| {
+    let shown = found.filter(|(h, _)| list.hint.dismissed.as_ref() != Some(h)).and_then(|(h, help)| {
         let cursor = galley_rect(at?);
-        let anchor = egui::Rect::from_x_y_ranges(galley_rect(h.brace).left()..=galley_rect(h.brace).left(), cursor.y_range());
+        let brace = galley_rect(h.brace).left();
+        let anchor = egui::Rect::from_x_y_ranges(brace..=brace, cursor.y_range());
         visible.intersects(cursor).then_some((anchor, h, help))
     });
     let Some((cursor, at_line, help)) = shown else {
-        list.hint = None;
-        list.hint_rect = None;
+        list.hint.shown = None;
+        list.hint.rect = None;
         store(ui, box_id, list);
         return;
     };
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y + 4.0;
     let screen = ui.ctx().content_rect();
     let width = (screen.width() - FRAME).clamp(0.0, HELP_WIDTH);
-    let size = list.hint_rect.map_or(egui::vec2(width + FRAME, row * (help.params.len() + 3) as f32), |r| r.size());
+    let size = list.hint.rect.map_or(egui::vec2(width + FRAME, row * (help.params.len() + 3) as f32), |r| r.size());
     let (corner, room) = place(cursor, size, screen, row * 3.0);
     let area = egui::Area::new(box_id.with("complete_hint")).order(egui::Order::Foreground).fixed_pos(corner).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, |ui| draw_help(ui, &help, width));
         });
     });
-    list.hint = Some(at_line);
-    list.hint_rect = Some(area.response.rect);
+    list.hint.shown = Some(at_line);
+    list.hint.rect = Some(area.response.rect);
     store(ui, box_id, list);
 }
 
