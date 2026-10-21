@@ -2,7 +2,7 @@
 //!
 //! The crates RustGIS is built from are MIT, BSD, ISC, Apache and so on, and those licences ask
 //! for their copyright and licence text to go with every copy, binaries included. This writes
-//! them, from `cargo about` (`cargo install --locked cargo-about`, configured by `about.toml`),
+//! them, from `cargo about` (see [`INSTALL`], configured by `about.toml`),
 //! into a plain-text file next to each LICENSE the packages ship:
 //!
 //! - `THIRD-PARTY-LICENSES.txt`: every crate in the workspace (the desktop app, the command line
@@ -18,6 +18,12 @@ use std::path::Path;
 use std::process::Command;
 
 use serde_json::Value;
+
+/// How to install the cargo-about the files were generated with (CI pins the same version).
+pub const INSTALL: &str = "cargo install --locked --features cli cargo-about@0.9.2";
+
+/// The `--check` exit code for files that are out of date (other failures exit with 1).
+pub const STALE: u8 = 2;
 
 /// (output file, package manifest or "" for the whole workspace, what it covers).
 const FILES: &[(&str, &str, &str)] = &[
@@ -131,42 +137,42 @@ fn notice_files(manifest_path: &str) -> Vec<(String, String)> {
 /// `cargo about`'s JSON report for `manifest` (the workspace when empty).
 fn about(root: &Path, manifest: &str) -> Result<Value, String> {
     let mut cmd = Command::new("cargo");
-    cmd.args(["about", "generate", "--locked", "--format", "json"]).current_dir(root);
+    // --fail: a crate whose licence cargo-about can't work out is an error, not a gap in the file.
+    cmd.args(["about", "generate", "--locked", "--fail", "--format", "json"]).current_dir(root);
     if !manifest.is_empty() {
         cmd.args(["--manifest-path", manifest]);
     }
     println!(
-        "$ cargo about generate --locked --format json{}",
+        "$ cargo about generate --locked --fail --format json{}",
         if manifest.is_empty() { String::new() } else { format!(" --manifest-path {manifest}") }
     );
-    let out = cmd.output().map_err(|e| format!("cargo about: {e} (install it with `cargo install --locked cargo-about`)"))?;
+    let out = cmd.output().map_err(|e| format!("cargo about: {e} (install it with `{INSTALL}`)"))?;
     if !out.status.success() {
-        return Err(format!(
-            "cargo about failed (install it with `cargo install --locked cargo-about`):\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        return Err(format!("cargo about failed (install it with `{INSTALL}`):\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo about's report: {e}"))
 }
 
-pub fn notices(root: &Path, check: bool) -> Result<(), String> {
+/// Writes the files, or with `check` reports the ones out of date: `Err((STALE, …))` for those,
+/// `Err((1, …))` for any other failure.
+pub fn notices(root: &Path, check: bool) -> Result<(), (u8, String)> {
     let mut stale = Vec::new();
     for (file, manifest, what) in FILES {
-        let wanted = render(&about(root, manifest)?, what, &notice_files);
+        let wanted = render(&about(root, manifest).map_err(|e| (1, e))?, what, &notice_files);
         let path = root.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() == Some(wanted.as_str()) {
             println!("notices: {file} is up to date");
         } else if check {
             stale.push(*file);
         } else {
-            std::fs::write(&path, wanted).map_err(|e| format!("{file}: {e}"))?;
+            std::fs::write(&path, wanted).map_err(|e| (1, format!("{file}: {e}")))?;
             println!("notices: wrote {file}");
         }
     }
     if stale.is_empty() {
         Ok(())
     } else {
-        Err(format!("out of date: {}; run `cargo xtask notices` and commit the result", stale.join(", ")))
+        Err((STALE, format!("out of date: {}; run `cargo xtask notices` and commit the result", stale.join(", "))))
     }
 }
 

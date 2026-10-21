@@ -70,9 +70,16 @@ jobs:
       - name: Dependency licences
         run: cargo deny --locked check licenses
       - name: Third-party notices
+        # Exit code 2 is stale notices (a warning); anything else (cargo-about failing, a licence
+        # it can't work out) fails the job.
         run: |
-          cargo xtask notices --check ||
+          status=0
+          cargo xtask notices --check || status=$?
+          if [ "$status" -eq 2 ]; then
             echo "::warning::THIRD-PARTY-LICENSES.txt is out of date: run cargo xtask notices and commit it before the next release."
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
 
   plan:
     name: Platforms

@@ -990,11 +990,16 @@ pub(crate) fn project_links(ui: &mut egui::Ui) {
     });
 }
 
-/// Links to the licence notices of the software and data RustGIS is built with; the packages
-/// ship `THIRD-PARTY-LICENSES.txt` next to LICENSE too.
+/// Links to the licence notices of the software and data RustGIS is built with. The web app
+/// serves its own copy of `THIRD-PARTY-LICENSES.txt`; the desktop packages ship one next to
+/// LICENSE, and link to the current one on GitHub.
 pub(crate) fn licence_links(ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        let notices = "https://github.com/opengeos/RustGIS/blob/main/THIRD-PARTY-LICENSES.txt";
+        let notices = if cfg!(target_arch = "wasm32") {
+            "THIRD-PARTY-LICENSES.txt"
+        } else {
+            "https://github.com/opengeos/RustGIS/blob/main/THIRD-PARTY-LICENSES.txt"
+        };
         ui.add(egui::Hyperlink::from_label_and_url(tl!("Third-party licences"), notices).open_in_new_tab(true));
         ui.label("·");
         let attribution = "https://github.com/opengeos/RustGIS/blob/main/ATTRIBUTION.md";
