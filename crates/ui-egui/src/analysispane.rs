@@ -786,6 +786,8 @@ pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let results = if app.workflow.script_out.is_empty() { 0.0 } else { out_h + gap };
     let below = ui.spacing().interact_size.y + gap * 3.0 + results;
     let min = ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32;
+    // The bottom of what shows: the pane is in a vertical ScrollArea, where the clip rect is the
+    // visible part, and `max_rect` or `available_height` are the content's, unbounded.
     let room = (ui.clip_rect().bottom() - ui.cursor().top() - below).max(min);
     egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         ui.add(

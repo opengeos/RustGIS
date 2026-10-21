@@ -261,6 +261,12 @@ pub fn unknown_ids(session: &rustgis_engine::Session, script: &str) -> Vec<Strin
 }
 
 /// The text box's layout of `script`: its colours (worked out once per change), wrapped at `wrap`.
+///
+/// Each frame costs a hash of the script (the cache key) and a clone of the kept `LayoutJob`, by
+/// design: `layout_job` takes the job by value, and egui keeps the laid-out galleys itself. Keeping
+/// our own `Galley` instead would skip that clone but outlive egui's font atlas: after the atlas is
+/// rebuilt (a language with a CJK font, a change of UI zoom) it would draw stale glyphs, where
+/// egui's own galley cache is cleared. egui_extras' highlighter works the same way.
 pub fn layout(ui: &egui::Ui, script: &str, unknown: &[String], palette: Palette, wrap: f32) -> std::sync::Arc<egui::Galley> {
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let mut job = ui.memory_mut(|m| m.caches.cache::<Cache>().get((script, unknown, palette, &font)).clone());
@@ -522,5 +528,25 @@ mod tests {
         });
         // No painter here: the frame's textures are let go, as egui asks.
         out.textures_delta.clear();
+    }
+
+    /// Hosted as in the app, inside the right pane's vertical ScrollArea, a long script still
+    /// leaves Run in view: the box's limit is the visible part, not the scroll's content.
+    #[test]
+    fn run_stays_in_view_inside_the_panes_scroll() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = crate::RustGisApp::with_sample();
+        app.workflow.script = "map.zoomFull\n".repeat(300);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    crate::analysispane::script(app, ui, &crate::theme::Tokens::light());
+                });
+            },
+            app,
+        );
+        h.run();
+        let run = h.get_by_label("Run").rect();
+        assert!(run.max.y < 700.0, "Run is in view: {run:?}");
     }
 }
