@@ -55,16 +55,26 @@ fn byte_at(script: &str, at: usize) -> Option<usize> {
     if at == 0 { Some(0) } else { script.char_indices().nth(at - 1).map(|(b, c)| b + c.len_utf8()) }
 }
 
+/// The command whose parameters a cursor is in (`hint_at`): its line's start and its `{` (char
+/// indexes), and its id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hint {
+    pub line: usize,
+    pub brace: usize,
+    pub id: String,
+}
+
 /// The command whose parameters the cursor at char `at` is in: the cursor inside its line's
-/// `{…}` (quoted text aside: a `}` in a string doesn't close it). Its line's start (a char index)
-/// and id; None outside the braces, or on a line with no id.
-pub fn hint_at(script: &str, at: usize) -> Option<(usize, String)> {
+/// `{…}` (quoted text aside: a `}` in a string doesn't close it). None outside the braces, or on
+/// a line with no id.
+pub fn hint_at(script: &str, at: usize) -> Option<Hint> {
     let before = script.get(..byte_at(script, at)?)?;
     let line_start = before.rfind('\n').map_or(0, |i| i + 1);
     let line = before.get(line_start..)?;
     let id = crate::scriptcolor::line_id(line)?;
+    let brace = line.find('{')?;
     let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
-    for c in line.get(line.find('{')?..)?.chars() {
+    for c in line.get(brace..)?.chars() {
         let was_escaped = escaped;
         escaped = c == '\\' && !was_escaped;
         match c {
@@ -74,7 +84,9 @@ pub fn hint_at(script: &str, at: usize) -> Option<(usize, String)> {
             _ => {}
         }
     }
-    (depth > 0).then(|| (before.get(..line_start).map_or(0, |b| b.chars().count()), id.to_string()))
+    let chars = |s: Option<&str>| s.map_or(0, |s| s.chars().count());
+    let line_chars = chars(before.get(..line_start));
+    (depth > 0).then(|| Hint { line: line_chars, brace: line_chars + chars(line.get(..brace)), id: id.to_string() })
 }
 
 /// Where a popup of `size` (last frame's) goes by `cursor`: under it if it fits, else above if it
@@ -228,9 +240,13 @@ struct List {
     /// The help shown by the cursor while it's in a line's `{…}` (its line start and id), what
     /// Escape closed (not shown again until the cursor leaves those braces), and where it was
     /// drawn last frame.
-    hint: Option<(usize, String)>,
-    hint_dismissed: Option<(usize, String)>,
+    hint: Option<Hint>,
+    hint_dismissed: Option<Hint>,
     hint_rect: Option<egui::Rect>,
+    /// What the help by the cursor was worked out to show, and for which cursor, script (the
+    /// hash `show` takes this frame) and language (the help is translated): worked out again only
+    /// when one changes, not each frame the cursor blinks.
+    hint_worked: Option<(Option<usize>, u64, &'static str, Option<(Hint, Help)>)>,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -450,14 +466,29 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
     let mut list = load(ui, box_id);
     let focused = out.response.response.has_focus() && ui.input(|i| i.focused);
     let at = out.cursor_range.filter(|r| focused && list.open.is_none() && r.is_empty()).map(|r| r.primary.index.0);
-    let found = at.and_then(|at| hint_at(script, at).map(|h| (at, h)));
+    // The script's hash as `show` took it this frame, for the same cursor (no second pass).
+    let text = list.worked.as_ref().filter(|w| w.0 == at).map_or_else(|| egui::util::hash(script), |w| w.1);
+    let lang = crate::i18n::current().code();
+    let kept = list.hint_worked.as_ref().filter(|w| (w.0, w.1, w.2) == (at, text, lang)).map(|w| w.3.clone());
+    let found = match kept {
+        Some(found) => found,
+        None => {
+            let found = at.and_then(|at| hint_at(script, at)).and_then(|h| Some((h.clone(), help(session, &h.id)?)));
+            list.hint_worked = Some((at, text, lang, found.clone()));
+            found
+        }
+    };
     // Out of the braces, what Escape closed may show again next time.
     if found.is_none() {
         list.hint_dismissed = None;
     }
-    let shown = found.filter(|(_, h)| list.hint_dismissed.as_ref() != Some(h)).and_then(|(at, h)| {
-        let cursor = out.galley.pos_from_cursor(CCursor::new(at)).translate(out.galley_pos.to_vec2());
-        Some((cursor, h.clone(), help(session, &h.1)?)).filter(|(c, _, _)| visible.intersects(*c))
+    // Anchored at the line's `{` sideways, so it doesn't slide with each key typed; on the
+    // cursor's line, which it doesn't cover.
+    let galley_rect = |i: usize| out.galley.pos_from_cursor(CCursor::new(i)).translate(out.galley_pos.to_vec2());
+    let shown = found.filter(|(h, _)| list.hint_dismissed.as_ref() != Some(h)).and_then(|(h, help)| {
+        let cursor = galley_rect(at?);
+        let anchor = egui::Rect::from_x_y_ranges(galley_rect(h.brace).left()..=galley_rect(h.brace).left(), cursor.y_range());
+        visible.intersects(cursor).then_some((anchor, h, help))
     });
     let Some((cursor, at_line, help)) = shown else {
         list.hint = None;
@@ -892,9 +923,10 @@ mod tests {
     #[test]
     fn hint_at_finds_the_command_whose_braces_hold_the_cursor() {
         use super::hint_at;
-        let at = |s: &str| hint_at(s, s.chars().count());
+        let at = |s: &str| hint_at(s, s.chars().count()).map(|h| (h.line, h.id));
         assert_eq!(at(r#"labels.style {"size": 1"#), Some((0, "labels.style".into())));
         assert_eq!(at("map.zoomFull\nlabels.style {"), Some((13, "labels.style".into())), "its line's start");
+        assert_eq!(hint_at("map.zoomFull\nlabels.style {", 27).map(|h| h.brace), Some(26), "its brace");
         assert_eq!(at(r#"labels.style {"x": "a}b", "#), Some((0, "labels.style".into())), "a brace in a string");
         assert_eq!(at(r#"labels.style {"size": 1}"#), None, "past the closing brace");
         assert_eq!(at("labels.style "), None, "before the brace");
@@ -925,5 +957,19 @@ mod tests {
         assert!(h.query_by_label(&sig).is_none(), "past the closing brace");
         type_in(&mut h, "\nlabels.style {");
         h.get_by_label(&sig);
+    }
+
+    /// The help by the cursor stays put sideways while the parameters are typed: it's anchored at
+    /// the line's `{`, not at the moving cursor.
+    #[test]
+    fn the_help_by_the_cursor_doesnt_slide() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        let help = super::help(&h.state().session, "labels.style").unwrap();
+        let sig = format!("{}{}", help.id, help.keys);
+        type_in(&mut h, "labels.style {");
+        let first = h.get_by_label(&sig).rect().left();
+        type_in(&mut h, r#""size": 12, "bold": true"#);
+        assert!((h.get_by_label(&sig).rect().left() - first).abs() < 0.5, "it didn't move with the cursor");
     }
 }
