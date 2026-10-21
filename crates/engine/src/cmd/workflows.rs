@@ -432,6 +432,12 @@ pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"ran": out}))
 }
 
+/// Whether command `id` can't run in a script: scripts and notebooks (which would run scripts), and
+/// the interface's `ui.*` commands. The Script pane marks such a line with the same rule.
+pub fn refused_in_script(id: &str) -> bool {
+    id.starts_with("script.") || id.starts_with("ui.") || id == "notebook.run"
+}
+
 /// A script's commands, as `(line, id, params)` with 1-based lines: one `id {json}` per line,
 /// blank lines and `#` comments skipped. A line that isn't JSON, or a command that can't run in
 /// a script (scripts, notebooks, `ui.*`), is an error naming its line.
@@ -449,7 +455,7 @@ pub fn script_commands(script: &str) -> Result<Vec<(usize, String, Value)>, Stri
         } else {
             serde_json::from_str(rest.trim()).map_err(|e| format!("line {}: {e}", n + 1))?
         };
-        if id.starts_with("script.") || id.starts_with("ui.") || id == "notebook.run" {
+        if refused_in_script(id) {
             return Err(format!("line {}: '{id}' can't run in a script", n + 1));
         }
         out.push((n + 1, id.to_string(), params));

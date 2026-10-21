@@ -1,5 +1,5 @@
 //! Colours for the Script pane (#653): comments, command ids and their JSON parameters, read by
-//! the rules `script.run` reads a script by (`script_commands`), so a line that won't run shows
+//! the rules `script.run` reads a script by (`script_commands`, `refused_in_script`), so a line that won't run shows
 //! before Run. The text itself is never changed: the colours are spans over it, byte for byte, so
 //! the box's cursor, selection and undo work as in a plain one.
 
@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Stroke};
-use rustgis_engine::cmd::workflows::script_commands;
+use rustgis_engine::cmd::workflows::refused_in_script;
 
 /// What a piece of a script is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,12 +85,11 @@ fn line_spans(script: &str, range: Range<usize>, unknown: &[String], out: &mut V
     plain(start..start + lead, out);
     let word = body.split_once(char::is_whitespace).map_or(body, |(w, _)| w);
     let id = word.trim_end_matches('=');
-    // The engine's own reading of the line: a refusal is a JSON that doesn't read or an id that
-    // can't run in a script.
-    let refused = script_commands(line).is_err();
+    // Read as `script_commands` reads it: the JSON once, and the engine's own rule for the ids a
+    // script refuses.
     let rest = &body[word.len()..];
     let json_reads = rest.trim().is_empty() || serde_json::from_str::<serde_json::Value>(rest.trim()).is_ok();
-    let bad_id = (refused && json_reads) || unknown.iter().any(|u| u == id);
+    let bad_id = refused_in_script(id) || unknown.iter().any(|u| u == id);
     let id_at = start + lead;
     if !id.is_empty() {
         out.push(Span { range: id_at..id_at + id.len(), kind: if bad_id { Kind::BadId } else { Kind::Id }, broken: false });
@@ -408,9 +407,10 @@ mod tests {
         let mut app = crate::RustGisApp::with_sample();
         let script = "# zoom\nnope.cmd {\"a\": \"é\"}\nlabels.style {\"size\": }\n";
         app.workflow.script = script.into();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(500.0, 400.0))
-            .build_ui_state(|ui, app: &mut crate::RustGisApp| crate::analysispane::script(app, ui, &crate::theme::Tokens::light()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 400.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            app,
+        );
         h.run();
         assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some(script));
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
@@ -458,9 +458,10 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(500.0, 700.0))
-            .build_ui_state(|ui, app: &mut crate::RustGisApp| crate::analysispane::script(app, ui, &crate::theme::Tokens::light()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            app,
+        );
         h.run();
         let run = h.get_by_label("Run").rect();
         assert!(run.max.y < 700.0, "Run is in view: {run:?}");
@@ -473,9 +474,10 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull".into();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(500.0, 700.0))
-            .build_ui_state(|ui, app: &mut crate::RustGisApp| crate::analysispane::script(app, ui, &crate::theme::Tokens::light()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            app,
+        );
         h.run();
         let text = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
         assert!(text.height() < 300.0, "about ten lines, not the whole pane: {text:?}");
@@ -505,9 +507,10 @@ mod tests {
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
         app.workflow.script_out = (0..12).map(|i| (format!("line {i}: {}", "a long error ".repeat(30)), true)).collect();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(500.0, 700.0))
-            .build_ui_state(|ui, app: &mut crate::RustGisApp| crate::analysispane::script(app, ui, &crate::theme::Tokens::light()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            app,
+        );
         h.run();
         assert!(h.get_by_label("Run").rect().max.y < 700.0);
         let first = h.get_by_label_contains("line 0:").rect();
@@ -530,23 +533,21 @@ mod tests {
         out.textures_delta.clear();
     }
 
-    /// Hosted as in the app, inside the right pane's vertical ScrollArea, a long script still
-    /// leaves Run in view: the box's limit is the visible part, not the scroll's content.
+    /// A pane too short for the box's first lines and the buttons scrolls as a whole, the box
+    /// kept at its first lines; a tall one fits the box to it (`a_long_script_keeps_run_in_view`).
     #[test]
-    fn run_stays_in_view_inside_the_panes_scroll() {
+    fn a_short_pane_scrolls_as_a_whole() {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
-            |ui, app: &mut crate::RustGisApp| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    crate::analysispane::script(app, ui, &crate::theme::Tokens::light());
-                });
-            },
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 150.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
         h.run();
-        let run = h.get_by_label("Run").rect();
-        assert!(run.max.y < 700.0, "Run is in view: {run:?}");
+        // The text's own rect is its whole content (it scrolls inside the box): Run, just under the
+        // box, says how tall the box is.
+        let (text, run) = (h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect(), h.get_by_label("Run").rect());
+        assert!(run.min.y - text.min.y < 260.0, "the box keeps about its first lines: {text:?}, Run at {run:?}");
     }
 }

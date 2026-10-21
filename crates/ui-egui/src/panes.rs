@@ -140,6 +140,11 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
         crate::sqlpane::show(app, ui, t);
         return;
     }
+    // The Script pane fits its box to the pane's height, the buttons kept in view (#653).
+    if right == RightPane::Script {
+        crate::analysispane::script_pane(app, ui, t);
+        return;
+    }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| match right {
             RightPane::Geoprocessing => geoprocessing(app, ui, t),
@@ -149,7 +154,6 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Editing => crate::editpanes::editing(app, ui, t),
             RightPane::Design => crate::editpanes::design(app, ui, t),
             RightPane::Workflows => crate::analysispane::workflows(app, ui, t),
-            RightPane::Script => crate::analysispane::script(app, ui, t),
             RightPane::Tasks => crate::workspacepanes::tasks(app, ui, t),
             RightPane::Jobs => crate::workspacepanes::jobs(app, ui, t),
             RightPane::Profile => crate::workspacepanes::profile(app, ui, t),
@@ -158,7 +162,7 @@ fn right_pane(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens) {
             RightPane::Report => crate::reportpane::report(app, ui, t),
             RightPane::Presentation => crate::docpanes::presentation(app, ui, t),
             RightPane::Notebook => crate::docpanes::notebook(app, ui, t),
-            RightPane::Assistant | RightPane::Sql => {}
+            RightPane::Assistant | RightPane::Sql | RightPane::Script => {}
             RightPane::Shares => crate::docpanes::shares(app, ui, t),
             RightPane::Directions => crate::navui::show(app, ui, t),
             RightPane::Bookmarks => crate::bookmarkpane::show(app, ui, t),

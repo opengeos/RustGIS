@@ -771,24 +771,55 @@ const SCRIPT_MIN_ROWS: usize = 10;
 /// The most lines a run's results take below the Script pane's buttons; more scroll there.
 const SCRIPT_OUT_ROWS: f32 = 6.0;
 
-/// The Script pane: commands typed one per line, run in order, coloured as they're typed (#653).
-pub fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+/// The Script pane, laid out to the pane's own height, out of the right pane's scroll (as the SQL
+/// and Assistant panes are): the box grows with the script down to the buttons and then scrolls
+/// inside, so Run and a run's results stay in view, and its height doesn't follow a scroll of the
+/// pane. Only a pane too short for the box's first lines and the buttons scrolls as a whole.
+pub fn script_pane(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+        // The hint above the box (two lines, in a narrow pane), the box's first lines, the rest.
+        let hint = (ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y) * 2.0;
+        let need = hint + script_rows(ui) + script_below(app, ui);
+        if ui.available_height() >= need {
+            script(app, ui, t, true);
+        } else {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| script(app, ui, t, false));
+        }
+    });
+}
+
+/// The height of the Script box's first lines.
+fn script_rows(ui: &Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32
+}
+
+/// The height the Script pane needs below its box: the buttons, and a run's results (their own
+/// scroll, at most SCRIPT_OUT_ROWS lines) when there are any.
+fn script_below(app: &RustGisApp, ui: &Ui) -> f32 {
+    let gap = ui.spacing().item_spacing.y;
+    let results = if app.workflow.script_out.is_empty() { 0.0 } else { script_out_height(ui) + gap };
+    ui.spacing().interact_size.y + gap * 3.0 + results
+}
+
+/// The most height a run's results take.
+fn script_out_height(ui: &Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Small) + ui.spacing().item_spacing.y) * SCRIPT_OUT_ROWS
+}
+
+/// The Script pane's content: commands typed one per line, run in order, coloured as they're typed
+/// (#653). `fit`: the box grows down to the buttons (the pane's own layout); else it keeps its
+/// first lines, in a pane that scrolls as a whole.
+fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     ui.label(egui::RichText::new(tl!("One command per line: id {json}. Lines starting with # are comments.")).small().weak());
     let unknown = crate::scriptcolor::unknown_ids_cached(ui, &app.session, &app.workflow.script);
     let palette = crate::scriptcolor::Palette::of(t);
     let mut layouter =
         |ui: &Ui, buf: &dyn egui::TextBuffer, wrap: f32| crate::scriptcolor::layout(ui, buf.as_str(), &unknown, palette, wrap);
-    // The box grows with the script down to the bottom of the pane, less the room its buttons and
-    // a run's results (their own scroll, at most SCRIPT_OUT_ROWS lines) take; a longer script
-    // scrolls inside it, so Run and the results stay in view.
-    let gap = ui.spacing().item_spacing.y;
-    let out_h = (ui.text_style_height(&egui::TextStyle::Small) + gap) * SCRIPT_OUT_ROWS;
-    let results = if app.workflow.script_out.is_empty() { 0.0 } else { out_h + gap };
-    let below = ui.spacing().interact_size.y + gap * 3.0 + results;
-    let min = ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32;
-    // The bottom of what shows: the pane is in a vertical ScrollArea, where the clip rect is the
-    // visible part, and `max_rect` or `available_height` are the content's, unbounded.
-    let room = (ui.clip_rect().bottom() - ui.cursor().top() - below).max(min);
+    // The box grows with the script down to what the buttons and results leave (the pane's own
+    // layout: `available_height` is what's left of the pane), then scrolls inside it.
+    let min = script_rows(ui);
+    let room = if fit { (ui.available_height() - script_below(app, ui)).max(min) } else { min };
+    let out_h = script_out_height(ui);
     egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         ui.add(
             egui::TextEdit::multiline(&mut app.workflow.script)
