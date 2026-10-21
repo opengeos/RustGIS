@@ -176,6 +176,10 @@ struct List {
     /// Where the list was drawn last frame: a press on it takes the focus from the box (a click
     /// elsewhere), so the list stays while the pointer is on it, for the press to reach it.
     rect: Option<egui::Rect>,
+    /// Whether the help follows the item under the pointer (it moved last) or the highlighted one
+    /// (an arrow key moved it last): a pointer resting on the list mustn't hold the help while
+    /// the arrows move the highlight.
+    pointer_leads: bool,
 }
 
 fn load(ui: &Ui, box_id: Id) -> List {
@@ -229,6 +233,7 @@ pub fn keys(ui: &Ui, box_id: Id, script: &str) -> Option<(Offer, String)> {
         if up || down {
             let selected = if up { (selected + n - 1) % n } else { (selected + 1) % n };
             list.open = Some((offer, selected));
+            list.pointer_leads = false;
         }
         None
     };
@@ -301,6 +306,10 @@ pub fn show(
         store(ui, box_id, list);
         return None;
     };
+    if ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+        list.pointer_leads = true;
+    }
+    let pointer_leads = list.pointer_leads;
     let kept = list.open.as_ref().and_then(|(o, s)| o.items.get(*s));
     let selected = kept.and_then(|item| offer.items.iter().position(|i| i == item)).unwrap_or(0);
     // Just under the cursor, or above it when the list would run off the bottom; kept on screen
@@ -334,7 +343,11 @@ pub fn show(
                             }
                         }
                     });
-                    if let Some(help) = offer.items.get(hovered.unwrap_or(selected)).and_then(|id| help(session, id)) {
+                    // Worked out each frame the list shows, for one command: a registry lookup and a
+                    // short description split. Kept, it would need the id and the language as its
+                    // key (the help is translated), for next to nothing saved.
+                    let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
+                    if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
                         // A gap, not a separator: in a row, egui's separator takes all the height it
                         // can, and would stretch the list down to the bottom of the screen.
                         ui.add_space(12.0);
@@ -688,5 +701,30 @@ mod tests {
         h.run();
         assert!(h.query_by_label(&one).is_none());
         h.get_by_label(&two);
+    }
+
+    /// With the pointer resting on the list, the arrows still move the help with the highlight;
+    /// moving the pointer gives it back to the item under it.
+    #[test]
+    fn the_last_to_move_leads_the_help() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        type_in(&mut h, "labels.");
+        let items = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
+        let sig = |h: &egui_kittest::Harness<'static, crate::RustGisApp>, id: &str| {
+            super::help(&h.state().session, id).map(|x| format!("{}{}", x.id, x.keys)).unwrap()
+        };
+        // The pointer over the third item: the help follows it.
+        let third = h.get_by_role_and_label(egui::accesskit::Role::Button, &items[2]).rect().center();
+        // From somewhere first: egui's first pointer position has no delta to move by.
+        h.event(egui::Event::PointerMoved(egui::pos2(1.0, 1.0)));
+        h.run();
+        h.event(egui::Event::PointerMoved(third));
+        h.run();
+        h.get_by_label(&sig(&h, &items[2]));
+        // ↓ with the pointer still: the help follows the highlight (the second item).
+        h.key_press(egui::Key::ArrowDown);
+        h.run();
+        h.get_by_label(&sig(&h, &items[1]));
     }
 }
