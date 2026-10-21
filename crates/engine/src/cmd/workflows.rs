@@ -432,6 +432,9 @@ pub(crate) fn run_script(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"ran": out}))
 }
 
+/// The most lines a script is read to: Run reads no further, and the Script pane colours no further.
+pub const MAX_SCRIPT_LINES: usize = 10_000;
+
 /// Whether command `id` can't run in a script: scripts and notebooks (which would run scripts), and
 /// the interface's `ui.*` commands. The Script pane marks such a line with the same rule.
 pub fn refused_in_script(id: &str) -> bool {
@@ -443,7 +446,7 @@ pub fn refused_in_script(id: &str) -> bool {
 /// a script (scripts, notebooks, `ui.*`), is an error naming its line.
 pub fn script_commands(script: &str) -> Result<Vec<(usize, String, Value)>, String> {
     let mut out = Vec::new();
-    for (n, line) in script.lines().enumerate().take(10_000) {
+    for (n, line) in script.lines().enumerate().take(MAX_SCRIPT_LINES) {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;

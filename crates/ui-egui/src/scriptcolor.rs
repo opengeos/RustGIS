@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Stroke};
-use rustgis_engine::cmd::workflows::refused_in_script;
+use rustgis_engine::cmd::workflows::{MAX_SCRIPT_LINES, refused_in_script};
 
 /// What a piece of a script is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,8 @@ pub enum Kind {
     /// `true`, `false`, `null`.
     Literal,
     Punct,
+    /// A line past `MAX_SCRIPT_LINES`, which Run doesn't read.
+    Unread,
 }
 
 /// A piece of a script: its bytes, what it is, and whether it is in parameters that don't read as
@@ -39,8 +41,13 @@ pub struct Span {
 pub fn spans(script: &str, unknown: &[String]) -> Vec<Span> {
     let mut out = Vec::new();
     let mut at = 0;
-    for line in script.split_inclusive('\n') {
+    for (n, line) in script.split_inclusive('\n').enumerate() {
         let end = at + line.trim_end_matches(['\n', '\r']).len();
+        if n >= MAX_SCRIPT_LINES {
+            // Run reads no further: the rest is one dimmed span.
+            out.push(Span { range: at..script.len(), kind: Kind::Unread, broken: false });
+            return out;
+        }
         line_spans(script, at..end, unknown, &mut out);
         if end < at + line.len() {
             out.push(Span { range: end..at + line.len(), kind: Kind::Plain, broken: false });
@@ -89,7 +96,8 @@ fn line_spans(script: &str, range: Range<usize>, unknown: &[String], out: &mut V
     // script refuses.
     let rest = &body[word.len()..];
     let json_reads = rest.trim().is_empty() || serde_json::from_str::<serde_json::Value>(rest.trim()).is_ok();
-    let bad_id = refused_in_script(id) || unknown.iter().any(|u| u == id);
+    // `unknown` is sorted (`unknown_ids`), so a binary search: a script may name many.
+    let bad_id = refused_in_script(id) || unknown.binary_search_by(|u| u.as_str().cmp(id)).is_ok();
     let id_at = start + lead;
     if !id.is_empty() {
         out.push(Span { range: id_at..id_at + id.len(), kind: if bad_id { Kind::BadId } else { Kind::Id }, broken: false });
@@ -202,7 +210,7 @@ pub fn job(script: &str, unknown: &[String], palette: Palette, font: &FontId) ->
         let color = match s.kind {
             Kind::Plain | Kind::Key => palette.text,
             Kind::Comment => palette.comment,
-            Kind::Punct => palette.dim,
+            Kind::Punct | Kind::Unread => palette.dim,
             Kind::Id => palette.id,
             Kind::BadId => palette.bad,
             Kind::Str => palette.string,
@@ -246,14 +254,15 @@ pub fn unknown_ids_cached(ui: &egui::Ui, session: &rustgis_engine::Session, scri
     ids
 }
 
-/// The ids `script`'s lines name that no command has (built-in, or a plugin's), each once and in
-/// order.
+/// The ids `script`'s lines name (as far as Run reads) that no command has, built-in or a
+/// plugin's, each once and sorted.
 pub fn unknown_ids(session: &rustgis_engine::Session, script: &str) -> Vec<String> {
     let known = |id: &str| {
         session.registry.get(id).is_some()
             || (id.starts_with(rustgis_engine::plugins::PREFIX) && rustgis_engine::plugins::command(id).is_some())
     };
-    let mut out: Vec<String> = script.lines().filter_map(line_id).filter(|id| !known(id)).map(String::from).collect();
+    let lines = script.lines().take(MAX_SCRIPT_LINES);
+    let mut out: Vec<String> = lines.filter_map(line_id).filter(|id| !known(id)).map(String::from).collect();
     out.sort();
     out.dedup();
     out
@@ -549,5 +558,39 @@ mod tests {
         // box, says how tall the box is.
         let (text, run) = (h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect(), h.get_by_label("Run").rect());
         assert!(run.min.y - text.min.y < 260.0, "the box keeps about its first lines: {text:?}, Run at {run:?}");
+    }
+
+    /// Past the lines Run reads, nothing is coloured or looked up: those lines won't run.
+    #[test]
+    fn lines_run_doesnt_read_are_dimmed() {
+        let max = rustgis_engine::cmd::workflows::MAX_SCRIPT_LINES;
+        let script = format!("{}nope.cmd {{}}\n", "map.zoomFull\n".repeat(max));
+        let sp = spans(&script, &[]);
+        let last = sp.last().unwrap();
+        assert_eq!((last.kind, &script[last.range.clone()]), (Kind::Unread, "nope.cmd {}\n"));
+        let app = crate::RustGisApp::with_sample();
+        assert!(super::unknown_ids(&app.session, &script).is_empty(), "an unread line's id isn't looked up");
+    }
+
+    /// The box keeps its focus and text when the pane is resized from fitting the box to scrolling
+    /// as a whole: one id either way.
+    #[test]
+    fn resizing_the_pane_keeps_the_box_focused() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = crate::RustGisApp::with_sample();
+        app.workflow.script = "map.zoomFull\n".repeat(30);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            app,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+        h.run();
+        h.set_size(egui::vec2(500.0, 150.0));
+        h.run();
+        assert!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).is_focused(), "still focused once the pane scrolls");
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text("z");
+        h.run();
+        assert!(h.state().workflow.script.contains('z'));
     }
 }

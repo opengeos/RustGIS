@@ -823,6 +823,9 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         ui.add(
             egui::TextEdit::multiline(&mut app.workflow.script)
+                // One id whether the pane scrolls as a whole or not, so resizing it across that
+                // keeps the box's focus, cursor and selection.
+                .id(egui::Id::new("script_text"))
                 .code_editor()
                 .layouter(&mut layouter)
                 .desired_rows(SCRIPT_MIN_ROWS)
