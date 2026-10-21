@@ -31,6 +31,8 @@ vector, LiDAR and hydrology tools, after John Lindsay's
 - The [EPSG Geodetic Parameter Dataset](https://epsg.org) of IOGP, PROJ's database and Esri's
   [projection-engine-db-doc](https://github.com/Esri/projection-engine-db-doc) for coordinate
   systems.
+- [OpenFreeMap](https://openfreemap.org), whose free vector tiles and styles (such as Liberty)
+  draw RustGIS's vector basemaps.
 - [OpenStreetMap](https://www.openstreetmap.org) and its contributors,
   [Overture Maps](https://overturemaps.org) and [Protomaps](https://protomaps.com) for basemaps
   and open map data.

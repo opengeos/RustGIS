@@ -206,7 +206,8 @@ See the [Become a Sponsor](https://rustgis.app/sponsor/) page for what sponsorsh
 RustGIS builds on the work of many projects and their authors: [QGIS](https://qgis.org), ArcGIS
 Pro and [GDAL](https://gdal.org), the GIS it is measured against; [MapLibre](https://maplibre.org)
 and [PROJ](https://proj.org); the GeoLibre tool suite, after John Lindsay's
-[WhiteboxTools](https://www.whiteboxgeo.com); [Natural Earth](https://www.naturalearthdata.com),
+[WhiteboxTools](https://www.whiteboxgeo.com); [OpenFreeMap](https://openfreemap.org) for vector
+basemaps; [Natural Earth](https://www.naturalearthdata.com),
 [OpenStreetMap](https://www.openstreetmap.org), [Overture Maps](https://overturemaps.org) and the
 EPSG dataset; and the Rust crates it is made of, among them [egui](https://github.com/emilk/egui),
 [wgpu](https://wgpu.rs), [tiny-skia](https://github.com/linebender/tiny-skia),
