@@ -226,12 +226,15 @@ fn block(r: &Raster, plan: &Plan, factor: usize, ox: usize, oy: usize, out: &mut
     let (w, h) = (r.width as usize, r.height as usize);
     let (x0, y0) = (ox * factor, oy * factor);
     let (x1, y1) = ((x0 + factor).min(w), (y0 + factor).min(h));
+    // With an alpha band, alpha says which pixels have no value: a colour channel that equals the
+    // no-data value (a black red channel, with no-data 0) is a real colour.
+    let valid = |v: f32| if plan.alpha.is_some() { v.is_finite() } else { r.is_valid(v) };
     if factor == 1 || plan.categorical {
         // Classes are never averaged: an overview takes the pixel in the middle of its block.
         let (x, y) = (x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2);
         for (o, &b) in out.iter_mut().zip(&plan.bands) {
             let v = r.bands.get(b).and_then(|band| band.data.get(y * w + x)).copied().unwrap_or(f32::NAN);
-            *o = if r.is_valid(v) { v } else { f32::NAN };
+            *o = if valid(v) { v } else { f32::NAN };
         }
         return;
     }
@@ -248,11 +251,11 @@ fn block(r: &Raster, plan: &Plan, factor: usize, ox: usize, oy: usize, out: &mut
                 continue;
             };
             for (i, &v) in row.iter().enumerate() {
-                if !r.is_valid(v) {
+                if !valid(v) {
                     continue;
                 }
                 let k = match arow {
-                    Some(a) => a.get(i).copied().filter(|a| r.is_valid(*a)).map_or(0.0, f64::from),
+                    Some(a) => a.get(i).copied().filter(|a| valid(*a)).map_or(0.0, f64::from),
                     None => 1.0,
                 };
                 sum += f64::from(v) * k;
@@ -892,6 +895,17 @@ mod tests {
         bytes[at + 8] = 0;
         let back = geotiff::read(Cursor::new(bytes), "b").unwrap();
         assert_eq!((back.band_count(), back.color.clone()), (2, ColorHint::Gray));
+        // With alpha, a channel equal to the no-data value is a colour: the pixel stays opaque, and
+        // overviews average it.
+        let bands = vec![vec![0.0; n], vec![100.0; n], vec![200.0; n], vec![255.0; n]];
+        let z = utm(w, h, bands, ColorHint::Rgb { alpha: true }, "UInt8", Some(0.0));
+        let bytes = write(&z, 0).unwrap();
+        let mut dec = Decoder::new(Cursor::new(bytes.as_slice())).unwrap();
+        let DecodingResult::U8(px) = dec.read_image().unwrap() else { panic!("bytes") };
+        assert_eq!(px.get(..4), Some(&[0, 100, 200, 255][..]));
+        dec.seek_to_image(1).unwrap();
+        let DecodingResult::U8(px) = dec.read_image().unwrap() else { panic!("bytes") };
+        assert_eq!(px.get(..4), Some(&[0, 100, 200, 255][..]));
         // Byte colours with a fractional alpha keep the alpha, as floats, rather than dropping it.
         let f = utm(
             2,
