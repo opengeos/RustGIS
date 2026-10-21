@@ -5391,6 +5391,76 @@ fn data_from_a_web_address() {
     assert_eq!(crate::cmd::layer::url_file_name("https://x.org/q.json", b"[]").unwrap(), "q.geojson");
 }
 
+/// JPEG 2000 from a web address or uploaded bytes is read through GDAL on the desktop, as a file
+/// on disk is; contents that aren't JPEG 2000 never reach GDAL.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn jpeg2000_from_a_web_address() {
+    use base64::Engine;
+    let mut s = Session::new(Project::default());
+    // A VRT (which would have GDAL read other files on this computer) named like JPEG 2000.
+    let vrt = serve(br#"<VRTDataset rasterXSize="1" rasterYSize="1"></VRTDataset>"#, 1);
+    let e = s.run("layer.addUrl", &json!({"url": format!("{vrt}/TCI.jp2")})).unwrap_err();
+    assert!(e.contains("not a JPEG 2000 file"), "{e}");
+    if !rustgis_data::raster::gdal::available() {
+        let jp2 = serve(b"\0\0\0\x0cjP  \r\n\x87\n", 1);
+        let e = s.run("layer.addUrl", &json!({"url": format!("{jp2}/TCI.jp2")})).unwrap_err();
+        assert!(e.contains("needs GDAL"), "{e}");
+        return;
+    }
+    let executable = if cfg!(windows) { "gdal_translate.exe" } else { "gdal_translate" };
+    let translate = std::env::var_os("RUSTGIS_GDAL_BIN")
+        .map(|d| std::path::PathBuf::from(d).join(executable))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| executable.into());
+    let formats = std::process::Command::new(&translate).arg("--formats").output().expect("list GDAL drivers");
+    assert!(formats.status.success(), "GDAL driver discovery failed: {}", String::from_utf8_lossy(&formats.stderr));
+    if !String::from_utf8_lossy(&formats.stdout).lines().any(|line| line.split_whitespace().next() == Some("JP2OpenJPEG")) {
+        eprintln!("skipping JPEG 2000 conversion: GDAL has no optional JP2OpenJPEG driver");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-jp2-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asc = dir.join("g.asc");
+    std::fs::write(&asc, "ncols 4\nnrows 3\nxllcorner 10\nyllcorner 40\ncellsize 0.5\n1 2 3 4\n5 6 7 8\n9 10 11 12\n").unwrap();
+    let jp2 = dir.join("g.jp2");
+    let made = std::process::Command::new(&translate)
+        .args(["-q", "-of", "JP2OpenJPEG", "-ot", "Byte", "-a_srs", "EPSG:4326"])
+        .arg(&asc)
+        .arg(&jp2)
+        .output()
+        .expect("generate JPEG 2000 fixture");
+    assert!(made.status.success(), "JPEG 2000 fixture conversion failed ({}): {}", made.status, String::from_utf8_lossy(&made.stderr));
+    // `serve` requires a 'static slice; intentionally leak this small test-only fixture so it
+    // stays valid for the server thread's lifetime.
+    let bytes = Vec::leak(std::fs::read(&jp2).unwrap());
+    let uploaded = base64::engine::general_purpose::STANDARD.encode(&*bytes);
+    let base = serve(bytes, 1);
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/tiles/33/T/XN/TCI.jp2")})).unwrap();
+    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(l.name, "TCI");
+    let rl = l.raster.as_ref().unwrap();
+    let data = rl.data.as_ref().unwrap();
+    assert_eq!((data.width, data.height, data.georeferenced), (4, 3, true));
+    let e = data.extent();
+    assert!((e.min_x - 10.0).abs() < 1e-6 && (e.max_y - 41.5).abs() < 1e-6, "{e:?}");
+    // The project keeps the converted GeoTIFF, so it opens again without GDAL.
+    assert_eq!(rl.file_name.as_deref(), Some("TCI.tif"));
+    assert!(rl.embedded.is_some() && rl.path.is_none());
+    for file_name in ["uploaded.jp2", "uploaded.J2K"] {
+        let mut upload = Session::new(Project::default());
+        let r = upload.run("layer.addDataBytes", &json!({"fileName": file_name, "data": uploaded})).unwrap();
+        let rl = upload.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap();
+        let raster = rl.data.as_ref().unwrap();
+        assert_eq!((raster.width, raster.height, raster.georeferenced), (4, 3, true));
+        let e = raster.extent();
+        assert!((e.min_x - 10.0).abs() < 1e-6 && (e.max_y - 41.5).abs() < 1e-6, "{e:?}");
+        assert_eq!(rl.file_name.as_deref(), Some("uploaded.tif"));
+        assert!(rl.embedded.is_some() && rl.path.is_none());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Where a command may not download itself (the browser), `layer.addUrl` leaves its request for
 /// the front end: once per address, a few at a time (the next is refused, never one silently
 /// dropped after it was promised), and taken once.
@@ -6818,6 +6888,134 @@ fn lidar_point_clouds() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A Zarr store in a temporary folder: `t` over three monthly steps (days since 2001-01-01: 0,
+/// 31, 59) on a 3 × 4 grid, step `k`'s values `100·k + i`.
+#[cfg(not(target_arch = "wasm32"))]
+fn zarr_store_over_time(tag: &str) -> (std::path::PathBuf, String) {
+    let dir = std::env::temp_dir().join(format!("rustgis-zarr-{tag}-{}", std::process::id()));
+    let store = dir.join("air.zarr");
+    let _ = std::fs::remove_dir_all(&dir);
+    for d in ["t", "lat", "lon", "time"] {
+        std::fs::create_dir_all(store.join(d)).unwrap();
+    }
+    let arr = |shape: &str, chunks: &str, dtype: &str| {
+        serde_json::from_str::<Value>(&format!(
+            r#"{{"shape":{shape},"chunks":{chunks},"dtype":"{dtype}","compressor":null,"fill_value":null,"filters":null,"order":"C","zarr_format":2}}"#
+        ))
+        .unwrap()
+    };
+    let meta = json!({"metadata": {
+        ".zgroup": {"zarr_format": 2},
+        "t/.zarray": arr("[3,3,4]", "[1,3,4]", "<f4"),
+        "t/.zattrs": {"_ARRAY_DIMENSIONS": ["time","lat","lon"], "units": "K"},
+        "lat/.zarray": arr("[3]", "[3]", "<f4"),
+        "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
+        "lon/.zarray": arr("[4]", "[4]", "<f4"),
+        "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
+        "time/.zarray": arr("[3]", "[3]", "<i4"),
+        "time/.zattrs": {"_ARRAY_DIMENSIONS": ["time"], "units": "days since 2001-01-01"},
+    }, "zarr_consolidated_format": 1});
+    std::fs::write(store.join(".zmetadata"), meta.to_string()).unwrap();
+    std::fs::write(store.join(".zgroup"), r#"{"zarr_format":2}"#).unwrap();
+    let f32s = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    std::fs::write(store.join("lat/0"), f32s(&[10.0, 20.0, 30.0])).unwrap();
+    std::fs::write(store.join("lon/0"), f32s(&[1.0, 2.0, 3.0, 4.0])).unwrap();
+    std::fs::write(store.join("time/0"), [0i32, 31, 59].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+    for t in 0..3 {
+        let v: Vec<f32> = (0..12).map(|i| (t * 100 + i) as f32).collect();
+        std::fs::write(store.join(format!("t/{t}.0.0")), f32s(&v)).unwrap();
+    }
+    let path = store.display().to_string();
+    (dir, path)
+}
+
+/// A Zarr variable follows the time slider (#554): the slice drawn is the step the slider is at,
+/// the stretch is the same at every step, and the project keeps the layer by its store.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_zarr_variable_follows_the_time_slider() {
+    let (dir, path) = zarr_store_over_time("follow");
+    let mut s = Session::new(Project::default());
+    let id = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true})).unwrap()["layer"].as_u64().unwrap() as u32;
+    // The slider is on over the variable's three dates, at the first.
+    let info = s.run("time.info", &Value::Null).unwrap();
+    assert_eq!(info["steps"], 3, "{info}");
+    let first = |s: &Session| s.map().layer(id).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.as_ref()).map(|d| d.bands[0].data[0]);
+    // North up: the last latitude row first; step k's values are 100·k + i.
+    assert_eq!(first(&s), Some(8.0));
+    let rl = s.map().layer(id).unwrap().raster.clone().unwrap();
+    assert!(matches!(rl.style.stretch, rustgis_map::raster::Stretch::Custom { .. }), "{:?}", rl.style.stretch);
+    assert!(s.map().layer(id).unwrap().name.ends_with(" t"), "{}", s.map().layer(id).unwrap().name);
+    let stretch = rl.style.stretch;
+    // Moving the slider moves the slice; the stretch stays.
+    s.run("time.goTo", &json!({"step": 2})).unwrap();
+    assert_eq!(first(&s), Some(208.0));
+    s.run("time.step", &json!({"by": -1})).unwrap();
+    assert_eq!(first(&s), Some(108.0));
+    assert_eq!(s.map().layer(id).unwrap().raster.as_ref().unwrap().style.stretch, stretch);
+    // Saved and opened again: the store and the step, read again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains("\"time_zarr\"") && !text.contains("\"embedded\""), "kept by its store, not as a slice");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t
+        .map()
+        .layers
+        .iter()
+        .find(|l| l.is_raster())
+        .and_then(|l| l.raster.as_ref())
+        .and_then(|r| r.data.as_ref())
+        .map(|d| d.bands[0].data[0]);
+    assert_eq!(again, Some(108.0));
+    // A window with no step of the variable: nothing drawn.
+    s.run("time.set", &json!({"dates": ["2000-06-01", "2001-01-01", "2001-02-01", "2001-03-01"], "date": "2000-06-01"})).unwrap();
+    assert_eq!(first(&s), None);
+    s.run("time.goTo", &json!({"step": 3})).unwrap();
+    assert_eq!(first(&s), Some(208.0));
+    // The animation reads each step's slice.
+    let zip = std::env::temp_dir().join(format!("rustgis-zarr-frames-{}.zip", std::process::id()));
+    let r = s.run("time.export", &json!({"path": zip.display().to_string(), "width": 64, "height": 48})).unwrap();
+    assert_eq!(r["frames"], 4, "{r}");
+    // After the export the slider is back at its step, and the layer shows it.
+    assert_eq!(first(&s), Some(208.0), "the layer shows the step the slider is back at");
+    let _ = std::fs::remove_file(zip);
+    // A period: the steps from February on, the layer's first step the second of the axis.
+    let id2 = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true, "start": "2001-01-20", "name": "late"})).unwrap()
+        ["layer"]
+        .as_u64()
+        .unwrap() as u32;
+    let zt = s.map().layer(id2).unwrap().raster.as_ref().unwrap().time_zarr.clone().unwrap();
+    assert_eq!((zt.offset, zt.dates.len(), zt.dim.as_str()), (1, 2, "time"));
+    for bad in [
+        json!({"path": path, "variable": "t", "time": true, "start": "2002-01-01"}),
+        json!({"path": path, "variable": "t", "time": true, "start": "June"}),
+        json!({"path": path, "variable": "t", "time": true, "ran": 1}),
+        json!({"path": path, "variable": "lat", "time": true}),
+    ] {
+        assert!(s.run("layer.addZarr", &bad).is_err(), "{bad}");
+    }
+    // An axis with a date twice, or going back: each date is a step, so it can't be followed.
+    let (dir2, twice) = zarr_store_over_time("twice");
+    std::fs::write(std::path::Path::new(&twice).join("time/0"), [0i32, 31, 31].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>())
+        .unwrap();
+    let e = s.run("layer.addZarr", &json!({"path": twice, "variable": "t", "time": true})).unwrap_err();
+    assert!(e.contains("increasing order"), "{e}");
+    // With no variable named, a folder's first one follows the slider.
+    let mut plain = Session::new(Project::default());
+    let r = plain.run("layer.addZarr", &json!({"path": path, "time": true})).unwrap();
+    assert!(plain.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().time_zarr.is_some());
+    // A store whose first slice can't be read leaves the slider as it was.
+    let (dir3, broken) = zarr_store_over_time("broken");
+    std::fs::remove_file(std::path::Path::new(&broken).join("t/0.0.0")).unwrap();
+    std::fs::write(std::path::Path::new(&broken).join("t/0.0.0"), b"short").unwrap();
+    let mut fresh = Session::new(Project::default());
+    assert!(fresh.run("layer.addZarr", &json!({"path": broken, "variable": "t", "time": true})).is_err());
+    assert!(fresh.map().time.is_none(), "a store that can't be read leaves the slider as it was");
+    let _ = std::fs::remove_dir_all(dir3);
+    let _ = std::fs::remove_dir_all(dir2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A Zarr store in a folder: its variables listed (with time labels), a slice added by command
 /// and by Add Data, saved by folder and selection and read again when the project opens; a slice
 /// the app read itself handed over by id.
@@ -7643,6 +7841,23 @@ fn params_name_every_key_a_command_reads() {
         }
     }
     assert!(missing.is_empty(), "{} commands read keys their params don't name:\n{}", missing.len(), missing.join("\n"));
+}
+
+#[test]
+fn needs_input_reads_descriptions() {
+    use crate::needs_input;
+    assert!(!needs_input("{}"));
+    assert!(!needs_input(r#"{"layer"?, "name"?: text}"#));
+    assert!(needs_input(r#"{"layer": raster, "points"?: [[column, row, lon, lat], …]}"#));
+    assert!(needs_input(r#"{"path": folder | "url": "https://…", "name"?: text}"#));
+    assert!(needs_input(r#"{"url": "https://…/x.json?f=json"}"#));
+    assert!(!needs_input(r#"{"steps"?: [{"required": value}], "url"?: "https://…/?q=x"}"#));
+    assert!(needs_input("a GeoJSON text: {type: …}"));
+    assert!(!needs_input("a GeoJSON text"));
+    assert!(needs_input("a service URL: https://…/query?f=json"));
+    let s = Session::new(Project::default());
+    assert!(s.registry.get("raster.georeference").is_some_and(crate::CommandSpec::needs_input));
+    assert!(s.registry.get("map.zoomIn").is_some_and(|c| !c.needs_input()));
 }
 
 #[test]
@@ -10523,6 +10738,19 @@ fn project_info_describes_the_whole_project() {
     assert_eq!(layers.len(), 1, "{some}");
     assert_eq!(layers[0]["name"], "Cities");
     assert!(layers[0].get("fields").is_none(), "{some}");
+}
+
+/// A script refuses scripts, notebooks and `ui.*` commands, by the one rule the Script pane marks
+/// its lines with (#653).
+#[test]
+fn scripts_refuse_scripts_notebooks_and_ui_commands() {
+    use crate::cmd::workflows::{refused_in_script, script_commands};
+    for id in ["script.run", "ui.pane.labeling", "notebook.run"] {
+        assert!(refused_in_script(id), "{id}");
+        let e = script_commands(&format!("map.zoomFull\n{id} {{}}")).unwrap_err();
+        assert!(e.contains("line 2") && e.contains("can't run in a script"), "{e}");
+    }
+    assert!(!refused_in_script("map.zoomFull") && !refused_in_script("notebook.new"));
 }
 
 /// A script can't edit a layer read in place from its file, as a command run on its own can't:

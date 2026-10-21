@@ -34,7 +34,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
@@ -1889,6 +1889,10 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
         .take(120)
         .collect();
     let ext = Path::new(&last).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    // JPEG 2000 (Sentinel-2's imagery) is read through GDAL, which the browser can't run.
+    if rustgis_data::raster::is_jpeg2000_name(&last) {
+        return if cfg!(target_arch = "wasm32") { Err(super::raster::JPEG2000_WEB_LIMITATION.into()) } else { Ok(last) };
+    }
     let known = rustgis_data::io::READ_EXTENSIONS.contains(&ext.as_str()) || rustgis_data::raster::is_raster_name(&last) || ext == "tsv";
     if known && ext != "json" {
         return Ok(last);
@@ -1986,7 +1990,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
         let name = url_file_name(url, &bytes).map_err(named)?;
-        super::raster::add_named_bytes(s, p, name, bytes)
+        super::raster::add_named_bytes(s, p, name, bytes).map_err(named)
     }
 }
 

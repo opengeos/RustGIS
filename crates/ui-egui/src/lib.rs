@@ -51,10 +51,12 @@ mod relayshot;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod scriptcolor;
 mod searchbox;
 mod serviceui;
 mod showme;
 mod sourcespane;
+mod sqlbox;
 mod sqlpane;
 mod stacui;
 mod table;
@@ -2473,6 +2475,7 @@ impl RustGisApp {
                 }
             }
             "ui.modelBuilder" => modelbuilder::command(self, p)?,
+            "ui.importModel" => modelbuilder::import(self),
             "ui.catalogView" => self.ws.catalog_view = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.catalog_view),
             "ui.itemPopups" => self.ws.item_popups = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.item_popups),
             "ui.linkCursors" => self.ws.link_cursors = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ws.link_cursors),

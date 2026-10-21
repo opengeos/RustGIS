@@ -445,12 +445,7 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
             menu_item(ui, app, "", "S3…", "ui.dialog", json!({"name": "s3"}));
             menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
             ui.separator();
-            ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
-            for (n, label) in
-                [("countries", "World Countries"), ("cities", "Populated Places"), ("rivers", "Major Rivers"), ("lakes", "Major Lakes")]
-            {
-                menu_item(ui, app, "", label, "layer.addSample", json!({"name": n}));
-            }
+            sample_data_gallery(ui, app);
         });
         big_menu(ui, app, "web_data", "Web\nData", "Add data from public web services and catalogs.", web_data_menu);
     });
@@ -569,7 +564,16 @@ fn web_data_menu(ui: &mut Ui, app: &mut RustGisApp) {
     });
 }
 
-fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
+pub(crate) fn sample_data_gallery(ui: &mut Ui, app: &mut RustGisApp) {
+    ui.label(egui::RichText::new(tl!("Sample data (Natural Earth)")).small().weak());
+    for (name, label) in
+        [("countries", "World Countries"), ("cities", "Populated Places"), ("rivers", "Major Rivers"), ("lakes", "Major Lakes")]
+    {
+        menu_item(ui, app, "", label, "layer.addSample", json!({"name": name}));
+    }
+}
+
+pub(crate) fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Basemaps")).font(semibold(12.5)));
     ui.add_space(4.0);
@@ -579,6 +583,7 @@ fn basemap_gallery(ui: &mut Ui, app: &mut RustGisApp) {
             let (r, resp) = ui.allocate_exact_size(vec2(92.0, 74.0), Sense::click());
             // Web basemaps cover the built-in one.
             let sel = app.session.map().basemap == b && app.session.map().tiles.iter().all(|t| t.overlay);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!(b.label())));
             let thumb = Rect::from_min_size(r.min + vec2(4.0, 4.0), vec2(84.0, 48.0));
             ui.painter().rect_filled(thumb, CornerRadius::same(4), crate::theme::c32(water));
             // A little continent.
@@ -1170,20 +1175,29 @@ fn notebook_group(app: &mut RustGisApp, ui: &mut Ui) {
 
 fn layer_templates_group(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Layer Templates", |ui| {
-        big_menu(ui, app, "graphics_layer", "Layer\nTemplates", "Add an empty layer with a ready-made schema, to draw into.", |ui, app| {
-            for (id, label) in [
-                ("points", "Points"),
-                ("lines", "Lines"),
-                ("polygons", "Polygons"),
-                ("places", "Places (name, category, address, rating)"),
-                ("routes", "Routes (name, surface, length)"),
-                ("areas", "Areas (name, land use, area)"),
-                ("observations", "Observations (observer, date, species, count)"),
-            ] {
-                menu_item(ui, app, "add_data", label, "layer.template", json!({"template": id}));
-            }
-        });
+        big_menu(
+            ui,
+            app,
+            "graphics_layer",
+            "Layer\nTemplates",
+            "Add an empty layer with a ready-made schema, to draw into.",
+            layer_templates_gallery,
+        );
     });
+}
+
+pub(crate) fn layer_templates_gallery(ui: &mut Ui, app: &mut RustGisApp) {
+    for (id, label) in [
+        ("points", "Points"),
+        ("lines", "Lines"),
+        ("polygons", "Polygons"),
+        ("places", "Places (name, category, address, rating)"),
+        ("routes", "Routes (name, surface, length)"),
+        ("areas", "Areas (name, land use, area)"),
+        ("observations", "Observations (observer, date, species, count)"),
+    ] {
+        menu_item(ui, app, "add_data", label, "layer.template", json!({"template": id}));
+    }
 }
 
 fn styles_group(app: &mut RustGisApp, ui: &mut Ui) {

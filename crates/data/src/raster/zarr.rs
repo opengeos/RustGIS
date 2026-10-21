@@ -1256,6 +1256,104 @@ pub fn info_keys(store: &Store) -> Vec<String> {
     keys
 }
 
+/// The chunk keys of the coordinates of `variable`'s dimensions other than the map's (as
+/// [`info_keys`] lists them for every variable).
+pub fn coordinate_keys(store: &Store, variable: &str) -> Vec<String> {
+    let Some(v) = store.array(variable) else { return Vec::new() };
+    let (y, x) = map_dims(v);
+    let mut keys = Vec::new();
+    for (d, name) in v.dim_names().iter().enumerate() {
+        if d == y || d == x {
+            continue;
+        }
+        if let Some(c) =
+            store.coordinate(v, name).filter(|c| c.shape.first().is_some_and(|n| *n <= MAX_COORDS) && c.unsupported().is_none())
+        {
+            keys.extend(all_keys(c).into_iter().filter(|k| !keys.contains(k)).collect::<Vec<_>>());
+        }
+    }
+    keys
+}
+
+/// `variable`'s time dimension: the first of its dimensions other than the map's whose
+/// coordinate has CF time units (`days since 2001-01-01`), with its steps as milliseconds since
+/// 1970 (UTC). A `noleap` date is the same real date; a 360- or 366-day year is laid over its real
+/// year in proportion (360_day's 30 February falls about 1 March), so its dates stay distinct and
+/// in order. `None` when no dimension has such a coordinate, or one of its steps isn't a date.
+pub fn time_axis(store: &Store, variable: &str, chunks: &HashMap<String, Vec<u8>>) -> Option<(String, Vec<f64>)> {
+    let v = store.array(variable)?;
+    let (y, x) = map_dims(v);
+    for (d, name) in v.dim_names().iter().enumerate() {
+        if d == y || d == x {
+            continue;
+        }
+        // A coordinate of the dimension's own length (one found at the root, of another group,
+        // may not be), so date `i` is step `i`.
+        let Some(c) = store.coordinate(v, name).filter(|c| c.shape.first() == v.shape.get(d)) else { continue };
+        if !attr_str(c, "units").is_some_and(|u| u.contains(" since ")) {
+            continue;
+        }
+        let Ok(vals) = values_1d(c, chunks) else { continue };
+        let ms: Option<Vec<f64>> = vals.iter().map(|t| time_ms(c, *t)).collect();
+        if let Some(ms) = ms.filter(|m| !m.is_empty()) {
+            return Some((name.clone(), ms));
+        }
+    }
+    None
+}
+
+/// A CF time coordinate's value as milliseconds since 1970 (see [`time_axis`]).
+fn time_ms(c: &Array, v: f64) -> Option<f64> {
+    let units = attr_str(c, "units")?;
+    let calendar = attr_str(c, "calendar").unwrap_or("standard").to_ascii_lowercase();
+    let (unit, since) = units.split_once(" since ")?;
+    let secs = match unit.trim().to_ascii_lowercase().as_str() {
+        "seconds" | "second" | "s" => 1.0,
+        "minutes" | "minute" | "min" => 60.0,
+        "hours" | "hour" | "h" => 3600.0,
+        "days" | "day" | "d" => 86_400.0,
+        _ => return None,
+    };
+    if !(v.is_finite() && v.abs() < 1e13) {
+        return None;
+    }
+    let since = since.trim();
+    let t = match calendar.as_str() {
+        "standard" | "gregorian" | "proleptic_gregorian" => epoch_seconds(since)? + v * secs,
+        "noleap" | "365_day" | "all_leap" | "366_day" | "360_day" => {
+            // The time of day `since` gives counts too (`days since 2000-01-01 12:00`).
+            let offset = v * secs + since.split_once([' ', 'T']).map_or(0.0, |(_, clock)| clock_seconds(clock));
+            let day = fixed_calendar(&calendar, since, offset)?;
+            let (Some(y), Some(m), Some(d)) = date_parts(&day) else { return None };
+            let into_day = offset.rem_euclid(86_400.0);
+            match calendar.as_str() {
+                // Every day of a 365-day year is a real date.
+                "noleap" | "365_day" => days_from_civil(y, m, d) as f64 * 86_400.0 + into_day,
+                // 360 or 366 days: placed in the real year in proportion.
+                _ => {
+                    let (model, before): (f64, i64) = if calendar == "360_day" {
+                        (360.0, (m - 1) * 30)
+                    } else {
+                        (
+                            366.0,
+                            [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+                                .get((m - 1).clamp(0, 11) as usize)
+                                .copied()
+                                .unwrap_or(0),
+                        )
+                    };
+                    let start = days_from_civil(y, 1, 1);
+                    let real = (days_from_civil(y + 1, 1, 1) - start) as f64;
+                    (start as f64 + ((before + d - 1) as f64 + into_day / 86_400.0) / model * real) * 86_400.0
+                }
+            }
+        }
+        _ => return None,
+    };
+    let ms = t * 1000.0;
+    ms.is_finite().then_some(ms)
+}
+
 /// A coordinate value as a label: a CF time (`days since 1850-01-01`) as a date, else the
 /// number and units.
 fn label(c: &Array, v: f64) -> String {
@@ -1292,12 +1390,22 @@ fn label(c: &Array, v: f64) -> String {
     if units.is_empty() { n } else { format!("{n} {units}") }
 }
 
+/// A date's year, month and day as its text has them: `2001-03-05`, or `-0001-01-01` for a year
+/// before 1 CE (the sign is the year's, not a separator).
+fn date_parts(s: &str) -> (Option<i64>, Option<i64>, Option<i64>) {
+    let (sign, rest) = match s.trim().strip_prefix('-') {
+        Some(r) => (-1, r),
+        None => (1, s.trim()),
+    };
+    let mut p = rest.splitn(3, '-').map(|x| x.trim().parse::<i64>().ok());
+    (p.next().flatten().map(|y| sign * y), p.next().flatten(), p.next().flatten())
+}
+
 /// A date in a model calendar of fixed-length years (365, 366 or 360 days): `secs` after `since`.
 fn fixed_calendar(calendar: &str, since: &str, secs: f64) -> Option<String> {
-    let mut d = since.split([' ', 'T']).next()?.splitn(3, '-').map(|p| p.trim().parse::<i64>().ok());
+    let (y, m, d) = date_parts(since.split([' ', 'T']).next()?);
     // The parts of a hostile `units` string are kept to sane ranges, so nothing below overflows.
-    let (y0, m0, d0) =
-        (d.next()??.clamp(-MAX_YEAR, MAX_YEAR), d.next().flatten().unwrap_or(1).clamp(1, 12), d.next().flatten().unwrap_or(1).clamp(1, 31));
+    let (y0, m0, d0) = (y?.clamp(-MAX_YEAR, MAX_YEAR), m.unwrap_or(1).clamp(1, 12), d.unwrap_or(1).clamp(1, 31));
     let months: [i64; 12] = match calendar {
         "360_day" => [30; 12],
         "all_leap" | "366_day" => [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31],
@@ -1319,12 +1427,17 @@ fn fixed_calendar(calendar: &str, since: &str, secs: f64) -> Option<String> {
 /// Seconds since 1970 of `YYYY-MM-DD[ T]HH:MM:SS`.
 fn epoch_seconds(s: &str) -> Option<f64> {
     let (date, time) = s.split_once([' ', 'T']).unwrap_or((s, "0:0:0"));
-    let mut d = date.splitn(3, '-').map(|p| p.trim().parse::<i64>().ok());
-    let (y, m, day) =
-        (d.next()??.clamp(-MAX_YEAR, MAX_YEAR), d.next().flatten().unwrap_or(1).clamp(1, 12), d.next().flatten().unwrap_or(1).clamp(1, 31));
-    let mut t = time.trim().trim_end_matches('Z').split(':').map(|p| p.trim().parse::<f64>().ok());
+    let (y, m, day) = date_parts(date);
+    let (y, m, day) = (y?.clamp(-MAX_YEAR, MAX_YEAR), m.unwrap_or(1).clamp(1, 12), day.unwrap_or(1).clamp(1, 31));
+    Some(days_from_civil(y, m, day) as f64 * 86_400.0 + clock_seconds(time))
+}
+
+/// Seconds into the day of `HH:MM:SS` (parts missing are 0; a trailing `Z` is dropped), kept
+/// within a few days so a hostile string can't push a date far off.
+fn clock_seconds(time: &str) -> f64 {
+    let mut t = time.trim().trim_end_matches('Z').split(':').map(|p| p.trim().parse::<f64>().ok().filter(|v| v.is_finite()));
     let (hh, mm, ss) = (t.next().flatten().unwrap_or(0.0), t.next().flatten().unwrap_or(0.0), t.next().flatten().unwrap_or(0.0));
-    Some(days_from_civil(y, m, day) as f64 * 86_400.0 + hh * 3600.0 + mm * 60.0 + ss)
+    (hh * 3600.0 + mm * 60.0 + ss).clamp(-7.0 * 86_400.0, 7.0 * 86_400.0)
 }
 
 /// The years a `since` date may name: far past any data, small enough that day counts can't
@@ -1503,6 +1616,42 @@ pub fn read_dir(dir: &std::path::Path, selection: &str, crs: Option<&str>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A CF date's parts, a year before 1 CE included (its sign isn't a separator).
+    #[test]
+    fn dates_before_1_ce() {
+        assert_eq!(date_parts("2001-03-05"), (Some(2001), Some(3), Some(5)));
+        assert_eq!(date_parts("-0001-01-01"), (Some(-1), Some(1), Some(1)));
+        assert_eq!(date_parts("1850"), (Some(1850), None, None));
+        assert_eq!(date_parts("x-1-1"), (None, Some(1), Some(1)));
+        assert!(fixed_calendar("noleap", "-0001-01-01", 0.0).is_some());
+    }
+
+    /// Model calendars: the time of day in `since` counts, and daily 360- and 366-day dates stay
+    /// distinct and in order (30 February and 1 March are two days).
+    #[test]
+    fn model_calendar_dates_stay_apart() {
+        let arr = serde_json::json!({"shape": [2], "chunks": [2], "dtype": "<f4", "compressor": null, "fill_value": null, "filters": null, "order": "C", "zarr_format": 2});
+        let meta = serde_json::json!({"metadata": {"t/.zarray": arr}});
+        let st = parse_store(&[(".zmetadata".into(), meta.to_string().into_bytes())]).unwrap();
+        let at = |cal: &str, units: &str, v: f64| {
+            let mut t = st.arrays[0].clone();
+            t.attrs.insert("units".into(), Value::String(units.into()));
+            t.attrs.insert("calendar".into(), Value::String(cal.into()));
+            time_ms(&t, v).unwrap()
+        };
+        // Noon on 1 January 2000, in a standard and a noleap calendar alike.
+        let noon = 946_728_000_000.0;
+        assert_eq!(at("standard", "days since 2000-01-01 12:00", 0.0), noon);
+        assert_eq!(at("noleap", "days since 2000-01-01 12:00", 0.0), noon);
+        assert_eq!(at("noleap", "hours since 2000-01-01T06:00:00", 6.0), noon);
+        for cal in ["360_day", "all_leap", "366_day"] {
+            let days: Vec<f64> = (0..800).map(|d| at(cal, "days since 2001-01-01", f64::from(d))).collect();
+            assert!(days.windows(2).all(|w| w[0] < w[1]), "{cal}: not in order");
+            // A year's first day is the real year's.
+            assert_eq!(days[0], 978_307_200_000.0, "{cal}");
+        }
+    }
 
     fn lz4_block(raw: &[u8]) -> Vec<u8> {
         lz4_flex::block::compress(raw)

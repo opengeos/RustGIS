@@ -171,11 +171,16 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   window); in the web app added with Add Data and held in memory for the session (a project keeps
   the layer, and asks for the file again).
 - **Map styles**: a MapLibre style document (`style.json`), with its vector and raster sources.
-  RustGIS draws background, fill, line, circle and raster layers, point labels with their icons
-  from the style's sprite (SDF icons in their `icon-color`), and fill patterns; it evaluates the
-  style's expressions and zoom functions. Line labels and shields along roads, line patterns,
-  hillshade and 3D extrusion are not drawn (extrusions draw flat). A label shows the lines of
-  its text that the map's font can draw: a style's "Syria / سوريا" shows as "Syria".
+  RustGIS draws background, fill, line, circle and raster layers, labels with their icons from
+  the style's sprite (SDF icons in their `icon-color`), and fill patterns; it evaluates the
+  style's expressions and zoom functions. Labels are placed as MapLibre places them: at points,
+  in the middle of areas, and along lines (street names every `symbol-spacing`, turned to the
+  street, where it bends less than `text-max-angle`; shields and one-way arrows), wrapped to
+  `text-max-width`, the style's later layers first and then by `symbol-sort-key`, kept apart by
+  `text-padding` and the `*-optional`, `*-allow-overlap` and `*-ignore-placement` rules. Text
+  along a line is drawn straight rather than curved round its bends. Line patterns, hillshade
+  and 3D extrusion are not drawn (extrusions draw flat). A label shows the lines of its text
+  that the map's font can draw: a style's "Syria / سوريا" shows as "Syria".
   A style's root `center`, `zoom`, `bearing` and `pitch` say where it opens: `map.addTiles` with
   `"view": true` takes the map there once the style has loaded.
 

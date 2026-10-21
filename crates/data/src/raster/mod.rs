@@ -43,6 +43,13 @@ pub fn is_raster_name(name: &str) -> bool {
     READ_EXTENSIONS.contains(&ext.as_str())
 }
 
+/// Whether a file name is JPEG 2000's (`.jp2`, `.j2k`): read through GDAL on the desktop, from a
+/// download too (`gdal::convert_jpeg2000`).
+pub fn is_jpeg2000_name(name: &str) -> bool {
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "jp2" | "j2k")
+}
+
 /// Maps pixel (column, row) corners to coordinates: north-up grids only.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GeoTransform {
