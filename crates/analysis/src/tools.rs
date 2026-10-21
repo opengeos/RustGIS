@@ -908,12 +908,21 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
     raw_pts.sort_by(|a, b| a.0.x.total_cmp(&b.0.x).then_with(|| a.0.y.total_cmp(&b.0.y)));
     let mut accum: Vec<(Coord, f64, usize)> = Vec::with_capacity(raw_pts.len());
     for (c, v) in raw_pts {
-        if let Some((last_c, sum, count)) = accum.last_mut()
-            && (c.x - last_c.x).abs() < 1e-9
-            && (c.y - last_c.y).abs() < 1e-9
-        {
-            *sum += v;
-            *count += 1;
+        let mut duplicate_idx = None;
+        for (i, (last_c, _, _)) in accum.iter().enumerate().rev() {
+            if c.x - last_c.x >= 1e-9 {
+                break;
+            }
+            if (c.y - last_c.y).abs() < 1e-9 {
+                duplicate_idx = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = duplicate_idx {
+            if let Some((_, sum, count)) = accum.get_mut(i) {
+                *sum += v;
+                *count += 1;
+            }
             continue;
         }
         accum.push((c, v, 1));
@@ -1665,6 +1674,18 @@ mod tests {
             _ => panic!("expected raster"),
         };
         assert!(pred.bands[0].data.iter().all(|v| (19.99..=20.01).contains(v)), "{:?}", pred.bands[0].data);
+
+        // Deduplication merges near-duplicate samples across x-windows even when separated by different y
+        let mut inter_pts = Dataset::new("inter", GeometryType::Point, vec![Field::new("v", FieldType::Double)]);
+        inter_pts.push(Some(Geometry::Point(Coord::new(0.5, 0.5))), vec![Value::Float(10.0)]);
+        inter_pts.push(Some(Geometry::Point(Coord::new(0.5 + 5e-13, 10.0))), vec![Value::Float(100.0)]);
+        inter_pts.push(Some(Geometry::Point(Coord::new(0.5 + 9e-13, 0.5))), vec![Value::Float(30.0)]);
+        inter_pts.push(Some(Geometry::Point(Coord::new(1.5, 1.5))), vec![Value::Float(20.0)]);
+        let m_inter = Map(HashMap::from([("inter".to_string(), inter_pts)]));
+        assert!(
+            crate::run("kriging", &m_inter, &serde_json::json!({"input": "inter", "field": "v", "extent": "0,0,2,2", "pixelSize": 0.5}))
+                .is_ok()
+        );
     }
 
     #[test]

@@ -228,6 +228,13 @@ pub fn ordinary_kriging_point(
     let k = near.len().min(32);
     let m = k + 1; // system size (k weights + 1 Lagrange multiplier)
 
+    // Solve with gamma / scale so the pivot tolerance does not depend on the data's units.
+    // Weights are invariant; the Lagrange multiplier scales by `scale`.
+    let scale = {
+        let s = params.sill.max(params.nugget);
+        if s.is_finite() && s > 0.0 { s } else { 1.0 }
+    };
+
     for i in 0..k {
         let (di, _, pi) = match near.get(i) {
             Some(n) => *n,
@@ -243,7 +250,7 @@ pub fn ordinary_kriging_point(
             let hij = (dx * dx + dy * dy).sqrt();
             let gamma = params.semivariance(hij);
             if let Some(cell) = buffers.a_mat.get_mut(i * m + j) {
-                *cell = gamma;
+                *cell = gamma / scale;
             }
         }
         // Constraint: sum(w_i) = 1
@@ -253,10 +260,10 @@ pub fn ordinary_kriging_point(
         if let Some(cell) = buffers.a_mat.get_mut(k * m + i) {
             *cell = 1.0;
         }
-        // Right hand side: gamma(h_i0)
+        // Right hand side: gamma(h_i0) / scale
         let gamma_0 = params.semivariance(di);
         if let Some(b_val) = buffers.b_vec.get_mut(i) {
-            *b_val = gamma_0;
+            *b_val = gamma_0 / scale;
         }
     }
     // A_mat[k, k] = 0.0
@@ -270,7 +277,7 @@ pub fn ordinary_kriging_point(
 
     if solve_linear_system(m, &mut buffers.a_mat[..m * m], &mut buffers.b_vec[..m], &mut buffers.solution[..m]) {
         let mut est = 0.0;
-        let mut variance = buffers.solution.get(k).copied().unwrap_or(0.0); // Lagrange multiplier μ
+        let mut variance = buffers.solution.get(k).copied().unwrap_or(0.0) * scale; // Lagrange multiplier μ
 
         for i in 0..k {
             let w = buffers.solution.get(i).copied().unwrap_or(0.0);
@@ -490,5 +497,24 @@ mod tests {
         assert!(kriging(&pts, &extent, f64::NAN, &params, 4, "t").is_err());
         // Empty extent
         assert!(kriging(&pts, &Extent::EMPTY, 0.5, &params, 4, "t").is_err());
+    }
+
+    #[test]
+    fn test_kriging_scale_invariance_with_small_values() {
+        let pts =
+            vec![(Coord::new(0.0, 0.0), 10.0), (Coord::new(2.0, 0.0), 20.0), (Coord::new(0.0, 2.0), 15.0), (Coord::new(2.0, 2.0), 25.0)];
+        let extent = Extent::new(0.0, 0.0, 2.0, 2.0);
+        let params = auto_variogram(&pts, &extent, VariogramModel::Spherical);
+        let r_orig = kriging(&pts, &extent, 0.5, &params, 4, "orig").unwrap();
+
+        let scale = 1e-6_f64;
+        let scaled_pts: Vec<(Coord, f64)> = pts.iter().map(|(c, v)| (*c, v * scale)).collect();
+        let scaled_params = auto_variogram(&scaled_pts, &extent, VariogramModel::Spherical);
+        let r_scaled = kriging(&scaled_pts, &extent, 0.5, &scaled_params, 4, "scaled").unwrap();
+
+        for (v_orig, v_scaled) in r_orig.bands[0].data.iter().zip(&r_scaled.bands[0].data) {
+            let expected = *v_orig * (scale as f32);
+            assert!((*v_scaled - expected).abs() <= 1e-10, "scaled {v_scaled} vs expected {expected}");
+        }
     }
 }
