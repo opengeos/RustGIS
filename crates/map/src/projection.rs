@@ -47,7 +47,6 @@ const PRESET_ALIASES: &[(&str, &[&str])] = &[
     (
         "vn2000tm3",
         &[
-            "vietnam",
             "vn2000tm3",
             "vn2000-tm3",
             "vn2000_tm3",
@@ -1345,6 +1344,8 @@ mod tests {
             assert_eq!(def, rustgis_data::raster::crs::epsg_proj4(code), "{id}");
         }
 
+        // `vietnam` names no projection: the country spans two UTM zones and many TM-3 meridians.
+        assert!(lookup("vietnam").is_err());
         // Bare VN-2000 is ambiguous and rejected
         for bare in ["vn2000", "VN-2000", "VN2000", "vn-2000", "VN 2000", "vn_2000"] {
             let err = lookup(bare).unwrap_err();
@@ -1353,8 +1354,7 @@ mod tests {
         }
 
         // Explicit TM-3 alias lookups
-        for name in ["vn2000tm3", "vn2000-tm3", "vn2000_tm3", "vn-2000-tm3", "VN-2000 / TM-3", "vn-2000 / tm-3", "VN2000 / TM-3", "vietnam"]
-        {
+        for name in ["vn2000tm3", "vn2000-tm3", "vn2000_tm3", "vn-2000-tm3", "VN-2000 / TM-3", "vn-2000 / tm-3", "VN2000 / TM-3"] {
             let (def, label) = lookup(name).unwrap();
             assert!(def.contains("+proj=tmerc") && def.contains("+towgs84="), "{name}");
             assert!(def.contains("+lon_0=105") && def.contains("+k=0.9999"), "{name}");
