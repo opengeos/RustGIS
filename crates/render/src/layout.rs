@@ -28,6 +28,26 @@ pub struct PageInfo {
 const MAX_SIDE: f64 = 12_000.0;
 const MAX_PIXELS: f64 = if cfg!(target_arch = "wasm32") { 25_000_000.0 } else { 60_000_000.0 };
 
+/// Whether skipping a failed frame would omit required complete-source content.
+pub(crate) fn frame_requires_complete(map: &Map, view: &View) -> bool {
+    let mut scales = vec![map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M];
+    if view.camera.pitch != 0.0 && !map.projection.is_globe() {
+        scales.extend(view.camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M));
+    }
+    map.layers.iter().filter(|l| scales.iter().any(|scale| map.draws_at(l, *scale))).any(|layer| {
+        layer.source.as_ref().and_then(|s| s.chunk_source()).is_some()
+            || layer
+                .mask
+                .as_deref()
+                .and_then(|name| {
+                    map.layers.iter().find(|m| m.name.eq_ignore_ascii_case(name) && m.geometry_type() == GeometryType::Polygon)
+                })
+                .and_then(|mask| mask.source.as_ref())
+                .and_then(|s| s.chunk_source())
+                .is_some()
+    })
+}
+
 /// Renders a layout at `dpi` (dots per inch). `maps` are the project's maps, found by name.
 pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<Pixmap> {
     let ppp = (if dpi.is_finite() { dpi } else { 96.0 } / 96.0).clamp(0.25, 8.0);
@@ -83,7 +103,13 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                 // A frame larger than the page budget is drawn at a lower resolution and scaled up.
                 let fppp = ppp.min((MAX_PIXELS / (fw * fh).max(1.0)).sqrt()).max(0.01);
                 let view = View { width: fw, height: fh, pixels_per_point: fppp, camera: cam, sky: false };
-                let mut img = crate::render_complete(map, &view)?;
+                let Some(mut img) = crate::render_complete(map, &view) else {
+                    if frame_requires_complete(map, &view) {
+                        return None;
+                    }
+                    // Preserve upstream's best-effort page export for ordinary maps.
+                    continue;
+                };
                 for l in img.unplaced.iter().chain(&img.labels) {
                     text::draw(&mut img.pixmap, l, fppp as f32);
                 }

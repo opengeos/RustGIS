@@ -911,7 +911,6 @@ fn pitched_large_or_unknown_point_sources_use_total_rows_not_the_interaction_win
     }
     let mut full = Map::new("source total");
     full.add_dataset(ds.clone());
-    full.layers[0].selection = vec![0];
     let view = View {
         width: 96.0,
         height: 64.0,
@@ -919,28 +918,90 @@ fn pitched_large_or_unknown_point_sources_use_total_rows_not_the_interaction_win
         camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
         sky: false,
     };
-    let expected = render(&mut full.clone(), &view).unwrap();
-    assert!(!stands_up(&full, &full.layers[0]));
-    for total in [Some(MAX_UPRIGHT_POINTS as u64 + 1), None] {
-        for window in [1, 3] {
-            for backend in [Backend::Cpu, Backend::Gpu] {
-                let mut map = full.clone();
-                map.layers[0] = streamed(&full.layers[0], 2048);
-                map.layers[0].dataset.features = ds.features.iter().take(window).cloned().collect::<Vec<_>>().into();
-                let mut info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
-                info.count = total;
-                map.layers[0].source =
-                    Some(SourceLayer::from_path("points.shp", None, Box::new(Chunks { info, ds: ds.clone(), size: 2048 })));
-                assert!(!stands_up(&map, &map.layers[0]));
-                SNAPSHOT_TEST_LIMIT.with(|s| s.set(Some(0)));
-                let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut map, &view, true, backend) else {
-                    panic!("a large/unknown complete point source must render without a depth snapshot");
-                };
-                assert!(got.pixmap.data() == expected.pixmap.data());
-                assert_eq!(got.labels, expected.labels);
-                assert!(!stands_up(&map, &map.layers[0]));
-                assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+    // Exercise the direct GPU path as well as the selected CPU fallback.
+    for selected in [false, true] {
+        full.layers[0].selection = if selected { vec![0] } else { Vec::new() };
+        let expected = render(&mut full.clone(), &view).unwrap();
+        assert!(!stands_up(&full, &full.layers[0]));
+        for total in [Some(MAX_UPRIGHT_POINTS as u64 + 1), None] {
+            for window in [1, 3] {
+                for backend in [Backend::Cpu, Backend::Gpu] {
+                    let mut map = full.clone();
+                    map.layers[0] = streamed(&full.layers[0], 2048);
+                    map.layers[0].dataset.features = ds.features.iter().take(window).cloned().collect::<Vec<_>>().into();
+                    let mut info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+                    info.count = total;
+                    map.layers[0].source =
+                        Some(SourceLayer::from_path("points.shp", None, Box::new(Chunks { info, ds: ds.clone(), size: 2048 })));
+                    assert!(!stands_up(&map, &map.layers[0]));
+                    SNAPSHOT_TEST_LIMIT.with(|s| s.set(Some(0)));
+                    match render_with_backend(&mut map, &view, true, backend).expect("complete large-source render") {
+                        RenderOutput::Cpu(got) => {
+                            assert!(got.pixmap.data() == expected.pixmap.data());
+                            assert_eq!(got.labels, expected.labels);
+                        }
+                        RenderOutput::Gpu(scene) => {
+                            assert_eq!(backend, Backend::Gpu);
+                            let Some(RenderOutput::Gpu(reference)) = render_with_backend(&mut full.clone(), &view, true, backend) else {
+                                panic!("the resident GPU reference should use the same ground-marker path");
+                            };
+                            let count = |scene: &gpu_scene::GpuScene| {
+                                scene
+                                    .cmds
+                                    .iter()
+                                    .map(|cmd| match cmd {
+                                        gpu_scene::DrawCmd::Points { instances, .. } => instances.len(),
+                                        _ => 0,
+                                    })
+                                    .sum::<usize>()
+                            };
+                            assert!(scene.tilt.is_some());
+                            assert!(scene.clips.iter().all(|clip| !clip.upright));
+                            assert!(count(&scene) > 0);
+                            assert_eq!(count(&scene), count(&reference), "the GPU scene must include all visible source markers");
+                            assert_eq!(scene.labels, reference.labels);
+                            assert_eq!(scene.clear, reference.clear);
+                            assert!(!scene.data_pending);
+                        }
+                    }
+                    assert!(!stands_up(&map, &map.layers[0]));
+                    assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+                }
             }
         }
     }
+}
+
+#[test]
+fn layout_failure_policy_only_requires_active_complete_sources_and_masks() {
+    let mut ds = Dataset::new("plain", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut map = Map::new("layout policy");
+    let plain = map.add_dataset(ds);
+    let mut ds = Dataset::new("mask", GeometryType::Polygon, vec![]);
+    ds.push(
+        Some(Geometry::Polygon(vec![vec![vec![
+            Coord::new(-0.01, -0.01),
+            Coord::new(0.01, -0.01),
+            Coord::new(0.01, 0.01),
+            Coord::new(-0.01, -0.01),
+        ]]])),
+        vec![],
+    );
+    let mask = map.add_dataset(ds);
+    *map.layer_mut(mask).unwrap() = streamed(map.layer(mask).unwrap(), 1);
+    map.layer_mut(mask).unwrap().visible = false;
+    let view = View { width: 120.0, height: 90.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+    assert!(!layout::frame_requires_complete(&map, &view), "an unused hidden source cannot change ordinary frame failure behavior");
+    map.layer_mut(plain).unwrap().mask = Some("mask".into());
+    assert!(layout::frame_requires_complete(&map, &view), "a needed hidden complete mask is authoritative");
+    map.layer_mut(plain).unwrap().visible = false;
+    assert!(!layout::frame_requires_complete(&map, &view));
+    map.layer_mut(mask).unwrap().visible = true;
+    assert!(layout::frame_requires_complete(&map, &view));
+    let mut group = rustgis_map::LayerGroup::new("hidden group");
+    group.visible = false;
+    group.children = vec![mask];
+    map.groups.push(group);
+    assert!(!layout::frame_requires_complete(&map, &view));
 }
