@@ -424,6 +424,8 @@ fn partial_source_failure_and_incomplete_summary_reach_unchanged_owner() {
         settle(&mut map, &view);
         let mut worker = map.clone();
         assert!(render(&mut worker, &view).is_none());
+        // The error below can only come from the worker.
+        assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
         map.adopt_caches(&worker);
         assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains(message));
         map.layers[0].source.as_mut().unwrap().error = None;
