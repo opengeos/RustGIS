@@ -244,8 +244,7 @@ pub fn preset_params(id: &str) -> &'static [PresetParam] {
         | "eckertIV"
         | "northPolar"
         | "southPolar"
-        | "vn2000tm3"
-        | "vn2000" => &[LON_0],
+        | "vn2000tm3" => &[LON_0],
         "albers" | "lambertConformal" => &[LON_0, LAT_1, LAT_2],
         _ => &[],
     }
@@ -267,9 +266,8 @@ pub fn preset_value(id: &str, key: &str) -> Option<f64> {
 pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static str, f64)>)>, String> {
     let (head, rest) = code.trim().split_once('+').unwrap_or((code.trim(), ""));
     let head = head.trim();
-    let clean: String = head.to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    if clean == "VN2000" {
-        return Err("coordinate system 'VN-2000' is ambiguous: specify 'VN-2000 / UTM zone 48N' (vn2000Utm48, EPSG:3405), 'VN-2000 / UTM zone 49N' (vn2000Utm49, EPSG:3406), or TM-3 ('vn2000tm3' / 'VN-2000 / TM-3')".into());
+    if rustgis_data::raster::crs::is_bare_vn2000(head) {
+        return Err(rustgis_data::raster::crs::bare_vn2000_error(head));
     }
     let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| {
         id.eq_ignore_ascii_case(head)
@@ -362,21 +360,9 @@ pub fn normalize_vietnamese(s: &str) -> String {
     out
 }
 
-/// Resolves a Vietnamese province/city name or alias to its VN-2000 central meridian (lon_0).
-pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
-    let trimmed = code.trim();
-    let s = [":", "/"]
-        .iter()
-        .find_map(|sep| {
-            let (prefix, rest) = trimmed.split_once(sep)?;
-            (prefix.eq_ignore_ascii_case("vn2000")
-                || prefix.eq_ignore_ascii_case("vn-2000")
-                || prefix.eq_ignore_ascii_case("vn2000tm3")
-                || prefix.eq_ignore_ascii_case("vn-2000-tm3"))
-            .then_some(rest)
-        })
-        .unwrap_or(trimmed);
-    let norm = normalize_vietnamese(s);
+/// Resolves a bare Vietnamese province name, ID, or alias to its VN-2000 central meridian (lon_0).
+pub fn resolve_vn2000_province(name: &str) -> Option<f64> {
+    let norm = normalize_vietnamese(name.trim());
     if norm.is_empty() {
         return None;
     }
@@ -386,6 +372,21 @@ pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
         }
     }
     None
+}
+
+/// Resolves an explicitly prefixed VN-2000 alias (e.g. `vn2000:hcm`, `vn2000/danang`, `vn2000tm3:vinh`)
+/// to its central meridian (lon_0). Explicit prefix is required to prevent bare names from hijacking lookup.
+pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
+    let trimmed = code.trim();
+    let rest = [":", "/"].iter().find_map(|sep| {
+        let (prefix, rest) = trimmed.split_once(sep)?;
+        (prefix.eq_ignore_ascii_case("vn2000")
+            || prefix.eq_ignore_ascii_case("vn-2000")
+            || prefix.eq_ignore_ascii_case("vn2000tm3")
+            || prefix.eq_ignore_ascii_case("vn-2000-tm3"))
+        .then_some(rest)
+    })?;
+    resolve_vn2000_province(rest)
 }
 
 /// The PROJ definition and label of a projection code: a preset id, `EPSG:<code>`, `ESRI:<code>`
@@ -445,9 +446,8 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     }
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        let clean: String = code.to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        if clean == "VN2000" {
-            return Err("coordinate system 'VN-2000' is ambiguous: specify 'VN-2000 / UTM zone 48N' (vn2000Utm48, EPSG:3405), 'VN-2000 / UTM zone 49N' (vn2000Utm49, EPSG:3406), or TM-3 ('vn2000tm3' / 'VN-2000 / TM-3')".into());
+        if rustgis_data::raster::crs::is_bare_vn2000(code) {
+            return Err(rustgis_data::raster::crs::bare_vn2000_error(code));
         }
         if let Some(lon) = resolve_vn2000_alias(code) {
             let (_, label, def) =
@@ -1102,13 +1102,15 @@ mod tests {
         for (id, _, _) in PRESETS {
             let p = Projector::new(id).unwrap_or_else(|e| panic!("{id}: {e}"));
             let c = match *id {
-                "vn2000" | "vn2000Utm48" | "vn2000Utm49" => Coord::new(105.0, 21.0),
+                "vn2000tm3" | "vn2000Utm48" | "vn2000Utm49" => Coord::new(105.0, 21.0),
                 _ => Coord::new(10.0, if id.contains("south") { -75.0 } else { 50.0 }),
             };
             let m = p.forward(c).unwrap_or_else(|| panic!("{id}"));
             let back = p.inverse(m).unwrap();
             assert!((back.x - c.x).abs() < 1e-6 && (back.y - c.y).abs() < 1e-6, "{id}: {back:?}");
         }
+        assert_eq!(preset_params("vn2000tm3"), &[LON_0]);
+        assert_eq!(preset_params("vn2000"), &[]);
         assert!(Projector::new("EPSG:3035").is_ok());
         assert!(Projector::new("epsg:32633").is_ok());
         assert!(Projector::new("3857").is_ok());
@@ -1350,6 +1352,9 @@ mod tests {
 
     #[test]
     fn vn2000_vietnam_projections() {
+        // Cross-crate Helmert parameters consistency
+        assert_eq!(VN2000_TOWGS84, rustgis_data::raster::crs::VN2000_TOWGS84);
+
         // Bare VN-2000 is ambiguous and rejected
         for bare in ["vn2000", "VN-2000", "VN2000", "vn-2000", "VN 2000", "vn_2000"] {
             let err = lookup(bare).unwrap_err();
@@ -1391,44 +1396,52 @@ mod tests {
             assert!(def.contains("+proj=utm") && def.contains("+zone=49"), "{name}");
             assert_eq!(label, "VN-2000 / UTM zone 49N", "{name}");
         }
-        // Provincial lookups (ASCII and native Vietnamese diacritics, case-insensitive prefixes)
-        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+
+        // Bare province names and aliases must NOT hijack lookup: they must return unknown projection error
+        for bare in [
+            "hanoi",
+            "Hà Nội",
+            "tphcm",
+            "TP. Hồ Chí Minh",
+            "saigon",
+            "Sài Gòn",
+            "danang",
+            "Đà Nẵng",
+            "Gia Lai",
+            "Đắk Lắk",
+            "Huế",
+            "Nghệ An",
+            "vinh",
+            "hue",
+            "sapa",
+            "hcm",
+            "daknong",
+            "Đắk Nông",
+            "haugiang",
+            "Hậu Giang",
+            "atlantis",
+            "unknown_province_xyz",
+        ] {
+            assert!(lookup(bare).is_err(), "{bare} should not be recognized as bare projection");
+        }
+
+        // Explicitly prefixed aliases resolve correctly
         assert_eq!(lookup("vn2000:hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
         assert_eq!(lookup("VN2000:hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
         assert_eq!(lookup("VN-2000:Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
         assert_eq!(lookup("VN2000/Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("tphcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("TP. Hồ Chí Minh").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("vn2000:tphcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
         assert_eq!(lookup("VN2000:TP. Hồ Chí Minh").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("Sài Gòn").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("Đà Nẵng").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("vn2000:saigon").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("vn2000:danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
         assert_eq!(lookup("VN2000/Đà Nẵng").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
-        assert_eq!(lookup("Đắk Lắk").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
-        assert_eq!(lookup("Huế").unwrap().0, lookup("vn2000tm3 +lon_0=107").unwrap().0);
-        assert_eq!(lookup("Nghệ An").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
-        assert_eq!(lookup("Quảng Trị").unwrap().0, lookup("vn2000tm3 +lon_0=106.25").unwrap().0);
-        assert_eq!(lookup("Cà Mau").unwrap().0, lookup("vn2000tm3 +lon_0=104.5").unwrap().0);
-        assert_eq!(lookup("Khánh Hòa").unwrap().0, lookup("vn2000tm3 +lon_0=108.25").unwrap().0);
-        // Named aliases requested in review: vinh, hue, sapa, hcm, saigon, hanoi, danang
-        assert_eq!(lookup("vinh").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
-        assert_eq!(lookup("hue").unwrap().0, lookup("vn2000tm3 +lon_0=107").unwrap().0);
-        assert_eq!(lookup("sapa").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
-        assert_eq!(lookup("hcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
-
-        // Disputed province central meridians verified against Circular 25/2014/TT-BTNMT Annex 02
-        // Đắk Nông verified at 108°30' (108.5°), not 107.5°
-        assert_eq!(lookup("Đắk Nông").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
-        assert_eq!(lookup("daknong").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
-        // Hậu Giang verified at 105°00' (105.0°), not 105.5°
-        assert_eq!(lookup("Hậu Giang").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("haugiang").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("vn2000tm3:danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("vn2000:vinh").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("vn2000:hue").unwrap().0, lookup("vn2000tm3 +lon_0=107").unwrap().0);
+        assert_eq!(lookup("vn2000:sapa").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("vn2000:hcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("vn2000:daknong").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
+        assert_eq!(lookup("vn2000:haugiang").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
 
         // Numeric EPSG codes and unrelated projections must never be intercepted by province alias resolution
         assert_eq!(lookup("3405").unwrap().1, "EPSG:3405");
@@ -1446,7 +1459,7 @@ mod tests {
         assert!(lookup("vn2000tm3 +invalid=10").is_err());
 
         // Parameter replacement preserves all other PROJ parameters uncorrupted
-        let (danang_def, _) = lookup("danang").unwrap();
+        let (danang_def, _) = lookup("vn2000:danang").unwrap();
         assert!(danang_def.contains("+proj=tmerc"));
         assert!(danang_def.contains("+lat_0=0"));
         assert!(danang_def.contains("+lon_0=107.75"));
@@ -1458,18 +1471,19 @@ mod tests {
         assert!(danang_def.contains("+units=m"));
         assert!(danang_def.contains("+no_defs"));
 
-        // All 63 provinces in VN2000_PROVINCES resolve and project correctly
+        // All 63 provinces in VN2000_PROVINCES resolve via resolve_vn2000_province and prefixed lookup
         assert_eq!(VN2000_PROVINCES.len(), 63);
         for prov in VN2000_PROVINCES {
-            let lon = resolve_vn2000_alias(prov.name).unwrap();
+            let lon = resolve_vn2000_province(prov.name).unwrap();
             assert_eq!(lon, prov.lon_0, "{}", prov.name);
-            let (def, _) = lookup(prov.name).unwrap();
+            let prefixed = format!("vn2000:{}", prov.id);
+            let (def, _) = lookup(&prefixed).unwrap();
             if (prov.lon_0 - 105.0).abs() < 1e-6 {
                 assert!(def.contains("+lon_0=105"), "{}: {def}", prov.name);
             } else {
                 assert!(def.contains(&format!("+lon_0={}", prov.lon_0)), "{}: {def}", prov.name);
             }
-            assert!(Projector::new(prov.name).is_ok(), "{}", prov.name);
+            assert!(Projector::new(&prefixed).is_ok(), "{}", prov.name);
         }
 
         // All UI shortcut hubs are canonical entries with matching central meridians
@@ -1480,7 +1494,7 @@ mod tests {
 
         // Decomposed NFD Vietnamese unicode normalization
         let nfd_hanoi = "Ha\u{300} N\u{f4}\u{323}i";
-        assert_eq!(lookup(nfd_hanoi).unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup(&format!("vn2000:{nfd_hanoi}")).unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
 
         // Forward and inverse coordinate projection accuracy
         // Hanoi (Hoan Kiem lake: 105.8525°E, 21.0285°N) in VN-2000 TM-3 (lon_0 = 105.0)

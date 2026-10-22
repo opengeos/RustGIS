@@ -126,13 +126,53 @@ fn custom_table() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>> {
     T.get_or_init(Default::default)
 }
 
+macro_rules! vn2000_towgs84_lit {
+    () => {
+        "+towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278"
+    };
+}
+
+/// The 7-parameter Helmert shift from VN-2000 to WGS 84 (QĐ 973/2001/QĐ-TTg).
+pub const VN2000_TOWGS84: &str = vn2000_towgs84_lit!();
+
 /// The PROJ definition of VN-2000 / TM-3 with central meridian 105° and scale factor 0.9999.
-pub const VN2000_TM3_105_PROJ4: &str = "+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs";
+pub const VN2000_TM3_105_PROJ4: &str =
+    concat!("+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 ", vn2000_towgs84_lit!(), " +units=m +no_defs");
+
+/// Returns true if `text` is an ambiguous bare reference to VN-2000 without a specified projection.
+pub fn is_bare_vn2000(text: &str) -> bool {
+    let clean: String = text.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
+    clean == "VN2000"
+}
+
+/// The error message returned when an ambiguous bare VN-2000 name is provided.
+pub fn bare_vn2000_error(text: &str) -> String {
+    format!(
+        "coordinate system '{text}' is ambiguous: specify 'VN-2000 / UTM zone 48N' (vn2000Utm48, EPSG:3405), 'VN-2000 / UTM zone 49N' (vn2000Utm49, EPSG:3406), or TM-3 ('vn2000tm3' / 'VN-2000 / TM-3')"
+    )
+}
+
+/// Validates a PROJ definition string against unsafe parameter forms.
+fn validate_proj_string(proj4: &str) -> Result<(), String> {
+    for token in proj4.split_whitespace() {
+        let t = token.trim_start_matches('+');
+        let (key, val) = t.split_once('=').unwrap_or((t, ""));
+        let key_lower = key.to_ascii_lowercase();
+        if key_lower == "init" || key_lower == "nadgrids" {
+            return Err(format!("parameter '+{key}' is not allowed in coordinate system definition"));
+        }
+        if val.contains("..") || val.contains('/') || val.contains('\\') {
+            return Err("file path in parameter is not allowed in coordinate system definition".into());
+        }
+    }
+    Ok(())
+}
 
 impl Crs {
     /// A file's own coordinate system: checked (its PROJ definition must parse, or be a
     /// sinusoidal one RustGIS computes) and added to the run's table, once per definition.
     pub fn custom(def: CustomCrs) -> Result<Crs, String> {
+        validate_proj_string(&def.proj4)?;
         let checked = match rustgis_geom::Sinusoidal::from_proj4(&def.proj4) {
             Some(sinu) => sinu.map(|_| ()),
             None => proj4rs::Proj::from_proj_string(&def.proj4).map(|_| ()).map_err(|e| e.to_string()),
@@ -190,6 +230,7 @@ impl Crs {
                 return Err("coordinate system definition is too long".into());
             }
             let proj4 = format!("+proj{}", t.get(5..).unwrap_or(""));
+            validate_proj_string(&proj4)?;
             return Crs::custom(CustomCrs {
                 proj4,
                 label: "Custom PROJ".to_string(),
@@ -202,12 +243,10 @@ impl Crs {
         if up.ends_with("CRS84") {
             return Ok(Crs::LonLat);
         }
-        let clean: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        if clean == "VN2000" {
-            return Err(format!(
-                "coordinate system '{t}' is ambiguous: specify 'VN-2000 / UTM zone 48N' (EPSG:3405), 'VN-2000 / UTM zone 49N' (EPSG:3406), or 'VN-2000 / TM-3'"
-            ));
+        if is_bare_vn2000(t) {
+            return Err(bare_vn2000_error(t));
         }
+        let clean: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
         if clean.starts_with("VN2000") {
             match clean.as_str() {
                 "VN2000UTMZONE48N" | "VN2000UTM48N" | "VN2000UTM48" | "VN2000UTMZONE48" | "VN200048" | "VN200048N" => {
@@ -526,11 +565,39 @@ mod tests {
         assert!(Crs::parse("VN2000XYZ").is_err());
         assert!(Crs::parse("VN-2000 unknown").is_err());
 
+        // Shared bare VN-2000 helper verification
+        assert!(is_bare_vn2000("VN-2000"));
+        assert!(is_bare_vn2000("vn2000"));
+        assert!(is_bare_vn2000("VN 2000"));
+        assert!(is_bare_vn2000("vn_2000"));
+        assert!(!is_bare_vn2000("VN-2000 / UTM zone 48N"));
+        assert!(!is_bare_vn2000("vn2000tm3"));
+        assert!(!is_bare_vn2000("WGS 84"));
+        assert!(bare_vn2000_error("VN-2000").contains("ambiguous"));
+
+        // Embedded EPSG definitions verification
+        let p3405 = epsg_proj4(3405).expect("EPSG:3405 must be present in crs_definitions");
+        assert!(p3405.contains("+proj=utm") && p3405.contains("+zone=48"), "{p3405}");
+        let p3406 = epsg_proj4(3406).expect("EPSG:3406 must be present in crs_definitions");
+        assert!(p3406.contains("+proj=utm") && p3406.contains("+zone=49"), "{p3406}");
+        assert_eq!(Crs::from_epsg(65534), None);
+        assert!(Crs::parse("EPSG:65534").is_err());
+
         // PROJ string validation: case normalization, prefix validation, and size limit
         let custom_proj = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj.label(), "Custom PROJ");
         let custom_proj_upper = Crs::parse("+PROJ=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj_upper.label(), "Custom PROJ");
+
+        // Custom CRS deduplication
+        let custom_dup = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
+        assert_eq!(custom_proj, custom_dup);
+
+        // Security validation: unsafe parameter forms (+init, +nadgrids, path traversal)
+        assert!(Crs::parse("+proj=utm +zone=48 +init=epsg:4326").is_err());
+        assert!(Crs::parse("+proj=utm +zone=48 +nadgrids=@null").is_err());
+        assert!(Crs::parse("+proj=utm +zone=48 +file=../secret").is_err());
+        assert!(Crs::parse("+proj=utm +zone=48 +file=C:\\secret").is_err());
 
         let custom_count_before = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
         assert!(Crs::parse("+proj").is_err());

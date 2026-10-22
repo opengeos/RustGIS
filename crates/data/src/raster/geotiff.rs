@@ -2169,4 +2169,55 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn custom_crs_geotiff_round_trip() {
+        let r = small();
+        let custom_proj =
+            Crs::parse("+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +datum=WGS84 +units=m +no_defs").unwrap();
+        let raster_custom = Raster::new(
+            "cust",
+            r.width,
+            r.height,
+            r.bands.iter().map(|b| b.data.clone()).collect(),
+            r.transform,
+            custom_proj,
+            r.nodata,
+            r.color.clone(),
+            "Float32",
+        )
+        .unwrap();
+        let bytes = write(&raster_custom, 0).expect("custom CRS with standard projection parameters should serialize to GeoTIFF");
+        let back = read(std::io::Cursor::new(&bytes), "back").unwrap();
+        assert_eq!((back.width, back.height), (r.width, r.height));
+        assert_eq!(back.transform, r.transform);
+        assert!(!back.crs.is_geographic());
+        // Verify custom CRS definition is equivalent and usable
+        let def = back.crs.custom_def().expect("re-opened raster has custom CRS definition");
+        assert!(def.proj4.contains("+proj=tmerc"), "{}", def.proj4);
+        assert!(def.proj4.contains("+lon_0=105"), "{}", def.proj4);
+        let tr = back.crs.transformer().expect("transformer available");
+        let pt = rustgis_geom::Coord::new(105.5, 21.0);
+        let projected = tr.from_lonlat(pt).unwrap();
+        let back_pt = tr.to_lonlat(projected).unwrap();
+        assert!((back_pt.x - pt.x).abs() < 1e-6 && (back_pt.y - pt.y).abs() < 1e-6);
+
+        // A custom CRS with parameters GeoTIFF keys cannot express (such as 7-parameter Helmert +towgs84 shift)
+        // returns a clear error rather than silently writing misleading keys or dropping CRS metadata
+        let vn2000_tm3 = Crs::parse("VN-2000 / TM-3").unwrap();
+        let raster_vn2000 = Raster::new(
+            "vn",
+            r.width,
+            r.height,
+            r.bands.iter().map(|b| b.data.clone()).collect(),
+            r.transform,
+            vn2000_tm3,
+            r.nodata,
+            r.color,
+            "Float32",
+        )
+        .unwrap();
+        let err = write(&raster_vn2000, 0).unwrap_err();
+        assert!(err.to_string().contains("a coordinate system without GeoTIFF keys can't be written"), "{err}");
+    }
 }

@@ -226,3 +226,24 @@ fn registry_process_plugin_notes_are_in_every_catalog() {
         }
     }
 }
+
+#[test]
+fn vn2000_translations_in_vietnamese_catalog() {
+    let vi = Lang::from_code("vi").unwrap();
+    assert_eq!(tr(vi, "Provinces:"), "Tỉnh thành:");
+    assert_eq!(
+        tr(
+            vi,
+            "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84."
+        ),
+        "Hệ tọa độ quốc gia Việt Nam (VN-2000) dùng phép chiếu Transverse Mercator 3 độ với phép chuyển đổi 7 tham số Helmert sang WGS 84."
+    );
+    assert_eq!(
+        tr(vi, "Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E)."),
+        "Hệ tọa độ quốc gia Việt Nam (VN-2000) múi chiếu UTM 48N (102°Đ–108°Đ, kinh tuyến trục 105°Đ)."
+    );
+    assert_eq!(
+        tr(vi, "Vietnam national coordinate system (VN-2000) UTM zone 49N (108°E–114°E, central meridian 111°E)."),
+        "Hệ tọa độ quốc gia Việt Nam (VN-2000) múi chiếu UTM 49N (108°Đ–114°Đ, kinh tuyến trục 111°Đ)."
+    );
+}

@@ -1227,27 +1227,35 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
     close
 }
 
+/// Formats degrees as an integer if whole (e.g. 105°), or with decimal places if fractional (e.g. 105.75°).
+pub(crate) fn format_degrees(deg: f64) -> String {
+    if (deg - deg.round()).abs() < 1e-6 { format!("{:.0}°", deg) } else { format!("{deg}°") }
+}
+
 /// The chosen preset's parameters (opengeos/RustGIS#517): the central meridian, and a conic's
 /// standard parallels, each written back into the chosen code. Nothing for a preset without any.
 fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
     use rustgis_engine::map::projection::{
-        VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value, resolve_vn2000_alias,
+        VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value, resolve_vn2000_alias, resolve_vn2000_province,
     };
     let input = app.dialogs.text.trim();
-    let resolved = if let Some(lon) = resolve_vn2000_alias(input) { format!("vn2000tm3 +lon_0={lon}") } else { input.to_string() };
+    let resolved = if let Some(lon) = resolve_vn2000_alias(input).or_else(|| resolve_vn2000_province(input)) {
+        format!("vn2000tm3 +lon_0={lon}")
+    } else {
+        input.to_string()
+    };
     let Ok(Some((id, params))) = parse_preset(&resolved) else { return };
     let takes = preset_params(id);
     if takes.is_empty() {
         return;
     }
     let mut next = params.clone();
-    if id == "vn2000tm3" || id == "vn2000" {
+    if id == "vn2000tm3" {
         let default_lon = preset_value(id, "lon_0").unwrap_or(105.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(tl!("Provinces:")).weak());
             for &(p_name, lon) in VN2000_UI_PROVINCES {
-                let lon_str = if (lon - lon.round()).abs() < 1e-6 { format!("{:.0}", lon) } else { format!("{lon}") };
-                let label = crate::i18n::fmt("{name} ({lon}°)", &[("name", p_name), ("lon", &lon_str)]);
+                let label = crate::i18n::fmt("{name} ({lon})", &[("name", p_name), ("lon", &format_degrees(lon))]);
                 if ui.small_button(&label).clicked() {
                     next.retain(|(k, _)| *k != "lon_0");
                     if (lon - default_lon).abs() > 1e-6 {
@@ -1291,10 +1299,18 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
 }
 
 /// A typed coordinate system code: `ESRI:102033` or `Epsg: 3035` as it is (`lookup` reads the
-/// prefix in any case and spacing), a bare number as an EPSG code.
+/// prefix in any case and spacing), a bare number as an EPSG code, or a Vietnamese province alias.
 pub(crate) fn typed_crs(text: &str) -> String {
     let text = text.trim();
-    if text.starts_with(|c: char| c.is_ascii_digit()) { format!("EPSG:{text}") } else { text.to_string() }
+    if text.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("EPSG:{text}")
+    } else if let Some(lon) = rustgis_engine::map::projection::resolve_vn2000_alias(text)
+        .or_else(|| rustgis_engine::map::projection::resolve_vn2000_province(text))
+    {
+        format!("vn2000tm3 +lon_0={lon}")
+    } else {
+        text.to_string()
+    }
 }
 
 /// What a coordinate system is: its kind, area of use, definition and epsg.io page.
@@ -1318,39 +1334,43 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
     let preset = rustgis_engine::map::projection::parse_preset(&code).ok().flatten();
     let tuned = preset.as_ref().is_some_and(|(_, p)| !p.is_empty());
     let (kind, page): (&str, Option<String>) = match preset.map_or(code.as_str(), |(id, _)| id) {
-        "mercator" => ("World, conformal: the usual web map; areas grow towards the poles.", Some("3857".into())),
-        "globe" => ("A 3D globe seen from space.", None),
-        "equirectangular" => ("World, cylindrical: equal steps of longitude and latitude.", Some("4087".into())),
-        "miller" => ("World, cylindrical: a compromise between Mercator and equal steps.", Some("54003".into())),
-        "mollweide" => ("World, equal-area: true sizes, shapes bend towards the edges.", Some("54009".into())),
-        "cylindricalEqualArea" => ("World, equal-area, cylindrical: true sizes, flattened near the poles.", Some("54034".into())),
-        "robinson" => ("World, compromise: neither equal-area nor conformal, balanced for wall maps.", Some("54030".into())),
-        "equalEarth" => ("World, equal-area: true sizes with a Robinson-like look.", Some("8857".into())),
-        "naturalEarth" => ("World, compromise: rounded corners, gentle shapes near the poles.", None),
-        "winkelTripel" => ("World, compromise: low overall distortion, used for world atlases.", Some("54042".into())),
-        "eckertIV" => ("World, equal-area: true sizes with rounded poles.", Some("54012".into())),
-        "northPolar" => ("Polar, conformal: the Arctic and the northern lands.", None),
-        "southPolar" => ("Polar, conformal: Antarctica and the Southern Ocean.", Some("3031".into())),
-        "europeEqualArea" => ("Regional, equal-area: the European standard for statistics.", Some("3035".into())),
-        "usaAlbers" => ("Regional, equal-area: the contiguous United States.", Some("5070".into())),
-        "albers" => ("Conic, equal-area: true sizes across a mid-latitude region; set its meridian and parallels to the region.", None),
-        "lambertConformal" => {
-            ("Conic, conformal: true shapes across a mid-latitude region; set its meridian and parallels to the region.", None)
+        "mercator" => (tl!("World, conformal: the usual web map; areas grow towards the poles."), Some("3857".into())),
+        "globe" => (tl!("A 3D globe seen from space."), None),
+        "equirectangular" => (tl!("World, cylindrical: equal steps of longitude and latitude."), Some("4087".into())),
+        "miller" => (tl!("World, cylindrical: a compromise between Mercator and equal steps."), Some("54003".into())),
+        "mollweide" => (tl!("World, equal-area: true sizes, shapes bend towards the edges."), Some("54009".into())),
+        "cylindricalEqualArea" => (tl!("World, equal-area, cylindrical: true sizes, flattened near the poles."), Some("54034".into())),
+        "robinson" => (tl!("World, compromise: neither equal-area nor conformal, balanced for wall maps."), Some("54030".into())),
+        "equalEarth" => (tl!("World, equal-area: true sizes with a Robinson-like look."), Some("8857".into())),
+        "naturalEarth" => (tl!("World, compromise: rounded corners, gentle shapes near the poles."), None),
+        "winkelTripel" => (tl!("World, compromise: low overall distortion, used for world atlases."), Some("54042".into())),
+        "eckertIV" => (tl!("World, equal-area: true sizes with rounded poles."), Some("54012".into())),
+        "northPolar" => (tl!("Polar, conformal: the Arctic and the northern lands."), None),
+        "southPolar" => (tl!("Polar, conformal: Antarctica and the Southern Ocean."), Some("3031".into())),
+        "europeEqualArea" => (tl!("Regional, equal-area: the European standard for statistics."), Some("3035".into())),
+        "usaAlbers" => (tl!("Regional, equal-area: the contiguous United States."), Some("5070".into())),
+        "albers" => {
+            (tl!("Conic, equal-area: true sizes across a mid-latitude region; set its meridian and parallels to the region."), None)
         }
-        "vn2000tm3" | "vn2000" => (
-            "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84.",
+        "lambertConformal" => {
+            (tl!("Conic, conformal: true shapes across a mid-latitude region; set its meridian and parallels to the region."), None)
+        }
+        "vn2000tm3" => (
+            tl!(
+                "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84."
+            ),
             None,
         ),
         "vn2000Utm48" => {
-            ("Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E).", Some("3405".into()))
+            (tl!("Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E)."), Some("3405".into()))
         }
         "vn2000Utm49" => {
-            ("Vietnam national coordinate system (VN-2000) UTM zone 49N (108°E–114°E, central meridian 111°E).", Some("3406".into()))
+            (tl!("Vietnam national coordinate system (VN-2000) UTM zone 49N (108°E–114°E, central meridian 111°E)."), Some("3406".into()))
         }
-        _ => ("A projected coordinate system.", epsg.clone()),
+        _ => (tl!("A projected coordinate system."), epsg.clone()),
     };
     let page = page.filter(|_| !tuned);
-    ui.label(tl!(kind));
+    ui.label(kind);
     if let Ok(p) = Projector::new(&code) {
         let area = match p.domain() {
             Domain::World => tl!("Area of use: the whole world").to_string(),
@@ -1497,14 +1517,10 @@ mod tests {
 
     #[test]
     fn ui_degree_formatting_preserves_fractions() {
-        let format_deg = |lon: f64| -> String {
-            let lon_str = if (lon - lon.round()).abs() < 1e-6 { format!("{:.0}", lon) } else { format!("{lon}") };
-            format!("{lon_str}°")
-        };
-        assert_eq!(format_deg(105.0), "105°");
-        assert_eq!(format_deg(107.0), "107°");
-        assert_eq!(format_deg(105.75), "105.75°");
-        assert_eq!(format_deg(108.5), "108.5°");
-        assert_eq!(format_deg(104.25), "104.25°");
+        assert_eq!(format_degrees(105.0), "105°");
+        assert_eq!(format_degrees(107.0), "107°");
+        assert_eq!(format_degrees(105.75), "105.75°");
+        assert_eq!(format_degrees(108.5), "108.5°");
+        assert_eq!(format_degrees(104.25), "104.25°");
     }
 }
