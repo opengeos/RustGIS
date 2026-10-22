@@ -482,3 +482,145 @@ fn perspective_does_not_read_unused_hidden_sources() {
     assert!(got.pixmap.data() == expected.pixmap.data());
     assert!(actual.layer(hidden).unwrap().source.as_ref().unwrap().error.is_none());
 }
+
+#[test]
+fn extrusion_spool_failures_retain_the_actual_source_diagnostic() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            effects::SPOOL_FAILURE.with(|s| s.set(None));
+        }
+    }
+    let _reset = Reset;
+    let mut ds = Dataset::new("extrusion failure", GeometryType::Polygon, vec![]);
+    ds.push(
+        Some(Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.01, 0.0),
+            Coord::new(0.01, 0.01),
+            Coord::new(0.0, 0.0),
+        ]]])),
+        vec![],
+    );
+    let mut base = Map::new("spool failure");
+    base.add_dataset(ds);
+    base.layers[0].extrusion = Some(rustgis_map::effects::Extrusion {
+        height: 100.0,
+        field: None,
+        factor: 1.0,
+        face_culling: true,
+        lighting: true,
+        shadows: true,
+    });
+    let view = View { width: 120.0, height: 90.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+    for stage in ["create", "insert", "draw"] {
+        let mut map = base.clone();
+        map.layers[0] = streamed(&base.layers[0], 1);
+        effects::SPOOL_FAILURE.with(|s| s.set(Some(stage)));
+        assert!(render(&mut map, &view).is_none());
+        assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains(&format!("spool {stage} failure")));
+        effects::SPOOL_FAILURE.with(|s| s.set(None));
+        assert!(render(&mut map, &view).is_some());
+        assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+    }
+}
+
+#[test]
+fn perspective_reports_shapefile_open_failure() {
+    let mut ds = Dataset::new("visible", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut map = Map::new("open failure");
+    map.add_dataset(ds);
+    let view = View {
+        width: 120.0,
+        height: 90.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    map.layers[0].source = Some(SourceLayer { path: Some(dir.path().join("missing.shp").display().to_string()), ..Default::default() });
+    assert!(render(&mut map, &view).is_none());
+    assert!(map.layers[0].source.as_ref().unwrap().error.is_some());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pitched_mixed_sources_keep_windows_and_pending_on_the_owner() {
+    use std::sync::{Arc, Condvar, Mutex};
+    struct WindowSource {
+        chunks: Chunks,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+    impl FeatureSource for WindowSource {
+        fn info(&self) -> &SourceInfo {
+            &self.chunks.info
+        }
+        fn read(&self, _: &Request) -> rustgis_data::Result<Batch> {
+            let (lock, wake) = &*self.gate;
+            let mut ready = lock.lock().unwrap();
+            while !*ready {
+                ready = wake.wait(ready).unwrap();
+            }
+            Ok(Batch {
+                features: self.chunks.ds.features.to_vec(),
+                matched: self.chunks.ds.features.len() as u64,
+                complete: true,
+                skipped: 0,
+            })
+        }
+    }
+    struct Release(Arc<(Mutex<bool>, Condvar)>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            *self.0.0.lock().unwrap() = true;
+            self.0.1.notify_all();
+        }
+    }
+    let mut ds = Dataset::new("mixed", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.01, 0.01))), vec![]);
+    let mut base = Map::new("mixed");
+    base.add_dataset(ds.clone());
+    base.add_dataset(ds);
+    let view = View {
+        width: 120.0,
+        height: 90.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    for backend in [Backend::Cpu, Backend::Gpu] {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let release = Release(gate.clone());
+        let mut map = base.clone();
+        map.layers[0] = streamed(&base.layers[0], 1);
+        let info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+        map.layers[1].dataset.features = Vec::new().into();
+        map.layers[1].source = Some(SourceLayer::from_path(
+            "mixed.gpkg",
+            None,
+            Box::new(WindowSource { chunks: Chunks { info, ds: base.layers[1].dataset.clone(), size: 1 }, gate }),
+        ));
+        let output = render_with_backend(&mut map, &view, false, backend).unwrap();
+        let pending = match output {
+            RenderOutput::Cpu(r) => r.data_pending,
+            RenderOutput::Gpu(s) => s.data_pending,
+        };
+        assert!(pending);
+        assert!(map.layers[1].source.as_ref().unwrap().is_pending());
+        drop(release);
+        // Wait for the same owning request, then verify the next frame retains its window.
+        let bands = view.camera.tilt_bands(view.width, view.height);
+        sync_tilted(&mut map, &view, &bands, true);
+        assert_eq!(map.layers[1].dataset.features.len(), 2);
+        assert!(map.layers[1].source.as_ref().unwrap().reads > 0);
+        let output = render_with_backend(&mut map, &view, true, backend).unwrap();
+        let pending = match output {
+            RenderOutput::Cpu(r) => r.data_pending,
+            RenderOutput::Gpu(s) => s.data_pending,
+        };
+        assert!(!pending);
+        assert_eq!(map.layers[1].dataset.features.len(), 2);
+    }
+}

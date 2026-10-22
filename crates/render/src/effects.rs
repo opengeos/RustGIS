@@ -136,7 +136,14 @@ fn shapes(
         if rings.is_empty() {
             continue;
         }
-        let cy = rings.iter().flatten().map(|p| p.1).sum::<f32>() / rings.iter().map(Vec::len).sum::<usize>().max(1) as f32;
+        let count = rings.iter().map(Vec::len).sum::<usize>().max(1);
+        let sum = rings.iter().flatten().map(|p| p.1).sum::<f32>();
+        // Preserve ordinary painter order exactly; only widen an overflowing sum.
+        let cy = if sum.is_finite() {
+            sum / count as f32
+        } else {
+            (rings.iter().flatten().map(|p| f64::from(p.1)).sum::<f64>() / count as f64) as f32
+        };
         shapes.push((cy, rings, hp, symbol(row)));
     }
     shapes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -234,6 +241,39 @@ fn paint_shapes(pm: &mut Pixmap, ctx: &Ctx, x: &Extrusion, shapes: &[Shape], sha
     }
 }
 
+// Store float bits as integers so JSON cannot turn a non-finite height or symbol into null.
+// This is a disposable internal payload, not a persisted file format.
+#[cfg(not(target_arch = "wasm32"))]
+type StoredShape = (u32, Vec<Vec<(u32, u32)>>, u32, Rgba, Rgba, u32, u32, rustgis_map::Marker);
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_shape(shape: &Shape) -> rustgis_data::Result<Vec<u8>> {
+    let (cy, rings, hp, sym) = shape;
+    let stored: StoredShape = (
+        cy.to_bits(),
+        rings.iter().map(|r| r.iter().map(|(x, y)| (x.to_bits(), y.to_bits())).collect()).collect(),
+        hp.to_bits(),
+        sym.fill,
+        sym.stroke,
+        sym.stroke_width.to_bits(),
+        sym.size.to_bits(),
+        sym.marker,
+    );
+    serde_json::to_vec(&stored).map_err(|e| rustgis_data::DataError::Format(e.to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_shape(bytes: &[u8]) -> rustgis_data::Result<Shape> {
+    let (cy, rings, hp, fill, stroke, width, size, marker): StoredShape =
+        serde_json::from_slice(bytes).map_err(|e| rustgis_data::DataError::Format(e.to_string()))?;
+    Ok((
+        f32::from_bits(cy),
+        rings.into_iter().map(|r| r.into_iter().map(|(x, y)| (f32::from_bits(x), f32::from_bits(y))).collect()).collect(),
+        f32::from_bits(hp),
+        Symbol { fill, stroke, stroke_width: f32::from_bits(width), size: f32::from_bits(size), marker },
+    ))
+}
+
 /// Global painter ordering and a separate shadow pass, without retaining every feature.
 pub(crate) struct ExtrusionSpool {
     #[cfg(not(target_arch = "wasm32"))]
@@ -241,8 +281,23 @@ pub(crate) struct ExtrusionSpool {
     #[cfg(target_arch = "wasm32")]
     shapes: Vec<Shape>,
 }
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SPOOL_FAILURE: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn check_spool_failure(stage: &str) -> rustgis_data::Result<()> {
+    if SPOOL_FAILURE.with(|s| s.get() == Some(stage)) {
+        return Err(rustgis_data::DataError::Format(format!("injected spool {stage} failure")));
+    }
+    Ok(())
+}
+
 impl ExtrusionSpool {
     pub fn new() -> rustgis_data::Result<Self> {
+        #[cfg(test)]
+        check_spool_failure("create")?;
         Ok(Self {
             #[cfg(not(target_arch = "wasm32"))]
             disk: rustgis_data::source::spill::Ordered::new()?,
@@ -260,20 +315,23 @@ impl ExtrusionSpool {
         px_per_m: f64,
         symbol: impl Fn(usize) -> Symbol,
     ) -> rustgis_data::Result<()> {
+        #[cfg(test)]
+        check_spool_failure("insert")?;
         for shape in shapes(ctx, ds, geoms, rows, x, px_per_m, symbol) {
             #[cfg(not(target_arch = "wasm32"))]
-            self.disk
-                .insert(f64::from(shape.0), &serde_json::to_vec(&shape).map_err(|e| rustgis_data::DataError::Format(e.to_string()))?)?;
+            self.disk.insert(f64::from(shape.0), &encode_shape(&shape)?)?;
             #[cfg(target_arch = "wasm32")]
             self.shapes.push(shape);
         }
         Ok(())
     }
     pub fn draw(&mut self, pm: &mut Pixmap, ctx: &Ctx, x: &Extrusion) -> rustgis_data::Result<()> {
+        #[cfg(test)]
+        check_spool_failure("draw")?;
         #[cfg(not(target_arch = "wasm32"))]
         for shadows in [true, false] {
             self.disk.visit(|bytes| {
-                let shape: Shape = serde_json::from_slice(bytes).map_err(|e| rustgis_data::DataError::Format(e.to_string()))?;
+                let shape = decode_shape(bytes)?;
                 paint_shapes(pm, ctx, x, std::slice::from_ref(&shape), shadows, !shadows);
                 Ok(())
             })?;
@@ -578,5 +636,50 @@ pub(crate) fn extrude_tilted(
             let edge = sym.stroke.lerp(fog, *fogged).with_alpha(110);
             pm.stroke_path(&p, &paint(edge, 1.0), &Stroke { width: 0.6 * ppp, ..Stroke::default() }, Transform::identity(), None);
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod spool_tests {
+    use super::*;
+    #[test]
+    fn spool_payload_preserves_all_float_bits_and_large_finite_centres() {
+        let symbol = Symbol { stroke_width: f32::NAN, size: f32::INFINITY, ..Symbol::default_for(rustgis_data::GeometryType::Polygon, 1) };
+        let shape = (1.0, vec![vec![(f32::MAX, -0.0)]], f32::NAN, symbol);
+        let decoded = decode_shape(&encode_shape(&shape).unwrap()).unwrap();
+        assert_eq!(decoded.0.to_bits(), shape.0.to_bits());
+        assert_eq!(decoded.1[0][0].0.to_bits(), f32::MAX.to_bits());
+        assert_eq!(decoded.1[0][0].1.to_bits(), (-0.0f32).to_bits());
+        assert_eq!(decoded.2.to_bits(), shape.2.to_bits());
+        assert_eq!(decoded.3.stroke_width.to_bits(), symbol.stroke_width.to_bits());
+        assert_eq!(decoded.3.size.to_bits(), symbol.size.to_bits());
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: rustgis_map::Camera::new(rustgis_geom::Coord::new(0.0, 0.0), 1.0),
+            sky: false,
+        };
+        let ctx =
+            Ctx { view: &view, ppp: 1.0, wireframe: false, cull: rustgis_geom::Extent::EMPTY, globe: None, sprites: Default::default() };
+        let geom = Geometry::Polygon(vec![vec![vec![
+            rustgis_geom::Coord::new(0.0, -2e38),
+            rustgis_geom::Coord::new(1.0, -2e38),
+            rustgis_geom::Coord::new(1.0, -2e38),
+            rustgis_geom::Coord::new(0.0, -2e38),
+        ]]]);
+        let ds = Dataset::new("large", rustgis_data::GeometryType::Polygon, vec![]);
+        let x = Extrusion { height: 1.0, field: None, factor: 1.0, face_culling: true, lighting: true, shadows: true };
+        let got = shapes(&ctx, &ds, &[Some(&geom)], &[true], &x, 1.0, |_| symbol);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_finite());
+        let ordered = rustgis_data::source::spill::Ordered::new().unwrap();
+        ordered.insert(f64::from(got[0].0), &encode_shape(&got[0]).unwrap()).unwrap();
+        ordered
+            .visit(|bytes| {
+                decode_shape(bytes)?;
+                Ok(())
+            })
+            .unwrap();
     }
 }

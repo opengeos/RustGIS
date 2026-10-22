@@ -14,7 +14,14 @@ fn bad(e: impl std::fmt::Display) -> DataError {
 
 impl Ordered {
     pub fn new() -> Result<Self> {
-        let file = tempfile::tempdir()?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("rustgis-render-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let file = builder.tempdir()?;
         let db = Connection::open(file.path().join("ordering.sqlite")).map_err(bad)?;
         db.execute_batch(
             "PRAGMA page_size=4096; PRAGMA max_page_count=1048576; PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-2048; PRAGMA mmap_size=0; PRAGMA temp_store=FILE;
@@ -27,7 +34,11 @@ impl Ordered {
     }
 
     pub fn insert(&self, priority: f64, payload: &[u8]) -> Result<()> {
-        self.db.execute("INSERT INTO shapes(priority,payload) VALUES(?1,?2)", params![priority, payload]).map_err(bad)?;
+        self.db
+            .prepare_cached("INSERT INTO shapes(priority,payload) VALUES(?1,?2)")
+            .map_err(bad)?
+            .execute(params![priority, payload])
+            .map_err(bad)?;
         Ok(())
     }
 

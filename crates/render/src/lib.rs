@@ -1153,9 +1153,21 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             }
             if let Some(source) = &mut layer.source
                 && !source.is_open()
-                && source.path.is_some()
+                && source.embedded.is_none()
+                && source.gdal.is_none()
+                && source.duckdb.is_none()
+                && source.postgis.is_none()
+                && source.mysql.is_none()
+                && source.sqlserver.is_none()
+                && source.path.as_ref().is_some_and(|p| {
+                    !rustgis_data::source::is_remote_name(p)
+                        && std::path::Path::new(p).extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"))
+                })
             {
-                let _ = source.open();
+                if let Err(e) = source.open() {
+                    source.error = Some(e);
+                    return None;
+                }
                 if layer.dataset.fields.is_empty()
                     && let Some(info) = source.info()
                 {
@@ -1171,12 +1183,19 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         && !map.projection.is_globe()
         && map.layers.iter().any(|l| complete_layers.contains(&l.id) && l.source.as_ref().and_then(|s| s.chunk_source()).is_some())
     {
+        // Keep asynchronous windows and pending work on their owner, never a disposable copy.
+        let bands = camera.tilt_bands(view.width, view.height);
+        let data_pending = sync_tilted(map, &View { camera, ..*view }, &bands, full_res_rasters);
         let mut snapshot = map.clone();
         for layer in &mut snapshot.layers {
             if !complete_layers.contains(&layer.id) {
+                layer.source = None;
                 continue;
             }
-            let Some(source) = layer.source.as_ref().and_then(|s| s.chunk_source()) else { continue };
+            let Some(source) = layer.source.as_ref().and_then(|s| s.chunk_source()) else {
+                layer.source = None;
+                continue;
+            };
             let ids: std::collections::HashSet<u64> =
                 layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r).map(|f| f.id)).collect();
             let mut features = Vec::new();
@@ -1199,7 +1218,14 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             layer.clear_cache();
             layer.touch_geometry();
         }
-        return render_with_backend(&mut snapshot, view, full_res_rasters, backend);
+        let mut output = render_with_backend(&mut snapshot, view, full_res_rasters, backend);
+        if let Some(output) = &mut output {
+            match output {
+                RenderOutput::Cpu(rendered) => rendered.data_pending |= data_pending,
+                RenderOutput::Gpu(scene) => scene.data_pending |= data_pending,
+            }
+        }
+        return output;
     }
     // The globe turns and tilts itself (`Globe`): one frame.
     if map.projection.is_globe() {
@@ -2501,11 +2527,19 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             && globe.is_none()
             && !matches!(labels_to, Labels::Tilted(..) | Labels::Shared)
         {
-            Some(effects::ExtrusionSpool::new().ok()?)
+            match effects::ExtrusionSpool::new() {
+                Ok(spool) => Some(spool),
+                Err(e) => {
+                    if let Some(source) = &mut layer.source {
+                        source.error = Some(e.to_string());
+                    }
+                    return None;
+                }
+            }
         } else {
             None
         };
-        let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> Option<()> {
+        let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // The definition query and the display filters that apply at this scale (a feature draws
             // only if it matches all of them).
             let mut rows = layer.drawn_rows(scale);
@@ -2525,7 +2559,6 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
             // Drawn from a copy thinned to under a third of a pixel: a detailed layer seen whole
             // otherwise walks many vertices per pixel on every frame.
-            let thin_tol = view.camera.res / view.pixels_per_point.max(0.01) * rustgis_map::lod::THIN_PX;
             if globe.is_none() {
                 if complete_source {
                     layer.projected_in(&flat, &key);
@@ -2575,7 +2608,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // and the layer runs the CPU branch below like any ineligible one.
             let mut gpu_done = false;
             if gpu_layer {
-                flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
+                flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
+                    .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
                 gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
             }
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
@@ -2598,7 +2632,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                     let px_per_m = view.pixels_per_point / (map_ground_res(view, &flat) * body);
                     if let Some(spool) = &mut extrusions {
-                        spool.add(&ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r)).ok()?;
+                        spool.add(&ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r))?;
                     } else {
                         effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
                     }
@@ -2772,7 +2806,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             if complete_source && matches!(labels_to, Labels::Own | Labels::Turned(_)) {
                 compact_label_candidates(&mut label_candidates);
             }
-            Some(())
+            Ok(())
         };
         if let Some(source) = source {
             let selected: std::collections::HashSet<u64> =
@@ -2788,7 +2822,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 chunk.selection = features.iter().enumerate().filter_map(|(r, f)| selected.contains(&f.id).then_some(r)).collect();
                 chunk.dataset.features = features.into();
                 chunk.touch_geometry();
-                draw_chunk(&mut chunk).ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
+                draw_chunk(&mut chunk)?;
                 chunk.clear_cache();
                 chunk.dataset.features = Vec::new().into();
                 Ok(())
@@ -2803,10 +2837,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 source.error = None;
             }
         } else {
-            draw_chunk(layer)?;
+            draw_chunk(layer).ok()?;
         }
-        if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion) {
-            spool.draw(if direct { &mut pm } else { &mut target }, &ctx, x).ok()?;
+        if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion)
+            && let Err(e) = spool.draw(if direct { &mut pm } else { &mut target }, &ctx, x)
+        {
+            if let Some(source) = &mut layer.source {
+                source.error = Some(e.to_string());
+            }
+            return None;
         }
         if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
             bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
