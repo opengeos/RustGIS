@@ -1080,6 +1080,10 @@ fn hostile_params_never_panic() {
         json!({"type": "albers", "lon_0": f64::MAX, "lat_1": "x", "lat_2": -1e308}),
         json!({"kind": "legend", "element": 1, "exclude": [null, 7, "", {"x": 1}]}),
         json!({"kind": "text", "element": 1, "font": {"family": "serif"}, "italic": [], "align": 7}),
+        // A STAC trend's source: a valid band and period so the junk after them is reached, and an
+        // API on a closed local port, so nothing is read.
+        json!({"collection": "c", "asset": "NDVI", "url": "http://127.0.0.1:9/v1", "bbox": "nowhere", "cellSize": -1e308, "resampling": 3, "start": "2020", "end": "2021"}),
+        json!({"collection": "c", "asset": "NDVI", "url": "http://127.0.0.1:9/v1", "bbox": [1e308, -91, 7, "x"], "start": "2020", "end": "2021"}),
         // MySQL addresses that can't be read, so nothing connects.
         json!({"database": "mysql://u:p#@[::1/x?ssl-mode=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
@@ -7246,6 +7250,152 @@ fn a_stac_data_cube_on_the_time_slider() {
     assert_eq!((s.map().tiles.len(), s.map().layers.len()), (tiles, layers));
 }
 
+/// A trend over a STAC collection's band (#579), read in place from its files over an area: each
+/// date's values scaled as its own metadata says (here date k's scale is k + 1 ten-thousandths,
+/// so every cell grows in a straight line), Sen's slope as worked out by hand; the same outputs
+/// read whole or in pieces of rows; a coarser cell size read from the files' overviews; and the
+/// requests a trend can't take refused.
+#[test]
+fn a_trend_over_a_stac_collection() {
+    use crate::cmd::stac::PIECE_VALUES;
+    let (cog, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let dates = ["2024-01-01", "2024-01-17", "2024-02-02", "2024-02-18", "2024-03-05", "2024-03-21"];
+    let features: Vec<String> = dates
+        .iter()
+        .enumerate()
+        .map(|(k, d)| {
+            format!(
+                r#"{{"type": "Feature", "id": "n{k}", "collection": "mod", "bbox": [10, 45, 11, 46], "geometry": null,
+                   "properties": {{"datetime": "{d}T00:00:00Z", "bdc:tiles": ["h13v09"]}},
+                   "assets": {{"NDVI": {{"href": "{cog}/n{k}.tif", "eo:bands": [{{"scale": {}, "offset": {}}}]}}}}}}"#,
+                (k + 1) as f64 * 1e-4,
+                k as f64 * 0.01
+            )
+        })
+        .collect();
+    let search = format!(r#"{{"type": "FeatureCollection", "features": [{}]}}"#, features.join(","));
+    let base = serve_routes(vec![("/v1/search", search)], 16);
+    let api = format!("{base}/v1");
+    let params = json!({"url": api, "collection": "mod", "asset": "NDVI", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-03", "test": "original"});
+    let mut s = Session::new(Project::default());
+    let run = |s: &mut Session, p: &Value| {
+        let r = s.run("cube.trend", p).unwrap();
+        let ids: Vec<u32> = r["layers"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap() as u32).collect();
+        let raster = |id: u32| s.map().layer(id).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+        (r["dates"].as_u64(), ids.iter().map(|id| raster(*id)).collect::<Vec<_>>())
+    };
+    let (n, whole) = run(&mut s, &params);
+    assert_eq!(n, Some(6));
+    let slope = &whole[0];
+    assert_eq!((slope.width, slope.height), (512, 512), "the area on the full images' grid");
+    // Pixel (x, y) stores (x + y) % 256; with date k's scale (k + 1) ten-thousandths and offset
+    // k hundredths, its value grows by that many ten-thousandths and a hundredth a date, 16 days
+    // apart: each file's own scale and offset taken.
+    let per_year = |x: usize, y: usize| (((x + y) % 256) as f64 * 1e-4 + 0.01) * 365.2425 / 16.0;
+    for (x, y) in [(10, 20), (300, 100), (0, 0), (511, 511)] {
+        let got = f64::from(slope.bands[0].data[y * 512 + x]);
+        assert!((got - per_year(x, y)).abs() < 1e-4, "({x}, {y}): {got} vs {}", per_year(x, y));
+    }
+    // A straight rise over six dates is significant, (0, 0)'s too: its stored 0 rises by the offsets.
+    assert!(whole[3].bands[0].data[20 * 512 + 10].is_finite() && whole[3].bands[0].data[0].is_finite());
+    // An area wider than the file: half a degree more to the west, 256 columns no file covers
+    // (NaN), and the file's own beside them, in their places.
+    let wider = json!({"url": api, "collection": "mod", "asset": "NDVI", "bbox": [9.5, 45, 11, 46], "start": "2024-01-01", "end": "2024-03", "test": "original"});
+    let (_, wide) = run(&mut s, &wider);
+    let ws = &wide[0];
+    assert_eq!((ws.width, ws.height), (768, 512));
+    assert!(ws.bands[0].data[20 * 768 + 255].is_nan() && ws.bands[0].data[0].is_nan());
+    for (x, y) in [(10, 20), (511, 511)] {
+        let got = f64::from(ws.bands[0].data[y * 768 + 256 + x]);
+        assert!((got - per_year(x, y)).abs() < 1e-4, "({x}, {y}): {got} vs {}", per_year(x, y));
+    }
+    // An area no file covers (the items only near it) is refused, not four empty rasters.
+    let away = json!({"url": api, "collection": "mod", "asset": "NDVI", "bbox": [20, 45, 21, 46], "start": "2024-01-01", "end": "2024-03"});
+    let e = s.run("cube.trend", &away).unwrap_err();
+    assert!(e.contains("covers the area"), "{e}");
+    // Ten tiles, more than the cover probes reach, none covering it: refused once read, not four
+    // empty rasters.
+    let many: Vec<String> = (0..10)
+        .flat_map(|t| {
+            let cog = cog.clone();
+            dates.iter().enumerate().map(move |(k, d)| {
+                format!(
+                    r#"{{"type": "Feature", "id": "t{t}n{k}", "collection": "mod", "bbox": [20, 45, 21, 46], "geometry": null,
+                       "properties": {{"datetime": "{d}T00:00:00Z", "bdc:tiles": ["t{t}"]}},
+                       "assets": {{"NDVI": {{"href": "{cog}/t{t}n{k}.tif"}}}}}}"#
+                )
+            })
+        })
+        .collect();
+    let search = format!(r#"{{"type": "FeatureCollection", "features": [{}]}}"#, many.join(","));
+    let tiles_api = format!("{}/v1", serve_routes(vec![("/v1/search", search)], 16));
+    let e = s.run("cube.trend", &json!({"url": tiles_api, "collection": "mod", "asset": "NDVI", "bbox": [20, 45, 21, 46], "start": "2024-01-01", "end": "2024-03"})).unwrap_err();
+    assert!(e.contains("covers the area"), "{e}");
+    // Read in two pieces (a quarter of the rows' values each would make four; 256-row tiles make
+    // it two), the outputs are the same, cell for cell.
+    PIECE_VALUES.with(|v| v.set(Some(512 * 300 * 6)));
+    let (_, pieces) = run(&mut s, &params);
+    PIECE_VALUES.with(|v| v.set(None));
+    for (a, b) in whole.iter().zip(&pieces) {
+        assert_eq!((a.width, a.height), (b.width, b.height));
+        assert!(a.bands[0].data.iter().zip(&b.bands[0].data).all(|(x, y)| x == y || (x.is_nan() && y.is_nan())), "{}", a.name);
+        assert!(crate::cmd::cube::same_grid(&a.transform, &b.transform));
+    }
+    // Cancelled, the readers stop early and the run says so, rather than work out a block only
+    // partly read.
+    let job = crate::cmd::cube::trend_start(&s, &params).unwrap();
+    let e = job.run(&std::sync::atomic::AtomicBool::new(true), &std::sync::atomic::AtomicUsize::new(0)).unwrap_err();
+    assert_eq!(e, "cancelled");
+    // A row too wide for a piece is said.
+    PIECE_VALUES.with(|v| v.set(Some(100)));
+    let e = s.run("cube.trend", &params).unwrap_err();
+    PIECE_VALUES.with(|v| v.set(None));
+    assert!(e.contains("more than a run's block"), "{e}");
+    // A coarser cell size reads the overview nearest it: 256 × 256 cells of 1/256°.
+    let mut coarse = params.clone();
+    coarse["cellSize"] = json!(0.004);
+    let (_, half) = run(&mut s, &coarse);
+    assert_eq!((half[0].width, half[0].height), (256, 256));
+    // Averaged, each 1/256° cell is the mean of its 2 × 2 full pixels, (2x + 2y + 1) where the
+    // overview's (nearest) pixel is 2x + 2y.
+    coarse["resampling"] = json!("average");
+    let (_, mean) = run(&mut s, &coarse);
+    assert_eq!((mean[0].width, mean[0].height), (256, 256));
+    for (x, y) in [(5, 7), (30, 40)] {
+        let (near, avg) = (f64::from(half[0].bands[0].data[y * 256 + x]), f64::from(mean[0].bands[0].data[y * 256 + x]));
+        let (unit, offsets) = (1e-4 * 365.2425 / 16.0, 0.01 * 365.2425 / 16.0);
+        assert!((near - (2 * x + 2 * y) as f64 * unit - offsets).abs() < 1e-4, "nearest ({x}, {y}): {near}");
+        assert!((avg - (2 * x + 2 * y + 1) as f64 * unit - offsets).abs() < 1e-4, "average ({x}, {y}): {avg}");
+    }
+    let before = s.map().layers.len();
+    for bad in [json!("bilinear"), json!(3)] {
+        coarse["resampling"] = bad;
+        assert!(s.run("cube.trend", &coarse).unwrap_err().contains("resampling"));
+    }
+    assert_eq!(s.map().layers.len(), before, "refused, nothing added");
+    coarse["resampling"] = Value::Null;
+    // The level nearest the size asked: 0.0025 is nearer the full images' 1/512° than 1/256°.
+    coarse["cellSize"] = json!(0.0025);
+    assert_eq!(run(&mut s, &coarse).1[0].width, 512);
+    // What can't be read is refused before anything is added.
+    let layers = s.map().layers.len();
+    for (bad, said) in [
+        (json!({"cellSize": -1}), "cellSize"),
+        (json!({"cellSize": "fine"}), "cellSize"),
+        (json!({"bbox": [11, 45, 10, 46]}), "bbox"),
+        (json!({"asset": null}), "asset"),
+        (json!({"bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-01-20"}), "dates"),
+    ] {
+        let mut p = params.clone();
+        for (k, v) in bad.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let e = s.run("cube.trend", &p).unwrap_err();
+        assert!(e.contains(said), "{bad}: {e}");
+    }
+    assert_eq!(s.map().layers.len(), layers);
+}
+
 /// A cloud-optimised GeoTIFF by its address is read in place: its header, then only the tiles a
 /// map tile needs, by range; a GeoTIFF in strips is downloaded whole as a raster layer.
 #[test]
@@ -7699,6 +7849,20 @@ fn a_trend_over_a_data_cube() {
     let late = r["layers"][0].clone();
     assert_eq!(r["dates"], 9);
     assert!((value(&s, &late, 0) - 0.2).abs() < 1e-2, "{}", value(&s, &late, 0));
+    // An end given as a year takes all of it: 2013 to 2020's July, eight dates (read as 1 January
+    // 2020, it would leave 2020's out).
+    let r = s.run("cube.trend", &json!({"layers": names, "end": "2020", "name": "to2020"})).unwrap();
+    assert_eq!(r["dates"], 8, "{r}");
+    let r = s.run("cube.trend", &json!({"layers": names, "end": "2020-06", "name": "toJune"})).unwrap();
+    assert_eq!(r["dates"], 7, "a month ends with it: 2020's July date is after June: {r}");
+    // A year given as a number reads the same.
+    let r = s.run("cube.trend", &json!({"layers": names, "end": 2020, "name": "to2020n"})).unwrap();
+    assert_eq!(r["dates"], 8, "{r}");
+    // A full date is that day, as before: 1 January 2020 leaves 2020's July out, its 1 July keeps it.
+    let r = s.run("cube.trend", &json!({"layers": names, "end": "2020-01-01", "name": "toNewYear"})).unwrap();
+    assert_eq!(r["dates"], 7, "{r}");
+    let r = s.run("cube.trend", &json!({"layers": names, "end": "2020-07-01", "name": "toJuly"})).unwrap();
+    assert_eq!(r["dates"], 8, "{r}");
     let backwards: Vec<String> = (0..12).map(|k| format!("{}-01-01", 2030 - k)).collect();
     let r = s.run("cube.trend", &json!({"layers": names, "dates": backwards, "test": "original"})).unwrap();
     assert!(value(&s, &r["layers"][0], 0) < 0.0, "the dates given are used, in the layers' order");
