@@ -138,7 +138,7 @@ pub const VN2000_PROVINCES: &[Vn2000Province] = &[
 
 /// Distinct primary regional hubs for UI central meridian shortcut buttons.
 pub const VN2000_UI_PROVINCES: &[(&str, f64)] =
-    &[("Hà Nội", 105.0), ("TP.HCM", 105.75), ("Huế", 107.0), ("Đà Nẵng", 107.75), ("Khánh Hòa", 108.25), ("Đắk Lắk", 108.5)];
+    &[("Hà Nội", 105.0), ("TP. Hồ Chí Minh", 105.75), ("Huế", 107.0), ("Đà Nẵng", 107.75), ("Khánh Hòa", 108.25), ("Đắk Lắk", 108.5)];
 
 /// A parameter a preset takes (opengeos/RustGIS#517): its PROJ name and the range, in degrees,
 /// it is checked against.
