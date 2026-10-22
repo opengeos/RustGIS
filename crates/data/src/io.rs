@@ -527,11 +527,12 @@ pub(crate) fn temp_beside(path: &Path) -> std::io::Result<std::path::PathBuf> {
 /// removes it on failure.
 fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     let res = (|| {
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
         f.write_all(bytes)?;
         f.sync_all()
     })();
+    drop(f);
     if res.is_err() {
         let _ = std::fs::remove_file(path);
     }
@@ -1865,6 +1866,47 @@ pub(crate) fn group_rings(rings: Vec<(Vec<Coord>, bool)>) -> Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_collision_preserves_the_existing_file() -> std::io::Result<()> {
+        let path = temp_beside(&std::env::temp_dir().join("rustgis-staging-collision"))?;
+        write_new(&path, b"unrelated existing file")?;
+        let error = write_new(&path, b"must not replace").err().ok_or_else(|| std::io::Error::other("collision succeeded"))?;
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path)?, b"unrelated existing file");
+        std::fs::remove_file(path)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_collision_preserves_symlinks_and_their_targets() -> std::io::Result<()> {
+        let target = temp_beside(&std::env::temp_dir().join("rustgis-staging-target"))?;
+        let link = temp_beside(&target)?;
+        write_new(&target, b"unrelated target")?;
+        std::os::unix::fs::symlink(&target, &link)?;
+        assert!(write_new(&link, b"must not follow").is_err());
+        assert_eq!(std::fs::read_link(&link)?, target);
+        assert_eq!(std::fs::read(&target)?, b"unrelated target");
+        std::fs::remove_file(&target)?;
+        assert!(write_new(&link, b"must not replace dangling link").is_err());
+        assert_eq!(std::fs::read_link(&link)?, target);
+        assert!(!target.exists());
+        std::fs::remove_file(link)
+    }
+
+    #[test]
+    fn write_atomic_failed_install_preserves_destination_and_removes_staging() -> std::io::Result<()> {
+        let root = temp_beside(&std::env::temp_dir().join("rustgis-atomic-failed-install"))?;
+        std::fs::create_dir(&root)?;
+        let destination = root.join("occupied");
+        std::fs::create_dir(&destination)?;
+        let marker = destination.join("keep.txt");
+        std::fs::write(&marker, b"keep destination contents")?;
+        assert!(write_atomic(&destination, b"must not replace directory").is_err());
+        assert_eq!(std::fs::read(marker)?, b"keep destination contents");
+        assert_eq!(std::fs::read_dir(&root)?.count(), 1, "failed install left a staging file");
+        std::fs::remove_dir_all(root)
+    }
 
     #[test]
     fn topojson_named_json_from_disk() {
