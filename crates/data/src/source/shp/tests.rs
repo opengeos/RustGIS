@@ -264,6 +264,20 @@ fn shapefile_disk_index_complete_chunks_preserve_full_reads_and_file_order() {
                 assert_eq!(rows, expected.features);
             }
         }
+        for extent in [None, Some(Extent::EMPTY), Some(Extent::new(-180.0, -90.0, -179.0, -89.0))] {
+            assert!(source.visit_chunks(extent, 0, &mut |_| panic!("zero budget must not emit")).is_err());
+        }
+        let mut reentrant = false;
+        source
+            .visit_chunks(None, 256, &mut |_| {
+                if !reentrant {
+                    assert_eq!(source.read(&Request { extent: None, limit: 1 })?.features.len(), 1);
+                    reentrant = true;
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert!(reentrant);
         let mut calls = 0;
         assert!(
             source

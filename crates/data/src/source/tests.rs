@@ -1274,6 +1274,24 @@ fn shapefile_complete_chunks_keep_all_rows_order_attributes_and_budget() {
     );
     assert_eq!(calls, 1);
     assert!(source.visit_chunks(None, 0, &mut |_| { panic!("zero-budget traversal must not emit a row") }).is_err());
+    assert!(source.visit_chunks(Some(Extent::EMPTY), 0, &mut |_| panic!("zero budget must not emit")).is_err());
+    let empty_path = dir.path().join("empty.shp");
+    // The production exporter deliberately refuses an empty layer. Build a valid zero-record
+    // fixture from its headers rather than changing that existing export contract.
+    for ext in ["shp", "shx"] {
+        let mut header = std::fs::read(path.with_extension(ext)).unwrap();
+        header.truncate(100);
+        header[24..28].copy_from_slice(&50i32.to_be_bytes());
+        std::fs::write(empty_path.with_extension(ext), header).unwrap();
+    }
+    let mut header = std::fs::read(path.with_extension("dbf")).unwrap();
+    let len = u16::from_le_bytes([header[8], header[9]]) as usize;
+    header.truncate(len);
+    header[4..8].copy_from_slice(&0u32.to_le_bytes());
+    header.push(0x1a);
+    std::fs::write(empty_path.with_extension("dbf"), header).unwrap();
+    let empty = shp::ShpSource::open_path(&empty_path, "empty").unwrap();
+    assert!(empty.visit_chunks(None, 0, &mut |_| panic!("zero budget must not emit")).is_err());
     let extent = Some(Extent::new(0.02, 0.0, 0.1, 2.0));
     let expected = source.read(&Request { extent, limit: 1000 }).unwrap();
     let mut rows = Vec::new();

@@ -1187,6 +1187,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         let bands = camera.tilt_bands(view.width, view.height);
         let data_pending = sync_tilted(map, &View { camera, ..*view }, &bands, full_res_rasters);
         let mut snapshot = map.clone();
+        let mut snapshot_budget = SnapshotBudget::new(complete_snapshot_limit());
         for layer in &mut snapshot.layers {
             if !complete_layers.contains(&layer.id) {
                 layer.source = None;
@@ -1199,10 +1200,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             let ids: std::collections::HashSet<u64> =
                 layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r).map(|f| f.id)).collect();
             let mut features = Vec::new();
-            let result = visit_complete(source.as_ref(), &mut |chunk| {
-                features.extend(chunk);
-                Ok(())
-            });
+            let result = visit_complete(source.as_ref(), &mut |chunk| snapshot_budget.append(&mut features, chunk));
             if let Err(e) = result {
                 if let Some(s) = map.layer_mut(layer.id).and_then(|l| l.source.as_mut()) {
                     s.error = Some(e.to_string());
@@ -1248,6 +1246,60 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         }
     }
     render_frame(map, view, full_res_rasters, backend, Labels::Own)
+}
+
+// Separate from the interaction budget: this limits retained complete-source feature storage
+// across the perspective snapshot. Raster targets, derived caches and decoding scratch are extra.
+const COMPLETE_SNAPSHOT_BYTES: usize = rustgis_map::source::VIEW_BYTES * 4;
+
+#[cfg(test)]
+thread_local! {
+    static SNAPSHOT_TEST_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+fn complete_snapshot_limit() -> usize {
+    #[cfg(test)]
+    if let Some(limit) = SNAPSHOT_TEST_LIMIT.with(|s| s.get()) {
+        return limit;
+    }
+    COMPLETE_SNAPSHOT_BYTES
+}
+
+/// Account owned rows and actual vector capacity across all materialized chunk sources.
+/// Exceeding the budget fails the entire frame; no source is sampled or truncated.
+struct SnapshotBudget {
+    limit: usize,
+    used: usize,
+}
+
+impl SnapshotBudget {
+    fn new(limit: usize) -> Self {
+        Self { limit, used: 0 }
+    }
+
+    fn append(&mut self, features: &mut Vec<rustgis_data::Feature>, mut chunk: Vec<rustgis_data::Feature>) -> rustgis_data::Result<()> {
+        let bad =
+            || rustgis_data::DataError::Format(format!("complete perspective snapshot exceeds its {} byte feature budget", self.limit));
+        let row_size = std::mem::size_of::<rustgis_data::Feature>();
+        let heap = chunk.iter().fold(0usize, |n, f| n.saturating_add(rustgis_data::source::chunk_memory::feature_bytes(f)));
+        let needed = features.len().checked_add(chunk.len()).ok_or_else(bad)?;
+        let old_capacity = features.capacity();
+        let extra = needed.saturating_sub(old_capacity).saturating_mul(row_size);
+        if self.used.saturating_add(heap).saturating_add(extra) > self.limit {
+            return Err(bad());
+        }
+        features
+            .try_reserve_exact(chunk.len())
+            .map_err(|e| rustgis_data::DataError::Format(format!("complete perspective snapshot: {e}")))?;
+        let extra = features.capacity().saturating_sub(old_capacity).saturating_mul(row_size);
+        let used = self.used.saturating_add(heap).saturating_add(extra);
+        if used > self.limit {
+            return Err(bad());
+        }
+        self.used = used;
+        features.append(&mut chunk);
+        Ok(())
+    }
 }
 
 /// A capable source must explicitly finish the traversal; an incomplete summary must never
@@ -2520,7 +2572,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let direct = !offscreen;
         let mut bins = effects::AggregationBins::default();
         let mut aggregate_symbol = None;
-        let mut highlights = if layer.selection.is_empty() { None } else { Some(Pixmap::new(w, h)?) };
+        let mut highlights = if complete_source && !layer.selection.is_empty() { Some(Pixmap::new(w, h)?) } else { None };
         let mut extrusions = if complete_source
             && layer.geometry_type() == GeometryType::Polygon
             && layer.extrusion.is_some()

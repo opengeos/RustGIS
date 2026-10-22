@@ -624,7 +624,10 @@ traversal does not publish a partial successful frame. This workspace is not a r
 This is not a fixed bound on total renderer memory: raster targets, label candidates and the
 existing combined polygon-mask path have separate costs. Perspective markers, terrain and
 extrusions retain the complete upstream depth renderer through an isolated full-source
-snapshot; that compatibility fallback materializes the source. Flat line/polygon rendering
+snapshot; that compatibility fallback materializes the source. Retained complete-source feature
+storage across the snapshot has a separate budget (512 MiB natively, 192 MiB in the browser).
+Exceeding it fails the whole frame with a source diagnostic, without sampling or truncating
+features; raster targets, derived geometry caches and decoding scratch are outside that budget. Flat line/polygon rendering
 makes a statistics pass before painting and currently reads the entire source, so it trades
 additional I/O for complete rendering and predictable chunk storage. Geometry preprocessing
 and GPU preparation are separate optimizations.

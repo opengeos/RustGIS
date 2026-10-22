@@ -626,3 +626,57 @@ fn pitched_mixed_sources_keep_windows_and_pending_on_the_owner() {
         assert_eq!(map.layers[1].dataset.features.len(), 2);
     }
 }
+
+#[test]
+fn perspective_snapshot_budget_counts_all_layers_capacity_and_nested_values() {
+    let row = Feature {
+        id: 1,
+        geometry: Some(Geometry::MultiPoint(vec![Coord::new(0.0, 0.0); 8])),
+        attrs: vec![Value::Text("large attribute".repeat(16))],
+    };
+    let row_bytes = rustgis_data::source::chunk_memory::feature_bytes(&row) + std::mem::size_of::<Feature>();
+    let mut budget = SnapshotBudget::new(row_bytes);
+    let mut first = Vec::new();
+    budget.append(&mut first, vec![row.clone()]).unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(budget.used, row_bytes);
+    let mut second = Vec::new();
+    assert!(budget.append(&mut second, vec![row.clone()]).is_err());
+    assert!(second.is_empty());
+    assert!(budget.append(&mut first, vec![row]).is_err());
+    assert_eq!(first.len(), 1);
+    assert_eq!(budget.used, row_bytes);
+}
+
+#[test]
+fn perspective_snapshot_budget_failure_reaches_source_without_partial_output() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
+        }
+    }
+    let _reset = Reset;
+    let mut ds = Dataset::new("snapshot", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut base = Map::new("snapshot");
+    base.add_dataset(ds);
+    let view = View {
+        width: 120.0,
+        height: 90.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    for backend in [Backend::Cpu, Backend::Gpu] {
+        let mut map = base.clone();
+        map.layers[0] = streamed(&base.layers[0], 1);
+        SNAPSHOT_TEST_LIMIT.with(|s| s.set(Some(0)));
+        assert!(render_with_backend(&mut map, &view, true, backend).is_none());
+        assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains("snapshot exceeds"));
+        assert!(map.layers[0].source.as_ref().unwrap().chunk_source().is_some());
+        SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
+        assert!(render_with_backend(&mut map, &view, true, backend).is_some());
+        assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+    }
+}
