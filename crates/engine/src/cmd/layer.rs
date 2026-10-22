@@ -518,6 +518,10 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     if results.is_empty() {
         return Err(if failed.is_empty() { format!("{path}: nothing could be added") } else { failed.join("; ") });
     }
+    // Something was added (through GDAL): the layers read natively that couldn't be are still said.
+    for e in failed {
+        s.notify(e, true);
+    }
     // One result, as adding a single file gives it: every layer, the first, and the features.
     let layers: Vec<Value> = results.iter().filter_map(|r| r.get("layers").and_then(Value::as_array)).flatten().cloned().collect();
     let tables: Vec<Value> = results.iter().filter_map(|r| r.get("tables").and_then(Value::as_array)).flatten().cloned().collect();
