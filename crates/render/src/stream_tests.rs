@@ -91,14 +91,14 @@ fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_select
     l.labels.default.field = "name".into();
     l.renderer = Renderer::Single(Symbol { fill: Rgba::new(210, 60, 25, 120), ..Symbol::default_for(GeometryType::Polygon, l.id) });
     let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: m.camera, sky: false };
-    for extrusion in [false, true] {
-        m.layers[0].extrusion = extrusion.then_some(rustgis_map::effects::Extrusion {
+    for extrusion in [None, Some(true), Some(false)] {
+        m.layers[0].extrusion = extrusion.map(|shadows| rustgis_map::effects::Extrusion {
             height: 1500.0,
             field: None,
             factor: 1.0,
             face_culling: true,
             lighting: true,
-            shadows: true,
+            shadows,
         });
         let expected = render(&mut m.clone(), &view).unwrap();
         for size in [1, 3, 11, 100] {
@@ -678,5 +678,105 @@ fn perspective_snapshot_budget_failure_reaches_source_without_partial_output() {
         SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
         assert!(render_with_backend(&mut map, &view, true, backend).is_some());
         assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+    }
+}
+
+#[test]
+fn masks_skip_undrawn_targets_and_reuse_one_complete_source_with_distinct_swipes() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Counted {
+        chunks: Chunks,
+        calls: Arc<AtomicUsize>,
+    }
+    impl FeatureSource for Counted {
+        fn info(&self) -> &SourceInfo {
+            self.chunks.info()
+        }
+        fn read(&self, request: &Request) -> rustgis_data::Result<Batch> {
+            self.chunks.read(request)
+        }
+        fn streams_chunks(&self) -> bool {
+            true
+        }
+        fn visit_chunks(
+            &self,
+            extent: Option<Extent>,
+            bytes: usize,
+            visit: &mut dyn FnMut(Vec<Feature>) -> rustgis_data::Result<()>,
+        ) -> rustgis_data::Result<Batch> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.chunks.visit_chunks(extent, bytes, visit)
+        }
+    }
+    let mut ds = Dataset::new("target", GeometryType::Polygon, vec![]);
+    ds.push(
+        Some(Geometry::Polygon(vec![vec![vec![
+            Coord::new(-0.02, -0.02),
+            Coord::new(0.02, -0.02),
+            Coord::new(0.02, 0.02),
+            Coord::new(-0.02, 0.02),
+            Coord::new(-0.02, -0.02),
+        ]]])),
+        vec![],
+    );
+    let mut base = Map::new("shared masks");
+    let first = base.add_dataset(ds.clone());
+    let second = base.add_dataset(ds.clone());
+    ds.name = "mask".into();
+    let mask = base.add_dataset(ds.clone());
+    base.layer_mut(mask).unwrap().visible = false;
+    for id in [first, second] {
+        base.layer_mut(id).unwrap().mask = Some("mask".into());
+    }
+    base.swipe = Some((first, 0.35));
+    let view = View { width: 120.0, height: 90.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+    let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+    let flat = base.flat();
+    let scale = base.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    let expected = layer_masks(&mut base.clone(), &ctx, 120, 90, &flat, "test", scale).unwrap();
+    let info = streamed(base.layer(mask).unwrap(), 1).source.unwrap().info().unwrap().clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut actual = base.clone();
+    actual.layer_mut(mask).unwrap().source =
+        Some(SourceLayer::from_path("mask.shp", None, Box::new(Counted { chunks: Chunks { info, ds, size: 1 }, calls: calls.clone() })));
+    let got = layer_masks(&mut actual, &ctx, 120, 90, &flat, "test", scale).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(got.len(), 2);
+    for ((id, got), (expected_id, expected)) in got.iter().zip(&expected) {
+        assert_eq!(id, expected_id);
+        assert_eq!(got.data(), expected.data());
+    }
+    assert_ne!(got[0].1.data(), got[1].1.data(), "swipe remains target-specific");
+    for mode in 0..5 {
+        let mut map = base.clone();
+        *map.layer_mut(mask).unwrap() = streamed(base.layer(mask).unwrap(), 0);
+        for id in [first, second] {
+            match mode {
+                0 => map.layer_mut(id).unwrap().visible = false,
+                1 => map.layer_mut(id).unwrap().max_scale = Some(scale * 2.0),
+                2 | 3 => {
+                    let mut group = rustgis_map::LayerGroup::new(format!("group {id}"));
+                    group.id = id;
+                    group.children = vec![id];
+                    if mode == 2 {
+                        group.visible = false;
+                    } else {
+                        group.max_scale = Some(scale * 2.0);
+                    }
+                    map.groups.push(group);
+                }
+                _ => {}
+            }
+        }
+        let got = layer_masks(&mut map, &ctx, 120, 90, &flat, "test", scale);
+        if mode == 4 {
+            assert!(got.is_none(), "a failed required mask must still fail the frame");
+        } else {
+            assert!(got.unwrap().is_empty());
+            assert!(map.layer(mask).unwrap().source.as_ref().unwrap().error.is_none());
+        }
     }
 }

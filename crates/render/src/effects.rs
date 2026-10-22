@@ -329,7 +329,7 @@ impl ExtrusionSpool {
         #[cfg(test)]
         check_spool_failure("draw")?;
         #[cfg(not(target_arch = "wasm32"))]
-        for shadows in [true, false] {
+        for shadows in [true, false].into_iter().filter(|shadow| !*shadow || x.shadows) {
             self.disk.visit(|bytes| {
                 let shape = decode_shape(bytes)?;
                 paint_shapes(pm, ctx, x, std::slice::from_ref(&shape), shadows, !shadows);

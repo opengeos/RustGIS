@@ -2480,7 +2480,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     let tokens = rustgis_map::graphics::TokenValues::of(map, scale);
     let n_layers = map.layers.len();
     // Masks: layers shown only inside another layer's polygons, or left of the swipe divider.
-    let masks = layer_masks(map, &ctx, w, h, &flat, &key)?;
+    let masks = layer_masks(map, &ctx, w, h, &flat, &key, scale)?;
     // Bottom first; a higher depth priority draws later (on top) whatever the order.
     let mut order: Vec<usize> = (0..n_layers).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
@@ -3065,16 +3065,19 @@ fn layer_masks(
     h: u32,
     flat: &rustgis_map::projection::Flat,
     key: &str,
+    scale: f64,
 ) -> Option<Vec<(u32, tiny_skia::Mask)>> {
     let wanted: Vec<(u32, Option<String>, Option<f64>)> = map
         .layers
         .iter()
+        .filter(|l| map.draws_at(l, scale))
         .filter_map(|l| {
             let swipe = map.swipe.filter(|(id, _)| *id == l.id).map(|(_, x)| x.clamp(0.0, 1.0));
             (l.mask.is_some() || swipe.is_some()).then(|| (l.id, l.mask.clone(), swipe))
         })
         .collect();
     let mut out = Vec::new();
+    let mut paths = std::collections::HashMap::new();
     for (id, by, swipe) in wanted {
         let Some(mut m) = tiny_skia::Mask::new(w, h) else { continue };
         match by
@@ -3082,40 +3085,43 @@ fn layer_masks(
             .and_then(|n| map.layers.iter().position(|l| l.name.eq_ignore_ascii_case(n) && l.geometry_type() == GeometryType::Polygon))
         {
             Some(mi) => {
-                let mut pb = PathBuilder::new();
-                // The mask's shapes go straight into the path, without copying them.
-                let mut add = |g: &Geometry| {
-                    if let Geometry::Polygon(polys) = g {
-                        for r in polys.iter().flatten() {
-                            ctx.ring_path(&mut pb, r, true);
-                        }
-                    }
-                };
-                if let Some(source) = map.layers.get(mi).and_then(|l| l.source.as_ref()).and_then(|s| s.chunk_source()) {
-                    let result = visit_complete(source.as_ref(), &mut |features| {
-                        for feature in features {
-                            if let Some(g) = feature.geometry {
-                                let g = if ctx.globe.is_some() { g } else { flat.project(&g) };
-                                add(&g);
+                if let std::collections::hash_map::Entry::Vacant(entry) = paths.entry(mi) {
+                    let mut pb = PathBuilder::new();
+                    // The mask's shapes go straight into the path, without copying them.
+                    let mut add = |g: &Geometry| {
+                        if let Geometry::Polygon(polys) = g {
+                            for r in polys.iter().flatten() {
+                                ctx.ring_path(&mut pb, r, true);
                             }
                         }
-                        Ok(())
-                    });
-                    if let Err(e) = result {
-                        if let Some(s) = map.layers.get_mut(mi).and_then(|l| l.source.as_mut()) {
-                            s.error = Some(e.to_string());
+                    };
+                    if let Some(source) = map.layers.get(mi).and_then(|l| l.source.as_ref()).and_then(|s| s.chunk_source()) {
+                        let result = visit_complete(source.as_ref(), &mut |features| {
+                            for feature in features {
+                                if let Some(g) = feature.geometry {
+                                    let g = if ctx.globe.is_some() { g } else { flat.project(&g) };
+                                    add(&g);
+                                }
+                            }
+                            Ok(())
+                        });
+                        if let Err(e) = result {
+                            if let Some(s) = map.layers.get_mut(mi).and_then(|l| l.source.as_mut()) {
+                                s.error = Some(e.to_string());
+                            }
+                            return None;
                         }
-                        return None;
+                    } else if let Some(ml) = map.layers.get_mut(mi) {
+                        if ctx.globe.is_some() {
+                            ml.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).for_each(&mut add);
+                        } else {
+                            ml.projected_in(flat, key).iter().flatten().for_each(&mut add);
+                        }
                     }
-                } else if let Some(ml) = map.layers.get_mut(mi) {
-                    if ctx.globe.is_some() {
-                        ml.dataset.features.iter().filter_map(|f| f.geometry.as_ref()).for_each(&mut add);
-                    } else {
-                        ml.projected_in(flat, key).iter().flatten().for_each(&mut add);
-                    }
+                    entry.insert(pb.finish());
                 }
-                if let Some(p) = pb.finish() {
-                    m.fill_path(&p, FillRule::EvenOdd, true, Transform::identity());
+                if let Some(p) = paths.get(&mi).and_then(Option::as_ref) {
+                    m.fill_path(p, FillRule::EvenOdd, true, Transform::identity());
                 }
             }
             // No (or no usable) mask layer: everything shows.
