@@ -486,6 +486,11 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             if typing && !b.chord.command {
                 continue;
             }
+            // Nor undo and redo, whatever they're bound to: the text field undoes its own typing
+            // (#685), as ModelBuilder's keys leave it to the field too.
+            if typing && b.chord.is_text_undo() {
+                continue;
+            }
             // Duplicating needs a selected layout element, and not a text field being typed in;
             // otherwise the key is left alone.
             if b.command == "layout.duplicateElement" && (!element || typing) {
@@ -1177,6 +1182,39 @@ mod tests {
         ] {
             assert_eq!(parse_scale(text), None, "{text}");
         }
+    }
+
+    /// With a text field focused, Ctrl/⌘+Z undoes its typing, not the project; with none, the
+    /// project (#685).
+    #[test]
+    fn undo_in_a_text_field_undoes_its_text() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("labels.style", serde_json::json!({"layer": "Cities", "size": 20})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                shortcuts(app, &ctx);
+                crate::analysispane::script_pane(app, ui, &Tokens::light());
+            },
+            app,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+        h.run();
+        h.event(egui::Event::Text("map.zoomFull".into()));
+        h.run();
+        let depth = h.state().session.undo_depth();
+        let undo = egui::Event::Key { key: Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+        h.event(undo.clone());
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), depth, "the project untouched");
+        assert_eq!(h.state().workflow.script, "", "the typing undone");
+        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("script_text")));
+        h.run();
+        h.event(undo);
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), depth - 1, "no field focused: the project");
     }
 
     #[test]
