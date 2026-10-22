@@ -239,10 +239,12 @@ pub fn normalize_vietnamese(s: &str) -> String {
 /// Resolves a Vietnamese province/city name or alias to its VN-2000 central meridian (lon_0).
 pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
     let trimmed = code.trim();
-    let s = trimmed
-        .strip_prefix("vn2000:")
-        .or_else(|| trimmed.strip_prefix("vn2000/"))
-        .or_else(|| trimmed.strip_prefix("vn-2000:"))
+    let s = [":", "/"]
+        .iter()
+        .find_map(|sep| {
+            let (prefix, rest) = trimmed.split_once(sep)?;
+            (prefix.eq_ignore_ascii_case("vn2000") || prefix.eq_ignore_ascii_case("vn-2000")).then_some(rest)
+        })
         .unwrap_or(trimmed);
     let norm = normalize_vietnamese(s);
     if norm.is_empty() {
@@ -1225,16 +1227,21 @@ mod tests {
             assert!(def.contains("+proj=utm") && def.contains("+zone=49"), "{name}");
             assert_eq!(label, "VN-2000 / UTM zone 49N", "{name}");
         }
-        // Provincial lookups (ASCII and native Vietnamese diacritics)
+        // Provincial lookups (ASCII and native Vietnamese diacritics, case-insensitive prefixes)
         assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
         assert_eq!(lookup("Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
         assert_eq!(lookup("vn2000:hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN2000:hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN-2000:Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN2000/Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
         assert_eq!(lookup("tphcm").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
         assert_eq!(lookup("TP. Hồ Chí Minh").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("VN2000:TP. Hồ Chí Minh").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
         assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
         assert_eq!(lookup("Sài Gòn").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
         assert_eq!(lookup("danang").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
         assert_eq!(lookup("Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("VN2000/Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
         assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000 +lon_0=108.25").unwrap().0);
         assert_eq!(lookup("Đắk Lắk").unwrap().0, lookup("vn2000 +lon_0=108.5").unwrap().0);
         assert_eq!(lookup("Huế").unwrap().0, lookup("vn2000 +lon_0=107").unwrap().0);
