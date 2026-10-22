@@ -30,6 +30,12 @@ const MAX_FIELDS: usize = 4096;
 const MAX_PARTS: u64 = 1 << 24;
 /// Most faces of one multipatch merged into its footprint; beyond, its outline is its points' hull.
 const MAX_FACES: usize = 200_000;
+/// Most faces of one multipatch merged by a union; past it, the hull too. In the browser a panic
+/// in the union library can't be caught, so only small unions are tried there.
+const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 5_000 } else { MAX_FACES };
+/// Most faces merged for one table, whatever its rows ask: past it, multipatches are hulls, so a
+/// crafted table can't make loading take hours.
+const MAX_TABLE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
 
 /// Whether a folder is a File Geodatabase: named `.gdb`, holding a system catalog.
 pub fn is_geodatabase(dir: &Path) -> bool {
@@ -285,7 +291,8 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     let mut ds = Dataset::new(name, layer_type, fields);
     ds.crs = crs;
     let geometry_at = table.fields.iter().position(|f| f.kind == Kind::Geometry);
-    let (mut curves, mut hulls, mut unprojected) = (0usize, 0usize, 0usize);
+    let (mut curves, mut wall_hulls, mut unmerged, mut unprojected) = (0usize, 0usize, 0usize, 0usize);
+    let mut budget = MAX_TABLE_FACES;
     for (row, offset) in rows {
         let Some(values) = table.row(t, offset) else {
             report.skipped += 1;
@@ -300,7 +307,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         }
         let mut geometry = None;
         if let (Some(g), Some(def)) = (geometry_at.and_then(|i| values.get(i)).and_then(|v| v.blob.as_ref()), table.geometry.as_ref()) {
-            match decode_geometry(g, def) {
+            match decode_geometry(g, def, &mut budget) {
                 Ok(Decoded::Geometry(geom, curved)) => {
                     curves += curved;
                     geometry = Some(geom);
@@ -310,7 +317,8 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
                         attrs.resize(at, Value::Null);
                         attrs.extend([Value::Float(lo), Value::Float(hi), Value::Float(hi - lo)]);
                     }
-                    hulls += usize::from(patch.hull);
+                    wall_hulls += usize::from(patch.hull == Some(Hull::NoFaces));
+                    unmerged += usize::from(patch.hull == Some(Hull::Unmerged));
                     geometry = patch.footprint;
                 }
                 Ok(Decoded::Empty) => {}
@@ -338,8 +346,11 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     if patches {
         report.messages.push("3D multipatches are drawn as their footprints, with their lowest and highest Z in z_min and z_max, and the difference in height".into());
     }
-    if hulls > 0 {
-        report.messages.push(format!("{hulls} multipatches with no faces seen from above are drawn as the outline of their points"));
+    if wall_hulls > 0 {
+        report.messages.push(format!("{wall_hulls} multipatches with no faces seen from above are drawn as the outline of their points"));
+    }
+    if unmerged > 0 {
+        report.messages.push(format!("{unmerged} multipatches with too many faces to merge are drawn as the outline of their points"));
     }
     Ok(Some((ds, report)))
 }
@@ -827,14 +838,24 @@ struct Patch {
     footprint: Option<Geometry>,
     /// Its lowest and highest Z.
     z: Option<(f64, f64)>,
-    /// The footprint is the hull of its points (no face shows from above).
-    hull: bool,
+    /// Why the footprint is the hull of its points, when it is.
+    hull: Option<Hull>,
+}
+
+/// Why a multipatch's footprint is the hull of its points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hull {
+    /// No face shows from above (only walls).
+    NoFaces,
+    /// Its faces weren't merged: too many, past the table's budget, or the union failed.
+    Unmerged,
 }
 
 const HAS_Z: u64 = 0x8000_0000;
 const HAS_CURVES: u64 = 0x2000_0000;
 
-fn decode_geometry(b: &[u8], def: &GeomDef) -> std::result::Result<Decoded, ()> {
+/// `budget` is how many more faces the table's multipatches may merge (see [`MAX_TABLE_FACES`]).
+fn decode_geometry(b: &[u8], def: &GeomDef, budget: &mut usize) -> std::result::Result<Decoded, ()> {
     let mut c = Cur::new(b, 0);
     let ty = c.varuint().ok_or(())?;
     let x = |v: f64| v / def.xy_scale + def.x0;
@@ -921,7 +942,7 @@ fn decode_geometry(b: &[u8], def: &GeomDef) -> std::result::Result<Decoded, ()> 
                 Some((lo, hi)) => Some((lo.min(v), hi.max(v))),
             });
             let pts: Vec<P3> = pts.iter().enumerate().map(|(i, p)| [p.x, p.y, zs.get(i).copied().unwrap_or(0.0)]).collect();
-            let (footprint, hull) = footprint(&split(&pts, &sizes), &kinds);
+            let (footprint, hull) = footprint(&split(&pts, &sizes), &kinds, budget);
             Ok(Decoded::Patch(Patch { footprint, z, hull }))
         }
         _ => Err(()),
@@ -1027,9 +1048,10 @@ fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> (Vec<Vec<Vec<P3>>>, bool) {
 }
 
 /// A multipatch's footprint: the union of its faces seen from above. Faces standing on edge, such
-/// as walls, show nothing and are left out; when none shows, or it has more than [`MAX_FACES`],
-/// the footprint is the hull of its points. The flag says it is a hull.
-fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
+/// as walls, show nothing and are left out. The footprint is the hull of its points when no face
+/// shows, or when its faces aren't merged: more than [`MAX_FACES`], more seen from above than
+/// [`MAX_UNION_FACES`] or than the table's `budget` has left (which they then take from it).
+fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Geometry>, Option<Hull>) {
     use geo::{ConvexHull, Orient, orient::Direction};
     let (faces, truncated) = faces(parts, kinds);
     let all = || parts.iter().flatten();
@@ -1037,7 +1059,7 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
     let (y0, y1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[1]), b.max(p[1])));
     let size = (x1 - x0).max(y1 - y0);
     if !size.is_finite() {
-        return (None, false);
+        return (None, None);
     }
     // A face shows from above by the cosine of its tilt (its projected area over its area): walls,
     // even leaning ones, show as slivers, which cover nothing and which the union can't always
@@ -1070,22 +1092,25 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
                 .then(|| geo::Polygon::new(ring2(outer), holes.iter().map(|h| ring2(h)).collect()).orient(Direction::Default))
         })
         .collect();
+    let merge = !truncated && seen.len() <= MAX_UNION_FACES && seen.len() <= *budget;
     // The union library may still trip over faces it can't place: the hull stands in then (on the
-    // desktop; a panic in the browser ends the page, as any would).
-    let union = if seen.is_empty() {
-        geo::MultiPolygon::new(Vec::new())
+    // desktop; in the browser a panic can't be caught, which the small unions there make unlikely).
+    let union = if seen.is_empty() || !merge {
+        None
     } else {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| geo::unary_union(seen.iter())))
-            .unwrap_or_else(|_| geo::MultiPolygon::new(Vec::new()))
+        *budget -= seen.len();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| geo::unary_union(seen.iter()))).ok().filter(|u| !u.0.is_empty())
     };
-    let (shape, hull) = if union.0.is_empty() {
-        let points: Vec<geo::Point<f64>> = all().map(|p| geo::Point::new(p[0], p[1])).collect();
-        if points.len() < 3 {
-            return (None, false);
+    let (shape, hull) = match union {
+        Some(u) => (u, None),
+        None => {
+            let points: Vec<geo::Point<f64>> = all().map(|p| geo::Point::new(p[0], p[1])).collect();
+            if points.len() < 3 {
+                return (None, None);
+            }
+            let why = if seen.is_empty() && !truncated { Hull::NoFaces } else { Hull::Unmerged };
+            (geo::MultiPolygon::new(vec![geo::MultiPoint::from(points).convex_hull()]), Some(why))
         }
-        (geo::MultiPolygon::new(vec![geo::MultiPoint::from(points).convex_hull()]), true)
-    } else {
-        (union, false)
     };
     let ring = |ls: &geo::LineString<f64>| ls.0.iter().map(|c| Coord::new(c.x, c.y)).collect::<Vec<_>>();
     let polys: Vec<Vec<Vec<Coord>>> = shape
@@ -1094,7 +1119,7 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
         .filter(|p| p.exterior().0.len() >= 4)
         .map(|p| std::iter::once(ring(p.exterior())).chain(p.interiors().iter().map(ring)).collect())
         .collect();
-    if polys.is_empty() { (None, false) } else { (Some(Geometry::Polygon(polys)), hull) }
+    if polys.is_empty() { (None, None) } else { (Some(Geometry::Polygon(polys)), hull) }
 }
 
 #[cfg(test)]

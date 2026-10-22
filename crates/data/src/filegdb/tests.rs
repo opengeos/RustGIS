@@ -390,8 +390,27 @@ fn a_huge_strip_stops_at_the_face_cap() {
     // Within the cap, nothing is left out.
     assert_eq!(faces(&[strip[..10].to_vec()], &[0]), (strip[..10].windows(3).map(|w| vec![w.to_vec()]).collect(), false));
     // A truncated patch is drawn as its points' hull, not as part of its faces.
-    let (shape, hull) = footprint(std::slice::from_ref(&strip), &[0]);
-    assert!(hull && shape.is_some());
+    let mut budget = MAX_TABLE_FACES;
+    let (shape, hull) = footprint(std::slice::from_ref(&strip), &[0], &mut budget);
+    assert!(hull == Some(Hull::Unmerged) && shape.is_some());
+    assert_eq!(budget, MAX_TABLE_FACES, "nothing was merged");
+}
+
+/// A table's multipatches merge no more faces than its budget: past it, they are hulls.
+#[test]
+fn the_face_budget_bounds_a_tables_unions() {
+    // A 10 m square roof as a strip of two triangles, and a wall.
+    let parts = vec![
+        vec![[0.0, 0.0, 5.0], [0.0, 10.0, 5.0], [10.0, 0.0, 5.0], [10.0, 10.0, 5.0]],
+        vec![[0.0, 0.0, 0.0], [0.0, 0.0, 5.0], [10.0, 0.0, 5.0], [10.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+    ];
+    let kinds = [0, 2];
+    let mut budget = 3;
+    let (shape, hull) = footprint(&parts, &kinds, &mut budget);
+    assert_eq!((hull, budget), (None, 1), "two faces show and are merged: {shape:?}");
+    let (shape, hull) = footprint(&parts, &kinds, &mut budget);
+    assert_eq!((hull, budget), (Some(Hull::Unmerged), 1), "past the budget: {shape:?}");
+    assert!(shape.is_some());
 }
 
 /// Numbers whose bits run past 64 are refused: one decoding to `i64::MIN` panicked when negated.
