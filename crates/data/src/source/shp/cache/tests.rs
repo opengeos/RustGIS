@@ -147,6 +147,7 @@ fn cache_cleanup_is_bounded_and_preserves_unknown_files_and_orphans_in_use() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
             std::fs::set_permissions(lease_path(&path), std::fs::Permissions::from_mode(0o600)).unwrap();
         }
     }
