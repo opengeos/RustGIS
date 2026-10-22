@@ -1045,6 +1045,88 @@ pub fn probe(url: &str, then: Box<dyn FnOnce(Result<bool, String>) + Send>) {
     );
 }
 
+/// The most tiles of a file one read of values takes.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_VALUE_TILES: usize = 4096;
+
+/// The most values one read returns: 64 million, 256 MB, refused before anything is allocated.
+#[cfg(not(target_arch = "wasm32"))]
+pub const MAX_VALUES_READ: u64 = 64_000_000;
+
+/// A file's header, waiting for it: for an analysis that reads the values (opengeos/RustGIS#579).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn info_blocking(url: &str) -> Result<Arc<Info>, String> {
+    let url = split(url).0;
+    let (tx, rx) = std::sync::mpsc::channel();
+    with_info(url, Box::new(move |r| tx.send(r).unwrap_or_default()));
+    rx.recv_timeout(Duration::from_secs(120)).map_err(|_| format!("{url}: no answer in two minutes"))?
+}
+
+/// Band `band`'s values (0-based) in a window of a level: columns `cols.0..cols.1` and rows
+/// `rows.0..rows.1` of that level's grid, row by row, waiting for the tiles. No-data, and the
+/// window's pixels outside the file, are NaN. The values are as stored (no scale or offset).
+/// A read returns up to [`MAX_VALUES_READ`] values (256 MB): a caller reading on several threads
+/// bounds its windows itself (a STAC trend's slices are a million pixels at most). It waits up to
+/// two minutes for the tiles, as [`info_blocking`] does for the header.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_values_blocking(
+    info: &Arc<Info>,
+    url: &str,
+    level: usize,
+    band: usize,
+    cols: (u32, u32),
+    rows: (u32, u32),
+) -> Result<Vec<f32>, String> {
+    let url = split(url).0.to_string();
+    let l = info.layout.levels.get(level).ok_or("no such overview")?;
+    if band >= info.layout.bands.max(1) {
+        return Err(format!("the file has {} band(s)", info.layout.bands));
+    }
+    // The window's size checked before its values are allocated: a caller's window, not the file.
+    let (w, h) = (cols.1.saturating_sub(cols.0) as usize, rows.1.saturating_sub(rows.0) as usize);
+    let n = (w as u64).saturating_mul(h as u64);
+    if n > MAX_VALUES_READ {
+        return Err(format!("a window of {w} × {h} values; one read takes {MAX_VALUES_READ} at most"));
+    }
+    // The part of the window inside the file.
+    let (x0, x1) = (cols.0.min(l.width), cols.1.min(l.width));
+    let (y0, y1) = (rows.0.min(l.height), rows.1.min(l.height));
+    if x1 <= x0 || y1 <= y0 {
+        return Ok(vec![f32::NAN; n as usize]);
+    }
+    let (tw, th, across) = (l.tile_width.max(1), l.tile_height.max(1), l.across().max(1));
+    // The tiles the window takes, counted before they are listed, in checked arithmetic: a
+    // hostile header can't make a long list or a wrapped index.
+    let (c0, c1, r0, r1) = (x0 / tw, (x1 - 1) / tw, y0 / th, (y1 - 1) / th);
+    let count = (u64::from(c1 - c0) + 1) * (u64::from(r1 - r0) + 1);
+    if count > MAX_VALUE_TILES as u64 {
+        return Err(format!("{count} tiles of the file for one read; at most {MAX_VALUE_TILES}: take a coarser level or a smaller area"));
+    }
+    let tiles: Vec<u32> =
+        (r0..=r1).flat_map(|ty| (c0..=c1).filter_map(move |tx| ty.checked_mul(across).and_then(|t| t.checked_add(tx)))).collect();
+    let mut out = vec![f32::NAN; n as usize];
+    let (tx, rx) = std::sync::mpsc::channel();
+    fetch_bands(info.clone(), url.clone(), level, tiles.clone(), vec![band], Box::new(move |r| tx.send(r).unwrap_or_default()));
+    let picked = rx.recv_timeout(Duration::from_secs(120)).map_err(|_| format!("{url}: tiles not read in two minutes"))??;
+    let nodata = info.layout.nodata.map(|v| v as f32);
+    for (&t, p) in tiles.iter().zip(&picked) {
+        let Some(values) = p.first().and_then(|(chunk, i)| chunk.get(*i)) else { continue };
+        let (tx0, ty0) = ((t % across).saturating_mul(tw), (t / across).saturating_mul(th));
+        for py in ty0.max(y0)..ty0.saturating_add(th).min(y1) {
+            for px in tx0.max(x0)..tx0.saturating_add(tw).min(x1) {
+                let Some(&v) = values.get((py - ty0) as usize * tw as usize + (px - tx0) as usize) else { continue };
+                if v.is_finite()
+                    && Some(v) != nodata
+                    && let Some(slot) = out.get_mut((py - rows.0) as usize * w + (px - cols.0) as usize)
+                {
+                    *slot = v;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

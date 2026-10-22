@@ -1097,6 +1097,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id, &app.workflow.script) {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item, &app.session);
     }
+    // `{` closing itself (#662): what the box does with the keys, followed through after it.
+    let before = crate::scriptcomplete::before(ui, box_id, &app.workflow.script);
     let out = egui::ScrollArea::vertical().id_salt("script_box").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
         egui::TextEdit::multiline(&mut app.workflow.script)
             .id(box_id)
@@ -1112,6 +1114,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     crate::scriptcomplete::hint(ui, box_id, &out.inner, out.inner_rect, &app.workflow.script, &app.session);
     if let Some((offer, item)) = clicked {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item, &app.session);
+    } else {
+        crate::scriptcomplete::braces(ui, before, &out.inner, &mut app.workflow.script);
     }
     ui.horizontal(|ui| {
         if ui.button(tl!("Run")).clicked() {
