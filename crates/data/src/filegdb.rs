@@ -8,7 +8,8 @@
 //!
 //! Geometry is read in 2D. A multipatch (3D surfaces, such as the buildings of swissBUILDINGS3D)
 //! becomes its footprint: the union of its faces seen from above, with its lowest and highest Z in
-//! the fields `z_min` and `z_max`, and the difference in `height` (an extrusion stands it up by it). Curves are drawn as straight segments between their ends.
+//! the fields `z_min` and `z_max`, and the difference in `height` (an extrusion stands it up by it).
+//! In the browser, where a panic in the union can't be caught, a multipatch is the hull of its points. Curves are drawn as straight segments between their ends.
 //! Compressed tables, raster fields and the newer sparse row layouts aren't read: they give
 //! [`DataError::Unsupported`], and the caller can read the file through GDAL instead.
 //!
@@ -30,9 +31,10 @@ const MAX_FIELDS: usize = 4096;
 const MAX_PARTS: u64 = 1 << 24;
 /// Most faces of one multipatch merged into its footprint; beyond, its outline is its points' hull.
 const MAX_FACES: usize = 200_000;
-/// Most faces of one multipatch merged by a union; past it, the hull too. In the browser a panic
-/// in the union library can't be caught, so only small unions are tried there.
-const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 5_000 } else { MAX_FACES };
+/// Most faces of one multipatch merged by a union; past it, the hull too. None in the browser: a
+/// panic in the union library can't be caught there, and hostile input mustn't end the page, so
+/// multipatches are always the hulls of their points.
+const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 0 } else { MAX_FACES };
 /// Most faces merged for one table, whatever its rows ask: past it, multipatches are hulls, so a
 /// crafted table can't make loading take hours.
 const MAX_TABLE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
@@ -354,7 +356,11 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         report.messages.push(format!("{wall_hulls} multipatches with no faces seen from above are drawn as the outline of their points"));
     }
     if unmerged > 0 {
-        report.messages.push(format!("{unmerged} multipatches with too many faces to merge are drawn as the outline of their points"));
+        report.messages.push(if cfg!(target_arch = "wasm32") {
+            format!("{unmerged} multipatches are drawn as the outline of their points (the desktop app draws their footprints)")
+        } else {
+            format!("{unmerged} multipatches with too many faces to merge are drawn as the outline of their points")
+        });
     }
     Ok(Some((ds, report)))
 }
@@ -1097,8 +1103,8 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
         })
         .collect();
     let merge = !truncated && seen.len() <= MAX_UNION_FACES && seen.len() <= *budget;
-    // The union library may still trip over faces it can't place: the hull stands in then (on the
-    // desktop; in the browser a panic can't be caught, which the small unions there make unlikely).
+    // The union library may still trip over faces it can't place: the hull stands in then. (In the
+    // browser, where a panic can't be caught, nothing is merged: see `MAX_UNION_FACES`.)
     let union = if seen.is_empty() || !merge {
         None
     } else {

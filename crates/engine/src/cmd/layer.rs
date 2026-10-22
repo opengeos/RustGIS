@@ -494,9 +494,14 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     };
     let reads =
         read.layers.into_iter().map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }).collect();
-    let mut out = add_reads(s, p, path, reads, Vec::new())?;
-    // The tables it couldn't read (compressed, raster fields), through GDAL when it is installed;
-    // else, or if GDAL can't either, said.
+    // The tables read, then those it couldn't read (compressed, raster fields), through GDAL when it
+    // is installed; else, or if GDAL can't either, said. The second go on whether the first added.
+    let mut results: Vec<Value> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    match add_reads(s, p, path, reads, Vec::new()) {
+        Ok(r) => results.push(r),
+        Err(e) => failed.push(e),
+    }
     let gdal = rustgis_data::source::gdal::available();
     for (table, why) in read.unread {
         let mut q = p.clone();
@@ -505,19 +510,21 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
             o.remove("name");
         }
         match gdal.then(|| add_gdal(s, &q, path)) {
-            Some(Ok(r)) => {
-                if let (Some(all), Some(more)) =
-                    (out.get_mut("layers").and_then(Value::as_array_mut), r.get("layers").and_then(Value::as_array))
-                {
-                    all.extend(more.iter().cloned());
-                }
-                let features =
-                    out.get("features").and_then(Value::as_u64).unwrap_or(0) + r.get("features").and_then(Value::as_u64).unwrap_or(0);
-                out["features"] = json!(features);
-            }
+            Some(Ok(r)) => results.push(r),
             Some(Err(g)) => s.notify(format!("{path}: {table} not read: {why}; through GDAL: {g}"), true),
             None => s.notify(format!("{path}: {table} not read: {why} (GDAL, when installed, reads it)"), true),
         }
+    }
+    if results.is_empty() {
+        return Err(if failed.is_empty() { format!("{path}: nothing could be added") } else { failed.join("; ") });
+    }
+    // One result, as adding a single file gives it: every layer, the first, and the features.
+    let layers: Vec<Value> = results.iter().filter_map(|r| r.get("layers").and_then(Value::as_array)).flatten().cloned().collect();
+    let tables: Vec<Value> = results.iter().filter_map(|r| r.get("tables").and_then(Value::as_array)).flatten().cloned().collect();
+    let features: u64 = results.iter().filter_map(|r| r.get("features").and_then(Value::as_u64)).sum();
+    let mut out = json!({"layers": layers, "tables": tables, "features": features});
+    if let (Some(o), Some(first)) = (out.as_object_mut(), layers.first()) {
+        o.insert("layer".into(), first.clone());
     }
     Ok(out)
 }
