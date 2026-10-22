@@ -194,12 +194,12 @@ pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<
 }
 
 /// The conversion and whether it is unprojected (see [`Converted::unprojected`]).
-/// `family` picks one kind of geometry out of a layer that mixes them; `kind` is the layer's own,
-/// when it holds one. Both convert curves and surfaces (an Esri multipatch is a TIN or a
-/// polyhedral surface) to plain lines and polygons, which the FlatGeobuf reader takes.
-/// `has_srs` says whether the layer gives its coordinate system: one that doesn't (and has no
-/// `crs` given) is taken as it is, unprojected.
-#[allow(clippy::too_many_arguments)]
+///
+/// - `family` picks one kind of geometry out of a layer that mixes them; `kind` is the layer's
+///   own, when it holds one. Either converts curves and surfaces (an Esri multipatch is a TIN or
+///   a polyhedral surface) to plain lines and polygons, which the FlatGeobuf reader takes.
+/// - `has_srs` says whether the layer gives its coordinate system: one that doesn't (and has no
+///   `crs` given) is taken as it is, unprojected.
 fn convert_one_in(
     dir: &Path,
     src: &Path,
