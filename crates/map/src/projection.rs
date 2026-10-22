@@ -63,35 +63,82 @@ pub struct Vn2000Province {
     pub name: &'static str,
     /// Central meridian in degrees east (lon_0).
     pub lon_0: f64,
-    /// Search aliases (ASCII lowercase normalized).
+    /// Normalized search identifier (ASCII lowercase without diacritics).
+    pub id: &'static str,
+    /// Additional search aliases (ASCII lowercase normalized).
     pub aliases: &'static [&'static str],
 }
 
+/// The 63 Vietnamese provinces/cities with their VN-2000 3-degree central meridians (Circular 973/2001/TT-TCĐC).
 pub const VN2000_PROVINCES: &[Vn2000Province] = &[
-    Vn2000Province { name: "Hà Nội", lon_0: 105.0, aliases: &["hanoi", "hn", "phutho", "vinhphuc", "hanam", "ninhbinh", "namdinh"] },
-    Vn2000Province {
-        name: "TP. Hồ Chí Minh",
-        lon_0: 105.75,
-        aliases: &["tphcm", "saigon", "tphochiminh", "hochiminh", "hcm", "binhduong", "tayninh", "bariavungtau", "vungtau"],
-    },
-    Vn2000Province {
-        name: "Hải Phòng", lon_0: 105.75, aliases: &["haiphong", "haiduong", "hungyen", "bacninh", "bacgiang", "thaibinh"]
-    },
-    Vn2000Province { name: "Thừa Thiên Huế", lon_0: 107.0, aliases: &["hue", "thuathienhue", "nghean"] },
-    Vn2000Province {
-        name: "Đà Nẵng", lon_0: 107.75, aliases: &["danang", "quangnam", "quangtri", "quangninh", "dongnai", "binhphuoc"]
-    },
-    Vn2000Province { name: "Nha Trang", lon_0: 108.25, aliases: &["nhatrang", "khanhhoa", "ninhthuan"] },
-    Vn2000Province { name: "Gia Lai", lon_0: 108.25, aliases: &["gialai", "pleiku"] },
-    Vn2000Province { name: "Đắk Lắk", lon_0: 108.5, aliases: &["daklak", "buonmathuot", "daknong", "phuyen", "binhthuan"] },
-    Vn2000Province {
-        name: "Cần Thơ", lon_0: 105.0, aliases: &["cantho", "bentre", "travinh", "vinhlong", "soctrang", "baclieu", "camau"]
-    },
+    Vn2000Province { name: "An Giang", lon_0: 104.75, id: "angiang", aliases: &[] },
+    Vn2000Province { name: "Bà Rịa - Vũng Tàu", lon_0: 107.75, id: "bariavungtau", aliases: &["vungtau"] },
+    Vn2000Province { name: "Bạc Liêu", lon_0: 105.0, id: "baclieu", aliases: &[] },
+    Vn2000Province { name: "Bắc Giang", lon_0: 107.0, id: "bacgiang", aliases: &[] },
+    Vn2000Province { name: "Bắc Kạn", lon_0: 106.5, id: "backan", aliases: &[] },
+    Vn2000Province { name: "Bắc Ninh", lon_0: 105.5, id: "bacninh", aliases: &[] },
+    Vn2000Province { name: "Bến Tre", lon_0: 105.75, id: "bentre", aliases: &[] },
+    Vn2000Province { name: "Bình Dương", lon_0: 105.75, id: "binhduong", aliases: &[] },
+    Vn2000Province { name: "Bình Định", lon_0: 108.25, id: "binhdinh", aliases: &["quynhon"] },
+    Vn2000Province { name: "Bình Phước", lon_0: 106.25, id: "binhphuoc", aliases: &[] },
+    Vn2000Province { name: "Bình Thuận", lon_0: 108.5, id: "binhthuan", aliases: &["phantiet"] },
+    Vn2000Province { name: "Cà Mau", lon_0: 104.5, id: "camau", aliases: &[] },
+    Vn2000Province { name: "Cao Bằng", lon_0: 105.75, id: "caobang", aliases: &[] },
+    Vn2000Province { name: "Cần Thơ", lon_0: 105.0, id: "cantho", aliases: &[] },
+    Vn2000Province { name: "Đà Nẵng", lon_0: 107.75, id: "danang", aliases: &[] },
+    Vn2000Province { name: "Đắk Lắk", lon_0: 108.5, id: "daklak", aliases: &["buonmathuot", "daclac"] },
+    Vn2000Province { name: "Đắk Nông", lon_0: 108.5, id: "daknong", aliases: &["dacnong"] },
+    Vn2000Province { name: "Điện Biên", lon_0: 103.0, id: "dienbien", aliases: &["dienbienphu"] },
+    Vn2000Province { name: "Đồng Nai", lon_0: 107.75, id: "dongnai", aliases: &["bienhoa"] },
+    Vn2000Province { name: "Đồng Tháp", lon_0: 105.0, id: "dongthap", aliases: &["caolanh"] },
+    Vn2000Province { name: "Gia Lai", lon_0: 108.5, id: "gialai", aliases: &["pleiku"] },
+    Vn2000Province { name: "Hà Giang", lon_0: 105.5, id: "hagiang", aliases: &[] },
+    Vn2000Province { name: "Hà Nam", lon_0: 105.0, id: "hanam", aliases: &["phuly"] },
+    Vn2000Province { name: "Hà Nội", lon_0: 105.0, id: "hanoi", aliases: &["hn"] },
+    Vn2000Province { name: "Hà Tĩnh", lon_0: 105.5, id: "hatinh", aliases: &[] },
+    Vn2000Province { name: "Hải Dương", lon_0: 105.5, id: "haiduong", aliases: &[] },
+    Vn2000Province { name: "Hải Phòng", lon_0: 105.75, id: "haiphong", aliases: &[] },
+    Vn2000Province { name: "Hậu Giang", lon_0: 105.0, id: "haugiang", aliases: &["vitri"] },
+    Vn2000Province { name: "Hòa Bình", lon_0: 106.0, id: "hoabinh", aliases: &[] },
+    Vn2000Province { name: "Hưng Yên", lon_0: 105.5, id: "hungyen", aliases: &[] },
+    Vn2000Province { name: "Khánh Hòa", lon_0: 108.25, id: "khanhhoa", aliases: &["nhatrang"] },
+    Vn2000Province { name: "Kiên Giang", lon_0: 104.5, id: "kiengiang", aliases: &["rachgia", "phuquoc"] },
+    Vn2000Province { name: "Kon Tum", lon_0: 107.5, id: "kontum", aliases: &[] },
+    Vn2000Province { name: "Lai Châu", lon_0: 103.0, id: "laichau", aliases: &[] },
+    Vn2000Province { name: "Lạng Sơn", lon_0: 107.25, id: "langson", aliases: &[] },
+    Vn2000Province { name: "Lào Cai", lon_0: 104.75, id: "laocai", aliases: &["sapa"] },
+    Vn2000Province { name: "Lâm Đồng", lon_0: 107.75, id: "lamdong", aliases: &["dalat"] },
+    Vn2000Province { name: "Long An", lon_0: 105.75, id: "longan", aliases: &["tanan"] },
+    Vn2000Province { name: "Nam Định", lon_0: 105.5, id: "namdinh", aliases: &[] },
+    Vn2000Province { name: "Nghệ An", lon_0: 104.75, id: "nghean", aliases: &["vinh"] },
+    Vn2000Province { name: "Ninh Bình", lon_0: 105.0, id: "ninhbinh", aliases: &[] },
+    Vn2000Province { name: "Ninh Thuận", lon_0: 108.25, id: "ninhthuan", aliases: &["phanrang"] },
+    Vn2000Province { name: "Phú Thọ", lon_0: 104.75, id: "phutho", aliases: &["viettri"] },
+    Vn2000Province { name: "Phú Yên", lon_0: 108.5, id: "phuyen", aliases: &["tuyhoa"] },
+    Vn2000Province { name: "Quảng Bình", lon_0: 106.0, id: "quangbinh", aliases: &["donghoi"] },
+    Vn2000Province { name: "Quảng Nam", lon_0: 107.75, id: "quangnam", aliases: &["tamky", "hoian"] },
+    Vn2000Province { name: "Quảng Ngãi", lon_0: 108.0, id: "quangngai", aliases: &[] },
+    Vn2000Province { name: "Quảng Ninh", lon_0: 107.75, id: "quangninh", aliases: &["halong"] },
+    Vn2000Province { name: "Quảng Trị", lon_0: 106.25, id: "quangtri", aliases: &["dongha"] },
+    Vn2000Province { name: "Sóc Trăng", lon_0: 105.5, id: "soctrang", aliases: &[] },
+    Vn2000Province { name: "Sơn La", lon_0: 104.0, id: "sonla", aliases: &[] },
+    Vn2000Province { name: "Tây Ninh", lon_0: 105.5, id: "tayninh", aliases: &[] },
+    Vn2000Province { name: "Thái Bình", lon_0: 105.5, id: "thaibinh", aliases: &[] },
+    Vn2000Province { name: "Thái Nguyên", lon_0: 106.5, id: "thainguyen", aliases: &[] },
+    Vn2000Province { name: "Thanh Hóa", lon_0: 105.0, id: "thanhhoa", aliases: &[] },
+    Vn2000Province { name: "Thừa Thiên Huế", lon_0: 107.0, id: "thuathienhue", aliases: &["hue"] },
+    Vn2000Province { name: "Tiền Giang", lon_0: 105.75, id: "tiengiang", aliases: &["mytho"] },
+    Vn2000Province { name: "TP. Hồ Chí Minh", lon_0: 105.75, id: "tphochiminh", aliases: &["tphcm", "saigon", "hochiminh", "hcm"] },
+    Vn2000Province { name: "Trà Vinh", lon_0: 105.5, id: "travinh", aliases: &[] },
+    Vn2000Province { name: "Tuyên Quang", lon_0: 106.0, id: "tuyenquang", aliases: &[] },
+    Vn2000Province { name: "Vĩnh Long", lon_0: 105.5, id: "vinhlong", aliases: &[] },
+    Vn2000Province { name: "Vĩnh Phúc", lon_0: 105.0, id: "vinhphuc", aliases: &["vinhyen"] },
+    Vn2000Province { name: "Yên Bái", lon_0: 104.75, id: "yenbai", aliases: &[] },
 ];
 
 /// Distinct primary regional hubs for UI central meridian shortcut buttons.
 pub const VN2000_UI_PROVINCES: &[(&str, f64)] =
-    &[("Hà Nội", 105.0), ("TP.HCM", 105.75), ("Huế", 107.0), ("Đà Nẵng", 107.75), ("Gia Lai", 108.25), ("Đắk Lắk", 108.5)];
+    &[("Hà Nội", 105.0), ("TP.HCM", 105.75), ("Huế", 107.0), ("Đà Nẵng", 107.75), ("Khánh Hòa", 108.25), ("Đắk Lắk", 108.5)];
 
 /// A parameter a preset takes (opengeos/RustGIS#517): its PROJ name and the range, in degrees,
 /// it is checked against.
@@ -251,8 +298,7 @@ pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
         return None;
     }
     for prov in VN2000_PROVINCES {
-        let prov_norm = normalize_vietnamese(prov.name);
-        if norm == prov_norm || prov.aliases.iter().any(|&a| norm == a) {
+        if norm == prov.id || prov.aliases.iter().any(|&a| norm == a) {
             return Some(prov.lon_0);
         }
     }
@@ -1242,9 +1288,16 @@ mod tests {
         assert_eq!(lookup("danang").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
         assert_eq!(lookup("Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
         assert_eq!(lookup("VN2000/Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000 +lon_0=108.25").unwrap().0);
+        assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000 +lon_0=108.5").unwrap().0);
         assert_eq!(lookup("Đắk Lắk").unwrap().0, lookup("vn2000 +lon_0=108.5").unwrap().0);
         assert_eq!(lookup("Huế").unwrap().0, lookup("vn2000 +lon_0=107").unwrap().0);
+        assert_eq!(lookup("Nghệ An").unwrap().0, lookup("vn2000 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("Quảng Trị").unwrap().0, lookup("vn2000 +lon_0=106.25").unwrap().0);
+        assert_eq!(lookup("Cà Mau").unwrap().0, lookup("vn2000 +lon_0=104.5").unwrap().0);
+        assert_eq!(lookup("Khánh Hòa").unwrap().0, lookup("vn2000 +lon_0=108.25").unwrap().0);
+        // Decomposed NFD Vietnamese unicode normalization
+        let nfd_hanoi = "Ha\u{300} N\u{f4}\u{323}i";
+        assert_eq!(lookup(nfd_hanoi).unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
 
         // Forward and inverse coordinate projection accuracy
         // Hanoi (Hoan Kiem lake: 105.8525°E, 21.0285°N) in VN-2000 TM-3 (lon_0 = 105.0)

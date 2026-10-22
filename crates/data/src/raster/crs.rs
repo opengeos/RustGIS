@@ -181,12 +181,13 @@ impl Crs {
         if t.contains('[') {
             return super::wkt::crs_from_wkt(t);
         }
-        if t.starts_with("+proj") {
+        if t.to_ascii_lowercase().starts_with("+proj") {
             if t.len() > 1024 {
                 return Err("coordinate system definition is too long".into());
             }
+            let proj4 = if t.starts_with("+proj") { t.to_string() } else { format!("+proj{}", &t[5..]) };
             return Crs::custom(CustomCrs {
-                proj4: t.to_string(),
+                proj4,
                 label: "Custom PROJ".to_string(),
                 geokeys: Vec::new(),
                 doubles: Vec::new(),
@@ -397,6 +398,8 @@ mod tests {
         assert_eq!(Crs::parse("vn2000"), Ok(Crs::Epsg(3405)));
         let custom_proj = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj.label(), "Custom PROJ");
+        let custom_proj_upper = Crs::parse("+PROJ=utm +zone=48 +ellps=WGS84").unwrap();
+        assert_eq!(custom_proj_upper.label(), "Custom PROJ");
         assert!(Crs::parse(&format!("+proj={}", "a".repeat(1025))).is_err());
         // VN-2000 / TM-3 103-00: its datum shift (+towgs84) is applied.
         check(9205, (103.065, 21.855), (506_521.959, 2_417_609.479), 1.0);
