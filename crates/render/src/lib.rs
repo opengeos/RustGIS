@@ -2724,13 +2724,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && !layer.graphics
                 && layer.line_strokes.is_empty()
                 && !upright.contains(&layer.id);
-            // Lyon refuses degenerate geometry tiny-skia draws fine: collect_layer reports it,
-            // and the layer runs the CPU branch below like any ineligible one.
+            // Lyon refuses degenerate geometry tiny-skia draws fine, and a layer too dense to mesh
+            // (`MAX_LAYER_VERTICES`) is quicker splatted: collect_layer reports both, and the layer
+            // runs the CPU branch below like any ineligible one. It meshes the thinned copy the
+            // CPU draws.
             let mut gpu_done = false;
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
                     .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
-                gpu_done = mesh::collect_layer(&mut cmds, layer, &geoms, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
+                gpu_done = mesh::collect_layer(&mut cmds, layer, &drawn, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
             }
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
             let mut drawn_here = true;
@@ -4523,6 +4525,34 @@ mod tests {
         let cpu = render(&mut m2, &view).expect("cpu");
         assert_eq!(scene.labels.len(), cpu.labels.len());
         assert_eq!(scene.labels.first().map(|l| l.text.as_str()), cpu.labels.first().map(|l| l.text.as_str()));
+    }
+
+    #[test]
+    fn gpu_backend_draws_a_layer_too_dense_to_mesh_on_the_cpu() {
+        // 72,900 triangles about a pixel across: tessellated with outlines they'd pass
+        // MAX_LAYER_VERTICES, so that layer alone is drawn on the CPU (splatted), never meshed.
+        let mut m = Map::new("Map");
+        square_layer(&mut m, "sparse", 0.0, -2.0, 1.0);
+        let mut d = Dataset::new("dense", GeometryType::Polygon, vec![]);
+        for i in 0..270 {
+            for j in 0..270 {
+                let (x, y) = (i as f64 * 0.01, j as f64 * 0.01);
+                let ring = vec![Coord::new(x, y), Coord::new(x + 0.008, y), Coord::new(x, y + 0.008)];
+                d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+            }
+        }
+        m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(1.35, 0.5)), res: 1000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.contains(&"image"), "the dense layer as a CPU picture: {kinds:?}");
+        assert!(kinds.contains(&"mesh"), "the sparse layer stays a mesh: {kinds:?}");
+        for c in &scene.cmds {
+            if let gpu_scene::DrawCmd::Mesh { vertices, .. } = c {
+                assert!(vertices.len() <= mesh::MAX_LAYER_VERTICES, "{} vertices", vertices.len());
+            }
+        }
     }
 
     #[test]

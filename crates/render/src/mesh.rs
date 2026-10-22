@@ -264,11 +264,38 @@ fn append_geometry(
     Ok(())
 }
 
+/// The most vertices one layer's mesh may take (40 bytes each: 80 MB, well inside the 256 MiB
+/// `max_buffer_size` devices and WebGL offer). A layer of a million tiny polygons (3D buildings
+/// as faces) would tessellate to tens of millions — seconds per frame, for a mesh the device
+/// then refuses — while the CPU path splats its sub-pixel features in milliseconds.
+pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
+
+/// About how many mesh vertices `append_geometry` makes of a geometry: a fill one per point, a
+/// round-joined stroke two per point and some 32 for the turns of its joins and caps (a full
+/// circle at the stroke tolerance). Points draw as instances and count nothing.
+fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
+    fn stroked<'a>(rings: impl Iterator<Item = &'a Vec<Coord>>) -> usize {
+        rings.map(|r| 2 * r.len() + 32).sum()
+    }
+    match g {
+        Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
+        Geometry::Line(parts) if s.stroke.a() > 0 => stroked(parts.iter()),
+        Geometry::Line(_) => 0,
+        Geometry::Polygon(polys) if wireframe => stroked(polys.iter().flatten()),
+        Geometry::Polygon(polys) => {
+            let fill = if s.fill.a() > 0 { polys.iter().flatten().map(Vec::len).sum() } else { 0 };
+            let outline = if s.stroke_width > 0.0 && s.stroke.a() > 0 { stroked(polys.iter().flatten()) } else { 0 };
+            fill + outline
+        }
+    }
+}
+
 /// Collects one GPU-eligible layer into Mesh/Points commands. `geoms`, `rows` and `visible`
-/// are the render loop's own (projected geometries, row filter, extent cull), so the GPU
-/// draws exactly the features the CPU would. `Ok(None)` when nothing visible was collected;
-/// `Err(TessError)` when lyon refused a feature — the caller then draws the whole layer with
-/// tiny-skia instead (nothing is pushed part-way).
+/// are the render loop's own (geometries as the CPU draws them, row filter, extent cull), so
+/// the GPU draws exactly the features the CPU would. `Ok(None)` when nothing visible was
+/// collected; `Err(TessError)` when lyon refused a feature or the mesh would pass
+/// [`MAX_LAYER_VERTICES`] — the caller then draws the whole layer with tiny-skia instead
+/// (nothing is pushed part-way).
 pub(crate) fn collect_layer(
     cmds: &mut Vec<DrawCmd>,
     layer: &Layer,
@@ -281,13 +308,20 @@ pub(crate) fn collect_layer(
 ) -> Result<Option<[f64; 2]>, TessError> {
     // Stable origin: the centre of the drawn features' extent. Two passes cost one extra
     // extent fold — the same order of work as the culling pass the CPU render already does.
+    // The same pass gives up on a layer too dense to mesh before any of it is tessellated.
     let mut ext = Extent::EMPTY;
+    let mut estimate = 0usize;
     for (row, g) in geoms.iter().enumerate() {
         let Some(g) = g else { continue };
-        if rows.get(row) != Some(&true) || !visible(&g.extent()) {
+        let e = g.extent();
+        if rows.get(row) != Some(&true) || !visible(&e) {
             continue;
         }
-        ext = ext.union(&g.extent());
+        ext = ext.union(&e);
+        estimate = estimate.saturating_add(estimate_vertices(g, &layer.symbol(row), wireframe));
+        if estimate > MAX_LAYER_VERTICES {
+            return Err(TessError);
+        }
     }
     if ext.is_empty() {
         return Ok(None);
@@ -300,6 +334,10 @@ pub(crate) fn collect_layer(
             continue;
         }
         append_geometry(&mut v, &mut i, &mut pts, g, &layer.symbol(row), origin, wireframe, ppp, map_per_px)?;
+        // The estimate is rough (sharp turns add join vertices): this bounds what it missed.
+        if v.len() > MAX_LAYER_VERTICES {
+            return Err(TessError);
+        }
     }
     if !i.is_empty() {
         cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
@@ -499,6 +537,30 @@ mod tests {
         assert_eq!(three[2].color, premul(Rgba::rgb(255, 0, 0)));
         let one = marker_instances(Coord::new(5.0, 5.0), [5.0, 5.0], &Symbol { stroke_width: 0.0, ..s }, 2.0, None);
         assert_eq!(one.len(), 1, "fill only");
+    }
+
+    #[test]
+    fn vertex_estimate_tracks_tessellation() {
+        let s = Symbol { fill: Rgba::rgb(255, 0, 0), stroke: Rgba::rgb(0, 0, 0), stroke_width: 1.0, size: 4.0, marker: Marker::Circle };
+        let polys = vec![vec![square(0.0, 0.0, 100.0), square(30.0, 30.0, 40.0)]];
+        let shapes = [
+            Geometry::Polygon(polys),
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(0.0, 1.0)]]]),
+            Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(50.0, 0.0), Coord::new(50.0, 50.0), Coord::new(0.0, 60.0)]]),
+        ];
+        for g in &shapes {
+            for wireframe in [false, true] {
+                let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
+                append_geometry(&mut v, &mut i, &mut pts, g, &s, [0.0, 0.0], wireframe, 1.0, 0.0).expect("tessellate");
+                let est = estimate_vertices(g, &s, wireframe);
+                assert!(est >= v.len() / 2 && est <= v.len() * 2, "{g:?}: estimated {est}, tessellated {}", v.len());
+            }
+        }
+        let point = Geometry::Point(Coord::new(0.0, 0.0));
+        assert_eq!(estimate_vertices(&point, &s, false), 0, "markers are instances, not mesh");
+        let hollow = Symbol { fill: Rgba::rgb(0, 0, 0).with_alpha(0), ..s };
+        let (est_hollow, est_full) = (estimate_vertices(&shapes[1], &hollow, false), estimate_vertices(&shapes[1], &s, false));
+        assert_eq!(est_full - est_hollow, 3, "a transparent fill tessellates nothing");
     }
 
     #[test]
