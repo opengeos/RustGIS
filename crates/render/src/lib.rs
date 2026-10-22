@@ -1874,7 +1874,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
             if extents.get(row).is_some_and(|e| !e.padded(0.0, reach).intersects(&cull)) {
                 continue;
             }
-            let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5);
+            let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5, usize::MAX);
             let Ok(Some((verts, indices))) = roof else { continue };
             let sym = layer.symbol(row);
             let pts: Vec<Coord> = polys.iter().filter_map(|p| p.first()).flatten().copied().filter(|c| c.is_finite()).collect();
@@ -2727,7 +2727,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // Lyon refuses degenerate geometry tiny-skia draws fine, and a layer too dense to mesh
             // (`MAX_LAYER_VERTICES`) is quicker splatted: collect_layer reports both, and the layer
             // runs the CPU branch below like any ineligible one. It meshes the thinned copy the
-            // CPU draws.
+            // CPU draws. A turned or tilted view takes no CPU pictures (`gpu_turned`), so there
+            // such a layer sends the whole view to the CPU renderer, not just itself.
             let mut gpu_done = false;
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
