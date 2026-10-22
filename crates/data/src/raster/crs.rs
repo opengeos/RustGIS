@@ -185,7 +185,7 @@ impl Crs {
             if t.len() > 1024 {
                 return Err("coordinate system definition is too long".into());
             }
-            let proj4 = if t.starts_with("+proj") { t.to_string() } else { format!("+proj{}", &t[5..]) };
+            let proj4 = if t.starts_with("+proj") { t.to_string() } else { format!("+proj{}", t.get(5..).unwrap_or("")) };
             return Crs::custom(CustomCrs {
                 proj4,
                 label: "Custom PROJ".to_string(),
