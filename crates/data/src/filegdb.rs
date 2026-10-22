@@ -9,7 +9,8 @@
 //! Geometry is read in 2D. A multipatch (3D surfaces, such as the buildings of swissBUILDINGS3D)
 //! becomes its footprint: the union of its faces seen from above, with its lowest and highest Z in
 //! the fields `z_min` and `z_max`, and the difference in `height` (an extrusion stands it up by it).
-//! In the browser, where a panic in the union can't be caught, a multipatch is the hull of its points. Curves are drawn as straight segments between their ends.
+//! In the browser, where a panic in the union can't be caught, a multipatch is the hull of its
+//! points. Curves are drawn as straight segments between their ends.
 //! Compressed tables, raster fields and the newer sparse row layouts aren't read: they give
 //! [`DataError::Unsupported`], and the caller can read the file through GDAL instead.
 //!
@@ -58,16 +59,7 @@ pub struct Read {
 /// (ignoring case).
 pub fn read_dir(dir: &Path, layer: Option<&str>) -> Result<Read> {
     let name = dir.file_stem().and_then(|s| s.to_str()).unwrap_or("geodatabase").to_string();
-    let open = |file: &str| -> Result<Option<Vec<u8>>> {
-        let path = dir.join(file);
-        match std::fs::metadata(&path) {
-            Ok(m) if m.len() > MAX_TABLE_BYTES as u64 => Err(DataError::Unsupported(format!("{file} is too large to read here"))),
-            Ok(_) => Ok(Some(std::fs::read(&path)?)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    };
-    let mut out = read(&name, &open, layer)?;
+    let mut out = read(&name, &|file: &str| read_file(dir, file), layer)?;
     for (ds, _) in &mut out.layers {
         ds.source = Some(dir.display().to_string());
     }
@@ -78,13 +70,21 @@ pub fn read_dir(dir: &Path, layer: Option<&str>) -> Result<Read> {
 pub fn layers(dir: &Path) -> Result<Vec<String>> {
     let name = dir.file_stem().and_then(|s| s.to_str()).unwrap_or("geodatabase");
     let read = |file: &str| -> Result<Vec<u8>> {
-        let path = dir.join(file);
-        if std::fs::metadata(&path)?.len() > MAX_TABLE_BYTES as u64 {
-            return Err(DataError::Unsupported(format!("{file} is too large to read here")));
-        }
-        Ok(std::fs::read(path)?)
+        read_file(dir, file)?.ok_or_else(|| DataError::Format(format!("{name}: not a File Geodatabase (no {file})")))
     };
     Ok(own_tables(catalog(name, &read("a00000001.gdbtable")?, &read("a00000001.gdbtablx")?)?).map(|(_, n, _)| n).collect())
+}
+
+/// One file of a geodatabase folder, `None` when it isn't there; one past [`MAX_TABLE_BYTES`] is
+/// refused before it is read.
+fn read_file(dir: &Path, file: &str) -> Result<Option<Vec<u8>>> {
+    let path = dir.join(file);
+    match std::fs::metadata(&path) {
+        Ok(m) if m.len() > MAX_TABLE_BYTES as u64 => Err(DataError::Unsupported(format!("{file} is too large to read here"))),
+        Ok(_) => Ok(Some(std::fs::read(&path)?)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// The tables the catalog lists that hold the geodatabase's data, not its own bookkeeping
@@ -312,7 +312,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     let (mut curves, mut wall_hulls, mut unmerged, mut unprojected) = (0usize, 0usize, 0usize, 0usize);
     let mut budget = MAX_TABLE_FACES;
     for (row, offset) in rows {
-        let Some(values) = table.row(t, offset) else {
+        let Some(mut values) = table.row(t, offset) else {
             report.skipped += 1;
             continue;
         };
@@ -320,7 +320,8 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         for &c in &columns {
             attrs.push(match table.fields.get(c).map(|f| f.kind) {
                 Some(Kind::ObjectId) => Value::Int(i64::try_from(row).unwrap_or(i64::MAX)),
-                _ => values.get(c).map(|v| v.value.clone()).unwrap_or(Value::Null),
+                // Taken, not cloned: each column is read once, and the geometry's blob stays.
+                _ => values.get_mut(c).map(|v| std::mem::replace(&mut v.value, Value::Null)).unwrap_or(Value::Null),
             });
         }
         let mut geometry = None;
@@ -1123,6 +1124,8 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
     let union = if seen.is_empty() || !merge {
         None
     } else {
+        // Spent before the union runs, so faces whose union panics (and become the hull) count too:
+        // the budget bounds the work tried, not the footprints made.
         *budget -= seen.len();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| geo::unary_union(seen.iter()))).ok().filter(|u| !u.0.is_empty())
     };
