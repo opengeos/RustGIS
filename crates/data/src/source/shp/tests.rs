@@ -9,7 +9,14 @@ fn dir() -> PathBuf {
         std::process::id(),
         SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
-    std::fs::create_dir_all(&path).unwrap();
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&path).unwrap();
     path
 }
 fn write_shapefile(ds: &Dataset, path: &Path) {
