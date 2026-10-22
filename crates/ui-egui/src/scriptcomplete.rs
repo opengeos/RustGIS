@@ -104,9 +104,11 @@ pub fn hint_at(script: &str, at: usize) -> Option<Hint> {
 }
 
 /// Where a popup of `size` (last frame's) goes by `cursor`: under it if it fits, else above if it
-/// fits, else on the side with more room; kept on screen sideways. Its corner, and the height its
-/// content may take (it scrolls beyond: a short window, a long help).
+/// fits, else on the side with more room, a line and a half clear of the cursor's line (the line
+/// next to it stays in view whole, with room around it); kept on screen sideways. Its corner, and the height its content may take (it
+/// scrolls beyond: a short window, a long help).
 fn place(cursor: egui::Rect, size: egui::Vec2, screen: egui::Rect, min: f32) -> (egui::Pos2, f32) {
+    let cursor = cursor.expand2(egui::vec2(0.0, cursor.height() * 1.5));
     let (below, above) = (screen.bottom() - cursor.bottom(), cursor.top() - screen.top());
     let under = size.y <= below || (size.y > above && below >= above);
     let room = (if under { below } else { above } - FRAME).max(min);
@@ -1909,5 +1911,18 @@ mod tests {
         h.run();
         type_in(&mut h, ",");
         assert_eq!(h.state().workflow.script, r#"gp.run {"tool": "buffer",}"#, "the cursor after the quote");
+    }
+
+    /// A popup leaves a line and a half clear of the cursor's line: under it when it fits, else
+    /// above it.
+    #[test]
+    fn a_popup_leaves_a_line_clear_of_the_cursor() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let cursor = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(2.0, 20.0));
+        let (corner, _) = super::place(cursor, egui::vec2(200.0, 100.0), screen, 60.0);
+        assert_eq!(corner, egui::pos2(100.0, 150.0), "under, clear of the line below");
+        let cursor = cursor.translate(egui::vec2(0.0, 400.0));
+        let (corner, _) = super::place(cursor, egui::vec2(200.0, 100.0), screen, 60.0);
+        assert_eq!(corner.y + 100.0, 470.0, "above, clear of the line over it");
     }
 }
