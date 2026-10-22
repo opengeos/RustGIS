@@ -2748,8 +2748,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     map_per_px,
                     mesh_room,
                 );
-                // Once a batch falls back, the layer's later ones do too (they get no room).
-                mesh_room = collected.map_or(0, |used| mesh_room.saturating_sub(used));
+                // Once a batch is too dense, the layer's later ones fall back too (they get no
+                // room); one lyon refused leaves the room to the batches after it.
+                mesh_room = match collected {
+                    Ok(used) => mesh_room.saturating_sub(used),
+                    Err(mesh::TessError::TooDense) => 0,
+                    Err(mesh::TessError::Refused) => mesh_room,
+                };
                 gpu_done = collected.is_ok();
             }
             // False for a layer drawn elsewhere: nothing goes into the picture for it.

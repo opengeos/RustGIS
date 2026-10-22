@@ -6,7 +6,8 @@
 
 use lyon::path::Path;
 use lyon::tessellation::{
-    BuffersBuilder, FillOptions, FillRule, FillTessellator, LineCap, LineJoin, StrokeOptions, StrokeTessellator, VertexBuffers,
+    BuffersBuilder, FillGeometryBuilder, FillOptions, FillRule, FillTessellator, FillVertex, GeometryBuilder, LineCap, LineJoin,
+    StrokeGeometryBuilder, StrokeOptions, StrokeTessellator, StrokeVertex, VertexBuffers, VertexId,
 };
 use rustgis_data::Geometry;
 use rustgis_geom::{Coord, Extent};
@@ -15,11 +16,76 @@ use rustgis_map::{Layer, Rgba, Symbol};
 use crate::SELECTION;
 use crate::gpu_scene::{DrawCmd, MeshVertex, PointInstance};
 
-/// Lyon refused to tessellate something tiny-skia would draw; the caller falls the layer (or
-/// the outline) back to the CPU path. Empty marker for `Result<_, TessError>` so clippy's
-/// `result_unit_err` stays happy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TessError;
+/// Why a mesh wasn't made; the caller falls the layer (or the outline) back to the CPU path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TessError {
+    /// Lyon refused something tiny-skia would draw.
+    Refused,
+    /// The mesh would pass its vertex limit ([`MAX_LAYER_VERTICES`]).
+    TooDense,
+}
+
+/// A lyon geometry builder that refuses vertices past `room`, so a tessellation stops at the
+/// limit instead of finishing a mesh that would be thrown away.
+struct Capped<B> {
+    inner: B,
+    room: usize,
+    /// Set once a vertex was refused for want of room (lyon then reports a builder error).
+    full: bool,
+}
+
+impl<B> Capped<B> {
+    fn new(inner: B, room: usize) -> Self {
+        Capped { inner, room, full: false }
+    }
+
+    fn take(&mut self) -> Result<(), lyon::tessellation::GeometryBuilderError> {
+        match self.room.checked_sub(1) {
+            Some(left) => {
+                self.room = left;
+                Ok(())
+            }
+            None => {
+                self.full = true;
+                Err(lyon::tessellation::GeometryBuilderError::TooManyVertices)
+            }
+        }
+    }
+
+    /// The error for a failed tessellation: the limit when this builder ran out of room.
+    fn error(&self) -> TessError {
+        if self.full { TessError::TooDense } else { TessError::Refused }
+    }
+}
+
+impl<B: GeometryBuilder> GeometryBuilder for Capped<B> {
+    fn begin_geometry(&mut self) {
+        self.inner.begin_geometry();
+    }
+    fn end_geometry(&mut self) {
+        self.inner.end_geometry();
+    }
+    fn add_triangle(&mut self, a: VertexId, b: VertexId, c: VertexId) {
+        self.inner.add_triangle(a, b, c);
+    }
+    fn abort_geometry(&mut self) {
+        self.inner.abort_geometry();
+    }
+}
+
+impl<B: FillGeometryBuilder> FillGeometryBuilder for Capped<B> {
+    fn add_fill_vertex(&mut self, vertex: FillVertex) -> Result<VertexId, lyon::tessellation::GeometryBuilderError> {
+        self.take()?;
+        self.inner.add_fill_vertex(vertex)
+    }
+}
+
+impl<B: StrokeGeometryBuilder> StrokeGeometryBuilder for Capped<B> {
+    fn add_stroke_vertex(&mut self, vertex: StrokeVertex) -> Result<VertexId, lyon::tessellation::GeometryBuilderError> {
+        self.take()?;
+        self.inner.add_stroke_vertex(vertex)
+    }
+}
 
 /// Premultiplied 0..1 RGBA for the GPU (tiny-skia stores premultiplied; wgpu blends the same way).
 pub(crate) fn premul(c: Rgba) -> [f32; 4] {
@@ -91,8 +157,8 @@ fn path_of(rings: &[Vec<Coord>], origin: [f64; 2], map_per_px: f64, min_points: 
 /// Tessellates polygon fills (all rings in one EvenOdd path, like the CPU's `Ctx::polygon`).
 /// `Ok(None)` when nothing would draw; `Err` when lyon fails (the caller falls the layer back
 /// to the CPU pixmap — tiny-skia still draws geometry lyon refuses). Non-finite coordinates
-/// never reach lyon: `decimate` drops them. `Err` too once the vertices pass `limit` (checked
-/// after each polygon, so a dense layer stops tessellating there: [`MAX_LAYER_VERTICES`]).
+/// never reach lyon: `decimate` drops them. `Err(TooDense)` once the vertices would pass `limit`:
+/// tessellation stops at the vertex that doesn't fit ([`MAX_LAYER_VERTICES`]).
 pub(crate) fn fill_polygon(
     polys: &[Vec<Vec<Coord>>],
     origin: [f64; 2],
@@ -104,17 +170,16 @@ pub(crate) fn fill_polygon(
     let mut tess = FillTessellator::new();
     for rings in polys {
         let Some(path) = path_of(rings, origin, map_per_px, 3) else { continue };
-        tess.tessellate_path(
-            &path,
-            &FillOptions::default().with_fill_rule(FillRule::EvenOdd),
-            &mut BuffersBuilder::new(&mut out, |v: lyon::tessellation::FillVertex| {
+        let room = limit.saturating_sub(out.vertices.len());
+        let mut builder = Capped::new(
+            BuffersBuilder::new(&mut out, |v: FillVertex| {
                 let p = v.position();
                 MeshVertex { position: [p.x, p.y], normal: [0.0, 0.0], color, stroke_px: 0.0, _pad: 0.0 }
             }),
-        )
-        .map_err(|_| TessError)?;
-        if out.vertices.len() > limit {
-            return Err(TessError);
+            room,
+        );
+        if tess.tessellate_path(&path, &FillOptions::default().with_fill_rule(FillRule::EvenOdd), &mut builder).is_err() {
+            return Err(builder.error());
         }
     }
     Ok((!out.indices.is_empty()).then_some((out.vertices, out.indices)))
@@ -122,8 +187,8 @@ pub(crate) fn fill_polygon(
 
 /// Strokes rings (closed, polygon outlines) or line parts (open) at width 1.0; the vertex
 /// shader applies the real width. Ring outlines take no width floor (`Ctx::polygon`),
-/// line parts floor at half a physical pixel (`Ctx::line`). `Err` once the vertices pass
-/// `limit`, checked after each ring or part.
+/// line parts floor at half a physical pixel (`Ctx::line`). `Err(TooDense)` once the vertices
+/// would pass `limit`, as soon as one doesn't fit.
 #[allow(clippy::too_many_arguments)]
 fn stroke(
     rings: &[Vec<Coord>],
@@ -157,17 +222,16 @@ fn stroke(
             }
             b.end(closed);
             // position_on_path = position - normal * half_width, half_width = 0.5 at width 1.0.
-            tess.tessellate_path(
-                &b.build(),
-                &options,
-                &mut BuffersBuilder::new(&mut out, |v: lyon::tessellation::StrokeVertex| {
+            let room = limit.saturating_sub(out.vertices.len());
+            let mut builder = Capped::new(
+                BuffersBuilder::new(&mut out, |v: StrokeVertex| {
                     let (p, n) = (v.position(), v.normal());
                     MeshVertex { position: [p.x - n.x * 0.5, p.y - n.y * 0.5], normal: [n.x, n.y], color, stroke_px: width_px, _pad: 0.0 }
                 }),
-            )
-            .map_err(|_| TessError)?;
-            if out.vertices.len() > limit {
-                return Err(TessError);
+                room,
+            );
+            if tess.tessellate_path(&b.build(), &options, &mut builder).is_err() {
+                return Err(builder.error());
             }
         }
     }
@@ -229,7 +293,7 @@ fn extend_mesh(
 ) -> Result<(), TessError> {
     if let Some((pv, pi)) = part? {
         if v.len() + pv.len() > u32::MAX as usize {
-            return Err(TessError); // a mesh this big can't index itself (u32): the layer falls back to the CPU
+            return Err(TessError::TooDense); // a mesh this big can't index itself (u32): the layer falls back to the CPU
         }
         let base = v.len() as u32;
         v.extend(pv);
@@ -293,10 +357,12 @@ pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
 /// extrusion roofs): small or bounded by their own data.
 pub(crate) const NO_LIMIT: usize = usize::MAX;
 
-/// How many mesh vertices `append_geometry` makes of a geometry, erring high: a fill one per
+/// How many mesh vertices `append_geometry` makes of a geometry, roughly: a fill one per
 /// point; a round-joined stroke two per point, a join's arc for each turn (up to 16, a half
 /// circle at the stroke tolerance, for a hairpin) and two round caps on an open line. Points
-/// draw as instances and count nothing.
+/// draw as instances and count nothing. It is an early out, not a bound: lyon adds vertices
+/// where an EvenOdd ring crosses itself, and decimation drops some, so the tessellation itself
+/// stops at the limit ([`Capped`]).
 fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
     fn stroked<'a>(rings: impl Iterator<Item = &'a Vec<Coord>>, closed: bool) -> usize {
         rings.map(|r| 2 * r.len() + joins(r, closed) + if closed { 0 } else { 32 }).sum()
@@ -334,8 +400,8 @@ fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
 /// `geoms`, `extents`, `rows` and `visible` are the render loop's own (geometries as the CPU
 /// draws them, their cached extents, row filter, extent cull), so the GPU draws exactly the
 /// features the CPU would. `limit` is what is left of the layer's [`MAX_LAYER_VERTICES`] (its
-/// earlier batches took the rest). `Ok` with the mesh vertices pushed; `Err(TessError)` when
-/// lyon refused a feature or the mesh would pass `limit` — the caller then draws the layer
+/// earlier batches took the rest). `Ok` with the mesh vertices pushed; `Err(Refused)` when
+/// lyon refused a feature, `Err(TooDense)` when the mesh would pass `limit` — the caller then draws the layer
 /// (or batch) with tiny-skia instead (nothing is pushed part-way).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer(
@@ -369,7 +435,7 @@ pub(crate) fn collect_layer(
         let n = estimate_vertices(g, &s, wireframe);
         estimate = estimate.saturating_add(n);
         if estimate > limit {
-            return Err(TessError);
+            return Err(TessError::TooDense);
         }
         features.push((*g, s, n));
     }
@@ -379,10 +445,10 @@ pub(crate) fn collect_layer(
     let origin = [ext.center().x, ext.center().y];
     let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
     for (g, s, n) in &features {
-        // The estimate is rough (sharp turns add join vertices): a feature that won't fit isn't
-        // started, and `append_geometry` stops one that overflows after its first ring past it.
+        // The estimate is rough: a feature estimated not to fit isn't started, and
+        // `append_geometry` stops one that overflows at the first vertex past the limit.
         if v.len().saturating_add(*n) > limit {
-            return Err(TessError);
+            return Err(TessError::TooDense);
         }
         append_geometry(&mut v, &mut i, &mut pts, g, s, origin, wireframe, ppp, map_per_px, limit)?;
     }
@@ -625,7 +691,9 @@ mod tests {
         let est = estimate_vertices(&Geometry::Line(parts.clone()), &Symbol::default_for(GeometryType::Polyline, 0), false);
         assert!(est >= v.len() && est <= v.len() * 2, "hairpins: estimated {est}, tessellated {}", v.len());
         // The first part already passes the limit: the second is never tessellated.
-        assert!(stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, v.len() / 4).is_err());
+        assert_eq!(stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, v.len() / 4).err(), Some(TessError::TooDense));
+        // One part stops at the vertex past the limit, not after it is finished.
+        assert_eq!(stroke_lines(&parts[..1], [0.0, 0.0], [0.0; 4], 2.0, 0.0, 10).err(), Some(TessError::TooDense));
         let polys = vec![vec![square(0.0, 0.0, 10.0)], vec![square(20.0, 0.0, 10.0)]];
         assert!(fill_polygon(&polys, [0.0, 0.0], [0.0; 4], 0.0, 3).is_err(), "past the limit after the first square");
         assert!(fill_polygon(&polys, [0.0, 0.0], [0.0; 4], 0.0, 8).is_ok_and(|m| m.is_some()), "two squares fit in 8");

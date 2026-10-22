@@ -323,7 +323,10 @@ fn perspective_uses_complete_isolated_fallback() {
         let got = render(&mut actual, &view).unwrap();
         assert_eq!(got.labels, expected.labels);
         assert!(got.pixmap.data() == expected.pixmap.data());
-        assert!(actual.layers[0].dataset.features.shares(&before));
+        // The complete chunks never reach the interaction rows. Compared by value, not by
+        // allocation: the layer's background read can finish mid-render and install the same
+        // one-row sample again as a new allocation.
+        assert_eq!(actual.layers[0].dataset.features, before);
         assert_eq!(actual.layers[0].selection, vec![0]);
     }
 }
