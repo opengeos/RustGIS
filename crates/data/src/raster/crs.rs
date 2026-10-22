@@ -596,17 +596,25 @@ mod tests {
         let file = CustomCrs { proj4: merc.into(), label: "m".into(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() };
         assert!(Crs::custom(file).is_ok());
 
-        let custom_count_before = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
-        assert!(Crs::parse("+proj").is_err());
-        assert!(Crs::parse("+project").is_err());
-        assert!(Crs::parse("+proj=").is_err());
-        assert!(Crs::parse("+proj=   ").is_err());
-        assert!(Crs::parse("+proj=invalid_projection").is_err());
-        assert!(Crs::parse("+PROJ=invalid_projection").is_err());
-        assert!(Crs::parse(&format!("+proj={}", "a".repeat(1025))).is_err());
-        assert!(Crs::parse(&format!("+proj=utm {}", "a".repeat(1025))).is_err());
-        let custom_count_after = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
-        assert_eq!(custom_count_before, custom_count_after);
+        let long_proj = format!("+proj={}", "a".repeat(1025));
+        let long_utm = format!("+proj=utm {}", "a".repeat(1025));
+        let rejected = [
+            "+proj",
+            "+project",
+            "+proj=",
+            "+proj=   ",
+            "+proj=invalid_projection",
+            "+PROJ=invalid_projection",
+            long_proj.as_str(),
+            long_utm.as_str(),
+        ];
+        for r in rejected {
+            assert!(Crs::parse(r).is_err(), "{r}");
+        }
+        // None of them was registered (an exact check: other tests add to the table meanwhile).
+        let table = custom_table().lock().unwrap_or_else(|e| e.into_inner());
+        assert!(!table.iter().any(|d| rejected.iter().any(|r| d.proj4.eq_ignore_ascii_case(r.trim()))));
+        drop(table);
         // VN-2000 / TM-3 103-00: its datum shift (+towgs84) is applied.
         check(9205, (103.065, 21.855), (506_521.959, 2_417_609.479), 1.0);
         // NAD27 / US National Atlas Equal Area: Washington, DC, without NAD27's datum shift
