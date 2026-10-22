@@ -410,6 +410,14 @@ fn a_ring_with_no_area_is_left_out() {
     assert!(matches!(rows.get(1).and_then(|f| f.geometry.as_ref()), Some(Geometry::Polygon(p)) if p.len() == 1));
 }
 
+/// A small ring far from the origin keeps its area: products of its coordinates would round it away.
+#[test]
+fn a_small_ring_far_from_the_origin_has_an_area() {
+    let ring: Vec<Coord> =
+        [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)].iter().map(|&(x, y)| Coord::new(1e9 + x, 1e9 + y)).collect();
+    assert_eq!(signed_area(&ring), -2.0, "clockwise, twice its area");
+}
+
 /// A table's multipatches merge no more faces than its budget: past it, they are hulls.
 #[test]
 fn the_face_budget_bounds_a_tables_unions() {

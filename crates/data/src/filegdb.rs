@@ -33,11 +33,11 @@ const MAX_PARTS: u64 = 1 << 24;
 /// Most faces of one multipatch merged into its footprint; beyond, its outline is its points' hull.
 const MAX_FACES: usize = 200_000;
 /// Most faces of one multipatch merged by a union; past it, the hull too (a union's time grows
-/// faster than its faces, so one crafted row mustn't stall loading). None in the browser: a panic
-/// in the union library can't be caught there, and hostile input mustn't end the page, so
-/// multipatches are always the hulls of their points. On the desktop the catch relies on the
-/// workspace's default `panic = "unwind"`.
-const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 0 } else { 50_000 };
+/// faster than its faces, so one crafted row mustn't stall loading). The browser merges none: a
+/// panic in the union library can't be caught there, and hostile input mustn't end the page, so
+/// multipatches are always the hulls of their points (see [`footprint`]). On the desktop the catch
+/// relies on the workspace's default `panic = "unwind"`.
+const MAX_UNION_FACES: usize = 50_000;
 /// Most faces merged for one table, whatever its rows ask: past it, multipatches are hulls, so a
 /// crafted table can't make loading take hours.
 const MAX_TABLE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
@@ -1019,7 +1019,17 @@ fn split<T: Clone>(pts: &[T], sizes: &[usize]) -> Vec<Vec<T>> {
 
 /// Twice the signed area of a ring (positive counterclockwise).
 fn signed_area(ring: &[Coord]) -> f64 {
-    ring.iter().zip(ring.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum()
+    // From the first point: products of projected coordinates in the millions (or more) would round
+    // a small ring's area away.
+    let o = ring.first().copied().unwrap_or(Coord::new(0.0, 0.0));
+    let local = |c: &Coord| (c.x - o.x, c.y - o.y);
+    ring.iter()
+        .zip(ring.iter().cycle().skip(1))
+        .map(|(a, b)| {
+            let ((ax, ay), (bx, by)) = (local(a), local(b));
+            ax * by - bx * ay
+        })
+        .sum()
 }
 
 /// A point with its height.
@@ -1079,7 +1089,9 @@ fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> (Vec<Vec<Vec<P3>>>, bool) {
 /// [`MAX_UNION_FACES`] or than the table's `budget` has left (which they then take from it).
 fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Geometry>, Option<Hull>) {
     use geo::{ConvexHull, Orient, orient::Direction};
-    let (faces, truncated) = faces(parts, kinds);
+    // Where no union runs (the browser), the faces aren't built at all: the hull stands in.
+    let unions = !cfg!(target_arch = "wasm32");
+    let (faces, truncated) = if unions { faces(parts, kinds) } else { (Vec::new(), false) };
     let all = || parts.iter().flatten();
     let (x0, x1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[0]), b.max(p[0])));
     let (y0, y1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[1]), b.max(p[1])));
@@ -1108,12 +1120,10 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
         n > 0.0 && nz.abs() / n > 0.05 && longest > 0.0 && area2.abs() / longest > size * 1e-4
     };
     let ring2 = |r: &[P3]| geo::LineString::from(r.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>());
-    // Past the cap, a partial union would be wrong: the hull below stands in. Where no union runs
-    // (the browser), the faces aren't built at all.
-    let unions = !cfg!(target_arch = "wasm32");
+    // Past the cap, a partial union would be wrong: the hull below stands in.
     let seen: Vec<geo::Polygon<f64>> = faces
         .iter()
-        .filter(|_| !truncated && unions)
+        .filter(|_| !truncated)
         .filter_map(|face| {
             let (outer, holes) = face.split_first()?;
             (outer.len() >= 3 && shows(outer))
@@ -1138,8 +1148,7 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
             if points.len() < 3 {
                 return (None, None);
             }
-            let none_show = if unions { seen.is_empty() && !truncated } else { faces.is_empty() };
-            let why = if none_show { Hull::NoFaces } else { Hull::Unmerged };
+            let why = if unions && seen.is_empty() && !truncated { Hull::NoFaces } else { Hull::Unmerged };
             (geo::MultiPolygon::new(vec![geo::MultiPoint::from(points).convex_hull()]), Some(why))
         }
     };
