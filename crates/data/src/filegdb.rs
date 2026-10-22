@@ -1108,10 +1108,12 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
         n > 0.0 && nz.abs() / n > 0.05 && longest > 0.0 && area2.abs() / longest > size * 1e-4
     };
     let ring2 = |r: &[P3]| geo::LineString::from(r.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>());
-    // Past the cap, a partial union would be wrong: the hull below stands in.
+    // Past the cap, a partial union would be wrong: the hull below stands in. Where no union runs
+    // (the browser), the faces aren't built at all.
+    let unions = MAX_UNION_FACES > 0;
     let seen: Vec<geo::Polygon<f64>> = faces
         .iter()
-        .filter(|_| !truncated)
+        .filter(|_| !truncated && unions)
         .filter_map(|face| {
             let (outer, holes) = face.split_first()?;
             (outer.len() >= 3 && shows(outer))
@@ -1136,7 +1138,8 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
             if points.len() < 3 {
                 return (None, None);
             }
-            let why = if seen.is_empty() && !truncated { Hull::NoFaces } else { Hull::Unmerged };
+            let none_show = if unions { seen.is_empty() && !truncated } else { faces.is_empty() };
+            let why = if none_show { Hull::NoFaces } else { Hull::Unmerged };
             (geo::MultiPolygon::new(vec![geo::MultiPoint::from(points).convex_hull()]), Some(why))
         }
     };
