@@ -627,7 +627,9 @@ traversal does not publish a partial successful frame. This workspace is not a r
 This is not a fixed bound on total renderer memory: raster targets, label candidates and the
 existing combined polygon-mask path have separate costs. Upright perspective point markers
 and polygon extrusions retain the complete upstream depth renderer through an isolated
-full-source snapshot. Plain fills, lines and mask sources continue complete chunk traversal
+full-source snapshot. Upright points require a known source total of at most 50,000 rows;
+larger or unknown totals use complete ground-marker traversal, independent of the current
+interaction-window size. Plain fills, lines and mask sources continue complete chunk traversal
 per band, including terrain bands; they do not consume that snapshot's feature budget.
 Retained complete-source feature storage across the snapshot has a separate budget (512 MiB natively, 192 MiB in the browser).
 Exceeding it fails the whole frame with a source diagnostic, without sampling or truncating

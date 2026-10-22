@@ -894,3 +894,53 @@ fn pitched_plain_chunks_bypass_depth_budget_alone_and_with_upright_markers() {
         }
     }
 }
+
+#[test]
+fn pitched_large_or_unknown_point_sources_use_total_rows_not_the_interaction_window() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
+        }
+    }
+    let _reset = Reset;
+    let mut ds = Dataset::new("many points", GeometryType::Point, vec![]);
+    for i in 0..=MAX_UPRIGHT_POINTS {
+        let c = if i < 3 { Coord::new(i as f64 * 0.005, 0.0) } else { Coord::new(179.0, 80.0) };
+        ds.push(Some(Geometry::Point(c)), vec![]);
+    }
+    let mut full = Map::new("source total");
+    full.add_dataset(ds.clone());
+    full.layers[0].selection = vec![0];
+    let view = View {
+        width: 96.0,
+        height: 64.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    let expected = render(&mut full.clone(), &view).unwrap();
+    assert!(!stands_up(&full, &full.layers[0]));
+    for total in [Some(MAX_UPRIGHT_POINTS as u64 + 1), None] {
+        for window in [1, 3] {
+            for backend in [Backend::Cpu, Backend::Gpu] {
+                let mut map = full.clone();
+                map.layers[0] = streamed(&full.layers[0], 2048);
+                map.layers[0].dataset.features = ds.features.iter().take(window).cloned().collect::<Vec<_>>().into();
+                let mut info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+                info.count = total;
+                map.layers[0].source =
+                    Some(SourceLayer::from_path("points.shp", None, Box::new(Chunks { info, ds: ds.clone(), size: 2048 })));
+                assert!(!stands_up(&map, &map.layers[0]));
+                SNAPSHOT_TEST_LIMIT.with(|s| s.set(Some(0)));
+                let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut map, &view, true, backend) else {
+                    panic!("a large/unknown complete point source must render without a depth snapshot");
+                };
+                assert!(got.pixmap.data() == expected.pixmap.data());
+                assert_eq!(got.labels, expected.labels);
+                assert!(!stands_up(&map, &map.layers[0]));
+                assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+            }
+        }
+    }
+}

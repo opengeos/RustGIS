@@ -1982,6 +1982,12 @@ const UPRIGHT_SCALE: (f64, f64) = (0.25, 2.0);
 /// MapLibre's circles do), rather than drawing them flat on the ground. A masked, swiped or
 /// blended layer, an aggregation or graphics keep theirs on the ground.
 fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
+    // Complete sources must use their total, never the pan-dependent interaction sample.
+    // An unknown total conservatively uses complete ground-marker traversal.
+    let rows = match layer.source.as_ref().and_then(|s| s.chunk_source()) {
+        Some(source) => source.info().count,
+        None => Some(layer.dataset.features.len() as u64),
+    };
     layer.raster.is_none()
         && layer.geometry_type() == GeometryType::Point
         && layer.aggregation.is_none()
@@ -1989,7 +1995,7 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
         && layer.mask.is_none()
         && layer.blend == rustgis_map::effects::Blend::Normal
         && map.swipe.is_none_or(|(id, _)| id != layer.id)
-        && layer.dataset.features.len() <= MAX_UPRIGHT_POINTS
+        && rows.is_some_and(|n| n <= MAX_UPRIGHT_POINTS as u64)
 }
 
 /// A point marker standing upright in a tilted view, facing the viewer.
