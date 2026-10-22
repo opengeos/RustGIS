@@ -353,6 +353,7 @@ mod tests {
             ("MultiSurface", Some(Family::Polygons)),
             ("CurvePolygon", Some(Family::Polygons)),
             ("CompoundCurve", Some(Family::Lines)),
+            ("CircularStringZ", Some(Family::Lines)),
             ("MultiLineString", Some(Family::Lines)),
             ("PointZ", Some(Family::Points)),
             ("GeometryZ", None),

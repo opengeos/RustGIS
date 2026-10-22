@@ -91,7 +91,7 @@ impl Family {
             Some(Family::Points)
         } else if ["polygon", "surface", "tin", "triangle"].iter().any(|k| ty.contains(k)) {
             Some(Family::Polygons)
-        } else if ["linestring", "curve"].iter().any(|k| ty.contains(k)) {
+        } else if ["linestring", "circularstring", "curve"].iter().any(|k| ty.contains(k)) {
             Some(Family::Lines)
         } else {
             None
