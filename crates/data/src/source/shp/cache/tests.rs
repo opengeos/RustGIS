@@ -144,6 +144,11 @@ fn cache_cleanup_is_bounded_and_preserves_unknown_files_and_orphans_in_use() {
         let path = index_path(&root.0, &key(n)).unwrap();
         std::fs::write(&path, [1]).unwrap();
         std::fs::write(lease_path(&path), b"C").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(lease_path(&path), std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
     let orphan = root.0.join("rg-index-work-v1-1-2-3.lease");
     let lock = open_lock(&orphan).unwrap();
