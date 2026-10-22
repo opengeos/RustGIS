@@ -186,10 +186,13 @@ fn convert_in(dir: &Path, src: &Path, layer: Option<&str>, crs: Option<&str>) ->
 pub fn convert_one(src: &Path, layer: &str, family: Option<Family>, crs: Option<&str>) -> Result<Option<PathBuf>> {
     let dir = cache_dir().ok_or_else(|| DataError::Format("no cache folder for GDAL conversions".into()))?;
     // The layer's own kind of geometry, and whether it says its coordinate system, as a fresh
-    // listing tells.
-    let info = list(src)?.into_iter().find(|l| l.name == layer);
-    let has_srs = info.as_ref().is_none_or(|l| l.has_srs);
+    // listing tells. Its name is matched as `convert` matches it, ignoring case (the exact
+    // spelling first), and converted under the listed spelling, so the two share a conversion.
+    let all = list(src)?;
+    let info = all.iter().find(|l| l.name == layer).or_else(|| all.iter().find(|l| l.name.eq_ignore_ascii_case(layer)));
+    let has_srs = info.is_none_or(|l| l.has_srs);
     let kind = info.and_then(|l| l.family);
+    let layer = info.map_or(layer, |l| l.name.as_str());
     Ok(convert_one_in(&dir, src, layer, family, kind, crs, has_srs)?.map(|(p, _)| p))
 }
 
