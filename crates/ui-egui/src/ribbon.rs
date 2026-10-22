@@ -4014,11 +4014,12 @@ fn renderer_icon(r: &Renderer) -> &'static str {
 struct LabelSizeDrag {
     layer: u32,
     before: f32,
-    size: f32,
+    // Keep the widget's precision for command recording; layer storage is f32.
+    size: f64,
 }
 
 /// Retains the starting size and layer while applying each frame's preview.
-fn label_size_drag(app: &mut RustGisApp, ui: &Ui, layer: &rustgis_engine::map::Layer, size: f32) {
+fn label_size_drag(app: &mut RustGisApp, ui: &Ui, layer: &rustgis_engine::map::Layer, size: f64) {
     let key = egui::Id::new("ribbon_label_size_drag");
     let pending = ui.data_mut(|d| d.remove_temp::<LabelSizeDrag>(key));
     let before = match pending {
@@ -4031,7 +4032,7 @@ fn label_size_drag(app: &mut RustGisApp, ui: &Ui, layer: &rustgis_engine::map::L
     };
     ui.data_mut(|d| d.insert_temp(key, LabelSizeDrag { layer: layer.id, before, size }));
     if let Some(layer) = app.session.map_mut().layer_mut(layer.id) {
-        layer.labels.default.size = size;
+        layer.labels.default.size = size as f32;
     }
     app.session.revision = app.session.revision.wrapping_add(1);
 }
@@ -4050,7 +4051,7 @@ pub(crate) fn finish_label_size_drag(app: &mut RustGisApp, ui: &Ui) {
 fn apply_label_size_drag(app: &mut RustGisApp, drag: LabelSizeDrag) {
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
     layer.labels.default.size = drag.before;
-    if drag.before != drag.size {
+    if drag.before != drag.size as f32 {
         let selected = app.session.active_layer.replace(drag.layer);
         let _ = app.run("labels.style", json!({"size": drag.size}));
         app.session.active_layer = selected;
@@ -4154,7 +4155,7 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 // Another layer gets a distinct widget, so an in-flight drag cannot move to it.
                 ui.push_id(("label_size", layer.id), |ui| {
                     if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
-                        label_size_drag(app, ui, &layer, size as f32);
+                        label_size_drag(app, ui, &layer, size);
                     }
                 });
             });
@@ -4588,19 +4589,21 @@ mod tests {
     }
 
     #[test]
-    fn ribbon_label_size_can_still_be_typed() {
+    fn ribbon_label_size_text_input_preserves_decimal_command_value() {
         let mut h = label_harness();
         let id = h.state().session.active_layer.unwrap();
         let before = h.state().session.map().layer(id).unwrap().labels.default.size;
         let undo = h.state().session.undo_depth();
         h.get_by_role(egui::accesskit::Role::SpinButton).focus();
         h.run();
-        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("14");
+        // Inserts the complete value in one text event; per-keystroke undo grouping is separate.
+        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("14.3");
         h.key_press(egui::Key::Enter);
         h.run();
-        assert_eq!(h.state().session.map().layer(id).unwrap().labels.default.size, 14.0);
+        assert_eq!(h.state().session.map().layer(id).unwrap().labels.default.size, 14.3_f32);
         assert_eq!(h.state().session.undo_depth(), undo + 1);
         assert_eq!(h.state().ws.recording.as_ref().unwrap().len(), 1);
+        assert_eq!(h.state().ws.recording.as_ref().unwrap()[0].params["size"], json!(14.3));
         h.state_mut().run("edit.undo", json!(null)).unwrap();
         assert_eq!(h.state().session.map().layer(id).unwrap().labels.default.size, before);
     }
