@@ -4017,6 +4017,7 @@ struct LabelSizeDrag {
     size: f32,
 }
 
+/// Retains the starting size and layer while applying each frame's preview.
 fn label_size_drag(app: &mut RustGisApp, ui: &Ui, layer: &rustgis_engine::map::Layer, size: f32) {
     let key = egui::Id::new("ribbon_label_size_drag");
     let pending = ui.data_mut(|d| d.remove_temp::<LabelSizeDrag>(key));
@@ -4045,6 +4046,7 @@ pub(crate) fn finish_label_size_drag(app: &mut RustGisApp, ui: &Ui) {
     }
 }
 
+/// Restores the original size before committing on the owning layer, so Undo captures that size.
 fn apply_label_size_drag(app: &mut RustGisApp, drag: LabelSizeDrag) {
     let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
     layer.labels.default.size = drag.before;
@@ -4362,6 +4364,7 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
+    /// Isolates the label controls; the interrupted-gesture test below checks full-frame wiring.
     fn label_harness() -> egui_kittest::Harness<'static, RustGisApp> {
         let mut app = RustGisApp::with_sample();
         app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
@@ -4458,15 +4461,33 @@ mod tests {
         }
     }
 
+    /// Exercises the app frame so removing the pane finalizer breaks gesture completion.
     #[test]
     fn ribbon_label_size_drag_finishes_when_hidden_or_unfocused() {
         for hide_ribbon in [false, true] {
-            let mut h = label_harness();
+            let mut app = RustGisApp::with_sample();
+            app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
+            app.ui.tab = "Style".into();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run();
+            for _ in 0..2 {
+                h.get_by_label("Scroll the ribbon right").click();
+                h.run();
+            }
+            h.state_mut().ws.recording = Some(Vec::new());
             let id = h.state().session.active_layer.unwrap();
             let size = |app: &RustGisApp| app.session.map().layer(id).unwrap().labels.default.size;
             let before = size(h.state());
             let undo = h.state().session.undo_depth();
-            let at = h.get_by_role(egui::accesskit::Role::SpinButton).rect().center();
+            // Text Symbol follows the Drawing group's numeric controls in the Style ribbon.
+            let at = h.query_all_by_role(egui::accesskit::Role::SpinButton).last().unwrap().rect().center();
             h.hover_at(at);
             h.drag_at(at);
             h.step();

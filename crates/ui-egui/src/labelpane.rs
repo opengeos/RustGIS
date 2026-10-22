@@ -298,6 +298,7 @@ struct ColorDrag {
     color: Rgba,
 }
 
+/// Previews a colour pick on its layer until `finish_color_drag` commits the completed gesture.
 pub(crate) fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
     let key = egui::Id::new(COLOR_DRAG);
     let mut pending = ui.data(|d| d.get_temp::<ColorDrag>(key));
