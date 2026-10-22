@@ -1189,8 +1189,8 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(tl!("EPSG, ESRI or name"));
-                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035, vn2000, hanoi").desired_width(120.0));
+                ui.label(tl!("EPSG or ESRI code"));
+                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035, vn2000").desired_width(120.0));
                 if r.changed() && !app.dialogs.a.trim().is_empty() {
                     app.dialogs.text = typed_crs(&app.dialogs.a);
                 }
@@ -1230,26 +1230,26 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
 /// The chosen preset's parameters (opengeos/RustGIS#517): the central meridian, and a conic's
 /// standard parallels, each written back into the chosen code. Nothing for a preset without any.
 fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    use rustgis_engine::map::projection::{parse_preset, preset_code, preset_params, preset_value};
-    let Ok(Some((id, params))) = parse_preset(&app.dialogs.text) else { return };
+    use rustgis_engine::map::projection::{
+        VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value, resolve_vn2000_alias,
+    };
+    let input = app.dialogs.text.trim();
+    let resolved = if let Some(lon) = resolve_vn2000_alias(input) { format!("vn2000 +lon_0={lon}") } else { input.to_string() };
+    let Ok(Some((id, params))) = parse_preset(&resolved) else { return };
     let takes = preset_params(id);
     if takes.is_empty() {
         return;
     }
     let mut next = params.clone();
     if id == "vn2000" {
+        let default_lon = preset_value(id, "lon_0").unwrap_or(105.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(tl!("Provinces:")).weak());
-            for (p_name, lon) in [
-                ("Hà Nội (105°)", 105.0),
-                ("TP.HCM (105.75°)", 105.75),
-                ("Đà Nẵng (107.75°)", 107.75),
-                ("Hải Phòng (105.75°)", 105.75),
-                ("Cần Thơ (105°)", 105.0),
-            ] {
-                if ui.small_button(p_name).clicked() {
+            for &(p_name, lon) in VN2000_UI_PROVINCES {
+                let label = format!("{p_name} ({lon:.2}°)");
+                if ui.small_button(&label).clicked() {
                     next.retain(|(k, _)| *k != "lon_0");
-                    if lon != 105.0 {
+                    if (lon - default_lon).abs() > 1e-6 {
                         next.push(("lon_0", lon));
                     }
                 }
@@ -1467,11 +1467,13 @@ mod tests {
         let proj = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
         assert_eq!(proj.label(), "VN-2000 / TM-3 (Vietnam)");
 
-        // Typing provincial name "hanoi"
-        app.dialogs.a = "hanoi".into();
-        app.dialogs.text = typed_crs(&app.dialogs.a);
-        let proj_hn = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
-        assert_eq!(proj_hn.label(), "VN-2000 / TM-3 (Vietnam)");
+        // Typing provincial name "hanoi" or native "Hà Nội"
+        for name in ["hanoi", "Hà Nội", "Đà Nẵng", "tphcm"] {
+            app.dialogs.a = name.into();
+            app.dialogs.text = typed_crs(&app.dialogs.a);
+            let proj_p = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
+            assert!(proj_p.label().contains("VN-2000"), "{name}");
+        }
 
         // Applying VN-2000
         app.run("map.projection", json!({"type": "vn2000"})).unwrap();

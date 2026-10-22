@@ -175,39 +175,21 @@ impl Crs {
     }
 
     /// A coordinate system given as text: `EPSG:2263`, `2263`, an OGC URN or URL ending in the
-    /// code, WKT, PROJ string, or a named system like `VN-2000`.
+    /// code, or WKT.
     pub fn parse(text: &str) -> Result<Crs, String> {
         let t = text.trim();
         if t.contains('[') {
             return super::wkt::crs_from_wkt(t);
         }
-        if t.starts_with("+proj") {
-            return Crs::custom(CustomCrs {
-                proj4: t.to_string(),
-                label: "Custom PROJ".to_string(),
-                geokeys: Vec::new(),
-                doubles: Vec::new(),
-                ascii: String::new(),
-            });
-        }
         let up = t.to_ascii_uppercase();
         if up.ends_with("CRS84") {
             return Ok(Crs::LonLat);
-        }
-        if up == "VN2000" || up == "VN-2000" || up == "VIETNAM" {
-            return Crs::custom(CustomCrs {
-                proj4: "+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs".to_string(),
-                label: "VN-2000 / TM-3".to_string(),
-                geokeys: Vec::new(),
-                doubles: Vec::new(),
-                ascii: String::new(),
-            });
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
         match code.parse::<u32>() {
             Ok(c) if known => Crs::from_epsg(c).ok_or_else(|| format!("unknown coordinate system EPSG:{c}")),
-            _ => Err(format!("'{t}': give a coordinate system as EPSG:<code>, WKT, or +proj string")),
+            _ => Err(format!("'{t}': give a coordinate system as EPSG:<code> or WKT")),
         }
     }
 
@@ -393,20 +375,9 @@ mod tests {
         check(9377, (-74.08, 4.65), (4_880_256.854, 2_071_911.388), 0.01);
         assert_eq!(Crs::parse("EPSG:9377"), Ok(Crs::Epsg(9377)));
         assert_eq!(Crs::parse("urn:ogc:def:crs:EPSG::9377"), Ok(Crs::Epsg(9377)));
-        // VN-2000 parsing and transform
-        let vn = Crs::parse("VN-2000").unwrap();
-        assert_eq!(vn.label(), "VN-2000 / TM-3");
-        assert!(!vn.is_geographic());
-        let tr = vn.transformer().unwrap();
-        let pt = tr.from_lonlat(Coord::new(105.0, 21.0)).unwrap();
-        // Shifted by ~200-300m due to the 7-parameter Helmert transformation to WGS84
-        assert!((pt.x - 500_000.0).abs() < 1000.0);
-        assert!((pt.y - 2_322_000.0).abs() < 10_000.0);
-        let back = tr.to_lonlat(pt).unwrap();
-        assert!((back.x - 105.0).abs() < 1e-6 && (back.y - 21.0).abs() < 1e-6);
-        // Custom PROJ string parsing
-        let custom = Crs::parse("+proj=tmerc +lat_0=0 +lon_0=105.75 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 +units=m +no_defs").unwrap();
-        assert_eq!(custom.label(), "Custom PROJ");
+        // VN-2000 UTM zones 48N and 49N (opengeos/RustGIS#684)
+        assert_eq!(Crs::parse("EPSG:3405"), Ok(Crs::Epsg(3405)));
+        assert_eq!(Crs::parse("EPSG:3406"), Ok(Crs::Epsg(3406)));
         // VN-2000 / TM-3 103-00: its datum shift (+towgs84) is applied.
         check(9205, (103.065, 21.855), (506_521.959, 2_417_609.479), 1.0);
         // NAD27 / US National Atlas Equal Area: Washington, DC, without NAD27's datum shift
