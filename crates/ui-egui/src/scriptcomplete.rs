@@ -155,7 +155,7 @@ pub fn key_at(script: &str, at: usize) -> Option<(Hint, usize, String)> {
         escaped = c == '\\' && !was_escaped;
         if quoted {
             if c == '"' && !was_escaped {
-                (quoted, start, entry) = (false, None, false);
+                (quoted, start) = (false, None);
             }
             continue;
         }
@@ -171,7 +171,7 @@ pub fn key_at(script: &str, at: usize) -> Option<(Hint, usize, String)> {
             _ => entry = false,
         }
     }
-    let start = start.filter(|_| quoted)?;
+    let start = start?;
     let word: String = text.chars().skip(start).collect();
     if word.chars().any(|c| c.is_whitespace() || c == '\\') {
         return None;
@@ -188,8 +188,8 @@ fn entries(desc: &str) -> Vec<(Vec<String>, String)> {
         .iter()
         .map(|p| {
             let entry = format!("{{{}}}", p.text);
-            let keys = rustgis_engine::param_keys(&entry).filter(|k| !k.is_empty());
-            (keys.map_or_else(|| vec![p.key.to_string()], |k| k.iter().map(|k| k.to_string()).collect()), p.text.to_string())
+            let keys = rustgis_engine::param_keys(&entry).filter(|k| !k.is_empty()).unwrap_or(vec![p.key]);
+            (keys.into_iter().map(str::to_string).collect(), p.text.to_string())
         })
         .collect()
 }
