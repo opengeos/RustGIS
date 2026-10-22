@@ -7,14 +7,7 @@
 
 use rustgis_geom::{Coord, Extent, lonlat_to_merc, merc_to_lonlat};
 
-macro_rules! vn2000_towgs84 {
-    () => {
-        "+towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278"
-    };
-}
-
-/// The 7-parameter Helmert shift from VN-2000 to WGS 84 (QĐ 973/2001/QĐ-TTg).
-pub const VN2000_TOWGS84: &str = vn2000_towgs84!();
+use rustgis_data::vn2000_towgs84;
 
 /// A named projection: (id, label, PROJ definition).
 pub const PRESETS: &[(&str, &str, &str)] = &[
@@ -1346,8 +1339,11 @@ mod tests {
 
     #[test]
     fn vn2000_vietnam_projections() {
-        // Cross-crate Helmert parameters consistency
-        assert_eq!(VN2000_TOWGS84, rustgis_data::raster::crs::VN2000_TOWGS84);
+        // The presets are EPSG's VN-2000 systems word for word.
+        for (id, code) in [("vn2000tm3", 5897), ("vn2000Utm48", 3405), ("vn2000Utm49", 3406)] {
+            let def = PRESETS.iter().find(|(p, _, _)| *p == id).map(|(_, _, d)| *d);
+            assert_eq!(def, rustgis_data::raster::crs::epsg_proj4(code), "{id}");
+        }
 
         // Bare VN-2000 is ambiguous and rejected
         for bare in ["vn2000", "VN-2000", "VN2000", "vn-2000", "VN 2000", "vn_2000"] {

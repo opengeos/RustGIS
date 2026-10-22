@@ -126,14 +126,18 @@ fn custom_table() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>> {
     T.get_or_init(Default::default)
 }
 
-macro_rules! vn2000_towgs84_lit {
+/// The VN-2000 to WGS 84 Helmert shift as a literal, for `concat!` (rustgis-map's presets):
+/// PROJ's position-vector `+towgs84` for EPSG:3405, 3406 and 5897.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! vn2000_towgs84 {
     () => {
         "+towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278"
     };
 }
 
-/// The 7-parameter Helmert shift from VN-2000 to WGS 84 (QĐ 973/2001/QĐ-TTg).
-pub const VN2000_TOWGS84: &str = vn2000_towgs84_lit!();
+/// The 7-parameter Helmert shift from VN-2000 to WGS 84, as PROJ gives it for EPSG:4756.
+pub const VN2000_TOWGS84: &str = crate::vn2000_towgs84!();
 
 /// Returns true if `text` is an ambiguous bare reference to VN-2000 without a specified projection.
 pub fn is_bare_vn2000(text: &str) -> bool {
@@ -155,7 +159,7 @@ fn validate_proj_string(proj4: &str) -> Result<(), String> {
         let t = token.trim_start_matches('+');
         let (key, val) = t.split_once('=').unwrap_or((t, ""));
         let key_lower = key.to_ascii_lowercase();
-        if ["init", "nadgrids", "geoidgrids", "grids", "file"].contains(&key_lower.as_str()) {
+        if ["init", "nadgrids", "geoidgrids", "grids", "file", "catalog"].contains(&key_lower.as_str()) {
             return Err(format!("parameter '+{key}' is not allowed in coordinate system definition"));
         }
         if val.contains("..") || val.contains('/') || val.contains('\\') {
