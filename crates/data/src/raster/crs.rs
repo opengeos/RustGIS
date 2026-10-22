@@ -185,7 +185,7 @@ impl Crs {
             if t.len() > 1024 {
                 return Err("coordinate system definition is too long".into());
             }
-            let proj4 = if t.starts_with("+proj") { t.to_string() } else { format!("+proj{}", t.get(5..).unwrap_or("")) };
+            let proj4 = format!("+proj{}", t.get(5..).unwrap_or(""));
             return Crs::custom(CustomCrs {
                 proj4,
                 label: "Custom PROJ".to_string(),
@@ -198,16 +198,12 @@ impl Crs {
         if up.ends_with("CRS84") {
             return Ok(Crs::LonLat);
         }
-        if up == "VN-2000"
-            || up == "VN2000"
-            || up == "VN-2000 / UTM ZONE 48N"
-            || up == "VN2000 / UTM ZONE 48N"
-            || up.ends_with("UTM ZONE 48N")
-        {
-            return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
-        }
-        if up == "VN-2000 / UTM ZONE 49N" || up == "VN2000 / UTM ZONE 49N" || up.ends_with("UTM ZONE 49N") {
+        let is_vn2000 = up.starts_with("VN-2000") || up.starts_with("VN2000");
+        if is_vn2000 && (up.ends_with("49N") || up.ends_with("ZONE 49")) {
             return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
+        }
+        if up == "VN-2000" || up == "VN2000" || (is_vn2000 && (up.ends_with("48N") || up.ends_with("ZONE 48"))) {
+            return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
@@ -406,6 +402,7 @@ mod tests {
         assert_eq!(Crs::parse("vn2000"), Ok(Crs::Epsg(3405)));
         assert_eq!(Crs::parse("VN-2000 / UTM zone 48N"), Ok(Crs::Epsg(3405)));
         assert_eq!(Crs::parse("VN-2000 / UTM zone 49N"), Ok(Crs::Epsg(3406)));
+        assert!(Crs::parse("WGS 84 / UTM zone 48N").is_err());
         let custom_proj = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj.label(), "Custom PROJ");
         let custom_proj_upper = Crs::parse("+PROJ=utm +zone=48 +ellps=WGS84").unwrap();

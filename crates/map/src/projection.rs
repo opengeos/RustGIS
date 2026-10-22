@@ -137,8 +137,14 @@ pub const VN2000_PROVINCES: &[Vn2000Province] = &[
 ];
 
 /// Distinct primary regional hubs for UI central meridian shortcut buttons.
-pub const VN2000_UI_PROVINCES: &[(&str, f64)] =
-    &[("Hà Nội", 105.0), ("TP. Hồ Chí Minh", 105.75), ("Huế", 107.0), ("Đà Nẵng", 107.75), ("Khánh Hòa", 108.25), ("Đắk Lắk", 108.5)];
+pub const VN2000_UI_PROVINCES: &[(&str, f64)] = &[
+    ("Hà Nội", 105.0),
+    ("TP. Hồ Chí Minh", 105.75),
+    ("Thừa Thiên Huế", 107.0),
+    ("Đà Nẵng", 107.75),
+    ("Khánh Hòa", 108.25),
+    ("Đắk Lắk", 108.5),
+];
 
 /// A parameter a preset takes (opengeos/RustGIS#517): its PROJ name and the range, in degrees,
 /// it is checked against.
@@ -363,7 +369,12 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         if let Some(lon) = resolve_vn2000_alias(code) {
-            return lookup(&format!("vn2000 +lon_0={lon}"));
+            let (_, label, def) = PRESETS.iter().find(|(p, _, _)| *p == "vn2000").ok_or_else(|| "vn2000 preset missing".to_string())?;
+            return if (lon - 105.0).abs() < 1e-6 {
+                Ok((def.to_string(), label.to_string()))
+            } else {
+                Ok((with_params(def, &[("lon_0", lon)]), format!("{label} (lon_0={lon})")))
+            };
         }
         return Err(format!("unknown projection '{code}'"));
     }
