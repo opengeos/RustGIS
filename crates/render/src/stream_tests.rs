@@ -44,6 +44,25 @@ fn streamed(layer: &Layer, size: usize) -> Layer {
     streamed_kind(layer, size, false)
 }
 
+/// Lets the streamed layers' background reads of `view` land first, as the screen does between
+/// frames. A render then finds the view read and starts no read of its own, which could land
+/// mid-test (on a busy machine) and replace the owner's rows.
+fn settle(map: &mut Map, view: &View) {
+    for _ in 0..2000 {
+        let pending = if view.camera.pitch > 0.0 {
+            sync_tilted_view(map, view)
+        } else {
+            let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+            map.sync_sources(&view_lonlat(map, view), scale, false)
+        };
+        if !pending {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("the background reads did not land");
+}
+
 fn streamed_kind(layer: &Layer, size: usize, native: bool) -> Layer {
     let ds = layer.dataset.clone();
     let info = SourceInfo {
@@ -319,6 +338,7 @@ fn perspective_uses_complete_isolated_fallback() {
     for size in [1, 3, 20] {
         let mut actual = base.clone();
         actual.layers[0] = streamed(&base.layers[0], size);
+        settle(&mut actual, &view);
         let before = actual.layers[0].dataset.features.clone();
         let got = render(&mut actual, &view).unwrap();
         assert_eq!(got.labels, expected.labels);
@@ -400,8 +420,8 @@ fn partial_source_failure_and_incomplete_summary_reach_unchanged_owner() {
     for (size, message) in [(0, "cancelled"), (usize::MAX, "incomplete")] {
         let mut map = base.clone();
         map.layers[0] = streamed(&base.layers[0], size);
-        map.sync_sources(&Extent::WORLD_LONLAT, 1.0, true);
         let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: map.camera, sky: false };
+        settle(&mut map, &view);
         let mut worker = map.clone();
         assert!(render(&mut worker, &view).is_none());
         map.adopt_caches(&worker);
