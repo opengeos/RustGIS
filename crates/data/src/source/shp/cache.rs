@@ -49,8 +49,36 @@ pub fn index_fallback_dir() -> PathBuf {
     std::env::temp_dir().join(name)
 }
 
+/// A lock file whose advisory lock is released explicitly when it is dropped.
+///
+/// Closing a descriptor releases its `flock` only once every duplicate of it is
+/// closed, and a process spawned on another thread (GDAL, DuckDB, a plugin) holds
+/// duplicates of all descriptors until it execs. Dropping a plain `File` could
+/// then leave a lease or the directory lock held for that window, so a sweep or a
+/// release that runs meanwhile finds the entry pinned and leaves it behind.
+/// Unlocking acts on the shared open file description, duplicates included, and
+/// is a no-op for a lock that was never taken.
+#[derive(Debug)]
+struct Flock(File);
+impl std::ops::Deref for Flock {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Flock {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for Flock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// Never follow a lease symlink or open a special file, including after a rename race.
-fn lease_file(path: &Path, create: bool) -> io::Result<File> {
+fn lease_file(path: &Path, create: bool) -> io::Result<Flock> {
     if std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
         return Err(io::Error::other("cache lease is not a regular file"));
     }
@@ -73,9 +101,9 @@ fn lease_file(path: &Path, create: bool) -> io::Result<File> {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, "cache lease is not private to this user"));
         }
     }
-    Ok(file)
+    Ok(Flock(file))
 }
-fn open_lock(path: &Path) -> io::Result<File> {
+fn open_lock(path: &Path) -> io::Result<Flock> {
     lease_file(path, true)
 }
 
@@ -116,7 +144,7 @@ fn validate_directory(root: &Path) -> io::Result<PathBuf> {
 #[derive(Debug)]
 struct Directory {
     root: PathBuf,
-    file: File,
+    file: Flock,
 }
 
 /// Shared validation for blocking checkout and nonblocking release paths.
@@ -190,7 +218,7 @@ fn owned(name: &str) -> bool {
         && parts.next().is_some_and(|s| s.parse::<u64>().is_ok())
         && parts.next().is_none()
 }
-fn existing_lock(path: &Path) -> io::Result<File> {
+fn existing_lock(path: &Path) -> io::Result<Flock> {
     if !regular(path) {
         return Err(io::Error::other("missing regular cache lease"));
     }
@@ -201,7 +229,7 @@ fn existing_lock(path: &Path) -> io::Result<File> {
 /// whole lifetime, rather than just during I/O. No PID-based assumption for new caches.
 pub struct Lease {
     path: PathBuf,
-    lock: Option<File>,
+    lock: Option<Flock>,
     temporary: bool,
     ready: bool,
     budget: u64,

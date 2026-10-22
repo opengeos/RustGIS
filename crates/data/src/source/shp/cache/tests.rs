@@ -132,6 +132,36 @@ fn cache_concurrent_builder_uses_private_index_without_replacing_reader() {
     assert!(reader.path().exists());
 }
 
+// A process spawned on another thread holds duplicates of every descriptor until it
+// execs. `try_clone` makes the same duplicate: releases must not wait for it to close.
+#[test]
+fn cache_releases_unlock_even_while_a_spawned_process_holds_a_duplicate() {
+    let root = Folder::new();
+    let (lease, file) = temporary_index(&root.0);
+    drop(file);
+    let path = lease.path().to_path_buf();
+    let duplicate = lease.lock.as_ref().unwrap().try_clone().unwrap();
+    drop(lease);
+    assert!(!path.exists(), "a released temporary index is removed at once");
+    assert_eq!(maintain(&root.0, 0).unwrap().remaining_bytes, 0);
+    drop(duplicate);
+
+    let lease = ready(&root.0, 1, 10, 4096);
+    let shared = lease.path().to_path_buf();
+    let duplicate = lease.lock.as_ref().unwrap().try_clone().unwrap();
+    drop(lease);
+    let rebuilt = reserve_index(&root.0, &key(1), 4096).unwrap();
+    assert_eq!(rebuilt.path(), shared, "a released index is not still pinned by the duplicate");
+    drop(rebuilt);
+    drop(duplicate);
+
+    let sweep = directory_lock(&root.0).unwrap();
+    let duplicate = sweep.file.try_clone().unwrap();
+    drop(sweep);
+    assert!(directory_file(&root.0).unwrap().file.try_lock().is_ok(), "a finished sweep releases the directory");
+    drop(duplicate);
+}
+
 #[test]
 fn cache_cleanup_is_bounded_and_preserves_unknown_files_and_orphans_in_use() {
     let root = Folder::new();
