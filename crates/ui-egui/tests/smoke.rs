@@ -1556,7 +1556,10 @@ fn connections_section_and_dialog() {
     h.step();
     h.step();
     h.get_by_label("Local").click_secondary();
-    h.step();
+    // The menu settles over a few frames; clicking its first layout can miss "Remove".
+    for _ in 0..4 {
+        h.step();
+    }
     h.get_by_label("Remove").click();
     h.step();
     assert!(h.state().session.connections.find("Local").is_none());
