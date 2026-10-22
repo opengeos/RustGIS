@@ -146,7 +146,11 @@ pub fn read(name: &str, open: &dyn Fn(&str) -> Result<Option<Vec<u8>>>, layer: O
         let files = open(&format!("{file}.gdbtable")).and_then(|t| Ok((t, open(&format!("{file}.gdbtablx"))?)));
         let (t, x) = match files {
             Ok((Some(t), Some(x))) => (t, x),
-            Ok(_) => continue,
+            // Listed, but its files aren't there: said, as `layers` lists it.
+            Ok(_) => {
+                out.unread.push((table_name, format!("its files ({file}.gdbtable, {file}.gdbtablx) are missing")));
+                continue;
+            }
             Err(e) => {
                 out.unread.push((table_name, e.to_string()));
                 continue;

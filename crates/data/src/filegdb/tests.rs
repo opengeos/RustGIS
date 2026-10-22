@@ -454,6 +454,21 @@ fn an_unreadable_table_leaves_the_others() {
     assert!(read.unread[0].1.contains("too large"), "{:?}", read.unread);
 }
 
+/// A table the catalog lists whose files are missing is said by name, not passed over.
+#[test]
+fn a_table_with_missing_files_is_said() {
+    let fields = [F::Oid, F::Text("name")];
+    let rows = vec![vec![V::Text(Some("a"))]];
+    let mut files = geodatabase(vec![("Good", table(0, &fields, &rows)), ("Gone", table(0, &fields, &rows))]);
+    files.retain(|(n, _)| n != "a00000003.gdbtablx");
+    let open = |name: &str| -> Result<Option<Vec<u8>>> { Ok(files.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone())) };
+    let read = read("test", &open, None).unwrap();
+    assert_eq!(read.layers.len(), 1);
+    assert_eq!(read.unread.len(), 1, "{:?}", read.unread);
+    assert_eq!(read.unread[0].0, "Gone");
+    assert!(read.unread[0].1.contains("missing"), "{:?}", read.unread);
+}
+
 /// A feature whose coordinates its coordinate system can't place keeps its row, and is said.
 #[test]
 fn coordinates_that_cant_be_converted_are_said() {
