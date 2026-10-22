@@ -476,19 +476,18 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
     // The search box was typed in until egui took its focus away on Escape: that Escape clears
     // the box, not the tool.
     let typing = ctx.egui_wants_keyboard_input() || crate::searchbox::had_focus(&app.ui.search, ctx.cumulative_pass_nr());
+    // A text field focused, not any widget (a button reached with Tab): it has an undo of its own.
+    let text_field = ctx.text_edit_focused();
     // An element selected in the open layout, for the layout's own keys.
     let element = app.session.active_layout.is_some() && app.layout.selected.is_some();
     let mut run: Vec<(String, Value)> = Vec::new();
     let keymap = &app.ui.keymap;
     ctx.input_mut(|i| {
         for b in keymap.match_order() {
-            // Keys without Ctrl (⌘) type text while a text field has focus.
-            if typing && !b.chord.command {
-                continue;
-            }
-            // Nor undo and redo, whatever they're bound to: the text field undoes its own typing
-            // (#685), as ModelBuilder's keys leave it to the field too.
-            if typing && b.chord.is_text_undo() {
+            // While a text field has focus, it keeps the keys it acts on: those without Ctrl (⌘),
+            // which type text, and undo and redo, whatever they're bound to (#685), as ModelBuilder
+            // leaves them.
+            if (typing && !b.chord.command) || (text_field && b.chord.is_text_undo()) {
                 continue;
             }
             // Duplicating needs a selected layout element, and not a text field being typed in;
