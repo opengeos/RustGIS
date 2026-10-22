@@ -241,7 +241,9 @@ fn extend_mesh(
 /// Appends one feature's GPU geometry, in the CPU path's per-feature order (fill, then
 /// outline — `Ctx::feature`). Transparent fills/strokes are skipped: tiny-skia draws them as
 /// no-ops, and not emitting them is identical output for less work. `Err` when lyon refuses
-/// the geometry — the layer then falls back to the CPU path entirely.
+/// the geometry, or once the mesh passes `limit` vertices — the layer then falls back to the
+/// CPU path entirely.
+#[allow(clippy::too_many_arguments)]
 fn append_geometry(
     v: &mut Vec<MeshVertex>,
     i: &mut Vec<u32>,
@@ -252,9 +254,10 @@ fn append_geometry(
     wireframe: bool,
     ppp: f32,
     map_per_px: f64,
+    limit: usize,
 ) -> Result<(), TessError> {
     // What the layer's mesh has left: tessellation stops once a part passes it.
-    let room = |v: &Vec<MeshVertex>| MAX_LAYER_VERTICES.saturating_sub(v.len());
+    let room = |v: &Vec<MeshVertex>| limit.saturating_sub(v.len());
     match g {
         Geometry::Point(c) => pts.extend(marker_instances(*c, origin, s, ppp, None)),
         Geometry::MultiPoint(cs) => cs.iter().for_each(|c| pts.extend(marker_instances(*c, origin, s, ppp, None))),
@@ -327,13 +330,14 @@ fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
     }
 }
 
-/// Collects one GPU-eligible layer into Mesh/Points commands. `geoms`, `extents`, `rows` and
-/// `visible` are the render loop's own (geometries as the CPU draws them, their cached extents,
-/// row filter, extent cull), so
-/// the GPU draws exactly the features the CPU would. `Ok(None)` when nothing visible was
-/// collected; `Err(TessError)` when lyon refused a feature or the mesh would pass
-/// [`MAX_LAYER_VERTICES`] — the caller then draws the whole layer with tiny-skia instead
-/// (nothing is pushed part-way).
+/// Collects one GPU-eligible layer, or one streamed batch of it, into Mesh/Points commands.
+/// `geoms`, `extents`, `rows` and `visible` are the render loop's own (geometries as the CPU
+/// draws them, their cached extents, row filter, extent cull), so the GPU draws exactly the
+/// features the CPU would. `limit` is what is left of the layer's [`MAX_LAYER_VERTICES`] (its
+/// earlier batches took the rest). `Ok` with the mesh vertices pushed; `Err(TessError)` when
+/// lyon refused a feature or the mesh would pass `limit` — the caller then draws the layer
+/// (or batch) with tiny-skia instead (nothing is pushed part-way).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer(
     cmds: &mut Vec<DrawCmd>,
     layer: &Layer,
@@ -344,7 +348,8 @@ pub(crate) fn collect_layer(
     wireframe: bool,
     ppp: f32,
     map_per_px: f64,
-) -> Result<Option<[f64; 2]>, TessError> {
+    limit: usize,
+) -> Result<usize, TessError> {
     // Stable origin: the centre of the drawn features' extent, so the features are listed
     // first — with their symbols and estimates, each worked out once. The same pass gives up on
     // a layer too dense to mesh before any of it is tessellated.
@@ -363,31 +368,32 @@ pub(crate) fn collect_layer(
         let s = layer.symbol(row);
         let n = estimate_vertices(g, &s, wireframe);
         estimate = estimate.saturating_add(n);
-        if estimate > MAX_LAYER_VERTICES {
+        if estimate > limit {
             return Err(TessError);
         }
         features.push((*g, s, n));
     }
     if ext.is_empty() {
-        return Ok(None);
+        return Ok(0);
     }
     let origin = [ext.center().x, ext.center().y];
     let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
     for (g, s, n) in &features {
         // The estimate is rough (sharp turns add join vertices): a feature that won't fit isn't
         // started, and `append_geometry` stops one that overflows after its first ring past it.
-        if v.len().saturating_add(*n) > MAX_LAYER_VERTICES {
+        if v.len().saturating_add(*n) > limit {
             return Err(TessError);
         }
-        append_geometry(&mut v, &mut i, &mut pts, g, s, origin, wireframe, ppp, map_per_px)?;
+        append_geometry(&mut v, &mut i, &mut pts, g, s, origin, wireframe, ppp, map_per_px, limit)?;
     }
+    let used = v.len();
     if !i.is_empty() {
         cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
     }
     if !pts.is_empty() {
         cmds.push(DrawCmd::Points { origin, instances: pts });
     }
-    Ok(Some(origin))
+    Ok(used)
 }
 
 /// Selection highlight of one feature, after its layer (`Ctx::highlight`): haloed markers,
@@ -598,7 +604,7 @@ mod tests {
         for g in &shapes {
             for wireframe in [false, true] {
                 let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
-                append_geometry(&mut v, &mut i, &mut pts, g, &s, [0.0, 0.0], wireframe, 1.0, 0.0).expect("tessellate");
+                append_geometry(&mut v, &mut i, &mut pts, g, &s, [0.0, 0.0], wireframe, 1.0, 0.0, NO_LIMIT).expect("tessellate");
                 let est = estimate_vertices(g, &s, wireframe);
                 assert!(est >= v.len() / 2 && est <= v.len() * 2, "{g:?}: estimated {est}, tessellated {}", v.len());
             }

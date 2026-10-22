@@ -1076,3 +1076,34 @@ fn layout_export_rejects_unopened_local_shapefiles_and_required_masks() {
         );
     }
 }
+
+#[test]
+fn gpu_mesh_limit_spans_a_streamed_layers_batches() {
+    // 72,900 triangles about a pixel across, streamed in batches that each mesh well under
+    // MAX_LAYER_VERTICES but together pass it: the batches past the limit draw on the CPU.
+    let mut ds = Dataset::new("dense", GeometryType::Polygon, vec![]);
+    for i in 0..270 {
+        for j in 0..270 {
+            let (x, y) = (i as f64 * 0.01, j as f64 * 0.01);
+            let ring = vec![Coord::new(x, y), Coord::new(x + 0.008, y), Coord::new(x, y + 0.008)];
+            ds.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        }
+    }
+    let mut map = Map::new("dense");
+    map.add_dataset(ds);
+    map.layers[0] = streamed(&map.layers[0], 72_900 / 8 + 1);
+    let camera = Camera { center: lonlat_to_merc(Coord::new(1.35, 1.35)), res: 1000.0, bearing: 0.0, pitch: 0.0 };
+    let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: false };
+    let Some(RenderOutput::Gpu(scene)) = render_backend(&mut map, &view, Backend::Gpu) else { panic!("gpu scene") };
+    let meshed: Vec<usize> = scene
+        .cmds
+        .iter()
+        .filter_map(|c| match c {
+            gpu_scene::DrawCmd::Mesh { vertices, .. } => Some(vertices.len()),
+            _ => None,
+        })
+        .collect();
+    assert!(!meshed.is_empty(), "the first batches still mesh");
+    assert!(meshed.iter().sum::<usize>() <= mesh::MAX_LAYER_VERTICES, "the layer's meshes: {meshed:?}");
+    assert!(scene.cmds.iter().any(|c| matches!(c, gpu_scene::DrawCmd::Image { .. })), "the rest drawn on the CPU");
+}

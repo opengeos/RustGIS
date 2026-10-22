@@ -2641,6 +2641,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             Default::default()
         };
         let mut highlights: Vec<(usize, Geometry, Symbol)> = Vec::new();
+        // The GPU mesh vertices the layer has left: a streamed layer's batches share them, so
+        // one too dense to mesh goes to the CPU however it is split.
+        let mut mesh_room = mesh::MAX_LAYER_VERTICES;
         let mut extrusions = if complete_source
             && layer.geometry_type() == GeometryType::Polygon
             && layer.extrusion.is_some()
@@ -2733,8 +2736,21 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
                     .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
-                gpu_done = mesh::collect_layer(&mut cmds, layer, &drawn, extents, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px)
-                    .is_ok();
+                let collected = mesh::collect_layer(
+                    &mut cmds,
+                    layer,
+                    &drawn,
+                    extents,
+                    &rows,
+                    &mesh_visible,
+                    ctx.wireframe,
+                    ctx.ppp,
+                    map_per_px,
+                    mesh_room,
+                );
+                // Once a batch falls back, the layer's later ones do too (they get no room).
+                mesh_room = collected.map_or(0, |used| mesh_room.saturating_sub(used));
+                gpu_done = collected.is_ok();
             }
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
             let mut drawn_here = true;
