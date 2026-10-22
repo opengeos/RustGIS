@@ -141,6 +141,55 @@ fn utf8_shapefile_text_survives_missing_metadata_and_utf8_cpg() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn native_imports_discover_every_cpg_extension_case() {
+    use rustgis_data::source::{FeatureSource, Request, shp::ShpSource};
+    for ext in ["cpg", "CPG", "Cpg", "cPg", "cpG", "CPg", "CpG", "cPG"] {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in parts(b"Montr\xe9al", 0xf0, Some(b"1252")) {
+            let name = if name.ends_with(".cpg") { format!("places.{ext}") } else { name };
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let path = dir.path().join("places.shp");
+        let (ds, report) = io::read_path(&path).unwrap();
+        assert_eq!(ds.value(0, 0), &Value::Text("Montréal".into()), "extension {ext}");
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+        let src = ShpSource::open_path(&path, "places").unwrap();
+        assert_eq!(src.read(&Request::all()).unwrap().features[0].attrs, [Value::Text("Montréal".into())], "extension {ext}");
+        assert!(src.info().notes.is_empty(), "{:?}", src.info().notes);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn unreadable_cpg_reports_fallback_without_preventing_native_imports() {
+    use rustgis_data::source::{FeatureSource, Request, shp::ShpSource};
+    for (ldid, text, expected) in [(0x03, b"Montr\xe9al".as_slice(), "Montréal"), (0, "München".as_bytes(), "München")] {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in parts(text, ldid, None) {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        // A directory at the sidecar path deterministically causes an I/O failure
+        // on both Unix and Windows, without depending on the test user's privileges.
+        std::fs::create_dir(dir.path().join("places.cpg")).unwrap();
+        let path = dir.path().join("places.shp");
+        let (ds, report) = io::read_path(&path).unwrap();
+        assert_eq!(ds.value(0, 0), &Value::Text(expected.into()));
+        assert!(report.messages.iter().any(|m| m.contains(".cpg") && m.contains("read")), "{:?}", report.messages);
+        let src = ShpSource::open_path(&path, "places").unwrap();
+        assert_eq!(src.read(&Request::all()).unwrap().features[0].attrs, [Value::Text(expected.into())]);
+        let mut attrs = Vec::new();
+        src.visit_chunks(None, 1024, &mut |features| {
+            attrs.extend(features.into_iter().map(|f| f.attrs));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(attrs, vec![vec![Value::Text(expected.into())]]);
+        assert!(src.info().notes.iter().any(|m| m.contains(".cpg") && m.contains("read")), "{:?}", src.info().notes);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn shapefile_decodes_legacy_field_names_in_all_readers() {
     use rustgis_data::source::{FeatureSource, shp::ShpSource};
     let mut files = parts(b"Montr\xe9al", 0x03, None);

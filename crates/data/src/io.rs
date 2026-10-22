@@ -1314,14 +1314,17 @@ fn read_shapefile(path: &Path, name: &str) -> Result<(Dataset, ReadReport)> {
         return Err(DataError::Format(format!("Shapefile: {} is missing", dbf.display())));
     }
     let shx = path.with_extension("shx");
+    let mut notes = Vec::new();
     let parts = ShapefileParts {
         shp: std::fs::read(path)?,
         shx: if shx.is_file() { Some(std::fs::read(shx)?) } else { None },
         dbf: std::fs::read(dbf)?,
         prj: crate::raster::read_prj(path),
-        cpg: crate::dbf::read_cpg(path)?,
+        cpg: crate::dbf::read_cpg(path, &mut notes),
     };
-    read_shapefile_parts(parts, name)
+    let (ds, mut report) = read_shapefile_parts(parts, name)?;
+    report.messages.extend(notes);
+    Ok((ds, report))
 }
 
 /// The files of a Shapefile besides its `.shp` that [`gather_shapefiles`] zips with it.

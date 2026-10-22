@@ -39,7 +39,7 @@ the `.dbf` header. Include the `.cpg` when picking or dropping loose files in th
 UTF-8 (including `65001`), DOS code pages such as CP437 and CP850 (numeric, `CP` or `IBM`
 labels), Windows code pages such as `1252`, `CP1252` and `Windows-1252`, ISO-8859 encodings
 and common East Asian encodings are supported. The Esri `0x57` DBF marker
-is read as Windows-1252. An empty, invalid, oversized or unsupported `.cpg` gives a notice and
+is read as Windows-1252. An unreadable, empty, invalid, oversized or unsupported `.cpg` gives a notice and
 falls back to the DBF code page; an unsupported DBF code page gives a notice and falls back to
 UTF-8. Files without encoding metadata keep the UTF-8 default. Unsupported characters become
 replacement characters. This applies to zipped files and large files read in place too.

@@ -78,7 +78,8 @@ impl ShpSource {
         }
         let mut notes = Vec::new();
         let table = read_table(&dbf)?;
-        let encoding = crate::dbf::encoding(crate::dbf::read_cpg(path)?.as_deref(), table.ldid, &mut notes);
+        let cpg = crate::dbf::read_cpg(path, &mut notes);
+        let encoding = crate::dbf::encoding(cpg.as_deref(), table.ldid, &mut notes);
         let shp_len = std::fs::metadata(path)?.len();
         if shp_len > u64::from(u32::MAX) {
             return Err(bad("the .shp is larger than the format's 4 GB"));

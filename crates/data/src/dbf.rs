@@ -116,9 +116,21 @@ pub(crate) fn encoding(cpg: Option<&[u8]>, ldid: u8, notes: &mut Vec<String>) ->
 }
 
 /// A code-page label should be a few bytes. Bound reads even for a hostile sidecar.
-pub(crate) fn read_cpg(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_cpg(path: &std::path::Path, notes: &mut Vec<String>) -> Option<Vec<u8>> {
+    match try_read_cpg(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            notes.push(format!("Shapefile: could not read .cpg ({e}); using the .dbf code page, or UTF-8 if unavailable"));
+            None
+        }
+    }
+}
+
+fn try_read_cpg(path: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
-    for ext in ["cpg", "CPG"] {
+    // Check every ASCII case combination without scanning a potentially large directory.
+    // Prefer the conventional spellings if multiple sidecars exist.
+    for ext in ["cpg", "CPG", "Cpg", "cPg", "cpG", "CPg", "CpG", "cPG"] {
         match std::fs::File::open(path.with_extension(ext)) {
             Ok(file) => {
                 let mut bytes = Vec::new();
