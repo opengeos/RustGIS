@@ -285,7 +285,7 @@ fn map_labeling(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
-/// Where a label colour being dragged in the pane's picker waits.
+/// Where a label colour being dragged in the pane or ribbon's picker waits.
 const COLOR_DRAG: &str = "label_pane_color_drag";
 
 /// A label colour being dragged: it previews in the project, and when the pointer is let go
@@ -298,7 +298,7 @@ struct ColorDrag {
     color: Rgba,
 }
 
-fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
+pub(crate) fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
     let key = egui::Id::new(COLOR_DRAG);
     let mut pending = ui.data(|d| d.get_temp::<ColorDrag>(key));
     // One left pending on another layer (the selection changed mid-pick, from the Assistant or a

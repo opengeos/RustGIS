@@ -77,6 +77,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // go joins the drag instead of running a command of its own.
     finish_class_color_drag(app, ui);
     crate::labelpane::finish_color_drag(app, ui);
+    crate::ribbon::finish_label_size_drag(app, ui);
 }
 
 /// Closes the pane that command `id` (a `ui.pane.*`) opens, on its side; false when `id` isn't a

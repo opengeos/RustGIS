@@ -4009,6 +4009,52 @@ fn renderer_icon(r: &Renderer) -> &'static str {
     }
 }
 
+/// A ribbon size preview belongs to the layer where the gesture began, even if selection moves.
+#[derive(Clone, Default)]
+struct LabelSizeDrag {
+    layer: u32,
+    before: f32,
+    size: f32,
+}
+
+fn label_size_drag(app: &mut RustGisApp, ui: &Ui, layer: &rustgis_engine::map::Layer, size: f32) {
+    let key = egui::Id::new("ribbon_label_size_drag");
+    let pending = ui.data_mut(|d| d.remove_temp::<LabelSizeDrag>(key));
+    let before = match pending {
+        Some(drag) if drag.layer == layer.id => drag.before,
+        Some(drag) => {
+            apply_label_size_drag(app, drag);
+            layer.labels.default.size
+        }
+        None => layer.labels.default.size,
+    };
+    ui.data_mut(|d| d.insert_temp(key, LabelSizeDrag { layer: layer.id, before, size }));
+    if let Some(layer) = app.session.map_mut().layer_mut(layer.id) {
+        layer.labels.default.size = size;
+    }
+    app.session.revision = app.session.revision.wrapping_add(1);
+}
+
+/// Called after the panes even if selection is cleared or the ribbon is hidden mid-gesture.
+pub(crate) fn finish_label_size_drag(app: &mut RustGisApp, ui: &Ui) {
+    if ui.input(|i| i.pointer.primary_down() && i.focused) {
+        return;
+    }
+    if let Some(drag) = ui.data_mut(|d| d.remove_temp::<LabelSizeDrag>(egui::Id::new("ribbon_label_size_drag"))) {
+        apply_label_size_drag(app, drag);
+    }
+}
+
+fn apply_label_size_drag(app: &mut RustGisApp, drag: LabelSizeDrag) {
+    let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
+    layer.labels.default.size = drag.before;
+    if drag.before != drag.size {
+        let selected = app.session.active_layer.replace(drag.layer);
+        let _ = app.run("labels.style", json!({"size": drag.size}));
+        app.session.active_layer = selected;
+    }
+}
+
 fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
     let Some(layer) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else { return };
     group(ui, "Labels", |ui| {
@@ -4103,16 +4149,21 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Size")).size(11.5));
                 let range = rustgis_engine::map::symbology::LABEL_SIZE;
-                if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
-                    let _ = app.run("labels.style", json!({"size": size}));
-                }
+                // Another layer gets a distinct widget, so an in-flight drag cannot move to it.
+                ui.push_id(("label_size", layer.id), |ui| {
+                    if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
+                        label_size_drag(app, ui, &layer, size as f32);
+                    }
+                });
             });
             let mut c = crate::theme::c32(layer.labels.default.color);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Color")).size(11.5));
-                if crate::widgets::color_button(ui, &mut c).changed() {
-                    let _ = app.run("labels.style", json!({"color": crate::theme::rgba(c).hex()}));
-                }
+                ui.push_id(("label_color", layer.id), |ui| {
+                    if crate::widgets::color_button(ui, &mut c).changed() {
+                        crate::labelpane::color_drag(app, ui, &layer, crate::theme::rgba(c));
+                    }
+                });
             });
         });
         col(ui, |ui| {
@@ -4306,8 +4357,232 @@ fn language_menu(app: &mut RustGisApp, ui: &mut Ui) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn label_harness() -> egui_kittest::Harness<'static, RustGisApp> {
+        let mut app = RustGisApp::with_sample();
+        app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
+        app.ws.recording = Some(Vec::new());
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 700.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                if !app.ui.ribbon_minimized {
+                    ui.horizontal(|ui| label_groups(app, ui));
+                }
+                finish_label_size_drag(app, ui);
+                crate::labelpane::finish_color_drag(app, ui);
+            },
+            app,
+        );
+        h.run();
+        h
+    }
+
+    #[test]
+    fn ribbon_label_size_drag_is_one_undo_and_recorded_step() {
+        let mut h = label_harness();
+        let id = h.state().session.active_layer.unwrap();
+        let size = |app: &RustGisApp| app.session.map().layer(id).unwrap().labels.default.size;
+        let before = size(h.state());
+        let undo = h.state().session.undo_depth();
+        let at = h.get_by_role(egui::accesskit::Role::SpinButton).rect().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.step();
+        for dx in [16.0, 32.0, 48.0] {
+            h.hover_at(at + vec2(dx, 0.0));
+            h.step();
+            assert!(size(h.state()) > before, "the map previews the size while dragging");
+            assert_eq!(h.state().session.undo_depth(), undo, "a drag does not run a command each frame");
+            assert!(h.state().ws.recording.as_ref().unwrap().is_empty());
+        }
+        let after = size(h.state());
+        h.drop_at(at + vec2(48.0, 0.0));
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), undo + 1);
+        let steps = h.state().ws.recording.as_ref().unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].command, "labels.style");
+        assert_eq!(steps[0].params["layer"], "Cities");
+        assert_eq!(size(h.state()), after);
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(size(h.state()), before);
+        h.state_mut().run("edit.redo", json!(null)).unwrap();
+        assert_eq!(size(h.state()), after);
+    }
+
+    #[test]
+    fn ribbon_label_size_drag_keeps_its_layer_when_selection_changes() {
+        for clear_selection in [false, true] {
+            let mut h = label_harness();
+            let cities = h.state().session.active_layer.unwrap();
+            let countries = h.state().session.map().layers.iter().find(|l| l.name == "Countries").unwrap().id;
+            let size = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.size;
+            let before = size(h.state(), cities);
+            let countries_before = size(h.state(), countries);
+            let undo = h.state().session.undo_depth();
+            let at = h.get_by_role(egui::accesskit::Role::SpinButton).rect().center();
+            h.hover_at(at);
+            h.drag_at(at);
+            h.step();
+            h.hover_at(at + vec2(32.0, 0.0));
+            h.step();
+            let after = size(h.state(), cities);
+            assert!(after > before);
+            // Selection may also change through the Assistant or relay while the pointer is held.
+            let selected = if clear_selection { None } else { Some(countries) };
+            h.state_mut().session.active_layer = selected;
+            h.step();
+            h.drop_at(at + vec2(32.0, 0.0));
+            h.run();
+            assert_eq!(size(h.state(), countries), countries_before);
+            assert_eq!(size(h.state(), cities), after);
+            assert_eq!(h.state().session.active_layer, selected);
+            assert_eq!(h.state().session.undo_depth(), undo + 1);
+            let steps = h.state().ws.recording.as_ref().unwrap();
+            assert_eq!(steps.len(), 1);
+            assert_eq!(steps[0].params["layer"], "Cities");
+            h.state_mut().run("edit.undo", json!(null)).unwrap();
+            assert_eq!(size(h.state(), cities), before);
+            assert_eq!(size(h.state(), countries), countries_before);
+            h.state_mut().run("edit.redo", json!(null)).unwrap();
+            assert_eq!(size(h.state(), cities), after);
+        }
+    }
+
+    #[test]
+    fn ribbon_label_size_drag_finishes_when_hidden_or_unfocused() {
+        for hide_ribbon in [false, true] {
+            let mut h = label_harness();
+            let id = h.state().session.active_layer.unwrap();
+            let size = |app: &RustGisApp| app.session.map().layer(id).unwrap().labels.default.size;
+            let before = size(h.state());
+            let undo = h.state().session.undo_depth();
+            let at = h.get_by_role(egui::accesskit::Role::SpinButton).rect().center();
+            h.hover_at(at);
+            h.drag_at(at);
+            h.step();
+            h.hover_at(at + vec2(32.0, 0.0));
+            h.step();
+            let after = size(h.state());
+            assert!(after > before);
+            if hide_ribbon {
+                h.state_mut().ui.ribbon_minimized = true;
+                h.step();
+                h.drop_at(at + vec2(32.0, 0.0));
+            } else {
+                h.input_mut().focused = false;
+                h.event(egui::Event::WindowFocused(false));
+            }
+            h.run();
+            assert_eq!(size(h.state()), after);
+            assert_eq!(h.state().session.undo_depth(), undo + 1);
+            assert_eq!(h.state().ws.recording.as_ref().unwrap().len(), 1);
+            h.state_mut().run("edit.undo", json!(null)).unwrap();
+            assert_eq!(size(h.state()), before);
+        }
+    }
+
+    #[test]
+    fn ribbon_label_colour_drag_is_one_undo_and_recorded_step() {
+        let mut h = label_harness();
+        let id = h.state().session.active_layer.unwrap();
+        let color = |app: &RustGisApp| app.session.map().layer(id).unwrap().labels.default.color;
+        let before = color(h.state());
+        let undo = h.state().session.undo_depth();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        // The ribbon size precedes the colour picker's R/G/B/A numeric controls.
+        let at = h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().rect().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.step();
+        for dx in [16.0, 32.0, 48.0] {
+            h.hover_at(at + vec2(dx, 0.0));
+            h.step();
+            assert_ne!(color(h.state()), before, "the map previews the colour while dragging");
+            assert_eq!(h.state().session.undo_depth(), undo, "the picker does not run a command each frame");
+            assert!(h.state().ws.recording.as_ref().unwrap().is_empty());
+        }
+        let after = color(h.state());
+        h.drop_at(at + vec2(48.0, 0.0));
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), undo + 1);
+        let steps = h.state().ws.recording.as_ref().unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].command, "labels.style");
+        assert_eq!(steps[0].params["layer"], "Cities");
+        assert_eq!(color(h.state()), after);
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(color(h.state()), before);
+        h.state_mut().run("edit.redo", json!(null)).unwrap();
+        assert_eq!(color(h.state()), after);
+    }
+
+    #[test]
+    fn ribbon_label_colour_drag_keeps_its_layer_when_selection_changes() {
+        let mut h = label_harness();
+        let cities = h.state().session.active_layer.unwrap();
+        let countries = h.state().session.map().layers.iter().find(|l| l.name == "Countries").unwrap().id;
+        let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.color;
+        let before = color(h.state(), cities);
+        let countries_before = color(h.state(), countries);
+        let undo = h.state().session.undo_depth();
+        h.get_by_role(egui::accesskit::Role::ColorWell).click();
+        h.run();
+        let at = h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().rect().center();
+        h.hover_at(at);
+        h.drag_at(at);
+        h.step();
+        h.hover_at(at + vec2(32.0, 0.0));
+        h.step();
+        let after = color(h.state(), cities);
+        assert_ne!(after, before);
+        h.state_mut().session.active_layer = Some(countries);
+        h.step();
+        h.hover_at(at + vec2(64.0, 0.0));
+        h.step();
+        h.drop_at(at + vec2(64.0, 0.0));
+        h.run();
+        assert_eq!(color(h.state(), countries), countries_before);
+        assert_eq!(color(h.state(), cities), after);
+        assert_eq!(h.state().session.active_layer, Some(countries));
+        assert_eq!(h.state().session.undo_depth(), undo + 1);
+        let steps = h.state().ws.recording.as_ref().unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].params["layer"], "Cities");
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(color(h.state(), cities), before);
+        assert_eq!(color(h.state(), countries), countries_before);
+        h.state_mut().run("edit.redo", json!(null)).unwrap();
+        assert_eq!(color(h.state(), cities), after);
+    }
+
+    #[test]
+    fn ribbon_label_size_can_still_be_typed() {
+        let mut h = label_harness();
+        let id = h.state().session.active_layer.unwrap();
+        let before = h.state().session.map().layer(id).unwrap().labels.default.size;
+        let undo = h.state().session.undo_depth();
+        h.get_by_role(egui::accesskit::Role::SpinButton).focus();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("14");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().session.map().layer(id).unwrap().labels.default.size, 14.0);
+        assert_eq!(h.state().session.undo_depth(), undo + 1);
+        assert_eq!(h.state().ws.recording.as_ref().unwrap().len(), 1);
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(h.state().session.map().layer(id).unwrap().labels.default.size, before);
+    }
 
     #[test]
     fn saved_hidden_tabs_never_hide_the_fixed_tabs() {
