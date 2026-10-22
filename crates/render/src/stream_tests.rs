@@ -539,7 +539,9 @@ fn perspective_reports_shapefile_open_failure() {
         sky: false,
     };
     let dir = tempfile::tempdir().unwrap();
-    map.layers[0].source = Some(SourceLayer { path: Some(dir.path().join("missing.shp").display().to_string()), ..Default::default() });
+    let mut source = SourceLayer::default();
+    source.path = Some(dir.path().join("missing.shp").display().to_string());
+    map.layers[0].source = Some(source);
     assert!(render(&mut map, &view).is_none());
     assert!(map.layers[0].source.as_ref().unwrap().error.is_some());
 }
