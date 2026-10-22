@@ -184,12 +184,8 @@ fn validate_proj_string(proj4: &str) -> Result<(), String> {
     for token in proj4.split_whitespace() {
         let t = token.trim_start_matches('+');
         let (key, val) = t.split_once('=').unwrap_or((t, ""));
-        let key_lower = key.to_ascii_lowercase();
-        if key_lower.contains("grid") || ["init", "file", "catalog", "step"].contains(&key_lower.as_str()) {
-            return Err(format!("parameter '+{key}' is not allowed in coordinate system definition"));
-        }
-        if key_lower == "proj" && val.eq_ignore_ascii_case("pipeline") {
-            return Err("PROJ pipelines are not allowed in coordinate system definition".into());
+        if proj_key_refused(key, val) {
+            return Err(format!("parameter '+{t}' is not allowed in coordinate system definition"));
         }
         if val.contains("..") || val.contains('/') || val.contains('\\') {
             return Err("file path in parameter is not allowed in coordinate system definition".into());
@@ -198,10 +194,26 @@ fn validate_proj_string(proj4: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether a PROJ parameter names files PROJ would read (any key with `grid` in it, `init`,
+/// `file`, `catalog`) or builds a pipeline (`step`, `proj=pipeline`): refused in definitions
+/// typed by a user and in those handed to GDAL's programs (`raster::gdal`).
+pub(crate) fn proj_key_refused(key: &str, val: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    key.contains("grid")
+        || ["init", "file", "catalog", "step"].contains(&key.as_str())
+        || (key == "proj" && val.trim().eq_ignore_ascii_case("pipeline"))
+}
+
 impl Crs {
     /// A file's own coordinate system: checked (its PROJ definition must parse, or be a
     /// sinusoidal one RustGIS computes) and added to the run's table, once per definition.
     pub fn custom(def: CustomCrs) -> Result<Crs, String> {
+        Crs::register(def, false)
+    }
+
+    /// Adds a system to the run's table; one `typed` as a PROJ string counts against
+    /// `MAX_TYPED` too, checked under the same lock as the insertion.
+    fn register(def: CustomCrs, typed: bool) -> Result<Crs, String> {
         let checked = match rustgis_geom::Sinusoidal::from_proj4(&def.proj4) {
             Some(sinu) => sinu.map(|_| ()),
             None => proj4rs::Proj::from_proj_string(&def.proj4).map(|_| ()).map_err(|e| e.to_string()),
@@ -221,6 +233,9 @@ impl Crs {
         }
         if t.len() >= MAX_CUSTOM {
             return Err("too many coordinate systems defined by files".into());
+        }
+        if typed && t.iter().filter(|d| d.label == TYPED_LABEL).count() >= MAX_TYPED {
+            return Err("too many coordinate systems typed as PROJ strings".into());
         }
         t.push(std::sync::Arc::new(def));
         index(t.len() - 1)
@@ -261,20 +276,10 @@ impl Crs {
             }
             let proj4 = format!("+proj{}", t.get(5..).unwrap_or(""));
             validate_proj_string(&proj4)?;
-            {
-                let table = custom_table().lock().unwrap_or_else(|e| e.into_inner());
-                let known = table.iter().any(|d| d.proj4 == proj4);
-                if !known && table.iter().filter(|d| d.label == TYPED_LABEL).count() >= MAX_TYPED {
-                    return Err("too many coordinate systems typed as PROJ strings".into());
-                }
-            }
-            return Crs::custom(CustomCrs {
-                proj4,
-                label: TYPED_LABEL.to_string(),
-                geokeys: Vec::new(),
-                doubles: Vec::new(),
-                ascii: String::new(),
-            });
+            return Crs::register(
+                CustomCrs { proj4, label: TYPED_LABEL.to_string(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() },
+                true,
+            );
         }
         let up = t.to_ascii_uppercase();
         if up.ends_with("CRS84") {

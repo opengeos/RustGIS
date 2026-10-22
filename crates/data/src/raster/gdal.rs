@@ -227,11 +227,14 @@ fn valid_crs(c: &str) -> bool {
         .iter()
         .any(|k| up.starts_with(k))
         && c.contains('[');
-    // PROJ parameters that name grid or definition files PROJ would look up are refused.
-    let file_keys = ["nadgrids", "geoidgrids", "grids", "init", "file"];
+    // PROJ parameters that name grid or definition files PROJ would look up, or build a
+    // pipeline, are refused (the same check as for typed definitions).
     let proj = c.starts_with("+proj=")
         && c.chars().all(|ch| ch.is_ascii_alphanumeric() || " +=_.,-".contains(ch))
-        && !c.split('+').filter_map(|kv| kv.split('=').next()).any(|k| file_keys.contains(&k.trim().to_ascii_lowercase().as_str()));
+        && !c.split('+').any(|kv| {
+            let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+            super::crs::proj_key_refused(k, v)
+        });
     let urn = up.starts_with("URN:OGC:DEF:CRS:") && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ":._-".contains(ch));
     !c.chars().any(char::is_control) && (code(&up) || wkt || proj || urn)
 }
@@ -451,6 +454,8 @@ mod tests {
             "+proj=utm +zone=33 +geoidgrids=egm96_15.gtx",
             "+proj=longlat +init=epsg",
             "+proj=pipeline +step +proj=hgridshift +grids=ntv2.gsb",
+            "+proj=utm +zone=33 +vgrids=egm96_15.gtx",
+            "+proj=deformation +xy_grids=a.tif",
         ] {
             assert!(!valid_crs(bad), "{bad}");
         }
