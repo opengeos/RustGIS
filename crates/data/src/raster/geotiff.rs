@@ -1004,7 +1004,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
             Err(e) => return Err(err(e)),
         }
     };
-    let (bands, data_type) = if let Some(buf) = whole {
+    let (mut bands, data_type) = if let Some(buf) = whole {
         let (values, dt) = to_f32(buf);
         if values.len() < n.saturating_mul(nbands) {
             return Err(err("couldn't read every band"));
@@ -1034,16 +1034,15 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
         decimate(&mut dec, iw, ih, nbands, planar, decimate_by, open)?
     };
 
+    if ycbcr {
+        ycbcr_to_rgb(&mut bands);
+    }
     // A scan keeps a stand-in transform, sized to the pixels read.
     if !geo.referenced {
         let mut r = Raster::new(name, w, h, bands, super::unreferenced(w, h), Crs::LonLat, geo.nodata, color, data_type)?;
         r.georeferenced = false;
         r.overview = overview;
         return Ok(r);
-    }
-    let mut bands = bands;
-    if ycbcr {
-        ycbcr_to_rgb(&mut bands);
     }
     let mut transform = geo.transform;
     // How many full-image pixels one pixel read spans, across and down.
@@ -2144,71 +2143,73 @@ mod tests {
         }
     }
 
-    /// A 32×32 GeoTIFF whose one strip is a JPEG of four flat colours (one per 16×16 quarter), as
-    /// GDAL writes a `COMPRESS=JPEG PHOTOMETRIC=YCBCR` file: JPEG compression, YCbCr photometric,
-    /// chroma subsampled 2×2.
-    fn ycbcr_jpeg_tiff(colors: [[u8; 3]; 4]) -> Vec<u8> {
-        let mut rgb = image::RgbImage::new(32, 32);
-        for (x, y, px) in rgb.enumerate_pixels_mut() {
-            *px = image::Rgb(colors[(x / 16 + 2 * (y / 16)) as usize]);
-        }
-        let mut jpeg = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode_image(&rgb).unwrap();
-        let mut out = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
-        // Entries by tag: (tag, type, count, value or offset); the longer values follow the entries.
-        let entries: [(u16, u16, u32, u32); 14] = [
-            (256, 3, 1, 32),
-            (257, 3, 1, 32),
-            (258, 3, 3, 0),
-            (259, 3, 1, 7),
-            (262, 3, 1, 6),
-            (273, 4, 1, 0),
-            (277, 3, 1, 3),
-            (278, 3, 1, 32),
-            (279, 4, 1, jpeg.len() as u32),
-            (284, 3, 1, 1),
-            (530, 3, 2, 0),
-            (33550, 12, 3, 0),
-            (33922, 12, 6, 0),
-            (34735, 3, 16, 0),
+    /// A `w` × `h` TIFF (`w`, `h` and `rows` multiples of 16) of four flat colours, one per quarter,
+    /// each strip of `rows` rows a JPEG, as GDAL writes a `COMPRESS=JPEG PHOTOMETRIC=YCBCR` file:
+    /// JPEG compression, YCbCr photometric, chroma subsampled 2×2. With `geo` it is a GeoTIFF.
+    fn ycbcr_jpeg_tiff(w: u32, h: u32, rows: u32, colors: [[u8; 3]; 4], geo: bool) -> Vec<u8> {
+        let strips: Vec<Vec<u8>> = (0..h / rows)
+            .map(|s| {
+                let mut rgb = image::RgbImage::new(w, rows);
+                for (x, y, px) in rgb.enumerate_pixels_mut() {
+                    *px = image::Rgb(colors[(x / (w / 2) + 2 * ((s * rows + y) / (h / 2))) as usize]);
+                }
+                let mut jpeg = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 100).encode_image(&rgb).unwrap();
+                jpeg
+            })
+            .collect();
+        let n = strips.len() as u32;
+        let le16 = |v: &[u16]| v.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let le32 = |v: &[u32]| v.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        let le64 = |v: &[f64]| v.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+        // (tag, type, count, bytes): values of up to four bytes go in the entry, longer ones after
+        // the entries (the strip offsets are filled in once the entries' size is known).
+        let mut entries: Vec<(u16, u16, u32, Vec<u8>)> = vec![
+            (256, 3, 1, le16(&[w as u16])),
+            (257, 3, 1, le16(&[h as u16])),
+            (258, 3, 3, le16(&[8, 8, 8])),
+            (259, 3, 1, le16(&[7])),
+            (262, 3, 1, le16(&[6])),
+            (273, 4, n, vec![0; 4 * n as usize]),
+            (277, 3, 1, le16(&[3])),
+            (278, 3, 1, le16(&[rows as u16])),
+            (279, 4, n, le32(&strips.iter().map(|s| s.len() as u32).collect::<Vec<_>>())),
+            (284, 3, 1, le16(&[1])),
+            (530, 3, 2, le16(&[2, 2])),
         ];
+        if geo {
+            entries.push((33550, 12, 3, le64(&[1.0, 1.0, 0.0])));
+            entries.push((33922, 12, 6, le64(&[0.0, 0.0, 0.0, 500_000.0, 5_000_000.0, 0.0])));
+            entries.push((34735, 3, 16, le16(&[1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 25832])));
+        }
         let table_end = 8 + 2 + 12 * entries.len() + 4;
-        let bits_at = table_end;
-        let sub_at = bits_at + 6;
-        let scale_at = sub_at + 4;
-        let tie_at = scale_at + 24;
-        let keys_at = tie_at + 48;
-        let strip_at = keys_at + 32;
+        let long: usize = entries.iter().filter(|e| e.3.len() > 4).map(|e| e.3.len()).sum();
+        let mut at = table_end;
+        let mut strip_at = (table_end + long) as u32;
+        let (mut table, mut data) = (Vec::new(), Vec::new());
+        for (tag, kind, count, bytes) in &entries {
+            let mut bytes = bytes.clone();
+            if *tag == 273 {
+                bytes = le32(&strips.iter().map(|s| (strip_at, strip_at += s.len() as u32).0).collect::<Vec<_>>());
+            }
+            table.extend(tag.to_le_bytes());
+            table.extend(kind.to_le_bytes());
+            table.extend(count.to_le_bytes());
+            if bytes.len() > 4 {
+                table.extend((at as u32).to_le_bytes());
+                at += bytes.len();
+                data.extend(bytes);
+            } else {
+                bytes.resize(4, 0);
+                table.extend(bytes);
+            }
+        }
+        let mut out = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
         out.extend((entries.len() as u16).to_le_bytes());
-        for (tag, kind, count, value) in entries {
-            let value = match tag {
-                258 => bits_at as u32,
-                273 => strip_at as u32,
-                530 => sub_at as u32,
-                33550 => scale_at as u32,
-                33922 => tie_at as u32,
-                34735 => keys_at as u32,
-                _ => value,
-            };
-            out.extend(tag.to_le_bytes());
-            out.extend(kind.to_le_bytes());
-            out.extend(count.to_le_bytes());
-            out.extend(value.to_le_bytes());
-        }
+        out.extend(table);
         out.extend(0u32.to_le_bytes());
-        for v in [8u16, 8, 8, 2, 2] {
-            out.extend(v.to_le_bytes());
-        }
-        for v in [1.0f64, 1.0, 0.0] {
-            out.extend(v.to_le_bytes());
-        }
-        for v in [0.0f64, 0.0, 0.0, 500_000.0, 5_000_000.0, 0.0] {
-            out.extend(v.to_le_bytes());
-        }
-        for v in [1u16, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 25832] {
-            out.extend(v.to_le_bytes());
-        }
-        out.extend(jpeg);
+        out.extend(data);
+        out.extend(strips.concat());
         out
     }
 
@@ -2217,21 +2218,27 @@ mod tests {
         // Issue #692: the tiff crate leaves JPEG-compressed YCbCr as it is, which drew a COG with
         // a purple and green cast. Flat colours survive the JPEG within a few levels.
         let colors = [[200, 30, 30], [30, 160, 40], [20, 40, 220], [230, 230, 60]];
-        let bytes = ycbcr_jpeg_tiff(colors);
-        let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
-        assert!(matches!(dec.colortype().unwrap(), ColorType::YCbCr(8)));
-        let check = |r: &Raster| {
-            assert_eq!((r.width, r.height, r.bands.len(), r.color.clone()), (32, 32, 3, ColorHint::Rgb { alpha: false }));
+        let check = |r: &Raster, w: usize, h: usize| {
+            assert_eq!((r.width as usize, r.height as usize, r.bands.len(), r.color.clone()), (w, h, 3, ColorHint::Rgb { alpha: false }));
             for (i, rgb) in colors.iter().enumerate() {
-                let (x, y) = (4 + 16 * (i % 2), 4 + 16 * (i / 2));
+                let (x, y) = (w / 4 + w / 2 * (i % 2), h / 4 + h / 2 * (i / 2));
                 for (band, want) in r.bands.iter().zip(rgb) {
-                    let got = band.data[y * 32 + x];
+                    let got = band.data[y * w + x];
                     assert!((got - f32::from(*want)).abs() <= 4.0, "quarter {i}: {got} for {want}");
                 }
             }
         };
-        check(&read(std::io::Cursor::new(&bytes), "ycc").unwrap());
-        check(&read_threaded(&bytes, MAX_SAMPLES).unwrap());
+        let bytes = ycbcr_jpeg_tiff(32, 32, 32, colors, true);
+        let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(matches!(dec.colortype().unwrap(), ColorType::YCbCr(8)));
+        check(&read(std::io::Cursor::new(&bytes), "ycc").unwrap(), 32, 32);
+        // Without geo tags (a scan), which returns before the georeferencing.
+        let scan = read(std::io::Cursor::new(ycbcr_jpeg_tiff(32, 32, 32, colors, false)), "scan").unwrap();
+        assert!(!scan.georeferenced);
+        check(&scan, 32, 32);
+        // A million pixels in 16 strips, read a chunk at a time on several threads.
+        let big = ycbcr_jpeg_tiff(1024, 1024, 64, colors, true);
+        check(&read_threaded(&big, MAX_SAMPLES).unwrap(), 1024, 1024);
     }
 
     #[test]
