@@ -66,8 +66,10 @@ FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cach
 `%LOCALAPPDATA%\RustGIS\cache\gdal` on Windows, or `RUSTGIS_GDAL_CACHE`). Adding the file again
 reuses the conversion until the file changes, and large layers stream like any large FlatGeobuf
 (below). Every layer of the file is added; a layer mixing geometry types is
-added as one layer per type. Projects remember the original file and convert it again if the
-cached copy is gone.
+added as one layer per type. Curves become straight segments, and 3D surfaces (an Esri
+multipatch, such as the buildings of swissBUILDINGS3D, is read as a TIN) become flat
+polygons, one part per face, without their heights. Projects remember the original file and
+convert it again if the cached copy is gone.
 
 ## SQL queries and DuckDB databases
 
