@@ -196,9 +196,11 @@ fn entries(desc: &str) -> Vec<(Vec<String>, String)> {
 
 /// The keys of command `id`'s parameters (`desc`) that complete `word`, typed from char `start`
 /// to `end`, case aside, in the order described; an entry already given on the line (`line`, from
-/// its `{`) isn't offered, nor its alternatives.
+/// its `{`: a script's command is one line) isn't offered, nor its alternatives. The key being
+/// typed doesn't count as given, so a key already closed (`"lat|": 5`) can still be changed.
 fn complete_keys(id: &str, desc: &str, line: &str, start: usize, end: usize, word: &str) -> Option<Offer> {
-    let given = rustgis_engine::param_keys(line).unwrap_or_default();
+    let mut given = rustgis_engine::param_keys(line).unwrap_or_default();
+    given.retain(|k| *k != word);
     let items: Vec<String> = entries(desc)
         .into_iter()
         .filter(|(keys, _)| !keys.iter().any(|k| given.contains(&k.as_str())))
@@ -1405,6 +1407,8 @@ mod tests {
         assert_eq!(keys(r#"{"x": 2, ""#, ""), ["lat", "y", "scale"], "an alternative given");
         assert_eq!(keys(r#"{""#, "S"), ["scale"], "case aside");
         assert!(keys(r#"{""#, "zz").is_empty());
+        assert_eq!(keys(r#"{"lat": 5}"#, "lat"), ["lat"], "the key being typed isn't given");
+        assert_eq!(keys(r#"{"lat": 5}"#, ""), ["lon", "x", "scale"], "a key given");
         let o = super::complete_keys("map.goToXY", desc, r#"{""#, 0, 0, "").unwrap();
         assert_eq!(o.keys_of.as_deref(), Some("map.goToXY"));
     }
