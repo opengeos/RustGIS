@@ -487,18 +487,62 @@ mod tests {
             let unproj_pt = tr.to_lonlat(proj_pt).unwrap();
             assert!((unproj_pt.x - pt.x).abs() < 1e-6 && (unproj_pt.y - pt.y).abs() < 1e-6);
         }
+        // Numeric EPSG codes for VN-2000 UTM 48N/49N
+        assert_eq!(Crs::parse("3405"), Ok(Crs::Epsg(3405)));
+        assert_eq!(Crs::parse("3406"), Ok(Crs::Epsg(3406)));
+        assert_eq!(Crs::parse(" 3405 "), Ok(Crs::Epsg(3405)));
+        assert_eq!(Crs::parse("epsg:3405"), Ok(Crs::Epsg(3405)));
+        assert_eq!(Crs::parse("EPSG:3406"), Ok(Crs::Epsg(3406)));
+        assert_eq!(Crs::parse("urn:ogc:def:crs:EPSG::3405"), Ok(Crs::Epsg(3405)));
+        assert_eq!(Crs::parse("urn:ogc:def:crs:EPSG::3406"), Ok(Crs::Epsg(3406)));
+
+        // Coordinate transformation for EPSG:3405 and EPSG:3406
+        let crs48 = Crs::from_epsg(3405).unwrap();
+        let tr48 = crs48.transformer().unwrap();
+        let pt48 = Coord::new(105.8525, 21.0285);
+        let proj48 = tr48.from_lonlat(pt48).unwrap();
+        assert!(proj48.x > 500_000.0 && proj48.x < 700_000.0);
+        assert!(proj48.y > 2_000_000.0 && proj48.y < 2_500_000.0);
+        let unproj48 = tr48.to_lonlat(proj48).unwrap();
+        assert!((unproj48.x - pt48.x).abs() < 1e-6 && (unproj48.y - pt48.y).abs() < 1e-6);
+
+        let crs49 = Crs::from_epsg(3406).unwrap();
+        let tr49 = crs49.transformer().unwrap();
+        let pt49 = Coord::new(109.1967, 12.2388);
+        let proj49 = tr49.from_lonlat(pt49).unwrap();
+        assert!(proj49.x > 200_000.0 && proj49.x < 400_000.0);
+        assert!(proj49.y > 1_300_000.0 && proj49.y < 1_500_000.0);
+        let unproj49 = tr49.to_lonlat(proj49).unwrap();
+        assert!((unproj49.x - pt49.x).abs() < 1e-6 && (unproj49.y - pt49.y).abs() < 1e-6);
+
+        // Over-broad UTM matching and unrelated CRS names must NOT match VN-2000
         assert!(Crs::parse("WGS 84 / UTM zone 48N").is_err());
         assert!(Crs::parse("WGS 84 / UTM zone 49N").is_err());
         assert!(Crs::parse("NAD83 / UTM zone 48N").is_err());
+        assert!(Crs::parse("NAD83 / UTM zone 49N").is_err());
+        assert!(Crs::parse("VN-2000 CUSTOM UTM ZONE 48N").is_err());
+        assert!(Crs::parse("VN2000 EXTRA TEXT UTM ZONE 49N").is_err());
+        assert!(Crs::parse("VN-2000 UTM 50N").is_err());
+        assert!(Crs::parse("VN2000XYZ").is_err());
         assert!(Crs::parse("VN-2000 unknown").is_err());
+
+        // PROJ string validation: case normalization, prefix validation, and size limit
         let custom_proj = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj.label(), "Custom PROJ");
         let custom_proj_upper = Crs::parse("+PROJ=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj_upper.label(), "Custom PROJ");
+
+        let custom_count_before = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
+        assert!(Crs::parse("+proj").is_err());
+        assert!(Crs::parse("+project").is_err());
         assert!(Crs::parse("+proj=").is_err());
+        assert!(Crs::parse("+proj=   ").is_err());
         assert!(Crs::parse("+proj=invalid_projection").is_err());
         assert!(Crs::parse("+PROJ=invalid_projection").is_err());
         assert!(Crs::parse(&format!("+proj={}", "a".repeat(1025))).is_err());
+        assert!(Crs::parse(&format!("+proj=utm {}", "a".repeat(1025))).is_err());
+        let custom_count_after = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
+        assert_eq!(custom_count_before, custom_count_after);
         // VN-2000 / TM-3 103-00: its datum shift (+towgs84) is applied.
         check(9205, (103.065, 21.855), (506_521.959, 2_417_609.479), 1.0);
         // NAD27 / US National Atlas Equal Area: Washington, DC, without NAD27's datum shift

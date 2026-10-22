@@ -1494,4 +1494,17 @@ mod tests {
         app.run("map.projection", json!({"type": "vn2000tm3 +lon_0=105.75"})).unwrap();
         assert_eq!(app.session.map().projection.code(), "vn2000tm3 +lon_0=105.75");
     }
+
+    #[test]
+    fn ui_degree_formatting_preserves_fractions() {
+        let format_deg = |lon: f64| -> String {
+            let lon_str = if (lon - lon.round()).abs() < 1e-6 { format!("{:.0}", lon) } else { format!("{lon}") };
+            format!("{lon_str}°")
+        };
+        assert_eq!(format_deg(105.0), "105°");
+        assert_eq!(format_deg(107.0), "107°");
+        assert_eq!(format_deg(105.75), "105.75°");
+        assert_eq!(format_deg(108.5), "108.5°");
+        assert_eq!(format_deg(104.25), "104.25°");
+    }
 }

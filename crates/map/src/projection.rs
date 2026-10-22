@@ -107,7 +107,8 @@ const PRESET_ALIASES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// A province or regional hub in Vietnam and its VN-2000 3-degree central meridian (QĐ 05/2007/QĐ-BTNMT).
+/// A province or regional hub in Vietnam and its VN-2000 3-degree central meridian
+/// (Circular 25/2014/TT-BTNMT Annex 02, inheriting QĐ 05/2007/QĐ-BTNMT).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vn2000Province {
     /// Name in Vietnamese, e.g. "Hà Nội".
@@ -120,7 +121,14 @@ pub struct Vn2000Province {
     pub aliases: &'static [&'static str],
 }
 
-/// The 63 Vietnamese provinces/cities with their VN-2000 3-degree central meridians (Circular 973/2001/TT-TCĐC).
+/// The official 63 Vietnamese provincial central meridians for 3-degree Transverse Mercator projections,
+/// established under Circular 25/2014/TT-BTNMT (Phụ lục số 02 - Danh mục kinh tuyến trục theo từng tỉnh,
+/// thành phố trực thuộc Trung ương; inheriting Decision 05/2007/QĐ-BTNMT and Circular 973/2001/TT-TCĐC).
+///
+/// These 63 entries define the official cadastral and cartographic projection zones across Vietnam.
+/// Even after administrative reorganizations or boundary adjustments (such as 2024–2025 reforms),
+/// existing cadastral maps, spatial datasets, and land registries strictly maintain these designated
+/// central meridians for spatial integrity and backward compatibility.
 pub const VN2000_PROVINCES: &[Vn2000Province] = &[
     Vn2000Province { name: "An Giang", lon_0: 104.75, id: "angiang", aliases: &[] },
     Vn2000Province { name: "Bà Rịa - Vũng Tàu", lon_0: 107.75, id: "bariavungtau", aliases: &["vungtau"] },
@@ -187,7 +195,16 @@ pub const VN2000_PROVINCES: &[Vn2000Province] = &[
     Vn2000Province { name: "Yên Bái", lon_0: 104.75, id: "yenbai", aliases: &[] },
 ];
 
-/// Distinct primary regional hubs for UI central meridian shortcut buttons.
+/// Distinct representative regional hubs for UI central meridian shortcut buttons.
+///
+/// This is not an exhaustive list of all 63 provinces, but provides quick-access
+/// shortcuts covering each major geographic zone:
+/// - Northern delta: Hà Nội (105.0°)
+/// - Southern region: TP. Hồ Chí Minh (105.75°)
+/// - North Central: Thừa Thiên Huế (107.0°)
+/// - Central Coast: Đà Nẵng (107.75°)
+/// - South Central Coast: Khánh Hòa (108.25°)
+/// - Central Highlands: Đắk Lắk (108.5°)
 pub const VN2000_UI_PROVINCES: &[(&str, f64)] = &[
     ("Hà Nội", 105.0),
     ("TP. Hồ Chí Minh", 105.75),
@@ -1396,6 +1413,71 @@ mod tests {
         assert_eq!(lookup("Quảng Trị").unwrap().0, lookup("vn2000tm3 +lon_0=106.25").unwrap().0);
         assert_eq!(lookup("Cà Mau").unwrap().0, lookup("vn2000tm3 +lon_0=104.5").unwrap().0);
         assert_eq!(lookup("Khánh Hòa").unwrap().0, lookup("vn2000tm3 +lon_0=108.25").unwrap().0);
+        // Named aliases requested in review: vinh, hue, sapa, hcm, saigon, hanoi, danang
+        assert_eq!(lookup("vinh").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("hue").unwrap().0, lookup("vn2000tm3 +lon_0=107").unwrap().0);
+        assert_eq!(lookup("sapa").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("hcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+
+        // Disputed province central meridians verified against Circular 25/2014/TT-BTNMT Annex 02
+        // Đắk Nông verified at 108°30' (108.5°), not 107.5°
+        assert_eq!(lookup("Đắk Nông").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
+        assert_eq!(lookup("daknong").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
+        // Hậu Giang verified at 105°00' (105.0°), not 105.5°
+        assert_eq!(lookup("Hậu Giang").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("haugiang").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+
+        // Numeric EPSG codes and unrelated projections must never be intercepted by province alias resolution
+        assert_eq!(lookup("3405").unwrap().1, "EPSG:3405");
+        assert_eq!(lookup("3406").unwrap().1, "EPSG:3406");
+        assert_eq!(lookup("3035").unwrap().1, "EPSG:3035");
+        assert_eq!(lookup("EPSG:3035").unwrap().1, "EPSG:3035");
+        assert_eq!(lookup("ESRI:102033").unwrap().1, "ESRI:102033");
+        assert_eq!(lookup("robinson").unwrap().1, "Robinson");
+
+        // Unknown aliases and malformed parameters must return errors
+        assert!(lookup("unknown_province_xyz").is_err());
+        assert!(lookup("atlantis").is_err());
+        assert!(lookup("vn2000tm3 +lon_0=abc").is_err());
+        assert!(lookup("vn2000tm3 +lon_0=999").is_err());
+        assert!(lookup("vn2000tm3 +invalid=10").is_err());
+
+        // Parameter replacement preserves all other PROJ parameters uncorrupted
+        let (danang_def, _) = lookup("danang").unwrap();
+        assert!(danang_def.contains("+proj=tmerc"));
+        assert!(danang_def.contains("+lat_0=0"));
+        assert!(danang_def.contains("+lon_0=107.75"));
+        assert!(danang_def.contains("+k=0.9999"));
+        assert!(danang_def.contains("+x_0=500000"));
+        assert!(danang_def.contains("+y_0=0"));
+        assert!(danang_def.contains("+ellps=WGS84"));
+        assert!(danang_def.contains("+towgs84="));
+        assert!(danang_def.contains("+units=m"));
+        assert!(danang_def.contains("+no_defs"));
+
+        // All 63 provinces in VN2000_PROVINCES resolve and project correctly
+        assert_eq!(VN2000_PROVINCES.len(), 63);
+        for prov in VN2000_PROVINCES {
+            let lon = resolve_vn2000_alias(prov.name).unwrap();
+            assert_eq!(lon, prov.lon_0, "{}", prov.name);
+            let (def, _) = lookup(prov.name).unwrap();
+            if (prov.lon_0 - 105.0).abs() < 1e-6 {
+                assert!(def.contains("+lon_0=105"), "{}: {def}", prov.name);
+            } else {
+                assert!(def.contains(&format!("+lon_0={}", prov.lon_0)), "{}: {def}", prov.name);
+            }
+            assert!(Projector::new(prov.name).is_ok(), "{}", prov.name);
+        }
+
+        // All UI shortcut hubs are canonical entries with matching central meridians
+        for &(ui_name, ui_lon) in VN2000_UI_PROVINCES {
+            let prov = VN2000_PROVINCES.iter().find(|p| p.name == ui_name).unwrap();
+            assert_eq!(prov.lon_0, ui_lon, "{ui_name}");
+        }
+
         // Decomposed NFD Vietnamese unicode normalization
         let nfd_hanoi = "Ha\u{300} N\u{f4}\u{323}i";
         assert_eq!(lookup(nfd_hanoi).unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
