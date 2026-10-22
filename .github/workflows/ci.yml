@@ -51,6 +51,36 @@ jobs:
       - name: Build for the browser
         run: cargo build --locked --target wasm32-unknown-unknown -p rustgis-web
 
+  # Every dependency's licence must be one the project accepts (deny.toml). The third-party
+  # notices the packages ship (`cargo xtask notices`) only warn here when out of date, since
+  # Dependabot can't regenerate them; the release build requires them current.
+  licenses:
+    name: Licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only main saves the cache (see test-rust.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-about@0.9.2
+      - name: Dependency licences
+        run: cargo deny --locked check licenses
+      - name: Third-party notices
+        # Exit code 2 is stale notices (a warning); anything else (cargo-about failing, a licence
+        # it can't work out) fails the job.
+        run: |
+          status=0
+          cargo xtask notices --check || status=$?
+          if [ "$status" -eq 2 ]; then
+            echo "::warning::THIRD-PARTY-LICENSES.txt is out of date: run cargo xtask notices and commit it before the next release."
+          elif [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
   plan:
     name: Platforms
     runs-on: ubuntu-latest

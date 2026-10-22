@@ -53,6 +53,9 @@ is a command, a thin egui front end, headless screenshots for UI work.
 
 ## Quality gates
 `cargo xtask ci` (fmt, clippy -D warnings, tests, layers) before every commit.
+A new dependency must have a licence `deny.toml` allows (CI runs `cargo deny check licenses`); after
+changing dependencies, run `cargo xtask notices` to refresh the `THIRD-PARTY-LICENSES.txt` files the
+packages ship (the release build fails on stale ones).
 Pull requests run CI on Linux; pushes to `main` add macOS and Windows. Label a pull request
 `ci:windows`, `ci:macos` or `ci:full` to test there before merging (platform-specific code, paths,
 file dialogs). The release build of the apps runs nightly (`.github/workflows/nightly.yml`), with every

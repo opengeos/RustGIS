@@ -125,6 +125,7 @@ jobs:
           # conda-forge and other repackagers need the license in the sdist.
           # PyPI rejects an sdist whose PKG-INFO License-File isn't at its root.
           tar tzf ./*.tar.gz | grep -E '^[^/]+/LICENSE$' || { echo "::error::The sdist has no LICENSE file at its root."; exit 1; }
+          tar tzf ./*.tar.gz | grep -E '^[^/]+/THIRD-PARTY-LICENSES.txt$' || { echo "::error::The sdist has no THIRD-PARTY-LICENSES.txt at its root."; exit 1; }
           python -m pip install ./*.tar.gz pytest
           python -m pytest -q test_session.py
       - uses: actions/upload-artifact@v7

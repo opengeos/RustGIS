@@ -1,0 +1,734 @@
+//! Data cubes (opengeos/RustGIS#579): rasters on one grid at a series of dates, whatever they come
+//! from, and the trend of each cell over them.
+//!
+//! A [`TimeCube`] gives its dates and the slice at each one. The sources:
+//! - a Zarr variable with a time dimension (#554), read a slice at a time;
+//! - a stack of raster layers, each a date (from the `dates` given, or found in the layer's name
+//!   or file);
+//! - a raster layer of several bands, each a date (from `dates`, or the bands' names).
+//!
+//! `cube.trend` reads the slices into one block, cell by date, and works out each cell's trend
+//! with [`rustgis_analysis::trend`]: Sen's slope and the modified Mann–Kendall test.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use rustgis_analysis::trend::{self, Test};
+use rustgis_data::raster::{self, Raster};
+use serde_json::{Value, json};
+
+use super::ps;
+use crate::{CmdResult, CommandSpec as C, Session};
+
+pub fn commands() -> Vec<C> {
+    vec![C::new("cube.trend", "Trend Analysis", "Analyze › Image Analysis", trend_cmd).params(
+        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer (or "path" | "url", "variable", "index", "crs" as for zarr.reduce) or a raster of several bands, a date each (default: the active layer), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "start"?, "end"?: dates, "months"?: [1–12] (one season across years), "test"?: "hamedRao" (default) | "yueWang" | "seasonal" | "original", "seasons"?: parts of a year for the seasonal test (default 12), "alpha"?: 0.05 (above 0, below 0.5), "minValid"?: dates a cell needs (default: half of them, at least 4; the seasonal test also needs 4 in seasons of two or more), "per"?: "year" (default) | "decade", "name"?: text, "ran"?: (internal: a trend the app has worked out)} → four raster layers: Sen's slope, the test's Z and p-value, and the slope where p < alpha"#,
+    )]
+}
+
+/// The most cell values a cube is read into at once (cells × dates): 64 million, 256 MB, on the
+/// desktop; 16 million, 64 MB, in the browser's smaller memory. A run also takes, on each of its
+/// threads (up to 16 on the desktop, one in the browser), a cell's Sen slopes at a time (dates² ⁄ 2:
+/// at most 16 MB at [`MAX_DATES`], so up to 256 MB more at the peak), freed cell by cell; and its
+/// four outputs, four values a cell, made once the block is dropped.
+pub const MAX_VALUES: u64 = if cfg!(target_arch = "wasm32") { 16_000_000 } else { 64_000_000 };
+/// The most pairs of dates a trend compares in all (cells × dates² ⁄ 2), which bounds the time
+/// Sen's slope takes: far fewer in the browser, which works them out on one thread. At the cap a
+/// run can take minutes on the desktop, which the app runs on threads with progress and Cancel;
+/// `cube.trend` called directly (a script, the CLI) takes [`MAX_WAITED_PAIRS`].
+pub const MAX_PAIRS: u64 = if cfg!(target_arch = "wasm32") { 50_000_000 } else { 20_000_000_000 };
+/// The most pairs a trend worked out where it's called compares (`cube.trend` without `ran`: a
+/// script, the CLI), which waits for it with no Cancel: a tenth of the app's on the desktop. The
+/// browser works every trend out where it's called, within its own lower cap.
+pub const MAX_WAITED_PAIRS: u64 = if cfg!(target_arch = "wasm32") { MAX_PAIRS } else { MAX_PAIRS / 10 };
+/// The most dates a cube is read at.
+pub const MAX_DATES: usize = 2_000;
+
+/// Rasters on one grid at a series of dates.
+pub trait TimeCube: Send + Sync {
+    /// The dates, in milliseconds since 1970, in the cube's order.
+    fn dates(&self) -> &[f64];
+    /// The slice at date `i`: a raster and the band holding the values, or `None` for a date
+    /// with nothing written (a Zarr step never written), which has no value for any cell.
+    fn slice(&self, i: usize) -> Result<Option<(Arc<Raster>, usize)>, String>;
+    /// What the cube holds, for the outputs' names.
+    fn label(&self) -> String;
+    /// The steps taken when no period is asked for (a following Zarr layer's), as a range.
+    fn period(&self) -> (usize, usize) {
+        (0, self.dates().len())
+    }
+}
+
+/// A stack of rasters (or a raster's bands), a date each.
+pub struct Stack {
+    /// Each date's raster and band.
+    items: Vec<(f64, Arc<Raster>, usize)>,
+    dates: Vec<f64>,
+    label: String,
+}
+
+impl Stack {
+    /// Sorted by date.
+    fn new(mut items: Vec<(f64, Arc<Raster>, usize)>, label: String) -> Stack {
+        items.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let dates = items.iter().map(|i| i.0).collect();
+        Stack { items, dates, label }
+    }
+}
+
+impl TimeCube for Stack {
+    fn dates(&self) -> &[f64] {
+        &self.dates
+    }
+    fn slice(&self, i: usize) -> Result<Option<(Arc<Raster>, usize)>, String> {
+        self.items.get(i).map(|(_, r, b)| Some((r.clone(), *b))).ok_or_else(|| format!("no date {i}"))
+    }
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+}
+
+/// A Zarr variable along its time dimension.
+#[cfg(not(target_arch = "wasm32"))]
+struct ZarrCube(super::zarr::ZarrCube);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TimeCube for ZarrCube {
+    fn dates(&self) -> &[f64] {
+        &self.0.zt.dates
+    }
+    fn slice(&self, i: usize) -> Result<Option<(Arc<Raster>, usize)>, String> {
+        // A slice already kept is used; the others are read without being kept, so a trend over
+        // many dates doesn't push out the slices a layer following the slider holds. A step
+        // never written is `None`: no value that date, as the Zarr summary takes it.
+        let zt = &self.0.zt;
+        let r = match super::zarr::kept_slice(&super::zarr::slice_key(zt, i)) {
+            Some(r) => r,
+            None => match super::zarr::read_slice(zt, i)? {
+                Some(r) => Arc::new(r),
+                None => return Ok(None),
+            },
+        };
+        Ok(Some((r, 0)))
+    }
+    fn label(&self) -> String {
+        self.0.zt.variable.clone()
+    }
+    fn period(&self) -> (usize, usize) {
+        self.0.period
+    }
+}
+
+/// A date written in a name: `2024-06-01` (or with `_`, `.` or nothing between), MODIS's
+/// `A2024153` (year and day of the year), `2024-06`, or a year alone. Milliseconds since 1970.
+pub fn date_in_text(text: &str) -> Option<f64> {
+    let b = text.as_bytes();
+    let digits = |from: usize, n: usize| -> Option<u32> {
+        let s = text.get(from..from + n)?;
+        s.bytes().all(|c| c.is_ascii_digit()).then(|| s.parse().ok()).flatten()
+    };
+    // Digits at `i` not run on from a digit before.
+    let before = |i: usize| i.checked_sub(1).and_then(|j| b.get(j)).copied();
+    let starts = |i: usize| !before(i).is_some_and(|c| c.is_ascii_digit());
+    let ends = |i: usize| !b.get(i).is_some_and(u8::is_ascii_digit);
+    let day = |y: u32, m: u32, d: u32| {
+        ((1800..=2200).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d))
+            .then(|| rustgis_data::time::parse_text(&format!("{y:04}-{m:02}-{d:02}")))
+            .flatten()
+    };
+    // MODIS: A + year + day of the year.
+    for (i, c) in b.iter().enumerate() {
+        if *c == b'A'
+            && ends(i + 8)
+            && let (Some(y), Some(doy)) = (digits(i + 1, 4), digits(i + 5, 3))
+            && (1..=366).contains(&doy)
+            && let Some(jan1) = day(y, 1, 1)
+        {
+            return Some(jan1 + f64::from(doy - 1) * 86_400_000.0);
+        }
+    }
+    // A year alone, only once no fuller date is found anywhere in the text, and only standing
+    // apart (not `res2000` or `v2015`, which name something else).
+    let mut bare = None;
+    let apart = |i: usize| !before(i).is_some_and(|c| c.is_ascii_alphanumeric()) && !b.get(i + 4).is_some_and(u8::is_ascii_alphanumeric);
+    for i in 0..b.len() {
+        if !starts(i) {
+            continue;
+        }
+        let Some(y) = digits(i, 4) else { continue };
+        // Year, month and day, with one separator or none.
+        let sep = b.get(i + 4).copied().filter(|c| matches!(c, b'-' | b'_' | b'.'));
+        let at = i + 4 + usize::from(sep.is_some());
+        if let Some(m) = digits(at, 2) {
+            let next = at + 2;
+            let dsep = if sep.is_some() { b.get(next).copied().filter(|c| Some(*c) == sep) } else { None };
+            let dat = next + usize::from(dsep.is_some());
+            if (sep.is_none() || dsep.is_some())
+                && let Some(d) = digits(dat, 2)
+                && ends(dat + 2)
+                && let Some(ms) = day(y, m, d)
+            {
+                return Some(ms);
+            }
+            if sep.is_some()
+                && ends(next)
+                && let Some(ms) = day(y, m, 1)
+            {
+                return Some(ms);
+            }
+        }
+        if bare.is_none()
+            && ends(i + 4)
+            && apart(i)
+            && let Some(ms) = day(y, 1, 1)
+        {
+            bare = Some(ms);
+        }
+    }
+    bare
+}
+
+fn date_list(p: &Value) -> Result<Option<Vec<f64>>, String> {
+    match p.get("dates").filter(|v| !v.is_null()) {
+        None => Ok(None),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|v| rustgis_data::time::parse_input(v).ok_or_else(|| format!("{v} isn't a date")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err("dates is a list of dates".into()),
+    }
+}
+
+/// The cube a command's parameters name: a stack of layers, a Zarr variable, or a raster's bands.
+pub fn cube_from(s: &Session, p: &Value) -> Result<Box<dyn TimeCube>, String> {
+    let dates = date_list(p)?;
+    if let Some(list) = p.get("layers").filter(|v| !v.is_null()) {
+        let list = list.as_array().ok_or("layers is a list of raster layers")?;
+        if list.len() < trend::MIN_VALUES {
+            return Err(format!("a stack needs {} layers or more, a date each", trend::MIN_VALUES));
+        }
+        // At most a run's dates, refused before each is looked up and checked against the others.
+        if list.len() > MAX_DATES {
+            return Err(format!("{} layers; a trend takes {MAX_DATES} dates at most", list.len()));
+        }
+        if dates.as_ref().is_some_and(|d| d.len() != list.len()) {
+            return Err("dates has a date for each layer, in their order".into());
+        }
+        let band = band_index(p)?;
+        let mut items = Vec::with_capacity(list.len());
+        let mut label = String::new();
+        for (k, v) in list.iter().enumerate() {
+            let id = s.layer_id(&json!({ "layer": v }))?;
+            let l = s.map().layer(id).ok_or("no such layer")?;
+            let r = l.raster.as_ref().and_then(|r| r.data.clone()).ok_or_else(|| format!("{} isn't a raster read into the map", l.name))?;
+            if band >= r.bands.len() {
+                return Err(format!("{} has {} bands", l.name, r.bands.len()));
+            }
+            // The file's own name, not its folders' (`/data/2020/ndvi_a.tif` would date them all).
+            let file = l
+                .raster
+                .as_ref()
+                .and_then(|r| r.path.as_deref())
+                .and_then(|f| std::path::Path::new(f).file_name())
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let date = match &dates {
+                Some(d) => d.get(k).copied().ok_or("dates has a date for each layer, in their order")?,
+                None => date_in_text(&l.name)
+                    .or_else(|| date_in_text(&file))
+                    .ok_or_else(|| format!("no date in the name of {}: give \"dates\"", l.name))?,
+            };
+            if label.is_empty() {
+                label = l.name.clone();
+            }
+            // One layer a date: two on a day would count as two ordered values in the test.
+            if items.iter().any(|(d, ..): &(f64, _, usize)| *d == date) {
+                return Err(format!(
+                    "{} and another layer have the same date ({}): one layer a date",
+                    l.name,
+                    rustgis_data::time::format(date, "YYYY-MM-DD")
+                ));
+            }
+            items.push((date, r, band));
+        }
+        return Ok(Box::new(Stack::new(items, common_label(&label))));
+    }
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+    let zarr_layer = !given("path") && !given("url") && {
+        let id = s.layer_id(p)?;
+        // A Zarr layer: one following the slider, or a slice, named by its steps (`t2m[time=3]`);
+        // another file's subdataset (GDAL's) goes the bands' way below.
+        s.map()
+            .layer(id)
+            .and_then(|l| l.raster.as_ref())
+            .is_some_and(|r| r.time_zarr.is_some() || r.subdataset.as_deref().is_some_and(|d| d.contains('[')))
+    };
+    if given("path") || given("url") || zarr_layer {
+        // The web app reads no Zarr store along its time axis yet: said, not taken for bands.
+        #[cfg(target_arch = "wasm32")]
+        return Err("in the web app, a Zarr variable's trend can't be worked out yet (the desktop app can)".into());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let cube = super::zarr::zarr_cube(s, p)?;
+            // A trend takes the steps in time order: an axis out of order (descending) or with a
+            // date twice would turn the test's sign or count a date twice.
+            if !cube.zt.dates.windows(2).all(|w| w[0] < w[1]) {
+                return Err(format!(
+                    "{}'s time axis isn't in increasing order without repeats, so a trend can't be read from it",
+                    cube.zt.variable
+                ));
+            }
+            return Ok(Box::new(ZarrCube(cube)));
+        }
+    }
+    let id = s.layer_id(p)?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    let r = l.raster.as_ref().and_then(|r| r.data.clone()).ok_or_else(|| format!("{} isn't a raster", l.name))?;
+    if r.bands.len() < trend::MIN_VALUES {
+        return Err(format!(
+            "{} has {} band(s): a cube is a raster of {} bands or more (a date each), a Zarr variable with a time dimension, or \"layers\"",
+            l.name,
+            r.bands.len(),
+            trend::MIN_VALUES
+        ));
+    }
+    if dates.as_ref().is_some_and(|d| d.len() != r.bands.len()) {
+        return Err(format!("dates has a date for each of the {} bands", r.bands.len()));
+    }
+    let mut items = Vec::with_capacity(r.bands.len());
+    for (b, band) in r.bands.iter().enumerate() {
+        let date = match &dates {
+            Some(d) => d.get(b).copied().ok_or("dates has a date for each band, in their order")?,
+            None => {
+                date_in_text(&band.name).ok_or_else(|| format!("band {} ({}) has no date in its name: give \"dates\"", b + 1, band.name))?
+            }
+        };
+        // One band a date, as one layer a date in a stack.
+        if items.iter().any(|(d, ..): &(f64, _, usize)| *d == date) {
+            return Err(format!(
+                "band {} and another band have the same date ({}): one band a date",
+                b + 1,
+                rustgis_data::time::format(date, "YYYY-MM-DD")
+            ));
+        }
+        items.push((date, r.clone(), b));
+    }
+    Ok(Box::new(Stack::new(items, l.name.clone())))
+}
+
+fn band_index(p: &Value) -> Result<usize, String> {
+    match p.get("band").filter(|v| !v.is_null()) {
+        None => Ok(0),
+        Some(v) => v.as_u64().filter(|b| *b >= 1).map(|b| b as usize - 1).ok_or_else(|| "band is a number from 1".into()),
+    }
+}
+
+/// A name with its date taken out (`NDVI_2024-06-01` → `NDVI`, `MOD13Q1.A2024153` → `MOD13Q1`),
+/// for the outputs' names: cut where the date [`date_in_text`] finds begins, so a product name with
+/// digits of its own keeps them.
+fn common_label(name: &str) -> String {
+    // The date's start: the last place from which the same date is still found (past it, the date
+    // is gone or another). Names are short; a long one takes the simpler cut below.
+    if let Some(date) = date_in_text(name).filter(|_| name.len() <= 512) {
+        let start = name.char_indices().map(|(i, _)| i).take_while(|i| date_in_text(&name[*i..]) == Some(date)).last().unwrap_or(0);
+        let cut = name[..start].trim_end_matches(['_', '-', ' ', '.']);
+        if !cut.is_empty() {
+            return cut.to_string();
+        }
+    }
+    let lead: String = name.chars().take_while(|c| !c.is_ascii_digit()).collect();
+    // MODIS dates its files `A2024153` (year and day of the year): that A goes with the date; any
+    // other final A is the name's own (`NDVI_BETA2020`).
+    let modis = lead.ends_with('A') && name[lead.len()..].chars().take_while(char::is_ascii_digit).count() == 7;
+    let cut = if modis { &lead[..lead.len() - 1] } else { lead.as_str() };
+    let cut = cut.trim_end_matches(['_', '-', ' ', '.']);
+    if cut.is_empty() { name.to_string() } else { cut.to_string() }
+}
+
+/// A date's season among `m` in its calendar year (UTC): its month for 12, otherwise its part of
+/// the year by day, so a composite on the same day each year (16-day ones, 23 a year) keeps its
+/// season from year to year (a day near a season's edge can move by one in a leap year).
+pub fn season_of(ms: f64, m: u32) -> usize {
+    let m = m.max(1) as usize;
+    let month = rustgis_data::time::format(ms, "MM").parse::<usize>().unwrap_or(1);
+    if m == 12 {
+        return month.clamp(1, 12) - 1;
+    }
+    let year = rustgis_data::time::format(ms, "YYYY");
+    let start = rustgis_data::time::parse_text(&format!("{year}-01-01")).unwrap_or(ms);
+    let next = year
+        .parse::<i64>()
+        .ok()
+        .and_then(|y| rustgis_data::time::parse_text(&format!("{:04}-01-01", y + 1)))
+        .unwrap_or(start + 365.0 * 86_400_000.0);
+    let fraction = ((ms - start) / (next - start).max(1.0)).clamp(0.0, 1.0);
+    ((fraction * m as f64).floor() as usize).min(m - 1)
+}
+
+/// The dates of a cube a run takes: those between `start` and `end` and in `months`, or, with
+/// no period given, the cube's own `period` of steps (a following Zarr layer's).
+pub fn steps(dates: &[f64], period: (usize, usize), p: &Value) -> Result<Vec<usize>, String> {
+    let date = |k: &str| -> Result<Option<f64>, String> {
+        match p.get(k).filter(|v| !v.is_null()) {
+            None => Ok(None),
+            Some(v) => rustgis_data::time::parse_input(v)
+                .map(Some)
+                .ok_or_else(|| format!("{k} is a date (2015-06-01, a year, or milliseconds since 1970)")),
+        }
+    };
+    let months = months(p)?;
+    let (start, end) = (date("start")?, date("end")?);
+    let (lo, hi) = match (start, end) {
+        (None, None) => (period.0.min(dates.len()), period.1.min(dates.len())),
+        _ => (0, dates.len()),
+    };
+    let month = |d: f64| rustgis_data::time::format(d, "MM").parse::<u32>().unwrap_or(0);
+    let out: Vec<usize> = (lo..hi)
+        .filter(|i| {
+            let d = dates.get(*i).copied().unwrap_or(f64::NAN);
+            start.is_none_or(|a| d >= a) && end.is_none_or(|z| d <= z) && (months.is_empty() || months.contains(&month(d)))
+        })
+        .collect();
+    if out.is_empty() {
+        return Err("no date of the cube falls in the period (and months) asked for".into());
+    }
+    Ok(out)
+}
+
+/// The `months` a run keeps (1 to 12; none for every month): the one reading of the parameter,
+/// for the steps and for the outputs' names.
+pub(crate) fn months(p: &Value) -> Result<Vec<u32>, String> {
+    match p.get("months").filter(|v| !v.is_null()) {
+        None => Ok(Vec::new()),
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|m| {
+                m.as_u64().filter(|m| (1..=12).contains(m)).map(|m| m as u32).ok_or_else(|| "months are numbers from 1 to 12".to_string())
+            })
+            .collect(),
+        Some(_) => Err("months is a list of months (1–12)".into()),
+    }
+}
+
+/// What a trend writes for each cell.
+const OUTPUTS: usize = 4;
+
+/// The parts a run's cells count for on a progress bar.
+const CELL_PARTS: usize = 100;
+
+/// A trend over a cube, prepared on the session and computed anywhere with [`TrendRun::run`]:
+/// the desktop app runs it on a thread of its own, with progress and Cancel.
+pub struct TrendRun {
+    cube: Box<dyn TimeCube>,
+    steps: Vec<usize>,
+    test: Test,
+    alpha: f64,
+    min_valid: Option<usize>,
+    /// Years in the slope's unit (1, or 10 for a decade).
+    per: f64,
+    /// The outputs' names start with this.
+    pub name: String,
+    /// The most pairs it compares: [`MAX_PAIRS`] on the app's threads, with Cancel; fewer for a
+    /// call that waits for it ([`MAX_WAITED_PAIRS`]).
+    max_pairs: u64,
+}
+
+impl TrendRun {
+    /// The work, for a progress bar: the slices read, then the cells worked out, in
+    /// [`CELL_PARTS`] parts.
+    pub fn total(&self) -> usize {
+        self.steps.len() + CELL_PARTS
+    }
+
+    /// How many dates it reads.
+    pub fn dates(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Reads the slices into one block, cell by date, then works each cell's trend out on as
+    /// many threads as there are cores. `done` counts the slices read, and the last unit once
+    /// the cells are done; `cancel` stops it between slices or rows.
+    pub fn run(&self, cancel: &AtomicBool, done: &AtomicUsize) -> Result<Vec<Raster>, String> {
+        let n = self.steps.len();
+        let mut grid: Option<Arc<Raster>> = None;
+        let mut block: Vec<f32> = Vec::new();
+        let mut cells = 0usize;
+        for (k, &i) in self.steps.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            // A date with nothing written leaves its cells without a value (the block starts empty).
+            let Some((r, b)) = self.cube.slice(i)? else {
+                done.fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
+            let vals = &r.bands.get(b).ok_or("the slice has no such band")?.data;
+            match &grid {
+                None => {
+                    cells = vals.len();
+                    let values = (cells as u64).saturating_mul(n as u64);
+                    if values > MAX_VALUES {
+                        return Err(format!(
+                            "{cells} cells × {n} dates is {values} values, more than {MAX_VALUES}: take a smaller area or fewer dates"
+                        ));
+                    }
+                    let pairs = (cells as u64).saturating_mul((n * n.saturating_sub(1) / 2) as u64);
+                    if pairs > self.max_pairs {
+                        let how = if self.max_pairs < MAX_PAIRS { " (or run it from the Workflows pane, which can take more)" } else { "" };
+                        return Err(format!("{cells} cells × {n} dates is too long a run: take a smaller area or fewer dates{how}"));
+                    }
+                    block = vec![f32::NAN; cells * n];
+                    grid = Some(r.clone());
+                }
+                Some(g) if (g.width, g.height, g.crs) != (r.width, r.height, r.crs) || !same_grid(&g.transform, &r.transform) => {
+                    return Err(format!(
+                        "the slice at {} is {} × {} on another grid than the first ({} × {}): put them on one grid first (Raster Functions › Resample)",
+                        rustgis_data::time::format(self.cube.dates().get(i).copied().unwrap_or(f64::NAN), "YYYY-MM-DD"),
+                        r.width,
+                        r.height,
+                        g.width,
+                        g.height
+                    ));
+                }
+                Some(_) => {}
+            }
+            let nodata = r.nodata.map(|v| v as f32);
+            for (c, v) in vals.iter().enumerate().take(cells) {
+                if v.is_finite()
+                    && Some(*v) != nodata
+                    && let Some(slot) = block.get_mut(c * n + k)
+                {
+                    *slot = *v;
+                }
+            }
+            done.fetch_add(1, Ordering::Relaxed);
+        }
+        let grid = grid.ok_or("no date to read")?;
+        // Times in the slope's unit.
+        let year = 365.2425 * 86_400_000.0 * self.per;
+        let date = |i: usize| self.cube.dates().get(i).copied().unwrap_or(f64::NAN);
+        let times: Vec<f64> = self.steps.iter().map(|i| date(*i) / year).collect();
+        // The seasonal test's seasons, from each date's place in its calendar year.
+        let seasons: Vec<usize> = match self.test {
+            Test::Seasonal(m) => self.steps.iter().map(|i| season_of(date(*i), m)).collect(),
+            _ => Vec::new(),
+        };
+        let need = self.min_valid.unwrap_or((n / 2).max(trend::MIN_VALUES)).max(trend::MIN_VALUES);
+        let mut out = vec![f32::NAN; cells * OUTPUTS];
+        let stopped = AtomicBool::new(false);
+        // A part of the cells, worked out in place.
+        // Cancel is looked at after about the same work whatever the dates: a cell compares n²⁄2
+        // pairs, so every 4096 cells for a short series, every cell for a long one.
+        let every = (4_000_000 / (n * n).max(1)).clamp(1, 4096);
+        // Progress through the cells: a part of the bar every `tick` cells, on whichever thread.
+        let tick = cells.div_ceil(CELL_PARTS).max(1);
+        // `first`: the block's first cell among all of them, so the parts are counted over the
+        // whole grid, not again from 0 on each thread.
+        let work = |first: usize, block: &[f32], out: &mut [f32]| {
+            let mut ys = vec![0.0f64; n];
+            // Sen's slopes, one buffer per thread, cleared cell by cell rather than made anew.
+            let mut slopes: Vec<f64> = Vec::new();
+            for (c, (vals, o)) in block.chunks(n).zip(out.chunks_mut(OUTPUTS)).enumerate() {
+                if first + c > 0 && (first + c).is_multiple_of(tick) {
+                    done.fetch_add(1, Ordering::Relaxed);
+                }
+                if c % every == 0 && (cancel.load(Ordering::Relaxed) || stopped.load(Ordering::Relaxed)) {
+                    stopped.store(true, Ordering::Relaxed);
+                    return;
+                }
+                for (y, v) in ys.iter_mut().zip(vals) {
+                    *y = f64::from(*v);
+                }
+                if vals.iter().filter(|v| v.is_finite()).count() < need {
+                    continue;
+                }
+                let found = match self.test {
+                    Test::Seasonal(_) => trend::trend_seasonal_with(&times, &ys, &seasons, self.alpha, &mut slopes),
+                    test => trend::trend_with(&times, &ys, test, self.alpha, &mut slopes),
+                };
+                if let Some(t) = found
+                    && let [slope, z, p, significant, ..] = o
+                {
+                    *slope = t.slope as f32;
+                    *z = t.z as f32;
+                    *p = t.p as f32;
+                    *significant = if t.p < self.alpha { t.slope as f32 } else { f32::NAN };
+                }
+            }
+        };
+        // On the desktop, the cells in as many parts as there are cores; the browser has no
+        // threads, so there they are worked out here.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).clamp(1, 16);
+            let part = cells.div_ceil(threads).max(1);
+            std::thread::scope(|scope| {
+                for (k, (block, out)) in block.chunks(part * n).zip(out.chunks_mut(part * OUTPUTS)).enumerate() {
+                    let work = &work;
+                    scope.spawn(move || work(k * part, block, out));
+                }
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        work(0, &block, &mut out);
+        if stopped.load(Ordering::Relaxed) {
+            return Err("cancelled".into());
+        }
+        // The values are read: their block goes before the outputs are made from `out`.
+        drop(block);
+        done.store(self.total(), Ordering::Relaxed);
+        let unit = if self.per == 10.0 { "decade" } else { "year" };
+        let names = [
+            format!("{} Sen slope per {unit}", self.name),
+            format!("{} Z ({})", self.name, self.test.code()),
+            format!("{} p-value ({})", self.name, self.test.code()),
+            format!("{} significant slope per {unit} (p < {})", self.name, self.alpha),
+        ];
+        names
+            .into_iter()
+            .enumerate()
+            .map(|(k, name)| {
+                let band: Vec<f32> = out.chunks(OUTPUTS).map(|o| o.get(k).copied().unwrap_or(f32::NAN)).collect();
+                Raster::new(name, grid.width, grid.height, vec![band], grid.transform, grid.crs, None, raster::ColorHint::Gray, "Float32")
+                    .map_err(|e| e.to_string())
+            })
+            .collect()
+    }
+}
+
+/// Prepares `cube.trend`: the cube, the dates, the test and its options checked.
+pub fn trend_start(s: &Session, p: &Value) -> Result<TrendRun, String> {
+    // Read for the seasonal test only: another test leaves it alone, whatever it holds.
+    let seasonal = ps(p, "test").and_then(|t| Test::parse(t, 12)).is_some_and(|t| matches!(t, Test::Seasonal(_)));
+    let seasons = match p.get("seasons").filter(|v| seasonal && !v.is_null()) {
+        None => 12,
+        Some(v) => v.as_u64().filter(|m| (2..=366).contains(m)).ok_or("seasons is a number from 2 to 366")? as u32,
+    };
+    let test = match ps(p, "test") {
+        None => Test::HamedRao,
+        Some(t) => Test::parse(t, seasons).ok_or_else(|| format!("unknown test '{t}' (hamedRao, yueWang, seasonal or original)"))?,
+    };
+    let alpha = match p.get("alpha").filter(|v| !v.is_null()) {
+        None => 0.05,
+        Some(v) => v.as_f64().filter(|a| *a > 0.0 && *a < 0.5).ok_or("alpha is a level between 0 and 0.5, such as 0.05")?,
+    };
+    let min_valid = match p.get("minValid").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_u64().filter(|m| *m >= 1).ok_or("minValid is a number of dates")? as usize),
+    };
+    let per = match ps(p, "per").map(str::trim) {
+        None | Some("") | Some("year") => 1.0,
+        Some("decade") => 10.0,
+        Some(x) => return Err(format!("per is year or decade, not {x}")),
+    };
+    let cube = cube_from(s, p)?;
+    let period = cube.period();
+    let steps = steps(cube.dates(), period, p)?;
+    if steps.len() < trend::MIN_VALUES {
+        return Err(format!("{} dates; a trend needs {} or more", steps.len(), trend::MIN_VALUES));
+    }
+    if steps.len() > MAX_DATES {
+        return Err(format!("{} dates; a trend takes {MAX_DATES} at most: take a shorter period", steps.len()));
+    }
+    // More valid dates asked for than there are would leave every cell out.
+    if let Some(m) = min_valid.filter(|m| *m > steps.len()) {
+        return Err(format!("minValid is {m}, more than the {} dates", steps.len()));
+    }
+    let day = |i: usize| rustgis_data::time::format(cube.dates().get(i).copied().unwrap_or(f64::NAN), "YYYY-MM-DD");
+    let (a, z) = (steps.first().copied().unwrap_or(0), steps.last().copied().unwrap_or(0));
+    let label = format!("{} {}–{}", cube.label(), day(a), day(z));
+    let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map_or(label, |n| n.chars().take(200).collect());
+    Ok(TrendRun { cube, steps, test, alpha, min_valid, per, name, max_pairs: MAX_PAIRS })
+}
+
+/// Whether two slices' grids are one: origins and pixel sizes within a thousandth of a pixel, so
+/// files written apart (an ulp off) still stack.
+pub(crate) fn same_grid(a: &rustgis_data::raster::GeoTransform, b: &rustgis_data::raster::GeoTransform) -> bool {
+    let (w, h) = (a.pixel_width.abs().max(f64::MIN_POSITIVE), a.pixel_height.abs().max(f64::MIN_POSITIVE));
+    let near = |x: f64, y: f64, unit: f64| (x - y).abs() <= unit * 1e-3;
+    near(a.origin_x, b.origin_x, w)
+        && near(a.origin_y, b.origin_y, h)
+        && near(a.pixel_width, b.pixel_width, w)
+        && near(a.pixel_height, b.pixel_height, h)
+}
+
+/// Keeps a trend worked out elsewhere (its layers and how many dates) in this session, for
+/// `cube.trend` with `"ran"`: the id returned. The last two are kept (each is four full rasters),
+/// and another project opened doesn't see them.
+pub fn land(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> u64 {
+    s.next_pending = s.next_pending.wrapping_add(1);
+    if s.trend_results.len() >= 2 {
+        s.trend_results.remove(0);
+    }
+    s.trend_results.push((s.next_pending, rasters, dates));
+    s.next_pending
+}
+
+/// `cube.trend`: the trend computed here (blocking), or the one the app worked out (`ran`), and
+/// its four layers added, kept in the project as GeoTIFFs.
+fn trend_cmd(s: &mut Session, p: &Value) -> CmdResult {
+    // A run the app worked out: added if it is still kept (the last few are), never worked out
+    // again here, which would block.
+    if let Some(ran) = p.get("ran").filter(|v| !v.is_null()) {
+        let id = ran.as_u64().ok_or("ran is the number of a run the app worked out")?;
+        let at = s.trend_results.iter().position(|(k, ..)| *k == id).ok_or("that trend is no longer kept: run it again")?;
+        let (_, rasters, dates) = s.trend_results.remove(at);
+        return add_outputs(s, rasters, dates);
+    }
+    // Worked out here, waited for with no Cancel (a script, the CLI): a run of seconds, not minutes.
+    let mut run = trend_start(s, p)?;
+    run.max_pairs = MAX_WAITED_PAIRS;
+    let rasters = run.run(&AtomicBool::new(false), &AtomicUsize::new(0))?;
+    add_outputs(s, rasters, run.steps.len())
+}
+
+/// Adds a trend's layers, each as a GeoTIFF the project keeps.
+pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdResult {
+    let mut layers = Vec::new();
+    for r in rasters {
+        let name = r.name.clone();
+        let tif = raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
+        let file: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
+        let layer = rustgis_map::raster::RasterLayer::from_bytes(r, format!("{file}.tif"), tif);
+        let out = super::raster::add_raster(s, &name, layer)?;
+        layers.push(out["layer"].clone());
+    }
+    Ok(json!({ "layers": layers, "dates": dates }))
+}
+
+#[cfg(test)]
+mod tests {
+    /// The outputs' names: the date taken out, a MODIS date's A with it, and no other final A.
+    #[test]
+    fn labels_lose_their_date() {
+        assert_eq!(super::common_label("NDVI_2024-06-01"), "NDVI");
+        assert_eq!(super::common_label("MOD13Q1.A2024153"), "MOD13Q1");
+        assert_eq!(super::common_label("sentinel2_ndvi_2024-06-01"), "sentinel2_ndvi");
+        assert_eq!(super::common_label("ndvi.A2024153.h12v10"), "ndvi");
+        assert_eq!(super::common_label("NDVI_BETA2020"), "NDVI_BETA");
+        assert_eq!(super::common_label("ETA_2020"), "ETA");
+    }
+
+    /// Dates in names: a full date anywhere before a year alone; a year only standing apart.
+    #[test]
+    fn dates_in_names() {
+        let day = |d: &str| rustgis_data::time::parse_text(d);
+        assert_eq!(super::date_in_text("ndvi_2015-06-01"), day("2015-06-01"));
+        assert_eq!(super::date_in_text("res2000_ndvi_20150601"), day("2015-06-01"));
+        assert_eq!(super::date_in_text("NDVI 2015"), day("2015-01-01"));
+        assert_eq!(super::date_in_text("ndvi_v2015"), None);
+        assert_eq!(super::date_in_text("MOD13Q1.A2024153"), day("2024-06-01"));
+    }
+
+    /// Slices an ulp apart are one grid; half a pixel apart, another.
+    #[test]
+    fn grids_within_a_hair_are_one() {
+        use rustgis_data::raster::GeoTransform;
+        let a = GeoTransform { origin_x: -60.0, origin_y: 5.0, pixel_width: 0.25, pixel_height: -0.25 };
+        let hair = GeoTransform { origin_x: -60.0 + 1e-12, ..a };
+        let half = GeoTransform { origin_x: -60.125, ..a };
+        assert!(super::same_grid(&a, &hair));
+        assert!(!super::same_grid(&a, &half));
+    }
+}

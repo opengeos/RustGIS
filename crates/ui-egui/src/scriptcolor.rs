@@ -134,7 +134,9 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
                 }
                 // A key is a string with a colon after it.
                 let after = text.get(i..).map(str::trim_start);
-                let kind = if after.is_some_and(|a| a.starts_with(':')) { Kind::Key } else { Kind::Str };
+                // (A command's parameter description marks a key that may be left out with `?`:
+                // `"size"?: number`, `"layer"?,`. A script's JSON never has one there.)
+                let kind = if after.is_some_and(|a| a.starts_with(':') || a.starts_with('?')) { Kind::Key } else { Kind::Str };
                 push(s..i, kind, out);
             }
             b'-' | b'0'..=b'9' => {
@@ -207,21 +209,44 @@ impl Palette {
 pub fn job(script: &str, unknown: &[String], palette: Palette, font: &FontId) -> LayoutJob {
     let mut job = LayoutJob::default();
     for s in spans(script, unknown) {
-        let color = match s.kind {
-            Kind::Plain | Kind::Key => palette.text,
-            Kind::Comment => palette.comment,
-            Kind::Punct | Kind::Unread => palette.dim,
-            Kind::Id => palette.id,
-            Kind::BadId => palette.bad,
-            Kind::Str => palette.string,
-            Kind::Num | Kind::Literal => palette.number,
-        };
-        // What won't run is underlined too, not told by its colour alone (WCAG 1.4.1).
-        let underline = if s.broken || s.kind == Kind::BadId { Stroke::new(1.0, palette.bad) } else { Stroke::NONE };
-        let format = TextFormat { font_id: font.clone(), color, underline, italics: s.kind == Kind::Comment, ..Default::default() };
-        job.append(script.get(s.range).unwrap_or_default(), 0.0, format);
+        append(&mut job, script, &s, palette, font);
     }
     job
+}
+
+/// A command's signature or one of its parameters, for the Script suggestions' help (#662),
+/// coloured as the script colours a command and its JSON, so the help reads as what's typed.
+/// `id` leads, in the id's colour, when given.
+pub fn help_job(id: Option<&str>, text: &str, palette: Palette, font: &FontId) -> LayoutJob {
+    let full = format!("{}{text}", id.unwrap_or_default());
+    let at = full.len() - text.len();
+    let mut spans = Vec::new();
+    if at > 0 {
+        spans.push(Span { range: 0..at, kind: Kind::Id, broken: false });
+    }
+    json_spans(text, at, false, &mut spans);
+    let mut job = LayoutJob::default();
+    for s in &spans {
+        append(&mut job, &full, s, palette, font);
+    }
+    job
+}
+
+/// `s` of `text` appended to `job` in its colour.
+fn append(job: &mut LayoutJob, text: &str, s: &Span, palette: Palette, font: &FontId) {
+    let color = match s.kind {
+        Kind::Plain | Kind::Key => palette.text,
+        Kind::Comment => palette.comment,
+        Kind::Punct | Kind::Unread => palette.dim,
+        Kind::Id => palette.id,
+        Kind::BadId => palette.bad,
+        Kind::Str => palette.string,
+        Kind::Num | Kind::Literal => palette.number,
+    };
+    // What won't run is underlined too, not told by its colour alone (WCAG 1.4.1).
+    let underline = if s.broken || s.kind == Kind::BadId { Stroke::new(1.0, palette.bad) } else { Stroke::NONE };
+    let format = TextFormat { font_id: font.clone(), color, underline, italics: s.kind == Kind::Comment, ..Default::default() };
+    job.append(text.get(s.range.clone()).unwrap_or_default(), 0.0, format);
 }
 
 /// Works out a script's colours once per change of the script (or theme, or of the ids no
@@ -592,5 +617,23 @@ mod tests {
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text("z");
         h.run();
         assert!(h.state().workflow.script.contains('z'));
+    }
+
+    /// The help's signature and parameters take the script's colours: the id, keys (`?` marks
+    /// one that may be left out) and string values.
+    #[test]
+    fn help_reads_in_the_scripts_colours() {
+        let palette = super::Palette::of(&crate::theme::Tokens::light());
+        let font = egui::FontId::monospace(12.0);
+        // The colour where `piece` starts (egui joins neighbouring pieces of one format).
+        let colour = |job: &egui::text::LayoutJob, piece: &str| {
+            let at = job.text.find(piece)?;
+            job.sections.iter().find(|s| (s.byte_range.start.0..s.byte_range.end.0).contains(&at)).map(|s| s.format.color)
+        };
+        let sig = super::help_job(Some("map.body"), " {name?, basemap?}", palette, &font);
+        assert_eq!(colour(&sig, "map.body"), Some(palette.id));
+        let p = super::help_job(None, r#""name"?: "earth"|"moon" (map.bodies lists them)"#, palette, &font);
+        assert_eq!(colour(&p, r#""name""#), Some(palette.text), "a key, `?` and all");
+        assert_eq!(colour(&p, r#""moon""#), Some(palette.string));
     }
 }

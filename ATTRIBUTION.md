@@ -1,6 +1,12 @@
 # Attribution
 
-Every asset file in this repository, with its source and licence.
+Every asset file in this repository, with its source and licence. The licences of the Rust
+crates RustGIS is built from, with their copyright notices, are in
+[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt) (the Python package's in
+[apps/rustgis-python/THIRD-PARTY-LICENSES.txt](apps/rustgis-python/THIRD-PARTY-LICENSES.txt)),
+which every package ships next to LICENSE. They are generated from `Cargo.lock` by
+`cargo xtask notices` (it needs `cargo install --locked --features cli cargo-about@0.9.2`);
+`deny.toml` lists the licences a dependency may have.
 
 | File | Author / source | Licence |
 |---|---|---|

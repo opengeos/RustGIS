@@ -95,6 +95,53 @@ pub fn param_keys(desc: &str) -> Option<Vec<&str>> {
     Some(keys)
 }
 
+/// One entry of a parameter description: its key, whether it may be left out, and its text as
+/// written (`"size"?: number`), for help that lists the parameters one per line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Param<'a> {
+    pub key: &'a str,
+    pub optional: bool,
+    pub text: &'a str,
+}
+
+/// The entries of a `{"key": …, "other"?: …}` description, split at its top-level commas (commas
+/// inside quotes, parentheses, brackets or braces belong to an entry's text). The key is an
+/// entry's first quoted word; an entry without one (prose) is left out. None when the
+/// description isn't an object.
+pub fn param_list(desc: &str) -> Option<Vec<Param<'_>>> {
+    // Up to the last brace: a note may follow the object, as in `{"path"?: file} (a style)`.
+    let body = desc.trim().strip_prefix('{')?;
+    let inner = body.get(..body.rfind('}')?)?;
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut start, mut escaped) = (0usize, false, 0, false);
+    for (i, c) in inner.char_indices() {
+        // A quote after a backslash (`\"`, in a plugin's description) doesn't open or close one.
+        let was_escaped = escaped;
+        escaped = c == '\\' && !was_escaped;
+        match c {
+            '"' if !was_escaped => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 => {
+                out.extend(inner.get(start..i).and_then(param));
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.extend(inner.get(start..).and_then(param));
+    Some(out)
+}
+
+/// An entry of a parameter description (see `param_list`): None for prose without a key.
+fn param(part: &str) -> Option<Param<'_>> {
+    let text = part.trim();
+    let rest = text.strip_prefix('"')?;
+    let (key, after) = rest.split_at(rest.find('"')?);
+    let optional = after.get(1..).is_some_and(|a| a.trim_start().starts_with('?'));
+    Some(Param { key, optional, text })
+}
+
 /// Whether a parameter description has a required key. Question marks in values do not count.
 pub fn needs_input(desc: &str) -> bool {
     let mut required = false;
@@ -352,6 +399,7 @@ struct PutAside {
     style_view: Option<(String, Camera)>,
     #[cfg(not(target_arch = "wasm32"))]
     sql_results: Vec<(u64, String, Option<String>, rustgis_data::source::duckdb::Output)>,
+    trend_results: Vec<(u64, Vec<rustgis_data::raster::Raster>, usize)>,
     edit_counts: std::collections::HashMap<u32, cmd::design::EditCounts>,
 }
 
@@ -486,6 +534,9 @@ pub struct Session {
     /// the id, the query and database (label) they came from, and the result.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) sql_results: Vec<(u64, String, Option<String>, rustgis_data::source::duckdb::Output)>,
+    /// Trends the app worked out on a thread, waiting for `cube.trend {"ran"}`: the id, the
+    /// layers and how many dates (see [`cmd::cube::land`]).
+    pub(crate) trend_results: Vec<(u64, Vec<rustgis_data::raster::Raster>, usize)>,
 }
 
 /// The most `layer.addUrl` requests kept for the front end at a time.
@@ -615,6 +666,7 @@ impl Session {
             quiet_failure: false,
             #[cfg(not(target_arch = "wasm32"))]
             sql_results: Vec::new(),
+            trend_results: Vec::new(),
         }
     }
 
@@ -942,6 +994,7 @@ impl Session {
             style_view: self.style_view.take(),
             #[cfg(not(target_arch = "wasm32"))]
             sql_results: take(&mut self.sql_results),
+            trend_results: take(&mut self.trend_results),
             edit_counts: take(&mut self.edit_counts),
         }
     }
@@ -983,6 +1036,7 @@ impl Session {
             style_view,
             #[cfg(not(target_arch = "wasm32"))]
             sql_results,
+            trend_results,
             edit_counts,
         } = *a;
         (self.undo, self.redo, self.back, self.forward, self.last_camera) = (undo, redo, back, forward, last_camera);
@@ -994,6 +1048,7 @@ impl Session {
         (self.path, self.model_run, self.style_view) = (path, model_run, style_view);
         (self.pending, self.plugin_runs, self.plugin_retries) = (pending, plugin_runs, plugin_retries);
         (self.downloading, self.downloaded, self.url_requests) = (downloading, downloaded, url_requests);
+        self.trend_results = trend_results;
         #[cfg(feature = "geolibre")]
         {
             self.started = started;

@@ -279,6 +279,41 @@ fn geoprocessing_adds_layers_and_history() {
 }
 
 #[test]
+fn spatial_join_command_joins_layers_and_records_history() {
+    let mut s = world();
+    s.run(
+        "gp.spatialJoin",
+        &json!({
+            "target": "Cities",
+            "join": "Countries",
+            "match": "Intersects",
+            "operation": "Join one to one",
+            "output": "Joined_Cities"
+        }),
+    )
+    .unwrap();
+    let l = s.map().layer_by_name("Joined_Cities").unwrap();
+    assert_eq!(l.dataset.features.len(), s.map().layer_by_name("Cities").unwrap().dataset.features.len());
+    assert!(l.dataset.field_index("join_count").is_some());
+    assert_eq!(s.project.gp_history.len(), 1);
+
+    s.run(
+        "gp.run",
+        &json!({
+            "tool": "spatialJoin",
+            "params": {
+                "target": "Countries",
+                "join": "Cities",
+                "match": "Contains",
+                "output": "Countries_With_Cities"
+            }
+        }),
+    )
+    .unwrap();
+    assert!(s.map().layer_by_name("Countries_With_Cities").is_some());
+}
+
+#[test]
 fn editing_features_and_fields() {
     let mut s = world();
     s.run(
@@ -1053,6 +1088,9 @@ fn hostile_params_never_panic() {
         json!({"points": [[], 7, [1, 2, 3, 4, "x"]], "transform": "spline"}),
         json!({"points": [[0, 0, 1e308, -1e308], [1, 0, -1e308, 1e308], [0, 1, 1e308, 1e308], [1, 1, 0, 0, 0]], "transform": "spline"}),
         json!({"points": vec![json!([5, 5, 1, 1]); 1000], "compare": true}),
+        // A warp: junk systems, sizes and paths with points that reach the fit.
+        json!({"transform": "spline", "crs": "EPSG:999999999", "pointsCrs": [7], "resampling": 1, "cellSize": -1e308, "path": 5, "points": [[0, 0, 1, 1]]}),
+        json!({"transform": "affine", "crs": 32613, "pointsCrs": 4326, "cellSize": 1e-300, "path": "/nonexistent/x.tif", "points": [[0, 0, 1, 1], [1, 0, 2, 1], [0, 1, 1, 2]]}),
         json!({"points": [[0, 0, f64::MAX, f64::MAX], [1, 0, -f64::MAX, f64::MAX], [0, 1, f64::MAX, -f64::MAX]], "compare": true}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
@@ -1825,6 +1863,182 @@ fn layer_class_style_edits_one_class() {
     s.run("layer.classStyle", &json!({"layer": "Countries", "index": 2, "label": "Most populous"})).unwrap();
     assert_eq!(renderer(&s).legend().get(2).map(|e| e.label.clone()).as_deref(), Some("Most populous"));
     assert!(s.run("layer.classStyle", &json!({"layer": "Countries", "index": 3, "label": "x"})).is_err());
+}
+
+/// Read classes by their command identity, not their sorted legend position.
+fn class_style_rows(s: &Session, layer: &str) -> Vec<(Value, rustgis_map::Symbol)> {
+    match &s.map().layer_by_name(layer).unwrap().renderer {
+        rustgis_map::Renderer::Graduated { symbols, .. } => {
+            symbols.iter().enumerate().map(|(i, symbol)| (json!({"layer": layer, "index": i}), *symbol)).collect()
+        }
+        rustgis_map::Renderer::Unique { classes, other, .. } => classes
+            .iter()
+            .map(|(value, symbol)| (json!({"layer": layer, "value": value}), *symbol))
+            .chain(std::iter::once((json!({"layer": layer, "other": true}), *other)))
+            .collect(),
+        _ => panic!("class renderer expected"),
+    }
+}
+
+#[test]
+fn layer_class_style_polygon_alpha_targets_only_the_named_class() {
+    use rustgis_map::Rgba;
+    for (kind, field) in [("graduated", "pop_est"), ("unique", "income_grp")] {
+        let mut s = world();
+        s.run("layer.symbology", &json!({"layer": "Countries", "type": kind, "field": field, "classes": 3})).unwrap();
+        let rows = class_style_rows(&s, "Countries");
+        // A middle graduated class, a unique value, and the unique fallback all use the same rules.
+        let targets = if kind == "unique" { vec![1, rows.len() - 1] } else { vec![1] };
+        for target in targets {
+            for (color, alpha) in [
+                ("#123456", 170),
+                (" #123456FF ", 255),
+                ("12345600", 0),
+                ("#12345640", 64),
+                ("#123456", 150),
+                ("#123456C8", 200),
+                (" 123456 ", 200),
+            ] {
+                let before = class_style_rows(&s, "Countries");
+                let mut params = before[target].0.clone();
+                params["color"] = json!(color);
+                let result = s.run("layer.classStyle", &params).unwrap();
+                let after = class_style_rows(&s, "Countries");
+                let fill = Rgba::rgb(0x12, 0x34, 0x56).with_alpha(alpha);
+                assert_eq!(after[target].1.fill, fill, "{kind}: {params}");
+                assert_eq!(Rgba::from_hex(result["color"].as_str().unwrap()), Some(fill));
+                for (i, (old, new)) in before.iter().zip(&after).enumerate() {
+                    assert_eq!(new.0, old.0);
+                    if i != target {
+                        assert_eq!(new.1, old.1, "{kind}: {params} changed class {i}");
+                    }
+                }
+                if alpha == 0 {
+                    s.run("edit.undo", &Value::Null).unwrap();
+                    assert_eq!(class_style_rows(&s, "Countries"), before);
+                    s.run("edit.redo", &Value::Null).unwrap();
+                    assert_eq!(class_style_rows(&s, "Countries"), after);
+                    let saved = serde_json::to_string(&s.project).unwrap();
+                    let reopened = Session::new(Project::from_json(&saved).unwrap());
+                    assert_eq!(class_style_rows(&reopened, "Countries"), after);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn layer_class_alpha_survives_reclassification_and_ramp() {
+    for (kind, field, scheme, next_scheme) in [("graduated", "pop_est", "Ember", "Harbour"), ("unique", "income_grp", "Harbour", "Ember")] {
+        let mut s = world();
+        let mut symbology = json!({"layer": "Countries", "type": kind, "field": field, "classes": 3, "ramp": scheme});
+        s.run("layer.symbology", &symbology).unwrap();
+        let original = class_style_rows(&s, "Countries");
+        for (i, (mut params, symbol)) in original.iter().cloned().enumerate() {
+            // Keep exactly the ramp's RGB: an alpha-only edit must not be mistaken for an untouched fill.
+            params["color"] = json!(symbol.fill.with_alpha([0, 64, 255][i % 3]).hex8());
+            s.run("layer.classStyle", &params).unwrap();
+        }
+        let edited = s.map().layer_by_name("Countries").unwrap().renderer.clone();
+        let before = class_style_rows(&s, "Countries");
+        for (i, ((_, old), (_, new))) in original.iter().zip(&before).enumerate() {
+            assert_eq!((new.fill.r(), new.fill.g(), new.fill.b()), (old.fill.r(), old.fill.g(), old.fill.b()));
+            assert_eq!(new.fill.a(), [0, 64, 255][i % 3]);
+        }
+        // Both an omitted scheme and an explicit unchanged scheme are reapplications, not resets.
+        let mut same = symbology.clone();
+        same.as_object_mut().unwrap().remove("ramp");
+        for params in [&same, &symbology] {
+            s.run("layer.symbology", params).unwrap();
+            assert_eq!(s.map().layer_by_name("Countries").unwrap().renderer, edited, "{kind}");
+        }
+        // Recolouring through layer.ramp keeps every class's exact alpha, including the fallback's.
+        s.run("layer.ramp", &json!({"layer": "Countries", "ramp": next_scheme})).unwrap();
+        let recolored = class_style_rows(&s, "Countries");
+        for ((old_target, old), (new_target, new)) in before.iter().zip(&recolored) {
+            assert_eq!(new_target, old_target);
+            assert_eq!(new.fill.a(), old.fill.a(), "{kind}: {new_target}");
+        }
+        assert!(
+            before
+                .iter()
+                .zip(&recolored)
+                .any(|((_, old), (_, new))| { (old.fill.r(), old.fill.g(), old.fill.b()) != (new.fill.r(), new.fill.g(), new.fill.b()) })
+        );
+        // A different scheme chosen through layer.symbology still resets polygon opacity as before.
+        symbology["ramp"] = json!(scheme);
+        s.run("layer.symbology", &symbology).unwrap();
+        assert!(class_style_rows(&s, "Countries").iter().all(|(_, symbol)| symbol.fill.a() == 170), "{kind}");
+    }
+}
+
+#[test]
+fn layer_class_creation_keeps_explicit_layer_fill_alpha() {
+    for (kind, field) in [("graduated", "pop_est"), ("unique", "income_grp")] {
+        for alpha in [0, 64, 255] {
+            let mut s = world();
+            s.run("layer.color", &json!({"layer": "Countries", "color": format!("#336699{alpha:02X}")})).unwrap();
+            s.run("layer.symbology", &json!({"layer": "Countries", "type": kind, "field": field, "classes": 3})).unwrap();
+            for (target, symbol) in class_style_rows(&s, "Countries") {
+                assert_eq!(symbol.fill.a(), alpha, "{kind}: {target}");
+            }
+        }
+    }
+}
+
+#[test]
+fn layer_class_style_point_and_line_colors_keep_their_supplied_alpha() {
+    use rustgis_map::Rgba;
+    let mut s = world();
+    for layer in ["Cities", "Rivers"] {
+        let field = s.map().layer_by_name(layer).unwrap().dataset.fields[0].name.clone();
+        s.run("layer.symbology", &json!({"layer": layer, "type": "unique", "field": field})).unwrap();
+        let mut params = class_style_rows(&s, layer)[0].0.clone();
+        for color in ["#12345600", "#12345640", "#123456FF", "#123456"] {
+            let before = class_style_rows(&s, layer);
+            params["color"] = json!(color);
+            s.run("layer.classStyle", &params).unwrap();
+            let after = class_style_rows(&s, layer);
+            let fill = Rgba::from_hex(color).unwrap();
+            assert_eq!(after[0].1.fill, fill, "{layer}: {color}");
+            assert_eq!(after[0].1.stroke, if layer == "Rivers" { fill } else { before[0].1.stroke });
+            assert_eq!(&after[1..], &before[1..], "{layer}: other classes are untouched");
+        }
+    }
+}
+
+#[test]
+fn layer_class_style_polygon_alpha_reaches_exported_pixels() {
+    isolate_plugins();
+    let fixture = json!({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": {"value": 1},
+        "geometry": {"type": "Polygon", "coordinates": [[[-0.25, -0.25], [0.25, -0.25], [0.25, 0.25], [-0.25, 0.25], [-0.25, -0.25]]]}
+    }]});
+    for kind in ["graduated", "unique"] {
+        let mut s = Session::new(Project::default());
+        s.run("layer.addDataText", &json!({"fileName": "square.geojson", "text": fixture.to_string()})).unwrap();
+        s.run("layer.symbology", &json!({"layer": "square", "type": kind, "field": "value", "classes": 1})).unwrap();
+        s.view_size = (128.0, 128.0);
+        s.map_mut().basemap = rustgis_map::Basemap::Blank;
+        s.map_mut().graticule = false;
+        s.map_mut().camera = rustgis_map::Camera { center: rustgis_geom::Coord::new(0.0, 0.0), res: 1000.0, bearing: 0.0, pitch: 0.0 };
+        let mut params = class_style_rows(&s, "square")[0].0.clone();
+        for alpha in [255, 0, 64] {
+            params["color"] = json!(format!("#FF0000{alpha:02X}"));
+            s.run("layer.classStyle", &params).unwrap();
+            let png = crate::cmd::share::map_png(&mut s, Some(128.0), Some(128.0), None).unwrap();
+            let pixels = crate::render::decode_png(&png).unwrap();
+            let center = pixels.pixel(64, 64).unwrap();
+            let background = pixels.pixel(0, 0).unwrap();
+            assert_eq!(center.alpha(), 255, "the export composites onto the blank basemap");
+            for (actual, source, behind) in
+                [(center.red(), 255, background.red()), (center.green(), 0, background.green()), (center.blue(), 0, background.blue())]
+            {
+                let expected = (source * alpha + u32::from(behind) * (255 - alpha) + 127) / 255;
+                assert!((i64::from(actual) - i64::from(expected)).abs() <= 1, "{kind}, alpha {alpha}: {center:?} over {background:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -2834,6 +3048,404 @@ fn analysis_workflows_models_scripts_and_raster_functions() {
     model_graphs(&mut s);
     let g = s.run("gp.gallery", &json!({"kind": "raster"})).unwrap();
     assert!(g.as_array().unwrap().iter().any(|t| t["id"] == "raster.function"));
+}
+
+/// A 100 × 80 scan whose value is `ramp(col, row)` (so a bilinear warp reproduces it exactly), with
+/// a bright pixel at (50, 40), added as a layer with a placeholder position.
+fn scan_layer(s: &mut Session, name: &str) -> (fn(f64, f64) -> f32, (f64, f64)) {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    fn ramp(c: f64, r: f64) -> f32 {
+        (c * 2.0 + r * 0.5) as f32
+    }
+    let (w, h) = (100u32, 80u32);
+    let mut z: Vec<f32> = (0..w * h).map(|i| ramp(f64::from(i % w) + 0.5, f64::from(i / w) + 0.5)).collect();
+    z[(40 * w + 50) as usize] = 5000.0;
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 80.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new(name, w, h, vec![z], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(s, name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+    (ramp, (50.5, 40.5))
+}
+
+/// The control points of a known map from the scan's corners and middle: `f` takes a pixel position
+/// to map coordinates.
+fn points_of(f: impl Fn(f64, f64) -> (f64, f64)) -> Value {
+    let pts: Vec<Value> = [(0.0, 0.0), (100.0, 0.0), (0.0, 80.0), (100.0, 80.0), (50.0, 40.0), (25.0, 60.0)]
+        .iter()
+        .map(|&(c, r)| {
+            let (x, y) = f(c, r);
+            json!([c, r, x, y])
+        })
+        .collect();
+    Value::Array(pts)
+}
+
+fn out_raster(s: &Session, v: &Value) -> std::sync::Arc<rustgis_data::raster::Raster> {
+    let id = v["layer"].as_u64().unwrap() as u32;
+    s.map().layer(id).unwrap().raster.as_ref().unwrap().data.clone().unwrap()
+}
+
+/// Warping through a known sheared affine puts every pixel where the matrix says: a bilinear
+/// warp of a ramp reproduces the ramp at the pixel each output cell comes from, and the bright
+/// pixel lands within half a cell of its place.
+#[test]
+fn a_warp_through_a_known_affine_puts_pixels_where_the_matrix_says() {
+    let mut s = world();
+    let (ramp, bright) = scan_layer(&mut s, "scan");
+    // x = 500000 + 10 col + 2 row, y = 4000000 - 10 row + 1 col, in UTM 13N.
+    let map = |c: f64, r: f64| (500_000.0 + 10.0 * c + 2.0 * r, 4_000_000.0 - 10.0 * r + c);
+    let v = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "affine", "pointsCrs": 32613, "crs": 32613, "points": points_of(map), "name": "warped", "resampling": "bilinear"}),
+        )
+        .unwrap();
+    assert_eq!(v["crs"], "EPSG:32613", "{v}");
+    let out = out_raster(&s, &v);
+    assert!(s.map().layer_by_name("scan").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().width == 100, "the scan is kept");
+    // The cell is the root of the pixel's area: |10 × -10 - 2 × 1| = 102.
+    let cell = 102f64.sqrt();
+    assert!((out.transform.pixel_width - cell).abs() < 1e-9 && (out.transform.pixel_height + cell).abs() < 1e-9);
+    // The grid covers the footprint, whose corners are the matrix's corners.
+    let corners = [(0.0, 0.0), (100.0, 0.0), (0.0, 80.0), (100.0, 80.0)].map(|(c, r)| map(c, r));
+    let (min_x, max_x) = corners.iter().fold((f64::MAX, f64::MIN), |(a, b), (x, _)| (a.min(*x), b.max(*x)));
+    let (min_y, max_y) = corners.iter().fold((f64::MAX, f64::MIN), |(a, b), (_, y)| (a.min(*y), b.max(*y)));
+    assert_eq!((out.transform.origin_x, out.transform.origin_y), (min_x, max_y));
+    assert!(out.transform.origin_x + out.transform.pixel_width * f64::from(out.width) >= max_x);
+    assert!(out.transform.origin_y + out.transform.pixel_height * f64::from(out.height) <= min_y);
+    // The matrix's inverse takes a map position back to the scan.
+    let det = 10.0 * -10.0 - 2.0 * 1.0;
+    let back = |x: f64, y: f64| {
+        let (dx, dy) = (x - 500_000.0, y - 4_000_000.0);
+        ((-10.0 * dx - 2.0 * dy) / det, (-dx + 10.0 * dy) / det)
+    };
+    let (mut checked, mut empty) = (0, 0);
+    for row in (0..i64::from(out.height)).step_by(7) {
+        for col in (0..i64::from(out.width)).step_by(5) {
+            let c = out.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
+            let (sc, sr) = back(c.x, c.y);
+            match out.value(0, col, row) {
+                // Away from the scan's edge and its bright pixel the value is the ramp's there.
+                Some(v) if (1.5..98.5).contains(&sc) && (1.5..78.5).contains(&sr) && (sc - 50.5).abs() > 2.0 && (sr - 40.5).abs() > 2.0 => {
+                    assert!((v - ramp(sc, sr)).abs() < 1e-3, "cell {col},{row}: {v} against {}", ramp(sc, sr));
+                    checked += 1;
+                }
+                Some(_) => {}
+                None => {
+                    assert!(!(0.0..100.0).contains(&sc) || !(0.0..80.0).contains(&sr), "cell {col},{row} comes from inside the scan");
+                    empty += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 100 && empty > 0, "{checked} checked, {empty} outside the scan");
+    // The bright pixel: its intensity-weighted position is within half a cell of the matrix's.
+    let (mut sum, mut sx, mut sy) = (0.0f64, 0.0f64, 0.0f64);
+    for row in 0..i64::from(out.height) {
+        for col in 0..i64::from(out.width) {
+            if let Some(v) = out.value(0, col, row).filter(|v| *v > 1000.0) {
+                let c = out.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
+                sum += f64::from(v);
+                sx += f64::from(v) * c.x;
+                sy += f64::from(v) * c.y;
+            }
+        }
+    }
+    let (ex, ey) = map(bright.0, bright.1);
+    assert!(
+        sum > 0.0 && (sx / sum - ex).abs() <= cell / 2.0 && (sy / sum - ey).abs() <= cell / 2.0,
+        "({}, {}) against ({ex}, {ey})",
+        sx / sum,
+        sy / sum
+    );
+}
+
+/// A 30° rotation, nearest sampling, replacing the layer's raster: the cells of the bright pixel
+/// are centred within half a cell of its place, and the grid's corners outside the turned image
+/// are no data.
+#[test]
+fn a_warp_through_a_known_rotation_puts_pixels_where_the_turn_says() {
+    let mut s = world();
+    let (_, bright) = scan_layer(&mut s, "scan");
+    let (sin, cos) = 30f64.to_radians().sin_cos();
+    // Ten metres a pixel, turned 30° about the origin (rows still run down the picture).
+    let map = |c: f64, r: f64| (500_000.0 + 10.0 * (c * cos + r * sin), 4_000_000.0 + 10.0 * (c * sin - r * cos));
+    let v = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "similarity", "pointsCrs": 32613, "crs": "EPSG:32613", "points": points_of(map), "resampling": "nearest", "cellSize": 2.5}),
+        )
+        .unwrap();
+    let out = out_raster(&s, &v);
+    assert_eq!(
+        s.map().layer_by_name("scan").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().width,
+        out.width,
+        "replaced in place"
+    );
+    assert!(out.width > 400, "the turned image needs a wider grid than its 1000 m / 2.5 m: {}", out.width);
+    // Nearest keeps the values: the bright pixel's cells are 5000, a square 10 m across turned 30°.
+    let (mut n, mut sx, mut sy) = (0.0f64, 0.0f64, 0.0f64);
+    for row in 0..i64::from(out.height) {
+        for col in 0..i64::from(out.width) {
+            if out.value(0, col, row) == Some(5000.0) {
+                let c = out.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
+                n += 1.0;
+                sx += c.x;
+                sy += c.y;
+            }
+        }
+    }
+    let (ex, ey) = map(bright.0, bright.1);
+    let cell = out.transform.pixel_width;
+    // About 100 / 6.25 = 16 cells.
+    assert!((10.0..=22.0).contains(&n), "{n} cells");
+    assert!((sx / n - ex).abs() <= cell / 2.0 && (sy / n - ey).abs() <= cell / 2.0, "({}, {}) against ({ex}, {ey})", sx / n, sy / n);
+    // The turned rectangle leaves the box's corners empty.
+    assert_eq!(out.value(0, 0, 0), None);
+    assert_eq!(out.value(0, i64::from(out.width) - 1, i64::from(out.height) - 1), None);
+    // At its default the cell is the pixel's 10 m.
+    let d = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "similarity", "pointsCrs": 32613, "crs": 32613, "points": points_of(map), "name": "d"}),
+        )
+        .unwrap();
+    assert!((out_raster(&s, &d).transform.pixel_width - 10.0).abs() < 1e-6);
+}
+
+/// Control points in longitude/latitude, warped into UTM: every cell holds the scan's value at
+/// the pixel the projection takes the cell's centre back to.
+#[test]
+fn a_warp_reprojects_from_the_points_crs() {
+    use rustgis_data::raster::Crs;
+    let mut s = world();
+    let (ramp, bright) = scan_layer(&mut s, "scan");
+    // A north-up block at 40°N, 105°W, a thousandth of a degree a pixel.
+    let map = |c: f64, r: f64| (-105.0 + c * 0.001, 40.0 - r * 0.001);
+    let v = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "affine", "crs": 32613, "pointsCrs": "EPSG:4326", "points": points_of(map), "name": "utm"}),
+        )
+        .unwrap();
+    let out = out_raster(&s, &v);
+    assert_eq!(out.crs.epsg(), 32613);
+    let t = Crs::from_epsg(32613).unwrap().transformer().unwrap();
+    let mut checked = 0;
+    for row in (0..i64::from(out.height)).step_by(3) {
+        for col in (0..i64::from(out.width)).step_by(3) {
+            let c = out.transform.to_world(col as f64 + 0.5, row as f64 + 0.5);
+            let ll = t.to_lonlat(c).unwrap();
+            let (sc, sr) = ((ll.x + 105.0) / 0.001, (40.0 - ll.y) / 0.001);
+            if (2.0..98.0).contains(&sc) && (2.0..78.0).contains(&sr) && (sc - 50.5).abs() > 2.5 && (sr - 40.5).abs() > 2.5 {
+                let got = out.value(0, col, row).unwrap();
+                assert!((got - ramp(sc, sr)).abs() < 0.05, "cell {col},{row}: {got} against {}", ramp(sc, sr));
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "{checked}");
+    // The bright pixel's own UTM position is within a cell of a bright cell.
+    let (lon, lat) = map(bright.0, bright.1);
+    let at = t.from_lonlat(rustgis_geom::Coord::new(lon, lat)).unwrap();
+    let (col, row) = out.transform.to_pixel(at);
+    let (col, row) = (col.floor() as i64, row.floor() as i64);
+    let near = (-1..=1)
+        .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+        .filter_map(|(dx, dy)| out.value(0, col + dx, row + dy))
+        .fold(f32::MIN, f32::max);
+    assert!(near > 500.0, "{near}");
+}
+
+/// A 48-bit colour scan (UInt16 RGB) warps with alpha the renderer reads as opaque (it takes
+/// alpha as 0–255 in every type), and the COG keeps the 16-bit type.
+#[test]
+fn a_sixteen_bit_colour_warp_is_opaque_to_the_renderer() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let mut s = world();
+    let n = 60 * 40;
+    let bands = vec![vec![60_000.0; n], vec![30_000.0; n], vec![1000.0; n]];
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 40.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new("deep", 60, 40, bands, gt, Crs::LonLat, None, ColorHint::Rgb { alpha: false }, "UInt16").unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "deep", rustgis_map::RasterLayer::from_bytes(r, "deep.tif", bytes)).unwrap();
+    let (sin, cos) = 20f64.to_radians().sin_cos();
+    let map = |c: f64, r: f64| (500_000.0 + 10.0 * (c * cos + r * sin), 4_000_000.0 + 10.0 * (c * sin - r * cos));
+    let pts: Vec<Value> =
+        [(0.0, 0.0), (60.0, 0.0), (0.0, 40.0), (60.0, 40.0)].iter().map(|&(c, r)| json!([c, r, map(c, r).0, map(c, r).1])).collect();
+    let path = std::env::temp_dir().join(format!("rustgis-deep-{}.tif", std::process::id()));
+    let v = s
+        .run("raster.georeference", &json!({"layer": "deep", "transform": "similarity", "pointsCrs": 32613, "points": pts, "name": "w", "path": path.display().to_string()}))
+        .unwrap();
+    let out = out_raster(&s, &v);
+    assert_eq!(out.color, ColorHint::Rgb { alpha: true });
+    let (mid_c, mid_r) = (i64::from(out.width) / 2, i64::from(out.height) / 2);
+    // The renderer clamps alpha to 0–255: inside is 255, the collar 0.
+    let alpha = |c, r| out.value(3, c, r).map(|v| v.clamp(0.0, 255.0) as u8);
+    assert_eq!((alpha(mid_c, mid_r), alpha(0, 0)), (Some(255), Some(0)));
+    let back = rustgis_data::raster::read_path(&path).unwrap();
+    assert_eq!((back.data_type.as_str(), back.band_count()), ("UInt16", 4));
+    assert_eq!(back.value(0, mid_c, mid_r), Some(60_000.0));
+    std::fs::remove_file(&path).ok();
+}
+
+/// A scan that would span the globe in degrees is refused, and a long thin grid can't slip past
+/// the size limit through its row buffers.
+#[test]
+fn a_warp_refuses_a_globe_in_degrees_and_bounds_its_memory() {
+    use rustgis_analysis::georef::{self, Gcp, Kind};
+    use rustgis_analysis::warp::{self, Options, Resampling};
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let (w, h) = (40u32, 40u32);
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 40.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let r = Raster::new("s", w, h, vec![vec![1.0; 1600]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    // A square of 2000 km centred on the pole, in polar stereographic (EPSG:3413).
+    let gcps = |f: &dyn Fn(f64, f64) -> (f64, f64)| -> Vec<Gcp> {
+        [(0.0, 0.0), (40.0, 0.0), (0.0, 40.0), (40.0, 40.0)]
+            .iter()
+            .map(|&(c, r)| {
+                let (x, y) = f(c, r);
+                Gcp { col: c, row: r, x, y, on: true }
+            })
+            .collect()
+    };
+    let fit = georef::fit(Kind::Affine, &gcps(&|c, r| (-1_000_000.0 + 50_000.0 * c, 1_000_000.0 - 50_000.0 * r))).unwrap();
+    let o = |crs: Crs, points: Crs, cell| Options { crs, points_crs: points, resampling: Resampling::Nearest, cell, name: "o".into() };
+    let polar = Crs::from_epsg(3413).unwrap();
+    // In degrees the scan spans every longitude: refused, with a hint.
+    let e = warp::warp(&r, &fit, &o(Crs::LonLat, polar, Some(0.05))).unwrap_err();
+    assert!(e.contains("projected crs"), "{e}");
+    // In Web Mercator it is placed (to its latitude limit), with the pole inside it.
+    assert!(warp::warp(&r, &fit, &o(Crs::WebMercator, polar, Some(100_000.0))).is_ok());
+    // A strip a hundred million metres long and a metre tall, from hostile points.
+    let strip = georef::fit(Kind::Affine, &gcps(&|c, r| (500_000.0 + c * 2.5e6, 4_000_000.0 - r * 0.025))).unwrap();
+    let utm13 = Crs::from_epsg(32613).unwrap();
+    let e = warp::warp(&r, &strip, &o(utm13, utm13, Some(1.0))).unwrap_err();
+    assert!(e.contains("cellSize"), "{e}");
+}
+
+/// A warp written as a COG becomes the layer's file; the options are checked.
+#[test]
+fn a_warp_can_write_a_cog_and_refuses_what_it_cannot_place() {
+    let mut s = world();
+    scan_layer(&mut s, "scan");
+    let map = |c: f64, r: f64| (500_000.0 + 10.0 * c, 4_000_000.0 - 10.0 * r);
+    let dir = std::env::temp_dir().join(format!("rustgis-warp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("warped.tif");
+    let v = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "affine", "pointsCrs": 32613, "crs": 32613, "points": points_of(map), "resampling": "cubic", "cellSize": 5, "name": "w", "path": path.display().to_string()}),
+        )
+        .unwrap();
+    assert_eq!(v["cog"]["overviews"], 0, "200 × 160 is one tile: {v}");
+    assert_eq!((v["width"].as_u64(), v["height"].as_u64()), (Some(200), Some(160)), "half-size cells double the grid");
+    let back = rustgis_data::raster::read_path(&path).unwrap();
+    assert_eq!((back.width, back.height, back.crs.epsg()), (200, 160, 32613));
+    assert_eq!(back.transform.origin_x, 500_000.0);
+    let layer = s.map().layer_by_name("w").unwrap().raster.as_ref().unwrap();
+    assert_eq!(layer.path.as_deref(), Some(path.display().to_string().as_str()), "the file is the layer's source");
+    // The same command without a transform is the old north-up fit.
+    s.run("raster.georeference", &json!({"layer": "scan", "extent": [10.0, 45.0, 10.1, 45.08]})).unwrap();
+    let ok = json!({"layer": "scan", "transform": "affine", "pointsCrs": 32613, "crs": 32613, "points": points_of(map)});
+    s.run("raster.georeference", &ok).unwrap();
+    for (k, bad) in [
+        ("transform", json!("warp")),
+        ("transform", json!(7)),
+        ("crs", json!("EPSG:99999999")),
+        ("crs", json!(-1)),
+        ("crs", json!(1e30)),
+        ("pointsCrs", json!([])),
+        ("resampling", json!("lanczos")),
+        ("cellSize", json!(0)),
+        ("cellSize", json!(-3)),
+        ("cellSize", json!(1e-9)),
+        ("cellSize", json!("x")),
+        ("path", json!("warped.png")),
+        ("path", json!(5)),
+        ("points", json!([[0, 0, 1, 1]])),
+    ] {
+        let mut p = ok.clone();
+        p[k] = bad.clone();
+        assert!(s.run("raster.georeference", &p).is_err(), "{k} = {bad}");
+    }
+    // A fit that collapses the image onto a line has no grid.
+    assert!(
+        s.run(
+            "raster.georeference",
+            &json!({"layer": "scan", "transform": "affine", "pointsCrs": 32613, "crs": 32613, "points": points_of(|c, _| (c, c))})
+        )
+        .is_err()
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A scan opened from a PNG and warped onto its points has coordinates for real: the cell is the
+/// fit's pixel on the ground, not the stand-in size it was laid over the view at; the pixels land
+/// where the fit says; it can be exported; and the project reopens it where the warp put it, not
+/// laid over the view again.
+#[test]
+fn a_scan_warped_onto_its_points_is_placed_for_real() {
+    let dir = std::env::temp_dir().join(format!("rustgis-scan-warp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("plate.png");
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(40, 20, |x, y| image::Rgb([x as u8, y as u8, 9])))
+        .save_with_format(&png, image::ImageFormat::Png)
+        .unwrap();
+    let mut s = world();
+    let r = s.run("layer.addData", &json!({"path": png.display().to_string()})).unwrap();
+    assert_eq!(r["georeferenced"], false, "{r}");
+    let laid = s.map().layer_by_name("plate").unwrap().raster.clone().unwrap();
+    assert!(laid.placement.is_some());
+    let stand_in = laid.data.as_ref().unwrap().transform.pixel_width;
+    // 7.5 m a pixel in UTM 13N, from the scan's corners and two points inside it; the output's
+    // system is the points'.
+    let map = |c: f64, r: f64| (500_000.0 + 7.5 * c, 4_000_000.0 - 7.5 * r);
+    let pts: Vec<Value> = [(0.0, 0.0), (40.0, 0.0), (0.0, 20.0), (40.0, 20.0), (20.0, 10.0), (10.0, 15.0)]
+        .iter()
+        .map(|&(c, r)| {
+            let (x, y) = map(c, r);
+            json!([c, r, x, y])
+        })
+        .collect();
+    let v = s
+        .run(
+            "raster.georeference",
+            &json!({"layer": "plate", "transform": "affine", "pointsCrs": 32613, "points": pts, "resampling": "nearest"}),
+        )
+        .unwrap();
+    assert_eq!(v["crs"], "EPSG:32613", "{v}");
+    let l = s.map().layer_by_name("plate").unwrap().raster.clone().unwrap();
+    assert!(l.placement.is_none(), "no longer laid over the view");
+    let out = l.data.clone().unwrap();
+    assert!(out.georeferenced && out.crs.epsg() == 32613);
+    assert!(
+        (out.transform.pixel_width - 7.5).abs() < 1e-6 && (out.transform.pixel_height + 7.5).abs() < 1e-6 && (stand_in - 7.5).abs() > 0.5,
+        "{:?}, laid at {stand_in}",
+        out.transform
+    );
+    // Red is the column and green the row, so a pixel reads back where the fit puts it; the scan
+    // had no alpha or no data, so it gains an opaque alpha band.
+    assert_eq!(out.band_count(), 4);
+    let (x, y) = map(10.5, 5.5);
+    let (col, row) = out.transform.to_pixel(rustgis_geom::Coord { x, y });
+    let (col, row) = (col.floor() as i64, row.floor() as i64);
+    let px: Vec<Option<f32>> = (0..4).map(|b| out.value(b, col, row)).collect();
+    assert_eq!(px, [Some(10.0), Some(5.0), Some(9.0), Some(255.0)], "cell {col},{row}");
+    // Exporting is no longer refused.
+    let tif = dir.join("plate.tif");
+    s.run("share.exportRaster", &json!({"layer": "plate", "path": tif.display().to_string(), "cog": true})).unwrap();
+    let back = rustgis_data::raster::read_path(&tif).unwrap();
+    assert!(back.georeferenced && back.crs.epsg() == 32613 && back.transform == out.transform);
+    // The project reopens it where the warp put it.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("plate").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert!(again.georeferenced && again.transform == out.transform, "{:?} vs {:?}", again.transform, out.transform);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -6874,6 +7486,14 @@ fn lidar_point_clouds() {
 /// 31, 59) on a 3 × 4 grid, step `k`'s values `100·k + i`.
 #[cfg(not(target_arch = "wasm32"))]
 fn zarr_store_over_time(tag: &str) -> (std::path::PathBuf, String) {
+    zarr_store_at(tag, &[0, 31, 59])
+}
+
+/// A Zarr store of one variable, `t` (time × 3 × 4), with a step at each of `days` since 2001-01-01:
+/// step `k`'s cells are `100 k + cell`.
+#[cfg(not(target_arch = "wasm32"))]
+fn zarr_store_at(tag: &str, days: &[i32]) -> (std::path::PathBuf, String) {
+    let n = days.len();
     let dir = std::env::temp_dir().join(format!("rustgis-zarr-{tag}-{}", std::process::id()));
     let store = dir.join("air.zarr");
     let _ = std::fs::remove_dir_all(&dir);
@@ -6888,13 +7508,13 @@ fn zarr_store_over_time(tag: &str) -> (std::path::PathBuf, String) {
     };
     let meta = json!({"metadata": {
         ".zgroup": {"zarr_format": 2},
-        "t/.zarray": arr("[3,3,4]", "[1,3,4]", "<f4"),
+        "t/.zarray": arr(&format!("[{n},3,4]"), "[1,3,4]", "<f4"),
         "t/.zattrs": {"_ARRAY_DIMENSIONS": ["time","lat","lon"], "units": "K"},
         "lat/.zarray": arr("[3]", "[3]", "<f4"),
         "lat/.zattrs": {"_ARRAY_DIMENSIONS": ["lat"], "units": "degrees_north"},
         "lon/.zarray": arr("[4]", "[4]", "<f4"),
         "lon/.zattrs": {"_ARRAY_DIMENSIONS": ["lon"], "units": "degrees_east"},
-        "time/.zarray": arr("[3]", "[3]", "<i4"),
+        "time/.zarray": arr(&format!("[{n}]"), &format!("[{n}]"), "<i4"),
         "time/.zattrs": {"_ARRAY_DIMENSIONS": ["time"], "units": "days since 2001-01-01"},
     }, "zarr_consolidated_format": 1});
     std::fs::write(store.join(".zmetadata"), meta.to_string()).unwrap();
@@ -6902,13 +7522,287 @@ fn zarr_store_over_time(tag: &str) -> (std::path::PathBuf, String) {
     let f32s = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
     std::fs::write(store.join("lat/0"), f32s(&[10.0, 20.0, 30.0])).unwrap();
     std::fs::write(store.join("lon/0"), f32s(&[1.0, 2.0, 3.0, 4.0])).unwrap();
-    std::fs::write(store.join("time/0"), [0i32, 31, 59].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
-    for t in 0..3 {
+    std::fs::write(store.join("time/0"), days.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+    for t in 0..n {
         let v: Vec<f32> = (0..12).map(|i| (t * 100 + i) as f32).collect();
         std::fs::write(store.join(format!("t/{t}.0.0")), f32s(&v)).unwrap();
     }
     let path = store.display().to_string();
     (dir, path)
+}
+
+/// A Zarr variable's series at a point (#555): the values along its time dimension at the cell
+/// holding it, read from the chunks holding that cell, through a layer or the store itself.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_zarr_series_at_a_point() {
+    let (dir, path) = zarr_store_over_time("series");
+    let mut s = Session::new(Project::default());
+    // At 1°E 30°N: the stored row 2 (latitudes 10, 20, 30), column 0, so 100·k + 8 at step k.
+    let at = json!({"path": path, "variable": "t", "lon": 1.0, "lat": 30.0});
+    let r = s.run("zarr.series", &at).unwrap();
+    assert_eq!(r["values"], json!([8.0, 108.0, 208.0]), "{r}");
+    assert_eq!(r["labels"], json!(["2001-01-01 00:00", "2001-02-01 00:00", "2001-03-01 00:00"]));
+    assert_eq!(
+        (r["dimension"].as_str(), r["units"].as_str(), r["row"].as_u64(), r["col"].as_u64()),
+        (Some("time"), Some("K"), Some(2), Some(0))
+    );
+    // A point between centres takes the nearest (the axis starts half a cell before the first
+    // centre): 24°N is the 20°N row, 26°N the 30°N row.
+    let mut at =
+        |lat: f64| s.run("zarr.series", &json!({"path": path, "variable": "t", "lon": 1.0, "lat": lat})).unwrap()["values"].clone();
+    let (twenty, thirty) = (at(20.0), at(30.0));
+    assert_eq!(at(24.0), twenty);
+    assert_eq!(at(26.0), thirty);
+    assert_ne!(twenty, thirty);
+    // Longitudes either way round the globe; another cell.
+    let r = s.run("zarr.series", &json!({"path": path, "variable": "t", "lon": 363.5, "lat": 11.0})).unwrap();
+    assert_eq!(r["values"], json!([3.0, 103.0, 203.0]), "{r}");
+    // A period.
+    let r = s.run("zarr.series", &json!({"path": path, "variable": "t", "lon": 1.0, "lat": 30.0, "start": "2001-01-15"})).unwrap();
+    assert_eq!(r["values"], json!([108.0, 208.0]));
+    // Through a layer: one that follows the slider (its period), and a slice (the whole axis).
+    let late = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true, "start": "2001-01-20"})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let r = s.run("zarr.series", &json!({"layer": late, "lon": 1.0, "lat": 30.0})).unwrap();
+    assert_eq!(r["values"], json!([108.0, 208.0]));
+    let slice = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "index": {"time": 1}})).unwrap()["layer"].as_u64().unwrap();
+    let r = s.run("zarr.series", &json!({"layer": slice, "lon": 1.0, "lat": 30.0})).unwrap();
+    assert_eq!(r["values"], json!([8.0, 108.0, 208.0]));
+    for bad in [
+        json!({"path": path, "variable": "t", "lon": 50.0, "lat": 30.0}),
+        json!({"path": path, "variable": "t", "lon": 1.0, "lat": 95.0}),
+        json!({"path": path, "variable": "t", "lat": 30.0}),
+        json!({"path": path, "variable": "t", "lon": 1.0, "lat": 30.0, "start": "2003-01-01"}),
+        json!({"path": path, "variable": "lat", "lon": 1.0, "lat": 30.0}),
+        json!({"path": "/nowhere/x.zarr", "lon": 1.0, "lat": 30.0}),
+    ] {
+        assert!(s.run("zarr.series", &bad).is_err(), "{bad}");
+    }
+    // A layer that isn't Zarr.
+    let mut w = Session::new(sample::world_project());
+    assert!(w.run("zarr.series", &json!({"layer": "Countries", "lon": 1.0, "lat": 30.0})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A Zarr variable summarised over time (#556): each statistic, a season, a period and a layer's
+/// period, into a raster layer kept in the project.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_zarr_variable_summarised_over_time() {
+    let (dir, path) = zarr_store_over_time("reduce");
+    let mut s = Session::new(Project::default());
+    // The first pixel (north up) is the stored cell 8: 8, 108 and 208 at the three steps.
+    let first = |s: &Session, r: &Value| {
+        let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+        let d = l.raster.as_ref().unwrap().data.clone().unwrap();
+        d.bands[0].data[0]
+    };
+    for (stat, want) in [("mean", 108.0), ("min", 8.0), ("max", 208.0), ("sum", 324.0), ("count", 3.0)] {
+        let r = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": stat})).unwrap();
+        assert_eq!(first(&s, &r), want, "{stat}");
+        assert_eq!(r["steps"], 3);
+    }
+    let r = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": "std"})).unwrap();
+    assert!((first(&s, &r) - 81.649_66).abs() < 1e-3, "{}", first(&s, &r));
+    let r = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": "countAbove", "above": 150})).unwrap();
+    assert_eq!(first(&s, &r), 1.0);
+    // A season (February alone), and a period.
+    let r = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": "mean", "months": [2]})).unwrap();
+    assert_eq!(first(&s, &r), 108.0);
+    let name = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().name.clone();
+    assert!(name.starts_with("t mean 2001-02-01–2001-02-01 (months 2)"), "{name}");
+    let r = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": "mean", "start": "2001-01-15"})).unwrap();
+    assert_eq!(first(&s, &r), 158.0);
+    // Through a layer that follows the slider: its period.
+    let late = s.run("layer.addZarr", &json!({"path": path, "variable": "t", "time": true, "start": "2001-01-20"})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    let r = s.run("zarr.reduce", &json!({"layer": late, "stat": "max", "name": "warmest"})).unwrap();
+    assert_eq!(first(&s, &r), 208.0);
+    assert!(s.map().layer_by_name("warmest").is_some());
+    // Kept in the project as a GeoTIFF, read again.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text})).unwrap();
+    let again = t.map().layer_by_name("warmest").and_then(|l| l.raster.as_ref()).and_then(|r| r.data.clone()).unwrap();
+    assert_eq!(again.bands[0].data[0], 208.0);
+    // A step never written (its chunk absent) is Zarr's fill value: no value that step, so the
+    // summary goes on with the others.
+    let (gap_dir, gap) = zarr_store_over_time("reduce-gap");
+    std::fs::remove_file(std::path::Path::new(&gap).join("t/1.0.0")).unwrap();
+    let r = s.run("zarr.reduce", &json!({"path": gap, "variable": "t", "stat": "count"})).unwrap();
+    assert_eq!(first(&s, &r), 2.0);
+    let r = s.run("zarr.reduce", &json!({"path": gap, "variable": "t", "stat": "mean"})).unwrap();
+    assert_eq!(first(&s, &r), 108.0);
+    let _ = std::fs::remove_dir_all(gap_dir);
+    for bad in [
+        json!({"path": path, "variable": "t"}),
+        json!({"path": path, "variable": "t", "stat": "median"}),
+        json!({"path": path, "variable": "t", "stat": "countAbove"}),
+        json!({"path": path, "variable": "t", "stat": "mean", "months": [13]}),
+        json!({"path": path, "variable": "t", "stat": "mean", "months": "June"}),
+        json!({"path": path, "variable": "t", "stat": "mean", "minValid": 1.5}),
+        json!({"path": path, "variable": "t", "stat": "mean", "start": "2005-01-01"}),
+        json!({"path": path, "variable": "lat", "stat": "mean"}),
+    ] {
+        assert!(s.run("zarr.reduce", &bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A trend over a data cube (#579), from the three kinds of cube: a stack of raster layers dated
+/// by their names, a raster whose bands are dates, and a Zarr variable along its time dimension.
+/// A cell with a clear trend gets Sen's slope and a significant slope; noise gets a slope but no
+/// significant one; a cell with too few values gets nothing.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_trend_over_a_data_cube() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: -56.0, origin_y: -12.0, pixel_width: 0.01, pixel_height: -0.01 };
+    // Twelve years; cell 0 rises 0.02 a year, cell 1 is noise, cell 2 has three values only.
+    let years: Vec<i32> = (2013..2025).collect();
+    let noise = [0.03, -0.02, 0.05, -0.04, 0.01, 0.0, -0.05, 0.04, -0.01, 0.02, -0.03, 0.03];
+    let cells = |k: usize| -> Vec<f32> {
+        vec![0.3 + 0.02 * k as f32 + 0.002 * noise[k] as f32, 0.5 + noise[k] as f32, if k < 3 { 0.4 } else { f32::NAN }, 0.6]
+    };
+    let mut names = Vec::new();
+    for (k, y) in years.iter().enumerate() {
+        let name = format!("ndvi_{y}-07-01");
+        let r = Raster::new(&name, 2, 2, vec![cells(k)], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let bytes = geotiff::write(&r, 0).unwrap();
+        crate::cmd::raster::add_raster(&mut s, &name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+        names.push(name);
+    }
+    let value = |s: &Session, id: &Value, cell: usize| {
+        s.map().layer(id.as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap().bands[0].data[cell]
+    };
+    let r = s.run("cube.trend", &json!({"layers": names})).unwrap();
+    let ids = r["layers"].as_array().unwrap().clone();
+    assert_eq!((ids.len(), r["dates"].as_u64()), (4, Some(12)), "{r}");
+    let (slope, p, significant) = (&ids[0], &ids[2], &ids[3]);
+    assert!((value(&s, slope, 0) - 0.02).abs() < 1e-3, "{}", value(&s, slope, 0));
+    assert!(value(&s, p, 0) < 0.01 && (value(&s, significant, 0) - 0.02).abs() < 1e-3);
+    assert!(value(&s, slope, 1).is_finite() && value(&s, p, 1) > 0.05 && value(&s, significant, 1).is_nan());
+    assert!(value(&s, slope, 2).is_nan() && value(&s, p, 2).is_nan());
+    // A constant cell: no slope, and nothing significant.
+    assert_eq!(value(&s, slope, 3), 0.0);
+    assert!(value(&s, significant, 3).is_nan());
+    let name = |id: &Value| s.map().layer(id.as_u64().unwrap() as u32).unwrap().name.clone();
+    assert_eq!(name(slope), "ndvi 2013-07-01–2024-07-01 Sen slope per year");
+    assert!(name(&ids[1]).ends_with("Z (Hamed-Rao)"), "{}", name(&ids[1]));
+    // Per decade, another test, a period, and the dates given.
+    let r = s.run("cube.trend", &json!({"layers": names, "per": "decade", "test": "yueWang", "start": "2016", "name": "late"})).unwrap();
+    let late = r["layers"][0].clone();
+    assert_eq!(r["dates"], 9);
+    assert!((value(&s, &late, 0) - 0.2).abs() < 1e-2, "{}", value(&s, &late, 0));
+    let backwards: Vec<String> = (0..12).map(|k| format!("{}-01-01", 2030 - k)).collect();
+    let r = s.run("cube.trend", &json!({"layers": names, "dates": backwards, "test": "original"})).unwrap();
+    assert!(value(&s, &r["layers"][0], 0) < 0.0, "the dates given are used, in the layers' order");
+    // A raster whose bands are the dates, named by them.
+    let bands: Vec<Vec<f32>> = (0..12).map(cells).collect();
+    let mut cube = Raster::new("stack", 2, 2, bands, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    for (b, y) in cube.bands.iter_mut().zip(&years) {
+        b.name = format!("NDVI {y}");
+    }
+    let bytes = geotiff::write(&cube, 0).unwrap();
+    let id =
+        crate::cmd::raster::add_raster(&mut s, "stack", rustgis_map::RasterLayer::from_bytes(cube, "stack.tif", bytes)).unwrap()["layer"]
+            .clone();
+    let r = s.run("cube.trend", &json!({"layer": id})).unwrap();
+    assert!((value(&s, &r["layers"][0], 0) - 0.02).abs() < 1e-3);
+    // Two bands on one date are refused, as two layers are.
+    let same: Vec<String> = (0..12).map(|k| format!("{}-06-01", 2000 + k.max(1))).collect();
+    let e = s.run("cube.trend", &json!({"layer": id, "dates": same})).unwrap_err();
+    assert!(e.contains("same date"), "{e}");
+    // A Zarr variable: every cell rises 100 a step.
+    let (dir, path) = zarr_store_at("trend", &[0, 31, 59, 90, 120, 151, 181, 212]);
+    let r = s.run("cube.trend", &json!({"path": path, "variable": "t", "test": "seasonal", "seasons": 4})).unwrap();
+    assert_eq!(r["dates"], 8);
+    assert!(value(&s, &r["layers"][0], 0) > 1000.0, "{}", value(&s, &r["layers"][0], 0));
+    let _ = std::fs::remove_dir_all(dir);
+    // A step never written (its chunk absent) has no value; the trend goes on with the others.
+    let (gap_dir, gap) = zarr_store_at("trend-gap", &[0, 31, 59, 90, 120, 151, 181, 212]);
+    std::fs::remove_file(std::path::Path::new(&gap).join("t/3.0.0")).unwrap();
+    let r = s.run("cube.trend", &json!({"path": gap, "variable": "t", "test": "original"})).unwrap();
+    assert!(value(&s, &r["layers"][0], 0) > 1000.0, "{}", value(&s, &r["layers"][0], 0));
+    let _ = std::fs::remove_dir_all(gap_dir);
+    // Refused: too few layers, no dates, dates of another length, unknown options, another grid.
+    let other = Raster::new("ndvi_2030-01-01", 3, 3, vec![vec![0.0; 9]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&other, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "ndvi_2030-01-01", rustgis_map::RasterLayer::from_bytes(other, "o.tif", bytes)).unwrap();
+    let mut mixed = names.clone();
+    mixed.push("ndvi_2030-01-01".into());
+    for bad in [
+        json!({"layers": &names[..3]}),
+        json!({"layers": names, "dates": ["2001", "2002"]}),
+        json!({"layers": names, "test": "ols"}),
+        json!({"layers": names, "alpha": 0.7}),
+        json!({"layers": names, "per": "week"}),
+        json!({"layers": names, "start": "2030"}),
+        json!({"layers": mixed}),
+        json!({"layer": names[0]}),
+    ] {
+        assert!(s.run("cube.trend", &bad).is_err(), "{bad}");
+    }
+    let undated = Raster::new("plain", 2, 2, vec![vec![0.0; 4]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&undated, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "plain", rustgis_map::RasterLayer::from_bytes(undated, "plain.tif", bytes)).unwrap();
+    let mut no_date = names[..4].to_vec();
+    no_date[1] = "plain".into();
+    let e = s.run("cube.trend", &json!({"layers": no_date})).unwrap_err();
+    assert!(e.contains("no date in the name of plain"), "{e}");
+    // A run the app no longer keeps is said, never worked out again here.
+    let e = s.run("cube.trend", &json!({"ran": 987_654_321u64})).unwrap_err();
+    assert!(e.contains("no longer kept"), "{e}");
+    // A run kept by one session is that session's: another one (Python, tests side by side)
+    // doesn't take it, and it is added once.
+    let kept = Raster::new("kept", 2, 2, vec![vec![0.0; 4]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let ran = crate::cmd::cube::land(&mut s, vec![kept], 12);
+    let mut other = Session::new(Project::default());
+    assert!(other.run("cube.trend", &json!({"ran": ran})).unwrap_err().contains("no longer kept"));
+    assert_eq!(s.run("cube.trend", &json!({"ran": ran})).unwrap()["dates"], 12);
+    assert!(s.run("cube.trend", &json!({"ran": ran})).is_err());
+    let e = s.run("cube.trend", &json!({"layers": names, "minValid": 99})).unwrap_err();
+    assert!(e.contains("more than the"), "{e}");
+    // Two layers on one day would count twice in the test: refused.
+    let mut twice: Vec<String> = (0..names.len()).map(|k| format!("{}-06-01", 2010 + k)).collect();
+    twice[1] = twice[0].clone();
+    let e = s.run("cube.trend", &json!({"layers": names, "dates": twice})).unwrap_err();
+    assert!(e.contains("same date"), "{e}");
+    // Seasons from the calendar: the 1st of every month is its month in every year, leap years
+    // included, and a 16-day composite on the same day each year keeps its season.
+    use crate::cmd::cube::season_of;
+    let day = |d: &str| rustgis_data::time::parse_text(d).unwrap();
+    for y in 2000..2010 {
+        for m in 1..=12 {
+            assert_eq!(season_of(day(&format!("{y}-{m:02}-01")), 12), m - 1, "{y}-{m}");
+        }
+        assert_eq!(season_of(day(&format!("{y}-01-17")), 23), 1, "{y}");
+        assert_eq!(season_of(day(&format!("{y}-12-19")), 23), 22, "{y}");
+    }
+    // A monthly cube dated on the 1st, with a yearly cycle and a rise: the seasonal test finds it
+    // per year and per decade alike.
+    let mut monthly = Vec::new();
+    for y in 2015..2021 {
+        for m in 1..=12 {
+            let k = (y - 2015) * 12 + (m - 1);
+            let v = 0.5 + 0.2 * (std::f32::consts::TAU * (m - 1) as f32 / 12.0).sin() + 0.01 * k as f32 / 12.0;
+            let name = format!("evi_{y}-{m:02}-01");
+            let r = Raster::new(&name, 1, 1, vec![vec![v]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+            let bytes = geotiff::write(&r, 0).unwrap();
+            crate::cmd::raster::add_raster(&mut s, &name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+            monthly.push(name);
+        }
+    }
+    for (per, want) in [("year", 0.01), ("decade", 0.1)] {
+        let r = s.run("cube.trend", &json!({"layers": monthly, "test": "seasonal", "per": per})).unwrap();
+        let slope = value(&s, &r["layers"][0], 0);
+        assert!((slope - want).abs() < want * 0.05, "{per}: {slope}");
+        assert!(value(&s, &r["layers"][2], 0) < 0.01, "{per}: significant");
+    }
 }
 
 /// A Zarr variable follows the time slider (#554): the slice drawn is the step the slider is at,
@@ -7804,7 +8698,7 @@ fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
 #[test]
 fn params_name_every_key_a_command_reads() {
     // Read by a shared helper but of no use to the command.
-    let unused = [("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
+    let unused = [("gp.spatialJoin", "input"), ("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
     let s = Session::new(Project::default());
     let mut missing = Vec::new();
     let found = keys_read_by_commands();
@@ -7840,6 +8734,34 @@ fn needs_input_reads_descriptions() {
     let s = Session::new(Project::default());
     assert!(s.registry.get("raster.georeference").is_some_and(crate::CommandSpec::needs_input));
     assert!(s.registry.get("map.zoomIn").is_some_and(|c| !c.needs_input()));
+}
+
+/// A description splits into one entry per parameter, for help that lists them (#662): commas
+/// inside quotes, parentheses, brackets or braces stay in their entry.
+#[test]
+fn param_list_splits_a_description_into_entries() {
+    use crate::{Param, param_list};
+    let desc =
+        r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "steps"?: [{"tool": id}, …], "where": "a, b"}"#;
+    let list = param_list(desc).unwrap();
+    let keys: Vec<(&str, bool)> = list.iter().map(|p| (p.key, p.optional)).collect();
+    assert_eq!(keys, [("layer", true), ("class", true), ("steps", true), ("where", false)]);
+    assert_eq!(list[1].text, r#""class"?: name (none: the Default class, by whatever name it has)"#);
+    assert_eq!(param_list("{}"), Some(Vec::<Param>::new()));
+    // An escaped quote (a plugin's description may have one) doesn't end a value early.
+    let escaped = param_list(r#"{"title"?: "a \"quoted, word\"", "n": number}"#).unwrap();
+    assert_eq!(escaped.iter().map(|p| p.key).collect::<Vec<_>>(), ["title", "n"]);
+    assert_eq!(param_list("a GeoJSON text"), None);
+    // Every command's description splits into entries, each led by a key `param_keys` finds: one
+    // cut in the wrong place (an unclosed bracket or quote in its prose) would lead with another.
+    let s = Session::new(Project::default());
+    for c in &s.registry.commands {
+        let list = param_list(c.params).unwrap_or_else(|| panic!("{}: {}", c.id, c.params));
+        let keys = c.param_keys().unwrap_or_default();
+        for p in &list {
+            assert!(keys.contains(&p.key), "{}: entry {:?} in {}", c.id, p.text, c.params);
+        }
+    }
 }
 
 #[test]

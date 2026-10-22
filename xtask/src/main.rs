@@ -1,9 +1,13 @@
-//! `cargo xtask ci | layers | web-pwa <dir>`
+//! `cargo xtask ci | layers | notices [--check] | web-pwa <dir>`
 //!
 //! - `layers`: enforces the crate layering (nothing below L6 may depend on egui/eframe/rfd).
 //! - `ci`: fmt check, clippy -D warnings, tests and the layer check.
+//! - `notices [--check]`: writes the third-party licence notices the packages ship (see
+//!   `notices.rs`), or checks they are up to date (exit code 2 when they are not).
 //! - `web-pwa <dir>`: writes the web app's service worker into a `trunk build` output directory
 //!   (`dist/web`) from the template `apps/rustgis-web/sw.js`, listing the built files to cache.
+
+mod notices;
 
 use std::process::{Command, ExitCode};
 
@@ -58,9 +62,9 @@ fn cargo(args: &[&str]) -> Result<(), String> {
     if st.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
-/// Files in a web build the service worker must not cache: itself, and the GitHub Pages
-/// configuration the deploy adds.
-const NOT_SHELL: &[&str] = &["sw.js", "CNAME", ".nojekyll"];
+/// Files in a web build the service worker must not cache: itself, the GitHub Pages
+/// configuration the deploy adds, and the licence notices (served, but not needed offline).
+const NOT_SHELL: &[&str] = &["sw.js", "CNAME", ".nojekyll", "LICENSE", "THIRD-PARTY-LICENSES.txt"];
 
 /// The files under `dir` (a `trunk build` output) for the service worker to cache, as sorted
 /// `/`-separated paths relative to `dir`, plus a version that changes whenever any of them or the
@@ -147,8 +151,25 @@ fn main() -> ExitCode {
             .and_then(|_| cargo(&["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))
             .and_then(|_| cargo(&["test", "--workspace", "-q"]))
             .and_then(|_| layers()),
+        "notices" => {
+            let check = match std::env::args().nth(2).as_deref() {
+                None => false,
+                Some("--check") => true,
+                Some(other) => {
+                    eprintln!("unknown argument {other}: usage: cargo xtask notices [--check]");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return match notices::notices(&root(), check) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err((code, e)) => {
+                    eprintln!("{e}");
+                    ExitCode::from(code)
+                }
+            };
+        }
         "web-pwa" => web_pwa(std::env::args().nth(2)),
-        _ => Err("usage: cargo xtask ci | layers | web-pwa <dir>".into()),
+        _ => Err("usage: cargo xtask ci | layers | notices [--check] | web-pwa <dir>".into()),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,
@@ -180,7 +201,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("snippets/x")).unwrap();
         std::fs::create_dir_all(dir.join(".stage")).unwrap();
-        for f in ["index.html", "app-1.js", "app-1_bg.wasm", "snippets/x/inline0.js", "sw.js", "CNAME", ".nojekyll", ".stage/tmp"] {
+        for f in [
+            "index.html",
+            "app-1.js",
+            "app-1_bg.wasm",
+            "snippets/x/inline0.js",
+            "sw.js",
+            "CNAME",
+            ".nojekyll",
+            "LICENSE",
+            "THIRD-PARTY-LICENSES.txt",
+            ".stage/tmp",
+        ] {
             std::fs::write(dir.join(f), f).unwrap();
         }
         let (files, v1) = web_shell(&dir, "sw").unwrap();

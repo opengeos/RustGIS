@@ -228,7 +228,13 @@ both themes: `#` comments in green italics, the command id, and the JSON's strin
 `notebook.run`), and parameters that aren't valid JSON are red and underlined. A script is read to
 its 10,000th line; any further are dimmed, as Run doesn't read them. Typing a line's first word
 opens a list of the commands it starts, under the cursor: ↑/↓ to move, Enter or Tab to accept,
-Escape to close, or a click.
+Escape to close, or a click. Beside it, the highlighted command's help: its signature (keys with `?`
+may be left out), its name, its parameters one per line, and where it sits in the interface.
+Accepting a command on a line of its own adds its braces: with its required keys ready for their
+values, the cursor at the first (`map.goToXY {"lon": , "lat": }`), or empty with the cursor inside
+when every key may be left out; a command with no parameters gets none, and a line that has
+parameters keeps them. While you type a command's parameters (the cursor inside its `{…}`), the same help stays by the cursor;
+Escape closes it.
 
 ## ModelBuilder
 
@@ -284,7 +290,23 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
 - **Ortho Mapping** and **Reality Mapping** workspaces mosaic georeferenced images into an
   orthomosaic, or elevation rasters into a surface model that exports as a 3D mesh (OBJ).
 - **Georeference** places a raster from control points (column, row, longitude, latitude) or
-  stretches it over the map view.
+  stretches it over the map view. Those only shift and scale a north-up grid, as RustGIS's
+  geotransform has no rotation. With `transform` (`raster.georeference`) the points are fitted by any
+  of the Control Point Fit transforms and the raster is warped onto a new north-up grid covering the
+  warped image: `{"layer": "scan", "transform": "spline", "points": [[column, row, x, y], …],
+  "pointsCrs": "EPSG:4326", "crs": 32613, "resampling": "bilinear", "cellSize": 5, "name": "warped",
+  "path": "warped.tif"}`. `pointsCrs` is the coordinate system the points' x and y are in (default
+  EPSG:4326) and `crs` the output's (default `pointsCrs`, so nothing is reprojected unless asked).
+  Each output cell is taken back through the fit, after reprojection, to the image and sampled there
+  with `nearest`, `bilinear` (the default) or `cubic`; cells that fall outside the image are no
+  data, or see-through for a colour image, which gains an alpha band for it (a grey byte image
+  becomes grey with alpha; alpha is 0–255 in every pixel type). An image warped into a geographic
+  `crs` gets square cells in degrees, and one that would span more than 180° of longitude is
+  refused: give a projected `crs`. The cell is about the source pixel's size on the ground unless
+  `cellSize` (output units) says otherwise. The result replaces the layer's raster, or becomes a new
+  layer with `name`; `path` also writes it as a cloud-optimised GeoTIFF, which then is the layer's
+  file. A raster opened from an overview is warped at that reduced resolution, and the result says
+  so.
 - **Control Point Fit** (`raster.gcpFit`) fits a similarity, affine, projective, second- or
   third-order polynomial, or thin plate spline transform to control points and reports how well
   it holds: each point's residual in pixels and map units, the RMSE, and each point's error when
@@ -305,6 +327,48 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
   from training polygons).
 - **Mensuration**: distances along the surface, heights between two points, areas, and volumes
   above or below a base height, with a list of results.
+
+### Trend analysis
+
+**Trend Analysis** (`cube.trend`, in the Workflows pane after Change Detection) asks of a series of
+rasters whether each cell is changing, how fast, and how surely: an NDVI series greening or
+browning, a temperature series warming. Each cell gets **Sen's slope**, the median of the slopes
+between every two dates, which holds up against outliers such as a cloud left in an NDVI scene,
+and a **Mann–Kendall** test of whether the trend is significant.
+
+- **The series** (a data cube) is any of:
+  - raster layers, a date each, dated by their names (`ndvi_2024-06-01`, MODIS's `A2024153`,
+    `2024-06`, a year) or by the `dates` given: `{"layers": ["ndvi_2015", "ndvi_2016", …]}`;
+  - a Zarr variable along its time dimension, by its layer or its store, as for Summarise over time
+    (see [Data](data.md)): `{"path": "air.zarr", "variable": "t2m"}`;
+  - a raster of several bands, a date each, as Earth Engine and openEO export, dated by the bands'
+    names or `dates`.
+
+  The rasters have to be on one grid; put them on one first with Raster Functions › Resample.
+- **The test:** NDVI and temperature series are autocorrelated, which makes the plain test report
+  too many significant cells, so the default is the **modified Mann–Kendall** test of **Hamed &
+  Rao (1998)**: the variance of S is corrected by the autocorrelation of the detrended series'
+  ranks, at the lags significant at the test's level. The others:
+  - **Yue & Wang (2004)**, from the lag-1 autocorrelation of the detrended series;
+  - **Seasonal** (Hirsch et al. 1982), for a series with a yearly cycle: the test is made within
+    each season (`"seasons": 12` for months, 23 for 16-day composites) and summed, and Sen's slope
+    comes from pairs within a season;
+  - **Mann–Kendall** for independent values.
+
+  The definitions follow `pymannkendall`'s, ties included.
+- **Options:** the significance level (`"alpha"`, 0.05), the slope per year or per decade (from the
+  real dates, so uneven spacing is handled), a period (`start`, `end`), a season across years
+  (`"months": [12, 1, 2]`), and the dates a cell needs (`"minValid"`, by default half of them, at
+  least 4). Missing values and no-data are skipped cell by cell.
+- **Outputs:** four 32-bit layers, kept in the project as GeoTIFFs: Sen's slope, the test's Z, the
+  p-value, and the slope where p < alpha (no-data elsewhere), the one a map usually shows on a
+  diverging ramp centred on 0.
+- **Size:** the cube is read into memory a slice at a time, up to 64 million values (cells times
+  dates; 16 million in the web app) and 2,000 dates. It runs in the background with progress and Cancel.
+
+```sh
+rustgis-cli run --cmd 'cube.trend={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"per":"decade"}'
+```
 
 ## Deep learning and hosted imagery
 

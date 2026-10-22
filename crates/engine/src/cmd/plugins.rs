@@ -288,8 +288,18 @@ pub const SQL: &str = "layer.addSql";
 
 /// Commands that read a database, which can be a PostgreSQL server's as well as a file, and a
 /// Zarr store, a folder or a web address.
-const DATABASES: &[&str] =
-    &[SQL, "layer.addDatabase", "info.databaseTables", "sql.query", "sql.schema", "raster.zarrInfo", "layer.addZarr"];
+const DATABASES: &[&str] = &[
+    SQL,
+    "layer.addDatabase",
+    "info.databaseTables",
+    "sql.query",
+    "sql.schema",
+    "raster.zarrInfo",
+    "layer.addZarr",
+    "zarr.series",
+    "zarr.reduce",
+    "cube.trend",
+];
 
 /// What a command reaches beyond the project when run with some parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -326,6 +336,10 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     }
     if DATABASES.contains(&spec.id) {
         return Some(Reach::Files);
+    }
+    // Georeferencing writes a file only when it is given a `path`; the rest of it stays in the project.
+    if spec.id == "raster.georeference" {
+        return super::items::names_place(params, PLACE_KEYS, 0).then_some(Reach::Files);
     }
     let files = super::items::names_place(params, PLACE_KEYS, 0)
         || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))

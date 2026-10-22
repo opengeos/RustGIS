@@ -40,6 +40,9 @@ for b in rustgis rustgis-cli; do
   [ -f "$bin/$b$exe" ] || { echo "missing $bin/$b$exe: build it first" >&2; exit 1; }
 done
 logo() { "$bin/rustgis-cli$exe" logo "$1" --size "$2"; }
+# The licence notices of the crates in the binaries (`cargo xtask notices`), shipped with LICENSE.
+notices="$root/THIRD-PARTY-LICENSES.txt"
+[ -f "$notices" ] || { echo "missing $notices: run cargo xtask notices" >&2; exit 1; }
 name="RustGIS-$version-$os-$arch"
 
 case "$os" in
@@ -47,7 +50,7 @@ case "$os" in
     # Portable tarball.
     d="$work/$name"
     mkdir -p "$d"
-    cp "$bin/rustgis" "$bin/rustgis-cli" "$root/LICENSE" "$root/README.md" \
+    cp "$bin/rustgis" "$bin/rustgis-cli" "$root/LICENSE" "$notices" "$root/README.md" \
       "$root/packaging/linux/rustgis.desktop" "$root/packaging/linux/rustgis-mime.xml" "$d/"
     logo "$d/rustgis.png" 512
     tar -C "$work" -czf "$dist/$name.tar.gz" "$name"
@@ -64,6 +67,7 @@ case "$os" in
       logo "$p/usr/share/icons/hicolor/${s}x${s}/apps/rustgis.png" "$s"
     done
     install -Dm644 "$root/LICENSE" "$p/usr/share/doc/rustgis/copyright"
+    install -Dm644 "$notices" "$p/usr/share/doc/rustgis/THIRD-PARTY-LICENSES.txt"
     mkdir -p "$p/DEBIAN"
     # Libraries the binaries link against, worked out by dpkg-shlibdeps (it wants a
     # debian/control in the working directory). The windowing and GPU libraries are loaded at
@@ -138,6 +142,7 @@ cp -a "$p/usr" %{buildroot}/
 /usr/share/mime/packages/rustgis.xml
 /usr/share/icons/hicolor/*/apps/rustgis.png
 %license /usr/share/doc/rustgis/copyright
+%license /usr/share/doc/rustgis/THIRD-PARTY-LICENSES.txt
 SPEC
       rpmbuild --quiet -bb --target "$arch" --define "_topdir $r" "$r/SPECS/rustgis.spec"
       # The file is named after $version (0.2.0-rc.1), like the other assets: GitHub rewrites
@@ -203,6 +208,7 @@ SPEC
       logo "$iconset/icon_${s}x${s}@2x.png" "$((s * 2))"
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/rustgis.icns"
+    cp "$root/LICENSE" "$notices" "$app/Contents/Resources/"
     # Signing: with MACOS_SIGN_IDENTITY (a Developer ID Application identity in the keychain)
     # the app and CLI get a hardened-runtime signature; without it, an ad-hoc one, which
     # Apple Silicon needs to launch anything. With APPLE_API_KEY_PATH, APPLE_API_KEY_ID and
@@ -245,7 +251,11 @@ SPEC
     mkdir -p "$stage"
     cp -R "$app" "$stage/"
     ln -s /Applications "$stage/Applications"
-    hdiutil create -volname "RustGIS $version" -srcfolder "$stage" -ov -format UDZO "$dist/$name.dmg"
+    # hdiutil's own size estimate for -srcfolder can fall short ("No space left on device" while
+    # copying the app): size the image from the folder, with room to spare. UDZO compresses the
+    # free space away.
+    size_mb=$(($(du -sm "$stage" | cut -f1) + 64))
+    hdiutil create -volname "RustGIS $version" -srcfolder "$stage" -size "${size_mb}m" -ov -format UDZO "$dist/$name.dmg"
     if [ -n "$identity" ]; then
       sign "$dist/$name.dmg"
       if notarize "$dist/$name.dmg" && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
@@ -255,7 +265,7 @@ SPEC
 
     d="$work/rustgis-cli-$version-$os-$arch"
     mkdir -p "$d"
-    cp "$bin/rustgis-cli" "$root/LICENSE" "$d/"
+    cp "$bin/rustgis-cli" "$root/LICENSE" "$notices" "$d/"
     sign "$d/rustgis-cli"
     # A bare executable cannot be stapled: notarizing it registers the ticket that Gatekeeper
     # looks up online.
@@ -270,7 +280,7 @@ SPEC
     # Portable zip: unzip anywhere and run, no installer or admin rights.
     d="$work/$name"
     mkdir -p "$d"
-    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$root/README.md" "$d/"
+    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$notices" "$root/README.md" "$d/"
     sed "s/@VERSION@/$version/g" "$root/packaging/windows/README-portable.txt" > "$d/README.txt"
     (cd "$work" && 7z a -tzip -bso0 "$dist/$name-portable.zip" "$name")
 
@@ -280,7 +290,7 @@ SPEC
     case "$arch" in x86_64) instarch=x64 ;; aarch64) instarch=arm64 ;; *) instarch="$arch" ;; esac
     s="$work/installer"
     mkdir -p "$s"
-    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$root/packaging/windows/path.ps1" "$s/"
+    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$notices" "$root/packaging/windows/path.ps1" "$s/"
     "$bin/rustgis-cli.exe" logo "$s/rustgis.ico"
     "$bin/rustgis-cli.exe" logo "$s/sidebar.bmp" --size 128 --canvas 164x314
     "$bin/rustgis-cli.exe" logo "$s/banner.bmp" --size 44 --canvas 493x58 --at 440,7
@@ -328,7 +338,7 @@ SPEC
     # self-signed sideload build.
     m="$work/msix"
     mkdir -p "$m/Assets"
-    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$m/"
+    cp "$bin/rustgis.exe" "$bin/rustgis-cli.exe" "$root/LICENSE" "$notices" "$m/"
     logo "$m/Assets/Square44x44Logo.png" 44
     logo "$m/Assets/Square150x150Logo.png" 150
     logo "$m/Assets/StoreLogo.png" 50

@@ -489,12 +489,40 @@ off, and the layer shows the last of its steps in the slider's window, or nothin
 in it. Moving or playing the slider reads that step's slice (only its chunks), keeping the last
 eight read. A web store's next two steps are read ahead in the background. The stretch is fixed at
 the first slice's range, so a colour means the same value at every step, and **Export** writes an
-animation of it. An axis longer than the slider's 20,000 steps (hourly ERA5) needs `"start"` and
-`"end"` to take a period. The project keeps such a layer by its store (a folder or a web address)
+animation of it. An axis longer than the slider's 20,000 steps (hourly ERA5) takes a period with `"start"` and
+`"end"`; given neither (as the dialog adds it), the layer takes 20,000 steps from the one picked. The project keeps such a layer by its store (a folder or a web address)
 and selection, not as a slice, and reads the slider's step again when it opens.
 
 ```sh
 rustgis-cli run --cmd 'layer.addZarr={"path":"air.zarr","variable":"t","time":true}' --cmd 'time.export={"path":"t.gif"}'
+```
+
+**View › Time Series** (desktop; `zarr.series`) reads a Zarr variable's values through time at a
+point. Pick a Zarr layer, then **Pick a Point** on the map. A layer that follows the time slider
+gives its period, a slice the whole axis, and `"start"`/`"end"` any other. Only the chunks holding
+that point's cell are read. A store chunked one step at a time, such as ARCO-ERA5's map-oriented
+copy, reads a chunk per step: about 4,000 steps at most, so a long axis needs a shorter period.
+The chart draws up to six points as lines and marks the time slider's step, and a click on it
+takes the slider to that date. **Export CSV…** writes the date and value of each point.
+
+```sh
+rustgis-cli run --cmd 'zarr.series={"path":"air.zarr","variable":"t","lon":-55.7,"lat":-12.5}'
+```
+
+**Summarise over time** (in the Time Series pane; `zarr.reduce`) makes a raster of one statistic of
+a Zarr variable's steps: **mean**, **min**, **max**, **sum**, **std** (the population standard
+deviation), **count** of values, or **countAbove** a threshold (days above 30 °C, say). It reads a
+layer's period by default, else the `"start"`/`"end"` given, and `"months"` keeps one season across
+years (`[12, 1, 2]`). Slices are read one at a time and folded into running totals (12 to 20 bytes a
+cell, for grids of up to 32 million cells), so memory depends on the grid, not on the period: at most
+20,000 steps, with progress and **Cancel** in the app. A cell keeps no value when it had fewer values
+than `"minValid"` (a share, 0 by default) of the steps read; with the default, **count** and
+**countAbove** give 0 where a cell never had a value (land in an ocean variable, say), and a
+`"minValid"` above 0 leaves such cells empty. The layer is named after what it holds (`tas mean 1991-01-01–2020-12-31`) and kept in the
+project as a GeoTIFF.
+
+```sh
+rustgis-cli run --cmd 'zarr.reduce={"path":"air.zarr","variable":"t","stat":"mean","months":[12,1,2]}'
 ```
 
 A single step (a layer that doesn't follow the slider) from a store in a folder is saved in the

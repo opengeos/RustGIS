@@ -176,6 +176,7 @@ fn about(ui: &mut Ui, t: &Tokens) {
         regular(12.5),
         t.text_dim,
     );
+    crate::chrome::licence_links(ui);
 }
 
 #[cfg(test)]
