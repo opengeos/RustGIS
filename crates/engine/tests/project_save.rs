@@ -1,6 +1,7 @@
 use rustgis_engine::{Project, Session, cmd::design::EditCounts};
 use serde_json::{Value, json};
 
+/// Failed Save As preserves session state and history, and a later save can still succeed.
 #[test]
 fn failed_save_as_preserves_project_state_and_a_later_save_succeeds() -> Result<(), String> {
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
