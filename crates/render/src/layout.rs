@@ -34,8 +34,11 @@ pub(crate) fn frame_requires_complete(map: &Map, view: &View) -> bool {
     if view.camera.pitch != 0.0 && !map.projection.is_globe() {
         scales.extend(view.camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M));
     }
+    let complete = |source: &rustgis_map::source::SourceLayer| {
+        source.chunk_source().is_some() || (!source.is_open() && crate::is_local_shapefile(source))
+    };
     map.layers.iter().filter(|l| scales.iter().any(|scale| map.draws_at(l, *scale))).any(|layer| {
-        layer.source.as_ref().and_then(|s| s.chunk_source()).is_some()
+        layer.source.as_ref().is_some_and(complete)
             || layer
                 .mask
                 .as_deref()
@@ -43,8 +46,7 @@ pub(crate) fn frame_requires_complete(map: &Map, view: &View) -> bool {
                     map.layers.iter().find(|m| m.name.eq_ignore_ascii_case(name) && m.geometry_type() == GeometryType::Polygon)
                 })
                 .and_then(|mask| mask.source.as_ref())
-                .and_then(|s| s.chunk_source())
-                .is_some()
+                .is_some_and(complete)
     })
 }
 

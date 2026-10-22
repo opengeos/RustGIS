@@ -632,12 +632,18 @@ fn pitched_mixed_sources_keep_windows_and_pending_on_the_owner() {
         camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
         sky: false,
     };
-    for backend in [Backend::Cpu, Backend::Gpu] {
+    for (backend, total) in [(Backend::Cpu, Some(2)), (Backend::Gpu, Some(2)), (Backend::Cpu, None), (Backend::Gpu, None)] {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
         let release = Release(gate.clone());
         let mut map = base.clone();
         map.layers[0] = streamed(&base.layers[0], 1);
-        let info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+        let mut info = map.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+        info.count = total;
+        map.layers[0].source = Some(SourceLayer::from_path(
+            "test.shp",
+            None,
+            Box::new(Chunks { info: info.clone(), ds: base.layers[0].dataset.clone(), size: 1 }),
+        ));
         map.layers[1].dataset.features = Vec::new().into();
         map.layers[1].source = Some(SourceLayer::from_path(
             "mixed.gpkg",
@@ -939,6 +945,7 @@ fn pitched_large_or_unknown_point_sources_use_total_rows_not_the_interaction_win
                         RenderOutput::Cpu(got) => {
                             assert!(got.pixmap.data() == expected.pixmap.data());
                             assert_eq!(got.labels, expected.labels);
+                            assert!(!got.data_pending);
                         }
                         RenderOutput::Gpu(scene) => {
                             assert_eq!(backend, Backend::Gpu);
@@ -1004,4 +1011,68 @@ fn layout_failure_policy_only_requires_active_complete_sources_and_masks() {
     group.children = vec![mask];
     map.groups.push(group);
     assert!(!layout::frame_requires_complete(&map, &view));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn layout_export_rejects_unopened_local_shapefiles_and_required_masks() {
+    use rustgis_map::layout::{ElementKind, FrameShape, INDICATOR_COLOR, INDICATOR_WIDTH, Layout};
+    let dir = tempfile::tempdir().unwrap();
+    let mut base = Map::new("persisted sources");
+    let mut points = Dataset::new("points", GeometryType::Point, vec![]);
+    points.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let point = base.add_dataset(points);
+    let mask = base.add_dataset(Dataset::new("mask", GeometryType::Polygon, vec![]));
+    base.layer_mut(mask).unwrap().visible = false;
+    for pitch in [0.0, 35.0] {
+        let mut page = Layout::new("page", 30.0, 20.0);
+        page.add(
+            "map",
+            (0.0, 0.0, 30.0, 20.0),
+            ElementKind::MapFrame {
+                map: base.name.clone(),
+                center: Coord::new(0.0, 0.0),
+                scale: 300000.0,
+                shape: FrameShape::Rectangle,
+                grid: None,
+                extent_of: None,
+                extent_color: INDICATOR_COLOR,
+                extent_width: INDICATOR_WIDTH,
+                bearing: 0.0,
+                pitch,
+            },
+        );
+        for masked in [false, true] {
+            let mut map = base.clone();
+            let owner = if masked { mask } else { point };
+            let mut source = SourceLayer::default();
+            source.path = Some(dir.path().join("missing.SHP").display().to_string());
+            map.layer_mut(owner).unwrap().source = Some(source);
+            if masked {
+                map.layer_mut(point).unwrap().mask = Some("MASK".into());
+            }
+            assert!(
+                layout::render(&page, std::slice::from_mut(&mut map), 96.0, &layout::PageInfo::default()).is_none(),
+                "missing complete source must fail the page: pitch {pitch}, masked {masked}"
+            );
+            assert!(map.layer(owner).unwrap().source.as_ref().unwrap().error.is_some());
+        }
+        let mut unused = base.clone();
+        let mut source = SourceLayer::default();
+        source.path = Some(dir.path().join("unused.shp").display().to_string());
+        unused.layer_mut(mask).unwrap().source = Some(source);
+        assert!(
+            layout::render(&page, &mut [unused], 96.0, &layout::PageInfo::default()).is_some(),
+            "an unused hidden Shapefile must not fail export"
+        );
+
+        let mut ordinary = base.clone();
+        let mut source = SourceLayer::default();
+        source.path = Some(dir.path().join("missing.gpkg").display().to_string());
+        ordinary.layer_mut(point).unwrap().source = Some(source);
+        assert!(
+            layout::render(&page, &mut [ordinary], 96.0, &layout::PageInfo::default()).is_some(),
+            "ordinary sources retain upstream best-effort behavior"
+        );
+    }
 }

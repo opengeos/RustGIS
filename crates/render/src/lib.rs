@@ -1127,9 +1127,13 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     let mut camera = view.camera;
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
     camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
-    let complete_layers: std::collections::HashSet<u32> = if camera.pitch != 0.0 && !map.projection.is_globe() {
-        let scales: Vec<_> =
-            camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M).collect();
+    // A persisted Shapefile has no chunk handle until it opens. Preflight required local
+    // sources in every view so an open failure cannot become a successful incomplete export.
+    let complete_layers: std::collections::HashSet<u32> = {
+        let mut scales = vec![map.ground_res_at(&camera) / rustgis_geom::PIXEL_M];
+        if camera.pitch != 0.0 && !map.projection.is_globe() {
+            scales.extend(camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M));
+        }
         map.layers
             .iter()
             .filter(|l| scales.iter().any(|scale| map.draws_at(l, *scale)))
@@ -1144,8 +1148,6 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
                 std::iter::once(l.id).chain(mask)
             })
             .collect()
-    } else {
-        Default::default()
     };
     if !complete_layers.is_empty() {
         for layer in &mut map.layers {
@@ -1154,16 +1156,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             }
             if let Some(source) = &mut layer.source
                 && !source.is_open()
-                && source.embedded.is_none()
-                && source.gdal.is_none()
-                && source.duckdb.is_none()
-                && source.postgis.is_none()
-                && source.mysql.is_none()
-                && source.sqlserver.is_none()
-                && source.path.as_ref().is_some_and(|p| {
-                    !rustgis_data::source::is_remote_name(p)
-                        && std::path::Path::new(p).extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"))
-                })
+                && is_local_shapefile(source)
             {
                 if let Err(e) = source.open() {
                     source.error = Some(e);
@@ -1224,7 +1217,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         // Owner synchronization has already run. Repeating it on the copy could consume a
         // shared pending result before its owner installs it, even for a plain chunk source.
         let mut output = if backend.is_gpu() {
-            gpu_turned(&mut snapshot, &view, true)
+            gpu_turned(&mut snapshot, &view, full_res_rasters, true)
                 .map(RenderOutput::Gpu)
                 .or_else(|| render_tilted(&mut snapshot, &view, full_res_rasters, true).map(RenderOutput::Cpu))
         } else {
@@ -1248,7 +1241,7 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         let view = View { camera, ..*view };
         if backend.is_gpu()
             && (camera.pitch != 0.0 || camera.bearing != 0.0)
-            && let Some(scene) = gpu_turned(map, &view, false)
+            && let Some(scene) = gpu_turned(map, &view, full_res_rasters, false)
         {
             return Some(RenderOutput::Gpu(scene));
         }
@@ -1260,6 +1253,20 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         }
     }
     render_frame(map, view, full_res_rasters, backend, Labels::Own)
+}
+
+/// Persisted local Shapefiles can require complete traversal before a handle is opened.
+/// Converted, embedded, remote and database sources retain their own provider behavior.
+pub(crate) fn is_local_shapefile(source: &rustgis_map::source::SourceLayer) -> bool {
+    source.embedded.is_none()
+        && source.gdal.is_none()
+        && source.duckdb.is_none()
+        && source.postgis.is_none()
+        && source.mysql.is_none()
+        && source.sqlserver.is_none()
+        && source.path.as_ref().is_some_and(|p| {
+            !rustgis_data::source::is_remote_name(p) && std::path::Path::new(p).extension().is_some_and(|e| e.eq_ignore_ascii_case("shp"))
+        })
 }
 
 /// Layers whose perspective painter needs complete globally depth-ordered features.
@@ -1600,7 +1607,7 @@ fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidat
 /// [`render_tilted`] warps them), with point markers upright over them and labels placed in
 /// the view. `None` when the view needs pictures drawn on the CPU (tiles, rasters, layers drawn
 /// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
-fn gpu_turned(map: &mut Map, view: &View, sources_ready: bool) -> Option<gpu_scene::GpuScene> {
+fn gpu_turned(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready: bool) -> Option<gpu_scene::GpuScene> {
     use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
     if !gpu_may_turn(map, view) {
         return None;
@@ -1611,14 +1618,16 @@ fn gpu_turned(map: &mut Map, view: &View, sources_ready: bool) -> Option<gpu_sce
     if view.camera.pitch == 0.0 {
         let (bw, bh) = view.camera.rotated_size(view.width, view.height);
         let north = View { width: bw.ceil() + 2.0, height: bh.ceil() + 2.0, camera: Camera { bearing: 0.0, ..view.camera }, ..*view };
-        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &north, false, Backend::Gpu, Labels::Turned(view)) else { return None };
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &north, full_res_rasters, Backend::Gpu, Labels::Turned(view)) else {
+            return None;
+        };
         if pictures(&scene.cmds) || scene.labels.iter().any(|l| l.icon.is_some()) {
             return None;
         }
         return Some(GpuScene { tilt, ..scene });
     }
     let bands = view.camera.tilt_bands(view.width, view.height);
-    let data_pending = !sources_ready && sync_tilted(map, view, &bands, false);
+    let data_pending = !sources_ready && sync_tilted(map, view, &bands, full_res_rasters);
     let lock = map.label_lock.take();
     let mut candidates = Vec::new();
     let (mut cmds, mut clips) = (Vec::new(), Vec::new());
@@ -1627,7 +1636,8 @@ fn gpu_turned(map: &mut Map, view: &View, sources_ready: bool) -> Option<gpu_sce
     let last = bands.len().saturating_sub(1);
     for (i, b) in bands.iter().enumerate() {
         let v = band_view(view, b);
-        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &v, false, Backend::Gpu, Labels::Tilted(view, &mut candidates)) else {
+        let Some(RenderOutput::Gpu(scene)) = render_frame(map, &v, full_res_rasters, Backend::Gpu, Labels::Tilted(view, &mut candidates))
+        else {
             plain = false;
             break;
         };
