@@ -1128,10 +1128,11 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
     camera.bearing = rustgis_map::camera::normalize_bearing(camera.bearing);
     camera.pitch = rustgis_map::camera::normalize_pitch(camera.pitch);
     let complete_layers: std::collections::HashSet<u32> = if camera.pitch != 0.0 && !map.projection.is_globe() {
-        let scale = map.ground_res_at(&camera) / rustgis_geom::PIXEL_M;
+        let scales: Vec<_> =
+            camera.tilt_bands(view.width, view.height).iter().map(|b| map.ground_res_at(&b.camera) / rustgis_geom::PIXEL_M).collect();
         map.layers
             .iter()
-            .filter(|l| map.draws_at(l, scale))
+            .filter(|l| scales.iter().any(|scale| map.draws_at(l, *scale)))
             .flat_map(|l| {
                 let mask = l
                     .mask
@@ -1176,12 +1177,13 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             }
         }
     }
+    let depth_scale = map.ground_res_at(&camera) / rustgis_geom::PIXEL_M;
     // Perspective markers and extrusions have a global depth pass. Preserve that complete
     // upstream path using an isolated full-source snapshot until it has a chunk-aware sorter.
     // The owning interaction window, selection and editing provider are never replaced.
     if camera.pitch != 0.0
         && !map.projection.is_globe()
-        && map.layers.iter().any(|l| complete_layers.contains(&l.id) && l.source.as_ref().and_then(|s| s.chunk_source()).is_some())
+        && map.layers.iter().any(|l| needs_tilted_snapshot(map, l, &complete_layers, depth_scale))
     {
         // Keep asynchronous windows and pending work on their owner, never a disposable copy.
         let bands = camera.tilt_bands(view.width, view.height);
@@ -1189,14 +1191,16 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         let mut snapshot = map.clone();
         let mut snapshot_budget = SnapshotBudget::new(complete_snapshot_limit());
         for layer in &mut snapshot.layers {
-            if !complete_layers.contains(&layer.id) {
+            if !complete_layers.contains(&layer.id) || layer.source.as_ref().and_then(|s| s.chunk_source()).is_none() {
                 layer.source = None;
                 continue;
             }
-            let Some(source) = layer.source.as_ref().and_then(|s| s.chunk_source()) else {
-                layer.source = None;
+            if !needs_tilted_snapshot(map, layer, &complete_layers, depth_scale) {
+                // Plain fills/lines keep their complete per-band traversal, outside the
+                // global depth-order snapshot and its feature-storage budget.
                 continue;
-            };
+            }
+            let Some(source) = layer.source.as_ref().and_then(|s| s.chunk_source()) else { continue };
             let ids: std::collections::HashSet<u64> =
                 layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r).map(|f| f.id)).collect();
             let mut features = Vec::new();
@@ -1216,7 +1220,17 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
             layer.clear_cache();
             layer.touch_geometry();
         }
-        let mut output = render_with_backend(&mut snapshot, view, full_res_rasters, backend);
+        let view = View { camera, ..*view };
+        // Owner synchronization has already run. Repeating it on the copy could consume a
+        // shared pending result before its owner installs it, even for a plain chunk source.
+        let mut output = if backend.is_gpu() {
+            gpu_turned(&mut snapshot, &view, true)
+                .map(RenderOutput::Gpu)
+                .or_else(|| render_tilted(&mut snapshot, &view, full_res_rasters, true).map(RenderOutput::Cpu))
+        } else {
+            render_tilted(&mut snapshot, &view, full_res_rasters, true).map(RenderOutput::Cpu)
+        };
+        map.adopt_caches(&snapshot);
         if let Some(output) = &mut output {
             match output {
                 RenderOutput::Cpu(rendered) => rendered.data_pending |= data_pending,
@@ -1234,18 +1248,27 @@ fn render_with_backend(map: &mut Map, view: &View, full_res_rasters: bool, backe
         let view = View { camera, ..*view };
         if backend.is_gpu()
             && (camera.pitch != 0.0 || camera.bearing != 0.0)
-            && let Some(scene) = gpu_turned(map, &view)
+            && let Some(scene) = gpu_turned(map, &view, false)
         {
             return Some(RenderOutput::Gpu(scene));
         }
         if camera.pitch != 0.0 {
-            return render_tilted(map, &view, full_res_rasters).map(RenderOutput::Cpu);
+            return render_tilted(map, &view, full_res_rasters, false).map(RenderOutput::Cpu);
         }
         if camera.bearing != 0.0 {
             return render_turned(map, &view, full_res_rasters).map(RenderOutput::Cpu);
         }
     }
     render_frame(map, view, full_res_rasters, backend, Labels::Own)
+}
+
+/// Layers whose perspective painter needs complete globally depth-ordered features.
+/// Ordinary fills/lines and their masks stay on the complete per-band chunk path.
+fn needs_tilted_snapshot(map: &Map, layer: &rustgis_map::Layer, complete_layers: &std::collections::HashSet<u32>, scale: f64) -> bool {
+    complete_layers.contains(&layer.id)
+        && map.draws_at(layer, scale)
+        && layer.source.as_ref().and_then(|s| s.chunk_source()).is_some()
+        && (stands_up(map, layer) || (layer.geometry_type() == GeometryType::Polygon && layer.extrusion.is_some()))
 }
 
 // Separate from the interaction budget: this limits retained complete-source feature storage
@@ -1348,14 +1371,14 @@ const LABEL_MIN_DEPTH_SCALE: f64 = 0.3;
 /// ([`Camera::tilt_bands`]), sharp near and coarser toward the horizon (so far tiles come at
 /// lower zoom), then each screen pixel takes its colour from the band under it, fading into fog
 /// and the sky past the view's reach. Labels are placed in the tilted view, upright.
-fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<Rendered> {
+fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_ready: bool) -> Option<Rendered> {
     let bands_of = view.camera.tilt_bands(view.width, view.height);
-    let data_pending = sync_tilted(map, view, &bands_of, full_res_rasters);
+    let data_pending = !sources_ready && sync_tilted(map, view, &bands_of, full_res_rasters);
     // Labels are placed in the tilted view: a lock on a flat view's labels doesn't apply.
-    let lock = map.label_lock.take();
     let mut candidates = Vec::new();
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
+    let lock = map.label_lock.take();
     let mut warp = Warp::new(view, map);
     // On terrain the bands are kept, to lay over the ground's relief once all are drawn: every
     // triangle of every band is then ordered far to near together. That holds all the bands at
@@ -1367,26 +1390,29 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
     let (mut attribution, mut tiles_pending, mut tile_errors) = (Vec::<String>::new(), false, Vec::<String>::new());
     for (i, b) in bands_of.into_iter().enumerate() {
         let v = band_view(view, &b);
-        if let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates)) {
-            for a in r.attribution {
-                if !attribution.contains(&a) {
-                    attribution.push(a);
-                }
+        let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates))
+        else {
+            map.label_lock = lock;
+            return None;
+        };
+        for a in r.attribution {
+            if !attribution.contains(&a) {
+                attribution.push(a);
             }
-            for e in r.tile_errors {
-                if !tile_errors.contains(&e) {
-                    tile_errors.push(e);
-                }
+        }
+        for e in r.tile_errors {
+            if !tile_errors.contains(&e) {
+                tile_errors.push(e);
             }
-            tiles_pending |= r.tiles_pending;
-            if ground.is_some() {
-                // The nearest band reaches the bottom of the view, the farthest the sky.
-                let depth = (if i == 0 { 0.0 } else { b.depth.0 }, if i == last { f64::INFINITY } else { b.depth.1 });
-                kept.push((v, depth, r.pixmap));
-            } else {
-                // Into the view at once, nearest band first, so only one band is held at a time.
-                warp.band(&mut pm, &v, &r.pixmap, view.camera.depth_y(b.depth.1, view.height), view.camera.depth_y(b.depth.0, view.height));
-            }
+        }
+        tiles_pending |= r.tiles_pending;
+        if ground.is_some() {
+            // The nearest band reaches the bottom of the view, the farthest the sky.
+            let depth = (if i == 0 { 0.0 } else { b.depth.0 }, if i == last { f64::INFINITY } else { b.depth.1 });
+            kept.push((v, depth, r.pixmap));
+        } else {
+            // Into the view at once, nearest band first, so only one band is held at a time.
+            warp.band(&mut pm, &v, &r.pixmap, view.camera.depth_y(b.depth.1, view.height), view.camera.depth_y(b.depth.0, view.height));
         }
     }
     map.label_lock = lock;
@@ -1555,7 +1581,7 @@ fn lift_labels(view: &View, ground: &terrain::Ground, candidates: &mut [Candidat
 /// [`render_tilted`] warps them), with point markers upright over them and labels placed in
 /// the view. `None` when the view needs pictures drawn on the CPU (tiles, rasters, layers drawn
 /// as pictures, icons or extrusions), or the scene isn't plain: the caller draws it on the CPU.
-fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
+fn gpu_turned(map: &mut Map, view: &View, sources_ready: bool) -> Option<gpu_scene::GpuScene> {
     use gpu_scene::{CmdClip, DrawCmd, GpuScene, SceneTilt};
     if !gpu_may_turn(map, view) {
         return None;
@@ -1573,7 +1599,7 @@ fn gpu_turned(map: &mut Map, view: &View) -> Option<gpu_scene::GpuScene> {
         return Some(GpuScene { tilt, ..scene });
     }
     let bands = view.camera.tilt_bands(view.width, view.height);
-    let data_pending = sync_tilted(map, view, &bands, false);
+    let data_pending = !sources_ready && sync_tilted(map, view, &bands, false);
     let lock = map.label_lock.take();
     let mut candidates = Vec::new();
     let (mut cmds, mut clips) = (Vec::new(), Vec::new());
@@ -2572,7 +2598,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let direct = !offscreen;
         let mut bins = effects::AggregationBins::default();
         let mut aggregate_symbol = None;
-        let mut highlights = if complete_source && !layer.selection.is_empty() { Some(Pixmap::new(w, h)?) } else { None };
+        // Only selected geometry is retained; paint directly after the whole layer to avoid
+        // a second full-size canvas and transparent-intermediate rounding differences.
+        let selected_order: std::collections::HashMap<u64, usize> = if complete_source {
+            layer.selection.iter().enumerate().filter_map(|(rank, row)| layer.dataset.features.get(*row).map(|f| (f.id, rank))).collect()
+        } else {
+            Default::default()
+        };
+        let mut highlights: Vec<(usize, Geometry, Symbol)> = Vec::new();
         let mut extrusions = if complete_source
             && layer.geometry_type() == GeometryType::Polygon
             && layer.extrusion.is_some()
@@ -2728,6 +2761,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 }
                 cpu_dirty |= drawn_here;
             }
+            if !complete_source {
+                if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
+                    bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
+                }
+                if !direct {
+                    composite(&mut pm, &target);
+                }
+            }
             // An upright marker shows its own selection.
             for row in selection.iter().filter(|_| !upright.contains(&layer.id)) {
                 if let Some(Some(g)) = geoms.get(*row)
@@ -2741,15 +2782,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // Follow the layer's own backend: when it fell back to the CPU pixmap, the
                     // highlight must too — tessellated here, the layer's later-flushed Image would
                     // draw over it (the CPU path draws highlights over the layer).
-                    if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
+                    if complete_source {
+                        let rank = ds_ptr.features.get(*row).and_then(|f| selected_order.get(&f.id)).copied().unwrap_or(usize::MAX);
+                        highlights.push((rank, (**g).clone(), layer.symbol(*row)));
+                    } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
                         // highlight tessellated into the scene, right after its layer
                     } else {
-                        ctx.highlight(
-                            highlights.as_mut().unwrap_or(&mut pm),
-                            g,
-                            &layer.symbol(*row),
-                            if layer.graphics { &[] } else { &layer.line_strokes },
-                        );
+                        ctx.highlight(&mut pm, g, &layer.symbol(*row), if layer.graphics { &[] } else { &layer.line_strokes });
                         cpu_dirty = true;
                     }
                 }
@@ -2861,8 +2900,6 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             Ok(())
         };
         if let Some(source) = source {
-            let selected: std::collections::HashSet<u64> =
-                layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r).map(|f| f.id)).collect();
             let mut chunk = layer.clone();
             chunk.source = None;
             chunk.clear_cache();
@@ -2871,7 +2908,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // shadows and screen-space effects whose geometry lies beyond its boundary.
             let result = visit_complete(source.as_ref(), &mut |features| {
                 chunk.clear_cache();
-                chunk.selection = features.iter().enumerate().filter_map(|(r, f)| selected.contains(&f.id).then_some(r)).collect();
+                chunk.selection =
+                    features.iter().enumerate().filter_map(|(r, f)| selected_order.contains_key(&f.id).then_some(r)).collect();
                 chunk.dataset.features = features.into();
                 chunk.touch_geometry();
                 draw_chunk(&mut chunk)?;
@@ -2899,14 +2937,18 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
             return None;
         }
-        if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
-            bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
+        if complete_source {
+            if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
+                bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
+            }
+            if !direct {
+                composite(&mut pm, &target);
+            }
         }
-        if !direct {
-            composite(&mut pm, &target);
-        }
-        if let Some(highlights) = highlights {
-            pm.draw_pixmap(0, 0, highlights.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+        highlights.sort_by_key(|(rank, _, _)| *rank);
+        for (_, geometry, symbol) in highlights {
+            ctx.highlight(&mut pm, &geometry, &symbol, if layer.graphics { &[] } else { &layer.line_strokes });
+            cpu_dirty = true;
         }
     }
     if let Some(g) = &globe {

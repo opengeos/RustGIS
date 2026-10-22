@@ -614,7 +614,10 @@ in-memory layer. The renderer chooses geometry simplification from statistics ov
 layer, accumulates point bins across chunks, applies transparency and blend once per layer,
 and draws selection highlights after the whole layer. Labels share the existing global
 priority, stable tie ordering, collision rules and 20,000-candidate placement limit.
-Screen rendering and PNG/layout exports share this traversal.
+Screen rendering and PNG/layout exports share this traversal. Live redraws of a streamed
+Shapefile therefore also read the complete source; line/polygon layers currently make an
+additional statistics pass. Interaction windows remain byte-budgeted, but they are not a
+shortcut for this complete painter, so redraws can be I/O intensive on large files.
 
 Native flat extrusions use a private disposable SQLite ordering workspace (2 MiB page-cache
 target, memory mapping disabled, 4 GiB database ceiling), with a global shadow pass followed
@@ -622,10 +625,11 @@ by globally sorted solids. It is removed when rendering finishes. Failure or inc
 traversal does not publish a partial successful frame. This workspace is not a reusable index.
 
 This is not a fixed bound on total renderer memory: raster targets, label candidates and the
-existing combined polygon-mask path have separate costs. Perspective markers, terrain and
-extrusions retain the complete upstream depth renderer through an isolated full-source
-snapshot; that compatibility fallback materializes the source. Retained complete-source feature
-storage across the snapshot has a separate budget (512 MiB natively, 192 MiB in the browser).
+existing combined polygon-mask path have separate costs. Upright perspective point markers
+and polygon extrusions retain the complete upstream depth renderer through an isolated
+full-source snapshot. Plain fills, lines and mask sources continue complete chunk traversal
+per band, including terrain bands; they do not consume that snapshot's feature budget.
+Retained complete-source feature storage across the snapshot has a separate budget (512 MiB natively, 192 MiB in the browser).
 Exceeding it fails the whole frame with a source diagnostic, without sampling or truncating
 features; raster targets, derived geometry caches and decoding scratch are outside that budget. Flat line/polygon rendering
 makes a statistics pass before painting and currently reads the entire source, so it trades

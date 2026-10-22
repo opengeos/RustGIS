@@ -86,6 +86,7 @@ fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_select
     m.camera = Camera::new(rustgis_geom::lonlat_to_merc(Coord::new(0.02, 0.02)), 80.0);
     let l = &mut m.layers[0];
     l.transparency = 0.35;
+    l.selection = vec![5, 3];
     l.definition_query = Some("value >= 3".into());
     l.labels.enabled = true;
     l.labels.default.field = "name".into();
@@ -104,6 +105,10 @@ fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_select
         for size in [1, 3, 11, 100] {
             let mut actual = m.clone();
             actual.layers[0] = streamed(&m.layers[0], size);
+            // Selected source rows are deliberately ordered differently from file order.
+            actual.layers[0].dataset.features =
+                [5, 3].iter().map(|row| m.layers[0].dataset.features[*row].clone()).collect::<Vec<_>>().into();
+            actual.layers[0].selection = vec![0, 1];
 
             let got = render(&mut actual, &view).unwrap();
             assert!(got.pixmap.data() == expected.pixmap.data(), "chunk size {size} changed pixels");
@@ -777,6 +782,80 @@ fn masks_skip_undrawn_targets_and_reuse_one_complete_source_with_distinct_swipes
         } else {
             assert!(got.unwrap().is_empty());
             assert!(map.layer(mask).unwrap().source.as_ref().unwrap().error.is_none());
+        }
+    }
+}
+
+#[test]
+fn pitched_plain_chunks_bypass_depth_budget_alone_and_with_upright_markers() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
+        }
+    }
+    let _reset = Reset;
+    let view = View {
+        width: 120.0,
+        height: 90.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    for kind in [GeometryType::Polyline, GeometryType::Polygon] {
+        let mut ds = Dataset::new("ground", kind, vec![Field::new("text", FieldType::Text)]);
+        for i in 0..5 {
+            let x = i as f64 * 0.005 - 0.01;
+            let ring = vec![
+                Coord::new(x, -0.01),
+                Coord::new(x + 0.004, -0.01),
+                Coord::new(x + 0.004, 0.01),
+                Coord::new(x, 0.01),
+                Coord::new(x, -0.01),
+            ];
+            let g = if kind == GeometryType::Polyline { Geometry::Line(vec![ring]) } else { Geometry::Polygon(vec![vec![ring]]) };
+            ds.push(Some(g), vec![Value::Text("attribute".repeat(256))]);
+        }
+        let mut base = Map::new("depth eligibility");
+        let ground = base.add_dataset(ds);
+        base.layer_mut(ground).unwrap().selection = vec![0];
+        base.layer_mut(ground).unwrap().transparency = 0.35;
+        for mixed in [false, true] {
+            let mut full = base.clone();
+            if mixed {
+                let mut ds = Dataset::new("upright", GeometryType::Point, vec![]);
+                ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+                full.add_dataset(ds);
+            }
+            for backend in [Backend::Cpu, Backend::Gpu] {
+                let pixels = |output: RenderOutput| match output {
+                    RenderOutput::Cpu(r) => (r.pixmap.data().to_vec(), r.labels),
+                    RenderOutput::Gpu(_) => panic!("complete chunk painter uses the CPU fallback"),
+                };
+                // Always use a CPU reference; a plain in-memory ground layer may be GPU eligible.
+                let expected_cpu = render_with_backend(&mut full.clone(), &view, true, Backend::Cpu).unwrap();
+                let (expected_pixels, expected_labels) = pixels(expected_cpu);
+                let mut map = full.clone();
+                for layer in &mut map.layers {
+                    *layer = streamed(layer, 1);
+                }
+                SNAPSHOT_TEST_LIMIT.with(|s| s.set(Some(std::mem::size_of::<Feature>() * 2)));
+                let got = render_with_backend(&mut map, &view, true, backend).unwrap();
+                let (got_pixels, got_labels) = pixels(got);
+                assert_eq!(got_pixels, expected_pixels, "kind {kind:?}, mixed {mixed}, backend {backend:?}");
+                assert_eq!(got_labels, expected_labels);
+
+                let mut failed = full.clone();
+                for layer in &mut failed.layers {
+                    *layer = streamed(layer, if layer.id == ground { 0 } else { 1 });
+                }
+                let lock = Some(vec![(ground, 0)]);
+                failed.label_lock = lock.clone();
+                assert!(render_with_backend(&mut failed, &view, true, backend).is_none());
+                assert_eq!(failed.label_lock, lock);
+                assert!(failed.layer(ground).unwrap().source.as_ref().unwrap().error.as_ref().unwrap().contains("cancelled"));
+                SNAPSHOT_TEST_LIMIT.with(|s| s.set(None));
+            }
         }
     }
 }
