@@ -193,8 +193,11 @@ pub trait FeatureSource: Send + Sync {
         if !batch.complete && used < bytes {
             // A small probe can hit only unreadable/deleted candidates. An incomplete
             // empty answer is not proof that the requested extent contains no features.
-            let count =
-                batch.features.len().saturating_mul(bytes / 2).checked_div(used).unwrap_or(bytes / (std::mem::size_of::<Feature>() * 4));
+            let count = if batch.features.is_empty() {
+                bytes / (std::mem::size_of::<Feature>() * 4)
+            } else {
+                batch.features.len().saturating_mul(bytes / 2) / used.max(1)
+            };
             let next = clamp_limit(req.limit).min(count).max(1);
             if next > request.limit {
                 request.limit = next;

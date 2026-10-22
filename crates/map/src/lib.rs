@@ -21,6 +21,7 @@ pub mod symbology;
 pub mod tiles;
 pub mod time;
 pub mod view;
+mod view_memory;
 pub mod world;
 
 pub use camera::Camera;
@@ -174,6 +175,9 @@ pub struct Layer {
     /// The projection the cache is in.
     #[serde(skip)]
     projected_for: String,
+    /// Allocation identities and byte totals, shared with render snapshots without retaining rows.
+    #[serde(skip)]
+    view_memory: view_memory::Cache,
     /// Bumped whenever geometry changes so caches rebuild.
     #[serde(default)]
     pub geometry_rev: u64,
@@ -219,6 +223,7 @@ impl Layer {
             projected_rev: u64::MAX,
             projected_for: String::new(),
             geometry_rev: 0,
+            view_memory: Default::default(),
         }
     }
 
@@ -324,8 +329,12 @@ impl Layer {
         let fields = self.dataset.fields.len();
         self.clear_cache();
         self.dataset.features = features.into();
+        let mut padded = false;
         for f in &mut self.dataset.features {
-            f.attrs.resize(fields, rustgis_data::Value::Null);
+            if f.attrs.len() != fields {
+                f.attrs.resize(fields, rustgis_data::Value::Null);
+                padded = true;
+            }
         }
         self.dataset.windowed = true;
         if let Some(src) = &mut self.source {
@@ -343,16 +352,17 @@ impl Layer {
             self.projected_vertices = cache.vertices;
             self.projected_for = cache.key;
             self.projected_rev = self.geometry_rev;
+            let feature_bytes =
+                if padded { rustgis_data::source::memory::features_bytes(&self.dataset.features) } else { cache.feature_bytes };
+            self.view_memory.seed(&self.dataset.features, &self.projected, feature_bytes, cache.projected_bytes);
         }
     }
 
-    /// Allocated row, projected-geometry, extent and optional display storage. Shared render
-    /// snapshots reuse these allocations rather than charging/counting them again.
+    /// Allocated row, projected-geometry, extent and optional display storage for this layer.
+    /// Snapshots report the same shared allocations; totals are memoized until mutable access
+    /// changes an allocation identity, including edits through the public dataset API.
     pub fn view_cache_bytes(&self) -> usize {
-        rustgis_data::source::memory::features_bytes(&self.dataset.features)
-            .saturating_add(lod::cache_bytes(&self.projected))
-            .saturating_add(self.projected_extents.capacity().saturating_mul(std::mem::size_of::<Extent>()))
-            .saturating_add(self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum::<usize>())
+        self.view_memory.total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
     }
 
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
@@ -428,9 +438,7 @@ impl Layer {
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
         self.projected_in(flat, key);
         let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
-            let base = rustgis_data::source::memory::features_bytes(&self.dataset.features)
-                .saturating_add(lod::cache_bytes(&self.projected))
-                .saturating_add(self.projected_extents.capacity().saturating_mul(std::mem::size_of::<Extent>()));
+            let base = self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents);
             s.budget().saturating_sub(base).min(lod::CACHE_BYTES)
         });
         let Some(level) = lod::level(tol).filter(|_| self.projected_vertices > lod::THIN_ABOVE) else { return &self.projected };
@@ -1235,13 +1243,17 @@ impl Map {
                 src.byte_budget = bytes;
                 src.full_read = block;
                 if changed || mode_changed || budget_changed {
+                    let selected = std::mem::take(&mut src.saved_selection);
                     src.reset();
+                    src.saved_selection = selected;
                 }
                 if changed || (!block && layer.view_cache_bytes() > bytes) {
                     // Preserve ids while discarding a window that no longer fits. The next
                     // installed window resolves the selection against its authoritative ids.
-                    let selected = layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r)).map(|f| f.id).collect();
+                    let mut selected: Vec<_> =
+                        layer.selection.iter().filter_map(|r| layer.dataset.features.get(*r)).map(|f| f.id).collect();
                     if let Some(src) = &mut layer.source {
+                        selected.append(&mut src.saved_selection);
                         src.reset();
                     }
                     layer.install(Vec::new());

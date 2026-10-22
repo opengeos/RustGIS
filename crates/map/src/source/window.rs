@@ -11,6 +11,8 @@ pub(crate) struct Cache {
     pub vertices: usize,
     pub key: String,
     pub mean_bytes: usize,
+    pub feature_bytes: usize,
+    pub projected_bytes: usize,
 }
 
 fn base_bytes(batch: &Batch, projected: &Vec<Option<Geometry>>) -> usize {
@@ -53,6 +55,8 @@ pub(super) fn read_mode(
         extents: Arc::new(projected.iter().map(|g| g.as_ref().map_or(Extent::EMPTY, Geometry::extent)).collect()),
         vertices: projected.iter().flatten().map(crate::lod::thinnable).sum(),
         mean_bytes: 0,
+        feature_bytes: memory::features_bytes(&batch.features),
+        projected_bytes: crate::lod::cache_bytes(&projected),
         projected: Arc::new(projected),
         key: projection.code(),
     };
@@ -103,7 +107,11 @@ fn read_with_fields(
         }
         Ok(())
     };
-    let mut batch = source.read_budgeted(&request, bytes)?;
+    let mut batch = if estimate == 0 || req.limit == 0 { source.read_budgeted(&request, bytes)? } else { source.read(&request)? };
+    // Trusted row sizes avoid a second probe, but never exempt a newly oversized row.
+    if batch.features.iter().any(|f| std::mem::size_of::<rustgis_data::Feature>().saturating_add(memory::feature_bytes(f)) > bytes) {
+        return Err(DataError::Format("one feature exceeds the view memory budget; load it explicitly for full processing".into()));
+    }
     pad(&mut batch)?;
     let project = |batch: &Batch| batch.features.iter().map(|f| f.geometry.as_ref().map(|g| flat.project(g))).collect::<Vec<_>>();
     let mut projected = project(&batch);
@@ -151,7 +159,12 @@ fn read_with_fields(
     let extents = Arc::new(projected.iter().map(|g| g.as_ref().map_or(Extent::EMPTY, Geometry::extent)).collect());
     let vertices = projected.iter().flatten().map(crate::lod::thinnable).sum();
     let mean_bytes = base_bytes(&batch, &projected).div_ceil(batch.features.len().max(1));
-    Ok((batch, Cache { projected: Arc::new(projected), extents, vertices, key: projection.code(), mean_bytes }))
+    let feature_bytes = memory::features_bytes(&batch.features);
+    let projected_bytes = crate::lod::cache_bytes(&projected);
+    Ok((
+        batch,
+        Cache { projected: Arc::new(projected), extents, vertices, key: projection.code(), mean_bytes, feature_bytes, projected_bytes },
+    ))
 }
 
 #[cfg(test)]
@@ -300,6 +313,14 @@ mod tests {
         assert!(layer.dataset.features.is_empty());
         assert!(layer.view_cache_bytes() <= super::super::VIEW_BYTES / 2);
         assert!(!layer.source.as_ref().unwrap().is_pending());
+        // A hidden window can be reset repeatedly before it is visible again. Its IDs
+        // belong to this same source and must survive those display-only changes.
+        map.set_projection(crate::Projection::Custom("robinson".into()));
+        settle(&mut map, &extent);
+        map.set_projection(crate::Projection::WebMercator);
+        settle(&mut map, &extent);
+        let layer = map.layer_mut(first).unwrap();
+        assert_eq!(layer.source.as_ref().unwrap().saved_selection, vec![selected]);
         layer.visible = true;
         settle(&mut map, &extent);
         let layer = map.layer(first).unwrap();
@@ -336,10 +357,21 @@ mod tests {
         src.start(extent, true);
         assert!(matches!(src.poll(true), super::super::Polled::Done(..)));
         assert!(src.ready_cache.is_some());
+        src.saved_selection = vec![42];
         fail.store(true, Ordering::Relaxed);
         src.start(extent, true);
         assert!(matches!(src.poll(true), super::super::Polled::Failed(..)));
         assert!(src.ready_cache.is_none());
+        assert!(src.saved_selection.is_empty());
+        fail.store(false, Ordering::Relaxed);
+        let mut layer = crate::Layer::new_streamed(1, src);
+        layer.source.as_mut().unwrap().reset();
+        assert!(!layer.sync_source(&extent, true));
+        assert!(!layer.dataset.features.is_empty());
+        assert!(layer.selection.is_empty(), "an unrelated successful read restored failed selection IDs");
+        layer.source.as_mut().unwrap().saved_selection = vec![42];
+        layer.source.as_mut().unwrap().reset();
+        assert!(layer.source.as_ref().unwrap().saved_selection.is_empty(), "explicit reset retained parked selection");
     }
     #[test]
     fn an_empty_incomplete_probe_does_not_hide_the_source() {
@@ -350,12 +382,16 @@ mod tests {
             }
             fn read(&self, req: &Request) -> Result<Batch> {
                 if req.limit <= 128 {
-                    return Ok(Batch { matched: 600, complete: false, ..Batch::default() });
+                    return Ok(Batch { features: Vec::with_capacity(128), matched: 600, complete: false, ..Batch::default() });
                 }
                 self.0.read(req)
             }
         }
         let source = Sparse(source());
+        // Exercise the default adapter directly: the map's wider retry must not hide a
+        // provider probe whose empty Vec still has allocated capacity.
+        let probe = source.read_budgeted(&Request::all(), 128 * 1024).unwrap();
+        assert!(!probe.features.is_empty());
         let (batch, cache) = read(&source, &Request::all(), 128 * 1024, &crate::Projection::WebMercator, 0).unwrap();
         assert!(!batch.features.is_empty());
         assert_eq!(batch.features.len(), cache.projected.len());
@@ -373,5 +409,58 @@ mod tests {
         let (batch, cache) = read(source.as_ref(), &req, budget, &projection, 0).unwrap();
         assert_eq!(batch.features, full.features);
         assert!(base_bytes(&batch, &cache.projected) <= budget);
+    }
+    #[test]
+    fn measured_rows_read_once_and_still_reject_newly_oversized_features() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Counted {
+            inner: Box<dyn FeatureSource>,
+            limits: Mutex<Vec<usize>>,
+            large: AtomicBool,
+        }
+        impl FeatureSource for Counted {
+            fn info(&self) -> &rustgis_data::source::SourceInfo {
+                self.inner.info()
+            }
+            fn read(&self, req: &Request) -> Result<Batch> {
+                self.limits.lock().unwrap().push(req.limit);
+                let mut batch = self.inner.read(req)?;
+                if self.large.load(Ordering::Relaxed)
+                    && let Some(f) = batch.features.first_mut()
+                {
+                    f.attrs.push(Value::Text("x".repeat(256 * 1024)));
+                }
+                Ok(batch)
+            }
+        }
+        let mut ds = Dataset::new("points", GeometryType::Point, vec![]);
+        for i in 0..1000 {
+            ds.push(Some(Geometry::Point(Coord::new(i as f64 * 0.01, 0.0))), vec![]);
+        }
+        let (bytes, _) = rustgis_data::io::write_bytes(&ds, "fgb").unwrap();
+        let source = Counted {
+            inner: rustgis_data::source::open_bytes("points.fgb", bytes, None).unwrap(),
+            limits: Mutex::new(vec![]),
+            large: AtomicBool::new(false),
+        };
+        let budget = 128 * 1024;
+        let projection = crate::Projection::WebMercator;
+        let (batch, cache) = read(&source, &Request::all(), budget, &projection, 0).unwrap();
+        assert!(!batch.features.is_empty());
+        source.limits.lock().unwrap().clear();
+        let (batch, _) = read(&source, &Request::all(), budget, &projection, cache.mean_bytes).unwrap();
+        let limits = source.limits.lock().unwrap();
+        assert_eq!(limits.len(), 1, "a trusted estimate still triggered provider probes");
+        assert!(limits[0] > 128, "fixture must cover the old adapter's redundant-probe path");
+        drop(limits);
+        assert!(!batch.features.is_empty());
+        source.large.store(true, Ordering::Relaxed);
+        source.limits.lock().unwrap().clear();
+        let result = read(&source, &Request::all(), budget, &projection, cache.mean_bytes);
+        assert!(matches!(result, Err(DataError::Format(s)) if s.contains("one feature exceeds")));
+        assert_eq!(source.limits.lock().unwrap().len(), 1);
     }
 }

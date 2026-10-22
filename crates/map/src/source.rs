@@ -66,6 +66,9 @@ pub struct SourceLayer {
     /// Blocking render/export reads preserve the original row limit rather than the interaction budget.
     #[serde(skip)]
     pub(crate) full_read: bool,
+    /// IDs parked only while budget/projection eviction leaves this same source without rows.
+    /// Hidden layers retain them until the next read; success consumes them, failure or an
+    /// explicit source reset discards them. Display-only resets preserve them in `sync_sources`.
     #[serde(skip)]
     pub(crate) saved_selection: Vec<u64>,
     #[serde(skip)]
@@ -581,6 +584,7 @@ impl SourceLayer {
         self.pending = None;
         self.ready_cache = None;
         self.estimated_row_bytes = 0;
+        self.saved_selection.clear();
     }
 
     /// The extent to read for a view (longitude/latitude), or `None` when the window serves it.
@@ -670,6 +674,7 @@ impl SourceLayer {
                 Ok(_) => self.pending = Some(pending),
                 // No thread to read on: say so, and don't ask again until the view moves on.
                 Err(e) => {
+                    self.saved_selection.clear();
                     self.error = Some(format!("couldn't start reading the layer: {e}"));
                     self.window = Some(Window { extent, complete: true, matched: 0, kept: 0 });
                 }
@@ -700,6 +705,7 @@ impl SourceLayer {
                 Some(Err(e)) => {
                     self.pending = None;
                     self.ready_cache = None;
+                    self.saved_selection.clear();
                     self.error = Some(e.clone());
                     // Not read again until the view moves past it.
                     self.window = Some(Window { extent: p.extent, complete: true, matched: 0, kept: 0 });
@@ -712,6 +718,7 @@ impl SourceLayer {
                 // there as if it were the view. (The read carries on; the next view takes it.)
                 None if block && cfg!(not(target_arch = "wasm32")) => {
                     let e = "reading the layer took more than a minute".to_string();
+                    self.saved_selection.clear();
                     self.error = Some(e.clone());
                     return Polled::Failed(e);
                 }
