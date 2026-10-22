@@ -295,6 +295,11 @@ fn cache_child_fixture() {
         let abandoned = fallback.join("rg-index-work-v1-1-2-3.sqlite");
         std::fs::write(&abandoned, b"partial").unwrap();
         std::fs::write(lease_path(&abandoned), b"T").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(lease_path(&abandoned), std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         checkout().unwrap();
         assert!(!abandoned.exists(), "checkout must sweep the fallback cache too");
         assert_eq!(std::fs::read(root.join("blocked")).unwrap(), b"keep");
@@ -389,6 +394,7 @@ fn cache_unix_unsafe_root_is_rejected_before_an_attacker_lock() {
     let root = Folder::new();
     let lock_path = root.0.join(".rustgis-cache-v1.lock");
     std::fs::write(&lock_path, b"sentinel").unwrap();
+    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let lock = open_lock(&lock_path).unwrap();
     lock.lock().unwrap();
     std::fs::set_permissions(&root.0, std::fs::Permissions::from_mode(0o777)).unwrap();
