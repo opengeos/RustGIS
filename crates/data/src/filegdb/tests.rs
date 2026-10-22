@@ -396,6 +396,20 @@ fn a_huge_strip_stops_at_the_face_cap() {
     assert_eq!(budget, MAX_TABLE_FACES, "nothing was merged");
 }
 
+/// A ring with no area (its points on a line) is neither an outer ring nor a hole: no sliver.
+#[test]
+fn a_ring_with_no_area_is_left_out() {
+    let fields = [F::Oid, F::Shape { z: false, wkt: LONLAT }];
+    let line = [(0.0, 0.0), (5.0, 0.0), (10.0, 0.0), (0.0, 0.0)];
+    let rows = vec![vec![V::Blob(polygon(&line))], vec![V::Blob(polygon(&square(0.0, 0.0, 10.0)))]];
+    let files = geodatabase(vec![("Flat", table(4, &fields, &rows))]);
+    let layers = read_files(&files).unwrap();
+    let (ds, report) = &layers[0];
+    let rows: Vec<&crate::Feature> = ds.features.iter().collect();
+    assert!(!matches!(rows.first().and_then(|f| f.geometry.as_ref()), Some(Geometry::Polygon(_))), "{report:?}");
+    assert!(matches!(rows.get(1).and_then(|f| f.geometry.as_ref()), Some(Geometry::Polygon(p)) if p.len() == 1));
+}
+
 /// A table's multipatches merge no more faces than its budget: past it, they are hulls.
 #[test]
 fn the_face_budget_bounds_a_tables_unions() {

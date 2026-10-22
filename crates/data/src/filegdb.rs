@@ -31,10 +31,12 @@ const MAX_FIELDS: usize = 4096;
 const MAX_PARTS: u64 = 1 << 24;
 /// Most faces of one multipatch merged into its footprint; beyond, its outline is its points' hull.
 const MAX_FACES: usize = 200_000;
-/// Most faces of one multipatch merged by a union; past it, the hull too. None in the browser: a
-/// panic in the union library can't be caught there, and hostile input mustn't end the page, so
-/// multipatches are always the hulls of their points.
-const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 0 } else { MAX_FACES };
+/// Most faces of one multipatch merged by a union; past it, the hull too (a union's time grows
+/// faster than its faces, so one crafted row mustn't stall loading). None in the browser: a panic
+/// in the union library can't be caught there, and hostile input mustn't end the page, so
+/// multipatches are always the hulls of their points. On the desktop the catch relies on the
+/// workspace's default `panic = "unwind"`.
+const MAX_UNION_FACES: usize = if cfg!(target_arch = "wasm32") { 0 } else { 50_000 };
 /// Most faces merged for one table, whatever its rows ask: past it, multipatches are hulls, so a
 /// crafted table can't make loading take hours.
 const MAX_TABLE_FACES: usize = if cfg!(target_arch = "wasm32") { 500_000 } else { 4_000_000 };
@@ -245,9 +247,10 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
         Ok(_) => Some((None, None)),
         Err(_) => None,
     });
-    let (crs, to_lonlat) = match table.geometry.as_ref().map(|g| g.wkt.as_str()).filter(|w| !w.is_empty() && !w.starts_with('{')) {
-        _ if by_code.is_some() => by_code.unwrap_or((None, None)),
-        Some(wkt) => match crate::raster::wkt::read_wkt(wkt) {
+    let wkt = table.geometry.as_ref().map(|g| g.wkt.as_str()).filter(|w| !w.is_empty() && !w.starts_with('{'));
+    let (crs, to_lonlat) = match (by_code, wkt) {
+        (Some(by_code), _) => by_code,
+        (None, Some(wkt)) => match crate::raster::wkt::read_wkt(wkt) {
             Ok((c, note)) => {
                 if let Some(n) = note {
                     report.messages.push(format!("coordinate system: {n}"));
@@ -266,7 +269,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
                 (None, None)
             }
         },
-        None => (None, None),
+        (None, None) => (None, None),
     };
     // The attribute fields: every field but the geometry, and the object ID first.
     let mut fields: Vec<Field> = Vec::new();
@@ -916,15 +919,18 @@ fn decode_geometry(b: &[u8], def: &GeomDef, budget: &mut usize) -> std::result::
             }
             let geom = if polygon {
                 // Clockwise rings are outer; each counterclockwise one is a hole in the one before.
-                crate::io::group_rings(
-                    rings
-                        .into_iter()
-                        .map(|r| {
-                            let outer = signed_area(&r) <= 0.0;
-                            (r, outer)
-                        })
-                        .collect(),
-                )
+                // A ring with no area (its points on a line) is neither, and is left out.
+                let rings: Vec<(Vec<Coord>, bool)> = rings
+                    .into_iter()
+                    .filter_map(|r| {
+                        let a = signed_area(&r);
+                        (a != 0.0 && a.is_finite()).then_some((r, a < 0.0))
+                    })
+                    .collect();
+                if rings.is_empty() {
+                    return Ok(Decoded::Empty);
+                }
+                crate::io::group_rings(rings)
             } else {
                 Geometry::Line(rings)
             };
