@@ -648,13 +648,23 @@ fn in_string(line: &str) -> bool {
     quoted
 }
 
+/// What this frame's input did to the box, as `brace` needs it: a brace typed, Backspace, or
+/// anything else (an undo or redo, a paste, a cut), which it leaves as it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Keyed {
+    Brace,
+    Backspace,
+    Other,
+}
+
 /// The script once the box's edit is followed through, the edit read from `script` as the box
 /// left it, what was there `before`, and the cursor `now` (a char index): a `{` typed closes
 /// itself (`{|}`) when nothing, a space or a closing `}`, `]` or `,` follows it; a `}` typed right
 /// before a `}` steps over it rather than add one; Backspace in an empty `{|}` deletes both. Not
-/// in a string or a comment line, nor for a paste (`pasted`). The cursor stays where the box put
-/// it in each case. None to leave the edit as it is.
-fn brace(script: &str, before: Before, now: usize, pasted: bool) -> Option<String> {
+/// in a string or a comment line, and only for the keys that make those edits (`keyed`): an undo
+/// can bring a `{` back as typing one would. The cursor stays where the box put it in each case.
+/// None to leave the edit as it is.
+fn brace(script: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> {
     let Before { at, prev, len } = before;
     // Outside a comment line and a string, up to char `i`.
     let plain = |i: usize| {
@@ -662,8 +672,8 @@ fn brace(script: &str, before: Before, now: usize, pasted: bool) -> Option<Strin
         line.is_some_and(|l| !l.trim_start().starts_with('#') && !in_string(l))
     };
     let (typed, next) = (char_at(script, at), char_at(script, now));
-    let one_typed = script.len() == len + 1 && now == at + 1 && !pasted && plain(at);
-    let one_deleted = script.len() + 1 == len && now + 1 == at && prev == Some('{') && plain(now);
+    let one_typed = keyed == Keyed::Brace && script.len() == len + 1 && now == at + 1 && plain(at);
+    let one_deleted = keyed == Keyed::Backspace && script.len() + 1 == len && now + 1 == at && prev == Some('{') && plain(now);
     let cut = byte_at(script, if one_deleted { now } else { at })?;
     let (b, rest) = (script.get(..cut)?, script.get(cut..)?);
     match (typed, next) {
@@ -687,8 +697,29 @@ pub fn braces(ui: &Ui, before: Option<Before>, out: &TextEditOutput, script: &mu
     if !out.response.response.changed() {
         return;
     }
-    let pasted = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
-    if let Some(new) = brace(script, before, now, pasted) {
+    // One edit, made by one of those keys: the brace typed alone (Shift, AltGr or Option as it
+    // takes), or Backspace alone.
+    let keyed = ui.input(|i| {
+        let edits: Vec<&egui::Event> = i
+            .events
+            .iter()
+            .filter(|e| match e {
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
+                // Undo and redo, not every key with Ctrl: Windows reports AltGr, which types a
+                // brace on many keyboards, as Ctrl+Alt.
+                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    *key == Key::Backspace || (modifiers.command && matches!(key, Key::Z | Key::Y))
+                }
+                _ => false,
+            })
+            .collect();
+        match edits.as_slice() {
+            [egui::Event::Text(t)] if t == "{" || t == "}" => Keyed::Brace,
+            [egui::Event::Key { key: Key::Backspace, modifiers, .. }] if modifiers.is_none() => Keyed::Backspace,
+            _ => Keyed::Other,
+        }
+    });
+    if let Some(new) = brace(script, before, now, keyed) {
         *script = new;
         // The box drew the text as it left it: show the brace from the next frame on, now.
         ui.ctx().request_repaint();
@@ -1156,7 +1187,7 @@ mod tests {
         let b = super::byte_at(old, at).unwrap();
         let script = format!("{}{ins}{}", &old[..b], &old[b..]);
         let before = super::Before { at, prev: at.checked_sub(1).and_then(|i| super::char_at(old, i)), len: old.len() };
-        super::brace(&script, before, at + ins.chars().count(), false)
+        super::brace(&script, before, at + ins.chars().count(), super::Keyed::Brace)
     }
 
     /// What `brace` makes of Backspace at char `at` of `old`.
@@ -1164,7 +1195,7 @@ mod tests {
         let (b, e) = (super::byte_at(old, at - 1).unwrap(), super::byte_at(old, at).unwrap());
         let script = format!("{}{}", &old[..b], &old[e..]);
         let before = super::Before { at, prev: super::char_at(old, at - 1), len: old.len() };
-        super::brace(&script, before, at - 1, false)
+        super::brace(&script, before, at - 1, super::Keyed::Backspace)
     }
 
     /// `{` closes itself before nothing, a space or a closing `}`, `]` or `,`, not before other
@@ -1184,9 +1215,10 @@ mod tests {
         assert_eq!(end("  # x "), None, "in a comment line");
         assert_eq!(end("ñandú ").as_deref(), Some("ñandú {}"), "chars, not bytes");
         assert_eq!(typed("x ", 2, "{{"), None, "more than the brace typed");
-        let script = "x {";
         let before = super::Before { at: 2, prev: Some(' '), len: 2 };
-        assert_eq!(super::brace(script, before, 3, true), None, "a paste");
+        assert_eq!(super::brace("x {", before, 3, super::Keyed::Other), None, "a paste, an undo");
+        let before = super::Before { at: 3, prev: Some('{'), len: 4 };
+        assert_eq!(super::brace("x }", before, 2, super::Keyed::Other), None, "a cut, an undo");
     }
 
     /// `}` typed right before a `}` steps over it; Backspace in an empty `{}` deletes both.
