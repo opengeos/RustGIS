@@ -1274,6 +1274,8 @@ fn needs_tilted_snapshot(map: &Map, layer: &rustgis_map::Layer, complete_layers:
 // Separate from the interaction budget: this limits retained complete-source feature storage
 // across the perspective snapshot. Raster targets, derived caches and decoding scratch are extra.
 const COMPLETE_SNAPSHOT_BYTES: usize = rustgis_map::source::VIEW_BYTES * 4;
+/// Owned-storage target for a complete traversal; distinct from interaction and depth budgets.
+const COMPLETE_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 #[cfg(test)]
 thread_local! {
@@ -1331,7 +1333,7 @@ fn visit_complete(
     source: &dyn rustgis_data::source::FeatureSource,
     visit: &mut dyn FnMut(Vec<rustgis_data::Feature>) -> rustgis_data::Result<()>,
 ) -> rustgis_data::Result<rustgis_data::source::Batch> {
-    let result = source.visit_chunks(None, 8 * 1024 * 1024, visit)?;
+    let result = source.visit_chunks(None, COMPLETE_CHUNK_BYTES, visit)?;
     if !result.complete {
         return Err(rustgis_data::DataError::Format("source traversal was incomplete".into()));
     }
@@ -1392,8 +1394,25 @@ fn render_tilted(map: &mut Map, view: &View, full_res_rasters: bool, sources_rea
         let v = band_view(view, &b);
         let Some(RenderOutput::Cpu(r)) = render_frame(map, &v, full_res_rasters, Backend::Cpu, Labels::Tilted(view, &mut candidates))
         else {
-            map.label_lock = lock;
-            return None;
+            let scale = map.ground_res_at(&v.camera) / rustgis_geom::PIXEL_M;
+            let complete = sources_ready
+                || map.layers.iter().filter(|l| map.draws_at(l, scale)).any(|l| {
+                    l.source.as_ref().and_then(|s| s.chunk_source()).is_some()
+                        || l.mask
+                            .as_deref()
+                            .and_then(|name| {
+                                map.layers.iter().find(|m| m.name.eq_ignore_ascii_case(name) && m.geometry_type() == GeometryType::Polygon)
+                            })
+                            .and_then(|m| m.source.as_ref())
+                            .and_then(|s| s.chunk_source())
+                            .is_some()
+                });
+            if complete {
+                map.label_lock = lock;
+                return None;
+            }
+            // Preserve the upstream best-effort band path for ordinary providers.
+            continue;
         };
         for a in r.attribution {
             if !attribution.contains(&a) {
