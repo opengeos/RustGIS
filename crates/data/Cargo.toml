@@ -28,6 +28,8 @@ parquet = { workspace = true, features = ["zstd"] }
 url = { workspace = true }
 bytes = { workspace = true }
 flatgeobuf = { workspace = true }
+# Polygon union: a multipatch's footprint (File Geodatabase).
+geo = { workspace = true }
 geozero = { workspace = true }
 calamine = { workspace = true }
 # LAZ (compressed LiDAR) point clouds.

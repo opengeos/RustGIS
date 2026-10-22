@@ -6,6 +6,7 @@
 
 pub mod dirs;
 pub mod dxf;
+pub mod filegdb;
 pub mod geometry;
 pub mod georss;
 pub mod gml;

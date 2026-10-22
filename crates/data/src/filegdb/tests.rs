@@ -1,0 +1,473 @@
+use super::*;
+
+fn varuint(mut v: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let b = (v & 0x7F) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(b);
+            return out;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+fn varint(v: i64) -> Vec<u8> {
+    let (neg, mut m) = (v < 0, v.unsigned_abs());
+    let mut first = (m & 0x3F) as u8 | if neg { 0x40 } else { 0 };
+    m >>= 6;
+    if m == 0 {
+        return vec![first];
+    }
+    first |= 0x80;
+    let mut out = vec![first];
+    out.extend(varuint(m));
+    out
+}
+
+fn utf16_bytes(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// A field for the test writer.
+enum F {
+    Oid,
+    Text(&'static str),
+    Int(&'static str),
+    Shape { z: bool, wkt: &'static str },
+}
+
+/// One row's stored values (the object ID stores nothing): `None` is null.
+enum V {
+    Text(Option<&'static str>),
+    Int(Option<i32>),
+    Blob(Vec<u8>),
+}
+
+/// A minimal table (version 3) and its row index, as ArcGIS lays them out.
+fn table(layer_flags: u32, fields: &[F], rows: &[Vec<V>]) -> (Vec<u8>, Vec<u8>) {
+    let mut f = Vec::new();
+    f.extend(4i32.to_le_bytes());
+    f.extend((layer_flags | 0x100).to_le_bytes());
+    f.extend((fields.len() as i16).to_le_bytes());
+    let name = |f: &mut Vec<u8>, n: &str| {
+        f.push(n.encode_utf16().count() as u8);
+        f.extend(utf16_bytes(n));
+        f.push(0);
+    };
+    for field in fields {
+        match field {
+            F::Oid => {
+                name(&mut f, "OBJECTID");
+                f.extend([6, 4, 2]);
+            }
+            F::Text(n) => {
+                name(&mut f, n);
+                f.push(4);
+                f.extend(255i32.to_le_bytes());
+                f.extend([5, 0]);
+            }
+            F::Int(n) => {
+                name(&mut f, n);
+                f.extend([1, 4, 5, 0]);
+            }
+            F::Shape { z, wkt } => {
+                name(&mut f, "SHAPE");
+                f.extend([7, 0, 7]);
+                let w = utf16_bytes(wkt);
+                f.extend((w.len() as i16).to_le_bytes());
+                f.extend(w);
+                f.push(if *z { 3 } else { 1 });
+                for v in [0.0f64, 0.0, 1000.0] {
+                    f.extend(v.to_le_bytes());
+                }
+                if *z {
+                    f.extend(0.0f64.to_le_bytes());
+                    f.extend(1000.0f64.to_le_bytes());
+                }
+                f.extend(0.001f64.to_le_bytes());
+                if *z {
+                    f.extend(0.001f64.to_le_bytes());
+                }
+                for v in [0.0f64, 0.0, 100.0, 100.0] {
+                    f.extend(v.to_le_bytes());
+                }
+                if layer_flags & 0x8000_0000 != 0 {
+                    f.extend([0.0f64, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+                }
+                f.push(0);
+                f.extend(1u32.to_le_bytes());
+                f.extend(10.0f64.to_le_bytes());
+            }
+        }
+    }
+    // Every field but the object ID can be null here (the shape's flag 7 says so), so each has a
+    // bit in the null flags.
+    let nullable = fields.iter().filter(|f| !matches!(f, F::Oid)).count();
+    let mut t = vec![0u8; 40];
+    t.extend((f.len() as i32).to_le_bytes());
+    t.extend(&f);
+    let mut offsets = Vec::new();
+    for row in rows {
+        let mut nulls = vec![0u8; nullable.div_ceil(8)];
+        let mut body = Vec::new();
+        for (bit, v) in row.iter().enumerate() {
+            match v {
+                V::Text(None) | V::Int(None) => {
+                    if let Some(b) = nulls.get_mut(bit / 8) {
+                        *b |= 1 << (bit % 8);
+                    }
+                }
+                V::Text(Some(s)) => {
+                    body.extend(varuint(s.len() as u64));
+                    body.extend(s.as_bytes());
+                }
+                V::Int(Some(i)) => body.extend(i.to_le_bytes()),
+                V::Blob(b) => {
+                    body.extend(varuint(b.len() as u64));
+                    body.extend(b);
+                }
+            }
+        }
+        offsets.push(t.len() as u32);
+        t.extend(((nulls.len() + body.len()) as i32).to_le_bytes());
+        t.extend(nulls);
+        t.extend(body);
+    }
+    let size = t.len() as i64;
+    t[0..4].copy_from_slice(&3i32.to_le_bytes());
+    t[4..8].copy_from_slice(&(rows.len() as i32).to_le_bytes());
+    t[12..16].copy_from_slice(&5i32.to_le_bytes());
+    t[24..32].copy_from_slice(&size.to_le_bytes());
+    t[32..40].copy_from_slice(&40i64.to_le_bytes());
+    let mut x = Vec::new();
+    for v in [3i32, 1, rows.len() as i32, 4] {
+        x.extend(v.to_le_bytes());
+    }
+    for i in 0..1024 {
+        x.extend(offsets.get(i).copied().unwrap_or(0).to_le_bytes());
+    }
+    x.extend([0u8; 16]);
+    (t, x)
+}
+
+/// A polygon blob (type 5): one ring, scale 1000 from 0.
+fn polygon(ring: &[(f64, f64)]) -> Vec<u8> {
+    let mut b = varuint(5);
+    b.extend(varuint(ring.len() as u64));
+    b.extend(varuint(1));
+    b.extend([0u8; 4]);
+    let (mut px, mut py) = (0i64, 0i64);
+    for &(x, y) in ring {
+        let (ix, iy) = ((x * 1000.0).round() as i64, (y * 1000.0).round() as i64);
+        b.extend(varint(ix - px));
+        b.extend(varint(iy - py));
+        (px, py) = (ix, iy);
+    }
+    b
+}
+
+/// A multipatch blob (type 54 with Z): its parts' types and points.
+fn multipatch(parts: &[(u64, Vec<(f64, f64, f64)>)]) -> Vec<u8> {
+    let n: usize = parts.iter().map(|(_, p)| p.len()).sum();
+    let mut b = varuint(54 | HAS_Z);
+    b.extend(varuint(n as u64));
+    b.extend(varuint(0));
+    b.extend(varuint(parts.len() as u64));
+    b.extend([0u8; 4]);
+    for (_, p) in parts.iter().take(parts.len().saturating_sub(1)) {
+        b.extend(varuint(p.len() as u64));
+    }
+    for (kind, _) in parts {
+        b.extend(varuint(*kind));
+    }
+    let (mut px, mut py) = (0i64, 0i64);
+    for (_, p) in parts {
+        for &(x, y, _) in p {
+            let (ix, iy) = ((x * 1000.0).round() as i64, (y * 1000.0).round() as i64);
+            b.extend(varint(ix - px));
+            b.extend(varint(iy - py));
+            (px, py) = (ix, iy);
+        }
+    }
+    let mut pz = 0i64;
+    for (_, p) in parts {
+        for &(_, _, z) in p {
+            let iz = (z * 1000.0).round() as i64;
+            b.extend(varint(iz - pz));
+            pz = iz;
+        }
+    }
+    b
+}
+
+const LONLAT: &str = r#"GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]"#;
+
+/// A geodatabase's files: a catalog naming the given tables, which follow as a00000002….
+fn geodatabase(tables: Vec<(&'static str, (Vec<u8>, Vec<u8>))>) -> Vec<(String, Vec<u8>)> {
+    let rows: Vec<Vec<V>> = std::iter::once("GDB_SystemCatalog")
+        .chain(tables.iter().map(|(n, _)| *n))
+        .map(|n| vec![V::Text(Some(n)), V::Int(Some(0))])
+        .collect();
+    let (t, x) = table(0, &[F::Oid, F::Text("Name"), F::Int("FileFormat")], &rows);
+    let mut files = vec![("a00000001.gdbtable".to_string(), t), ("a00000001.gdbtablx".to_string(), x)];
+    for (i, (_, (t, x))) in tables.into_iter().enumerate() {
+        files.push((format!("a{:08x}.gdbtable", i + 2), t));
+        files.push((format!("a{:08x}.gdbtablx", i + 2), x));
+    }
+    files
+}
+
+fn read_files(files: &[(String, Vec<u8>)]) -> Result<Vec<(Dataset, ReadReport)>> {
+    read("test", &|name: &str| Ok(files.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone())), None)
+}
+
+/// A square (clockwise, as ArcGIS stores outer rings) from (x, y) with side `s`.
+fn square(x: f64, y: f64, s: f64) -> Vec<(f64, f64)> {
+    vec![(x, y), (x, y + s), (x + s, y + s), (x + s, y), (x, y)]
+}
+
+#[test]
+fn numbers_decode() {
+    for v in [0u64, 1, 63, 64, 127, 128, 300, 1 << 40, u64::MAX >> 1] {
+        assert_eq!(Cur::new(&varuint(v), 0).varuint(), Some(v), "{v}");
+    }
+    for v in [0i64, 1, -1, 63, -63, 64, -64, -65, 1_000_000, -1_000_000, 1 << 50] {
+        assert_eq!(Cur::new(&varint(v), 0).varint(), Some(v), "{v}");
+    }
+    // Endless continuation bits and cut-short numbers are refused.
+    assert_eq!(Cur::new(&[0xFF; 12], 0).varuint(), None);
+    assert_eq!(Cur::new(&[0xFF; 12], 0).varint(), None);
+    assert_eq!(Cur::new(&[0x80], 0).varuint(), None);
+    assert_eq!(guid(&[0x67, 0x45, 0x23, 0x01, 0xAB, 0x89, 0xEF, 0xCD, 1, 2, 3, 4, 5, 6, 7, 8]), "{01234567-89AB-CDEF-0102-030405060708}");
+    // 2000-01-01 is day 36,526 after 1899-12-30.
+    assert_eq!(date(36_526.5, "YYYY-MM-DDTHH:mm:ss"), Value::Text("2000-01-01T12:00:00".into()));
+}
+
+#[test]
+fn reads_a_feature_class_with_fields_nulls_and_holes() {
+    let outer = square(0.0, 0.0, 10.0);
+    // A hole: counterclockwise, in the same blob as a second part.
+    let hole: Vec<(f64, f64)> = square(2.0, 2.0, 2.0).into_iter().rev().collect();
+    let mut blob = varuint(5);
+    blob.extend(varuint((outer.len() + hole.len()) as u64));
+    blob.extend(varuint(2));
+    blob.extend([0u8; 4]);
+    blob.extend(varuint(outer.len() as u64));
+    let (mut px, mut py) = (0i64, 0i64);
+    for &(x, y) in outer.iter().chain(&hole) {
+        let (ix, iy) = ((x * 1000.0) as i64, (y * 1000.0) as i64);
+        blob.extend(varint(ix - px));
+        blob.extend(varint(iy - py));
+        (px, py) = (ix, iy);
+    }
+    let fields = [F::Oid, F::Shape { z: false, wkt: LONLAT }, F::Text("name"), F::Int("count")];
+    let rows = vec![
+        vec![V::Blob(blob), V::Text(Some("Gebäude")), V::Int(Some(7))],
+        vec![V::Blob(polygon(&square(20.0, 20.0, 5.0))), V::Text(None), V::Int(None)],
+    ];
+    let files = geodatabase(vec![("Parcels", table(4, &fields, &rows))]);
+    let layers = read_files(&files).unwrap();
+    assert_eq!(layers.len(), 1);
+    let (ds, report) = &layers[0];
+    assert_eq!(ds.name, "Parcels");
+    assert_eq!(ds.geometry_type, GeometryType::Polygon);
+    assert_eq!(report.skipped, 0, "{report:?}");
+    let names: Vec<&str> = ds.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["OBJECTID", "name", "count"]);
+    let rows: Vec<&crate::Feature> = ds.features.iter().collect();
+    assert_eq!(rows[0].attrs, vec![Value::Int(1), Value::Text("Gebäude".into()), Value::Int(7)]);
+    assert_eq!(rows[1].attrs, vec![Value::Int(2), Value::Null, Value::Null]);
+    match &rows[0].geometry {
+        Some(Geometry::Polygon(p)) => {
+            assert_eq!(p.len(), 1, "one polygon");
+            assert_eq!(p[0].len(), 2, "with its hole");
+            assert_eq!(p[0][0][2], Coord::new(10.0, 10.0));
+        }
+        g => panic!("{g:?}"),
+    }
+}
+
+#[test]
+fn a_multipatch_is_its_footprint_with_its_heights() {
+    // A 10 m box from z 400 to 410: its roof as two triangles (a strip), a floor ring, and walls,
+    // which show nothing from above.
+    let roof = (0, vec![(0.0, 0.0, 410.0), (0.0, 10.0, 410.0), (10.0, 0.0, 410.0), (10.0, 10.0, 410.0)]);
+    let floor = (2, vec![(0.0, 0.0, 400.0), (0.0, 10.0, 400.0), (10.0, 10.0, 400.0), (10.0, 0.0, 400.0), (0.0, 0.0, 400.0)]);
+    let wall = (2, vec![(0.0, 0.0, 400.0), (0.0, 0.0, 410.0), (10.0, 0.0, 410.0), (10.0, 0.0, 400.0), (0.0, 0.0, 400.0)]);
+    // A leaning wall: a sliver from above, which is left out too.
+    let leaning = (6, vec![(0.0, 10.0, 400.0), (5.0, 10.003, 410.0), (10.0, 10.0, 400.0)]);
+    // Only walls: the outline of its points stands in.
+    let walls_only = vec![
+        (2, vec![(30.0, 30.0, 0.0), (30.0, 30.0, 5.0), (40.0, 30.0, 5.0), (40.0, 30.0, 0.0), (30.0, 30.0, 0.0)]),
+        (2, vec![(40.0, 30.0, 0.0), (40.0, 30.0, 5.0), (40.0, 40.0, 5.0), (40.0, 40.0, 0.0), (40.0, 30.0, 0.0)]),
+    ];
+    let fields = [F::Oid, F::Shape { z: true, wkt: LONLAT }, F::Text("name")];
+    let rows = vec![
+        vec![V::Blob(multipatch(&[roof, floor, wall, leaning])), V::Text(Some("box"))],
+        vec![V::Blob(multipatch(&walls_only)), V::Text(Some("walls"))],
+    ];
+    let files = geodatabase(vec![("Buildings", table(9 | 0x8000_0000, &fields, &rows))]);
+    let layers = read_files(&files).unwrap();
+    let (ds, report) = &layers[0];
+    assert_eq!(ds.geometry_type, GeometryType::Polygon);
+    assert_eq!(ds.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["OBJECTID", "name", "z_min", "z_max", "height"]);
+    let rows: Vec<&crate::Feature> = ds.features.iter().collect();
+    assert_eq!(rows[0].attrs[2..], [Value::Float(400.0), Value::Float(410.0), Value::Float(10.0)]);
+    let area = |g: &Option<Geometry>| match g {
+        Some(Geometry::Polygon(p)) => p.iter().map(|poly| poly.first().map_or(0.0, |r| signed_area(r).abs() / 2.0)).sum::<f64>(),
+        _ => 0.0,
+    };
+    assert!((area(&rows[0].geometry) - 100.0).abs() < 1e-6, "{:?}", rows[0].geometry);
+    assert!((area(&rows[1].geometry) - 50.0).abs() < 1e-6, "the hull of an L of walls: {:?}", rows[1].geometry);
+    assert!(report.messages.iter().any(|m| m.contains("footprints")), "{report:?}");
+    assert!(report.messages.iter().any(|m| m.contains("1 multipatches with no faces")), "{report:?}");
+}
+
+#[test]
+fn row_index_with_left_out_blocks() {
+    // Rows 1025 and 1026 stored in the one block present (the second of two).
+    let mut x = Vec::new();
+    for v in [3i32, 1, 2048, 4] {
+        x.extend(v.to_le_bytes());
+    }
+    for i in 0..1024u32 {
+        x.extend(
+            match i {
+                0 => 100u32,
+                1 => 0,
+                2 => 200,
+                _ => 0,
+            }
+            .to_le_bytes(),
+        );
+    }
+    for v in [1i32, 2, 1, 1] {
+        x.extend(v.to_le_bytes());
+    }
+    x.extend(0b10u32.to_le_bytes());
+    assert_eq!(row_offsets(&x).unwrap(), vec![(1025, 100), (1027, 200)]);
+    // A version 4 index with missing blocks isn't read here.
+    let mut x = Vec::new();
+    for v in [4i32, 0, 0, 4] {
+        x.extend(v.to_le_bytes());
+    }
+    x.extend(10i64.to_le_bytes());
+    x.extend(30i32.to_le_bytes());
+    assert!(matches!(row_offsets(&x), Err(DataError::Unsupported(_))));
+}
+
+#[test]
+fn compressed_tables_and_unknown_files_are_said() {
+    let (t, x) = table(
+        0,
+        &[F::Oid, F::Text("Name"), F::Int("FileFormat")],
+        &[vec![V::Text(Some("GDB_SystemCatalog")), V::Int(Some(0))], vec![V::Text(Some("Packed")), V::Int(Some(1))]],
+    );
+    let files = vec![("a00000001.gdbtable".to_string(), t), ("a00000001.gdbtablx".to_string(), x)];
+    assert!(matches!(read_files(&files), Err(DataError::Unsupported(m)) if m.contains("compressed")));
+    assert!(matches!(read_files(&[]), Err(DataError::Format(m)) if m.contains("not a File Geodatabase")));
+}
+
+/// Damaged files are refused or read in part, never a panic.
+#[test]
+fn hostile_bytes_never_panic() {
+    let fields = [F::Oid, F::Shape { z: true, wkt: LONLAT }, F::Text("name"), F::Int("count")];
+    let rows = vec![
+        vec![V::Blob(multipatch(&[(0, vec![(0.0, 0.0, 1.0), (0.0, 5.0, 1.0), (5.0, 0.0, 2.0)])])), V::Text(Some("a")), V::Int(Some(1))],
+        vec![V::Blob(polygon(&square(1.0, 1.0, 3.0))), V::Text(None), V::Int(Some(2))],
+    ];
+    let files = geodatabase(vec![("T", table(9 | 0x8000_0000, &fields, &rows))]);
+    assert!(read_files(&files).is_ok());
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for _ in 0..3000 {
+        let mut damaged = files.clone();
+        let which = (next() % damaged.len() as u64) as usize;
+        let bytes = &mut damaged[which].1;
+        match next() % 3 {
+            // Flipped bytes.
+            0 => {
+                for _ in 0..1 + next() % 8 {
+                    let at = (next() % bytes.len().max(1) as u64) as usize;
+                    if let Some(b) = bytes.get_mut(at) {
+                        *b = next() as u8;
+                    }
+                }
+            }
+            // Cut short.
+            1 => bytes.truncate((next() % (bytes.len() as u64 + 1)) as usize),
+            // Counts and sizes at their extremes.
+            _ => {
+                let at = (next() % bytes.len().max(1) as u64) as usize;
+                for (k, b) in [0xFFu8, 0xFF, 0xFF, 0x7F].into_iter().enumerate() {
+                    if let Some(x) = bytes.get_mut(at + k) {
+                        *x = b;
+                    }
+                }
+            }
+        }
+        let _ = read_files(&damaged);
+    }
+}
+
+/// A geodatabase GDAL writes (when GDAL is installed), read back without it: points with typed
+/// fields, and a TIN, which GDAL stores as a multipatch (a triangle fan).
+#[test]
+fn reads_what_gdal_writes_when_gdal_is_installed() {
+    if !crate::source::gdal::available() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("rustgis-filegdb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let gdb = dir.join("written.gdb");
+    let run = |args: &[&str]| {
+        let ok = std::process::Command::new("ogr2ogr").args(args).status().is_ok_and(|s| s.success());
+        assert!(ok, "ogr2ogr {args:?}");
+    };
+    let points = dir.join("points.csv");
+    std::fs::write(&points, "WKT,name,count,height,day\n\"POINT (8.5 47.4)\",Zürich,3,1.5,2024-05-06\n\"POINT (7.4 46.9)\",,,,\n").unwrap();
+    let tins = dir.join("tins.csv");
+    std::fs::write(
+        &tins,
+        "WKT,name\n\"TIN Z (((0 0 400,0 10 400,10 10 400,0 0 400)),((0 0 400,10 10 400,10 0 400,0 0 400)),((0 0 400,10 0 400,10 0 410,0 0 400)))\",block\n",
+    )
+    .unwrap();
+    let (gdb_s, points_s, tins_s) = (gdb.display().to_string(), points.display().to_string(), tins.display().to_string());
+    run(&["-f", "OpenFileGDB", "-a_srs", "EPSG:4326", "-nlt", "POINT", "-nln", "places", "-oo", "AUTODETECT_TYPE=YES", &gdb_s, &points_s]);
+    run(&["-f", "OpenFileGDB", "-update", "-a_srs", "EPSG:2056", "-nlt", "TINZ", "-nln", "blocks", &gdb_s, &tins_s]);
+    assert!(is_geodatabase(&gdb));
+    assert_eq!(layers(&gdb).unwrap(), ["places", "blocks"]);
+    let read = read_dir(&gdb, None).unwrap();
+    let (places, report) = &read[0];
+    assert_eq!(report.skipped, 0, "{report:?}");
+    let rows: Vec<&crate::Feature> = places.features.iter().collect();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        matches!(rows[0].geometry, Some(Geometry::Point(c)) if (c.x - 8.5).abs() < 1e-7 && (c.y - 47.4).abs() < 1e-7),
+        "{:?}",
+        rows[0].geometry
+    );
+    let at = |n: &str| places.field_index(n).unwrap();
+    assert_eq!(rows[0].attrs[at("name")], Value::Text("Zürich".into()));
+    assert_eq!(rows[0].attrs[at("count")], Value::Int(3));
+    assert_eq!(rows[0].attrs[at("height")], Value::Float(1.5));
+    assert!(matches!(&rows[0].attrs[at("day")], Value::Text(d) if d.starts_with("2024-05-06")), "{:?}", rows[0].attrs);
+    assert_eq!(rows[1].attrs[at("count")], Value::Null);
+    let (blocks, _) = &read[1];
+    assert_eq!(blocks.crs, Some(Crs::Epsg(2056)), "the coordinate system, by its code");
+    let block = blocks.features.iter().next().unwrap();
+    let z = |n: &str| block.attrs[blocks.field_index(n).unwrap()].clone();
+    assert_eq!((z("z_min"), z("z_max"), z("height")), (Value::Float(400.0), Value::Float(410.0), Value::Float(10.0)));
+    assert!(matches!(&block.geometry, Some(Geometry::Polygon(p)) if p.len() == 1), "{:?}", block.geometry);
+    // One layer by name, ignoring case.
+    assert_eq!(read_dir(&gdb, Some("BLOCKS")).unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

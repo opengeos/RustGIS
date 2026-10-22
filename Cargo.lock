@@ -4509,6 +4509,7 @@ dependencies = [
  "crs-definitions",
  "csv",
  "flatgeobuf",
+ "geo",
  "geozero",
  "image",
  "laz",

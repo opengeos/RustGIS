@@ -10,8 +10,8 @@ Many features are first versions: there are no full 3D scenes or enterprise port
 - Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Excel and OpenDocument spreadsheets,
   GeoRSS, LandXML, encoded polylines, Shapefile (zipped too, with the coordinate system in its
   `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ (styles included), GPX, GML, MapInfo MIF, OSM PBF, TopoJSON, DXF and LiDAR (LAS/LAZ/COPC) in, all of them
-  in the web app too (large files read in place, a view at a time); the vector formats GDAL
-  reads when it is installed, PostGIS, MySQL and MariaDB tables read live (desktop), and SQL queries
+  in the web app too (large files read in place, a view at a time); Esri File Geodatabases without GDAL (3D multipatches
+  as footprints with their heights); the vector formats GDAL reads when it is installed, PostGIS, MySQL and MariaDB tables read live (desktop), and SQL queries
   and DuckDB databases (DuckDB Spatial) when DuckDB is; GeoJSON, CSV, GeoPackage, GeoParquet, Shapefile, FlatGeobuf, KML/KMZ, GPX and WKT out;
   standalone tables; geotagged photos and KML ground overlays; geocoding (Find Place, address
   tables); a Data Sources pane (favourites, recent, saved services, a library) and an SQL pane

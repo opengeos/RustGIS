@@ -18,7 +18,8 @@ Formats](data-formats.md).
 | GML, MapInfo MIF/MID, OpenStreetMap PBF, TopoJSON, AutoCAD DXF (ASCII) | Yes | No |
 | LiDAR point clouds: LAS, LAZ, COPC (an evenly spread sample) | Yes | No |
 | Geotagged photos (JPEG with EXIF GPS): points with their thumbnails | Yes | No |
-| Through GDAL: File Geodatabase (`.gdb` folder), AutoCAD DWG, MapInfo TAB, OpenStreetMap XML… | Yes (desktop, when GDAL is installed) | No |
+| Esri File Geodatabase (`.gdb` folder; 3D multipatches as footprints) | Yes (desktop) | No |
+| Through GDAL: AutoCAD DWG, MapInfo TAB, OpenStreetMap XML, File Geodatabases RustGIS can't read itself… | Yes (desktop, when GDAL is installed) | No |
 | PostgreSQL/PostGIS databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | MySQL and MariaDB databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
@@ -59,7 +60,8 @@ reprojected on the fly as they draw.
 
 When [GDAL](https://gdal.org) is installed (its `ogr2ogr` and `ogrinfo` programs on the `PATH`,
 or the folder holding them in `RUSTGIS_GDAL_BIN`; GDAL 3.7 or later), the desktop app also opens
-the vector formats GDAL reads: File Geodatabases, DWG, MapInfo TAB, OpenStreetMap XML
+the vector formats GDAL reads: DWG, MapInfo TAB, OpenStreetMap XML, File Geodatabases RustGIS
+can't read itself (compressed ones, or ones with raster fields)
 and more. RustGIS doesn't link to GDAL: each layer is converted once, by `ogr2ogr`, into a
 FlatGeobuf with a spatial index in WGS 84 (GDAL reprojects it), kept in the cache folder
 (`~/.cache/rustgis/gdal` on Linux, `~/Library/Caches/RustGIS/gdal` on macOS,

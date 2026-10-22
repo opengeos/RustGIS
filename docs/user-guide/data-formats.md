@@ -31,6 +31,7 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 | GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases aren't read there. |
 | GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. Snappy, gzip, LZ4 and zstd compression are read, in the browser too; Brotli isn't. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
+| Esri File Geodatabase | `.gdb` folder (desktop) | A file dialog can't pick a folder: in Add Data pick any `.gdbtable` file inside it; or double-click the `.gdb` in the Browser, or drop the folder on the window | Read without GDAL: every feature class becomes a layer and every table a standalone table, with their fields (dates as text) and coordinate system (by its code, EPSG or Esri; else its WKT). `"layer"` picks one, and `info.fileLayers` lists them. 3D multipatches (such as swissBUILDINGS3D's buildings) are drawn as their footprints, the union of their faces seen from above, with their lowest and highest Z in `z_min` and `z_max` and the difference in `height`, which an extrusion (Style › Extrusion) can stand them up by; one with no face seen from above (only walls) is drawn as the outline of its points. Curves are drawn as straight segments between their ends. Compressed tables, raster fields and some newer row indexes aren't read: with GDAL installed, such a geodatabase opens through GDAL instead (see below). Loaded whole, up to 2 GB a table. |
 | Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Layers; join or relate them to layers. |
 
 Files with more than 100,000 features (GeoPackage, GeoParquet, FlatGeobuf, and Shapefile on the
@@ -47,7 +48,6 @@ GDAL](data.md#formats-through-gdal).
 
 | Format | Extensions or source | Notes |
 | --- | --- | --- |
-| Esri File Geodatabase | `.gdb` folder | Every feature class becomes a layer. A file dialog can't pick a folder: pick any `.gdbtable` file inside it, double-click the `.gdb` in the Browser, or drop the folder on the window. |
 | AutoCAD DWG | `.dwg` | Through GDAL's CAD driver, when it is built in. Give `"crs"` (such as `EPSG:2263`) when the drawing doesn't say its coordinate system. |
 | MapInfo tables | `.tab` | Keep the companion files together. |
 | OpenStreetMap XML | `.osm` | |
