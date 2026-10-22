@@ -1297,14 +1297,13 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
 }
 
 /// A typed coordinate system code: `ESRI:102033` or `Epsg: 3035` as it is (`lookup` reads the
-/// prefix in any case and spacing), a bare number as an EPSG code, or a Vietnamese province alias.
+/// prefix in any case and spacing), a bare number as an EPSG code, or a Vietnamese province with
+/// the `vn2000:` prefix (`vn2000:hanoi`); a bare name such as `hue` is not taken for one.
 pub(crate) fn typed_crs(text: &str) -> String {
     let text = text.trim();
     if text.starts_with(|c: char| c.is_ascii_digit()) {
         format!("EPSG:{text}")
-    } else if let Some(lon) = rustgis_engine::map::projection::resolve_vn2000_alias(text)
-        .or_else(|| rustgis_engine::map::projection::resolve_vn2000_province(text))
-    {
+    } else if let Some(lon) = rustgis_engine::map::projection::resolve_vn2000_alias(text) {
         format!("vn2000tm3 +lon_0={lon}")
     } else {
         text.to_string()
@@ -1479,11 +1478,12 @@ mod tests {
     fn vn2000_in_coordinate_system_dialog() {
         let mut app = RustGisApp::with_sample();
         app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
-        // Bare "vn2000" is ambiguous
+        // A bare "vn2000" names no projection: it is passed on, and refused as ambiguous.
         app.dialogs.a = "vn2000".into();
         app.dialogs.text = typed_crs(&app.dialogs.a);
         assert_eq!(app.dialogs.text, "vn2000");
-        assert!(rustgis_engine::map::Projection::from_code(&app.dialogs.text).is_err());
+        let err = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
 
         // Explicit "vn2000tm3" resolves to VN-2000 TM-3 preset
         app.dialogs.a = "vn2000tm3".into();
@@ -1496,12 +1496,11 @@ mod tests {
         let proj_utm = rustgis_engine::map::Projection::from_code("VN-2000 / UTM zone 48N").unwrap();
         assert_eq!(proj_utm.label(), "VN-2000 / UTM zone 48N");
 
-        // Typing provincial name "hanoi" or native "Hà Nội"
+        // A province with the vn2000: prefix, in ASCII or Vietnamese.
         for (name, code) in [
-            ("hanoi", "vn2000tm3"),
-            ("Hà Nội", "vn2000tm3"),
-            ("Đà Nẵng", "vn2000tm3 +lon_0=107.75"),
-            ("tphcm", "vn2000tm3 +lon_0=105.75"),
+            ("vn2000:hanoi", "vn2000tm3"),
+            ("vn2000:Hà Nội", "vn2000tm3"),
+            ("VN2000/Đà Nẵng", "vn2000tm3 +lon_0=107.75"),
             ("vn2000:tphcm", "vn2000tm3 +lon_0=105.75"),
         ] {
             app.dialogs.a = name.into();
@@ -1509,6 +1508,12 @@ mod tests {
             let proj_p = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
             assert!(proj_p.label().contains("VN-2000"), "{name}");
             assert_eq!(proj_p.code(), code, "{name}");
+        }
+        // A bare province name is not a coordinate system: words such as "hue" stay as typed,
+        // as `map.projection` reads them.
+        for name in ["hanoi", "Hà Nội", "hue", "vinh", "tphcm"] {
+            assert_eq!(typed_crs(name), name);
+            assert!(rustgis_engine::map::Projection::from_code(name).is_err(), "{name}");
         }
         // A prefixed province given to the command is saved as the preset too.
         app.run("map.projection", json!({"type": "VN2000/Đà Nẵng"})).unwrap();

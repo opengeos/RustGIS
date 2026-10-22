@@ -145,6 +145,21 @@ pub fn is_bare_vn2000(text: &str) -> bool {
     clean == "VN2000"
 }
 
+/// The EPSG code an explicit VN-2000 system name stands for, matched on its letters and digits
+/// in any case: `VN-2000 / UTM zone 48N`, `vn2000_utm48` or `vn-2000-48` (3405), the same for
+/// 49 (3406), `VN-2000 / TM-3` or `vn2000tm3` (5897). The one table for [`Crs::parse`] and
+/// rustgis-map's presets, so a name one takes the other takes too.
+pub fn vn2000_epsg(text: &str) -> Option<u16> {
+    let clean: String = text.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
+    match clean.as_str() {
+        "VN2000UTMZONE48N" | "VN2000UTM48N" | "VN2000UTM48" | "VN2000UTMZONE48" | "VN200048" | "VN200048N" => Some(3405),
+        "VN2000UTMZONE49N" | "VN2000UTM49N" | "VN2000UTM49" | "VN2000UTMZONE49" | "VN200049" | "VN200049N" => Some(3406),
+        // EPSG:5897, VN-2000 / TM-3 zone 482: central meridian 105°, k 0.9999.
+        "VN2000TM3" | "VN2000TM3VIETNAM" | "VN2000TM3105" | "VN2000TM3LON0105" => Some(5897),
+        _ => None,
+    }
+}
+
 /// The error message returned when an ambiguous bare VN-2000 name is provided.
 pub fn bare_vn2000_error(text: &str) -> String {
     format!(
@@ -226,7 +241,7 @@ impl Crs {
         if t.contains('[') {
             return super::wkt::crs_from_wkt(t);
         }
-        if t.to_ascii_lowercase().starts_with("+proj") {
+        if t.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("+proj=")) {
             if t.len() > 1024 {
                 return Err("coordinate system definition is too long".into());
             }
@@ -249,19 +264,7 @@ impl Crs {
         }
         let clean: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
         if clean.starts_with("VN2000") {
-            match clean.as_str() {
-                "VN2000UTMZONE48N" | "VN2000UTM48N" | "VN2000UTM48" | "VN2000UTMZONE48" | "VN200048" | "VN200048N" => {
-                    return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
-                }
-                "VN2000UTMZONE49N" | "VN2000UTM49N" | "VN2000UTM49" | "VN2000UTMZONE49" | "VN200049" | "VN200049N" => {
-                    return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
-                }
-                "VN2000TM3" | "VN2000TM3VIETNAM" | "VN2000TM3105" | "VN2000TM3LON0105" => {
-                    // EPSG:5897, VN-2000 / TM-3 zone 482: central meridian 105°, k 0.9999.
-                    return Crs::from_epsg(5897).ok_or_else(|| "unknown coordinate system VN-2000 / TM-3".into());
-                }
-                _ => return Err(format!("unknown coordinate system '{t}'")),
-            }
+            return vn2000_epsg(t).and_then(|c| Crs::from_epsg(c.into())).ok_or_else(|| format!("unknown coordinate system '{t}'"));
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");

@@ -43,61 +43,9 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
     ("vn2000Utm49", "VN-2000 / UTM zone 49N", concat!("+proj=utm +zone=49 +ellps=WGS84 ", vn2000_towgs84!(), " +units=m +no_defs")),
 ];
 
-const PRESET_ALIASES: &[(&str, &[&str])] = &[
-    (
-        "vn2000tm3",
-        &[
-            "vn2000tm3",
-            "vn2000-tm3",
-            "vn2000_tm3",
-            "vn-2000-tm3",
-            "vn-2000 / tm-3",
-            "vn2000 / tm-3",
-            "vn-2000 / tm3",
-            "vn2000 / tm3",
-            "vn-2000 tm-3",
-            "vn2000 tm-3",
-            "vn-2000 tm3",
-            "vn2000 tm3",
-        ],
-    ),
-    (
-        "vn2000Utm48",
-        &[
-            "vn-2000-48",
-            "vn2000-48",
-            "vn-2000-utm48",
-            "vn2000utm48",
-            "vn2000_utm48",
-            "vn-2000 / utm zone 48n",
-            "vn2000 / utm zone 48n",
-            "vn-2000 / utm 48n",
-            "vn2000 / utm 48n",
-            "vn-2000 / utm zone 48",
-            "vn2000 / utm zone 48",
-            "vn-2000 / utm 48",
-            "vn2000 / utm 48",
-        ],
-    ),
-    (
-        "vn2000Utm49",
-        &[
-            "vn-2000-49",
-            "vn2000-49",
-            "vn-2000-utm49",
-            "vn2000utm49",
-            "vn2000_utm49",
-            "vn-2000 / utm zone 49n",
-            "vn2000 / utm zone 49n",
-            "vn-2000 / utm 49n",
-            "vn2000 / utm 49n",
-            "vn-2000 / utm zone 49",
-            "vn2000 / utm zone 49",
-            "vn-2000 / utm 49",
-            "vn2000 / utm 49",
-        ],
-    ),
-];
+/// The VN-2000 presets and the EPSG systems they are: a name `Crs::parse` reads as one of these
+/// (`VN-2000 / UTM zone 48N`, `vn2000_utm48`…) picks the preset too.
+const VN2000_PRESET_EPSG: &[(&str, u16)] = &[("vn2000tm3", 5897), ("vn2000Utm48", 3405), ("vn2000Utm49", 3406)];
 
 /// A province or regional hub in Vietnam and its VN-2000 3-degree central meridian
 /// (Circular 25/2014/TT-BTNMT Annex 02, inheriting QĐ 05/2007/QĐ-BTNMT).
@@ -261,7 +209,7 @@ pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static st
     let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| {
         id.eq_ignore_ascii_case(head)
             || label.eq_ignore_ascii_case(head)
-            || PRESET_ALIASES.iter().any(|(target, aliases)| target == id && aliases.iter().any(|a| a.eq_ignore_ascii_case(head)))
+            || rustgis_data::raster::crs::vn2000_epsg(head).is_some_and(|c| VN2000_PRESET_EPSG.contains(&(*id, c)))
     }) else {
         // `vn2000:hanoi`: VN-2000 / TM-3 on a province's meridian, written as that preset so a
         // saved project's code never depends on the province names.
@@ -1351,6 +1299,19 @@ mod tests {
             let err = lookup(bare).unwrap_err();
             assert!(err.contains("ambiguous"), "{bare}: {err}");
             assert!(parse_preset(bare).is_err(), "{bare}");
+        }
+
+        // The presets and `Crs::parse` (rasters, command parameters) take the same names.
+        for (name, id, code) in [
+            ("vn2000_utm48", "vn2000Utm48", 3405),
+            ("vn-2000-utm48", "vn2000Utm48", 3405),
+            ("VN200048", "vn2000Utm48", 3405),
+            ("VN-2000 / UTM zone 49", "vn2000Utm49", 3406),
+            ("VN2000TM3105", "vn2000tm3", 5897),
+            ("vn2000 tm-3", "vn2000tm3", 5897),
+        ] {
+            assert_eq!(parse_preset(name).unwrap().map(|(p, _)| p), Some(id), "{name}");
+            assert_eq!(rustgis_data::raster::crs::Crs::parse(name).map(|c| c.epsg()), Ok(code), "{name}");
         }
 
         // Explicit TM-3 alias lookups
