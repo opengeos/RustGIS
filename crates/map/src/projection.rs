@@ -121,14 +121,11 @@ pub struct Vn2000Province {
     pub aliases: &'static [&'static str],
 }
 
-/// The official 63 Vietnamese provincial central meridians for 3-degree Transverse Mercator projections,
-/// established under Circular 25/2014/TT-BTNMT (Phụ lục số 02 - Danh mục kinh tuyến trục theo từng tỉnh,
-/// thành phố trực thuộc Trung ương; inheriting Decision 05/2007/QĐ-BTNMT and Circular 973/2001/TT-TCĐC).
-///
-/// These 63 entries define the official cadastral and cartographic projection zones across Vietnam.
-/// Even after administrative reorganizations or boundary adjustments (such as 2024–2025 reforms),
-/// existing cadastral maps, spatial datasets, and land registries strictly maintain these designated
-/// central meridians for spatial integrity and backward compatibility.
+/// The central meridians of Vietnam's 63 provinces and cities for VN-2000 / TM-3 (Circular
+/// 973/2001/TT-TCĐC, kept by Circular 25/2014/TT-BTNMT). Every meridian matches the area of use
+/// EPSG gives its VN-2000 / TM-3 system (EPSG:5899 and 9205 to 9218 name the provinces of each);
+/// the provinces at 105° and 108° are those EPSG lists under no other meridian. The table predates
+/// the 2025 mergers of provinces, as the cadastral maps made with it do.
 pub const VN2000_PROVINCES: &[Vn2000Province] = &[
     Vn2000Province { name: "An Giang", lon_0: 104.75, id: "angiang", aliases: &[] },
     Vn2000Province { name: "Bà Rịa - Vũng Tàu", lon_0: 107.75, id: "bariavungtau", aliases: &["vungtau"] },
@@ -274,6 +271,14 @@ pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static st
             || label.eq_ignore_ascii_case(head)
             || PRESET_ALIASES.iter().any(|(target, aliases)| target == id && aliases.iter().any(|a| a.eq_ignore_ascii_case(head)))
     }) else {
+        // `vn2000:hanoi`: VN-2000 / TM-3 on a province's meridian, written as that preset so a
+        // saved project's code never depends on the province names.
+        if rest.trim().is_empty()
+            && let Some(lon) = resolve_vn2000_alias(head)
+        {
+            let own = preset_value("vn2000tm3", "lon_0");
+            return Ok(Some(("vn2000tm3", if own == Some(lon) { Vec::new() } else { vec![("lon_0", lon)] })));
+        }
         return match (head, rest) {
             ("", _) if !rest.is_empty() => Err("PROJ strings aren't taken: pick a preset, or an EPSG or ESRI code".into()),
             (_, r) if r.contains('=') => Err(format!("only presets take parameters: '{head}' isn't one")),
@@ -380,6 +385,7 @@ pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
     let trimmed = code.trim();
     let rest = [":", "/"].iter().find_map(|sep| {
         let (prefix, rest) = trimmed.split_once(sep)?;
+        let prefix = prefix.trim();
         (prefix.eq_ignore_ascii_case("vn2000")
             || prefix.eq_ignore_ascii_case("vn-2000")
             || prefix.eq_ignore_ascii_case("vn2000tm3")
@@ -446,18 +452,6 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     }
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        if rustgis_data::raster::crs::is_bare_vn2000(code) {
-            return Err(rustgis_data::raster::crs::bare_vn2000_error(code));
-        }
-        if let Some(lon) = resolve_vn2000_alias(code) {
-            let (_, label, def) =
-                PRESETS.iter().find(|(p, _, _)| *p == "vn2000tm3").ok_or_else(|| "vn2000tm3 preset missing".to_string())?;
-            return if (lon - 105.0).abs() < 1e-6 {
-                Ok((def.to_string(), label.to_string()))
-            } else {
-                Ok((with_params(def, &[("lon_0", lon)]), format!("{label} (lon_0={lon})")))
-            };
-        }
         return Err(format!("unknown projection '{code}'"));
     }
     let unknown = || format!("unknown coordinate system EPSG:{}", digits.trim_start_matches('0'));
@@ -1485,6 +1479,18 @@ mod tests {
             }
             assert!(Projector::new(&prefixed).is_ok(), "{}", prov.name);
         }
+
+        // Every id is its name normalised.
+        for prov in VN2000_PROVINCES {
+            assert_eq!(prov.id, normalize_vietnamese(prov.name), "{}", prov.name);
+        }
+        // A province is saved as the preset on its meridian, so projects don't depend on the names.
+        assert_eq!(parse_preset("vn2000:tphcm"), Ok(Some(("vn2000tm3", vec![("lon_0", 105.75)]))));
+        assert_eq!(parse_preset("VN2000/Hà Nội"), Ok(Some(("vn2000tm3", vec![]))));
+        assert_eq!(parse_preset("VN-2000 / Đà Nẵng"), Ok(Some(("vn2000tm3", vec![("lon_0", 107.75)]))));
+        assert_eq!(parse_preset("hanoi"), Ok(None));
+        assert!(parse_preset("vn2000:hanoi +lon_0=106").is_err(), "a province takes no parameters");
+        assert_eq!(lookup("vn2000:tphcm").unwrap().1, "VN-2000 / TM-3 (Vietnam) (lon_0=105.75)");
 
         // All UI shortcut hubs are canonical entries with matching central meridians
         for &(ui_name, ui_lon) in VN2000_UI_PROVINCES {

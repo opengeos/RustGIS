@@ -1235,16 +1235,9 @@ pub(crate) fn format_degrees(deg: f64) -> String {
 /// The chosen preset's parameters (opengeos/RustGIS#517): the central meridian, and a conic's
 /// standard parallels, each written back into the chosen code. Nothing for a preset without any.
 fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
-    use rustgis_engine::map::projection::{
-        VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value, resolve_vn2000_alias, resolve_vn2000_province,
-    };
-    let input = app.dialogs.text.trim();
-    let resolved = if let Some(lon) = resolve_vn2000_alias(input).or_else(|| resolve_vn2000_province(input)) {
-        format!("vn2000tm3 +lon_0={lon}")
-    } else {
-        input.to_string()
-    };
-    let Ok(Some((id, params))) = parse_preset(&resolved) else { return };
+    use rustgis_engine::map::projection::{VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value};
+    // A province typed by name is already the preset (`typed_crs`), and `vn2000:hanoi` is one too.
+    let Ok(Some((id, params))) = parse_preset(&app.dialogs.text) else { return };
     let takes = preset_params(id);
     if takes.is_empty() {
         return;
@@ -1359,7 +1352,7 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
             tl!(
                 "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84."
             ),
-            None,
+            Some("5897".into()),
         ),
         "vn2000Utm48" => {
             (tl!("Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E)."), Some("3405".into()))
@@ -1499,12 +1492,22 @@ mod tests {
         assert_eq!(proj_utm.label(), "VN-2000 / UTM zone 48N");
 
         // Typing provincial name "hanoi" or native "Hà Nội"
-        for name in ["hanoi", "Hà Nội", "Đà Nẵng", "tphcm"] {
+        for (name, code) in [
+            ("hanoi", "vn2000tm3"),
+            ("Hà Nội", "vn2000tm3"),
+            ("Đà Nẵng", "vn2000tm3 +lon_0=107.75"),
+            ("tphcm", "vn2000tm3 +lon_0=105.75"),
+            ("vn2000:tphcm", "vn2000tm3 +lon_0=105.75"),
+        ] {
             app.dialogs.a = name.into();
             app.dialogs.text = typed_crs(&app.dialogs.a);
             let proj_p = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
             assert!(proj_p.label().contains("VN-2000"), "{name}");
+            assert_eq!(proj_p.code(), code, "{name}");
         }
+        // A prefixed province given to the command is saved as the preset too.
+        app.run("map.projection", json!({"type": "VN2000/Đà Nẵng"})).unwrap();
+        assert_eq!(app.session.map().projection.code(), "vn2000tm3 +lon_0=107.75");
 
         // Applying VN-2000 TM-3
         app.run("map.projection", json!({"type": "vn2000tm3"})).unwrap();

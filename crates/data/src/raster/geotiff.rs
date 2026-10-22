@@ -2202,8 +2202,7 @@ mod tests {
         let back_pt = tr.to_lonlat(projected).unwrap();
         assert!((back_pt.x - pt.x).abs() < 1e-6 && (back_pt.y - pt.y).abs() < 1e-6);
 
-        // A custom CRS with parameters GeoTIFF keys cannot express (such as 7-parameter Helmert +towgs84 shift)
-        // returns a clear error rather than silently writing misleading keys or dropping CRS metadata
+        // VN-2000 / TM-3 is EPSG:5897, written as its code and read back as it.
         let vn2000_tm3 = Crs::parse("VN-2000 / TM-3").unwrap();
         let raster_vn2000 = Raster::new(
             "vn",
@@ -2217,7 +2216,8 @@ mod tests {
             "Float32",
         )
         .unwrap();
-        let err = write(&raster_vn2000, 0).unwrap_err();
-        assert!(err.to_string().contains("a coordinate system without GeoTIFF keys can't be written"), "{err}");
+        let bytes = write(&raster_vn2000, 0).unwrap();
+        let back = read(std::io::Cursor::new(&bytes), "vn").unwrap();
+        assert_eq!(back.crs, Crs::Epsg(5897));
     }
 }

@@ -135,10 +135,6 @@ macro_rules! vn2000_towgs84_lit {
 /// The 7-parameter Helmert shift from VN-2000 to WGS 84 (QĐ 973/2001/QĐ-TTg).
 pub const VN2000_TOWGS84: &str = vn2000_towgs84_lit!();
 
-/// The PROJ definition of VN-2000 / TM-3 with central meridian 105° and scale factor 0.9999.
-pub const VN2000_TM3_105_PROJ4: &str =
-    concat!("+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 ", vn2000_towgs84_lit!(), " +units=m +no_defs");
-
 /// Returns true if `text` is an ambiguous bare reference to VN-2000 without a specified projection.
 pub fn is_bare_vn2000(text: &str) -> bool {
     let clean: String = text.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
@@ -152,13 +148,14 @@ pub fn bare_vn2000_error(text: &str) -> String {
     )
 }
 
-/// Validates a PROJ definition string against unsafe parameter forms.
+/// Checks a PROJ string typed by a user (not one read from a file, whose `+nadgrids=@null` is
+/// fine): no keys naming grid or definition files, as for GDAL (`raster::gdal`), and no paths.
 fn validate_proj_string(proj4: &str) -> Result<(), String> {
     for token in proj4.split_whitespace() {
         let t = token.trim_start_matches('+');
         let (key, val) = t.split_once('=').unwrap_or((t, ""));
         let key_lower = key.to_ascii_lowercase();
-        if key_lower == "init" || key_lower == "nadgrids" {
+        if ["init", "nadgrids", "geoidgrids", "grids", "file"].contains(&key_lower.as_str()) {
             return Err(format!("parameter '+{key}' is not allowed in coordinate system definition"));
         }
         if val.contains("..") || val.contains('/') || val.contains('\\') {
@@ -172,7 +169,6 @@ impl Crs {
     /// A file's own coordinate system: checked (its PROJ definition must parse, or be a
     /// sinusoidal one RustGIS computes) and added to the run's table, once per definition.
     pub fn custom(def: CustomCrs) -> Result<Crs, String> {
-        validate_proj_string(&def.proj4)?;
         let checked = match rustgis_geom::Sinusoidal::from_proj4(&def.proj4) {
             Some(sinu) => sinu.map(|_| ()),
             None => proj4rs::Proj::from_proj_string(&def.proj4).map(|_| ()).map_err(|e| e.to_string()),
@@ -218,8 +214,9 @@ impl Crs {
     }
 
     /// A coordinate system given as text: `EPSG:2263`, `2263`, an OGC URN or URL ending in the
-    /// code, WKT, PROJ string, or an explicit VN-2000 system like `VN-2000 / UTM zone 48N` or
-    /// `VN-2000 / TM-3` (bare `VN-2000` is ambiguous).
+    /// code, WKT, a PROJ string (`+proj=…`, naming no grid or definition files), or an explicit
+    /// VN-2000 system: `VN-2000 / UTM zone 48N` (EPSG:3405), `… 49N` (EPSG:3406) or
+    /// `VN-2000 / TM-3` (EPSG:5897, central meridian 105°). A bare `VN-2000` is ambiguous.
     pub fn parse(text: &str) -> Result<Crs, String> {
         let t = text.trim();
         if t.contains('[') {
@@ -256,13 +253,8 @@ impl Crs {
                     return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
                 }
                 "VN2000TM3" | "VN2000TM3VIETNAM" | "VN2000TM3105" | "VN2000TM3LON0105" => {
-                    return Crs::custom(CustomCrs {
-                        proj4: VN2000_TM3_105_PROJ4.to_string(),
-                        label: "VN-2000 / TM-3".to_string(),
-                        geokeys: Vec::new(),
-                        doubles: Vec::new(),
-                        ascii: String::new(),
-                    });
+                    // EPSG:5897, VN-2000 / TM-3 zone 482: central meridian 105°, k 0.9999.
+                    return Crs::from_epsg(5897).ok_or_else(|| "unknown coordinate system VN-2000 / TM-3".into());
                 }
                 _ => return Err(format!("unknown coordinate system '{t}'")),
             }
@@ -509,15 +501,11 @@ mod tests {
             "  VN-2000 / TM-3  ",
         ] {
             let crs = Crs::parse(name).unwrap();
-            assert_eq!(crs.epsg(), 0, "{name}");
-            assert_eq!(crs.label(), "VN-2000 / TM-3", "{name}");
+            assert_eq!(crs, Crs::Epsg(5897), "{name}");
             assert!(!crs.is_geographic(), "{name}");
-            let def = crs.custom_def().unwrap();
-            assert!(def.proj4.contains("+proj=tmerc"), "{name}");
-            assert!(def.proj4.contains("+lon_0=105"), "{name}");
-            assert!(def.proj4.contains("+k=0.9999"), "{name}");
-            assert!(def.proj4.contains("+x_0=500000"), "{name}");
-            assert!(def.proj4.contains("+towgs84="), "{name}");
+            let def = epsg_proj4(5897).unwrap();
+            assert!(def.contains("+proj=tmerc") && def.contains("+lon_0=105") && def.contains("+k=0.9999"), "{name}");
+            assert!(def.contains("+x_0=500000") && def.contains(VN2000_TOWGS84), "{name}");
             let tr = crs.transformer().unwrap();
             let pt = Coord::new(105.8525, 21.0285);
             let proj_pt = tr.from_lonlat(pt).unwrap();
@@ -598,6 +586,11 @@ mod tests {
         assert!(Crs::parse("+proj=utm +zone=48 +nadgrids=@null").is_err());
         assert!(Crs::parse("+proj=utm +zone=48 +file=../secret").is_err());
         assert!(Crs::parse("+proj=utm +zone=48 +file=C:\\secret").is_err());
+        assert!(Crs::parse("+proj=utm +zone=33 +geoidgrids=egm96_15.gtx").is_err());
+        // A file's own definition may carry `+nadgrids=@null` (Web Mercator as GDAL writes it).
+        let merc = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs";
+        let file = CustomCrs { proj4: merc.into(), label: "m".into(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() };
+        assert!(Crs::custom(file).is_ok());
 
         let custom_count_before = custom_table().lock().unwrap_or_else(|e| e.into_inner()).len();
         assert!(Crs::parse("+proj").is_err());
