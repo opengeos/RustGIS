@@ -150,12 +150,14 @@ fn complete(start: usize, end: usize, word: &str, ids: &[String]) -> Option<Offe
 
 /// Where a line's object leaves off at its end (`text`, from its `{`): where a quoted key being
 /// typed starts (after its quote, a char index of `text`; None when the end isn't in one), the
-/// `{` of the top-level `"params"` object the end is in (None outside it), and where a top-level
-/// quoted value being typed starts, with its key.
+/// `{` of the top-level `"params"` object the end is in (None outside it), where a top-level
+/// quoted value being typed starts, with its key, and the top-level quoted values read whole,
+/// each with its key, in order.
 struct Scan {
     start: Option<usize>,
     params: Option<usize>,
     value: Option<(usize, String)>,
+    values: Vec<(String, String)>,
 }
 
 /// Reads `text`, a line's object from its `{`, to its end: a key starts an entry right after a
@@ -168,12 +170,16 @@ fn scan(text: &str) -> Scan {
     // where the key being read starts, the `{` of the `"params"` object the text is in, and the
     // top-level value being read.
     let (mut named, mut valued, mut from, mut params, mut value) = (None::<String>, None::<String>, None, None, None);
+    let mut values = Vec::new();
     for (i, &c) in chars.iter().enumerate() {
         let was_escaped = escaped;
         escaped = c == '\\' && !was_escaped;
         if quoted {
             if c == '"' && !was_escaped {
-                (quoted, start, value) = (false, None, None);
+                if let Some((v, key)) = value.take() {
+                    values.push((key, chars.get(v..i).unwrap_or_default().iter().collect()));
+                }
+                (quoted, start) = (false, None);
                 named = from.take().and_then(|f| chars.get(f..i)).map(|k| k.iter().collect());
             }
             continue;
@@ -215,7 +221,7 @@ fn scan(text: &str) -> Scan {
             }
         }
     }
-    Scan { start, params, value }
+    Scan { start, params, value, values }
 }
 
 /// The line's object from its `{` up to the cursor at char `at` of `script`, read (`scan`), with
@@ -271,45 +277,12 @@ fn in_params(script: &str, at: usize, h: &Hint) -> bool {
 /// before or after its `"params"`; the last one given, as Run reads it. None without one, or when
 /// it isn't a plain string.
 pub fn tool_of(line: &str) -> Option<String> {
-    let chars: Vec<char> = line.chars().collect();
-    let (mut depth, mut entry, mut i, mut found) = (0usize, false, 0, None);
-    // 1: the key `"tool"` read; 2: its colon too, its value next.
-    let mut want = 0;
-    while let Some(&c) = chars.get(i) {
-        match c {
-            '"' => {
-                // Up to the string's closing quote, or the line's end.
-                let (mut end, mut escaped) = (i + 1, false);
-                while let Some(&d) = chars.get(end) {
-                    if d == '"' && !escaped {
-                        break;
-                    }
-                    escaped = d == '\\' && !escaped;
-                    end += 1;
-                }
-                let s: String = chars.get(i + 1..end).unwrap_or_default().iter().collect();
-                if depth == 1 && want == 2 {
-                    found = (!s.contains('\\')).then_some(s);
-                    want = 0;
-                } else {
-                    want = usize::from(depth == 1 && entry && s == "tool");
-                }
-                entry = false;
-                i = end;
-            }
-            '{' | '[' | '(' => {
-                depth += 1;
-                (entry, want) = (c == '{' && depth == 1, 0);
-            }
-            '}' | ']' | ')' => (depth, entry, want) = (depth.saturating_sub(1), false, 0),
-            ',' => (entry, want) = (depth == 1, 0),
-            ':' => want = if want == 1 && depth == 1 { 2 } else { 0 },
-            c if c.is_whitespace() => {}
-            _ => (entry, want) = (false, 0),
-        }
-        i += 1;
-    }
-    found
+    scan(line).values.into_iter().rev().find(|(key, _)| key == "tool").map(|(_, tool)| tool).filter(|t| !t.contains('\\'))
+}
+
+/// Line `h`'s object, from its `{` to the line's end.
+fn line_of<'a>(script: &'a str, h: &Hint) -> Option<&'a str> {
+    script.get(byte_at(script, h.brace)?..)?.split('\n').next()
 }
 
 /// The keys of the parameters `desc` describes, entry by entry, each with its alternatives
@@ -370,8 +343,7 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
     if h.id != "gp.run" {
         return None;
     }
-    let line = script.get(byte_at(script, h.brace)?..)?.split('\n').next()?;
-    let tool = rustgis_engine::analysis::tool(&tool_of(line)?)?;
+    let tool = rustgis_engine::analysis::tool(&tool_of(line_of(script, &h)?)?)?;
     // The `"params"` object from its `{` (it ends with its `}`: the rest of the line isn't read),
     // the word being typed taken out.
     let before = script.get(byte_at(script, params)?..byte_at(script, start)?)?;
@@ -415,25 +387,29 @@ fn key_help(session: &rustgis_engine::Session, of: &Of, key: &str) -> Option<(St
 fn param_line(p: &rustgis_engine::analysis::ParamSpec) -> String {
     use rustgis_engine::analysis::ParamKind as K;
     // In logical order (`tl_raw!`): `fmt` puts the finished line in display form.
+    let choices;
     let takes = match p.kind {
-        K::Layer => tl_raw!("layer").to_string(),
-        K::PolygonLayer => tl_raw!("polygon layer").to_string(),
-        K::PointLayer => tl_raw!("point layer").to_string(),
-        K::RasterLayer => tl_raw!("raster layer").to_string(),
-        K::VectorLayer => tl_raw!("vector layer").to_string(),
-        K::RasterLayers => tl_raw!("raster layers (names separated by ;)").to_string(),
-        K::VectorLayers => tl_raw!("vector layers (names separated by ;)").to_string(),
-        K::Field => tl_raw!("a field of the first layer").to_string(),
-        K::NumericField => tl_raw!("a numeric field of the first layer").to_string(),
-        K::CoordinateField => tl_raw!("a field of the first layer holding coordinates").to_string(),
-        K::Number => tl_raw!("number").to_string(),
-        K::Text => tl_raw!("text").to_string(),
-        K::Bool => tl_raw!("bool").to_string(),
-        K::Path => tl_raw!("file path").to_string(),
-        K::Choice(options) => options.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | "),
+        K::Layer => tl_raw!("layer"),
+        K::PolygonLayer => tl_raw!("polygon layer"),
+        K::PointLayer => tl_raw!("point layer"),
+        K::RasterLayer => tl_raw!("raster layer"),
+        K::VectorLayer => tl_raw!("vector layer"),
+        K::RasterLayers => tl_raw!("raster layers (names separated by ;)"),
+        K::VectorLayers => tl_raw!("vector layers (names separated by ;)"),
+        K::Field => tl_raw!("a field of the first layer"),
+        K::NumericField => tl_raw!("a numeric field of the first layer"),
+        K::CoordinateField => tl_raw!("a field of the first layer holding coordinates"),
+        K::Number => tl_raw!("number"),
+        K::Text => tl_raw!("text"),
+        K::Bool => tl_raw!("bool"),
+        K::Path => tl_raw!("file path"),
+        K::Choice(options) => {
+            choices = options.iter().map(|o| format!("\"{o}\"")).collect::<Vec<_>>().join(" | ");
+            choices.as_str()
+        }
     };
     let key = format!("\"{}\"{}", p.name, if p.required { "" } else { "?" });
-    let args = [("key", key.as_str()), ("takes", takes.as_str()), ("label", tl_raw!(p.label)), ("default", p.default)];
+    let args = [("key", key.as_str()), ("takes", takes), ("label", tl_raw!(p.label)), ("default", p.default)];
     if p.default.is_empty() {
         crate::i18n::fmt("{key}: {takes} — {label}", &args)
     } else {
@@ -444,11 +420,9 @@ fn param_line(p: &rustgis_engine::analysis::ParamSpec) -> String {
 /// The help for tool `t`, as `help` gives a command's: its signature, name, summary, parameters
 /// one per line (`param_line`), and its toolbox.
 fn tool_help(t: &rustgis_engine::analysis::ToolSpec) -> Help {
-    let names: Vec<String> = t.params.iter().map(|p| format!("{}{}", p.name, if p.required { "" } else { "?" })).collect();
-    let keys = if names.is_empty() { String::new() } else { format!(" {{{}}}", names.join(", ")) };
     Help {
         id: t.id.to_string(),
-        keys,
+        keys: signature(t.params.iter().map(|p| (p.name, !p.required))),
         label: tl!(t.name).to_string(),
         about: tl!(t.summary).to_string(),
         params: t.params.iter().map(param_line).collect(),
@@ -459,10 +433,7 @@ fn tool_help(t: &rustgis_engine::analysis::ToolSpec) -> Help {
 /// The help by the cursor at char `at` of `script`, in line `h`'s braces: in a `gp.run` line's
 /// `"params"`, the tool's it runs (when the line names one there is); elsewhere the command's.
 fn help_at(session: &rustgis_engine::Session, script: &str, at: usize, h: &Hint) -> Option<Help> {
-    let tool = || {
-        let line = script.get(byte_at(script, h.brace)?..)?.split('\n').next()?;
-        rustgis_engine::analysis::tool(&tool_of(line)?)
-    };
+    let tool = || rustgis_engine::analysis::tool(&tool_of(line_of(script, h)?)?);
     let tool = if h.id == "gp.run" && in_params(script, at, h) { tool() } else { None };
     tool.map(tool_help).or_else(|| help(session, &h.id))
 }
@@ -521,9 +492,15 @@ pub fn help(session: &rustgis_engine::Session, id: &str) -> Option<Help> {
         }
     };
     let params = rustgis_engine::param_list(&desc).unwrap_or_default();
-    let names: Vec<String> = params.iter().map(|p| format!("{}{}", p.key, if p.optional { "?" } else { "" })).collect();
-    let keys = if names.is_empty() { String::new() } else { format!(" {{{}}}", names.join(", ")) };
+    let keys = signature(params.iter().map(|p| (p.key, p.optional)));
     Some(Help { id: id.to_string(), keys, label, about, params: params.iter().map(|p| p.text.to_string()).collect(), location })
+}
+
+/// The keys after an id in a help's signature, each with `?` when it may be left out
+/// (` {layer?, size?}`); empty for none.
+fn signature<'a>(keys: impl Iterator<Item = (&'a str, bool)>) -> String {
+    let names: Vec<String> = keys.map(|(key, optional)| format!("{key}{}", if optional { "?" } else { "" })).collect();
+    if names.is_empty() { String::new() } else { format!(" {{{}}}", names.join(", ")) }
 }
 
 /// The parameter description of command `id`: a built-in command's, or an enabled plugin's.
@@ -1811,7 +1788,7 @@ mod tests {
         assert_eq!(tool_of(r#"{"x": "tool", "y": "buffer"}"#), None, "a value");
         assert_eq!(tool_of(r#"{"tool": 5}"#), None, "not a string");
         assert_eq!(tool_of(r#"{"tool": "a\"b"}"#), None, "escaped");
-        assert_eq!(tool_of(r#"{"tool": "buf"#).as_deref(), Some("buf"), "being typed");
+        assert_eq!(tool_of(r#"{"tool": "buf"#), None, "being typed");
         assert_eq!(tool_of(r#"{"tool""#), None);
         assert_eq!(tool_of(""), None);
     }
