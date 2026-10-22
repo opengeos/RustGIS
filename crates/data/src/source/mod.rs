@@ -170,6 +170,16 @@ pub struct Batch {
 
 /// A vector data source read in place.
 pub trait FeatureSource: Send + Sync {
+    /// Whether complete, ordered traversal is available without an interaction row limit.
+    fn streams_chunks(&self) -> bool {
+        false
+    }
+    /// Visits every matching feature in source painter order. Release each chunk before the
+    /// next callback. `bytes` targets owned feature storage; an indivisible larger row is emitted alone.
+    /// Callback errors stop traversal. Success returns an empty, complete summary batch.
+    fn visit_chunks(&self, _extent: Option<Extent>, _bytes: usize, _visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        Err(DataError::Format("this provider does not support chunk traversal".into()))
+    }
     fn info(&self) -> &SourceInfo;
     /// Reads the features a request asks for. A source read by its web address fails with
     /// [`remote::NEED`] until the bytes the read needs are fetched: run it with
@@ -599,3 +609,7 @@ pub(crate) fn tls_provider() {
 
 #[cfg(test)]
 mod tests;
+
+pub mod chunk_memory;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod spill;

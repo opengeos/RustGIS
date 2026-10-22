@@ -1,0 +1,484 @@
+use super::*;
+use rustgis_data::source::{Batch, FeatureSource, Request, SourceInfo};
+use rustgis_data::{Dataset, Feature, Field, FieldType, Value};
+use rustgis_map::{Layer, Renderer, source::SourceLayer};
+
+struct Chunks {
+    info: SourceInfo,
+    ds: Dataset,
+    size: usize,
+}
+
+impl FeatureSource for Chunks {
+    fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+    fn read(&self, _: &Request) -> rustgis_data::Result<Batch> {
+        Ok(Batch {
+            features: self.ds.features.iter().take(1).cloned().collect(),
+            matched: self.ds.features.len() as u64,
+            complete: false,
+            skipped: 0,
+        })
+    }
+    fn streams_chunks(&self) -> bool {
+        true
+    }
+    fn visit_chunks(
+        &self,
+        _: Option<Extent>,
+        _: usize,
+        visit: &mut dyn FnMut(Vec<Feature>) -> rustgis_data::Result<()>,
+    ) -> rustgis_data::Result<Batch> {
+        if self.size == 0 {
+            visit(self.ds.features.iter().take(1).cloned().collect())?;
+            return Err(rustgis_data::DataError::Format("cancelled after a source failure".into()));
+        }
+        for chunk in self.ds.features.chunks(self.size) {
+            visit(chunk.to_vec())?;
+        }
+        Ok(Batch { complete: self.size != usize::MAX, matched: self.ds.features.len() as u64, ..Default::default() })
+    }
+}
+fn streamed(layer: &Layer, size: usize) -> Layer {
+    streamed_kind(layer, size, false)
+}
+
+fn streamed_kind(layer: &Layer, size: usize, native: bool) -> Layer {
+    let ds = layer.dataset.clone();
+    let info = SourceInfo {
+        name: ds.name.clone(),
+        format: "test",
+        geometry_type: ds.geometry_type,
+        fields: ds.fields.clone(),
+        extent: ds.extent(),
+        count: Some(ds.features.len() as u64),
+        crs: if native { "EPSG:3857".into() } else { "EPSG:4326".into() },
+        indexed: true,
+        notes: Vec::new(),
+    };
+    let mut l = layer.clone();
+    l.dataset.features = ds.features.iter().take(1).cloned().collect::<Vec<_>>().into();
+    l.source = Some(SourceLayer::from_path("test.shp", None, Box::new(Chunks { info, ds, size })));
+    l
+}
+
+#[test]
+fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_selection() {
+    let mut ds =
+        Dataset::new("overlap", GeometryType::Polygon, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);
+    for i in 0..37 {
+        let x = (i % 7) as f64 * 0.015 - 0.05;
+        let y = (i % 5) as f64 * 0.015 - 0.03;
+        ds.push(
+            Some(Geometry::Polygon(vec![vec![vec![
+                Coord::new(x, y),
+                Coord::new(x + 0.04, y),
+                Coord::new(x + 0.04, y + 0.04),
+                Coord::new(x, y + 0.04),
+                Coord::new(x, y),
+            ]]])),
+            vec![Value::Text(format!("p{i}")), Value::Int(i)],
+        );
+    }
+    let mut m = Map::new("test");
+    m.add_dataset(ds);
+    m.camera = Camera::new(rustgis_geom::lonlat_to_merc(Coord::new(0.02, 0.02)), 80.0);
+    let l = &mut m.layers[0];
+    l.transparency = 0.35;
+    l.definition_query = Some("value >= 3".into());
+    l.labels.enabled = true;
+    l.labels.default.field = "name".into();
+    l.renderer = Renderer::Single(Symbol { fill: Rgba::new(210, 60, 25, 120), ..Symbol::default_for(GeometryType::Polygon, l.id) });
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: m.camera, sky: false };
+    for extrusion in [false, true] {
+        m.layers[0].extrusion = extrusion.then_some(rustgis_map::effects::Extrusion {
+            height: 1500.0,
+            field: None,
+            factor: 1.0,
+            face_culling: true,
+            lighting: true,
+            shadows: true,
+        });
+        let expected = render(&mut m.clone(), &view).unwrap();
+        for size in [1, 3, 11, 100] {
+            let mut actual = m.clone();
+            actual.layers[0] = streamed(&m.layers[0], size);
+
+            let got = render(&mut actual, &view).unwrap();
+            assert!(got.pixmap.data() == expected.pixmap.data(), "chunk size {size} changed pixels");
+            assert_eq!(got.labels.iter().map(|l| &l.text).collect::<Vec<_>>(), expected.labels.iter().map(|l| &l.text).collect::<Vec<_>>());
+        }
+    }
+}
+
+#[test]
+fn complete_chunks_accumulate_point_bins_across_boundaries() {
+    let mut ds = Dataset::new("points", GeometryType::Point, vec![]);
+    for i in 0..211 {
+        ds.push(Some(Geometry::Point(Coord::new((i % 13) as f64 * 0.002, (i % 7) as f64 * 0.002))), vec![]);
+    }
+    let mut m = Map::new("test");
+    m.add_dataset(ds);
+    m.camera = Camera::new(Coord::new(0.0, 0.0), 30.0);
+    m.layers[0].aggregation = Some(rustgis_map::effects::Aggregation { size: 18.0, hexagons: false });
+    m.layers[0].selection = vec![0];
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: m.camera, sky: false };
+    let expected = render(&mut m.clone(), &view).unwrap();
+    for size in [1, 17, 300] {
+        let mut actual = m.clone();
+        actual.layers[0] = streamed(&m.layers[0], size);
+
+        let got = render(&mut actual, &view).unwrap();
+        assert!(
+            got.pixmap.data() == expected.pixmap.data(),
+            "aggregation changed across chunks: {:?}",
+            got.pixmap.data().iter().zip(expected.pixmap.data()).position(|(a, b)| a != b)
+        );
+    }
+}
+
+#[test]
+fn complete_chunks_use_the_entire_mask_source() {
+    let rectangle = |x: f64, y: f64, w: f64, h: f64| {
+        Geometry::Polygon(vec![vec![vec![
+            Coord::new(x, y),
+            Coord::new(x + w, y),
+            Coord::new(x + w, y + h),
+            Coord::new(x, y + h),
+            Coord::new(x, y),
+        ]]])
+    };
+    let mut m = Map::new("mask");
+    let mut ds = Dataset::new("ink", GeometryType::Polygon, vec![]);
+    ds.push(Some(rectangle(-0.2, -0.15, 0.4, 0.3)), vec![]);
+    let ink = m.add_dataset(ds);
+    let mut ds = Dataset::new("mask", GeometryType::Polygon, vec![]);
+    for i in 0..5 {
+        ds.push(Some(rectangle(i as f64 * 0.05 - 0.12, -0.08, 0.025, 0.16)), vec![]);
+    }
+    let mask = m.add_dataset(ds);
+    m.layer_mut(mask).unwrap().visible = false;
+    m.layer_mut(ink).unwrap().mask = Some("mask".into());
+    m.camera = Camera::new(Coord::new(0.0, 0.0), 100.0);
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: m.camera, sky: false };
+    let expected = render(&mut m.clone(), &view).unwrap();
+    for size in [1, 3, 10] {
+        let mut actual = m.clone();
+        *actual.layer_mut(mask).unwrap() = streamed(m.layer(mask).unwrap(), size);
+
+        let got = render(&mut actual, &view).unwrap();
+        assert!(got.pixmap.data() == expected.pixmap.data(), "a mask lost features across chunks");
+    }
+}
+
+#[test]
+fn complete_chunks_preserve_label_classes_projection_rotation_and_png_export() {
+    let mut ds =
+        Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);
+    for i in 0..23 {
+        let y = i as f64 * 0.004 - 0.04;
+        ds.push(
+            Some(Geometry::Line(vec![vec![Coord::new(-0.06, y), Coord::new(0.0, y + 0.006), Coord::new(0.06, y)]])),
+            vec![Value::Text(format!("line {i}")), Value::Int(i)],
+        );
+    }
+    let mut base = Map::new("classes");
+    base.add_dataset(ds);
+    let l = &mut base.layers[0];
+    l.labels.enabled = true;
+    l.labels.default.field = "name".into();
+    let mut class = l.labels.default.clone();
+    class.name = "large".into();
+    class.where_ = Some("value >= 10".into());
+    class.size = 18.0;
+    class.color = Rgba::rgb(180, 20, 30);
+    class.bold = true;
+    l.labels.classes.push(class);
+    l.display_filters.push(rustgis_map::effects::DisplayFilter {
+        name: "subset".into(),
+        min_scale: None,
+        max_scale: None,
+        where_: "value < 20".into(),
+    });
+    l.selection = vec![0];
+    l.line_strokes = vec![
+        rustgis_map::LineStroke { color: Some(Rgba::rgb(20, 20, 20)), width: Some(5.0), offset: 3.0, ..Default::default() },
+        rustgis_map::LineStroke { color: Some(Rgba::rgb(240, 180, 40)), width: Some(2.0), offset: 3.0, ..Default::default() },
+    ];
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+    for projection in [rustgis_map::Projection::default(), rustgis_map::Projection::Custom("robinson".into())] {
+        base.projection = projection;
+        for bearing in [0.0, 25.0] {
+            let view = View { camera: Camera { bearing, ..view.camera }, ..view };
+            let expected = render(&mut base.clone(), &view).unwrap();
+            assert!(!expected.labels.is_empty());
+            assert!(expected.labels.iter().any(|l| l.bold));
+            for size in [1, 3, 11, 100] {
+                let mut actual = base.clone();
+                actual.layers[0] = streamed(&base.layers[0], size);
+                let got = render(&mut actual, &view).unwrap();
+                assert_eq!(got.labels, expected.labels, "label class or placement changed");
+                assert!(got.pixmap.data() == expected.pixmap.data(), "line rendering changed");
+                assert_eq!(render_png(&mut actual, &view).unwrap(), render_png(&mut base.clone(), &view).unwrap(), "PNG export changed");
+            }
+        }
+    }
+}
+
+#[test]
+fn complete_chunks_fail_without_publishing_a_partial_frame() {
+    let mut ds = Dataset::new("failure", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut map = Map::new("failure");
+    map.add_dataset(ds);
+    map.layers[0] = streamed(&map.layers[0], 0);
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: map.camera, sky: false };
+    assert!(render(&mut map, &view).is_none());
+    assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains("cancelled"));
+}
+
+#[test]
+fn complete_chunks_use_whole_layer_lod_decisions() {
+    let mut ds = Dataset::new("detailed", GeometryType::Polyline, vec![]);
+    for row in 0..11 {
+        let points = (0..20_001).map(|i| Coord::new(-0.1 + i as f64 * 0.00001, row as f64 * 0.004 + (i % 2) as f64 * 0.000001)).collect();
+        ds.push(Some(Geometry::Line(vec![points])), vec![]);
+    }
+    let mut base = Map::new("LOD");
+    base.add_dataset(ds);
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+    let expected = render(&mut base.clone(), &view).unwrap();
+    for size in [1, 3, 20] {
+        let mut actual = base.clone();
+        actual.layers[0] = streamed(&base.layers[0], size);
+        let got = render(&mut actual, &view).unwrap();
+        assert!(got.pixmap.data() == expected.pixmap.data(), "whole-layer LOD changed at chunk size {size}");
+    }
+}
+
+#[test]
+fn perspective_uses_complete_isolated_fallback() {
+    let mut ds = Dataset::new("upright", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+    for i in 0..13 {
+        ds.push(Some(Geometry::Point(Coord::new((i % 5) as f64 * 0.01, (i / 5) as f64 * 0.01))), vec![Value::Text(format!("point {i}"))]);
+    }
+    let mut base = Map::new("perspective");
+    base.add_dataset(ds);
+    base.layers[0].labels.enabled = true;
+    base.layers[0].labels.default.field = "name".into();
+    base.layers[0].selection = vec![0];
+    let view = View {
+        width: 320.0,
+        height: 240.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    let expected = render(&mut base.clone(), &view).unwrap();
+    for size in [1, 3, 20] {
+        let mut actual = base.clone();
+        actual.layers[0] = streamed(&base.layers[0], size);
+        let before = actual.layers[0].dataset.features.clone();
+        let got = render(&mut actual, &view).unwrap();
+        assert_eq!(got.labels, expected.labels);
+        assert!(got.pixmap.data() == expected.pixmap.data());
+        assert!(actual.layers[0].dataset.features.shares(&before));
+        assert_eq!(actual.layers[0].selection, vec![0]);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn actual_shapefile_export_is_complete_despite_one_row_interaction_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("complete.shp");
+    let mut ds =
+        Dataset::new("complete", GeometryType::Point, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);
+    for i in 0..29 {
+        ds.push(
+            Some(Geometry::Point(Coord::new((i % 7) as f64 * 0.02 - 0.06, (i / 7) as f64 * 0.02 - 0.04))),
+            vec![Value::Text(format!("p{i}")), Value::Int(i)],
+        );
+    }
+    for (ext, bytes) in rustgis_data::io::shapefile_parts(&ds).unwrap().0 {
+        std::fs::write(path.with_extension(ext), bytes).unwrap();
+    }
+    let source = rustgis_data::source::shp::ShpSource::open_path(&path, "complete").unwrap();
+    ds.fields = source.info().fields.clone();
+    ds.features = source.read(&Request::all()).unwrap().features.into();
+    let mut base = Map::new("complete");
+    base.add_dataset(ds);
+    base.layers[0].labels.enabled = true;
+    base.layers[0].labels.default.field = "name".into();
+    base.layers[0].selection = vec![0];
+    let symbol = base.layers[0].symbol(0);
+    let renderers = vec![
+        Renderer::Single(symbol),
+        Renderer::unique(&base.layers[0].dataset, &[], "value", rustgis_map::Ramp::Ember, symbol).unwrap(),
+        Renderer::graduated(
+            &base.layers[0].dataset,
+            &[],
+            "value",
+            4,
+            rustgis_map::ClassMethod::EqualInterval,
+            rustgis_map::Ramp::Ember,
+            symbol,
+        )
+        .unwrap(),
+        Renderer::proportional(&base.layers[0].dataset, &[], "value", symbol).unwrap(),
+    ];
+    let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: Camera::new(Coord::new(0.0, 0.0), 100.0), sky: false };
+    for renderer in renderers {
+        base.layers[0].renderer = renderer;
+        let expected = render(&mut base.clone(), &view).unwrap();
+        assert!(expected.labels.len() > 1);
+        let mut actual = base.clone();
+        actual.layers[0].dataset.features = base.layers[0].dataset.features.iter().take(1).cloned().collect::<Vec<_>>().into();
+        let mut source = SourceLayer::from_path(
+            path.to_string_lossy(),
+            None,
+            Box::new(rustgis_data::source::shp::ShpSource::open_path(&path, "complete").unwrap()),
+        );
+        source.limit = 1;
+        actual.layers[0].source = Some(source);
+        let bytes = render_png(&mut actual, &view).unwrap();
+        assert_eq!(bytes, render_png(&mut base.clone(), &view).unwrap());
+        assert_eq!(actual.layers[0].dataset.features.len(), 1, "export must not replace the interaction window");
+        if let Ok(path) = std::env::var("RUSTGIS_CHUNK_TEST_PNG") {
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+}
+
+#[test]
+fn partial_source_failure_and_incomplete_summary_reach_unchanged_owner() {
+    let mut ds = Dataset::new("failure", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut base = Map::new("failure");
+    base.add_dataset(ds);
+    for (size, message) in [(0, "cancelled"), (usize::MAX, "incomplete")] {
+        let mut map = base.clone();
+        map.layers[0] = streamed(&base.layers[0], size);
+        map.sync_sources(&Extent::WORLD_LONLAT, 1.0, true);
+        let view = View { width: 320.0, height: 240.0, pixels_per_point: 1.0, camera: map.camera, sky: false };
+        let mut worker = map.clone();
+        assert!(render(&mut worker, &view).is_none());
+        map.adopt_caches(&worker);
+        assert!(map.layers[0].source.as_ref().unwrap().error.as_ref().unwrap().contains(message));
+        map.layers[0].source.as_mut().unwrap().error = None;
+        map.layers[0].touch_geometry();
+        map.adopt_caches(&worker);
+        assert!(map.layers[0].source.as_ref().unwrap().error.is_none());
+    }
+}
+
+#[test]
+fn layout_export_keeps_all_drawn_legend_classes() {
+    use rustgis_map::layout::{ElementKind, FrameShape, INDICATOR_COLOR, INDICATOR_WIDTH, Layout};
+    let mut ds = Dataset::new("classes", GeometryType::Point, vec![Field::new("value", FieldType::Integer)]);
+    for i in 0..12 {
+        ds.push(Some(Geometry::Point(Coord::new((i % 4) as f64 * 0.02, (i / 4) as f64 * 0.02))), vec![Value::Int(i)]);
+    }
+    let mut base = Map::new("legend");
+    base.add_dataset(ds);
+    let layer = &mut base.layers[0];
+    layer.renderer = Renderer::unique(&layer.dataset, &[], "value", rustgis_map::Ramp::Ember, layer.symbol(0)).unwrap();
+    layer.definition_query = Some("value >= 2".into());
+    let mut page = Layout::new("page", 140.0, 100.0);
+    let frame = page.add(
+        "map",
+        (0.0, 0.0, 85.0, 95.0),
+        ElementKind::MapFrame {
+            map: base.name.clone(),
+            center: Coord::new(0.02, 0.02),
+            scale: 300000.0,
+            shape: FrameShape::Rectangle,
+            grid: None,
+            extent_of: None,
+            extent_color: INDICATOR_COLOR,
+            extent_width: INDICATOR_WIDTH,
+            bearing: 0.0,
+            pitch: 0.0,
+        },
+    );
+    page.add(
+        "legend",
+        (90.0, 0.0, 45.0, 95.0),
+        ElementKind::Legend { frame, title: "classes".into(), all_classes: false, hide_other: false, exclude: vec![] },
+    );
+    let expected = layout::render(&page, &mut [base.clone()], 96.0, &layout::PageInfo::default()).unwrap();
+    for size in [1, 3, 20] {
+        let mut actual = base.clone();
+        actual.layers[0] = streamed(&base.layers[0], size);
+        let got = layout::render(&page, &mut [actual], 96.0, &layout::PageInfo::default()).unwrap();
+        assert!(got.data() == expected.data(), "layout/legend changed at chunk size {size}");
+    }
+    let mut failed = base.clone();
+    failed.layers[0] = streamed(&base.layers[0], 0);
+    assert!(layout::render(&page, &mut [failed], 96.0, &layout::PageInfo::default()).is_none());
+}
+
+#[test]
+fn chunked_label_compaction_keeps_late_priorities_stable_ties_and_nan_order() {
+    let candidates: Vec<Candidate> = (0..50_003)
+        .map(|i| {
+            (
+                PlacedLabel {
+                    text: format!("label {i}"),
+                    x: 100.0,
+                    y: 100.0,
+                    size: 10.0,
+                    color: Rgba::rgb(0, 0, 0),
+                    halo: None,
+                    bold: false,
+                    icon: None,
+                    align: 0.0,
+                    framed: false,
+                    italic: false,
+                    spacing: 0.0,
+                    line_align: TextAlign::Left,
+                    angle: None,
+                    collide: Default::default(),
+                },
+                if i % 17 == 0 { f64::NAN } else { (i % 7) as f64 },
+                (1, i),
+            )
+        })
+        .collect();
+    let expected = place_labels(candidates.clone(), vec![], 320.0, 240.0, false);
+    let mut compacted = Vec::new();
+    for batch in candidates.chunks(1001) {
+        compacted.extend_from_slice(batch);
+        compact_label_candidates(&mut compacted);
+    }
+    let got = place_labels(compacted, vec![], 320.0, 240.0, false);
+    assert_eq!(got.labels, expected.labels);
+    assert_eq!(got.unplaced, expected.unplaced);
+    assert_eq!(got.keys, expected.keys);
+}
+
+#[test]
+fn perspective_does_not_read_unused_hidden_sources() {
+    let mut ds = Dataset::new("visible", GeometryType::Point, vec![]);
+    ds.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+    let mut base = Map::new("hidden");
+    base.add_dataset(ds.clone());
+    let hidden = base.add_dataset(ds);
+    base.layer_mut(hidden).unwrap().visible = false;
+    let view = View {
+        width: 320.0,
+        height: 240.0,
+        pixels_per_point: 1.0,
+        camera: Camera { pitch: 35.0, ..Camera::new(Coord::new(0.0, 0.0), 80.0) },
+        sky: false,
+    };
+    let expected = render(&mut base.clone(), &view).unwrap();
+    let mut actual = base.clone();
+    for layer in &mut actual.layers {
+        *layer = streamed(layer, if layer.id == hidden { 0 } else { 1 });
+    }
+    let got = render(&mut actual, &view).unwrap();
+    assert!(got.pixmap.data() == expected.pixmap.data());
+    assert!(actual.layer(hidden).unwrap().source.as_ref().unwrap().error.is_none());
+}

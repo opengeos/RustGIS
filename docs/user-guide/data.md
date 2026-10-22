@@ -555,3 +555,32 @@ map file or project. Data › Layer Templates adds empty layers with ready-made 
 routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser, which
 also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
 From History turns the geoprocessing history into a task you can replay.
+
+### Complete streamed Shapefile rendering
+
+The CPU renderer traverses a streamed Shapefile in source order instead of painting only
+its interaction sample. Shapes and attributes arrive in chunks targeting 8 MiB of owned
+feature storage; projection and display geometry are temporary copies of one chunk.
+Whole-file imports, loading for editing and other providers retain their existing read APIs.
+An indivisible row exceeding the chunk target is emitted alone, preserving its full geometry.
+A zero budget reports an error.
+
+Styles, definition queries, display filters and label classes use the same painter as an
+in-memory layer. The renderer chooses geometry simplification from statistics over the whole
+layer, accumulates point bins across chunks, applies transparency and blend once per layer,
+and draws selection highlights after the whole layer. Labels share the existing global
+priority, stable tie ordering, collision rules and 20,000-candidate placement limit.
+Screen rendering and PNG/layout exports share this traversal.
+
+Native flat extrusions use a private disposable SQLite ordering workspace (2 MiB page-cache
+target, memory mapping disabled, 4 GiB database ceiling), with a global shadow pass followed
+by globally sorted solids. It is removed when rendering finishes. Failure or incomplete
+traversal does not publish a partial successful frame. This workspace is not a reusable index.
+
+This is not a fixed bound on total renderer memory: raster targets, label candidates and the
+existing combined polygon-mask path have separate costs. Perspective markers, terrain and
+extrusions retain the complete upstream depth renderer through an isolated full-source
+snapshot; that compatibility fallback materializes the source. Flat line/polygon rendering
+makes a statistics pass before painting and currently reads the entire source, so it trades
+additional I/O for complete rendering and predictable chunk storage. Geometry preprocessing
+and GPU preparation are separate optimizations.

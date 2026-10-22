@@ -224,6 +224,79 @@ impl FeatureSource for ShpSource {
         }
         Ok(Batch { features, matched: matched as u64, complete: step == 1, skipped })
     }
+    fn streams_chunks(&self) -> bool {
+        true
+    }
+    fn visit_chunks(&self, extent: Option<Extent>, bytes: usize, visit: &mut dyn FnMut(Vec<Feature>) -> Result<()>) -> Result<Batch> {
+        let req = Request { extent, limit: usize::MAX };
+        let matched = self.matches(&req).count();
+        let mut used = 0usize;
+        let mut shp = Cursor::open(&self.shp)?;
+        let mut dbf = Cursor::open(&self.dbf)?;
+        let mut buf = Vec::new();
+        let mut row = vec![0u8; self.table.row_len];
+        let mut features = Vec::new();
+        let mut skipped = 0;
+        for i in self.matches(&req) {
+            let Some(place) = self.places.get(i as usize) else { continue };
+            buf.resize(place.len as usize, 0);
+            if shp.read_at(u64::from(place.offset), &mut buf).is_err() {
+                skipped += 1;
+                continue;
+            }
+            let geometry = match parse_shape(&buf) {
+                Ok(Some(g)) => match self.reproject.geometry(g) {
+                    Some(g) => Some(g),
+                    None => {
+                        skipped += 1;
+                        continue;
+                    }
+                },
+                Ok(None) => None,
+                Err(()) => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let attrs = if u64::from(i) < self.table.rows {
+                let at = self.table.header_len + u64::from(i) * self.table.row_len as u64;
+                if dbf.read_at(at, &mut row).is_err() {
+                    skipped += 1;
+                    continue;
+                }
+                // A deleted row: its shape is left out too.
+                if row.first() == Some(&b'*') {
+                    continue;
+                }
+                self.table.columns.iter().map(|c| value(c, row.get(1 + c.offset..1 + c.offset + c.len).unwrap_or(&[]))).collect()
+            } else {
+                vec![Value::Null; self.table.columns.len()]
+            };
+            let feature = Feature { id: u64::from(i) + 1, geometry, attrs };
+            let size = super::chunk_memory::feature_bytes(&feature).saturating_add(std::mem::size_of::<Feature>());
+            if bytes == 0 {
+                return Err(bad("the render memory budget is zero"));
+            }
+            if !features.is_empty() && used.saturating_add(size) > bytes {
+                features.shrink_to_fit();
+                visit(std::mem::take(&mut features))?;
+                used = 0;
+            }
+            // A geometry is indivisible. Preserve a valid detailed row instead of dropping it
+            // or failing the entire layer when it alone exceeds the chunk target.
+            if size > bytes {
+                visit(vec![feature])?;
+                continue;
+            }
+            used = used.saturating_add(size);
+            features.push(feature);
+        }
+        if !features.is_empty() {
+            features.shrink_to_fit();
+            visit(features)?;
+        }
+        Ok(Batch { features: Vec::new(), matched: matched as u64, complete: true, skipped })
+    }
 }
 
 /// A file read at offsets, through a buffer that a nearby offset reuses.

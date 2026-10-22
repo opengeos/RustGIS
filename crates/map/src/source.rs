@@ -309,6 +309,11 @@ pub enum Polled {
 }
 
 impl SourceLayer {
+    /// A source capable of a complete, ordered render traversal.
+    pub fn chunk_source(&self) -> Option<Arc<dyn FeatureSource>> {
+        self.handle.as_ref().filter(|h| h.streams_chunks()).cloned()
+    }
+
     /// A source read from a file on disk.
     pub fn from_path(path: impl Into<String>, table: Option<String>, handle: Box<dyn FeatureSource>) -> Self {
         SourceLayer { path: Some(path.into()), table, handle: Some(Arc::from(handle)), ..SourceLayer::default() }
