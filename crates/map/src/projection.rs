@@ -42,7 +42,7 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
     ("albers", "Albers Equal Area Conic", "+proj=aea +lat_0=0 +lon_0=0 +lat_1=20 +lat_2=50 +datum=WGS84 +units=m +no_defs"),
     ("lambertConformal", "Lambert Conformal Conic", "+proj=lcc +lat_0=0 +lon_0=0 +lat_1=20 +lat_2=50 +datum=WGS84 +units=m +no_defs"),
     (
-        "vn2000",
+        "vn2000tm3",
         "VN-2000 / TM-3 (Vietnam)",
         concat!("+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 ", vn2000_towgs84!(), " +units=m +no_defs"),
     ),
@@ -51,9 +51,60 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
 ];
 
 const PRESET_ALIASES: &[(&str, &[&str])] = &[
-    ("vn2000", &["vn-2000", "vietnam", "vn2000tm3", "vn2000-tm3"]),
-    ("vn2000Utm48", &["vn-2000-48", "vn2000-48", "vn-2000-utm48", "vn2000utm48", "vn2000_utm48"]),
-    ("vn2000Utm49", &["vn-2000-49", "vn2000-49", "vn-2000-utm49", "vn2000utm49", "vn2000_utm49"]),
+    (
+        "vn2000tm3",
+        &[
+            "vietnam",
+            "vn2000tm3",
+            "vn2000-tm3",
+            "vn2000_tm3",
+            "vn-2000-tm3",
+            "vn-2000 / tm-3",
+            "vn2000 / tm-3",
+            "vn-2000 / tm3",
+            "vn2000 / tm3",
+            "vn-2000 tm-3",
+            "vn2000 tm-3",
+            "vn-2000 tm3",
+            "vn2000 tm3",
+        ],
+    ),
+    (
+        "vn2000Utm48",
+        &[
+            "vn-2000-48",
+            "vn2000-48",
+            "vn-2000-utm48",
+            "vn2000utm48",
+            "vn2000_utm48",
+            "vn-2000 / utm zone 48n",
+            "vn2000 / utm zone 48n",
+            "vn-2000 / utm 48n",
+            "vn2000 / utm 48n",
+            "vn-2000 / utm zone 48",
+            "vn2000 / utm zone 48",
+            "vn-2000 / utm 48",
+            "vn2000 / utm 48",
+        ],
+    ),
+    (
+        "vn2000Utm49",
+        &[
+            "vn-2000-49",
+            "vn2000-49",
+            "vn-2000-utm49",
+            "vn2000utm49",
+            "vn2000_utm49",
+            "vn-2000 / utm zone 49n",
+            "vn2000 / utm zone 49n",
+            "vn-2000 / utm 49n",
+            "vn2000 / utm 49n",
+            "vn-2000 / utm zone 49",
+            "vn2000 / utm zone 49",
+            "vn-2000 / utm 49",
+            "vn2000 / utm 49",
+        ],
+    ),
 ];
 
 /// A province or regional hub in Vietnam and its VN-2000 3-degree central meridian (QĐ 05/2007/QĐ-BTNMT).
@@ -176,6 +227,7 @@ pub fn preset_params(id: &str) -> &'static [PresetParam] {
         | "eckertIV"
         | "northPolar"
         | "southPolar"
+        | "vn2000tm3"
         | "vn2000" => &[LON_0],
         "albers" | "lambertConformal" => &[LON_0, LAT_1, LAT_2],
         _ => &[],
@@ -198,6 +250,10 @@ pub fn preset_value(id: &str, key: &str) -> Option<f64> {
 pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static str, f64)>)>, String> {
     let (head, rest) = code.trim().split_once('+').unwrap_or((code.trim(), ""));
     let head = head.trim();
+    let clean: String = head.to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if clean == "VN2000" {
+        return Err("coordinate system 'VN-2000' is ambiguous: specify 'VN-2000 / UTM zone 48N' (vn2000Utm48, EPSG:3405), 'VN-2000 / UTM zone 49N' (vn2000Utm49, EPSG:3406), or TM-3 ('vn2000tm3' / 'VN-2000 / TM-3')".into());
+    }
     let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| {
         id.eq_ignore_ascii_case(head)
             || label.eq_ignore_ascii_case(head)
@@ -296,7 +352,11 @@ pub fn resolve_vn2000_alias(code: &str) -> Option<f64> {
         .iter()
         .find_map(|sep| {
             let (prefix, rest) = trimmed.split_once(sep)?;
-            (prefix.eq_ignore_ascii_case("vn2000") || prefix.eq_ignore_ascii_case("vn-2000")).then_some(rest)
+            (prefix.eq_ignore_ascii_case("vn2000")
+                || prefix.eq_ignore_ascii_case("vn-2000")
+                || prefix.eq_ignore_ascii_case("vn2000tm3")
+                || prefix.eq_ignore_ascii_case("vn-2000-tm3"))
+            .then_some(rest)
         })
         .unwrap_or(trimmed);
     let norm = normalize_vietnamese(s);
@@ -368,8 +428,13 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     }
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        let clean: String = code.to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        if clean == "VN2000" {
+            return Err("coordinate system 'VN-2000' is ambiguous: specify 'VN-2000 / UTM zone 48N' (vn2000Utm48, EPSG:3405), 'VN-2000 / UTM zone 49N' (vn2000Utm49, EPSG:3406), or TM-3 ('vn2000tm3' / 'VN-2000 / TM-3')".into());
+        }
         if let Some(lon) = resolve_vn2000_alias(code) {
-            let (_, label, def) = PRESETS.iter().find(|(p, _, _)| *p == "vn2000").ok_or_else(|| "vn2000 preset missing".to_string())?;
+            let (_, label, def) =
+                PRESETS.iter().find(|(p, _, _)| *p == "vn2000tm3").ok_or_else(|| "vn2000tm3 preset missing".to_string())?;
             return if (lon - 105.0).abs() < 1e-6 {
                 Ok((def.to_string(), label.to_string()))
             } else {
@@ -1268,51 +1333,76 @@ mod tests {
 
     #[test]
     fn vn2000_vietnam_projections() {
-        // Alias lookups
-        for name in ["vn2000", "VN-2000", "vietnam", "vn2000tm3"] {
+        // Bare VN-2000 is ambiguous and rejected
+        for bare in ["vn2000", "VN-2000", "VN2000", "vn-2000", "VN 2000", "vn_2000"] {
+            let err = lookup(bare).unwrap_err();
+            assert!(err.contains("ambiguous"), "{bare}: {err}");
+            assert!(parse_preset(bare).is_err(), "{bare}");
+        }
+
+        // Explicit TM-3 alias lookups
+        for name in ["vn2000tm3", "vn2000-tm3", "vn2000_tm3", "vn-2000-tm3", "VN-2000 / TM-3", "vn-2000 / tm-3", "VN2000 / TM-3", "vietnam"]
+        {
             let (def, label) = lookup(name).unwrap();
             assert!(def.contains("+proj=tmerc") && def.contains("+towgs84="), "{name}");
+            assert!(def.contains("+lon_0=105") && def.contains("+k=0.9999"), "{name}");
             assert_eq!(label, "VN-2000 / TM-3 (Vietnam)", "{name}");
         }
-        for name in ["vn2000Utm48", "vn-2000-48", "vn2000-48", "vn2000utm48"] {
+        for name in [
+            "vn2000Utm48",
+            "vn-2000-48",
+            "vn2000-48",
+            "vn2000utm48",
+            "VN-2000 / UTM zone 48N",
+            "vn-2000 / utm zone 48n",
+            "VN-2000 / UTM 48N",
+        ] {
             let (def, label) = lookup(name).unwrap();
             assert!(def.contains("+proj=utm") && def.contains("+zone=48"), "{name}");
             assert_eq!(label, "VN-2000 / UTM zone 48N", "{name}");
         }
-        for name in ["vn2000Utm49", "vn-2000-49", "vn2000-49", "vn2000utm49"] {
+        for name in [
+            "vn2000Utm49",
+            "vn-2000-49",
+            "vn2000-49",
+            "vn2000utm49",
+            "VN-2000 / UTM zone 49N",
+            "vn-2000 / utm zone 49n",
+            "VN-2000 / UTM 49N",
+        ] {
             let (def, label) = lookup(name).unwrap();
             assert!(def.contains("+proj=utm") && def.contains("+zone=49"), "{name}");
             assert_eq!(label, "VN-2000 / UTM zone 49N", "{name}");
         }
         // Provincial lookups (ASCII and native Vietnamese diacritics, case-insensitive prefixes)
-        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("vn2000:hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("VN2000:hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("VN-2000:Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("VN2000/Hà Nội").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
-        assert_eq!(lookup("tphcm").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("TP. Hồ Chí Minh").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("VN2000:TP. Hồ Chí Minh").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("Sài Gòn").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
-        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("VN2000/Đà Nẵng").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
-        assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000 +lon_0=108.5").unwrap().0);
-        assert_eq!(lookup("Đắk Lắk").unwrap().0, lookup("vn2000 +lon_0=108.5").unwrap().0);
-        assert_eq!(lookup("Huế").unwrap().0, lookup("vn2000 +lon_0=107").unwrap().0);
-        assert_eq!(lookup("Nghệ An").unwrap().0, lookup("vn2000 +lon_0=104.75").unwrap().0);
-        assert_eq!(lookup("Quảng Trị").unwrap().0, lookup("vn2000 +lon_0=106.25").unwrap().0);
-        assert_eq!(lookup("Cà Mau").unwrap().0, lookup("vn2000 +lon_0=104.5").unwrap().0);
-        assert_eq!(lookup("Khánh Hòa").unwrap().0, lookup("vn2000 +lon_0=108.25").unwrap().0);
+        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("vn2000:hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN2000:hanoi").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN-2000:Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("VN2000/Hà Nội").unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("tphcm").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("TP. Hồ Chí Minh").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("VN2000:TP. Hồ Chí Minh").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("Sài Gòn").unwrap().0, lookup("vn2000tm3 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("Đà Nẵng").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("VN2000/Đà Nẵng").unwrap().0, lookup("vn2000tm3 +lon_0=107.75").unwrap().0);
+        assert_eq!(lookup("Gia Lai").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
+        assert_eq!(lookup("Đắk Lắk").unwrap().0, lookup("vn2000tm3 +lon_0=108.5").unwrap().0);
+        assert_eq!(lookup("Huế").unwrap().0, lookup("vn2000tm3 +lon_0=107").unwrap().0);
+        assert_eq!(lookup("Nghệ An").unwrap().0, lookup("vn2000tm3 +lon_0=104.75").unwrap().0);
+        assert_eq!(lookup("Quảng Trị").unwrap().0, lookup("vn2000tm3 +lon_0=106.25").unwrap().0);
+        assert_eq!(lookup("Cà Mau").unwrap().0, lookup("vn2000tm3 +lon_0=104.5").unwrap().0);
+        assert_eq!(lookup("Khánh Hòa").unwrap().0, lookup("vn2000tm3 +lon_0=108.25").unwrap().0);
         // Decomposed NFD Vietnamese unicode normalization
         let nfd_hanoi = "Ha\u{300} N\u{f4}\u{323}i";
-        assert_eq!(lookup(nfd_hanoi).unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
+        assert_eq!(lookup(nfd_hanoi).unwrap().0, lookup("vn2000tm3 +lon_0=105").unwrap().0);
 
         // Forward and inverse coordinate projection accuracy
         // Hanoi (Hoan Kiem lake: 105.8525°E, 21.0285°N) in VN-2000 TM-3 (lon_0 = 105.0)
-        let p_hn = Projector::new("vn2000 +lon_0=105").unwrap();
+        let p_hn = Projector::new("vn2000tm3 +lon_0=105").unwrap();
         let c_hn = Coord::new(105.8525, 21.0285);
         let m_hn = p_hn.forward(c_hn).unwrap();
         // False easting is 500,000m, point is east of 105°E so x > 500,000; latitude ~21° so y ~ 2,326,000m
@@ -1322,7 +1412,7 @@ mod tests {
         assert!((back_hn.x - c_hn.x).abs() < 1e-6 && (back_hn.y - c_hn.y).abs() < 1e-6);
 
         // Ho Chi Minh City (Ben Thanh: 106.6983°E, 10.7725°N) in VN-2000 TM-3 (lon_0 = 105.75)
-        let p_hcm = Projector::new("vn2000 +lon_0=105.75").unwrap();
+        let p_hcm = Projector::new("vn2000tm3 +lon_0=105.75").unwrap();
         let c_hcm = Coord::new(106.6983, 10.7725);
         let m_hcm = p_hcm.forward(c_hcm).unwrap();
         assert!(m_hcm.x > 500_000.0 && m_hcm.x < 700_000.0);

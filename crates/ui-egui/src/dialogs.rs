@@ -1190,7 +1190,7 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(tl!("EPSG or ESRI code"));
-                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035, vn2000").desired_width(120.0));
+                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035, vn2000tm3").desired_width(120.0));
                 if r.changed() && !app.dialogs.a.trim().is_empty() {
                     app.dialogs.text = typed_crs(&app.dialogs.a);
                 }
@@ -1234,14 +1234,14 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
         VN2000_UI_PROVINCES, parse_preset, preset_code, preset_params, preset_value, resolve_vn2000_alias,
     };
     let input = app.dialogs.text.trim();
-    let resolved = if let Some(lon) = resolve_vn2000_alias(input) { format!("vn2000 +lon_0={lon}") } else { input.to_string() };
+    let resolved = if let Some(lon) = resolve_vn2000_alias(input) { format!("vn2000tm3 +lon_0={lon}") } else { input.to_string() };
     let Ok(Some((id, params))) = parse_preset(&resolved) else { return };
     let takes = preset_params(id);
     if takes.is_empty() {
         return;
     }
     let mut next = params.clone();
-    if id == "vn2000" {
+    if id == "vn2000tm3" || id == "vn2000" {
         let default_lon = preset_value(id, "lon_0").unwrap_or(105.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(tl!("Provinces:")).weak());
@@ -1337,7 +1337,7 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
         "lambertConformal" => {
             ("Conic, conformal: true shapes across a mid-latitude region; set its meridian and parallels to the region.", None)
         }
-        "vn2000" => (
+        "vn2000tm3" | "vn2000" => (
             "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84.",
             None,
         ),
@@ -1461,12 +1461,22 @@ mod tests {
     fn vn2000_in_coordinate_system_dialog() {
         let mut app = RustGisApp::with_sample();
         app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
-        // Typing "vn2000" or provincial name resolves to VN-2000 preset
+        // Bare "vn2000" is ambiguous
         app.dialogs.a = "vn2000".into();
         app.dialogs.text = typed_crs(&app.dialogs.a);
         assert_eq!(app.dialogs.text, "vn2000");
+        assert!(rustgis_engine::map::Projection::from_code(&app.dialogs.text).is_err());
+
+        // Explicit "vn2000tm3" resolves to VN-2000 TM-3 preset
+        app.dialogs.a = "vn2000tm3".into();
+        app.dialogs.text = typed_crs(&app.dialogs.a);
+        assert_eq!(app.dialogs.text, "vn2000tm3");
         let proj = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
         assert_eq!(proj.label(), "VN-2000 / TM-3 (Vietnam)");
+
+        // Explicit "VN-2000 / UTM zone 48N" resolves to UTM 48N
+        let proj_utm = rustgis_engine::map::Projection::from_code("VN-2000 / UTM zone 48N").unwrap();
+        assert_eq!(proj_utm.label(), "VN-2000 / UTM zone 48N");
 
         // Typing provincial name "hanoi" or native "Hà Nội"
         for name in ["hanoi", "Hà Nội", "Đà Nẵng", "tphcm"] {
@@ -1476,12 +1486,12 @@ mod tests {
             assert!(proj_p.label().contains("VN-2000"), "{name}");
         }
 
-        // Applying VN-2000
-        app.run("map.projection", json!({"type": "vn2000"})).unwrap();
-        assert_eq!(app.session.map().projection.code(), "vn2000");
+        // Applying VN-2000 TM-3
+        app.run("map.projection", json!({"type": "vn2000tm3"})).unwrap();
+        assert_eq!(app.session.map().projection.code(), "vn2000tm3");
 
         // Custom meridian for HCMC (105.75)
-        app.run("map.projection", json!({"type": "vn2000 +lon_0=105.75"})).unwrap();
-        assert_eq!(app.session.map().projection.code(), "vn2000 +lon_0=105.75");
+        app.run("map.projection", json!({"type": "vn2000tm3 +lon_0=105.75"})).unwrap();
+        assert_eq!(app.session.map().projection.code(), "vn2000tm3 +lon_0=105.75");
     }
 }

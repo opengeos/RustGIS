@@ -126,6 +126,9 @@ fn custom_table() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>> {
     T.get_or_init(Default::default)
 }
 
+/// The PROJ definition of VN-2000 / TM-3 with central meridian 105° and scale factor 0.9999.
+pub const VN2000_TM3_105_PROJ4: &str = "+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs";
+
 impl Crs {
     /// A file's own coordinate system: checked (its PROJ definition must parse, or be a
     /// sinusoidal one RustGIS computes) and added to the run's table, once per definition.
@@ -175,7 +178,8 @@ impl Crs {
     }
 
     /// A coordinate system given as text: `EPSG:2263`, `2263`, an OGC URN or URL ending in the
-    /// code, WKT, PROJ string, or a named system like `VN-2000`.
+    /// code, WKT, PROJ string, or an explicit VN-2000 system like `VN-2000 / UTM zone 48N` or
+    /// `VN-2000 / TM-3` (bare `VN-2000` is ambiguous).
     pub fn parse(text: &str) -> Result<Crs, String> {
         let t = text.trim();
         if t.contains('[') {
@@ -198,12 +202,31 @@ impl Crs {
         if up.ends_with("CRS84") {
             return Ok(Crs::LonLat);
         }
-        let is_vn2000 = up.starts_with("VN-2000") || up.starts_with("VN2000");
-        if is_vn2000 && (up.ends_with("49N") || up.ends_with("ZONE 49")) {
-            return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
+        let clean: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        if clean == "VN2000" {
+            return Err(format!(
+                "coordinate system '{t}' is ambiguous: specify 'VN-2000 / UTM zone 48N' (EPSG:3405), 'VN-2000 / UTM zone 49N' (EPSG:3406), or 'VN-2000 / TM-3'"
+            ));
         }
-        if up == "VN-2000" || up == "VN2000" || (is_vn2000 && (up.ends_with("48N") || up.ends_with("ZONE 48"))) {
-            return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
+        if clean.starts_with("VN2000") {
+            match clean.as_str() {
+                "VN2000UTMZONE48N" | "VN2000UTM48N" | "VN2000UTM48" | "VN2000UTMZONE48" | "VN200048" | "VN200048N" => {
+                    return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
+                }
+                "VN2000UTMZONE49N" | "VN2000UTM49N" | "VN2000UTM49" | "VN2000UTMZONE49" | "VN200049" | "VN200049N" => {
+                    return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
+                }
+                "VN2000TM3" | "VN2000TM3VIETNAM" | "VN2000TM3105" | "VN2000TM3LON0105" => {
+                    return Crs::custom(CustomCrs {
+                        proj4: VN2000_TM3_105_PROJ4.to_string(),
+                        label: "VN-2000 / TM-3".to_string(),
+                        geokeys: Vec::new(),
+                        doubles: Vec::new(),
+                        ascii: String::new(),
+                    });
+                }
+                _ => return Err(format!("unknown coordinate system '{t}'")),
+            }
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
         let known = t.chars().all(|c| c.is_ascii_digit()) || up.contains("EPSG");
@@ -398,11 +421,76 @@ mod tests {
         // VN-2000 UTM zones 48N and 49N (opengeos/RustGIS#684)
         assert_eq!(Crs::parse("EPSG:3405"), Ok(Crs::Epsg(3405)));
         assert_eq!(Crs::parse("EPSG:3406"), Ok(Crs::Epsg(3406)));
-        assert_eq!(Crs::parse("VN-2000"), Ok(Crs::Epsg(3405)));
-        assert_eq!(Crs::parse("vn2000"), Ok(Crs::Epsg(3405)));
-        assert_eq!(Crs::parse("VN-2000 / UTM zone 48N"), Ok(Crs::Epsg(3405)));
-        assert_eq!(Crs::parse("VN-2000 / UTM zone 49N"), Ok(Crs::Epsg(3406)));
+        for bare in ["VN-2000", "VN2000", "vn-2000", "vn2000", "  VN-2000  ", "VN 2000", "vn_2000"] {
+            let err = Crs::parse(bare).unwrap_err();
+            assert!(err.contains("ambiguous"), "{bare}: {err}");
+        }
+        for name in [
+            "VN-2000 / UTM zone 48N",
+            "VN2000 / UTM zone 48N",
+            "VN-2000 / UTM 48N",
+            "VN2000 / UTM 48N",
+            "VN-2000-48",
+            "VN2000-48",
+            "vn-2000 / utm zone 48n",
+            "vn2000 / utm 48n",
+            "  VN-2000 / UTM 48N  ",
+        ] {
+            let crs = Crs::parse(name).unwrap();
+            assert_eq!(crs, Crs::Epsg(3405), "{name}");
+            assert_eq!(crs.epsg(), 3405, "{name}");
+            assert!(!crs.is_geographic(), "{name}");
+        }
+        for name in [
+            "VN-2000 / UTM zone 49N",
+            "VN2000 / UTM zone 49N",
+            "VN-2000 / UTM 49N",
+            "VN2000 / UTM 49N",
+            "VN-2000-49",
+            "VN2000-49",
+            "vn-2000 / utm zone 49n",
+            "vn2000 / utm 49n",
+            "  VN-2000 / UTM 49N  ",
+        ] {
+            let crs = Crs::parse(name).unwrap();
+            assert_eq!(crs, Crs::Epsg(3406), "{name}");
+            assert_eq!(crs.epsg(), 3406, "{name}");
+            assert!(!crs.is_geographic(), "{name}");
+        }
+        for name in [
+            "VN-2000 / TM-3",
+            "VN2000 / TM-3",
+            "VN-2000 / TM3",
+            "VN2000 / TM3",
+            "VN-2000-TM3",
+            "VN2000-TM3",
+            "vn2000tm3",
+            "VN-2000 TM-3",
+            "vn-2000 / tm-3",
+            "  VN-2000 / TM-3  ",
+        ] {
+            let crs = Crs::parse(name).unwrap();
+            assert_eq!(crs.epsg(), 0, "{name}");
+            assert_eq!(crs.label(), "VN-2000 / TM-3", "{name}");
+            assert!(!crs.is_geographic(), "{name}");
+            let def = crs.custom_def().unwrap();
+            assert!(def.proj4.contains("+proj=tmerc"), "{name}");
+            assert!(def.proj4.contains("+lon_0=105"), "{name}");
+            assert!(def.proj4.contains("+k=0.9999"), "{name}");
+            assert!(def.proj4.contains("+x_0=500000"), "{name}");
+            assert!(def.proj4.contains("+towgs84="), "{name}");
+            let tr = crs.transformer().unwrap();
+            let pt = Coord::new(105.8525, 21.0285);
+            let proj_pt = tr.from_lonlat(pt).unwrap();
+            assert!(proj_pt.x > 500_000.0 && proj_pt.x < 700_000.0);
+            assert!(proj_pt.y > 2_000_000.0 && proj_pt.y < 2_500_000.0);
+            let unproj_pt = tr.to_lonlat(proj_pt).unwrap();
+            assert!((unproj_pt.x - pt.x).abs() < 1e-6 && (unproj_pt.y - pt.y).abs() < 1e-6);
+        }
         assert!(Crs::parse("WGS 84 / UTM zone 48N").is_err());
+        assert!(Crs::parse("WGS 84 / UTM zone 49N").is_err());
+        assert!(Crs::parse("NAD83 / UTM zone 48N").is_err());
+        assert!(Crs::parse("VN-2000 unknown").is_err());
         let custom_proj = Crs::parse("+proj=utm +zone=48 +ellps=WGS84").unwrap();
         assert_eq!(custom_proj.label(), "Custom PROJ");
         let custom_proj_upper = Crs::parse("+PROJ=utm +zone=48 +ellps=WGS84").unwrap();
