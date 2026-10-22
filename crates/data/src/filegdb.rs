@@ -1110,7 +1110,7 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
     let ring2 = |r: &[P3]| geo::LineString::from(r.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>());
     // Past the cap, a partial union would be wrong: the hull below stands in. Where no union runs
     // (the browser), the faces aren't built at all.
-    let unions = MAX_UNION_FACES > 0;
+    let unions = !cfg!(target_arch = "wasm32");
     let seen: Vec<geo::Polygon<f64>> = faces
         .iter()
         .filter(|_| !truncated && unions)
