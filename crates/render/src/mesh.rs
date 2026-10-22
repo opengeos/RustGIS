@@ -286,21 +286,38 @@ fn append_geometry(
 /// then refuses — while the CPU path splats its sub-pixel features in milliseconds.
 pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
 
-/// About how many mesh vertices `append_geometry` makes of a geometry: a fill one per point, a
-/// round-joined stroke two per point and some 32 for the turns of its joins and caps (a full
-/// circle at the stroke tolerance). Points draw as instances and count nothing.
+/// How many mesh vertices `append_geometry` makes of a geometry, erring high: a fill one per
+/// point; a round-joined stroke two per point, a join's arc for each turn (up to 16, a half
+/// circle at the stroke tolerance, for a hairpin) and two round caps on an open line. Points
+/// draw as instances and count nothing.
 fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
-    fn stroked<'a>(rings: impl Iterator<Item = &'a Vec<Coord>>) -> usize {
-        rings.map(|r| 2 * r.len() + 32).sum()
+    fn stroked<'a>(rings: impl Iterator<Item = &'a Vec<Coord>>, closed: bool) -> usize {
+        rings.map(|r| 2 * r.len() + joins(r, closed) + if closed { 0 } else { 32 }).sum()
+    }
+    // sin(θ/2) ≥ θ/π for a turn θ in 0..π, so 16·sin(θ/2) arc segments covers lyon's ~16θ/π —
+    // without an atan2 per point.
+    fn joins(r: &[Coord], closed: bool) -> usize {
+        let n = r.len();
+        let at = |k: usize| if closed { r.get(k % n) } else { r.get(k) };
+        let ends = if closed { 0..n } else { 1..n.saturating_sub(1) };
+        ends.filter_map(|k| {
+            let (a, b, c) = (at(if closed { k + n - 1 } else { k.checked_sub(1)? })?, at(k)?, at(k + 1)?);
+            let (u, v) = ((b.x - a.x, b.y - a.y), (c.x - b.x, c.y - b.y));
+            let lens = ((u.0 * u.0 + u.1 * u.1) * (v.0 * v.0 + v.1 * v.1)).sqrt();
+            let cos = ((u.0 * v.0 + u.1 * v.1) / lens).clamp(-1.0, 1.0);
+            // A repeated or non-finite point turns nowhere.
+            (lens > 0.0 && cos.is_finite()).then(|| (16.0 * ((1.0 - cos) / 2.0).sqrt()).ceil() as usize + 1)
+        })
+        .sum()
     }
     match g {
         Geometry::Point(_) | Geometry::MultiPoint(_) => 0,
-        Geometry::Line(parts) if s.stroke.a() > 0 => stroked(parts.iter()),
+        Geometry::Line(parts) if s.stroke.a() > 0 => stroked(parts.iter(), false),
         Geometry::Line(_) => 0,
-        Geometry::Polygon(polys) if wireframe => stroked(polys.iter().flatten()),
+        Geometry::Polygon(polys) if wireframe => stroked(polys.iter().flatten(), true),
         Geometry::Polygon(polys) => {
             let fill = if s.fill.a() > 0 { polys.iter().flatten().map(Vec::len).sum() } else { 0 };
-            let outline = if s.stroke_width > 0.0 && s.stroke.a() > 0 { stroked(polys.iter().flatten()) } else { 0 };
+            let outline = if s.stroke_width > 0.0 && s.stroke.a() > 0 { stroked(polys.iter().flatten(), true) } else { 0 };
             fill + outline
         }
     }
@@ -587,14 +604,12 @@ mod tests {
 
     #[test]
     fn tessellation_stops_past_its_vertex_limit() {
-        // Hairpin turns: each round join adds a half circle the point-count estimate doesn't see.
+        // Hairpin turns: each round join adds a half circle, which the estimate counts.
         let zigzag: Vec<Coord> = (0..200).map(|k| Coord::new((k % 2) as f64 * 100.0, k as f64)).collect();
         let parts = vec![zigzag.clone(), zigzag];
         let (v, _) = stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, usize::MAX).expect("stroke").expect("non-empty");
-        assert!(
-            v.len() > 2 * estimate_vertices(&Geometry::Line(parts.clone()), &Symbol::default_for(GeometryType::Polyline, 0), false),
-            "joins outrun the estimate"
-        );
+        let est = estimate_vertices(&Geometry::Line(parts.clone()), &Symbol::default_for(GeometryType::Polyline, 0), false);
+        assert!(est >= v.len() && est <= v.len() * 2, "hairpins: estimated {est}, tessellated {}", v.len());
         // The first part already passes the limit: the second is never tessellated.
         assert!(stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, v.len() / 4).is_err());
         let polys = vec![vec![square(0.0, 0.0, 10.0)], vec![square(20.0, 0.0, 10.0)]];
