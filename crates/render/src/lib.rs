@@ -1874,7 +1874,7 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
             if extents.get(row).is_some_and(|e| !e.padded(0.0, reach).intersects(&cull)) {
                 continue;
             }
-            let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5, usize::MAX);
+            let roof = mesh::fill_polygon(polys, [origin.x, origin.y], [0.0; 4], view.camera.res * 0.5, mesh::NO_LIMIT);
             let Ok(Some((verts, indices))) = roof else { continue };
             let sym = layer.symbol(row);
             let pts: Vec<Coord> = polys.iter().filter_map(|p| p.first()).flatten().copied().filter(|c| c.is_finite()).collect();
@@ -2733,7 +2733,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
                     .ok_or_else(|| rustgis_data::DataError::Format("cannot allocate render target".into()))?;
-                gpu_done = mesh::collect_layer(&mut cmds, layer, &drawn, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px).is_ok();
+                gpu_done = mesh::collect_layer(&mut cmds, layer, &drawn, extents, &rows, &mesh_visible, ctx.wireframe, ctx.ppp, map_per_px)
+                    .is_ok();
             }
             // False for a layer drawn elsewhere: nothing goes into the picture for it.
             let mut drawn_here = true;

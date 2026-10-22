@@ -286,6 +286,10 @@ fn append_geometry(
 /// then refuses — while the CPU path splats its sub-pixel features in milliseconds.
 pub(crate) const MAX_LAYER_VERTICES: usize = 2_000_000;
 
+/// The vertex limit of meshes that aren't a layer's (highlights, the basemap, the graticule,
+/// extrusion roofs): small or bounded by their own data.
+pub(crate) const NO_LIMIT: usize = usize::MAX;
+
 /// How many mesh vertices `append_geometry` makes of a geometry, erring high: a fill one per
 /// point; a round-joined stroke two per point, a join's arc for each turn (up to 16, a half
 /// circle at the stroke tolerance, for a hairpin) and two round caps on an open line. Points
@@ -323,8 +327,9 @@ fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
     }
 }
 
-/// Collects one GPU-eligible layer into Mesh/Points commands. `geoms`, `rows` and `visible`
-/// are the render loop's own (geometries as the CPU draws them, row filter, extent cull), so
+/// Collects one GPU-eligible layer into Mesh/Points commands. `geoms`, `extents`, `rows` and
+/// `visible` are the render loop's own (geometries as the CPU draws them, their cached extents,
+/// row filter, extent cull), so
 /// the GPU draws exactly the features the CPU would. `Ok(None)` when nothing visible was
 /// collected; `Err(TessError)` when lyon refused a feature or the mesh would pass
 /// [`MAX_LAYER_VERTICES`] — the caller then draws the whole layer with tiny-skia instead
@@ -333,6 +338,7 @@ pub(crate) fn collect_layer(
     cmds: &mut Vec<DrawCmd>,
     layer: &Layer,
     geoms: &[Option<&Geometry>],
+    extents: &[Extent],
     rows: &[bool],
     visible: &dyn Fn(&Extent) -> bool,
     wireframe: bool,
@@ -347,7 +353,9 @@ pub(crate) fn collect_layer(
     let mut features = Vec::new();
     for (row, g) in geoms.iter().enumerate() {
         let Some(g) = g else { continue };
-        let e = g.extent();
+        // Culled on the extent the CPU path culls on (the full geometry's, cached), so both
+        // backends keep the same features; the globe has none cached.
+        let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
         if rows.get(row) != Some(&true) || !visible(&e) {
             continue;
         }
@@ -398,17 +406,17 @@ pub(crate) fn collect_highlight(cmds: &mut Vec<DrawCmd>, g: &Geometry, s: &Symbo
             extend_mesh(
                 &mut v,
                 &mut i,
-                stroke_lines(parts, origin, premul(SELECTION), (s.stroke_width + 3.0) * ppp, map_per_px, usize::MAX),
+                stroke_lines(parts, origin, premul(SELECTION), (s.stroke_width + 3.0) * ppp, map_per_px, NO_LIMIT),
             )?;
-            extend_mesh(&mut v, &mut i, stroke_lines(parts, origin, premul(s.stroke), s.stroke_width * ppp, map_per_px, usize::MAX))?;
+            extend_mesh(&mut v, &mut i, stroke_lines(parts, origin, premul(s.stroke), s.stroke_width * ppp, map_per_px, NO_LIMIT))?;
             if !i.is_empty() {
                 cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
             }
         }
         Geometry::Polygon(polys) => {
             let (mut v, mut i) = (Vec::new(), Vec::new());
-            extend_mesh(&mut v, &mut i, fill_polygon(polys, origin, premul(SELECTION.with_alpha(40)), map_per_px, usize::MAX))?;
-            extend_mesh(&mut v, &mut i, stroke_rings(polys, origin, premul(SELECTION), 2.0 * ppp, map_per_px, usize::MAX))?;
+            extend_mesh(&mut v, &mut i, fill_polygon(polys, origin, premul(SELECTION.with_alpha(40)), map_per_px, NO_LIMIT))?;
+            extend_mesh(&mut v, &mut i, stroke_rings(polys, origin, premul(SELECTION), 2.0 * ppp, map_per_px, NO_LIMIT))?;
             if !i.is_empty() {
                 cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
             }
@@ -428,9 +436,9 @@ pub(crate) fn collect_basemap(
     map_per_px: f64,
 ) -> Result<(), TessError> {
     let (mut v, mut i) = (Vec::new(), Vec::new());
-    extend_mesh(&mut v, &mut i, fill_polygon(polys, origin, premul(land), map_per_px, usize::MAX))?;
+    extend_mesh(&mut v, &mut i, fill_polygon(polys, origin, premul(land), map_per_px, NO_LIMIT))?;
     if outline.a() > 0 {
-        extend_mesh(&mut v, &mut i, stroke_rings(polys, origin, premul(outline), 0.6 * ppp, map_per_px, usize::MAX))?;
+        extend_mesh(&mut v, &mut i, stroke_rings(polys, origin, premul(outline), 0.6 * ppp, map_per_px, NO_LIMIT))?;
     }
     if !i.is_empty() {
         cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
@@ -448,7 +456,7 @@ pub(crate) fn collect_graticule(
     map_per_px: f64,
 ) -> Result<(), TessError> {
     let (mut v, mut i) = (Vec::new(), Vec::new());
-    extend_mesh(&mut v, &mut i, stroke_lines(lines, origin, premul(grat), 0.6 * ppp, map_per_px, usize::MAX))?;
+    extend_mesh(&mut v, &mut i, stroke_lines(lines, origin, premul(grat), 0.6 * ppp, map_per_px, NO_LIMIT))?;
     if !i.is_empty() {
         cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
     }
@@ -477,7 +485,7 @@ mod tests {
     #[test]
     fn polygon_with_hole_tessellates_evenodd() {
         let polys = vec![vec![square(0.0, 0.0, 100.0), square(30.0, 30.0, 40.0)]];
-        let (v, i) = fill_polygon(&polys, [0.0, 0.0], [1.0, 0.0, 0.0, 1.0], 0.0, usize::MAX).expect("tessellate").expect("non-empty");
+        let (v, i) = fill_polygon(&polys, [0.0, 0.0], [1.0, 0.0, 0.0, 1.0], 0.0, NO_LIMIT).expect("tessellate").expect("non-empty");
         assert!(i.len() >= 24, "a hole needs interior triangles: {}", i.len());
         assert!(!point_covered(&v, &i, 50.0, 50.0), "hole center must stay uncovered");
         // (10, 5): inside, and not on a tessellation diagonal (edge points read as uncovered).
@@ -522,7 +530,7 @@ mod tests {
     #[test]
     fn stroke_vertices_carry_centerline_and_normal() {
         let parts = vec![vec![Coord::new(0.0, 0.0), Coord::new(100.0, 0.0)]];
-        let (v, i) = stroke_lines(&parts, [0.0, 0.0], [0.0, 0.0, 1.0, 1.0], 2.0, 0.0, usize::MAX).expect("stroke").expect("non-empty");
+        let (v, i) = stroke_lines(&parts, [0.0, 0.0], [0.0, 0.0, 1.0, 1.0], 2.0, 0.0, NO_LIMIT).expect("stroke").expect("non-empty");
         assert!(!i.is_empty());
         for vtx in &v {
             assert!(vtx.position[1].abs() < 1e-4, "centerline stays on the path: y={}", vtx.position[1]);
@@ -535,7 +543,7 @@ mod tests {
     #[test]
     fn ring_stroke_has_no_width_floor_and_closes() {
         let polys = vec![vec![square(0.0, 0.0, 10.0)]];
-        let (v, i) = stroke_rings(&polys, [0.0, 0.0], [0.0; 4], 0.2, 0.0, usize::MAX).expect("stroke").expect("non-empty");
+        let (v, i) = stroke_rings(&polys, [0.0, 0.0], [0.0; 4], 0.2, 0.0, NO_LIMIT).expect("stroke").expect("non-empty");
         assert!(!i.is_empty());
         assert!(v.iter().all(|x| x.stroke_px == 0.2), "polygon outlines keep their exact width");
     }
@@ -550,14 +558,14 @@ mod tests {
                 Coord::new(a.cos() * 100.0, a.sin() * 100.0)
             })
             .collect();
-        let (v, _) = stroke_lines(&[arc], [0.0, 0.0], [0.0; 4], 2.0, 0.0, usize::MAX).expect("stroke").expect("non-empty");
+        let (v, _) = stroke_lines(&[arc], [0.0, 0.0], [0.0; 4], 2.0, 0.0, NO_LIMIT).expect("stroke").expect("non-empty");
         assert!(v.len() >= 40, "round join subdivided finely: {} vertices", v.len());
     }
 
     #[test]
     fn line_width_floors_at_half_pixel() {
         let parts = vec![vec![Coord::new(0.0, 0.0), Coord::new(10.0, 0.0)]];
-        let (v, _) = stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 0.2, 0.0, usize::MAX).expect("stroke").expect("non-empty");
+        let (v, _) = stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 0.2, 0.0, NO_LIMIT).expect("stroke").expect("non-empty");
         assert!(v.iter().all(|x| x.stroke_px == 0.5));
     }
 
@@ -607,7 +615,7 @@ mod tests {
         // Hairpin turns: each round join adds a half circle, which the estimate counts.
         let zigzag: Vec<Coord> = (0..200).map(|k| Coord::new((k % 2) as f64 * 100.0, k as f64)).collect();
         let parts = vec![zigzag.clone(), zigzag];
-        let (v, _) = stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, usize::MAX).expect("stroke").expect("non-empty");
+        let (v, _) = stroke_lines(&parts, [0.0, 0.0], [0.0; 4], 2.0, 0.0, NO_LIMIT).expect("stroke").expect("non-empty");
         let est = estimate_vertices(&Geometry::Line(parts.clone()), &Symbol::default_for(GeometryType::Polyline, 0), false);
         assert!(est >= v.len() && est <= v.len() * 2, "hairpins: estimated {est}, tessellated {}", v.len());
         // The first part already passes the limit: the second is never tessellated.
