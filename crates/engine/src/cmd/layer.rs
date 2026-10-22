@@ -485,15 +485,41 @@ fn gdb_path(path: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(not(target_arch = "wasm32"))]
 fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     let layer = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty());
-    match rustgis_data::filegdb::read_dir(Path::new(path), layer) {
-        Ok(reads) => {
-            let reads =
-                reads.into_iter().map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }).collect();
-            add_reads(s, p, path, reads, Vec::new())
+    let read = match rustgis_data::filegdb::read_dir(Path::new(path), layer) {
+        Ok(read) => read,
+        Err(e) if rustgis_data::source::gdal::available() => {
+            return add_gdal(s, p, path).map_err(|g| format!("{path}: {e}; through GDAL: {g}"));
         }
-        Err(e) if rustgis_data::source::gdal::available() => add_gdal(s, p, path).map_err(|g| format!("{path}: {e}; through GDAL: {g}")),
-        Err(e) => Err(format!("{path}: {e}")),
+        Err(e) => return Err(format!("{path}: {e}")),
+    };
+    let reads =
+        read.layers.into_iter().map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() }).collect();
+    let mut out = add_reads(s, p, path, reads, Vec::new())?;
+    // The tables it couldn't read (compressed, raster fields), through GDAL when it is installed;
+    // else, or if GDAL can't either, said.
+    let gdal = rustgis_data::source::gdal::available();
+    for (table, why) in read.unread {
+        let mut q = p.clone();
+        if let Some(o) = q.as_object_mut() {
+            o.insert("layer".into(), json!(table));
+            o.remove("name");
+        }
+        match gdal.then(|| add_gdal(s, &q, path)) {
+            Some(Ok(r)) => {
+                if let (Some(all), Some(more)) =
+                    (out.get_mut("layers").and_then(Value::as_array_mut), r.get("layers").and_then(Value::as_array))
+                {
+                    all.extend(more.iter().cloned());
+                }
+                let features =
+                    out.get("features").and_then(Value::as_u64).unwrap_or(0) + r.get("features").and_then(Value::as_u64).unwrap_or(0);
+                out["features"] = json!(features);
+            }
+            Some(Err(g)) => s.notify(format!("{path}: {table} not read: {why}; through GDAL: {g}"), true),
+            None => s.notify(format!("{path}: {table} not read: {why} (GDAL, when installed, reads it)"), true),
+        }
     }
+    Ok(out)
 }
 
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {

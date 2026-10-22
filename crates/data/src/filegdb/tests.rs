@@ -220,7 +220,7 @@ fn geodatabase(tables: Vec<(&'static str, (Vec<u8>, Vec<u8>))>) -> Vec<(String, 
 }
 
 fn read_files(files: &[(String, Vec<u8>)]) -> Result<Vec<(Dataset, ReadReport)>> {
-    read("test", &|name: &str| Ok(files.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone())), None)
+    read("test", &|name: &str| Ok(files.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone())), None).map(|r| r.layers)
 }
 
 /// A square (clockwise, as ArcGIS stores outer rings) from (x, y) with side `s`.
@@ -380,12 +380,78 @@ fn a_huge_row_count_with_absent_blocks_is_quick() {
 fn a_huge_strip_stops_at_the_face_cap() {
     let strip: Vec<P3> = (0..1_000_000).map(|i| [f64::from(i), f64::from(i % 2), 0.0]).collect();
     let n = strip.len();
-    assert_eq!(faces(std::slice::from_ref(&strip), &[0]).len(), MAX_FACES);
-    assert_eq!(faces(std::slice::from_ref(&strip), &[1]).len(), MAX_FACES);
-    assert_eq!(faces(std::slice::from_ref(&strip), &[6]).len(), MAX_FACES);
+    for kind in [0, 1, 6] {
+        let (f, truncated) = faces(std::slice::from_ref(&strip), &[kind]);
+        assert_eq!((f.len(), truncated), (MAX_FACES, true), "kind {kind}");
+    }
     // Later parts get only the room left.
-    assert_eq!(faces(&[strip[..10].to_vec(), strip], &[0, 0]).len(), MAX_FACES);
+    assert_eq!(faces(&[strip[..10].to_vec(), strip.clone()], &[0, 0]).0.len(), MAX_FACES);
     assert!(n / 3 > MAX_FACES);
+    // Within the cap, nothing is left out.
+    assert_eq!(faces(&[strip[..10].to_vec()], &[0]), (strip[..10].windows(3).map(|w| vec![w.to_vec()]).collect(), false));
+    // A truncated patch is drawn as its points' hull, not as part of its faces.
+    let (shape, hull) = footprint(std::slice::from_ref(&strip), &[0]);
+    assert!(hull && shape.is_some());
+}
+
+/// Numbers whose bits run past 64 are refused: one decoding to `i64::MIN` panicked when negated.
+#[test]
+fn numbers_past_64_bits_are_refused() {
+    // Sign set, magnitude 2^63: eight continuation bytes reach bit 62, then 0x02.
+    let mut b = vec![0xC0];
+    b.extend([0x80; 8]);
+    b.push(0x02);
+    assert_eq!(Cur::new(&b, 0).varint(), None);
+    // The largest magnitude still reads.
+    let mut b = vec![0xFF];
+    b.extend([0xFF; 8]);
+    b.push(0x01);
+    assert_eq!(Cur::new(&b, 0).varint(), Some(-i64::MAX));
+    // Unsigned: bit 63 reads, a bit past it doesn't.
+    let mut b = vec![0x80; 9];
+    b.push(0x01);
+    assert_eq!(Cur::new(&b, 0).varuint(), Some(1 << 63));
+    let last = b.len() - 1;
+    b[last] = 0x02;
+    assert_eq!(Cur::new(&b, 0).varuint(), None);
+}
+
+/// A table that can't be opened (too large, not readable) is said by name; the others are read.
+#[test]
+fn an_unreadable_table_leaves_the_others() {
+    let fields = [F::Oid, F::Text("name")];
+    let rows = vec![vec![V::Text(Some("a"))]];
+    let files = geodatabase(vec![("Good", table(0, &fields, &rows)), ("Huge", table(0, &fields, &rows))]);
+    let open = |name: &str| -> Result<Option<Vec<u8>>> {
+        if name == "a00000003.gdbtable" {
+            return Err(DataError::Unsupported(format!("{name} is too large to read here")));
+        }
+        Ok(files.iter().find(|(n, _)| n == name).map(|(_, b)| b.clone()))
+    };
+    let read = read("test", &open, None).unwrap();
+    assert_eq!(read.layers.iter().map(|(d, _)| d.name.as_str()).collect::<Vec<_>>(), ["Good"]);
+    assert_eq!(read.unread.len(), 1);
+    assert_eq!(read.unread[0].0, "Huge");
+    assert!(read.unread[0].1.contains("too large"), "{:?}", read.unread);
+}
+
+/// A feature whose coordinates its coordinate system can't place keeps its row, and is said.
+#[test]
+fn coordinates_that_cant_be_converted_are_said() {
+    const LAEA: &str = r#"PROJCS["ETRS89 / LAEA Europe",GEOGCS["ETRS89",DATUM["European_Terrestrial_Reference_System_1989",SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Lambert_Azimuthal_Equal_Area"],PARAMETER["latitude_of_center",52],PARAMETER["longitude_of_center",10],PARAMETER["false_easting",4321000],PARAMETER["false_northing",3210000],UNIT["metre",1],AUTHORITY["EPSG","3035"]]"#;
+    let fields = [F::Oid, F::Shape { z: false, wkt: LAEA }, F::Text("name")];
+    let rows = vec![
+        vec![V::Blob(polygon(&square(4_321_000.0, 3_210_000.0, 10.0))), V::Text(Some("in"))],
+        // Far past the far side of the Earth.
+        vec![V::Blob(polygon(&square(9e8, 9e8, 10.0))), V::Text(Some("out"))],
+    ];
+    let files = geodatabase(vec![("T", table(4, &fields, &rows))]);
+    let layers = read_files(&files).unwrap();
+    let (ds, report) = &layers[0];
+    let rows: Vec<&crate::Feature> = ds.features.iter().collect();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].geometry.is_some() && rows[1].geometry.is_none(), "{:?}", rows[1].geometry);
+    assert!(report.messages.iter().any(|m| m.starts_with("1 features have coordinates outside")), "{report:?}");
 }
 
 #[test]
@@ -475,7 +541,7 @@ fn reads_what_gdal_writes_when_gdal_is_installed() {
     run(&["-f", "OpenFileGDB", "-update", "-a_srs", "EPSG:2056", "-nlt", "TINZ", "-nln", "blocks", &gdb_s, &tins_s]);
     assert!(is_geodatabase(&gdb));
     assert_eq!(layers(&gdb).unwrap(), ["places", "blocks"]);
-    let read = read_dir(&gdb, None).unwrap();
+    let read = read_dir(&gdb, None).unwrap().layers;
     let (places, report) = &read[0];
     assert_eq!(report.skipped, 0, "{report:?}");
     let rows: Vec<&crate::Feature> = places.features.iter().collect();
@@ -498,6 +564,6 @@ fn reads_what_gdal_writes_when_gdal_is_installed() {
     assert_eq!((z("z_min"), z("z_max"), z("height")), (Value::Float(400.0), Value::Float(410.0), Value::Float(10.0)));
     assert!(matches!(&block.geometry, Some(Geometry::Polygon(p)) if p.len() == 1), "{:?}", block.geometry);
     // One layer by name, ignoring case.
-    assert_eq!(read_dir(&gdb, Some("BLOCKS")).unwrap().len(), 1);
+    assert_eq!(read_dir(&gdb, Some("BLOCKS")).unwrap().layers.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }

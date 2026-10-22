@@ -36,9 +36,17 @@ pub fn is_geodatabase(dir: &Path) -> bool {
     crate::source::is_gdb_name(&dir.to_string_lossy()) && dir.join("a00000001.gdbtable").is_file()
 }
 
+/// What a geodatabase gave: its layers, and the tables that couldn't be read (by name, with why),
+/// which GDAL may read instead.
+#[derive(Debug, Default)]
+pub struct Read {
+    pub layers: Vec<(Dataset, ReadReport)>,
+    pub unread: Vec<(String, String)>,
+}
+
 /// Reads the feature classes and tables of a geodatabase folder; `layer` picks one by name
 /// (ignoring case).
-pub fn read_dir(dir: &Path, layer: Option<&str>) -> Result<Vec<(Dataset, ReadReport)>> {
+pub fn read_dir(dir: &Path, layer: Option<&str>) -> Result<Read> {
     let name = dir.file_stem().and_then(|s| s.to_str()).unwrap_or("geodatabase").to_string();
     let open = |file: &str| -> Result<Option<Vec<u8>>> {
         let path = dir.join(file);
@@ -50,7 +58,7 @@ pub fn read_dir(dir: &Path, layer: Option<&str>) -> Result<Vec<(Dataset, ReadRep
         }
     };
     let mut out = read(&name, &open, layer)?;
-    for (ds, _) in &mut out {
+    for (ds, _) in &mut out.layers {
         ds.source = Some(dir.display().to_string());
     }
     Ok(out)
@@ -66,12 +74,22 @@ pub fn layers(dir: &Path) -> Result<Vec<String>> {
         }
         Ok(std::fs::read(path)?)
     };
-    Ok(catalog(name, &read("a00000001.gdbtable")?, &read("a00000001.gdbtablx")?)?
+    Ok(own_tables(catalog(name, &read("a00000001.gdbtable")?, &read("a00000001.gdbtablx")?)?).map(|(_, n, _)| n).collect())
+}
+
+/// The tables the catalog lists that hold the geodatabase's data, not its own bookkeeping
+/// (`GDB_…`) nor nothing at all: their number, name and whether they are compressed. What
+/// [`layers`] lists and [`read`] reads (or says it can't).
+fn own_tables(listed: Vec<(u64, String, Option<f64>)>) -> impl Iterator<Item = (u64, String, bool)> {
+    listed
         .into_iter()
-        .filter(|(_, n, format)| !n.starts_with("GDB_") && *format != Some(2.0))
-        .map(|(_, n, _)| n)
+        .filter(|(_, n, _)| !n.starts_with("GDB_"))
+        .filter_map(|(row, n, format)| match format {
+            None | Some(0.0) => Some((row, n, false)),
+            Some(1.0) => Some((row, n, true)),
+            _ => None,
+        })
         .take(MAX_TABLES)
-        .collect())
 }
 
 /// Each table the system catalog lists: its number, name and storage (0: a table of its own;
@@ -95,7 +113,7 @@ fn catalog(name: &str, t: &[u8], x: &[u8]) -> Result<Vec<(u64, String, Option<f6
 
 /// Reads the feature classes and tables of a geodatabase whose files `open` gives by name
 /// (`a00000001.gdbtable`; `None` for a file it doesn't have).
-pub fn read(name: &str, open: &dyn Fn(&str) -> Result<Option<Vec<u8>>>, layer: Option<&str>) -> Result<Vec<(Dataset, ReadReport)>> {
+pub fn read(name: &str, open: &dyn Fn(&str) -> Result<Option<Vec<u8>>>, layer: Option<&str>) -> Result<Read> {
     let t = open("a00000001.gdbtable")?.ok_or_else(|| DataError::Format(format!("{name}: not a File Geodatabase (no system catalog)")))?;
     let x = open("a00000001.gdbtablx")?.ok_or_else(|| DataError::Format(format!("{name}: the system catalog has no row index")))?;
     let listed = catalog(name, &t, &x)?;
@@ -108,52 +126,45 @@ pub fn read(name: &str, open: &dyn Fn(&str) -> Result<Option<Vec<u8>>>, layer: O
             Some(wkids(&open(&format!("{file}.gdbtable")).ok()??, &open(&format!("{file}.gdbtablx")).ok()??))
         })
         .unwrap_or_default();
-    let mut out = Vec::new();
-    let mut unsupported = Vec::new();
-    for (row, table_name, format) in listed {
-        if out.len() >= MAX_TABLES {
-            break;
-        }
-        // The geodatabase's own tables.
-        if table_name.starts_with("GDB_") {
-            continue;
-        }
+    let mut out = Read::default();
+    for (row, table_name, compressed) in own_tables(listed) {
         if layer.is_some_and(|l| !l.eq_ignore_ascii_case(&table_name)) {
             continue;
         }
-        match format {
-            Some(1.0) => {
-                unsupported.push(format!("{table_name} is compressed"));
+        if compressed {
+            out.unread.push((table_name, "it is compressed".into()));
+            continue;
+        }
+        // A table that can't be opened (too large, not readable) is said; the others are read.
+        let file = format!("a{row:08x}");
+        let files = open(&format!("{file}.gdbtable")).and_then(|t| Ok((t, open(&format!("{file}.gdbtablx"))?)));
+        let (t, x) = match files {
+            Ok((Some(t), Some(x))) => (t, x),
+            Ok(_) => continue,
+            Err(e) => {
+                out.unread.push((table_name, e.to_string()));
                 continue;
             }
-            Some(f) if f != 0.0 => continue,
-            _ => {}
-        }
-        let file = format!("a{row:08x}");
-        let (Some(t), Some(x)) = (open(&format!("{file}.gdbtable"))?, open(&format!("{file}.gdbtablx"))?) else { continue };
+        };
         let wkid = wkids.iter().find(|(n, _)| n.eq_ignore_ascii_case(&table_name)).map(|&(_, c)| c);
         match read_table(&table_name, &t, &x, wkid) {
-            Ok(Some(read)) => out.push(read),
+            Ok(Some(read)) => out.layers.push(read),
             Ok(None) => {}
-            Err(e) => unsupported.push(format!("{table_name}: {e}")),
+            Err(e) => out.unread.push((table_name, e.to_string())),
         }
     }
-    if out.is_empty() {
-        return Err(match (unsupported.first(), layer) {
-            (Some(why), _) => DataError::Unsupported(format!("{name}: {why}")),
+    if out.layers.is_empty() {
+        return Err(match (out.unread.first(), layer) {
+            (Some((table, why)), _) => DataError::Unsupported(format!("{name}: {table}: {why}")),
             (None, Some(l)) => DataError::Format(format!("{name}: no layer '{l}'")),
             (None, None) => DataError::Format(format!("{name}: no feature classes or tables")),
         });
     }
     // A note several layers share is said once.
     let mut said: Vec<String> = Vec::new();
-    for (_, report) in &mut out {
+    for (_, report) in &mut out.layers {
         report.messages.retain(|m| !said.contains(m));
         said.extend(report.messages.iter().cloned());
-    }
-    // Said with the first layer, so a partly read geodatabase isn't taken for whole.
-    if let Some((_, report)) = out.first_mut() {
-        report.messages.extend(unsupported.into_iter().map(|u| format!("not read: {u}")));
     }
     Ok(out)
 }
@@ -274,7 +285,7 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
     let mut ds = Dataset::new(name, layer_type, fields);
     ds.crs = crs;
     let geometry_at = table.fields.iter().position(|f| f.kind == Kind::Geometry);
-    let (mut curves, mut hulls) = (0usize, 0usize);
+    let (mut curves, mut hulls, mut unprojected) = (0usize, 0usize, 0usize);
     for (row, offset) in rows {
         let Some(values) = table.row(t, offset) else {
             report.skipped += 1;
@@ -307,13 +318,22 @@ fn read_table(name: &str, t: &[u8], x: &[u8], wkid: Option<u32>) -> Result<Optio
             }
         }
         let geometry = match (geometry, &to_lonlat) {
-            (Some(g), Some(t)) => to_lonlat_geometry(g, t),
+            (Some(g), Some(t)) => {
+                let g = to_lonlat_geometry(g, t);
+                unprojected += usize::from(g.is_none());
+                g
+            }
             (g, _) => g,
         };
         ds.push_next(geometry, attrs);
     }
     if curves > 0 {
         report.messages.push(format!("{curves} curved segments are drawn as straight lines"));
+    }
+    if unprojected > 0 {
+        report
+            .messages
+            .push(format!("{unprojected} features have coordinates outside their coordinate system: they are kept without geometry"));
     }
     if patches {
         report.messages.push("3D multipatches are drawn as their footprints, with their lowest and highest Z in z_min and z_max, and the difference in height".into());
@@ -381,9 +401,13 @@ impl<'a> Cur<'a> {
     fn varuint(&mut self) -> Option<u64> {
         let mut v: u64 = 0;
         for shift in (0..64).step_by(7) {
-            let c = self.u8()?;
-            v |= u64::from(c & 0x7F).checked_shl(shift)?;
-            if c & 0x80 == 0 {
+            let part = u64::from(self.u8()?);
+            // Bits past the 64th are refused, not dropped.
+            if shift > 57 && (part & 0x7F) >> (64 - shift) != 0 {
+                return None;
+            }
+            v |= (part & 0x7F) << shift;
+            if part & 0x80 == 0 {
                 return Some(v);
             }
         }
@@ -393,18 +417,21 @@ impl<'a> Cur<'a> {
     fn varint(&mut self) -> Option<i64> {
         let c = self.u8()?;
         let negative = c & 0x40 != 0;
-        let mut v: i64 = i64::from(c & 0x3F);
+        let mut v: u64 = u64::from(c & 0x3F);
         let mut more = c & 0x80 != 0;
         let mut shift = 6u32;
         while more {
-            let c = self.u8()?;
-            if shift > 62 {
+            let part = u64::from(self.u8()?);
+            // Bits past the 64th are refused, not dropped.
+            if shift >= 64 || (shift > 57 && (part & 0x7F) >> (64 - shift) != 0) {
                 return None;
             }
-            v |= i64::from(c & 0x7F).checked_shl(shift)?;
+            v |= (part & 0x7F) << shift;
             shift += 7;
-            more = c & 0x80 != 0;
+            more = part & 0x80 != 0;
         }
+        // A magnitude past `i64::MAX` (which `-i64::MIN` would overflow) is refused.
+        let v = i64::try_from(v).ok()?;
         Some(if negative { -v } else { v })
     }
     /// A count, bounded by `max` and by the bytes left (each item takes at least `min_bytes`).
@@ -952,12 +979,22 @@ fn signed_area(ring: &[Coord]) -> f64 {
 type P3 = [f64; 3];
 
 /// A multipatch's faces, each its outer ring and then its holes: triangles from strips, fans and
-/// triangle lists, and rings. At most [`MAX_FACES`].
-fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> Vec<Vec<Vec<P3>>> {
+/// triangle lists, and rings. At most [`MAX_FACES`]; the flag says some were left out.
+fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> (Vec<Vec<Vec<P3>>>, bool) {
     let mut faces: Vec<Vec<Vec<P3>>> = Vec::new();
+    let mut truncated = false;
     for (part, &kind) in parts.iter().zip(kinds) {
         // Faces past the cap are left out, within a part too (one strip can hold millions).
         let room = MAX_FACES.saturating_sub(faces.len());
+        let has = match kind {
+            0 | 1 => part.len().saturating_sub(2),
+            6 => part.len() / 3,
+            3 => 0,
+            _ => 1,
+        };
+        if has > room {
+            truncated = true;
+        }
         if room == 0 {
             break;
         }
@@ -986,15 +1023,15 @@ fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> Vec<Vec<Vec<P3>>> {
             _ => faces.push(vec![part.clone()]),
         }
     }
-    faces
+    (faces, truncated)
 }
 
 /// A multipatch's footprint: the union of its faces seen from above. Faces standing on edge, such
-/// as walls, show nothing and are left out; when none shows, the footprint is the hull of its
-/// points. The flag says it is a hull.
+/// as walls, show nothing and are left out; when none shows, or it has more than [`MAX_FACES`],
+/// the footprint is the hull of its points. The flag says it is a hull.
 fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
     use geo::{ConvexHull, Orient, orient::Direction};
-    let faces = faces(parts, kinds);
+    let (faces, truncated) = faces(parts, kinds);
     let all = || parts.iter().flatten();
     let (x0, x1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[0]), b.max(p[0])));
     let (y0, y1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[1]), b.max(p[1])));
@@ -1008,7 +1045,11 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
     let shows = |ring: &[P3]| {
         let (mut nx, mut ny, mut nz) = (0.0, 0.0, 0.0);
         let (mut longest, mut area2) = (0.0f64, 0.0);
-        for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        // From the ring's first point: projected coordinates run to millions, whose products would
+        // lose the millimetres a small face is measured in.
+        let o = ring.first().copied().unwrap_or([0.0; 3]);
+        let local: Vec<P3> = ring.iter().map(|p| [p[0] - o[0], p[1] - o[1], p[2] - o[2]]).collect();
+        for (a, b) in local.iter().zip(local.iter().cycle().skip(1)) {
             nx += (a[1] - b[1]) * (a[2] + b[2]);
             ny += (a[2] - b[2]) * (a[0] + b[0]);
             nz += (a[0] - b[0]) * (a[1] + b[1]);
@@ -1019,8 +1060,10 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
         n > 0.0 && nz.abs() / n > 0.05 && longest > 0.0 && area2.abs() / longest > size * 1e-4
     };
     let ring2 = |r: &[P3]| geo::LineString::from(r.iter().map(|p| (p[0], p[1])).collect::<Vec<_>>());
+    // Past the cap, a partial union would be wrong: the hull below stands in.
     let seen: Vec<geo::Polygon<f64>> = faces
         .iter()
+        .filter(|_| !truncated)
         .filter_map(|face| {
             let (outer, holes) = face.split_first()?;
             (outer.len() >= 3 && shows(outer))
