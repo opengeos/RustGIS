@@ -32,6 +32,21 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
     ),
     ("albers", "Albers Equal Area Conic", "+proj=aea +lat_0=0 +lon_0=0 +lat_1=20 +lat_2=50 +datum=WGS84 +units=m +no_defs"),
     ("lambertConformal", "Lambert Conformal Conic", "+proj=lcc +lat_0=0 +lon_0=0 +lat_1=20 +lat_2=50 +datum=WGS84 +units=m +no_defs"),
+    (
+        "vn2000",
+        "VN-2000 / TM-3 (Vietnam)",
+        "+proj=tmerc +lat_0=0 +lon_0=105 +k=0.9999 +x_0=500000 +y_0=0 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs",
+    ),
+    (
+        "vn2000Utm48",
+        "VN-2000 / UTM zone 48N",
+        "+proj=utm +zone=48 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs",
+    ),
+    (
+        "vn2000Utm49",
+        "VN-2000 / UTM zone 49N",
+        "+proj=utm +zone=49 +ellps=WGS84 +towgs84=-191.90441429,-39.30318279,-111.45032835,0.00928836,-0.01975479,0.00427372,0.252906278 +units=m +no_defs",
+    ),
 ];
 
 /// A parameter a preset takes (opengeos/RustGIS#517): its PROJ name and the range, in degrees,
@@ -63,7 +78,8 @@ pub fn preset_params(id: &str) -> &'static [PresetParam] {
         | "winkelTripel"
         | "eckertIV"
         | "northPolar"
-        | "southPolar" => &[LON_0],
+        | "southPolar"
+        | "vn2000" => &[LON_0],
         "albers" | "lambertConformal" => &[LON_0, LAT_1, LAT_2],
         _ => &[],
     }
@@ -85,7 +101,22 @@ pub fn preset_value(id: &str, key: &str) -> Option<f64> {
 pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static str, f64)>)>, String> {
     let (head, rest) = code.trim().split_once('+').unwrap_or((code.trim(), ""));
     let head = head.trim();
-    let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| id.eq_ignore_ascii_case(head) || label.eq_ignore_ascii_case(head)) else {
+    let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| {
+        id.eq_ignore_ascii_case(head)
+            || label.eq_ignore_ascii_case(head)
+            || (id == &"vn2000"
+                && (head.eq_ignore_ascii_case("vn-2000") || head.eq_ignore_ascii_case("vietnam") || head.eq_ignore_ascii_case("vn2000tm3")))
+            || (id == &"vn2000Utm48"
+                && (head.eq_ignore_ascii_case("vn-2000-48")
+                    || head.eq_ignore_ascii_case("vn2000-48")
+                    || head.eq_ignore_ascii_case("vn-2000-utm48")
+                    || head.eq_ignore_ascii_case("vn2000utm48")))
+            || (id == &"vn2000Utm49"
+                && (head.eq_ignore_ascii_case("vn-2000-49")
+                    || head.eq_ignore_ascii_case("vn2000-49")
+                    || head.eq_ignore_ascii_case("vn-2000-utm49")
+                    || head.eq_ignore_ascii_case("vn2000utm49")))
+    }) else {
         return match (head, rest) {
             ("", _) if !rest.is_empty() => Err("PROJ strings aren't taken: pick a preset, or an EPSG or ESRI code".into()),
             (_, r) if r.contains('=') => Err(format!("only presets take parameters: '{head}' isn't one")),
@@ -147,10 +178,35 @@ pub fn local_views_supported() -> bool {
     *SUPPORTED.get_or_init(|| Projector::new("local:0,0").is_ok())
 }
 
+fn resolve_name_alias(code: &str) -> Option<&'static str> {
+    let clean = code.trim().to_ascii_lowercase().replace(['-', '_', ' '], "");
+    match clean.as_str() {
+        "hanoi" | "vn2000:hanoi" => Some("vn2000 +lon_0=105"),
+        "tphcm" | "saigon" | "hochiminh" | "vn2000:tphcm" | "vn2000:saigon" => Some("vn2000 +lon_0=105.75"),
+        "danang" | "vn2000:danang" => Some("vn2000 +lon_0=107.75"),
+        "haiphong" | "vn2000:haiphong" => Some("vn2000 +lon_0=105.75"),
+        "cantho" | "vn2000:cantho" => Some("vn2000 +lon_0=105"),
+        "hue" | "vn2000:hue" => Some("vn2000 +lon_0=107"),
+        "nhatrang" | "khanhhoa" | "vn2000:nhatrang" => Some("vn2000 +lon_0=108.25"),
+        "quangninh" | "vn2000:quangninh" => Some("vn2000 +lon_0=107.75"),
+        "vungtau" | "bariavungtau" | "vn2000:vungtau" => Some("vn2000 +lon_0=107.75"),
+        "binhduong" | "vn2000:binhduong" => Some("vn2000 +lon_0=105.75"),
+        "dongnai" | "vn2000:dongnai" => Some("vn2000 +lon_0=107.75"),
+        "gialai" | "pleiku" | "vn2000:gialai" => Some("vn2000 +lon_0=108.5"),
+        "daklak" | "buonmathuot" | "vn2000:daklak" => Some("vn2000 +lon_0=108.5"),
+        _ => None,
+    }
+}
+
 /// The PROJ definition and label of a projection code: a preset id, `EPSG:<code>`, `ESRI:<code>`
 /// or `local:lon,lat`.
 pub fn lookup(code: &str) -> Result<(String, String), String> {
     let code = code.trim();
+    if let Some(aliased) = resolve_name_alias(code)
+        && !aliased.eq_ignore_ascii_case(code)
+    {
+        return lookup(aliased);
+    }
     // `local:lon,lat`: an azimuthal equidistant projection centred on a point (a local scene).
     if let Some(rest) = code.strip_prefix("local:") {
         // Exactly two finite numbers; anything else is refused rather than half-read.
@@ -702,7 +758,7 @@ mod tests {
         assert!(lookup("epsg:+3035").unwrap_err().contains("unknown"));
         // Every preset is classified: the regional grids alone take nothing.
         for (id, _, _) in PRESETS {
-            assert_eq!(preset_params(id).is_empty(), ["europeEqualArea", "usaAlbers"].contains(id), "{id}");
+            assert_eq!(preset_params(id).is_empty(), ["europeEqualArea", "usaAlbers", "vn2000Utm48", "vn2000Utm49"].contains(id), "{id}");
         }
         for bad in [
             "robinson +lon_0=181",
@@ -846,7 +902,10 @@ mod tests {
     fn presets_and_epsg_codes() {
         for (id, _, _) in PRESETS {
             let p = Projector::new(id).unwrap_or_else(|e| panic!("{id}: {e}"));
-            let c = Coord::new(10.0, if id.contains("south") { -75.0 } else { 50.0 });
+            let c = match *id {
+                "vn2000" | "vn2000Utm48" | "vn2000Utm49" => Coord::new(105.0, 21.0),
+                _ => Coord::new(10.0, if id.contains("south") { -75.0 } else { 50.0 }),
+            };
             let m = p.forward(c).unwrap_or_else(|| panic!("{id}"));
             let back = p.inverse(m).unwrap();
             assert!((back.x - c.x).abs() < 1e-6 && (back.y - c.y).abs() < 1e-6, "{id}: {back:?}");
@@ -1088,5 +1147,59 @@ mod tests {
             Projector::new("EPSG:3832").unwrap().central_meridian().is_some_and(|s| (s - 150.0).abs() < 1e-9),
             "PDC Mercator: lon_0 = 150"
         );
+    }
+
+    #[test]
+    fn vn2000_vietnam_projections() {
+        // Alias lookups
+        for name in ["vn2000", "VN-2000", "vietnam", "vn2000tm3"] {
+            let (def, label) = lookup(name).unwrap();
+            assert!(def.contains("+proj=tmerc") && def.contains("+towgs84="), "{name}");
+            assert_eq!(label, "VN-2000 / TM-3 (Vietnam)", "{name}");
+        }
+        for name in ["vn2000Utm48", "vn-2000-48", "vn2000-48", "vn2000utm48"] {
+            let (def, label) = lookup(name).unwrap();
+            assert!(def.contains("+proj=utm") && def.contains("+zone=48"), "{name}");
+            assert_eq!(label, "VN-2000 / UTM zone 48N", "{name}");
+        }
+        for name in ["vn2000Utm49", "vn-2000-49", "vn2000-49", "vn2000utm49"] {
+            let (def, label) = lookup(name).unwrap();
+            assert!(def.contains("+proj=utm") && def.contains("+zone=49"), "{name}");
+            assert_eq!(label, "VN-2000 / UTM zone 49N", "{name}");
+        }
+        // Provincial lookups
+        assert_eq!(lookup("hanoi").unwrap().0, lookup("vn2000 +lon_0=105").unwrap().0);
+        assert_eq!(lookup("tphcm").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("saigon").unwrap().0, lookup("vn2000 +lon_0=105.75").unwrap().0);
+        assert_eq!(lookup("danang").unwrap().0, lookup("vn2000 +lon_0=107.75").unwrap().0);
+
+        // Forward and inverse coordinate projection accuracy
+        // Hanoi (Hoan Kiem lake: 105.8525°E, 21.0285°N) in VN-2000 TM-3 (lon_0 = 105.0)
+        let p_hn = Projector::new("vn2000 +lon_0=105").unwrap();
+        let c_hn = Coord::new(105.8525, 21.0285);
+        let m_hn = p_hn.forward(c_hn).unwrap();
+        // False easting is 500,000m, point is east of 105°E so x > 500,000; latitude ~21° so y ~ 2,326,000m
+        assert!(m_hn.x > 500_000.0 && m_hn.x < 700_000.0);
+        assert!(m_hn.y > 2_000_000.0 && m_hn.y < 2_500_000.0);
+        let back_hn = p_hn.inverse(m_hn).unwrap();
+        assert!((back_hn.x - c_hn.x).abs() < 1e-6 && (back_hn.y - c_hn.y).abs() < 1e-6);
+
+        // Ho Chi Minh City (Ben Thanh: 106.6983°E, 10.7725°N) in VN-2000 TM-3 (lon_0 = 105.75)
+        let p_hcm = Projector::new("vn2000 +lon_0=105.75").unwrap();
+        let c_hcm = Coord::new(106.6983, 10.7725);
+        let m_hcm = p_hcm.forward(c_hcm).unwrap();
+        assert!(m_hcm.x > 500_000.0 && m_hcm.x < 700_000.0);
+        assert!(m_hcm.y > 1_100_000.0 && m_hcm.y < 1_300_000.0);
+        let back_hcm = p_hcm.inverse(m_hcm).unwrap();
+        assert!((back_hcm.x - c_hcm.x).abs() < 1e-6 && (back_hcm.y - c_hcm.y).abs() < 1e-6);
+
+        // UTM 48N and 49N roundtrip
+        for utm in ["vn2000Utm48", "vn2000Utm49"] {
+            let p = Projector::new(utm).unwrap();
+            let c = Coord::new(106.0, 15.0);
+            let m = p.forward(c).unwrap();
+            let back = p.inverse(m).unwrap();
+            assert!((back.x - c.x).abs() < 1e-6 && (back.y - c.y).abs() < 1e-6);
+        }
     }
 }

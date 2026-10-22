@@ -1189,8 +1189,8 @@ fn coordinate_system(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) -> boo
             });
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(tl!("EPSG or ESRI code"));
-                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035").desired_width(110.0));
+                ui.label(tl!("EPSG, ESRI or name"));
+                let r = ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text("3035, vn2000, hanoi").desired_width(120.0));
                 if r.changed() && !app.dialogs.a.trim().is_empty() {
                     app.dialogs.text = typed_crs(&app.dialogs.a);
                 }
@@ -1237,6 +1237,26 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
         return;
     }
     let mut next = params.clone();
+    if id == "vn2000" {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(tl!("Provinces:")).weak());
+            for (p_name, lon) in [
+                ("Hà Nội (105°)", 105.0),
+                ("TP.HCM (105.75°)", 105.75),
+                ("Đà Nẵng (107.75°)", 107.75),
+                ("Hải Phòng (105.75°)", 105.75),
+                ("Cần Thơ (105°)", 105.0),
+            ] {
+                if ui.small_button(p_name).clicked() {
+                    next.retain(|(k, _)| *k != "lon_0");
+                    if lon != 105.0 {
+                        next.push(("lon_0", lon));
+                    }
+                }
+            }
+        });
+        ui.add_space(2.0);
+    }
     egui::Grid::new("preset_params").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         for p in takes {
             let label = match p.key {
@@ -1315,6 +1335,16 @@ fn crs_details(ui: &mut egui::Ui, chosen: &str, current: &str, t: &Tokens) {
         "albers" => ("Conic, equal-area: true sizes across a mid-latitude region; set its meridian and parallels to the region.", None),
         "lambertConformal" => {
             ("Conic, conformal: true shapes across a mid-latitude region; set its meridian and parallels to the region.", None)
+        }
+        "vn2000" => (
+            "Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84.",
+            None,
+        ),
+        "vn2000Utm48" => {
+            ("Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E).", Some("3405".into()))
+        }
+        "vn2000Utm49" => {
+            ("Vietnam national coordinate system (VN-2000) UTM zone 49N (108°E–114°E, central meridian 111°E).", Some("3406".into()))
         }
         _ => ("A projected coordinate system.", epsg.clone()),
     };
@@ -1424,5 +1454,31 @@ mod tests {
         h.get_by_label("Apply").click();
         h.run_steps(3);
         assert_eq!(h.state().session.map().projection.code(), "robinson +lon_0=150");
+    }
+
+    #[test]
+    fn vn2000_in_coordinate_system_dialog() {
+        let mut app = RustGisApp::with_sample();
+        app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
+        // Typing "vn2000" or provincial name resolves to VN-2000 preset
+        app.dialogs.a = "vn2000".into();
+        app.dialogs.text = typed_crs(&app.dialogs.a);
+        assert_eq!(app.dialogs.text, "vn2000");
+        let proj = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
+        assert_eq!(proj.label(), "VN-2000 / TM-3 (Vietnam)");
+
+        // Typing provincial name "hanoi"
+        app.dialogs.a = "hanoi".into();
+        app.dialogs.text = typed_crs(&app.dialogs.a);
+        let proj_hn = rustgis_engine::map::Projection::from_code(&app.dialogs.text).unwrap();
+        assert_eq!(proj_hn.label(), "VN-2000 / TM-3 (Vietnam)");
+
+        // Applying VN-2000
+        app.run("map.projection", json!({"type": "vn2000"})).unwrap();
+        assert_eq!(app.session.map().projection.code(), "vn2000");
+
+        // Custom meridian for HCMC (105.75)
+        app.run("map.projection", json!({"type": "vn2000 +lon_0=105.75"})).unwrap();
+        assert_eq!(app.session.map().projection.code(), "vn2000 +lon_0=105.75");
     }
 }
