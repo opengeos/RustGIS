@@ -120,6 +120,11 @@ pub struct CustomCrs {
 
 /// The most custom systems one run keeps.
 const MAX_CUSTOM: usize = 1024;
+/// The most of them typed as PROJ strings (`Crs::parse`): text from commands can't take the room
+/// files' own systems need.
+const MAX_TYPED: usize = 256;
+/// The name a system typed as a PROJ string gets.
+const TYPED_LABEL: &str = "Custom PROJ";
 
 fn custom_table() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>> {
     static T: std::sync::OnceLock<std::sync::Mutex<Vec<std::sync::Arc<CustomCrs>>>> = std::sync::OnceLock::new();
@@ -139,10 +144,15 @@ macro_rules! vn2000_towgs84 {
 /// The 7-parameter Helmert shift from VN-2000 to WGS 84, as PROJ gives it for EPSG:4756.
 pub const VN2000_TOWGS84: &str = crate::vn2000_towgs84!();
 
+/// A name's ASCII letters and digits, upper-cased: how VN-2000 names are matched, whatever the
+/// spacing, punctuation and case.
+fn squash(text: &str) -> String {
+    text.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect()
+}
+
 /// Returns true if `text` is an ambiguous bare reference to VN-2000 without a specified projection.
 pub fn is_bare_vn2000(text: &str) -> bool {
-    let clean: String = text.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
-    clean == "VN2000"
+    squash(text) == "VN2000"
 }
 
 /// The EPSG code an explicit VN-2000 system name stands for, matched on its letters and digits
@@ -150,8 +160,7 @@ pub fn is_bare_vn2000(text: &str) -> bool {
 /// 49 (3406), `VN-2000 / TM-3` or `vn2000tm3` (5897). The one table for [`Crs::parse`] and
 /// rustgis-map's presets, so a name one takes the other takes too.
 pub fn vn2000_epsg(text: &str) -> Option<u16> {
-    let clean: String = text.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_uppercase();
-    match clean.as_str() {
+    match squash(text).as_str() {
         "VN2000UTMZONE48N" | "VN2000UTM48N" | "VN2000UTM48" | "VN2000UTMZONE48" | "VN200048" | "VN200048N" => Some(3405),
         "VN2000UTMZONE49N" | "VN2000UTM49N" | "VN2000UTM49" | "VN2000UTMZONE49" | "VN200049" | "VN200049N" => Some(3406),
         // EPSG:5897, VN-2000 / TM-3 zone 482: central meridian 105°, k 0.9999.
@@ -168,14 +177,19 @@ pub fn bare_vn2000_error(text: &str) -> String {
 }
 
 /// Checks a PROJ string typed by a user (not one read from a file, whose `+nadgrids=@null` is
-/// fine): no keys naming grid or definition files, as for GDAL (`raster::gdal`), and no paths.
+/// fine): no keys naming grid or definition files, as for GDAL (`raster::gdal`), no pipelines,
+/// and no paths. Every key with `grid` in it is refused (`nadgrids`, `geoidgrids`, `vgrids`,
+/// `xy_grids`, `z_grids`, `gridlist`…), so a grid key PROJ adds later is refused too.
 fn validate_proj_string(proj4: &str) -> Result<(), String> {
     for token in proj4.split_whitespace() {
         let t = token.trim_start_matches('+');
         let (key, val) = t.split_once('=').unwrap_or((t, ""));
         let key_lower = key.to_ascii_lowercase();
-        if ["init", "nadgrids", "geoidgrids", "grids", "file", "catalog"].contains(&key_lower.as_str()) {
+        if key_lower.contains("grid") || ["init", "file", "catalog", "step"].contains(&key_lower.as_str()) {
             return Err(format!("parameter '+{key}' is not allowed in coordinate system definition"));
+        }
+        if key_lower == "proj" && val.eq_ignore_ascii_case("pipeline") {
+            return Err("PROJ pipelines are not allowed in coordinate system definition".into());
         }
         if val.contains("..") || val.contains('/') || val.contains('\\') {
             return Err("file path in parameter is not allowed in coordinate system definition".into());
@@ -247,9 +261,16 @@ impl Crs {
             }
             let proj4 = format!("+proj{}", t.get(5..).unwrap_or(""));
             validate_proj_string(&proj4)?;
+            {
+                let table = custom_table().lock().unwrap_or_else(|e| e.into_inner());
+                let known = table.iter().any(|d| d.proj4 == proj4);
+                if !known && table.iter().filter(|d| d.label == TYPED_LABEL).count() >= MAX_TYPED {
+                    return Err("too many coordinate systems typed as PROJ strings".into());
+                }
+            }
             return Crs::custom(CustomCrs {
                 proj4,
-                label: "Custom PROJ".to_string(),
+                label: TYPED_LABEL.to_string(),
                 geokeys: Vec::new(),
                 doubles: Vec::new(),
                 ascii: String::new(),
@@ -262,8 +283,7 @@ impl Crs {
         if is_bare_vn2000(t) {
             return Err(bare_vn2000_error(t));
         }
-        let clean: String = up.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        if clean.starts_with("VN2000") {
+        if squash(t).starts_with("VN2000") {
             return vn2000_epsg(t).and_then(|c| Crs::from_epsg(c.into())).ok_or_else(|| format!("unknown coordinate system '{t}'"));
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
@@ -594,6 +614,16 @@ mod tests {
         assert!(Crs::parse("+proj=utm +zone=48 +file=../secret").is_err());
         assert!(Crs::parse("+proj=utm +zone=48 +file=C:\\secret").is_err());
         assert!(Crs::parse("+proj=utm +zone=33 +geoidgrids=egm96_15.gtx").is_err());
+        // Any key naming grids (legacy `vgrids`, `deformation`'s `xy_grids`), pipelines and steps.
+        for bad in [
+            "+proj=utm +zone=33 +vgrids=egm96_15.gtx",
+            "+proj=deformation +xy_grids=a.tif +z_grids=b.tif",
+            "+proj=utm +zone=33 +gridlist=x",
+            "+proj=pipeline +step +proj=utm +zone=33",
+            "+PROJ=Pipeline +step +proj=utm +zone=33",
+        ] {
+            assert!(Crs::parse(bad).is_err(), "{bad}");
+        }
         // A file's own definition may carry `+nadgrids=@null` (Web Mercator as GDAL writes it).
         let merc = "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs";
         let file = CustomCrs { proj4: merc.into(), label: "m".into(), geokeys: Vec::new(), doubles: Vec::new(), ascii: String::new() };

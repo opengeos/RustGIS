@@ -206,10 +206,10 @@ pub fn parse_preset(code: &str) -> Result<Option<(&'static str, Vec<(&'static st
     if rustgis_data::raster::crs::is_bare_vn2000(head) {
         return Err(rustgis_data::raster::crs::bare_vn2000_error(head));
     }
+    // Matched before `resolve_vn2000_alias` below, which splits `VN-2000 / <province>` on `/`.
+    let vn2000 = rustgis_data::raster::crs::vn2000_epsg(head);
     let Some((id, _, _)) = PRESETS.iter().find(|(id, label, _)| {
-        id.eq_ignore_ascii_case(head)
-            || label.eq_ignore_ascii_case(head)
-            || rustgis_data::raster::crs::vn2000_epsg(head).is_some_and(|c| VN2000_PRESET_EPSG.contains(&(*id, c)))
+        id.eq_ignore_ascii_case(head) || label.eq_ignore_ascii_case(head) || vn2000.is_some_and(|c| VN2000_PRESET_EPSG.contains(&(*id, c)))
     }) else {
         // `vn2000:hanoi`: VN-2000 / TM-3 on a province's meridian, written as that preset so a
         // saved project's code never depends on the province names.
@@ -371,7 +371,6 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
         let shown: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
         return Ok((with_params(def, &params), format!("{label} ({})", shown.join(", "))));
     }
-
     // `3035`, `EPSG:3035` or `epsg 3035`: an optional prefix, then only digits.
     let lower = code.to_ascii_lowercase();
     // `ESRI:102033`: one of Esri's projected coordinate systems, from a table checked against PROJ.
