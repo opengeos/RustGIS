@@ -1872,6 +1872,7 @@ mod tests {
     use super::*;
 
     /// Exercises caller cleanup through the public Shapefile writer, one fresh process per collision.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shapefile_staging_collisions_preserve_existing_entries() -> std::io::Result<()> {
         let (original, _) =
@@ -1892,10 +1893,13 @@ mod tests {
                         ])
                         .env(CHILD, format!("{index}:{kind}"))
                         .output()?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
                     assert!(
-                        output.status.success(),
+                        output.status.success()
+                            && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;")
+                            && stdout.contains(&format!("collision case completed: {index}:{kind}")),
                         "part={index} kind={kind}: {}{}",
-                        String::from_utf8_lossy(&output.stdout),
+                        stdout,
                         String::from_utf8_lossy(&output.stderr)
                     );
                 }
@@ -1908,8 +1912,8 @@ mod tests {
         if !matches!(kind, "file" | "live" | "dangling") {
             return Err(std::io::Error::other("unknown collision kind"));
         }
-        let root = std::env::temp_dir().join(format!("rustgis-shp-collision-{}-{index}-{kind}", std::process::id()));
-        std::fs::create_dir(&root)?;
+        let workspace = tempfile::Builder::new().prefix("rustgis-shp-collision-").tempdir()?;
+        let root = workspace.path();
         let path = root.join("roads.SHP");
         let destination = |extension: &str| if extension == "shp" { path.clone() } else { path.with_extension(extension) };
         for (extension, bytes) in &parts {
@@ -1954,17 +1958,15 @@ mod tests {
         for (extension, bytes) in &parts {
             assert_eq!(&std::fs::read(destination(extension))?, bytes, "original {extension} changed");
         }
-        assert_eq!(
-            std::fs::read_dir(&root)?.count(),
-            parts.len() + 1 + usize::from(kind == "live"),
-            "owned staging files were not cleaned"
-        );
+        assert_eq!(std::fs::read_dir(root)?.count(), parts.len() + 1 + usize::from(kind == "live"), "owned staging files were not cleaned");
         std::fs::remove_file(collision)?;
         assert_eq!(write_path(&replacement, &path).map_err(std::io::Error::other)?, 0);
         for (extension, bytes) in shapefile_parts(&replacement).map_err(std::io::Error::other)?.0 {
             assert_eq!(std::fs::read(destination(extension))?, bytes, "retry changed {extension}");
         }
-        std::fs::remove_dir_all(root)
+        workspace.close()?;
+        println!("collision case completed: {case}");
+        Ok(())
     }
 
     #[test]
