@@ -196,15 +196,11 @@ fn entries(desc: &str) -> Vec<(Vec<String>, String)> {
 
 /// The keys of command `id`'s parameters (`desc`) that complete `word`, typed from char `start`
 /// to `end`, case aside, in the order described; an entry already given on the line (`line`, from
-/// its `{`: a script's command is one line) isn't offered, nor its alternatives. The key being
-/// typed doesn't count as given, so a key already closed (`"lat|": 5`) can still be changed; the
-/// same key given again elsewhere on the line still does.
+/// its `{`: a script's command is one line) isn't offered, nor its alternatives. `line` comes
+/// without the word being typed, so that key, closed or not, doesn't count as given (a key already
+/// closed, `"lat|": 5`, can still be changed), while the same key given elsewhere does.
 fn complete_keys(id: &str, desc: &str, line: &str, start: usize, end: usize, word: &str) -> Option<Offer> {
-    let mut given = rustgis_engine::param_keys(line).unwrap_or_default();
-    // One occurrence, the cursor's: `given` is only asked whether a key is there.
-    if let Some(i) = given.iter().position(|k| *k == word) {
-        given.remove(i);
-    }
+    let given = rustgis_engine::param_keys(line).unwrap_or_default();
     let items: Vec<String> = entries(desc)
         .into_iter()
         .filter(|(keys, _)| !keys.iter().any(|k| given.contains(&k.as_str())))
@@ -221,8 +217,10 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
         return complete(start, at, &word, ids);
     }
     let (h, start, word) = key_at(script, at)?;
-    let line = script.get(byte_at(script, h.brace)?..)?.split('\n').next()?;
-    complete_keys(&h.id, &params_of(session, &h.id)?, line, start, at, &word)
+    // The line from its `{`, the word being typed taken out.
+    let before = script.get(byte_at(script, h.brace)?..byte_at(script, start)?)?;
+    let after = script.get(byte_at(script, at)?..)?.split('\n').next()?;
+    complete_keys(&h.id, &params_of(session, &h.id)?, &format!("{before}{after}"), start, at, &word)
 }
 
 /// The text describing key `key` of command `id`'s parameters (`"size"?: number`), for the help
@@ -1411,11 +1409,23 @@ mod tests {
         assert_eq!(keys(r#"{"x": 2, ""#, ""), ["lat", "y", "scale"], "an alternative given");
         assert_eq!(keys(r#"{""#, "S"), ["scale"], "case aside");
         assert!(keys(r#"{""#, "zz").is_empty());
-        assert_eq!(keys(r#"{"lat": 5}"#, "lat"), ["lat"], "the key being typed isn't given");
         assert_eq!(keys(r#"{"lat": 5}"#, ""), ["lon", "x", "scale"], "a key given");
-        assert!(keys(r#"{"lat": 5, "lat": 6}"#, "lat").is_empty(), "the same key given again elsewhere");
         let o = super::complete_keys("map.goToXY", desc, r#"{""#, 0, 0, "").unwrap();
         assert_eq!(o.keys_of.as_deref(), Some("map.goToXY"));
+    }
+
+    /// The key under the cursor, closed or not, doesn't count as given; the same key given
+    /// elsewhere on the line does.
+    #[test]
+    fn the_key_being_typed_is_not_given() {
+        let app = crate::RustGisApp::with_sample();
+        let keys = |s: &str, at: usize| super::offer_at(s, at, &[], &app.session).map(|o| o.items).unwrap_or_default();
+        let s = r#"map.goToXY {"lat": 5}"#;
+        assert_eq!(keys(s, 16), ["lat"], "a closed key can be changed");
+        let s = r#"map.goToXY {"lat": 5, "lat": 6}"#;
+        assert!(keys(s, 26).is_empty(), "the same key closed elsewhere");
+        let s = r#"map.goToXY {"lat": 5, "lat"#;
+        assert!(keys(s, s.chars().count()).is_empty(), "the same key, the cursor's not closed");
     }
 
     /// In the pane: a quote in a command's braces offers its keys, the help beside shows the
