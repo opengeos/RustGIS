@@ -94,7 +94,7 @@ pub const VN2000_PROVINCES: &[Vn2000Province] = &[
     Vn2000Province { name: "Gia Lai", lon_0: 108.5, id: "gialai", aliases: &["pleiku"] },
     Vn2000Province { name: "Hà Giang", lon_0: 105.5, id: "hagiang", aliases: &[] },
     Vn2000Province { name: "Hà Nam", lon_0: 105.0, id: "hanam", aliases: &["phuly"] },
-    Vn2000Province { name: "Hà Nội", lon_0: 105.0, id: "hanoi", aliases: &["hn"] },
+    Vn2000Province { name: "Hà Nội", lon_0: 105.0, id: "hanoi", aliases: &[] },
     Vn2000Province { name: "Hà Tĩnh", lon_0: 105.5, id: "hatinh", aliases: &[] },
     Vn2000Province { name: "Hải Dương", lon_0: 105.5, id: "haiduong", aliases: &[] },
     Vn2000Province { name: "Hải Phòng", lon_0: 105.75, id: "haiphong", aliases: &[] },
@@ -341,9 +341,6 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
         let shown: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
         return Ok((with_params(def, &params), format!("{label} ({})", shown.join(", "))));
     }
-    if let Some(lon) = resolve_vn2000_alias(code) {
-        return lookup(&format!("vn2000 +lon_0={lon}"));
-    }
 
     // `3035`, `EPSG:3035` or `epsg 3035`: an optional prefix, then only digits.
     let lower = code.to_ascii_lowercase();
@@ -365,6 +362,9 @@ pub fn lookup(code: &str) -> Result<(String, String), String> {
     }
     let digits = lower.strip_prefix("epsg").map(|r| r.trim_start_matches([':', ' '])).unwrap_or(&lower);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        if let Some(lon) = resolve_vn2000_alias(code) {
+            return lookup(&format!("vn2000 +lon_0={lon}"));
+        }
         return Err(format!("unknown projection '{code}'"));
     }
     let unknown = || format!("unknown coordinate system EPSG:{}", digits.trim_start_matches('0'));

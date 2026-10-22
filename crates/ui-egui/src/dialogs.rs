@@ -1246,7 +1246,8 @@ fn preset_fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(tl!("Provinces:")).weak());
             for &(p_name, lon) in VN2000_UI_PROVINCES {
-                let label = format!("{p_name} ({lon:.2}°)");
+                let lon_str = format!("{lon:.2}");
+                let label = crate::i18n::fmt("{name} ({lon}°)", &[("name", p_name), ("lon", &lon_str)]);
                 if ui.small_button(&label).clicked() {
                     next.retain(|(k, _)| *k != "lon_0");
                     if (lon - default_lon).abs() > 1e-6 {

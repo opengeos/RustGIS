@@ -198,10 +198,15 @@ impl Crs {
         if up.ends_with("CRS84") {
             return Ok(Crs::LonLat);
         }
-        if up == "VN-2000" || up == "VN2000" || up.contains("VN-2000 / UTM ZONE 48") || up.contains("VN2000 / UTM ZONE 48") {
+        if up == "VN-2000"
+            || up == "VN2000"
+            || up == "VN-2000 / UTM ZONE 48N"
+            || up == "VN2000 / UTM ZONE 48N"
+            || up.ends_with("UTM ZONE 48N")
+        {
             return Crs::from_epsg(3405).ok_or_else(|| "unknown coordinate system VN-2000 UTM 48N".into());
         }
-        if up.contains("VN-2000 / UTM ZONE 49") || up.contains("VN2000 / UTM ZONE 49") {
+        if up == "VN-2000 / UTM ZONE 49N" || up == "VN2000 / UTM ZONE 49N" || up.ends_with("UTM ZONE 49N") {
             return Crs::from_epsg(3406).ok_or_else(|| "unknown coordinate system VN-2000 UTM 49N".into());
         }
         let code = t.rsplit([':', '/']).next().unwrap_or(t).trim();
