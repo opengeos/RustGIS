@@ -169,7 +169,9 @@ pub fn read(name: &str, open: &dyn Fn(&str) -> Result<Option<Vec<u8>>>, layer: O
                 continue;
             }
         };
-        let wkid = wkids.iter().find(|(n, _)| n.eq_ignore_ascii_case(&table_name)).map(|&(_, c)| c);
+        // Items that share the table's name but disagree on the code give none: the WKT decides.
+        let mut codes = wkids.iter().filter(|(n, _)| n.eq_ignore_ascii_case(&table_name)).map(|&(_, c)| c);
+        let wkid = codes.next().filter(|&c| codes.all(|d| d == c));
         match read_table(&table_name, &t, &x, wkid) {
             Ok(Some(read)) => out.layers.push(read),
             Ok(None) => {}
@@ -1130,7 +1132,7 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64], budget: &mut usize) -> (Option<Ge
                 .then(|| geo::Polygon::new(ring2(outer), holes.iter().map(|h| ring2(h)).collect()).orient(Direction::Default))
         })
         .collect();
-    let merge = !truncated && seen.len() <= MAX_UNION_FACES && seen.len() <= *budget;
+    let merge = unions && !truncated && seen.len() <= MAX_UNION_FACES && seen.len() <= *budget;
     // The union library may still trip over faces it can't place: the hull stands in then. (In the
     // browser, where a panic can't be caught, nothing is merged: see `MAX_UNION_FACES`.)
     let union = if seen.is_empty() || !merge {
