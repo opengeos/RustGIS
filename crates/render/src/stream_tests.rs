@@ -65,6 +65,33 @@ fn streamed_kind(layer: &Layer, size: usize, native: bool) -> Layer {
 
 #[test]
 fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_selection() {
+    // Keep selected interaction rows authoritative even if source synchronization completes
+    // during this test. Complete traversal still emits the original file order.
+    struct SelectedSample(Chunks);
+    impl FeatureSource for SelectedSample {
+        fn info(&self) -> &SourceInfo {
+            self.0.info()
+        }
+        fn read(&self, _: &Request) -> rustgis_data::Result<Batch> {
+            Ok(Batch {
+                features: [5, 3].iter().filter_map(|row| self.0.ds.features.get(*row).cloned()).collect(),
+                matched: self.0.ds.features.len() as u64,
+                complete: false,
+                skipped: 0,
+            })
+        }
+        fn streams_chunks(&self) -> bool {
+            true
+        }
+        fn visit_chunks(
+            &self,
+            extent: Option<Extent>,
+            bytes: usize,
+            visit: &mut dyn FnMut(Vec<Feature>) -> rustgis_data::Result<()>,
+        ) -> rustgis_data::Result<Batch> {
+            self.0.visit_chunks(extent, bytes, visit)
+        }
+    }
     let mut ds =
         Dataset::new("overlap", GeometryType::Polygon, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);
     for i in 0..37 {
@@ -109,8 +136,16 @@ fn complete_chunks_preserve_painter_order_filters_transparency_labels_and_select
             actual.layers[0].dataset.features =
                 [5, 3].iter().map(|row| m.layers[0].dataset.features[*row].clone()).collect::<Vec<_>>().into();
             actual.layers[0].selection = vec![0, 1];
+            let info = actual.layers[0].source.as_ref().unwrap().info().unwrap().clone();
+            actual.layers[0].source = Some(SourceLayer::from_path(
+                "selected.shp",
+                None,
+                Box::new(SelectedSample(Chunks { info, ds: m.layers[0].dataset.clone(), size })),
+            ));
 
-            let got = render(&mut actual, &view).unwrap();
+            let Some(RenderOutput::Cpu(got)) = render_with_backend(&mut actual, &view, true, Backend::Cpu) else {
+                panic!("complete selected frame");
+            };
             assert!(got.pixmap.data() == expected.pixmap.data(), "chunk size {size} changed pixels");
             assert_eq!(got.labels.iter().map(|l| &l.text).collect::<Vec<_>>(), expected.labels.iter().map(|l| &l.text).collect::<Vec<_>>());
         }
