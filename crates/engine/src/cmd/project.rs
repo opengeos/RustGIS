@@ -139,10 +139,15 @@ fn save(s: &mut Session, p: &Value) -> CmdResult {
 
 fn save_as(s: &mut Session, p: &Value) -> CmdResult {
     let path = PathBuf::from(super::ps(p, "path").ok_or("path is required")?);
-    if let Some(stem) = path.file_stem().and_then(|x| x.to_str()) {
-        s.project.name = stem.to_string();
+    let previous_name = path.file_stem().and_then(|x| x.to_str()).map(|stem| std::mem::replace(&mut s.project.name, stem.to_string()));
+    let result = write(s, path);
+    // Save As is a view command: a failed write does not get an automatic project rollback.
+    if result.is_err()
+        && let Some(name) = previous_name
+    {
+        s.project.name = name;
     }
-    write(s, path)
+    result
 }
 
 fn rename(s: &mut Session, p: &Value) -> CmdResult {
