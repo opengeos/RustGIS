@@ -322,11 +322,12 @@ pub(crate) fn collect_layer(
     ppp: f32,
     map_per_px: f64,
 ) -> Result<Option<[f64; 2]>, TessError> {
-    // Stable origin: the centre of the drawn features' extent. Two passes cost one extra
-    // extent fold — the same order of work as the culling pass the CPU render already does.
-    // The same pass gives up on a layer too dense to mesh before any of it is tessellated.
+    // Stable origin: the centre of the drawn features' extent, so the features are listed
+    // first — with their symbols and estimates, each worked out once. The same pass gives up on
+    // a layer too dense to mesh before any of it is tessellated.
     let mut ext = Extent::EMPTY;
     let mut estimate = 0usize;
+    let mut features = Vec::new();
     for (row, g) in geoms.iter().enumerate() {
         let Some(g) = g else { continue };
         let e = g.extent();
@@ -334,28 +335,26 @@ pub(crate) fn collect_layer(
             continue;
         }
         ext = ext.union(&e);
-        estimate = estimate.saturating_add(estimate_vertices(g, &layer.symbol(row), wireframe));
+        let s = layer.symbol(row);
+        let n = estimate_vertices(g, &s, wireframe);
+        estimate = estimate.saturating_add(n);
         if estimate > MAX_LAYER_VERTICES {
             return Err(TessError);
         }
+        features.push((*g, s, n));
     }
     if ext.is_empty() {
         return Ok(None);
     }
     let origin = [ext.center().x, ext.center().y];
     let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
-    for (row, g) in geoms.iter().enumerate() {
-        let Some(g) = g else { continue };
-        if rows.get(row) != Some(&true) || !visible(&g.extent()) {
-            continue;
-        }
-        let s = layer.symbol(row);
+    for (g, s, n) in &features {
         // The estimate is rough (sharp turns add join vertices): a feature that won't fit isn't
         // started, and `append_geometry` stops one that overflows after its first ring past it.
-        if v.len().saturating_add(estimate_vertices(g, &s, wireframe)) > MAX_LAYER_VERTICES {
+        if v.len().saturating_add(*n) > MAX_LAYER_VERTICES {
             return Err(TessError);
         }
-        append_geometry(&mut v, &mut i, &mut pts, g, &s, origin, wireframe, ppp, map_per_px)?;
+        append_geometry(&mut v, &mut i, &mut pts, g, s, origin, wireframe, ppp, map_per_px)?;
     }
     if !i.is_empty() {
         cmds.push(DrawCmd::Mesh { origin, vertices: v, indices: i });
