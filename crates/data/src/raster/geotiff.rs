@@ -2146,7 +2146,8 @@ mod tests {
     /// One image of [`ycbcr_jpeg_tiff`] to put at byte `base`: `w` × `h` (`w`, `h` and `rows` multiples
     /// of 16) of four flat colours, one per quarter, each strip of `rows` rows a JPEG, as GDAL writes
     /// a `COMPRESS=JPEG PHOTOMETRIC=YCBCR` file: JPEG compression, YCbCr photometric, chroma
-    /// subsampled 2×2. With `geo` it has the GeoTIFF tags, as `overview` the reduced-image flag.
+    /// subsampled 2×1 (as the `image` crate's encoder does; GDAL's 2×2 was checked by hand on a
+    /// GDAL-made file). With `geo` it has the GeoTIFF tags, as `overview` the reduced-image flag.
     /// Returns its bytes and where its next-IFD offset is.
     fn ycbcr_jpeg_image(base: usize, (w, h, rows): (u32, u32, u32), colors: [[u8; 3]; 4], geo: bool, overview: bool) -> (Vec<u8>, usize) {
         let strips: Vec<Vec<u8>> = (0..h / rows)
@@ -2181,7 +2182,7 @@ mod tests {
             (278, 3, 1, le16(&[rows as u16])),
             (279, 4, n, le32(&strips.iter().map(|s| s.len() as u32).collect::<Vec<_>>())),
             (284, 3, 1, le16(&[1])),
-            (530, 3, 2, le16(&[2, 2])),
+            (530, 3, 2, le16(&[2, 1])),
             // ReferenceBlackWhite, the JFIF values, as rationals.
             (532, 5, 6, le32(&[0, 1, 255, 1, 128, 1, 255, 1, 128, 1, 255, 1])),
         ]);
