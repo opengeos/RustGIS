@@ -1859,11 +1859,13 @@ mod tests {
     fn a_tools_key_is_offered_and_accepted() {
         use egui_kittest::kittest::Queryable;
         let mut h = pane();
-        type_in(&mut h, r#"gp.run {"tool": "buffer", ""#);
+        type_in(&mut h, r#"gp.run {"tool": "buffer", "#);
         let tool = super::tool_help(rustgis_engine::analysis::tool("buffer").unwrap());
         let sig = format!("{}{}", tool.id, tool.keys);
+        let run = super::help(&h.state().session, "gp.run").unwrap();
+        h.get_by_label(&format!("{}{}", run.id, run.keys));
         assert!(h.query_by_label(&sig).is_none(), "gp.run's help at the top level");
-        type_in(&mut h, r#"params": {"#);
+        type_in(&mut h, r#""params": {"#);
         h.get_by_label(&sig);
         type_in(&mut h, r#""di"#);
         h.get_by_role_and_label(egui::accesskit::Role::Button, "dissolve");
@@ -1900,7 +1902,8 @@ mod tests {
         assert_eq!((o.items.first().map(String::as_str), o.of), (Some("buffer"), Some(super::Of::ToolIds)));
         assert!(o.items.iter().all(|id| id.to_lowercase().starts_with("buf")));
         let all = offer(r#"gp.run {"tool": ""#).map(|o| o.items).unwrap_or_default();
-        assert_eq!(all.len(), rustgis_engine::analysis::tools().count(), "every tool, once");
+        let ids: std::collections::HashSet<&str> = rustgis_engine::analysis::tools().map(|t| t.id).collect();
+        assert_eq!(all.len(), ids.len(), "every tool, once");
         assert!(offer(r#"gp.run {"tool": "zzz"#).is_none());
         assert!(offer(r#"labels.style {"layer": ""#).is_none(), "another key's value");
         assert!(offer(r#"task.addStep {"tool": ""#).is_none(), "another command");
