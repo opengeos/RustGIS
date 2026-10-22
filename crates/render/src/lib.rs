@@ -5116,3 +5116,6 @@ mod tests {
 
 #[cfg(test)]
 mod stream_tests;
+
+#[cfg(test)]
+mod budget_tests;
