@@ -105,18 +105,20 @@ fn place(cursor: egui::Rect, size: egui::Vec2, screen: egui::Rect, min: f32) -> 
 /// size, the part scrolled out of view included, for `place` to choose a side next frame by what
 /// it holds, not by what last fit (it would stay on a side too short for it).
 fn popup(ui: &Ui, id: Id, corner: egui::Pos2, room: f32, content: impl FnOnce(&mut Ui)) -> (egui::Rect, egui::Vec2) {
-    let mut hidden = 0.0;
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(corner).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            // The area starts from its last size, so after a short list the scroll area would get
-            // only that room back, scrolling with room to spare: ask for the full height whenever
-            // it scrolls, as Command Search does (#255). Short content still shrinks it to fit.
-            let out = egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([true, true]).show(ui, content);
-            hidden = (out.content_size.y - out.inner_rect.height()).max(0.0);
-        });
+        egui::Frame::popup(ui.style())
+            .show(ui, |ui| {
+                // The area starts from its last size, so after a short list the scroll area would get
+                // only that room back, scrolling with room to spare: ask for the full height whenever
+                // it scrolls, as Command Search does (#255). Short content still shrinks it to fit.
+                let out =
+                    egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([true, true]).show(ui, content);
+                (out.content_size.y - out.inner_rect.height()).max(0.0)
+            })
+            .inner
     });
     let rect = area.response.rect;
-    (rect, rect.size() + egui::vec2(0.0, hidden))
+    (rect, rect.size() + egui::vec2(0.0, area.inner))
 }
 
 /// The ids in `ids` (the commands a script can run, `script_ids`) that complete `word`, typed
@@ -271,10 +273,9 @@ struct List {
     /// The offer Escape closed: not shown again until what's typed changes.
     dismissed: Option<Offer>,
     /// Where the list was drawn last frame: a press on it takes the focus from the box (a click
-    /// elsewhere), so the list stays while the pointer is on it, for the press to reach it.
-    rect: Option<egui::Rect>,
-    /// Its whole size last frame, scroll aside (`popup`): where it goes.
-    size: Option<egui::Vec2>,
+    /// elsewhere), so the list stays while the pointer is on it, for the press to reach it. And
+    /// its whole size, scroll aside (`popup`): where it goes.
+    drawn: Option<(egui::Rect, egui::Vec2)>,
     /// Whether the help follows the item under the pointer (it moved last) or the highlighted one
     /// (an arrow key moved it last): a pointer resting on the list mustn't hold the help while
     /// the arrows move the highlight.
@@ -412,13 +413,13 @@ pub fn show(
         if let Some((offer, _)) = list.open.take() {
             list.dismissed = Some(offer);
         }
-        list.rect = None;
-        list.size = None;
+        list.drawn = None;
         store(ui, box_id, list);
         return None;
     }
     // A press on the list: only then does it outlive the box's focus.
-    let on_list = list.rect.is_some_and(|r| ui.input(|i| i.pointer.any_down() && i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
+    let on_list =
+        list.drawn.is_some_and(|(r, _)| ui.input(|i| i.pointer.any_down() && i.pointer.hover_pos().is_some_and(|p| r.contains(p))));
     let offer = if out.response.response.has_focus() {
         // A cursor, not a selection: with text selected, Enter and Tab act on it as usual.
         let at = out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0);
@@ -445,8 +446,7 @@ pub fn show(
     // Closed with Escape: not again for the same word.
     if offer.is_some() && list.dismissed == offer {
         list.open = None;
-        list.rect = None;
-        list.size = None;
+        list.drawn = None;
         store(ui, box_id, list);
         return None;
     }
@@ -456,8 +456,7 @@ pub fn show(
     let cursor = offer.as_ref().map(|o| out.galley.pos_from_cursor(CCursor::new(o.end)).translate(out.galley_pos.to_vec2()));
     let (Some(offer), Some(cursor)) = (offer, cursor.filter(|c| visible.intersects(*c))) else {
         list.open = None;
-        list.rect = None;
-        list.size = None;
+        list.drawn = None;
         store(ui, box_id, list);
         return None;
     };
@@ -475,7 +474,7 @@ pub fn show(
     // sideways. Its size is last frame's (a long plugin id, another font), estimated only on the
     // first frame it shows.
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + ui.spacing().item_spacing.y + 4.0;
-    let size = list.size.unwrap_or(egui::vec2(MIN_WIDTH + 16.0, row * offer.items.len() as f32 + 12.0));
+    let size = list.drawn.map_or(egui::vec2(MIN_WIDTH + 16.0, row * offer.items.len() as f32 + 12.0), |(_, s)| s);
     let screen = ui.ctx().content_rect();
     let (corner, room) = place(cursor, size, screen, row * 3.0);
     // The help beside the list in the room the screen leaves, or under it when that's too narrow
@@ -523,12 +522,10 @@ pub fn show(
     });
     if clicked.is_some() {
         list.open = None;
-        list.rect = None;
-        list.size = None;
+        list.drawn = None;
     } else {
         list.open = Some((offer, selected));
-        list.rect = Some(area);
-        list.size = Some(size);
+        list.drawn = Some((area, size));
     }
     store(ui, box_id, list);
     clicked
@@ -1064,7 +1061,7 @@ mod tests {
         let items = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
         assert!(items.len() > 3, "a longer list: {items:?}");
         let list = h.ctx.data(|d| d.get_temp::<super::List>(egui::Id::new("script_text").with("complete"))).unwrap();
-        let shown = list.rect.unwrap();
+        let (shown, _) = list.drawn.unwrap();
         let last = h.get_by_role_and_label(egui::accesskit::Role::Button, items.last().unwrap()).rect();
         assert!(last.max.y <= shown.max.y, "every item in view, no scroll: {last:?} in {shown:?}");
     }
