@@ -367,10 +367,11 @@ mod tests {
         }
     }
 
-    /// A layer mixing a point, a TIN (how GDAL reads an Esri multipatch), a curved polygon and a
-    /// compound curve keeps all four: the surface and the curves were left out before.
+    /// A layer mixing a point, a TIN (how GDAL reads an Esri multipatch), a curved polygon, a
+    /// compound curve and a collection of a TIN and a polygon (a multipatch from a Shapefile)
+    /// keeps all five: the surfaces, the curves and the collection were left out before.
     #[test]
-    fn keeps_surfaces_and_curves_when_gdal_is_installed() {
+    fn keeps_surfaces_curves_and_collections_when_gdal_is_installed() {
         if !available() {
             return;
         }
@@ -383,7 +384,8 @@ mod tests {
              \"POINT (10 20)\",p\n\
              \"TIN Z (((0 0 1,1 0 1,0 1 2,0 0 1)),((1 0 1,1 1 2,0 1 2,1 0 1)))\",tin\n\
              \"CURVEPOLYGON (CIRCULARSTRING (0 0,1 1,2 0,1 -1,0 0))\",curved\n\
-             \"COMPOUNDCURVE ((0 0,1 0),CIRCULARSTRING (1 0,2 1,3 0))\",curve\n",
+             \"COMPOUNDCURVE ((0 0,1 0),CIRCULARSTRING (1 0,2 1,3 0))\",curve\n\
+             \"GEOMETRYCOLLECTION Z (TIN Z (((5 5 1,6 5 1,5 6 2,5 5 1))),POLYGON Z ((7 7 0,8 7 0,8 8 0,7 7 0)))\",patch\n",
         )
         .unwrap();
         let (out, failed) = convert_in(&dir.join("cache"), &csv, None, Some("EPSG:4326")).unwrap();
@@ -400,7 +402,7 @@ mod tests {
             vec![
                 ("mixed (points)".to_string(), GeometryType::Point, 1),
                 ("mixed (lines)".to_string(), GeometryType::Polyline, 1),
-                ("mixed (polygons)".to_string(), GeometryType::Polygon, 2),
+                ("mixed (polygons)".to_string(), GeometryType::Polygon, 3),
             ],
             "{kinds:?}"
         );

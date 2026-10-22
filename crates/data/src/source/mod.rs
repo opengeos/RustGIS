@@ -62,13 +62,15 @@ impl Family {
     }
 
     /// An OGR SQL filter on the geometry type. Curves and surfaces count as lines and polygons:
-    /// an Esri multipatch, read as a TIN or a polyhedral surface, is polygons.
+    /// an Esri multipatch, read as a TIN, a polyhedral surface or (from a Shapefile) a geometry
+    /// collection of them, is polygons. A collection of anything else fails the conversion to
+    /// polygons and is left out, as before.
     pub fn filter(self) -> &'static str {
         match self {
             Family::Points => "OGR_GEOMETRY IN ('POINT', 'MULTIPOINT')",
             Family::Lines => "OGR_GEOMETRY IN ('LINESTRING', 'MULTILINESTRING', 'CIRCULARSTRING', 'COMPOUNDCURVE', 'MULTICURVE')",
             Family::Polygons => {
-                "OGR_GEOMETRY IN ('POLYGON', 'MULTIPOLYGON', 'CURVEPOLYGON', 'MULTISURFACE', 'TRIANGLE', 'TIN', 'POLYHEDRALSURFACE')"
+                "OGR_GEOMETRY IN ('POLYGON', 'MULTIPOLYGON', 'CURVEPOLYGON', 'MULTISURFACE', 'TRIANGLE', 'TIN', 'POLYHEDRALSURFACE', 'GEOMETRYCOLLECTION')"
             }
         }
     }
