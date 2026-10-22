@@ -2951,8 +2951,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             if let Some(source) = &mut layer.source {
                 source.error = None;
             }
-        } else {
-            draw_chunk(layer).ok()?;
+        } else if let Err(e) = draw_chunk(layer) {
+            log::warn!("cannot render layer '{}': {e}", layer.name);
+            return None;
         }
         if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion)
             && let Err(e) = spool.draw(if direct { &mut pm } else { &mut target }, &ctx, x)
