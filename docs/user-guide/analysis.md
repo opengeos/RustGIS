@@ -234,7 +234,9 @@ Accepting a command on a line of its own adds its braces: with its required keys
 values, the cursor at the first (`map.goToXY {"lon": , "lat": }`), or empty with the cursor inside
 when every key may be left out; a command with no parameters gets none, and a line that has
 parameters keeps them. While you type a command's parameters (the cursor inside its `{…}`), the same help stays by the cursor;
-Escape closes it.
+Escape closes it. A `{` typed closes itself, the cursor inside, unless text follows it or it's in a
+string or a comment; a `}` typed before a `}` steps over it, and Backspace in an empty `{}` deletes
+both. Pasting adds nothing.
 
 ## ModelBuilder
 
