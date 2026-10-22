@@ -2143,10 +2143,12 @@ mod tests {
         }
     }
 
-    /// A `w` × `h` TIFF (`w`, `h` and `rows` multiples of 16) of four flat colours, one per quarter,
-    /// each strip of `rows` rows a JPEG, as GDAL writes a `COMPRESS=JPEG PHOTOMETRIC=YCBCR` file:
-    /// JPEG compression, YCbCr photometric, chroma subsampled 2×2. With `geo` it is a GeoTIFF.
-    fn ycbcr_jpeg_tiff(w: u32, h: u32, rows: u32, colors: [[u8; 3]; 4], geo: bool) -> Vec<u8> {
+    /// One image of [`ycbcr_jpeg_tiff`] to put at byte `base`: `w` × `h` (`w`, `h` and `rows` multiples
+    /// of 16) of four flat colours, one per quarter, each strip of `rows` rows a JPEG, as GDAL writes
+    /// a `COMPRESS=JPEG PHOTOMETRIC=YCBCR` file: JPEG compression, YCbCr photometric, chroma
+    /// subsampled 2×2. With `geo` it has the GeoTIFF tags, as `overview` the reduced-image flag.
+    /// Returns its bytes and where its next-IFD offset is.
+    fn ycbcr_jpeg_image(base: usize, (w, h, rows): (u32, u32, u32), colors: [[u8; 3]; 4], geo: bool, overview: bool) -> (Vec<u8>, usize) {
         let strips: Vec<Vec<u8>> = (0..h / rows)
             .map(|s| {
                 let mut rgb = image::RgbImage::new(w, rows);
@@ -2164,7 +2166,11 @@ mod tests {
         let le64 = |v: &[f64]| v.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
         // (tag, type, count, bytes): values of up to four bytes go in the entry, longer ones after
         // the entries (the strip offsets are filled in once the entries' size is known).
-        let mut entries: Vec<(u16, u16, u32, Vec<u8>)> = vec![
+        let mut entries: Vec<(u16, u16, u32, Vec<u8>)> = Vec::new();
+        if overview {
+            entries.push((254, 4, 1, le32(&[1])));
+        }
+        entries.extend([
             (256, 3, 1, le16(&[w as u16])),
             (257, 3, 1, le16(&[h as u16])),
             (258, 3, 3, le16(&[8, 8, 8])),
@@ -2176,13 +2182,15 @@ mod tests {
             (279, 4, n, le32(&strips.iter().map(|s| s.len() as u32).collect::<Vec<_>>())),
             (284, 3, 1, le16(&[1])),
             (530, 3, 2, le16(&[2, 2])),
-        ];
+            // ReferenceBlackWhite, the JFIF values, as rationals.
+            (532, 5, 6, le32(&[0, 1, 255, 1, 128, 1, 255, 1, 128, 1, 255, 1])),
+        ]);
         if geo {
             entries.push((33550, 12, 3, le64(&[1.0, 1.0, 0.0])));
             entries.push((33922, 12, 6, le64(&[0.0, 0.0, 0.0, 500_000.0, 5_000_000.0, 0.0])));
             entries.push((34735, 3, 16, le16(&[1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 25832])));
         }
-        let table_end = 8 + 2 + 12 * entries.len() + 4;
+        let table_end = base + 2 + 12 * entries.len() + 4;
         let long: usize = entries.iter().filter(|e| e.3.len() > 4).map(|e| e.3.len()).sum();
         let mut at = table_end;
         let mut strip_at = (table_end + long) as u32;
@@ -2204,12 +2212,29 @@ mod tests {
                 table.extend(bytes);
             }
         }
-        let mut out = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
-        out.extend((entries.len() as u16).to_le_bytes());
+        let mut out = (entries.len() as u16).to_le_bytes().to_vec();
         out.extend(table);
+        let next = 2 + 12 * entries.len();
         out.extend(0u32.to_le_bytes());
         out.extend(data);
         out.extend(strips.concat());
+        (out, next)
+    }
+
+    /// A TIFF of [`ycbcr_jpeg_image`]s: the full image with its GeoTIFF tags (unless `!geo`), then
+    /// any overviews.
+    fn ycbcr_jpeg_tiff(sizes: &[(u32, u32, u32)], colors: [[u8; 3]; 4], geo: bool) -> Vec<u8> {
+        let mut out = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+        let mut next_at = None;
+        for (i, size) in sizes.iter().enumerate() {
+            let base = out.len();
+            if let Some(at) = next_at {
+                out[at..at + 4].copy_from_slice(&(base as u32).to_le_bytes());
+            }
+            let (bytes, next) = ycbcr_jpeg_image(base, *size, colors, geo && i == 0, i > 0);
+            next_at = Some(base + next);
+            out.extend(bytes);
+        }
         out
     }
 
@@ -2228,17 +2253,22 @@ mod tests {
                 }
             }
         };
-        let bytes = ycbcr_jpeg_tiff(32, 32, 32, colors, true);
+        let bytes = ycbcr_jpeg_tiff(&[(32, 32, 32)], colors, true);
         let mut dec = Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
         assert!(matches!(dec.colortype().unwrap(), ColorType::YCbCr(8)));
         check(&read(std::io::Cursor::new(&bytes), "ycc").unwrap(), 32, 32);
         // Without geo tags (a scan), which returns before the georeferencing.
-        let scan = read(std::io::Cursor::new(ycbcr_jpeg_tiff(32, 32, 32, colors, false)), "scan").unwrap();
+        let scan = read(std::io::Cursor::new(ycbcr_jpeg_tiff(&[(32, 32, 32)], colors, false)), "scan").unwrap();
         assert!(!scan.georeferenced);
         check(&scan, 32, 32);
         // A million pixels in 16 strips, read a chunk at a time on several threads.
-        let big = ycbcr_jpeg_tiff(1024, 1024, 64, colors, true);
+        let big = ycbcr_jpeg_tiff(&[(1024, 1024, 64)], colors, true);
         check(&read_threaded(&big, MAX_SAMPLES).unwrap(), 1024, 1024);
+        // An image too large for the limit is shown by its overview, a JPEG of its own.
+        let cog = ycbcr_jpeg_tiff(&[(64, 64, 64), (32, 32, 32)], colors, true);
+        let r = read_limited(reader(std::io::Cursor::new(&cog)).unwrap(), "cog", 4_000, None).unwrap();
+        assert_eq!(r.overview, Some((64, 64)));
+        check(&r, 32, 32);
     }
 
     #[test]
