@@ -466,7 +466,7 @@ fn a_table_with_missing_files_is_said() {
     assert_eq!(read.layers.len(), 1);
     assert_eq!(read.unread.len(), 1, "{:?}", read.unread);
     assert_eq!(read.unread[0].0, "Gone");
-    assert!(read.unread[0].1.contains("missing"), "{:?}", read.unread);
+    assert_eq!(read.unread[0].1, "its file a00000003.gdbtablx is missing");
 }
 
 /// A feature whose coordinates its coordinate system can't place keeps its row, and is said.
