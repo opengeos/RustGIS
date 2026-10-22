@@ -944,7 +944,8 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
     }
     // From here on, tags (colour type, planar layout) are those of the chosen image.
     let ct = dec.colortype().map_err(err)?;
-    let ycbcr = matches!(ct, ColorType::YCbCr(_));
+    // JPEG-compressed YCbCr, the only YCbCr read (the colour match below rejects the rest).
+    let ycbcr = matches!(ct, ColorType::YCbCr(_)) && dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7);
     // A palette image (shown to the decoder as grey) is coloured by its table.
     let ct = match ct {
         ColorType::Gray(bits) if palette && dec.find_tag(Tag::ColorMap).ok().flatten().is_some() => ColorType::Palette(bits),
@@ -956,9 +957,7 @@ pub(super) fn read_limited(r: Reader<'_>, name: &str, max: usize, open: Option<O
         ColorType::RGB(_) => (3, ColorHint::Rgb { alpha: false }),
         // The decoder leaves JPEG-compressed YCbCr as it is (it turns off the JPEG library's colour
         // conversion), so it is turned into RGB below (issue #692); other YCbCr data isn't read.
-        ColorType::YCbCr(_) if dec.find_tag_unsigned::<u16>(Tag::Compression).ok().flatten() == Some(7) => {
-            (3, ColorHint::Rgb { alpha: false })
-        }
+        ColorType::YCbCr(_) if ycbcr => (3, ColorHint::Rgb { alpha: false }),
         ColorType::RGBA(_) => (4, ColorHint::Rgb { alpha: true }),
         ColorType::Palette(bits) => {
             let map: Vec<u16> = dec.find_tag(Tag::ColorMap).ok().flatten().and_then(|v| v.into_u16_vec().ok()).unwrap_or_default();
