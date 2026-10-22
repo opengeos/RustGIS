@@ -747,41 +747,39 @@ fn row_offsets(x: &[u8]) -> Result<Vec<(u64, usize)>> {
         }
         _ => return Err(DataError::Unsupported(format!("row index version {version}"))),
     };
-    let total = match bitmap {
-        None => total.min(stored),
-        Some(_) => total,
+    // Block by block (1024 rows each): a block the bitmap leaves out is passed over whole, and no
+    // more blocks are looked at than are stored or the bitmap has bits for, whatever the row count
+    // in the header says.
+    let in_blocks = match bitmap {
+        None => total.min(stored).div_ceil(1024),
+        Some(bits) => total.div_ceil(1024).min(bits.len().saturating_mul(8)),
     };
     let mut out = Vec::new();
-    let mut present_before = 0usize;
-    let mut block_present = false;
-    for row in 0..total {
-        let block = row / 1024;
-        let slot = match bitmap {
-            None => row,
-            Some(bits) => {
-                if row % 1024 == 0 {
-                    block_present = bits.get(block / 8).is_some_and(|b| b >> (block % 8) & 1 == 1);
-                    if row > 0 && bits.get((block - 1) / 8).is_some_and(|b| b >> ((block - 1) % 8) & 1 == 1) {
-                        present_before += 1;
-                    }
-                }
-                if !block_present {
-                    continue;
-                }
-                present_before * 1024 + row % 1024
-            }
-        };
-        if slot >= stored {
-            break;
-        }
-        let at = 16 + slot * width;
-        let Some(bytes) = x.get(at..at + width) else { break };
-        let offset = bytes.iter().rev().fold(0u64, |v, &b| v << 8 | u64::from(b));
-        if offset == 0 {
+    let mut stored_before = 0usize;
+    for block in 0..in_blocks {
+        let present = bitmap.is_none_or(|bits| bits.get(block / 8).is_some_and(|b| b >> (block % 8) & 1 == 1));
+        if !present {
             continue;
         }
-        if let Ok(offset) = usize::try_from(offset) {
-            out.push((row as u64 + 1, offset));
+        if stored_before >= blocks {
+            break;
+        }
+        let first = stored_before * 1024;
+        stored_before += 1;
+        for k in 0..1024 {
+            let row = block * 1024 + k;
+            if row >= total {
+                break;
+            }
+            let at = 16 + (first + k) * width;
+            let Some(bytes) = x.get(at..at + width) else { break };
+            let offset = bytes.iter().rev().fold(0u64, |v, &b| v << 8 | u64::from(b));
+            if offset == 0 {
+                continue;
+            }
+            if let Ok(offset) = usize::try_from(offset) {
+                out.push((row as u64 + 1, offset));
+            }
         }
     }
     Ok(out)
@@ -953,29 +951,32 @@ fn signed_area(ring: &[Coord]) -> f64 {
 /// A point with its height.
 type P3 = [f64; 3];
 
-/// A multipatch's footprint: the union of its faces seen from above. Faces standing on edge, such
-/// as walls, show nothing and are left out; when none shows, the footprint is the hull of its
-/// points. The flag says it is a hull.
-fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
-    use geo::{ConvexHull, Orient, orient::Direction};
-    // Each face: its outer ring, then its holes.
+/// A multipatch's faces, each its outer ring and then its holes: triangles from strips, fans and
+/// triangle lists, and rings. At most [`MAX_FACES`].
+fn faces(parts: &[Vec<P3>], kinds: &[u64]) -> Vec<Vec<Vec<P3>>> {
     let mut faces: Vec<Vec<Vec<P3>>> = Vec::new();
     for (part, &kind) in parts.iter().zip(kinds) {
-        if faces.len() >= MAX_FACES {
+        // Faces past the cap are left out, within a part too (one strip can hold millions).
+        let room = MAX_FACES.saturating_sub(faces.len());
+        if room == 0 {
             break;
         }
         match kind {
             // Triangle strip, fan, triangles.
-            0 => faces.extend(part.windows(3).map(|w| vec![w.to_vec()])),
+            0 => faces.extend(part.windows(3).take(room).map(|w| vec![w.to_vec()])),
             1 => {
                 if let Some((first, rest)) = part.split_first() {
-                    faces.extend(rest.windows(2).filter_map(|w| match w {
-                        [a, b] => Some(vec![vec![*first, *a, *b]]),
-                        _ => None,
-                    }));
+                    faces.extend(
+                        rest.windows(2)
+                            .filter_map(|w| match w {
+                                [a, b] => Some(vec![vec![*first, *a, *b]]),
+                                _ => None,
+                            })
+                            .take(room),
+                    );
                 }
             }
-            6 => faces.extend(part.as_chunks::<3>().0.iter().map(|w| vec![w.to_vec()])),
+            6 => faces.extend(part.as_chunks::<3>().0.iter().take(room).map(|w| vec![w.to_vec()])),
             // An inner ring is a hole in the face before.
             3 => match faces.last_mut() {
                 Some(face) => face.push(part.clone()),
@@ -985,6 +986,15 @@ fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
             _ => faces.push(vec![part.clone()]),
         }
     }
+    faces
+}
+
+/// A multipatch's footprint: the union of its faces seen from above. Faces standing on edge, such
+/// as walls, show nothing and are left out; when none shows, the footprint is the hull of its
+/// points. The flag says it is a hull.
+fn footprint(parts: &[Vec<P3>], kinds: &[u64]) -> (Option<Geometry>, bool) {
+    use geo::{ConvexHull, Orient, orient::Direction};
+    let faces = faces(parts, kinds);
     let all = || parts.iter().flatten();
     let (x0, x1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[0]), b.max(p[0])));
     let (y0, y1) = all().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p[1]), b.max(p[1])));

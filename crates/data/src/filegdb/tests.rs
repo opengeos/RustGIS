@@ -358,6 +358,36 @@ fn row_index_with_left_out_blocks() {
     assert!(matches!(row_offsets(&x), Err(DataError::Unsupported(_))));
 }
 
+/// A row index claiming billions of rows in blocks its bitmap leaves out is passed over block by
+/// block, not row by row (it hung before).
+#[test]
+fn a_huge_row_count_with_absent_blocks_is_quick() {
+    let mut x = Vec::new();
+    for v in [3i32, 0, i32::MAX, 4] {
+        x.extend(v.to_le_bytes());
+    }
+    for v in [1i32, (i32::MAX / 1024) + 1, 0, 1] {
+        x.extend(v.to_le_bytes());
+    }
+    x.extend(0u32.to_le_bytes());
+    let start = std::time::Instant::now();
+    assert_eq!(row_offsets(&x).unwrap(), Vec::new());
+    assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+}
+
+/// One strip of a million points makes no more faces than the cap (each is an allocation).
+#[test]
+fn a_huge_strip_stops_at_the_face_cap() {
+    let strip: Vec<P3> = (0..1_000_000).map(|i| [f64::from(i), f64::from(i % 2), 0.0]).collect();
+    let n = strip.len();
+    assert_eq!(faces(std::slice::from_ref(&strip), &[0]).len(), MAX_FACES);
+    assert_eq!(faces(std::slice::from_ref(&strip), &[1]).len(), MAX_FACES);
+    assert_eq!(faces(std::slice::from_ref(&strip), &[6]).len(), MAX_FACES);
+    // Later parts get only the room left.
+    assert_eq!(faces(&[strip[..10].to_vec(), strip], &[0, 0]).len(), MAX_FACES);
+    assert!(n / 3 > MAX_FACES);
+}
+
 #[test]
 fn compressed_tables_and_unknown_files_are_said() {
     let (t, x) = table(
