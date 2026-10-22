@@ -94,7 +94,7 @@ pub const VN2000_PROVINCES: &[Vn2000Province] = &[
     Vn2000Province { name: "Hà Tĩnh", lon_0: 105.5, id: "hatinh", aliases: &[] },
     Vn2000Province { name: "Hải Dương", lon_0: 105.5, id: "haiduong", aliases: &[] },
     Vn2000Province { name: "Hải Phòng", lon_0: 105.75, id: "haiphong", aliases: &[] },
-    Vn2000Province { name: "Hậu Giang", lon_0: 105.0, id: "haugiang", aliases: &["vitri"] },
+    Vn2000Province { name: "Hậu Giang", lon_0: 105.0, id: "haugiang", aliases: &["vithanh", "vitri"] },
     Vn2000Province { name: "Hòa Bình", lon_0: 106.0, id: "hoabinh", aliases: &[] },
     Vn2000Province { name: "Hưng Yên", lon_0: 105.5, id: "hungyen", aliases: &[] },
     Vn2000Province { name: "Khánh Hòa", lon_0: 108.25, id: "khanhhoa", aliases: &["nhatrang"] },
@@ -1448,6 +1448,10 @@ mod tests {
         assert_eq!(parse_preset("hanoi"), Ok(None));
         assert!(parse_preset("vn2000:hanoi +lon_0=106").is_err(), "a province takes no parameters");
         assert_eq!(lookup("vn2000:tphcm").unwrap().1, "VN-2000 / TM-3 (Vietnam) (lon_0=105.75)");
+        assert_eq!(resolve_vn2000_province("vithanh"), Some(105.0));
+        assert_eq!(resolve_vn2000_province("vitri"), Some(105.0));
+        assert_eq!(parse_preset("vn2000:vithanh"), Ok(Some(("vn2000tm3", vec![]))));
+        assert_eq!(parse_preset("vn2000:vitri"), Ok(Some(("vn2000tm3", vec![]))));
 
         // All UI shortcut hubs are canonical entries with matching central meridians
         for &(ui_name, ui_lon) in VN2000_UI_PROVINCES {

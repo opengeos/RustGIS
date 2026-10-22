@@ -1502,6 +1502,8 @@ mod tests {
             ("vn2000:Hà Nội", "vn2000tm3"),
             ("VN2000/Đà Nẵng", "vn2000tm3 +lon_0=107.75"),
             ("vn2000:tphcm", "vn2000tm3 +lon_0=105.75"),
+            ("vn2000:vithanh", "vn2000tm3"),
+            ("vn2000:vitri", "vn2000tm3"),
         ] {
             app.dialogs.a = name.into();
             app.dialogs.text = typed_crs(&app.dialogs.a);
@@ -1511,7 +1513,7 @@ mod tests {
         }
         // A bare province name is not a coordinate system: words such as "hue" stay as typed,
         // as `map.projection` reads them.
-        for name in ["hanoi", "Hà Nội", "hue", "vinh", "tphcm"] {
+        for name in ["hanoi", "Hà Nội", "hue", "vinh", "tphcm", "vithanh", "vitri", "vietnam"] {
             assert_eq!(typed_crs(name), name);
             assert!(rustgis_engine::map::Projection::from_code(name).is_err(), "{name}");
         }

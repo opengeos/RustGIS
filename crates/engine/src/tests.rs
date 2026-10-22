@@ -843,6 +843,50 @@ fn projection_presets_take_parameters() {
 }
 
 #[test]
+fn vn2000_projection_command_and_project_persistence() {
+    let mut s = world();
+    // Explicit prefixed province syntax works and canonicalizes to the preset
+    s.run("map.projection", &json!({"type": "vn2000:danang"})).unwrap();
+    assert_eq!(s.map().projection.code(), "vn2000tm3 +lon_0=107.75");
+    assert_eq!(s.map().projection.label(), "VN-2000 / TM-3 (Vietnam) (lon_0=107.75)");
+
+    // Capital Hanoi on central meridian 105.0 drops redundant parameter
+    s.run("map.projection", &json!({"type": "vn2000:hanoi"})).unwrap();
+    assert_eq!(s.map().projection.code(), "vn2000tm3");
+    assert_eq!(s.map().projection.label(), "VN-2000 / TM-3 (Vietnam)");
+
+    // UTM zones work
+    s.run("map.projection", &json!({"type": "vn2000Utm48"})).unwrap();
+    assert_eq!(s.map().projection.code(), "vn2000Utm48");
+    assert_eq!(s.map().projection.label(), "VN-2000 / UTM zone 48N");
+
+    s.run("map.projection", &json!({"type": "vn2000Utm49"})).unwrap();
+    assert_eq!(s.map().projection.code(), "vn2000Utm49");
+    assert_eq!(s.map().projection.label(), "VN-2000 / UTM zone 49N");
+
+    // Bare province names and "vietnam" are rejected in strict command context
+    for bare in ["danang", "vinh", "hanoi", "hue", "hcm", "vietnam"] {
+        assert!(s.run("map.projection", &json!({"type": bare})).is_err(), "{bare}");
+    }
+    // Ambiguous bare VN-2000 is rejected
+    for bare in ["vn2000", "VN-2000", "VN2000"] {
+        let err = s.run("map.projection", &json!({"type": bare})).unwrap_err();
+        assert!(err.contains("ambiguous"), "{bare}: {err}");
+    }
+
+    // Set a provincial TM-3 projection and verify project save and reload
+    s.run("map.projection", &json!({"type": "VN-2000 / Đà Nẵng"})).unwrap();
+    assert_eq!(s.map().projection.code(), "vn2000tm3 +lon_0=107.75");
+    let text = serde_json::to_string(&s.project).unwrap();
+
+    // Reload project from serialized JSON text
+    let mut s2 = world();
+    s2.run("project.openText", &json!({"text": text})).unwrap();
+    assert_eq!(s2.map().projection.code(), "vn2000tm3 +lon_0=107.75");
+    assert_eq!(s2.map().projection.label(), "VN-2000 / TM-3 (Vietnam) (lon_0=107.75)");
+}
+
+#[test]
 fn custom_projections_switch_keep_scale_query_and_render() {
     let mut s = with_raster();
     s.run("map.goToXY", &json!({"lon": 10.0, "lat": 50.0, "scale": 5_000_000})).unwrap();
