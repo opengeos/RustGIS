@@ -22,6 +22,18 @@ pub const MAX_LAT: f64 = 85.051_128_78;
 /// Screen pixel size assumed when converting resolution to a map scale (0.28 mm, OGC).
 pub const PIXEL_M: f64 = 0.000_28;
 
+/// Metres per unit for a lowercase distance unit name. Callers choose defaults and normalize input.
+/// Feet are international feet, not US survey feet.
+pub fn distance_unit_metres(unit: &str) -> Option<f64> {
+    match unit {
+        "meters" => Some(1.0),
+        "feet" => Some(0.3048),
+        "kilometers" => Some(1000.0),
+        "miles" => Some(1609.344),
+        _ => None,
+    }
+}
+
 /// A 2-D coordinate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Coord {

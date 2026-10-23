@@ -491,6 +491,14 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 app.map.cancel_sketch();
                 ui.close();
             }
+            ui.separator();
+            ui.label(tl!("Measurement units"));
+            for (imperial, units, label) in [(false, "metric", "Metric"), (true, "imperial", "Imperial")] {
+                if ui.radio(app.ui.measurement_imperial == imperial, tl!(label)).clicked() {
+                    let _ = app.run("ui.measurementUnits", json!({"units": units}));
+                    ui.close();
+                }
+            }
         });
         col(ui, |ui| {
             small(ui, app, "locate", "Locate", "Find a place by coordinates.", "ui.dialog", json!({"name": "goToXY"}), false);

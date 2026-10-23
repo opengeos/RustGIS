@@ -641,6 +641,7 @@ pub(crate) const UI_COMMANDS: &[(&str, &str, &str)] = &[
     ("ui.pane.bookmarks", "Bookmarks Pane", "Home › Navigate › Bookmarks"),
     ("ui.theme", "Toggle Dark Mode", "View"),
     ("ui.map.gpu", "Toggle GPU Rendering", "View"),
+    ("ui.measurementUnits", "Toggle Imperial Measurements", "Home › Inspect › Measure"),
     ("ui.exportMap", "Export Map…", "Publish › Output"),
     ("ui.checkUpdate", "Check for Updates…", "Help › Help"),
 ];

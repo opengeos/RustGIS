@@ -14,6 +14,8 @@ use crate::theme::{Tokens, semibold};
 pub struct Forms {
     pub dx: String,
     pub dy: String,
+    /// Units for Move and constant elevation; empty keeps the metre default.
+    pub distance_units: String,
     pub angle: String,
     pub factor: String,
     pub template: String,
@@ -111,6 +113,17 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
 
+    ui.horizontal(|ui| {
+        ui.label(tl!("Distance units"));
+        let label = if app.forms.distance_units.is_empty() { "Meters" } else { &app.forms.distance_units };
+        egui::ComboBox::from_id_salt("editing_distance_units").selected_text(tl!(label)).show_ui(ui, |ui| {
+            for unit in ["Meters", "Feet", "Kilometers", "Miles"] {
+                ui.selectable_value(&mut app.forms.distance_units, unit.to_string(), tl!(unit));
+            }
+        });
+    });
+    let units = app.forms.distance_units.clone();
+
     heading(ui, "Modify Selected Features");
     // Texts alone (#516): of these tools only Move applies to them (the others turn, scale or cut
     // shapes, and a text is a point); they are formatted in the Format pane.
@@ -120,15 +133,15 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     let not_for_texts = tl!("Not for texts: a text is edited in the Format pane.");
     egui::Grid::new("modify").num_columns(3).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Move (m)"));
+        ui.label(tl!("Move"));
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut app.forms.dx).hint_text("east").desired_width(52.0));
-            ui.add(egui::TextEdit::singleline(&mut app.forms.dy).hint_text("north").desired_width(52.0));
+            ui.add(egui::TextEdit::singleline(&mut app.forms.dx).hint_text(tl!("east")).desired_width(52.0));
+            ui.add(egui::TextEdit::singleline(&mut app.forms.dy).hint_text(tl!("north")).desired_width(52.0));
         });
         if ui.button(tl!("Move")).clicked() {
             let (tx, ty) = (app.forms.dx.clone(), app.forms.dy.clone());
             if let (Some(dx), Some(dy)) = (number(app, &tx, "East"), number(app, &ty, "North")) {
-                run(app, "edit.move", json!({"dx": dx, "dy": dy}));
+                run(app, "edit.move", json!({"dx": dx, "dy": dy, "units": units}));
             }
         }
         ui.end_row();
@@ -243,10 +256,10 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if ui.radio(mode == "constant", tl!("Constant")).clicked() {
             let t = app.forms.z.clone();
             if let Some(z) = number(app, &t, "Elevation") {
-                run(app, "edit.elevation", json!({"mode": "constant", "z": z}));
+                run(app, "edit.elevation", json!({"mode": "constant", "z": z, "units": units}));
             }
         }
-        ui.add(egui::TextEdit::singleline(&mut app.forms.z).hint_text("z (m)").desired_width(60.0));
+        ui.add(egui::TextEdit::singleline(&mut app.forms.z).hint_text(tl!("z")).desired_width(60.0));
         for r in &rasters {
             let on = matches!(&settings.elevation, Elevation::Surface(n) if n == r);
             if ui.radio(on, crate::i18n::fmt("Surface: {layer}", &[("layer", r)])).clicked() {

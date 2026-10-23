@@ -41,6 +41,7 @@ mod localagents;
 mod mapgpu;
 mod mapmenu;
 mod mapview;
+mod measure_units;
 mod modelbuilder;
 mod navui;
 mod nldiui;
@@ -441,6 +442,8 @@ pub struct UiState {
     /// `panes::web_data_name`).
     pub web_data: &'static str,
     pub dark: bool,
+    /// Live measurement and map scale-bar units, chosen in Home › Measure.
+    pub measurement_imperial: bool,
     /// The theme follows the system's light or dark setting until the user picks one.
     pub dark_follows_system: bool,
     /// Interface language preference: a language code or `auto`.
@@ -628,6 +631,7 @@ impl Default for UiState {
             right_open: Vec::new(),
             web_data: "opendata",
             dark: false,
+            measurement_imperial: false,
             dark_follows_system: true,
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
@@ -906,6 +910,8 @@ impl RustGisApp {
             self.session.raster_defaults = d.sanitized();
         }
         self.ui.raster_defaults_saved = self.session.raster_defaults.clone();
+        self.ui.measurement_imperial =
+            self.services.load_pref.as_ref().and_then(|load| load("measurement_units")).as_deref() == Some("imperial");
         // The GPU map backend: RUSTGIS_GPU forces it on, else the saved preference.
         self.map.gpu_enabled = std::env::var_os("RUSTGIS_GPU").is_some()
             || self.services.load_pref.as_ref().and_then(|load| load("ui.map.gpu")).as_deref() == Some("1");
@@ -1816,6 +1822,18 @@ impl RustGisApp {
             "ui.theme" => {
                 self.ui.dark = p.get("dark").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
                 self.ui.dark_follows_system = false;
+            }
+            "ui.measurementUnits" => {
+                let imperial = match p.get("units") {
+                    None => !self.ui.measurement_imperial,
+                    Some(Value::String(v)) if v.eq_ignore_ascii_case("metric") => false,
+                    Some(Value::String(v)) if v.eq_ignore_ascii_case("imperial") => true,
+                    _ => return Err(tl!("Measurement units must be metric or imperial").into()),
+                };
+                self.ui.measurement_imperial = imperial;
+                if let Some(save) = &self.services.save_pref {
+                    save("measurement_units", if imperial { "imperial" } else { "metric" });
+                }
             }
             "ui.map.gpu" => {
                 self.map.gpu_enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.gpu_enabled);

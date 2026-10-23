@@ -18,7 +18,14 @@ pub fn properties(kind: GeometryType) -> &'static [(&'static str, &'static str)]
 /// The units `property` can be calculated in, as `(key, label)` pairs.
 pub fn units(property: &str) -> &'static [(&'static str, &'static str)] {
     match property {
-        "area" => &[("m2", "Square metres"), ("km2", "Square kilometres"), ("ha", "Hectares"), ("ac", "Acres")],
+        "area" => &[
+            ("m2", "Square metres"),
+            ("km2", "Square kilometres"),
+            ("ha", "Hectares"),
+            ("ac", "Acres"),
+            ("ft2", "Square feet"),
+            ("mi2", "Square miles"),
+        ],
         "length" | "perimeter" => &[("m", "Metres"), ("km", "Kilometres"), ("ft", "Feet"), ("mi", "Miles")],
         "x" | "y" => &[("deg", "Degrees (WGS84)"), ("projected", "Projected CRS units")],
         _ => &[],
@@ -102,6 +109,8 @@ pub fn run(s: &mut Session, p: &Json) -> CmdResult {
         "ft" => 0.3048,
         "mi" => 1609.344,
         "km2" => 1e6,
+        "ft2" => 0.09290304,
+        "mi2" => 2_589_988.110336,
         "ha" => 1e4,
         "ac" => 4046.8564224,
         _ => 1.0,
