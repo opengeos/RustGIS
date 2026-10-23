@@ -1160,45 +1160,38 @@ fn closer(open: char) -> Option<char> {
 /// The script once the box's edit is followed through, the edit read from `script` as the box
 /// left it, what was there `before`, and the cursor `now` (a char index): a `{` or `[` typed
 /// closes itself (`{|}`, `[|]`) when nothing, a space or a closing `}`, `]` or `,` follows it; a
-/// `"` too (`"|"`), before a `:` as well, unless it follows a word or another quote; a `}` or `]`
-/// typed right before the same one steps over it rather than add one, and so does a `"` typed
-/// before the quote that ends the string it's in; Backspace in an empty `{|}`, `[|]` or `"|"`
-/// deletes both. Not in a string (but for that quote) or a comment line, and only for the keys
-/// that make those edits (`keyed`): an undo can bring a `{` back as typing one would. The cursor
-/// stays where the box put it in each case. None to leave the edit as it is.
+/// `"` too (`"|"`), when it also comes where a string can start (a line's start, a space, `{`,
+/// `[`, `,` or `:`); a `}` or `]` typed right before the same one steps over it rather than add
+/// one, and so does a `"` that ends a string; Backspace in an empty `{|}`, `[|]` or `"|"` deletes
+/// both. Not in a string or a comment line, and only for the keys that make those edits
+/// (`keyed`): an undo can bring a `{` back as typing one would. The cursor stays where the box put
+/// it in each case. None to leave the edit as it is.
 fn brace(script: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> {
     let Before { at, prev, len } = before;
-    // The line up to char `i`, unless it's a comment line.
-    let line = |i: usize| {
-        let line = byte_at(script, i).and_then(|b| script.get(..b)).map(|b| b.rsplit('\n').next().unwrap_or_default());
-        line.filter(|l| !l.trim_start().starts_with('#'))
-    };
     // Outside a comment line and a string, up to char `i`.
-    let plain = |i: usize| line(i).is_some_and(|l| !in_string(l));
+    let plain = |i: usize| {
+        let line = byte_at(script, i).and_then(|b| script.get(..b)).map(|b| b.rsplit('\n').next().unwrap_or_default());
+        line.is_some_and(|l| !l.trim_start().starts_with('#') && !in_string(l))
+    };
     let (typed, next) = (char_at(script, at), char_at(script, now));
     let typed_one = keyed == Keyed::Pair && script.len() == len + 1 && now == at + 1;
-    let one_typed = typed_one && plain(at);
     let one_deleted = keyed == Keyed::Backspace && script.len() + 1 == len && now + 1 == at && plain(now);
     let cut = byte_at(script, if one_deleted { now } else { at })?;
     let (b, rest) = (script.get(..cut)?, script.get(cut..)?);
+    // What may follow an opener that closes itself, and what may come before a quote that does.
     let closes = |c: char| c.is_whitespace() || matches!(c, '}' | ']' | ',');
+    let opens = |c: char| c.is_whitespace() || matches!(c, '{' | '[' | ',' | ':');
     match (typed, next) {
-        (Some(open @ ('{' | '[')), next) if one_typed && next.is_none_or(closes) => {
+        (Some(open @ ('{' | '[')), next) if typed_one && plain(at) && next.is_none_or(closes) => {
             Some(format!("{b}{open}{}{}", closer(open)?, rest.get(1..)?))
         }
-        (Some('"'), next)
-            if one_typed
-                && next.is_none_or(|c| closes(c) || c == ':')
-                && prev.is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '_' | '"')) =>
-        {
+        (Some('"'), next) if typed_one && plain(at) && next.is_none_or(closes) && prev.is_none_or(opens) => {
             Some(format!("{b}\"\"{}", rest.get(1..)?))
         }
         // The `}` or `]` typed goes: the cursor, after it, is after the one that was there.
-        (Some(close @ ('}' | ']')), Some(next)) if one_typed && close == next => Some(format!("{b}{}", rest.get(1..)?)),
-        // A `"` that ends the string the cursor was in (not an escaped one), before its quote.
-        (Some('"'), Some('"')) if typed_one && line(at).is_some_and(in_string) && line(now).is_some_and(|l| !in_string(l)) => {
-            Some(format!("{b}{}", rest.get(1..)?))
-        }
+        (Some(close @ ('}' | ']')), Some(next)) if typed_one && plain(at) && close == next => Some(format!("{b}{}", rest.get(1..)?)),
+        // So does a `"` that ends a string (in one before it, out of it after): not an escaped one.
+        (Some('"'), Some('"')) if typed_one && !plain(at) && plain(now) => Some(format!("{b}{}", rest.get(1..)?)),
         // The closer that followed the deleted opener, now at the cursor.
         (_, Some(next)) if one_deleted && prev.and_then(closer) == Some(next) => Some(format!("{b}{}", rest.get(1..)?)),
         _ => None,
@@ -1756,19 +1749,23 @@ mod tests {
         assert_eq!(backspace("x {]", 3), None, "not a pair either");
     }
 
-    /// `"` closes itself as `{` does, before a `:` too, not after a word or a quote; one typed
-    /// before the quote that ends its string steps over it, not an escaped one; Backspace in an
-    /// empty `""` deletes both, not after a string's closing quote.
+    /// `"` closes itself as `{` does, where a string can start: not after a word, a quote or a
+    /// closing brace; one typed before the quote that ends its string steps over it, not an
+    /// escaped one; Backspace in an empty `""` deletes both, not after a string's closing quote.
     #[test]
     fn a_quote_works_as_a_brace() {
         assert_eq!(typed("x {}", 3, "\"").as_deref(), Some(r#"x {""}"#), "before a closing brace");
         assert_eq!(typed(r#"x {"a": }"#, 8, "\"").as_deref(), Some(r#"x {"a": ""}"#), "a value");
+        assert_eq!(typed(r#"x {"a":}"#, 7, "\"").as_deref(), Some(r#"x {"a":""}"#), "right after a colon");
         assert_eq!(typed("x [1, ]", 6, "\"").as_deref(), Some(r#"x [1, ""]"#), "before a closing bracket");
-        assert_eq!(typed("x { : 1}", 4, "\"").as_deref(), Some(r#"x { "": 1}"#), "before a colon");
+        assert_eq!(typed("", 0, "\"").as_deref(), Some(r#""""#), "the script's start");
+        assert_eq!(typed("x\n", 2, "\"").as_deref(), Some("x\n\"\""), "a line's start");
         assert_eq!(typed("ñ ", 2, "\"").as_deref(), Some(r#"ñ """#), "chars, not bytes");
+        assert_eq!(typed("x { : 1}", 4, "\""), None, "before a colon");
         assert_eq!(typed("x ab", 2, "\""), None, "before other text");
         assert_eq!(typed("x ab", 4, "\""), None, "after a word");
         assert_eq!(typed(r#"x """#, 4, "\""), None, "after a quote");
+        assert_eq!(typed("x {}", 4, "\""), None, "after a closing brace");
         assert_eq!(typed("# x ", 4, "\""), None, "in a comment line");
         assert_eq!(typed(r#"x {"a"}"#, 5, "\"").as_deref(), Some(r#"x {"a"}"#), "stepped over");
         assert_eq!(typed(r#"x {"a\"}"#, 6, "\""), None, "an escaped quote");
