@@ -472,11 +472,16 @@ fn sub_desc(desc: &str, key: &str) -> Option<String> {
 }
 
 /// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
-/// once, in order (a built-in tool first: an external one with the same id isn't the one Run
-/// finds): the tools or commands a value takes (`of`), offered from its quote.
+/// once: the tools or commands a value takes (`of`), offered from its quote, so not cut to
+/// `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's first word offers them; tools
+/// in their order, the built-in ones first (an external one with the same id isn't the one Run
+/// finds).
 fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
     let mut seen = std::collections::HashSet::new();
-    let items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
+    let mut items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
+    if of == Of::CommandIds {
+        items.sort();
+    }
     (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
 }
 
@@ -2137,6 +2142,8 @@ mod tests {
         let o = offer(r#"task.addStep {"command": "LABELS.ST"#).unwrap();
         assert_eq!((o.items, o.of), (vec!["labels.style".to_string()], Some(super::Of::CommandIds)));
         assert!(offer(r#"task.addStep {"command": "ui."#).is_none(), "none a script refuses");
+        let all = offer(r#"task.addStep {"command": ""#).map(|o| o.items).unwrap_or_default();
+        assert!(all.len() > super::MAX_ITEMS && all.is_sorted(), "every command, sorted as a line's first word offers them");
         assert!(offer(r#"task.addStep {"title": "labels.st"#).is_none(), "another key's value");
         let keys = |s: &str| offer(s).map(|o| o.items).unwrap_or_default();
         assert_eq!(keys(r#"task.addStep {"command": "labels.style", "params": {"si"#), ["size"]);
