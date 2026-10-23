@@ -2965,6 +2965,29 @@ fn publication_surrounds_keep_off_the_data() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A publication legend sized to its rows fits them: its box, less the padding, may come out a
+/// rounding error short of the rows' width, which isn't "more than fits" (macOS CI, whose fonts
+/// gave one such width). Layer names of many widths, so some land on a rounding error with any font.
+#[test]
+fn a_publication_legend_sized_to_its_rows_fits_them() {
+    let dir = std::env::temp_dir().join(format!("rustgis-legend-fit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let names: Vec<String> = (0..300).map(|i| format!("{}{i}", &"WmilQxkaRb"[i % 10..])).collect();
+    for name in &names {
+        let path = dir.join(format!("{name}.geojson"));
+        std::fs::write(
+            &path,
+            r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[4,4],[6,4],[6,6],[4,6],[4,4]]]}}]}"#,
+        )
+        .unwrap();
+        let mut s = Session::new(Project::default());
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+        let r = s.run("layout.publication", &json!({"extent": [0, 0, 10, 10], "author": ""})).unwrap();
+        assert!(!r["warnings"].to_string().contains("more than fits"), "{name}: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A publication layout keys a raster theme with a colorbar: the topmost visible raster drawn on a
 /// ramp gets one at the bottom of the legend's box; a map of vectors only gets none.
 #[test]

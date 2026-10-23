@@ -1072,10 +1072,13 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         let (ix, iy, iw, ih) = (r.0 + pad, r.1 + pad, lw - 2.0 * pad, lh - 2.0 * pad);
         let bar_fit = if bar.is_some() { bar_h.min(ih) } else { 0.0 };
         let rows_h = (ih - bar_fit - if bar.is_some() { bar_part - bar_h } else { 0.0 }).max(0.0);
-        if ch > 0.0 && (cw > iw || ch > rows_h) {
+        // A box sized to its content, less the padding again, can come out a rounding error
+        // short of it: that still fits.
+        const FIT_MM: f64 = 1e-6;
+        if ch > 0.0 && (cw > iw + FIT_MM || ch > rows_h + FIT_MM) {
             warnings.push("the legend lists more than fits its corner: its last rows or the ends of long labels are left out".into());
         }
-        if bar.is_some() && (bar_w > iw || bar_h > ih) {
+        if bar.is_some() && (bar_w > iw + FIT_MM || bar_h > ih + FIT_MM) {
             warnings.push("the legend's box is smaller than the colorbar: it is drawn narrower or shorter".into());
         }
         if ch > 0.0 && rows_h >= 1.0 {
