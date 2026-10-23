@@ -322,13 +322,14 @@ pub struct TilesResolve {
 }
 
 /// A service layer waiting on a document before it is added. `dialog` tells whether the add came
-/// from the add-service dialog (its result shows there) or from the Connections tree (a notice).
+/// from the add-service dialog (its result shows there) or from the Connections tree (a notice);
+/// `origin` is the connection a tree add is for, named in Recent once the layer is added.
 pub enum ServiceStep {
     /// An OGC API layer whose advertised tile template is being read.
-    Tiles { resolve: TilesResolve, dialog: bool },
+    Tiles { resolve: TilesResolve, dialog: bool, origin: Option<String> },
     /// A WCS coverage whose description is being read before it is asked for: `service.coverage`'s
     /// parameters and the description on its way.
-    Coverage { params: Value, slot: Slot<Result<Vec<u8>, String>>, dialog: bool },
+    Coverage { params: Value, slot: Slot<Result<Vec<u8>, String>>, dialog: bool, origin: Option<String> },
 }
 
 /// Fetches an address into a slot, off the frame.
@@ -2041,11 +2042,13 @@ impl RustGisApp {
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
             "ui.addUrl" => {
+                // The connection a Connections tree add is for (named in Recent once it is added).
+                let origin = connectiontree::take_origin(self);
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
                     return self.run("ui.dialog", json!({"name": "addUrl"}));
                 };
                 if url.to_ascii_lowercase().split(['?', '#']).next().is_some_and(|u| u.ends_with(".pmtiles")) {
-                    return self.run("layer.addUrl", p.clone());
+                    return connectiontree::run_named(self, "layer.addUrl", p.clone(), origin.as_deref());
                 }
                 // A GeoTIFF, FlatGeobuf or GeoParquet: its header (or footer) first, off the
                 // frame; one that can be read in place is, another is downloaded (see
@@ -2073,7 +2076,14 @@ impl RustGisApp {
                         );
                     }
                     self.session.notify(i18n::fmt("Reading {url}…", &[("url", url)]), false);
-                    self.ui.cog_probes.push((p.clone(), slot));
+                    let mut probe = p.clone();
+                    if let Some(o) = probe.as_object_mut() {
+                        o.remove(connectiontree::ORIGIN);
+                        if let Some(origin) = &origin {
+                            o.insert(connectiontree::ORIGIN.into(), json!(origin));
+                        }
+                    }
+                    self.ui.cog_probes.push((probe, slot));
                     return Ok(Value::Null);
                 }
                 let url = url.to_string();
@@ -2096,6 +2106,9 @@ impl RustGisApp {
                     if p.get(k).and_then(Value::as_bool) == Some(true) {
                         q[k] = json!(true);
                     }
+                }
+                if let Some(origin) = &origin {
+                    q[connectiontree::ORIGIN] = json!(origin);
                 }
                 self.session.notify(i18n::fmt("Downloading {url}…", &[("url", &url)]), false);
                 let id = self.session.download_started();
@@ -2986,16 +2999,19 @@ impl RustGisApp {
             None => true,
         });
         for (mut p, r) in probed {
+            let origin = connectiontree::take_origin_key(&mut p);
             let url = p.get("url").and_then(Value::as_str).unwrap_or("").to_string();
             match r {
                 Ok(true) => {
+                    let before = self.session.sources.generation;
                     if self.run("layer.addUrl", p).is_ok() {
+                        connectiontree::name_recent(self, before, origin.as_deref());
                         self.map.invalidate();
                     }
                 }
                 Ok(false) => {
                     p["whole"] = json!(true);
-                    let _ = self.run("ui.addUrl", p);
+                    let _ = connectiontree::run_add_url(self, p, origin.as_deref());
                 }
                 Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
             }
@@ -3009,6 +3025,7 @@ impl RustGisApp {
             None => true,
         });
         for (id, url, mut p, r) in landed {
+            let origin = connectiontree::take_origin_key(&mut p);
             match r {
                 Ok(bytes) => {
                     if !self.session.download_landed(id, bytes) {
@@ -3024,8 +3041,10 @@ impl RustGisApp {
                     if zoom && self.ui.link_zoomed {
                         p["zoom"] = json!(false);
                     }
+                    let before = self.session.sources.generation;
                     match self.run("layer.addDownload", p) {
                         Ok(r) => {
+                            connectiontree::name_recent(self, before, origin.as_deref());
                             if r.get("zoomed").and_then(Value::as_bool) == Some(true) {
                                 self.ui.link_zoomed = true;
                             }
@@ -3061,9 +3080,9 @@ impl RustGisApp {
         use rustgis_engine::data::ogc::{TilesStep, resolve_tiles};
         for step in std::mem::take(&mut self.ui.service_steps) {
             match step {
-                ServiceStep::Tiles { mut resolve, dialog } => {
+                ServiceStep::Tiles { mut resolve, dialog, origin } => {
                     let Some(r) = resolve.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-                        self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog });
+                        self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog, origin });
                         continue;
                     };
                     let next = r.ok().and_then(|body| resolve_tiles(&resolve.list, &resolve.doc, &body, resolve.vector));
@@ -3072,7 +3091,7 @@ impl RustGisApp {
                             resolve.read += 1;
                             resolve.doc = next.clone();
                             resolve.slot = fetch_into(&next);
-                            self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog });
+                            self.ui.service_steps.push(ServiceStep::Tiles { resolve, dialog, origin });
                             continue;
                         }
                         Some(TilesStep::Template(t)) => t,
@@ -3081,13 +3100,14 @@ impl RustGisApp {
                     let mut p = resolve.params;
                     p["tiles"] = json!(template);
                     let title = p["name"].as_str().unwrap_or("").to_string();
-                    let r = self.run("service.add", p).map(|_| format!("{} {title}", tl!("Added")));
+                    let r =
+                        connectiontree::run_named(self, "service.add", p, origin.as_deref()).map(|_| format!("{} {title}", tl!("Added")));
                     self.report_step(dialog, r);
                     self.map.invalidate();
                 }
-                ServiceStep::Coverage { mut params, slot, dialog } => {
+                ServiceStep::Coverage { mut params, slot, dialog, origin } => {
                     let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-                        self.ui.service_steps.push(ServiceStep::Coverage { params, slot, dialog });
+                        self.ui.service_steps.push(ServiceStep::Coverage { params, slot, dialog, origin });
                         continue;
                     };
                     let title = params["name"].as_str().unwrap_or("").to_string();
@@ -3096,7 +3116,7 @@ impl RustGisApp {
                         // Not `self.run`: an error belongs where the step reports, not the notices.
                         let c = self.session.run("service.coverage", &params)?;
                         let get = c.get("url").and_then(Value::as_str).unwrap_or("").to_string();
-                        self.run("ui.addUrl", json!({"url": get, "name": title, "coverage": true}))
+                        connectiontree::run_add_url(self, json!({"url": get, "name": title, "coverage": true}), origin.as_deref())
                     });
                     self.report_step(dialog, r.map(|_| format!("{} {title}", tl!("Downloading…"))));
                 }

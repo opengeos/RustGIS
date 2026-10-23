@@ -336,7 +336,15 @@ places data comes from:
 
 - **Favourites**: any source, right-clicked and added.
 - **Recent**: the last 20 sources added (files, web addresses, tile layers, services, database
-  tables, Zarr variables, STAC assets, sample data), newest first.
+  tables, Zarr variables, STAC assets, sample data), newest first. A dataset added from a
+  connection in the tree is listed under that connection's name rather than one made from its
+  address. Only the name changes: the entry keeps the kind, address and options of the dataset
+  as it was added, and the layer keeps its own name. Clicking it opens it as any Recent entry
+  of that kind opens (a service entry reopens the service's layer list). A source is one entry
+  per kind and address, so every dataset added through one service shares an entry, as do two
+  connections with one address. The name is the connection's when the dataset was added:
+  renaming a connection changes it only when something is added from it again. An add that
+  fails, or is cancelled before it lands, isn't listed.
 - **Folders**: the folders connected to the Browser (**Add Folder…**; desktop).
 - **Connections**: named services, databases, STAC APIs and S3 endpoints, organised by optional
   groups. **New Connection ▾** opens a kind-specific form. Click a connection to open it: its

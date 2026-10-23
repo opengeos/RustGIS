@@ -1941,7 +1941,8 @@ fn connections_tree_browses_and_adds() {
     assert!(h.state().ui.connection_tree.picks.is_empty());
     h.state_mut().run("edit.undo", json!(null)).unwrap();
     assert_eq!(h.state().session.map().tiles.len(), before);
-    h.get_by_label("Local").click_secondary();
+    // Recent now lists the added layer under "Local" too, above the connection's own row.
+    h.query_all_by_label("Local").last().unwrap().click_secondary();
     h.step();
     h.get_by_label("Refresh").click();
     h.step();
