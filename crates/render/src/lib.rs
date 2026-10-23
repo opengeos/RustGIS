@@ -5389,6 +5389,7 @@ mod offset_normal_tests {
         println!("normal cases: {} paths x 5 offsets", cases.len());
     }
 
+    /// Frozen pre-optimization oracle; keep independent of the optimized implementation.
     fn reference_offset_polyline(pts: &[(f32, f32)], d: f32) -> Vec<(f32, f32)> {
         let mut p: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
         for &q in pts.iter().filter(|q| q.0.is_finite() && q.1.is_finite()) {
