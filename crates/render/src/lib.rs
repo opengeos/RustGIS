@@ -581,7 +581,7 @@ impl Ctx<'_> {
         pm.stroke_path(&path, p, &st, Transform::identity(), None);
     }
 
-    /// A line drawn as a layer's stacked strokes (`Layer::line_strokes`), bottom first, each
+    /// A line drawn as its stacked strokes (`Layer::strokes`), bottom first, each
     /// shifted sideways by its offset.
     fn stacked_line(&self, pm: &mut Pixmap, parts: &[Vec<Coord>], s: &Symbol, strokes: &[LineStroke]) {
         let mut pb = PathBuilder::new();
@@ -1766,7 +1766,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && map.swipe.is_none_or(|(id, _)| id != l.id)
             && l.aggregation.is_none()
             && !l.graphics
-            && l.line_strokes.is_empty()
+            && !l.has_strokes()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
     })
 }
@@ -2646,7 +2646,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         } else {
             Default::default()
         };
-        let mut highlights: Vec<(usize, Geometry, Symbol)> = Vec::new();
+        let mut highlights: Vec<(usize, Geometry, Symbol, Vec<LineStroke>)> = Vec::new();
         // The GPU mesh vertices the layer has left: a streamed layer's batches share them, so
         // one too dense to mesh goes to the CPU however it is split.
         let mut mesh_room = mesh::MAX_LAYER_VERTICES;
@@ -2731,7 +2731,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && layer.aggregation.is_none()
                 && layer.extrusion.is_none()
                 && !layer.graphics
-                && layer.line_strokes.is_empty()
+                && !layer.has_strokes()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, and a layer too dense to mesh
             // (`MAX_LAYER_VERTICES`) is quicker splatted: collect_layer reports both, and the layer
@@ -2807,21 +2807,21 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             continue;
                         }
                         let sym = layer.symbol(row);
+                        // The layer's stacked strokes, or the feature's class's own.
+                        let strokes = layer.strokes(row);
                         // A feature under a pixel across: blend its coverage into the pixels it touches
                         // (a dense layer seen whole is mostly these, and a path each is slow).
                         // Not stacked strokes: a splat would draw them unshifted, in one colour.
                         if globe.is_none()
                             && !layer.graphics
-                            && layer.line_strokes.is_empty()
+                            && strokes.is_empty()
                             && let Some(e) = extents.get(row)
                             && ctx.splat(dest, e, g, &sym)
                         {
                             continue;
                         }
                         match g {
-                            Geometry::Line(parts) if !layer.line_strokes.is_empty() && !layer.graphics => {
-                                stroke_paths.draw(&ctx, dest, parts, &sym, &layer.line_strokes)
-                            }
+                            Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(&ctx, dest, parts, &sym, strokes),
                             _ => ctx.feature(dest, g, &sym),
                         }
                     }
@@ -2851,11 +2851,11 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // draw over it (the CPU path draws highlights over the layer).
                     if complete_source {
                         let rank = ds_ptr.features.get(*row).and_then(|f| selected_order.get(&f.id)).copied().unwrap_or(usize::MAX);
-                        highlights.push((rank, (**g).clone(), layer.symbol(*row)));
+                        highlights.push((rank, (**g).clone(), layer.symbol(*row), layer.strokes(*row).to_vec()));
                     } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
                         // highlight tessellated into the scene, right after its layer
                     } else {
-                        ctx.highlight(&mut pm, g, &layer.symbol(*row), if layer.graphics { &[] } else { &layer.line_strokes });
+                        ctx.highlight(&mut pm, g, &layer.symbol(*row), layer.strokes(*row));
                         cpu_dirty = true;
                     }
                 }
@@ -3013,9 +3013,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 composite(&mut pm, &target);
             }
         }
-        highlights.sort_by_key(|(rank, _, _)| *rank);
-        for (_, geometry, symbol) in highlights {
-            ctx.highlight(&mut pm, &geometry, &symbol, if layer.graphics { &[] } else { &layer.line_strokes });
+        highlights.sort_by_key(|(rank, ..)| *rank);
+        for (_, geometry, symbol, strokes) in highlights {
+            ctx.highlight(&mut pm, &geometry, &symbol, &strokes);
             cpu_dirty = true;
         }
     }
@@ -5288,6 +5288,56 @@ mod tests {
         let r = render(&mut m, &view).unwrap();
         assert_ne!(r.pixmap.pixel(100, 110).unwrap(), blank, "drawn 10 pt to the right");
         assert_eq!(r.pixmap.pixel(100, 100).unwrap(), blank, "nothing on the centreline");
+    }
+
+    #[test]
+    fn a_class_draws_its_own_stacked_strokes() {
+        // Two lines of two Unique Values classes: "road" has a black casing and a red core of its
+        // own, "path" takes the layer's single green stroke.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("lines", GeometryType::Polyline, vec![Field::new("kind", FieldType::Text)]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.3), Coord::new(1.0, 0.3)]])), vec![Value::Text("road".into())]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, -0.3), Coord::new(1.0, -0.3)]])), vec![Value::Text("path".into())]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let colour = |r: &Rendered, y: u32| {
+            let p = r.pixmap.pixel(100, y).unwrap();
+            (p.red(), p.green(), p.blue())
+        };
+        let (black, red, green) = (Rgba::rgb(0, 0, 0), Rgba::rgb(255, 0, 0), Rgba::rgb(0, 160, 0));
+        let stroke = |c: Rgba, w: f32| rustgis_map::LineStroke { color: Some(c), width: Some(w), ..Default::default() };
+        let l = m.layer_mut(id).unwrap();
+        let s = Symbol::default_for(GeometryType::Polyline, 0);
+        l.renderer = rustgis_map::Renderer::Unique {
+            field: "kind".into(),
+            classes: vec![("road".into(), s), ("path".into(), s)],
+            other: s,
+            ramp: rustgis_map::Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+            class_strokes: [("road".to_string(), vec![stroke(black, 9.0), stroke(red, 3.0)])].into_iter().collect(),
+            other_strokes: Vec::new(),
+        };
+        l.line_strokes = vec![stroke(green, 3.0)];
+        // 0.3° is about 22 px from the centre at this resolution.
+        let r = render(&mut m, &view).unwrap();
+        let (road, path) = ((0..100).find(|y| colour(&r, *y) == (255, 0, 0)), (100..200).find(|y| colour(&r, *y) == (0, 160, 0)));
+        let (Some(road), Some(path)) = (road, path) else { panic!("the road's red core and the path's green stroke draw") };
+        assert_eq!(colour(&r, road - 2), (0, 0, 0), "the road's casing shows around its core");
+        assert!((path - 1..=path + 3).all(|y| colour(&r, y) != (0, 0, 0)), "the path has no casing");
+        // Selected, the road keeps its own stack under the halo.
+        m.layer_mut(id).unwrap().selection = vec![0];
+        let r = render(&mut m, &view).unwrap();
+        assert_eq!(colour(&r, road + 1), (255, 0, 0));
+        // Without the layer's strokes, the path draws its symbol's single line; the road keeps its own.
+        m.layer_mut(id).unwrap().line_strokes.clear();
+        m.layer_mut(id).unwrap().selection.clear();
+        let r = render(&mut m, &view).unwrap();
+        assert_eq!(colour(&r, road + 1), (255, 0, 0));
+        assert_eq!(colour(&r, road - 2), (0, 0, 0));
+        assert!((100..200).all(|y| colour(&r, y) != (0, 160, 0)), "no green left");
     }
 
     #[test]

@@ -215,6 +215,23 @@ pub fn de_strokes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<LineStro
     Ok(v.into_iter().map(LineStroke::clamped).collect())
 }
 
+/// Reads a renderer's per-class strokes as [`de_strokes`] reads a layer's: each class's at most
+/// [`MAX_STROKES`], each [`LineStroke::clamped`]. A class left with none is dropped.
+pub fn de_class_strokes<'de, D, K>(d: D) -> Result<BTreeMap<K, Vec<LineStroke>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    K: Deserialize<'de> + Ord,
+{
+    let m: BTreeMap<K, Vec<LineStroke>> = BTreeMap::deserialize(d)?;
+    Ok(m.into_iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, mut v)| {
+            v.truncate(MAX_STROKES);
+            (k, v.into_iter().map(LineStroke::clamped).collect())
+        })
+        .collect())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClassMethod {
     #[default]
@@ -259,6 +276,13 @@ pub enum Renderer {
         /// The legend label of `other`, when set by hand (otherwise `<all other values>`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         other_label: Option<String>,
+        /// A line layer's stacked strokes for one class, by class value: drawn for that class's
+        /// features instead of the layer's `line_strokes`. A class without its own takes the layer's.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "de_class_strokes")]
+        class_strokes: BTreeMap<String, Vec<LineStroke>>,
+        /// The stacked strokes of `other`; empty takes the layer's.
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "de_strokes")]
+        other_strokes: Vec<LineStroke>,
     },
     /// Upper bounds of each class (ascending) and one symbol per class.
     Graduated {
@@ -272,6 +296,9 @@ pub enum Renderer {
         /// shows its range.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         class_labels: BTreeMap<usize, String>,
+        /// A line layer's stacked strokes for one class, by class index, as Unique Values'.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "de_class_strokes")]
+        class_strokes: BTreeMap<usize, Vec<LineStroke>>,
     },
     /// Marker size grows with the value.
     Proportional {
@@ -315,6 +342,27 @@ pub enum ClassRef {
     Index(usize),
     /// The Unique Values fallback, `<all other values>`.
     Other,
+}
+
+/// The class a feature falls in ([`Renderer::class_of`]): a place in the classes, or Unique
+/// Values' `<all other values>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Class(usize),
+    Other,
+}
+
+fn no_class(i: usize, n: usize) -> String {
+    format!("no class {i}: this renderer has {n} (0 to {})", n.saturating_sub(1))
+}
+
+/// Why a class reference doesn't fit the renderer, as [`Renderer::set_class_style`] says it.
+fn class_mismatch(r: &Renderer) -> String {
+    match r {
+        Renderer::Unique { .. } => "Unique Values classes are named by their value, not by number".into(),
+        Renderer::Graduated { .. } => "Graduated Colors classes are numbered from 0, the lowest".into(),
+        _ => "only Unique Values and Graduated Colors have classes to style".into(),
+    }
 }
 
 /// What [`Renderer::set_class_style`] changes in a class; `None` leaves that part as it is.
@@ -370,6 +418,8 @@ impl Renderer {
             ramp,
             class_labels: BTreeMap::new(),
             other_label: None,
+            class_strokes: BTreeMap::new(),
+            other_strokes: Vec::new(),
         })
     }
 
@@ -406,6 +456,7 @@ impl Renderer {
             method,
             min,
             class_labels: BTreeMap::new(),
+            class_strokes: BTreeMap::new(),
         })
     }
 
@@ -431,12 +482,13 @@ impl Renderer {
         })
     }
 
-    /// Symbol for a feature row.
-    pub fn symbol_for(&self, ds: &Dataset, row: usize) -> Symbol {
+    /// The class a feature row falls in: a Unique Values class's place in `classes` (its value's
+    /// first class) or `<all other values>`, a Graduated Colors class's index; `None` for the other
+    /// renderers, and for a Graduated Colors row without a number.
+    fn class_of(&self, ds: &Dataset, row: usize) -> Option<Slot> {
         match self {
-            Renderer::Single(s) => *s,
-            Renderer::Unique { field, classes, other, .. } => {
-                let Some(fi) = ds.field_index(field) else { return *other };
+            Renderer::Unique { field, classes, .. } => {
+                let Some(fi) = ds.field_index(field) else { return Some(Slot::Other) };
                 // Text compares as it is; other values as they print.
                 let printed;
                 let v = match ds.value(row, fi) {
@@ -446,14 +498,105 @@ impl Renderer {
                         printed.as_str()
                     }
                 };
-                classes.iter().find(|(k, _)| k == v).map(|c| c.1).unwrap_or(*other)
+                Some(classes.iter().position(|(k, _)| k == v).map_or(Slot::Other, Slot::Class))
             }
-            Renderer::Graduated { field, breaks, symbols, .. } => {
+            Renderer::Graduated { field, breaks, .. } => {
+                let v = ds.field_index(field).and_then(|fi| ds.value(row, fi).as_f64())?;
+                Some(Slot::Class(breaks.iter().position(|b| v <= *b).unwrap_or(breaks.len().saturating_sub(1))))
+            }
+            Renderer::Single(_) | Renderer::Proportional { .. } => None,
+        }
+    }
+
+    /// The stacked strokes a line feature row's class has of its own (`class_strokes`), or `None`
+    /// when its class has none (the layer's `line_strokes` apply).
+    pub fn strokes_for(&self, ds: &Dataset, row: usize) -> Option<&[LineStroke]> {
+        let strokes = match (self, self.class_of(ds, row)?) {
+            (Renderer::Unique { classes, class_strokes, .. }, Slot::Class(i)) => class_strokes.get(&classes.get(i)?.0)?,
+            (Renderer::Unique { other_strokes, .. }, Slot::Other) => other_strokes,
+            (Renderer::Graduated { class_strokes, .. }, Slot::Class(i)) => class_strokes.get(&i)?,
+            _ => return None,
+        };
+        (!strokes.is_empty()).then_some(strokes.as_slice())
+    }
+
+    /// Whether any class has stacked strokes of its own.
+    pub fn has_class_strokes(&self) -> bool {
+        match self {
+            Renderer::Unique { class_strokes, other_strokes, .. } => !class_strokes.is_empty() || !other_strokes.is_empty(),
+            Renderer::Graduated { class_strokes, .. } => !class_strokes.is_empty(),
+            Renderer::Single(_) | Renderer::Proportional { .. } => false,
+        }
+    }
+
+    /// One class's own stacked strokes (empty when it takes the layer's).
+    pub fn class_strokes(&self, class: &ClassRef) -> Result<&[LineStroke], String> {
+        let none: &[LineStroke] = &[];
+        match (self, class) {
+            (Renderer::Unique { classes, class_strokes, .. }, ClassRef::Value(v)) => {
+                if !classes.iter().any(|(k, _)| k == v) {
+                    return Err(format!("no class with the value '{v}'"));
+                }
+                Ok(class_strokes.get(v).map_or(none, Vec::as_slice))
+            }
+            (Renderer::Unique { other_strokes, .. }, ClassRef::Other) => Ok(other_strokes),
+            (Renderer::Graduated { symbols, class_strokes, .. }, ClassRef::Index(i)) => {
+                if *i >= symbols.len() {
+                    return Err(no_class(*i, symbols.len()));
+                }
+                Ok(class_strokes.get(i).map_or(none, Vec::as_slice))
+            }
+            _ => Err(class_mismatch(self)),
+        }
+    }
+
+    /// Sets one class's own stacked strokes, at most [`MAX_STROKES`], each brought into range;
+    /// none goes back to the layer's.
+    pub fn set_class_strokes(&mut self, class: &ClassRef, strokes: Vec<LineStroke>) -> Result<(), String> {
+        if strokes.len() > MAX_STROKES {
+            return Err(format!("at most {MAX_STROKES} strokes"));
+        }
+        let strokes: Vec<LineStroke> = strokes.into_iter().map(LineStroke::clamped).collect();
+        match (&mut *self, class) {
+            (Renderer::Unique { classes, class_strokes, .. }, ClassRef::Value(v)) => {
+                if !classes.iter().any(|(k, _)| k == v) {
+                    return Err(format!("no class with the value '{v}'"));
+                }
+                if strokes.is_empty() {
+                    class_strokes.remove(v);
+                } else {
+                    class_strokes.insert(v.clone(), strokes);
+                }
+            }
+            (Renderer::Unique { other_strokes, .. }, ClassRef::Other) => *other_strokes = strokes,
+            (Renderer::Graduated { symbols, class_strokes, .. }, ClassRef::Index(i)) => {
+                if *i >= symbols.len() {
+                    return Err(no_class(*i, symbols.len()));
+                }
+                if strokes.is_empty() {
+                    class_strokes.remove(i);
+                } else {
+                    class_strokes.insert(*i, strokes);
+                }
+            }
+            _ => return Err(class_mismatch(self)),
+        }
+        Ok(())
+    }
+
+    /// Symbol for a feature row.
+    pub fn symbol_for(&self, ds: &Dataset, row: usize) -> Symbol {
+        match self {
+            Renderer::Single(s) => *s,
+            Renderer::Unique { classes, other, .. } => match self.class_of(ds, row) {
+                Some(Slot::Class(i)) => classes.get(i).map_or(*other, |c| c.1),
+                _ => *other,
+            },
+            Renderer::Graduated { symbols, .. } => {
                 let fallback = symbols.first().copied().unwrap_or(Symbol::default_for(ds.geometry_type, 0));
-                let Some(v) = ds.field_index(field).and_then(|fi| ds.value(row, fi).as_f64()) else {
+                let Some(Slot::Class(i)) = self.class_of(ds, row) else {
                     return Symbol { fill: Rgba::new(0xC8, 0xC8, 0xC8, 140), ..fallback };
                 };
-                let i = breaks.iter().position(|b| v <= *b).unwrap_or(breaks.len().saturating_sub(1));
                 symbols.get(i).copied().unwrap_or(fallback)
             }
             Renderer::Proportional { field, base, min_size, max_size, min, max } => {
@@ -673,14 +816,28 @@ impl Renderer {
     pub fn carry_edits_from(&mut self, old: &Renderer, g: GeometryType) {
         match (self, old) {
             (
-                Renderer::Unique { field, classes, other, ramp, class_labels, other_label },
-                Renderer::Unique { field: of, classes: oc, other: oo, ramp: or, class_labels: ol, other_label: ool },
+                Renderer::Unique { field, classes, other, ramp, class_labels, other_label, class_strokes, other_strokes },
+                Renderer::Unique {
+                    field: of,
+                    classes: oc,
+                    other: oo,
+                    ramp: or,
+                    class_labels: ol,
+                    other_label: ool,
+                    class_strokes: ost,
+                    other_strokes: oos,
+                },
             ) if field == of => {
                 let same_scheme = ramp == or;
                 let n = oc.len();
+                // Strokes are drawn by hand, as labels are: a class keeps them whatever the scheme.
+                other_strokes.clone_from(oos);
                 for (k, s) in classes.iter_mut() {
                     if let Some(t) = ol.get(k.as_str()) {
                         class_labels.insert(k.clone(), t.clone());
+                    }
+                    if let Some(st) = ost.get(k.as_str()) {
+                        class_strokes.insert(k.clone(), st.clone());
                     }
                     if same_scheme
                         && let Some(j) = oc.iter().position(|(ok, _)| ok == k)
@@ -695,14 +852,15 @@ impl Renderer {
                 }
             }
             (
-                Renderer::Graduated { field, breaks, symbols, ramp, min, class_labels, .. },
-                Renderer::Graduated { field: of, breaks: ob, symbols: os, ramp: or, min: om, class_labels: ol, .. },
+                Renderer::Graduated { field, breaks, symbols, ramp, min, class_labels, class_strokes, .. },
+                Renderer::Graduated { field: of, breaks: ob, symbols: os, ramp: or, min: om, class_labels: ol, class_strokes: ost, .. },
             ) if field == of => {
                 // A Graduated Colors edit belongs to a range: it stays only while the ranges do.
                 if breaks != ob || min != om {
                     return;
                 }
                 class_labels.clone_from(ol);
+                class_strokes.clone_from(ost);
                 if ramp == or && symbols.len() == os.len() {
                     let n = os.len();
                     for (i, (s, o)) in symbols.iter_mut().zip(os).enumerate() {
@@ -1328,6 +1486,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let labels = |rows: &[bool]| r.legend_for(&d, rows).into_iter().map(|e| e.label).collect::<Vec<_>>();
         assert_eq!(labels(&[]), ["a", "b", "<all other values>"]);
@@ -1345,6 +1505,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let shown = twice.legend_for(&d, &[]);
         assert_eq!(shown.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), ["a", "b", "<all other values>"]);
@@ -1357,6 +1519,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         assert_eq!(gone.legend_for(&d, &[]).len(), 1);
         // The fallback row is marked as such, whatever a class is called.
@@ -1367,6 +1531,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let mut d2 = d.clone();
         d2.push(None, vec![Value::Text(OTHER_VALUES.into())]);
@@ -1396,6 +1562,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let labels = |r: &Renderer, rows: &[bool]| r.legend_for(&d, rows).into_iter().map(|e| e.label).collect::<Vec<_>>();
         assert_eq!(labels(&r, &[]), ["a"], "z falls in the invisible fallback");
@@ -1410,6 +1578,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         assert_eq!(labels(&r2, &[]), ["a", OTHER_VALUES]);
         // A line's fill draws nothing: a fallback with only a fill is invisible on lines.
@@ -1424,6 +1594,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         assert!(r3.legend_for(&lines, &[]).is_empty());
         assert_eq!(labels(&r3, &[]), ["a", OTHER_VALUES], "a polygon fill still shows");
@@ -1450,6 +1622,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: BTreeMap::new(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let legend = renderer.legend();
         assert_eq!(
@@ -1538,6 +1712,8 @@ mod tests {
             ramp,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         }
     }
 
@@ -1550,6 +1726,7 @@ mod tests {
             method: ClassMethod::Quantile,
             min: 0.0,
             class_labels: Default::default(),
+            class_strokes: Default::default(),
         }
     }
 

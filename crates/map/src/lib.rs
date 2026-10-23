@@ -405,6 +405,21 @@ impl Layer {
         if self.graphics { graphics::symbol(&self.dataset, row) } else { self.renderer.symbol_for(&self.dataset, row) }
     }
 
+    /// The stacked strokes a line feature row is drawn with: its class's own
+    /// ([`Renderer::strokes_for`]), else the layer's `line_strokes`; none (the single stroke) for
+    /// a graphics layer.
+    pub fn strokes(&self, row: usize) -> &[LineStroke] {
+        if self.graphics {
+            return &[];
+        }
+        self.renderer.strokes_for(&self.dataset, row).unwrap_or(&self.line_strokes)
+    }
+
+    /// Whether some feature may be drawn with stacked strokes ([`Layer::strokes`]).
+    pub fn has_strokes(&self) -> bool {
+        !self.graphics && (!self.line_strokes.is_empty() || self.renderer.has_class_strokes())
+    }
+
     pub fn is_raster(&self) -> bool {
         self.raster.is_some()
     }
@@ -1580,6 +1595,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hostile_class_strokes_in_a_project_are_brought_into_range() {
+        // The same for a class's own strokes, Unique Values' (and <all other values>') and
+        // Graduated Colors'; a class listed with none is dropped.
+        let wild = vec![symbology::LineStroke { width: Some(f32::MAX), offset: 1e30, ..Default::default() }; 5000];
+        let tame = |v: &[symbology::LineStroke]| {
+            v.len() == symbology::MAX_STROKES
+                && v.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == symbology::MAX_STROKE_OFFSET)
+        };
+        let s = Symbol::default_for(GeometryType::Polyline, 0);
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        l.renderer = Renderer::Unique {
+            field: "k".into(),
+            classes: vec![("a".into(), s), ("b".into(), s)],
+            other: s,
+            ramp: Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+            class_strokes: [("a".to_string(), wild.clone()), ("b".to_string(), Vec::new())].into_iter().collect(),
+            other_strokes: wild.clone(),
+        };
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        let Renderer::Unique { class_strokes, other_strokes, .. } = &back.renderer else { panic!("unique renderer expected") };
+        assert!(tame(&class_strokes["a"]) && !class_strokes.contains_key("b") && tame(other_strokes));
+        l.renderer = Renderer::Graduated {
+            field: "k".into(),
+            breaks: vec![1.0],
+            symbols: vec![s],
+            ramp: Ramp::Ember,
+            method: ClassMethod::NaturalBreaks,
+            min: 0.0,
+            class_labels: Default::default(),
+            class_strokes: [(0, wild)].into_iter().collect(),
+        };
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        let Renderer::Graduated { class_strokes, .. } = &back.renderer else { panic!("graduated renderer expected") };
+        assert!(tame(&class_strokes[&0]));
+        // A project from before per-class strokes reads with none.
+        let old = r#"{"Unique":{"field":"k","classes":[],"other":{"fill":[0,0,0,255],"stroke":[0,0,0,255],"stroke_width":1,"size":0,"marker":"Circle"},"ramp":"Ember"}}"#;
+        let r: Renderer = serde_json::from_str(old).unwrap();
+        assert!(!r.has_class_strokes());
+    }
+
     /// A layer of one long line along the equator with `n` vertices.
     fn long_line(n: usize) -> Layer {
         let mut d = Dataset::new("line", GeometryType::Polyline, vec![]);
@@ -1786,6 +1844,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let labels = |l: &Layer, scale| l.shown_legend(scale).map(|v| v.into_iter().map(|e| e.label).collect::<Vec<_>>());
         assert_eq!(labels(l, 1e6), Some(vec!["1".to_string(), "2".to_string()]), "no 9, no <all other values>");

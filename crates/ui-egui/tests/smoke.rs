@@ -2860,3 +2860,38 @@ fn map_and_layout_tabs_rename_from_their_menus() {
     assert_eq!(p.maps[0].name, "Renamed Map");
     assert_eq!(p.layouts.last().map(|l| l.name.as_str()), Some("Renamed Layout"));
 }
+
+#[test]
+fn line_strokes_editor_edits_one_class() {
+    use rustgis_engine::map::symbology::ClassRef;
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run("layer.select", json!({"layer": "Rivers"})).unwrap();
+    app.run("layer.symbology", json!({"layer": "Rivers", "type": "unique", "field": "scalerank"})).unwrap();
+    let pair = json!([{"color": "#000000", "width": 6}, {"color": "#FFFFFF", "width": 2}]);
+    app.run("layer.lineStrokes", json!({"layer": "Rivers", "value": "1", "strokes": pair})).unwrap();
+    app.run("ui.pane.symbology", json!({})).unwrap();
+    h.step();
+    h.step();
+    let class_strokes = |h: &egui_kittest::Harness<'_, RustGisApp>, c: &ClassRef| {
+        h.state().session.map().layer_by_name("Rivers").unwrap().renderer.class_strokes(c).unwrap().len()
+    };
+    // The layer's strokes first; class 1 is marked as having its own.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("All classes")).unwrap().click();
+    h.step();
+    h.get_by_label("1 •").click_accesskit();
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Stroke 2").is_some(), "class 1's two strokes are listed");
+    // Back to the layer's strokes: the class borrows them, and Add Stroke gives it its own again.
+    h.get_by_label("Use the Layer's Strokes").click_accesskit();
+    h.step();
+    h.step();
+    assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 0);
+    assert!(h.query_by_label_contains("drawn with the layer's strokes").is_some());
+    h.get_by_label("Add Stroke").click_accesskit();
+    h.step();
+    h.step();
+    assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 1);
+    assert!(h.state().session.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty(), "the layer's own are untouched");
+}

@@ -154,7 +154,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
             .when(need_lines)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel"}] (drawn bottom first; [] goes back to the single stroke)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel"}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
         C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
@@ -301,8 +301,9 @@ fn need_lines(s: &Session) -> Option<&'static str> {
     }
 }
 
-/// `layer.lineStrokes`: sets a line layer's stacked strokes.
+/// `layer.lineStrokes`: sets a line layer's stacked strokes, or one class's own.
 fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
+    let class = class_ref(p)?;
     let list = p.get("strokes").and_then(Value::as_array).ok_or("strokes is a list of strokes ([] for the single stroke)")?;
     if list.len() > MAX_STROKES {
         return Err(format!("at most {MAX_STROKES} strokes"));
@@ -345,8 +346,12 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
     if l.geometry_type() != GeometryType::Polyline || l.graphics {
         return Err("this works on line layers".into());
     }
-    l.line_strokes = strokes;
-    Ok(json!({"strokes": l.line_strokes.len()}))
+    let n = strokes.len();
+    match class {
+        Some(c) => l.renderer.set_class_strokes(&c, strokes)?,
+        None => l.line_strokes = strokes,
+    }
+    Ok(json!({"strokes": n}))
 }
 
 pub(crate) fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {
@@ -892,6 +897,8 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
         ramp: Default::default(),
         class_labels: Default::default(),
         other_label: None,
+        class_strokes: Default::default(),
+        other_strokes: Vec::new(),
     };
 }
 
@@ -2448,14 +2455,16 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     with(s, p, |l| l.renderer = r)
 }
 
-/// `layer.classStyle`: one class's colour, outline colour and legend label (#314).
-fn class_style(s: &mut Session, p: &Value) -> CmdResult {
+/// The class `value`, `index` or `other: true` name in a command's parameters, or `None` when
+/// none does.
+fn class_ref(p: &Value) -> Result<Option<ClassRef>, String> {
     let other = b(p, "other").unwrap_or(false);
     let index = match p.get("index") {
         Some(_) => Some(uint(p, "index").ok_or("index must be a whole number from 0")?),
         None => None,
     };
-    let class = match (p.get("value"), index, other) {
+    Ok(Some(match (p.get("value"), index, other) {
+        (None, None, false) => return Ok(None),
         (Some(v), None, false) => ClassRef::Value(match v {
             Value::String(t) => t.clone(),
             // As the data prints it (the classes' own keys): `1000.0` is the class "1000".
@@ -2469,7 +2478,12 @@ fn class_style(s: &mut Session, p: &Value) -> CmdResult {
         (None, Some(i), false) => ClassRef::Index(usize::try_from(i).map_err(|_| "index is too large")?),
         (None, None, true) => ClassRef::Other,
         _ => return Err("name one class: value (Unique Values), index (Graduated Colors) or other: true".into()),
-    };
+    }))
+}
+
+/// `layer.classStyle`: one class's colour, outline colour and legend label (#314).
+fn class_style(s: &mut Session, p: &Value) -> CmdResult {
+    let class = class_ref(p)?.ok_or("name one class: value (Unique Values), index (Graduated Colors) or other: true")?;
     let label = match p.get("label") {
         None => None,
         Some(Value::String(t)) => Some(t.clone()),

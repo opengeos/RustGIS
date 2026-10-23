@@ -392,6 +392,84 @@ fn line_strokes_stack_and_survive_save_and_undo() {
 }
 
 #[test]
+fn a_class_stacks_strokes_of_its_own() {
+    use rustgis_map::symbology::ClassRef;
+    use rustgis_map::{LineStroke, Rgba};
+    let mut s = world();
+    s.run("layer.symbology", &json!({"layer": "Rivers", "type": "unique", "field": "scalerank"})).unwrap();
+    // The layer's one stroke, a casing and core for rivers of rank 1, a thin line for
+    // <all other values>; rank 2 keeps the layer's.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"offset": 3}]})).unwrap();
+    let depth = s.undo_depth();
+    let pair = json!([{"color": "#000000", "width": 6}, {"color": "#FF8C00", "width": 3}]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "value": "1", "strokes": pair})).unwrap();
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "other": true, "strokes": [{"width": 0.5}]})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 2);
+    let casing = vec![
+        LineStroke { color: Some(Rgba::rgb(0, 0, 0)), width: Some(6.0), ..Default::default() },
+        LineStroke { color: Some(Rgba::rgb(0xFF, 0x8C, 0)), width: Some(3.0), ..Default::default() },
+    ];
+    let layer_own = vec![LineStroke { offset: 3.0, ..Default::default() }];
+    let check = |s: &Session| {
+        let l = s.map().layer_by_name("Rivers").unwrap();
+        let fi = l.dataset.field_index("scalerank").unwrap();
+        assert!(l.has_strokes());
+        for row in 0..l.dataset.features.len() {
+            let want = if l.dataset.value(row, fi).to_string() == "1" { &casing } else { &layer_own };
+            assert_eq!(l.strokes(row), want.as_slice(), "row {row}");
+        }
+        assert_eq!(l.renderer.class_strokes(&ClassRef::Other).unwrap().len(), 1);
+    };
+    check(&s);
+    // A number names the class as the data prints it.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "value": 1, "strokes": pair})).unwrap();
+    check(&s);
+    // Kept in the project file, and through applying the same symbology again.
+    let dir = std::env::temp_dir().join(format!("rustgis-class-strokes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("strokes.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    check(&t);
+    let png = dir.join("map.png");
+    t.run("share.exportMap", &json!({"path": png.display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    s.run("layer.symbology", &json!({"layer": "Rivers", "type": "unique", "field": "scalerank", "ramp": "Ember"})).unwrap();
+    check(&s);
+    // Junk, a class that isn't there, or a class on the wrong renderer: refused, nothing changes.
+    let depth = s.undo_depth();
+    for bad in [
+        json!({"layer": "Rivers", "value": "7", "strokes": pair}),
+        json!({"layer": "Rivers", "index": 0, "strokes": pair}),
+        json!({"layer": "Rivers", "value": "1", "index": 0, "strokes": pair}),
+        json!({"layer": "Rivers", "value": [1], "strokes": pair}),
+        json!({"layer": "Rivers", "value": "1", "strokes": vec![json!({}); 17]}),
+        json!({"layer": "Rivers", "value": "1", "strokes": [{"cap": "pointy"}]}),
+        json!({"layer": "Cities", "value": "1", "strokes": []}),
+    ] {
+        assert!(s.run("layer.lineStrokes", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // [] gives the class back to the layer's strokes; undo brings its own back.
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "value": "1", "strokes": []})).unwrap();
+    assert!(s.map().layer_by_name("Rivers").unwrap().strokes(0).iter().all(|st| st.offset == 3.0));
+    s.run("edit.undo", &Value::Null).unwrap();
+    check(&s);
+    // Another field starts fresh.
+    s.run("layer.symbology", &json!({"layer": "Rivers", "type": "unique", "field": "name"})).unwrap();
+    assert!(!s.map().layer_by_name("Rivers").unwrap().renderer.has_class_strokes());
+    // Graduated Colors classes go by index; a single symbol has no classes.
+    s.run("layer.symbology", &json!({"layer": "Rivers", "type": "graduated", "field": "scalerank", "classes": 2})).unwrap();
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 0, "strokes": pair})).unwrap();
+    assert_eq!(s.map().layer_by_name("Rivers").unwrap().renderer.class_strokes(&ClassRef::Index(0)).unwrap(), casing.as_slice());
+    assert!(s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 9, "strokes": pair})).is_err());
+    assert!(s.run("layer.lineStrokes", &json!({"layer": "Rivers", "value": "1", "strokes": pair})).is_err());
+    s.run("layer.symbology", &json!({"layer": "Rivers", "type": "single"})).unwrap();
+    assert!(s.run("layer.lineStrokes", &json!({"layer": "Rivers", "index": 0, "strokes": pair})).is_err());
+}
+
+#[test]
 fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));

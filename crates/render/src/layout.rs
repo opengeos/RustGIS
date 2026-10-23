@@ -1360,6 +1360,8 @@ mod tests {
                 ramp: rustgis_map::Ramp::Ember,
                 class_labels: Default::default(),
                 other_label: None,
+                class_strokes: Default::default(),
+                other_strokes: Vec::new(),
             };
         }
         // How far down the legend draws, in pixels.
@@ -1465,6 +1467,7 @@ mod tests {
                 method: rustgis_map::ClassMethod::NaturalBreaks,
                 min: 0.0,
                 class_labels: Default::default(),
+                class_strokes: Default::default(),
             };
         }
         map.layers.retain(|l| l.id == pts);

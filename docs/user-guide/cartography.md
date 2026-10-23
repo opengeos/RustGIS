@@ -91,6 +91,20 @@ layer.lineStrokes={"layer":"Rivers","strokes":[{"color":"#000000","width":11.5,"
 
 A stroke without `color` or `width` takes the renderer's.
 
+A Unique Values or Graduated Colors class can stack strokes of its own, so a motorway gets a
+casing and a centre line while a path stays a single thin line on the same layer. Pick the class
+under **Strokes for** at the top of the Strokes section (**All classes** edits the layer's
+strokes); a class with strokes of its own is marked with •. A class without its own is drawn with
+the layer's strokes, and changing them while it is picked gives it its own copy. **Use the
+Layer's Strokes** gives the class back to the layer's. A class keeps its strokes when the same
+symbology is applied again on the same field (a Graduated Colors class, while its range stays the
+same). By command, name the class as `layer.classStyle` does, with `value`, `index` or
+`"other": true`:
+
+```text
+layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A1E","width":7},{"color":"#F28C28","width":5},{"color":"#FFFFFF","width":0.6}]}
+```
+
 ### Custom color ramps
 
 Besides the built-in color schemes, a project can hold your own color ramps: an organization's
