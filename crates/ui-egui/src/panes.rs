@@ -9,7 +9,7 @@ use rustgis_engine::analysis::{ParamKind, tools};
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::{Normalizer, RasterLegend, RasterStyle};
 use rustgis_engine::map::symbology::{
-    ClassRef, ClassStyle, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
+    ClassRef, ClassStyle, Dash, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
     OTHER_VALUES, normalize_label,
 };
 use rustgis_engine::map::tiles::{TileKind, TileLayer};
@@ -3899,6 +3899,31 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
 }
 
 /// A stroke as `layer.lineStrokes` takes it.
+/// The dash patterns the stroke editor offers, in stroke widths (dash, gap, …).
+const DASH_PRESETS: [(&str, Option<&[f32]>); 5] = [
+    ("Solid", None),
+    ("Dashed", Some(&[4.0, 2.0])),
+    ("Dotted", Some(&[1.0, 2.0])),
+    ("Dash-dot", Some(&[4.0, 2.0, 1.0, 2.0])),
+    ("Long dash", Some(&[8.0, 3.0])),
+];
+
+/// A dash pattern as the stroke editor shows it: `4 2`.
+fn dash_text(d: &Dash) -> String {
+    d.steps().iter().map(|v| format!("{}", (v * 100.0).round() / 100.0)).collect::<Vec<_>>().join(" ")
+}
+
+/// A dash pattern typed in the stroke editor: `Some(None)` for none (solid), `None` when it isn't
+/// one ([`Dash::new`]). Lengths are separated by spaces, commas or semicolons.
+fn parse_dash(text: &str) -> Option<Option<Dash>> {
+    let parts: Vec<&str> = text.split([' ', ',', ';']).filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return Some(None);
+    }
+    let steps: Vec<f32> = parts.iter().map(|p| p.parse::<f32>().ok()).collect::<Option<_>>()?;
+    Dash::new(&steps).map(Some)
+}
+
 fn stroke_json(st: &LineStroke) -> Value {
     json!({
         "color": st.color.map(|c| c.hex8()),
@@ -3907,6 +3932,7 @@ fn stroke_json(st: &LineStroke) -> Value {
         "cap": st.cap.code(),
         "join": st.join.code(),
         "level": st.level,
+        "dash": st.dash.map(|d| d.steps().to_vec()),
     })
 }
 
@@ -4028,12 +4054,33 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             let w = (w * k).max(0.5);
             let y = r.center().y + st.offset * k;
             let pad = cap_pad(st, w);
-            if st.cap == LineCap::Round {
-                ui.painter().circle_filled(pos2(x0, y), w / 2.0, c32(c));
-                ui.painter().circle_filled(pos2(x1, y), w / 2.0, c32(c));
+            // The dashes along the preview, scaled as the strokes are (solid when finer than a
+            // pixel a round, as the map draws them).
+            let steps: Vec<f32> = st.dash.map(|d| d.even_steps().iter().map(|v| v * k).collect()).unwrap_or_default();
+            let mut runs = Vec::new();
+            if steps.iter().sum::<f32>() >= 1.0 {
+                let (mut x, mut on) = (x0, true);
+                for step in steps.iter().cycle().take(4096) {
+                    if x >= x1 {
+                        break;
+                    }
+                    let end = (x + step).min(x1);
+                    if on {
+                        runs.push((x, end));
+                    }
+                    (x, on) = (end, !on);
+                }
+            } else {
+                runs.push((x0, x1));
             }
-            let (a, b) = if st.cap == LineCap::Square { (x0 - pad, x1 + pad) } else { (x0, x1) };
-            ui.painter().line_segment([pos2(a, y), pos2(b, y)], Stroke::new(w, c32(c)));
+            for (from, to) in runs {
+                if st.cap == LineCap::Round {
+                    ui.painter().circle_filled(pos2(from, y), w / 2.0, c32(c));
+                    ui.painter().circle_filled(pos2(to, y), w / 2.0, c32(c));
+                }
+                let (a, b) = if st.cap == LineCap::Square { (from - pad, to + pad) } else { (from, to) };
+                ui.painter().line_segment([pos2(a, y), pos2(b, y)], Stroke::new(w, c32(c)));
+            }
         }
         // The line's direction.
         let (ay, ax) = (r.max.y - 6.0, r.max.x - 8.0);
@@ -4142,6 +4189,36 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                             set(app, LineStroke { join: j, ..st });
                         }
                     }
+                });
+                ui.end_row();
+                ui.label(tl!("Dash"));
+                ui.horizontal(|ui| {
+                    // The pattern as typed, kept while the box has focus; set when it loses it.
+                    let id = ui.id().with(("stroke_dash", i));
+                    let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
+                    let mut text = ui.data_mut(|m| m.get_temp::<String>(id)).unwrap_or(shown);
+                    let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
+                    let r =
+                        ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
+                    if r.changed() {
+                        ui.data_mut(|m| m.insert_temp(id, text.clone()));
+                    }
+                    if r.lost_focus() {
+                        ui.data_mut(|m| m.remove::<String>(id));
+                        if let Some(dash) = parse_dash(&text).filter(|d| *d != st.dash) {
+                            set(app, LineStroke { dash, ..st });
+                        }
+                    }
+                    let preset = egui::ComboBox::from_id_salt(("stroke_dash_preset", i)).selected_text("").width(24.0);
+                    preset.show_ui(ui, |ui| {
+                        for (label, steps) in DASH_PRESETS {
+                            // Scaled by the stroke's width, so a thick line's dashes stay in proportion.
+                            let dash = steps.and_then(|s| Dash::new(&s.iter().map(|v| v * w.max(1.0)).collect::<Vec<_>>()));
+                            if ui.selectable_label(dash == st.dash, tl!(label)).clicked() {
+                                set(app, LineStroke { dash, ..st });
+                            }
+                        }
+                    });
                 });
                 ui.end_row();
                 if l.stroke_levels {

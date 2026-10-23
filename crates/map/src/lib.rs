@@ -1646,6 +1646,34 @@ mod tests {
     }
 
     #[test]
+    fn dash_patterns_are_kept_and_hostile_ones_brought_into_range() {
+        use symbology::{Dash, MAX_DASH_STEP, MAX_DASH_STEPS};
+        // Built: in range, not all 0, at most MAX_DASH_STEPS.
+        assert_eq!(Dash::new(&[4.0, 2.0]).map(|d| d.steps().to_vec()), Some(vec![4.0, 2.0]));
+        assert_eq!(Dash::new(&[3.0]).map(|d| (d.even_steps(), d.period())), Some((vec![3.0, 3.0], 6.0)), "odd: twice over");
+        for bad in [&[][..], &[0.0, 0.0], &[-1.0, 2.0], &[f32::NAN, 1.0], &[MAX_DASH_STEP + 1.0], &[1.0; MAX_DASH_STEPS + 1]] {
+            assert!(Dash::new(bad).is_none(), "{bad:?}");
+        }
+        // Saved as a plain list and read back.
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        l.line_strokes = vec![symbology::LineStroke { dash: Dash::new(&[4.0, 2.0, 1.0, 2.0]), ..Default::default() }];
+        let text = serde_json::to_string(&l).unwrap();
+        assert!(text.contains(r#""dash":[4.0,2.0,1.0,2.0]"#), "{text}");
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().line_strokes, l.line_strokes);
+        // A crafted project's: steps clamped, too many cut, and one without length solid.
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let read = |v: &serde_json::Value| serde_json::from_value::<Layer>(v.clone()).unwrap().line_strokes[0].dash;
+        v["line_strokes"][0]["dash"] = serde_json::json!([1e30, -5, 2]);
+        assert_eq!(read(&v).map(|d| d.steps().to_vec()), Some(vec![MAX_DASH_STEP, 0.0, 2.0]));
+        v["line_strokes"][0]["dash"] = serde_json::json!(vec![1.0; 5000]);
+        assert_eq!(read(&v).map(|d| d.steps().len()), Some(MAX_DASH_STEPS));
+        for solid in [serde_json::json!([0, 0]), serde_json::json!([]), serde_json::json!([-3])] {
+            v["line_strokes"][0]["dash"] = solid.clone();
+            assert_eq!(read(&v), None, "{solid}");
+        }
+    }
+
+    #[test]
     fn a_reference_scale_scales_sizes_with_the_map_and_hostile_ones_are_dropped() {
         let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
         assert_eq!(l.size_factor(10_000.0), 1.0, "none: sizes stay as set");

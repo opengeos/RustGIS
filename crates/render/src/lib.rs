@@ -358,6 +358,9 @@ fn paint(c: Rgba, opacity: f32) -> Paint<'static> {
     p
 }
 
+/// The most dashes a dashed stroke is cut into along one path (`Ctx::dash`).
+const MAX_DASHES: f32 = 100_000.0;
+
 struct Ctx<'a> {
     view: &'a View,
     ppp: f32,
@@ -592,6 +595,21 @@ impl Ctx<'_> {
         self.stacked_path(pm, &path, s, strokes);
     }
 
+    /// A stroke's dash pattern in pixels for `path`, or `None` to draw it solid: a pattern under a
+    /// pixel a round, or one that would cut the path into more than [`MAX_DASHES`] dashes (each
+    /// is a path of its own), would only cost time.
+    fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<tiny_skia::StrokeDash> {
+        let steps: Vec<f32> = d.even_steps().iter().map(|v| v * self.ppp).collect();
+        let period: f32 = steps.iter().sum();
+        let b = path.bounds();
+        // A path's length is at least its bounds' span; most lines aren't much longer.
+        let span = (b.width() + b.height()) * 2.0;
+        if !(period >= 1.0 && span / period <= MAX_DASHES) {
+            return None;
+        }
+        tiny_skia::StrokeDash::new(steps, 0.0)
+    }
+
     fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke]) {
         // Shifted once per offset: a casing and its core usually share one.
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
@@ -620,6 +638,7 @@ impl Ctx<'_> {
                     rustgis_map::LineJoin::Miter => LineJoin::Miter,
                     rustgis_map::LineJoin::Bevel => LineJoin::Bevel,
                 },
+                dash: st.dash.and_then(|d| self.dash(&d, drawn)),
                 ..Stroke::default()
             };
             pm.stroke_path(drawn, &paint(c, 1.0), &stroke, Transform::identity(), None);
@@ -5473,6 +5492,42 @@ mod tests {
         l.line_strokes[1].level = Some(0);
         let r = render(&mut m, &view).unwrap();
         assert_eq!(colour(&r, 60), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_dashed_stroke_leaves_gaps() {
+        // A line across the view, one 4-point black stroke: solid it covers the middle of the row;
+        // dashed 10 on, 10 off (flat caps), about half of it, in runs about 10 pixels long.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("road", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let stroke = rustgis_map::LineStroke {
+            color: Some(Rgba::rgb(0, 0, 0)),
+            width: Some(4.0),
+            cap: rustgis_map::LineCap::Butt,
+            ..Default::default()
+        };
+        let dark = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            (40..160).map(|x| r.pixmap.pixel(x, 100).unwrap().red() < 128).collect::<Vec<bool>>()
+        };
+        m.layer_mut(id).unwrap().line_strokes = vec![stroke];
+        assert!(dark(&mut m).iter().all(|d| *d), "solid");
+        let dash = rustgis_map::symbology::Dash::new(&[10.0, 10.0]);
+        m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
+        let row = dark(&mut m);
+        let on = row.iter().filter(|d| **d).count();
+        assert!((50..=70).contains(&on), "{on} of 120 pixels dark");
+        let runs = row.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!((10..=13).contains(&runs), "{runs} changes along the row");
+        // A pattern under a pixel a round draws solid rather than cut into slivers.
+        let dash = rustgis_map::symbology::Dash::new(&[0.2, 0.2]);
+        m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
+        assert!(dark(&mut m).iter().all(|d| *d), "too fine: solid");
     }
 
     #[test]

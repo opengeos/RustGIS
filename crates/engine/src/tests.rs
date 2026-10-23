@@ -351,6 +351,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             cap: LineCap::Round,
             join: LineJoin::Round,
             level: None,
+            dash: None,
         },
         LineStroke {
             color: Some(Rgba::rgb(0xFF, 0x8C, 0)),
@@ -359,6 +360,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             cap: LineCap::Butt,
             join: LineJoin::Miter,
             level: None,
+            dash: None,
         },
         LineStroke { offset: -2.0, ..LineStroke::default() },
     ];
@@ -403,6 +405,22 @@ fn line_strokes_stack_and_survive_save_and_undo() {
     assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes.len(), 1);
+}
+
+#[test]
+fn a_stroke_is_dashed_by_command() {
+    let mut s = world();
+    let stroke = |dash: Value| json!({"layer": "Rivers", "strokes": [{"color": "#000000", "width": 2, "dash": dash}]});
+    s.run("layer.lineStrokes", &stroke(json!([4, 2.5]))).unwrap();
+    let dash = |s: &Session| s.map().layer_by_name("Rivers").unwrap().line_strokes[0].dash.map(|d| d.steps().to_vec());
+    assert_eq!(dash(&s), Some(vec![4.0, 2.5]));
+    let depth = s.undo_depth();
+    for bad in [json!([]), json!([0, 0]), json!([-1, 2]), json!([1, "2"]), json!("4 2"), json!([1, 1, 1, 1, 1, 1, 1, 1, 1]), json!([1e9])] {
+        assert!(s.run("layer.lineStrokes", &stroke(bad.clone())).is_err(), "{bad}");
+    }
+    assert_eq!((s.undo_depth(), dash(&s)), (depth, Some(vec![4.0, 2.5])), "a refused pattern changes nothing");
+    s.run("layer.lineStrokes", &stroke(Value::Null)).unwrap();
+    assert_eq!(dash(&s), None, "null: solid");
 }
 
 #[test]
