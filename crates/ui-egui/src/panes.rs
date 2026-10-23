@@ -3888,7 +3888,13 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         // The composed symbol along a line drawn left to right: a positive offset shows below it.
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(4), t.ribbon);
-        let preview: Vec<LineStroke> = if strokes.is_empty() { vec![LineStroke::default()] } else { strokes.clone() };
+        let mut preview: Vec<LineStroke> = if strokes.is_empty() { vec![LineStroke::default()] } else { strokes.clone() };
+        // In levels, a stroke shows over the lower levels' (ties keep their stack order), as the map has it.
+        if l.stroke_levels {
+            let mut levelled: Vec<(u8, LineStroke)> = preview.iter().enumerate().map(|(i, st)| (st.level_at(i), *st)).collect();
+            levelled.sort_by_key(|(level, _)| *level);
+            preview = levelled.into_iter().map(|(_, st)| st).collect();
+        }
         let reach = preview.iter().map(|st| st.offset.abs() + st.resolve(&base).1 / 2.0).fold(1.0_f32, f32::max);
         let k = (18.0 / reach).min(1.0);
         let (x0, x1) = (r.min.x + 14.0, r.max.x - 14.0);
