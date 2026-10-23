@@ -2686,14 +2686,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         let ctx = if size_factor == 1.0 {
             &ctx
         } else {
-            scaled_ctx = Ctx {
-                view: ctx.view,
-                ppp: ctx.ppp * size_factor,
-                wireframe: ctx.wireframe,
-                cull: ctx.cull,
-                globe: ctx.globe,
-                sprites: Default::default(),
-            };
+            // Its own sprite cache: the sprites are drawn at the scaled size.
+            scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), ..ctx };
             &scaled_ctx
         };
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
