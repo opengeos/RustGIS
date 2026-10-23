@@ -597,14 +597,12 @@ impl Ctx<'_> {
 
     /// A stroke's dash pattern in pixels for `path`, or `None` to draw it solid: a pattern under a
     /// pixel a round, or one that would cut the path into more than [`MAX_DASHES`] dashes (each
-    /// is a path of its own), would only cost time.
+    /// is a path of its own), would only cost time. The whole path counts, on screen or not: the
+    /// dashing doesn't skip what's off screen.
     fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<tiny_skia::StrokeDash> {
         let steps: Vec<f32> = d.even_steps().iter().map(|v| v * self.ppp).collect();
         let period: f32 = steps.iter().sum();
-        let b = path.bounds();
-        // A path's length is at least its bounds' span; most lines aren't much longer.
-        let span = (b.width() + b.height()) * 2.0;
-        if !(period >= 1.0 && span / period <= MAX_DASHES) {
+        if !(period >= 1.0 && path_length(path) / period <= MAX_DASHES) {
             return None;
         }
         tiny_skia::StrokeDash::new(steps, 0.0)
@@ -775,6 +773,35 @@ impl Ctx<'_> {
             Geometry::Polygon(polys) => self.polygon(pm, polys, Some(paint(SELECTION.with_alpha(40), 1.0)), Some((cyan, 2.0))),
         }
     }
+}
+
+/// The length of `path` in pixels, at most a little over: a curve counts as its control polygon,
+/// which is never shorter than the curve.
+fn path_length(path: &tiny_skia::Path) -> f32 {
+    let (mut len, mut last, mut start) = (0.0, None, None);
+    for seg in path.segments() {
+        let pts = match seg {
+            tiny_skia::PathSegment::MoveTo(p) => {
+                (last, start) = (Some(p), Some(p));
+                continue;
+            }
+            tiny_skia::PathSegment::LineTo(p) => [p, p, p],
+            tiny_skia::PathSegment::QuadTo(a, p) => [a, p, p],
+            tiny_skia::PathSegment::CubicTo(a, b, p) => [a, b, p],
+            tiny_skia::PathSegment::Close => match start {
+                Some(p) => [p, p, p],
+                None => continue,
+            },
+        };
+        if let Some(mut q) = last {
+            for p in pts {
+                len += q.distance(p);
+                q = p;
+            }
+        }
+        last = Some(pts[2]);
+    }
+    len
 }
 
 /// `path`'s polylines shifted `d` pixels to the right of their direction (screen y down).
@@ -5492,6 +5519,36 @@ mod tests {
         l.line_strokes[1].level = Some(0);
         let r = render(&mut m, &view).unwrap();
         assert_eq!(colour(&r, 60), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_winding_path_counts_its_length_against_the_dash_limit() {
+        // A zigzag inside a 10-pixel square, 20,000 times across it: 200,000 pixels of line in
+        // bounds whose span is 40.
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        for i in 0..20_000 {
+            pb.line_to(if i % 2 == 0 { 10.0 } else { 0.0 }, 0.0);
+        }
+        let zigzag = pb.finish().unwrap();
+        assert!((path_length(&zigzag) - 200_000.0).abs() < 1.0);
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        pb.line_to(30.0, 0.0);
+        pb.line_to(30.0, 40.0);
+        pb.close();
+        assert!((path_length(&pb.finish().unwrap()) - 120.0).abs() < 1e-3);
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        // A 1-pixel period would cut it into 200,000 dashes: drawn solid. A 4-pixel one is fine.
+        assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[0.5, 0.5]).unwrap(), &zigzag).is_none());
+        assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[2.0, 2.0]).unwrap(), &zigzag).is_some());
     }
 
     #[test]
