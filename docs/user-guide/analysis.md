@@ -242,9 +242,10 @@ quote after `"tool": ` opens the list of the tools, beside the highlighted tool'
 one closes it. In its `"params": {…}`, the keys offered are those of the tool its `"tool"` names
 (by id or name, before or after `params`), beside the highlighted key's kind, name, default and
 help; there the help by the cursor is the tool's. A `task.addStep` line works the same way: its
-`"command": "` offers the commands, and its `"params"` that command's keys and help. A `{` typed
-closes itself, the cursor inside, unless text follows it or it's in a string or a comment; a `}` typed before a `}` steps over it, and Backspace in an empty `{}` deletes
-both. Pasting adds nothing.
+`"command": "` offers the commands, and its `"params"` that command's keys and help. A `{` or `[`
+typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
+a `}` or `]` typed before the same one steps over it, and Backspace in an empty `{}` or `[]`
+deletes both. Pasting adds nothing.
 
 ## ModelBuilder
 
