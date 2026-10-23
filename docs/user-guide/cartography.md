@@ -128,6 +128,23 @@ time. By command (`"level"` on a stroke, `null` for its place in the stack):
 layer.strokeLevels={"layer":"Roads","on":true}
 ```
 
+### Reference scale
+
+Symbol and label sizes are set in points, and normally keep that size on screen at every scale.
+A layer with a **Reference scale** (Style pane, **Layer**) has its sizes set for that scale
+instead, as on a printed map: zoomed in to half of it, its lines, markers and labels are drawn
+twice as large; zoomed out to twice it, half as large (within 1/100 and 32 times). Pick a scale,
+**Current scale** to keep the sizes as they are now, or **None**. A topographic map designed for
+1:25,000 then keeps its proportions as you zoom. By command (a scale, `"current"` or `null`):
+
+```text
+layer.referenceScale={"layer":"Roads","scale":25000}
+```
+
+Scales in RustGIS take a screen pixel to be 0.28 mm (the OGC standard pixel). Programs that take
+96 pixels to the inch (0.2646 mm) call the same view a larger scale; to match their sizes,
+multiply their reference scale by 0.2646 / 0.28 (about 0.945).
+
 ### Custom color ramps
 
 Besides the built-in color schemes, a project can hold your own color ramps: an organization's

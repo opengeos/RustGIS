@@ -529,6 +529,47 @@ fn strokes_draw_in_levels() {
 }
 
 #[test]
+fn a_reference_scale_is_set_kept_and_undone() {
+    let mut s = world();
+    let depth = s.undo_depth();
+    s.run("layer.referenceScale", &json!({"layer": "Rivers", "scale": 25000})).unwrap();
+    // "current" takes the map's scale, rounded.
+    let now = s.map().scale().round();
+    s.run("layer.referenceScale", &json!({"layer": "Cities", "scale": "current"})).unwrap();
+    assert_eq!(s.undo_depth(), depth + 2);
+    let check = |s: &Session| {
+        let at = |n: &str| s.map().layer_by_name(n).unwrap().reference_scale;
+        assert_eq!((at("Rivers"), at("Cities"), at("Lakes")), (Some(25000.0), Some(now), None));
+    };
+    check(&s);
+    let dir = std::env::temp_dir().join(format!("rustgis-reference-scale-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reference.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    check(&t);
+    t.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let depth = s.undo_depth();
+    for bad in [
+        json!({"layer": "Rivers", "scale": 0}),
+        json!({"layer": "Rivers", "scale": -25000}),
+        json!({"layer": "Rivers", "scale": 1e12}),
+        json!({"layer": "Rivers", "scale": "big"}),
+        json!({"layer": "Rivers", "scale": [25000]}),
+        json!({"layer": "Nowhere", "scale": 25000}),
+    ] {
+        assert!(s.run("layer.referenceScale", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    s.run("layer.referenceScale", &json!({"layer": "Rivers", "scale": null})).unwrap();
+    assert_eq!(s.map().layer_by_name("Rivers").unwrap().reference_scale, None);
+    s.run("edit.undo", &Value::Null).unwrap();
+    check(&s);
+}
+
+#[test]
 fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));

@@ -2697,6 +2697,23 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
             // Everything below only reads the layer: borrow rather than copy its data each frame.
             let layer: &rustgis_map::Layer = layer;
+            // A layer with a reference scale draws its symbols (and labels, below) grown or shrunk
+            // with the map: its points are wider or narrower in pixels.
+            let size_factor = layer.size_factor(scale);
+            let scaled_ctx;
+            let ctx = if size_factor == 1.0 {
+                &ctx
+            } else {
+                scaled_ctx = Ctx {
+                    view: ctx.view,
+                    ppp: ctx.ppp * size_factor,
+                    wireframe: ctx.wireframe,
+                    cull: ctx.cull,
+                    globe: ctx.globe,
+                    sprites: Default::default(),
+                };
+                &scaled_ctx
+            };
             let label_row = |row: usize| if complete_source { layer.dataset.features.get(row).map_or(row, |f| f.id as usize) } else { row };
             let (labels, selection, ds_ptr) = (&layer.labels, &layer.selection, &layer.dataset);
             // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
@@ -2770,7 +2787,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let aggregate = layer.aggregation.filter(|_| layer.geometry_type() == GeometryType::Point);
                 let extrude = layer.extrusion.as_ref().filter(|_| layer.geometry_type() == GeometryType::Polygon && globe.is_none());
                 if let Some(a) = aggregate {
-                    bins.add((w, h), &ctx, &geoms, &rows, a);
+                    bins.add((w, h), ctx, &geoms, &rows, a);
                     aggregate_symbol.get_or_insert_with(|| layer.symbol(0));
                 } else if extrude.is_some() && matches!(labels_to, Labels::Tilted(..)) {
                     // Stood up in perspective over the tilted view (`render_tilted`); its labels still
@@ -2783,9 +2800,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 } else if let Some(x) = extrude.filter(|_| !matches!(labels_to, Labels::Shared)) {
                     let px_per_m = view.pixels_per_point / (map_ground_res(view, &flat) * body);
                     if let Some(spool) = &mut extrusions {
-                        spool.add(&ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r))?;
+                        spool.add(ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r))?;
                     } else {
-                        effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
+                        effects::extrude(dest, ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
                     }
                 } else {
                     let mut stroke_paths = stroke_paths::Paths::default();
@@ -2825,7 +2842,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         }
                         match g {
                             Geometry::Line(parts) if !strokes.is_empty() && levels => stacked.push((parts, sym, strokes)),
-                            Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(&ctx, dest, parts, &sym, strokes),
+                            Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(ctx, dest, parts, &sym, strokes),
                             _ => ctx.feature(dest, g, &sym),
                         }
                     }
@@ -2843,14 +2860,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         let Some((parts, sym, strokes)) = stacked.get(f) else { continue };
                         one.clear();
                         one.extend(strokes.iter().enumerate().filter(|(i, s)| s.level_at(*i) == level).map(|(_, s)| *s));
-                        stroke_paths.draw(&ctx, dest, parts, sym, &one);
+                        stroke_paths.draw(ctx, dest, parts, sym, &one);
                     }
                 }
                 cpu_dirty |= drawn_here;
             }
             if !complete_source {
                 if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
-                    bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
+                    bins.draw(if direct { &mut pm } else { &mut target }, ctx, a, &base);
                 }
                 if !direct {
                     composite(&mut pm, &target);
@@ -2935,7 +2952,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                     let Some((x, y)) = ctx.screen(c) else { continue };
                     let is_point = g.kind() == GeometryType::Point;
-                    let marker = if is_point { layer.symbol(row).size } else { 0.0 };
+                    let marker = if is_point { layer.symbol(row).size * size_factor } else { 0.0 };
                     // Bigger polygons get priority.
                     let area = match g {
                         Geometry::Polygon(_) => {
@@ -2958,9 +2975,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             continue;
                         }
                         let text = v.to_string();
+                        let size = class.size * size_factor;
                         let (dx, dy) = class.placement.offset(
-                            text::block_width(&text, class.size, class.bold),
-                            text::block_height(&text, class.size),
+                            text::block_width(&text, size, class.bold),
+                            text::block_height(&text, size),
                             marker,
                             is_point,
                         );
@@ -2973,7 +2991,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 text,
                                 x: x as f32 + dx,
                                 y: y as f32 + dy,
-                                size: class.size,
+                                size,
                                 color: class.color,
                                 halo: class.halo.then_some(halo_for(class.color)),
                                 bold: class.bold,
@@ -5439,6 +5457,34 @@ mod tests {
         l.line_strokes[1].level = Some(0);
         let r = render(&mut m, &view).unwrap();
         assert_eq!(colour(&r, 60), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_reference_scale_scales_lines_with_the_map() {
+        // A 4-point black line: as wide as set without a reference scale or at it, twice as wide
+        // at half the reference scale (zoomed in), half as wide at twice it.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("road", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        m.camera = camera;
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let base = Symbol::default_for(GeometryType::Polyline, 0);
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(Symbol { stroke: Rgba::rgb(0, 0, 0), stroke_width: 4.0, ..base });
+        let width = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            (0..200).filter(|&y| r.pixmap.pixel(100, y).unwrap().red() < 128).count()
+        };
+        let plain = width(&mut m);
+        assert!((3..=5).contains(&plain), "{plain}");
+        let scale = m.scale();
+        for (reference, want) in [(scale, plain), (scale * 2.0, plain * 2), (scale / 2.0, plain / 2)] {
+            m.layer_mut(id).unwrap().reference_scale = Some(reference);
+            let got = width(&mut m);
+            assert!(got.abs_diff(want) <= 1, "reference 1:{reference:.0} at 1:{scale:.0}: {got} px, not about {want}");
+        }
     }
 
     #[test]

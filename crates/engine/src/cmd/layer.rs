@@ -220,6 +220,23 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_layer)
         .params(r#"{"layer"?, "min"?: scale (out beyond), "max"?: scale (in beyond)}"#),
+        C::new("layer.referenceScale", "Reference Scale", "Style › Drawing", |s, p| {
+            let (lo, hi) = rustgis_map::REFERENCE_SCALES;
+            let scale = match p.get("scale") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => Some(s.map().scale().round().clamp(lo, hi)),
+                Some(_) => Some(f(p, "scale").filter(|v| (lo..=hi).contains(v)).ok_or("scale is a number from 1 to 1000000000, \"current\" or null")?),
+            };
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if l.is_raster() || l.graphics {
+                return Err("this works on feature layers".into());
+            }
+            l.reference_scale = scale;
+            Ok(json!({"scale": scale}))
+        })
+        .when(need_feature_layer)
+        .params(r#"{"layer"?, "scale": 1:N the symbols' and labels' sizes are set for (drawn at another scale they grow and shrink with the map)|"current" (the map's scale)|null (sizes stay as set on screen)}"#),
         C::new("layer.selectable", "Selectable", "Layers", |s, p| {
             let ids = layer_ids(s, p)?;
             let on = b(p, "on").unwrap_or_else(|| {

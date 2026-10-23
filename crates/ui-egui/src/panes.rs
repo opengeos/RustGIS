@@ -3420,6 +3420,39 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
         transparency_drag(app, ui, &r, &l, tr);
     });
+    if !l.graphics {
+        reference_scale_row(app, ui, &l);
+    }
+}
+
+/// The scales the Reference scale picker offers, besides none and the map's own.
+const REFERENCE_SCALE_CHOICES: [f64; 8] = [5_000.0, 10_000.0, 25_000.0, 50_000.0, 100_000.0, 200_000.0, 500_000.0, 1_000_000.0];
+
+/// The Symbology pane's Reference scale: the scale a layer's symbol and label sizes are set
+/// for, so they grow and shrink with the map (`layer.referenceScale`).
+fn reference_scale_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+    let current = app.session.map().scale().round();
+    ui.horizontal(|ui| {
+        ui.label(tl!("Reference scale")).on_hover_text(tl!(
+            "The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper."
+        ));
+        egui::ComboBox::from_id_salt("reference_scale").selected_text(crate::ribbon::scale_label(l.reference_scale)).width(130.0).show_ui(
+            ui,
+            |ui| {
+                let mut pick = |ui: &mut Ui, label: String, scale: Value, on: bool| {
+                    if ui.selectable_label(on, label).clicked() {
+                        let _ = app.run("layer.referenceScale", json!({"scale": scale}));
+                    }
+                };
+                pick(ui, crate::ribbon::scale_label(None), Value::Null, l.reference_scale.is_none());
+                for c in REFERENCE_SCALE_CHOICES {
+                    pick(ui, crate::ribbon::scale_label(Some(c)), json!(c), l.reference_scale == Some(c));
+                }
+                let label = crate::i18n::fmt("Current scale ({scale})", &[("scale", &crate::ribbon::scale_label(Some(current)))]);
+                pick(ui, label, json!("current"), false);
+            },
+        );
+    });
 }
 
 /// The Symbology pane's Transparency slider: the map follows it while it's dragged, and letting
