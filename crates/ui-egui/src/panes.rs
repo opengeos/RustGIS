@@ -3645,11 +3645,16 @@ fn set_strokes(app: &mut RustGisApp, class: Option<&ClassRef>, strokes: &[LineSt
 /// The classes a line layer's strokes can be set for, with their legend labels and symbols.
 fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
     match r {
-        Renderer::Unique { classes, other, class_labels, other_label, .. } => classes
-            .iter()
-            .map(|(k, s)| (ClassRef::Value(k.clone()), class_labels.get(k).cloned().unwrap_or_else(|| k.clone()), *s))
-            .chain(std::iter::once((ClassRef::Other, other_label.clone().unwrap_or_else(|| tl!(OTHER_VALUES).to_string()), *other)))
-            .collect(),
+        Renderer::Unique { classes, other, class_labels, other_label, .. } => {
+            // A value listed twice is drawn with its first class, as the legend shows it.
+            let mut seen = std::collections::HashSet::new();
+            classes
+                .iter()
+                .filter(|(k, _)| seen.insert(k.as_str()))
+                .map(|(k, s)| (ClassRef::Value(k.clone()), class_labels.get(k).cloned().unwrap_or_else(|| k.clone()), *s))
+                .chain(std::iter::once((ClassRef::Other, other_label.clone().unwrap_or_else(|| tl!(OTHER_VALUES).to_string()), *other)))
+                .collect()
+        }
         Renderer::Graduated { symbols, .. } => {
             let legend = r.legend();
             symbols
@@ -4626,6 +4631,30 @@ mod tests {
             (Some("100"), Some("All"))
         );
         assert_eq!(f.values.get("output").map(String::as_str), Some("kept"), "not given");
+    }
+
+    /// The Strokes for picker lists a value listed twice once, for its first class (the one its
+    /// features draw with), then `<all other values>`.
+    #[test]
+    fn stroke_classes_list_a_repeated_value_once() {
+        let (a, b) = (
+            Symbol { stroke_width: 1.0, ..Symbol::default_for(GeometryType::Polyline, 0) },
+            Symbol { stroke_width: 2.0, ..Symbol::default_for(GeometryType::Polyline, 0) },
+        );
+        let r = Renderer::Unique {
+            field: "kind".into(),
+            classes: vec![("road".into(), a), ("rail".into(), b), ("road".into(), b)],
+            other: b,
+            ramp: Ramp::default(),
+            class_labels: Default::default(),
+            other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
+        };
+        let listed = stroke_classes(&r);
+        let refs: Vec<&ClassRef> = listed.iter().map(|(c, ..)| c).collect();
+        assert_eq!(refs, [&ClassRef::Value("road".into()), &ClassRef::Value("rail".into()), &ClassRef::Other]);
+        assert_eq!(listed.first().map(|(.., s)| s.stroke_width), Some(1.0));
     }
 
     fn layer(app: &RustGisApp, name: &str) -> u32 {
