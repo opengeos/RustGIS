@@ -417,6 +417,8 @@ fn a_class_stacks_strokes_of_its_own() {
         for row in 0..l.dataset.features.len() {
             let want = if l.dataset.value(row, fi).to_string() == "1" { &casing } else { &layer_own };
             assert_eq!(l.strokes(row), want.as_slice(), "row {row}");
+            // Classed once, the same as asked apart.
+            assert_eq!(l.style(row), (l.symbol(row), want.as_slice()), "row {row}");
         }
         assert_eq!(l.renderer.class_strokes(&ClassRef::Other).unwrap().len(), 1);
     };

@@ -2806,9 +2806,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             }
                             continue;
                         }
-                        let sym = layer.symbol(row);
-                        // The layer's stacked strokes, or the feature's class's own.
-                        let strokes = layer.strokes(row);
+                        // Its symbol, and the layer's stacked strokes or the feature's class's own.
+                        let (sym, strokes) = layer.style(row);
                         // A feature under a pixel across: blend its coverage into the pixels it touches
                         // (a dense layer seen whole is mostly these, and a path each is slow).
                         // Not stacked strokes: a splat would draw them unshifted, in one colour.
@@ -2851,11 +2850,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // draw over it (the CPU path draws highlights over the layer).
                     if complete_source {
                         let rank = ds_ptr.features.get(*row).and_then(|f| selected_order.get(&f.id)).copied().unwrap_or(usize::MAX);
-                        highlights.push((rank, (**g).clone(), layer.symbol(*row), layer.strokes(*row).to_vec()));
+                        let (symbol, strokes) = layer.style(*row);
+                        highlights.push((rank, (**g).clone(), symbol, strokes.to_vec()));
                     } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
                         // highlight tessellated into the scene, right after its layer
                     } else {
-                        ctx.highlight(&mut pm, g, &layer.symbol(*row), layer.strokes(*row));
+                        let (symbol, strokes) = layer.style(*row);
+                        ctx.highlight(&mut pm, g, &symbol, strokes);
                         cpu_dirty = true;
                     }
                 }

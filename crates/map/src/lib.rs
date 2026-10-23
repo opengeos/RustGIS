@@ -419,6 +419,16 @@ impl Layer {
         self.renderer.strokes_for(&self.dataset, row).unwrap_or(&self.line_strokes)
     }
 
+    /// A row's symbol and stacked strokes ([`Layer::symbol`], [`Layer::strokes`]), the feature
+    /// classed once for both.
+    pub fn style(&self, row: usize) -> (Symbol, &[LineStroke]) {
+        if self.graphics || !self.renderer.has_class_strokes() {
+            return (self.symbol(row), self.strokes(row));
+        }
+        let (symbol, strokes) = self.renderer.style_for(&self.dataset, row);
+        (symbol, strokes.unwrap_or(&self.line_strokes))
+    }
+
     /// Whether some feature may be drawn with stacked strokes ([`Layer::strokes`]).
     pub fn has_strokes(&self) -> bool {
         !self.graphics && (!self.line_strokes.is_empty() || self.renderer.has_class_strokes())

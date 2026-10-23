@@ -511,7 +511,18 @@ impl Renderer {
     /// The stacked strokes a line feature row's class has of its own (`class_strokes`), or `None`
     /// when its class has none (the layer's `line_strokes` apply).
     pub fn strokes_for(&self, ds: &Dataset, row: usize) -> Option<&[LineStroke]> {
-        let strokes = match (self, self.class_of(ds, row)?) {
+        self.strokes_in(self.class_of(ds, row))
+    }
+
+    /// The symbol a feature row draws with ([`Renderer::symbol_for`]) and its class's own stacked
+    /// strokes ([`Renderer::strokes_for`]), the feature classed once for both.
+    pub fn style_for(&self, ds: &Dataset, row: usize) -> (Symbol, Option<&[LineStroke]>) {
+        let slot = self.class_of(ds, row);
+        (self.symbol_in(ds, row, slot), self.strokes_in(slot))
+    }
+
+    fn strokes_in(&self, slot: Option<Slot>) -> Option<&[LineStroke]> {
+        let strokes = match (self, slot?) {
             (Renderer::Unique { classes, class_strokes, .. }, Slot::Class(i)) => class_strokes.get(&classes.get(i)?.0)?,
             (Renderer::Unique { other_strokes, .. }, Slot::Other) => other_strokes,
             (Renderer::Graduated { class_strokes, .. }, Slot::Class(i)) => class_strokes.get(&i)?,
@@ -586,15 +597,20 @@ impl Renderer {
 
     /// Symbol for a feature row.
     pub fn symbol_for(&self, ds: &Dataset, row: usize) -> Symbol {
+        self.symbol_in(ds, row, self.class_of(ds, row))
+    }
+
+    /// The symbol for a feature row in class `slot` ([`Renderer::class_of`]).
+    fn symbol_in(&self, ds: &Dataset, row: usize, slot: Option<Slot>) -> Symbol {
         match self {
             Renderer::Single(s) => *s,
-            Renderer::Unique { classes, other, .. } => match self.class_of(ds, row) {
+            Renderer::Unique { classes, other, .. } => match slot {
                 Some(Slot::Class(i)) => classes.get(i).map_or(*other, |c| c.1),
                 _ => *other,
             },
             Renderer::Graduated { symbols, .. } => {
                 let fallback = symbols.first().copied().unwrap_or(Symbol::default_for(ds.geometry_type, 0));
-                let Some(Slot::Class(i)) = self.class_of(ds, row) else {
+                let Some(Slot::Class(i)) = slot else {
                     return Symbol { fill: Rgba::new(0xC8, 0xC8, 0xC8, 140), ..fallback };
                 };
                 symbols.get(i).copied().unwrap_or(fallback)
