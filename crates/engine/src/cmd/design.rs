@@ -685,7 +685,7 @@ fn traverse(s: &mut Session, p: &Json) -> CmdResult {
             .and_then(Json::as_f64)
             .map(|d| d * unit)
             .filter(|d| d.is_finite() && *d >= 0.0 && *d < 2e7)
-            .ok_or("each leg has a distance in metres")?;
+            .ok_or("each leg has a finite, non-negative distance in the command's units (limit: less than 20,000 km)")?;
         let brg = leg.get("bearing").and_then(Json::as_f64).filter(|b| b.is_finite()).ok_or("each leg has a bearing in degrees")?;
         let (mut dx, mut dy) = (d * brg.to_radians().sin(), d * brg.to_radians().cos());
         if let Some((k, rot)) = g2g {

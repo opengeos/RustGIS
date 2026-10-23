@@ -106,13 +106,13 @@ pub fn run(s: &mut Session, p: &Json) -> CmdResult {
     }
     let divisor = match unit {
         "km" => 1e3,
-        "ft" => 0.3048,
-        "mi" => 1609.344,
+        "ft" => rustgis_geom::METRES_PER_FOOT,
+        "mi" => rustgis_geom::METRES_PER_MILE,
         "km2" => 1e6,
-        "ft2" => 0.09290304,
-        "mi2" => 2_589_988.110336,
+        "ft2" => rustgis_geom::SQUARE_METRES_PER_SQUARE_FOOT,
+        "mi2" => rustgis_geom::SQUARE_METRES_PER_SQUARE_MILE,
         "ha" => 1e4,
-        "ac" => 4046.8564224,
+        "ac" => rustgis_geom::SQUARE_METRES_PER_ACRE,
         _ => 1.0,
     };
     let mut values = Vec::with_capacity(rows.len());
