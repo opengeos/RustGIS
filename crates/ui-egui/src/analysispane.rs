@@ -267,17 +267,30 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.label(tl!("Output"));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("output layer name")).desired_width(120.0));
             });
-            let can_run = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
-            if !can_run {
+            let band_str = app.workflow.number.trim();
+            let band_valid = if band_str.is_empty() || band_str.eq_ignore_ascii_case("all") {
+                true
+            } else {
+                band_str.split([',', ';', ' ']).all(|part| {
+                    let p = part.trim().trim_matches(|c| c == '[' || c == ']' || c == '"');
+                    p.is_empty() || p.parse::<u64>().is_ok_and(|b| b >= 1)
+                })
+            };
+            let layers_ready = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
+            let can_run = layers_ready && band_valid;
+            if !layers_ready {
                 ui.label(egui::RichText::new(tl!("Add a raster and a polygon layer to calculate zonal statistics.")).small().weak());
+            } else if !band_valid {
+                ui.label(egui::RichText::new(tl!("Band must be a positive integer, list of bands, or 'all'.")).small().color(t.amber));
             }
             if ui.add_enabled(can_run, egui::Button::new(tl!("Calculate Statistics"))).clicked() {
-                let band = app.workflow.number.trim().parse::<u64>().unwrap_or(1);
                 let mut params = json!({
                     "raster": app.workflow.layer,
                     "polygons": app.workflow.layer2,
-                    "bands": [band],
                 });
+                if !band_str.is_empty() {
+                    params["bands"] = json!(band_str);
+                }
                 if !app.workflow.text.trim().is_empty() {
                     params["prefix"] = json!(app.workflow.text.trim());
                 }

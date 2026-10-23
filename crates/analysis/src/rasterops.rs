@@ -619,7 +619,7 @@ pub struct ZoneStats {
 }
 
 /// Numerically stable online accumulator using Welford's algorithm.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Accumulator {
     count: usize,
     sum: f64,
@@ -629,12 +629,21 @@ pub struct Accumulator {
     m2: f64,
 }
 
+impl Default for Accumulator {
+    /// Constructs an empty accumulator with `min = INFINITY` and `max = NEG_INFINITY`.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Accumulator {
+    /// Constructs a new empty accumulator with `min = INFINITY` and `max = NEG_INFINITY`.
     pub fn new() -> Self {
         Self { count: 0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY, mean: 0.0, m2: 0.0 }
     }
 
-    /// Feeds a valid finite measurement into the accumulator.
+    /// Feeds a valid finite measurement into the accumulator, updating count, sum, extrema,
+    /// and running mean / variance using Welford's algorithm. Non-finite values are ignored.
     pub fn add(&mut self, val: f64) {
         if !val.is_finite() {
             return;
@@ -653,10 +662,15 @@ impl Accumulator {
         self.m2 += delta * delta2;
     }
 
+    /// Number of valid finite samples accumulated so far.
     pub fn count(&self) -> usize {
         self.count
     }
 
+    /// Computes and returns the accumulated [`ZoneStats`].
+    ///
+    /// If no valid values were added (`count == 0`), returns `ZoneStats::default()`
+    /// where `count` is 0 and all statistical metrics are `None`.
     pub fn stats(&self) -> ZoneStats {
         if self.count == 0 {
             ZoneStats::default()
@@ -977,6 +991,50 @@ mod tests {
         assert_eq!(def_st.count, 2);
         assert_eq!(def_st.sum, Some(30.0));
         assert_eq!(def_st.mean, Some(15.0));
+    }
+
+    #[test]
+    fn accumulator_default_and_new_consistency_and_extrema() {
+        // default() and new() produce identical initial empty state
+        let d = Accumulator::default();
+        let n = Accumulator::new();
+        assert_eq!(d.count(), 0);
+        assert_eq!(n.count(), 0);
+        assert_eq!(d.stats(), ZoneStats::default());
+        assert_eq!(n.stats(), ZoneStats::default());
+
+        // Negative-only values: min must be -30, max must be -10 (not 0.0)
+        let mut neg_acc = Accumulator::default();
+        neg_acc.add(-30.0);
+        neg_acc.add(-20.0);
+        neg_acc.add(-10.0);
+        let neg_st = neg_acc.stats();
+        assert_eq!(neg_st.count, 3);
+        assert_eq!(neg_st.min, Some(-30.0));
+        assert_eq!(neg_st.max, Some(-10.0));
+        assert_eq!(neg_st.sum, Some(-60.0));
+        assert_eq!(neg_st.mean, Some(-20.0));
+
+        // Positive-only values: min must be 10 (not 0.0), max must be 30
+        let mut pos_acc = Accumulator::default();
+        pos_acc.add(10.0);
+        pos_acc.add(20.0);
+        pos_acc.add(30.0);
+        let pos_st = pos_acc.stats();
+        assert_eq!(pos_st.count, 3);
+        assert_eq!(pos_st.min, Some(10.0));
+        assert_eq!(pos_st.max, Some(30.0));
+
+        // Mixed positive and negative values
+        let mut mixed_acc = Accumulator::default();
+        mixed_acc.add(-5.0);
+        mixed_acc.add(5.0);
+        let mixed_st = mixed_acc.stats();
+        assert_eq!(mixed_st.count, 2);
+        assert_eq!(mixed_st.min, Some(-5.0));
+        assert_eq!(mixed_st.max, Some(5.0));
+        assert_eq!(mixed_st.sum, Some(0.0));
+        assert_eq!(mixed_st.mean, Some(0.0));
     }
 
     #[test]

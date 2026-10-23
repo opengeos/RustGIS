@@ -1483,6 +1483,8 @@ enum StatOp {
 }
 
 impl StatOp {
+    pub const ALL: [StatOp; 6] = [StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev];
+
     fn name(self) -> &'static str {
         match self {
             StatOp::Mean => "mean",
@@ -1504,7 +1506,7 @@ impl StatOp {
     fn parse(raw: &str) -> Result<Vec<StatOp>, String> {
         let clean = raw.trim().to_ascii_lowercase();
         match clean.as_str() {
-            "all" | "" => Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]),
+            "all" | "" => Ok(Self::ALL.to_vec()),
             "mean" => Ok(vec![StatOp::Mean]),
             "min" => Ok(vec![StatOp::Min]),
             "max" => Ok(vec![StatOp::Max]),
@@ -1516,52 +1518,101 @@ impl StatOp {
     }
 }
 
-fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
-    let mut bands = Vec::new();
-    if let Some(arr) = p.get("bands").and_then(Json::as_array) {
-        for item in arr {
-            let b = match item {
-                Json::Number(n) => n.as_u64().map(|v| v as usize),
-                Json::String(str_val) => str_val.trim().parse::<usize>().ok(),
-                _ => None,
-            };
-            let b = b.ok_or_else(|| "band numbers must be positive integers".to_string())?;
-            bands.push(b);
+fn parse_single_band(item: &Json, total_bands: usize, out: &mut Vec<usize>) -> Result<(), String> {
+    match item {
+        Json::Number(n) => {
+            let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
+            if !f.is_finite() {
+                return Err("band number must be a finite number".into());
+            }
+            if f <= 0.0 {
+                return Err("band numbers must be positive (1-based)".into());
+            }
+            if f.fract() != 0.0 {
+                return Err("band numbers must be integers, not decimals".into());
+            }
+            let b = f as usize;
+            if b > total_bands {
+                return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+            }
+            out.push(b);
+            Ok(())
         }
-    } else if let Some(n) = p.get("bands").and_then(Json::as_u64) {
-        bands.push(n as usize);
-    } else {
-        let txt = s(p, "bands").trim();
-        if txt.is_empty() || txt.eq_ignore_ascii_case("all") {
-            bands.push(1);
-        } else {
-            let clean = txt.trim_matches(|c| c == '[' || c == ']');
-            for part in clean.split([',', ';', ' ']) {
-                let part = part.trim();
-                if part.is_empty() {
-                    continue;
+        Json::String(s) => {
+            let txt = s.trim();
+            if txt.eq_ignore_ascii_case("all") {
+                out.extend(1..=total_bands);
+                Ok(())
+            } else {
+                let clean = txt.trim_matches(|c| c == '[' || c == ']');
+                for part in clean.split([',', ';', ' ']) {
+                    let part = part.trim().trim_matches('"');
+                    if part.is_empty() {
+                        continue;
+                    }
+                    if part.eq_ignore_ascii_case("all") {
+                        out.extend(1..=total_bands);
+                        continue;
+                    }
+                    let f: f64 = part.parse().map_err(|_| format!("invalid band number '{part}'"))?;
+                    if !f.is_finite() {
+                        return Err("band number must be a finite number".into());
+                    }
+                    if f <= 0.0 {
+                        return Err("band numbers must be positive (1-based)".into());
+                    }
+                    if f.fract() != 0.0 {
+                        return Err("band numbers must be integers, not decimals".into());
+                    }
+                    let b = f as usize;
+                    if b > total_bands {
+                        return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+                    }
+                    out.push(b);
                 }
-                let b = part.parse::<usize>().map_err(|_| format!("invalid band number '{part}'"))?;
-                bands.push(b);
+                Ok(())
             }
         }
+        _ => Err("band numbers must be positive integers or 'all'".into()),
     }
-    if bands.is_empty() {
-        bands.push(1);
+}
+
+fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    let mut raw_bands = Vec::new();
+    if let Some(arr) = p.get("bands").and_then(Json::as_array) {
+        if arr.is_empty() {
+            raw_bands.push(1);
+        } else {
+            for item in arr {
+                parse_single_band(item, total_bands, &mut raw_bands)?;
+            }
+        }
+    } else if let Some(v) = p.get("bands") {
+        if v.is_null() {
+            raw_bands.push(1);
+        } else {
+            parse_single_band(v, total_bands, &mut raw_bands)?;
+        }
+    } else {
+        raw_bands.push(1);
     }
-    for &b in &bands {
-        if b < 1 || b > total_bands {
-            return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+    if raw_bands.is_empty() {
+        raw_bands.push(1);
+    }
+    let mut unique = Vec::new();
+    for b in raw_bands {
+        if !unique.contains(&b) {
+            unique.push(b);
         }
     }
-    Ok(bands.into_iter().map(|b| b - 1).collect())
+    Ok(unique.into_iter().map(|b| b - 1).collect())
 }
 
 fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
     let mut out = Vec::new();
     if let Some(arr) = p.get("stats").and_then(Json::as_array) {
         if arr.is_empty() {
-            return Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]);
+            return Ok(StatOp::ALL.to_vec());
         }
         for item in arr {
             let txt = item.as_str().ok_or_else(|| "statistic names must be strings".to_string())?;
@@ -1575,7 +1626,7 @@ fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
     } else {
         let txt = s(p, "stats").trim();
         if txt.is_empty() {
-            return Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]);
+            return Ok(StatOp::ALL.to_vec());
         }
         let clean = txt.trim_matches(|c| c == '[' || c == ']');
         for part in clean.split([',', ';']) {
@@ -1592,7 +1643,7 @@ fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
         }
     }
     if out.is_empty() {
-        out = vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev];
+        out = StatOp::ALL.to_vec();
     }
     Ok(out)
 }
@@ -1618,9 +1669,12 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             poly_ds.geometry_type.label()
         ));
     }
-    if let Some(poly_crs) = poly_ds.crs {
-        poly_crs.transformer().map_err(|e| format!("polygon layer coordinate system isn't supported: {e}"))?;
-    }
+    let poly_tr = match poly_ds.crs {
+        Some(crs) if crs != rustgis_data::raster::Crs::LonLat && crs != rustgis_data::raster::Crs::Epsg(4326) => {
+            Some(crs.transformer().map_err(|e| format!("polygon layer coordinate system isn't supported: {e}"))?)
+        }
+        _ => None,
+    };
 
     let bands = parse_bands(p, r.band_count())?;
     let stats = parse_stats(p)?;
@@ -1637,20 +1691,15 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     for (b_idx, &band) in bands.iter().enumerate() {
         let band_num = band + 1;
         let band_name = r.bands.get(band).map(|b| b.name.as_str()).unwrap_or("");
+        let has_named_band = !band_name.is_empty() && !band_name.starts_with("Band ") && band_name != "Gray";
         let prefix = if !user_prefix.is_empty() {
             if multi_bands { format!("{user_prefix}_b{band_num}") } else { user_prefix.to_string() }
         } else if multi_bands {
-            if !band_name.is_empty() && !band_name.starts_with("Band ") && band_name != "Gray" {
-                format!("{}_{}", r.name, band_name)
-            } else {
-                format!("{}_b{band_num}", r.name)
-            }
+            if has_named_band { format!("{}_{}", r.name, band_name) } else { format!("{}_b{band_num}", r.name) }
+        } else if has_named_band {
+            band_name.to_string()
         } else {
-            if !band_name.is_empty() && !band_name.starts_with("Band ") && band_name != "Gray" {
-                band_name.to_string()
-            } else {
-                r.name.to_string()
-            }
+            r.name.to_string()
         };
 
         for &stat in &stats {
@@ -1674,7 +1723,27 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     for r_idx in target_rows {
         let Some(f) = poly_ds.features.get(r_idx) else { continue };
         let stats_by_band = match &f.geometry {
-            Some(Geometry::Polygon(polys)) if !polys.is_empty() => crate::rasterops::zonal_statistics(r, &bands, polys)?,
+            Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
+                let polys_lonlat: Vec<Vec<Vec<Coord>>> = match &poly_tr {
+                    Some(tr) => polys
+                        .iter()
+                        .map(|rings| {
+                            rings
+                                .iter()
+                                .map(|ring| ring.iter().filter_map(|&c| tr.to_lonlat(c)).collect::<Vec<_>>())
+                                .filter(|ring| ring.len() >= 3)
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|rings| !rings.is_empty())
+                        .collect(),
+                    None => polys.clone(),
+                };
+                if polys_lonlat.is_empty() {
+                    vec![crate::rasterops::ZoneStats::default(); bands.len()]
+                } else {
+                    crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?
+                }
+            }
             _ => vec![crate::rasterops::ZoneStats::default(); bands.len()],
         };
 
@@ -2669,6 +2738,79 @@ mod tests {
         let out_empty = layer(res_empty);
         assert_eq!(out_empty.features.len(), 0);
         assert!(out_empty.field_index("elev_mean").is_some());
+
+        // 9. Bands validation: "all", integral float, decimal rejection, zero rejection, negative rejection
+        let res_all_bands = crate::run(
+            "zonalStats",
+            &m,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "zones",
+                "bands": "all",
+            }),
+        )
+        .unwrap();
+        let out_all = layer(res_all_bands);
+        assert!(out_all.field_index("elev_b1_mean").is_some());
+        assert!(out_all.field_index("elev_b2_mean").is_some());
+
+        let res_float_band = crate::run(
+            "zonalStats",
+            &m,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "zones",
+                "bands": [1.0],
+            }),
+        )
+        .unwrap();
+        let out_float = layer(res_float_band);
+        assert!(out_float.field_index("elev_mean").is_some());
+
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [1.5]})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [0]})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [-1]})).is_err());
+
+        // 10. Projected CRS reprojection: polygon in EPSG:3857 (WebMercator)
+        let merc_tr = rustgis_data::raster::Crs::WebMercator.transformer().unwrap();
+        let p0 = merc_tr.from_lonlat(Coord::new(1.0, 7.0)).unwrap();
+        let p1 = merc_tr.from_lonlat(Coord::new(3.0, 9.0)).unwrap();
+        let merc_geom = Geometry::Polygon(vec![vec![vec![p0, Coord::new(p1.x, p0.y), p1, Coord::new(p0.x, p1.y), p0]]]);
+        let mut merc_poly_ds = Dataset::new("merc_zones", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        merc_poly_ds.crs = Some(rustgis_data::raster::Crs::WebMercator);
+        merc_poly_ds.push(Some(merc_geom.clone()), vec![Value::Int(1)]);
+
+        let m_merc = RasterMap {
+            datasets: HashMap::from([("merc_zones".to_string(), merc_poly_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let res_merc = crate::run(
+            "zonalStats",
+            &m_merc,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "merc_zones",
+                "bands": [1],
+            }),
+        )
+        .unwrap();
+        let out_merc = layer(res_merc);
+        assert_eq!(out_merc.crs, Some(rustgis_data::raster::Crs::WebMercator));
+        assert_eq!(out_merc.features[0].geometry, Some(merc_geom));
+        let merc_count = out_merc.field_index("elev_count").unwrap();
+        let merc_mean = out_merc.field_index("elev_mean").unwrap();
+        assert_eq!(out_merc.value(0, merc_count), &Value::Int(4));
+        assert_eq!(out_merc.value(0, merc_mean), &Value::Float(16.5));
+
+        // 11. Unsupported polygon CRS returns error
+        let mut bad_crs_ds = Dataset::new("bad_crs", GeometryType::Polygon, vec![]);
+        bad_crs_ds.crs = Some(rustgis_data::raster::Crs::Epsg(60000));
+        bad_crs_ds.push(Some(sq_geom(1.0, 7.0, 3.0, 9.0)), vec![]);
+        let m_bad_crs = RasterMap {
+            datasets: HashMap::from([("bad_crs".to_string(), bad_crs_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        assert!(crate::run("zonalStats", &m_bad_crs, &serde_json::json!({"raster": "elev", "polygons": "bad_crs"})).is_err());
 
         assert_eq!(m.datasets["zones"], input_clone);
     }

@@ -13469,8 +13469,49 @@ fn gp_zonal_stats_end_to_end_and_undo() {
     assert!(run_layer.dataset.field_index("dem_count").is_some());
     assert!(run_layer.dataset.field_index("dem_min").is_none());
 
+    // Projected CRS (WebMercator) reprojection end-to-end
+    let merc_tr = Crs::WebMercator.transformer().unwrap();
+    let mp0 = merc_tr.from_lonlat(Coord::new(1.0, 7.0)).unwrap();
+    let mp1 = merc_tr.from_lonlat(Coord::new(3.0, 9.0)).unwrap();
+    let mut merc_ds = Dataset::new("merc_districts", GeometryType::Polygon, vec![Field::new("code", FieldType::Text)]);
+    merc_ds.crs = Some(Crs::WebMercator);
+    merc_ds.push(Some(sq(mp0.x, mp0.y, mp1.x, mp1.y)), vec![Value::Text("M1".into())]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, merc_ds));
+
+    let merc_res = s.run(
+        "gp.zonalStats",
+        &json!({
+            "raster": "dem",
+            "polygons": "merc_districts",
+            "output": "merc_out",
+            "bands": [1.0],
+        }),
+    );
+    assert!(merc_res.is_ok(), "gp.zonalStats with WebMercator failed: {merc_res:?}");
+    let merc_layer = s.map().layer_by_name("merc_out").expect("merc_out should exist");
+    assert_eq!(merc_layer.dataset.crs, Some(Crs::WebMercator));
+    let m_count_idx = merc_layer.dataset.field_index("dem_count").unwrap();
+    let m_mean_idx = merc_layer.dataset.field_index("dem_mean").unwrap();
+    assert_eq!(merc_layer.dataset.value(0, m_count_idx), &Value::Int(4));
+    assert_eq!(merc_layer.dataset.value(0, m_mean_idx), &Value::Float(16.5));
+
+    // "bands": "all"
+    let all_res = s.run(
+        "gp.zonalStats",
+        &json!({
+            "raster": "dem",
+            "polygons": "districts",
+            "output": "all_bands_out",
+            "bands": "all",
+        }),
+    );
+    assert!(all_res.is_ok(), "gp.zonalStats with bands: all failed: {all_res:?}");
+
     assert!(s.run("gp.zonalStats", &json!({})).is_err());
     assert!(s.run("gp.zonalStats", &json!({"raster": "nonexistent", "polygons": "districts"})).is_err());
     assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "Cities"})).is_err());
     assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [999]})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [0]})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [-1]})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [1.5]})).is_err());
 }
