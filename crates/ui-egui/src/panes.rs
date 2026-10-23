@@ -3898,7 +3898,6 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
     });
 }
 
-/// A stroke as `layer.lineStrokes` takes it.
 /// The dash patterns the stroke editor offers, in stroke widths (dash, gap, …).
 const DASH_PRESETS: [(&str, Option<&[f32]>); 5] = [
     ("Solid", None),
@@ -3907,6 +3906,16 @@ const DASH_PRESETS: [(&str, Option<&[f32]>); 5] = [
     ("Dash-dot", Some(&[4.0, 2.0, 1.0, 2.0])),
     ("Long dash", Some(&[8.0, 3.0])),
 ];
+
+/// A dash pattern being typed in the stroke editor: the layer, the class (`None` for the layer's
+/// own strokes) and the text.
+type DashDraft = (u32, Option<ClassRef>, String);
+
+/// The text of `draft` if it was typed for `owner`'s stroke, else `None` (the stroke's own pattern
+/// shows).
+fn draft_for(draft: Option<DashDraft>, owner: &(u32, Option<ClassRef>)) -> Option<String> {
+    draft.filter(|(layer, class, _)| *layer == owner.0 && *class == owner.1).map(|(.., text)| text)
+}
 
 /// A dash pattern as the stroke editor shows it: `4 2`.
 fn dash_text(d: &Dash) -> String {
@@ -3924,6 +3933,7 @@ fn parse_dash(text: &str) -> Option<Option<Dash>> {
     Dash::new(&steps).map(Some)
 }
 
+/// A stroke as `layer.lineStrokes` takes it.
 fn stroke_json(st: &LineStroke) -> Value {
     json!({
         "color": st.color.map(|c| c.hex8()),
@@ -4193,18 +4203,22 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                 ui.end_row();
                 ui.label(tl!("Dash"));
                 ui.horizontal(|ui| {
-                    // The pattern as typed, kept while the box has focus; set when it loses it.
+                    // The pattern as typed, kept while the box has focus; set when it loses it. The
+                    // draft remembers whose stroke it is, so it never shows or lands on another
+                    // layer's or class's stroke at the same place.
                     let id = ui.id().with(("stroke_dash", i));
+                    let owner = (l.id, class.cloned());
                     let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
-                    let mut text = ui.data_mut(|m| m.get_temp::<String>(id)).unwrap_or(shown);
+                    let draft = ui.data_mut(|m| m.get_temp::<DashDraft>(id));
+                    let mut text = draft_for(draft, &owner).unwrap_or(shown);
                     let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
                     let r =
                         ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
                     if r.changed() {
-                        ui.data_mut(|m| m.insert_temp(id, text.clone()));
+                        ui.data_mut(|m| m.insert_temp::<DashDraft>(id, (owner.0, owner.1.clone(), text.clone())));
                     }
                     if r.lost_focus() {
-                        ui.data_mut(|m| m.remove::<String>(id));
+                        ui.data_mut(|m| m.remove::<DashDraft>(id));
                         if let Some(dash) = parse_dash(&text).filter(|d| *d != st.dash) {
                             set(app, LineStroke { dash, ..st });
                         }
@@ -5022,6 +5036,17 @@ mod tests {
 
     /// The Strokes for picker lists a value listed twice once, for its first class (the one its
     /// features draw with), then `<all other values>`.
+    #[test]
+    fn a_dash_draft_stays_with_its_layer_and_class() {
+        let draft = || Some((3, Some(ClassRef::Index(1)), "4 2".to_string()));
+        assert_eq!(draft_for(draft(), &(3, Some(ClassRef::Index(1)))).as_deref(), Some("4 2"));
+        // Another layer, another class, or the layer's own strokes show their own pattern.
+        assert_eq!(draft_for(draft(), &(4, Some(ClassRef::Index(1)))), None);
+        assert_eq!(draft_for(draft(), &(3, Some(ClassRef::Index(2)))), None);
+        assert_eq!(draft_for(draft(), &(3, None)), None);
+        assert_eq!(draft_for(None, &(3, None)), None);
+    }
+
     #[test]
     fn stroke_classes_list_a_repeated_value_once() {
         let (a, b) = (
