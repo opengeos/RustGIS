@@ -139,9 +139,22 @@ pub fn param_list(desc: &str) -> Option<Vec<Param<'_>>> {
 fn param(part: &str) -> Option<Param<'_>> {
     let text = part.trim();
     let rest = text.strip_prefix('"')?;
-    let (key, after) = rest.split_at(rest.find('"')?);
+    let (key, after) = rest.split_at(string_end(rest)?);
     let optional = after.get(1..).is_some_and(|a| a.trim_start().starts_with('?'));
     Some(Param { key, optional, text })
+}
+
+/// Where the string whose text starts `s` ends: the byte index of its closing quote, the first
+/// one not after a backslash (`\"`). None when nothing closes it.
+fn string_end(s: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if c == '"' && !escaped {
+            return Some(i);
+        }
+        escaped = c == '\\' && !escaped;
+    }
+    None
 }
 
 /// Whether a parameter description has a required key. Question marks in values do not count.
@@ -169,7 +182,7 @@ fn param_entries<'a>(desc: &'a str, mut visit: impl FnMut(&'a str, bool)) -> Opt
     while let Some(&c) = bytes.get(i) {
         match c {
             b'"' => {
-                let end = bytes.get(i + 1..).and_then(|r| r.iter().position(|&c| c == b'"')).map_or(bytes.len(), |n| i + 1 + n);
+                let end = desc.get(i + 1..).and_then(string_end).map_or(bytes.len(), |n| i + 1 + n);
                 let next = bytes.get(end + 1..).and_then(|r| r.iter().find(|c| !c.is_ascii_whitespace()));
                 let key = match at {
                     At::Entry => matches!(next, Some(b'?' | b':' | b',' | b'}' | b'|')),

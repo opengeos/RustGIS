@@ -9881,6 +9881,10 @@ fn param_list_splits_a_description_into_entries() {
     // An escaped quote (a plugin's description may have one) doesn't end a value early.
     let escaped = param_list(r#"{"title"?: "a \"quoted, word\"", "n": number}"#).unwrap();
     assert_eq!(escaped.iter().map(|p| p.key).collect::<Vec<_>>(), ["title", "n"]);
+    // Nor a key early: it's the whole key, as `param_keys` reads it.
+    let key = param_list(r#"{"a\"b"?: text}"#).unwrap();
+    assert_eq!(key.iter().map(|p| (p.key, p.optional)).collect::<Vec<_>>(), [(r#"a\"b"#, true)]);
+    assert_eq!(crate::param_keys(r#"{"a\"b"?: text}"#), Some(vec![r#"a\"b"#]));
     assert_eq!(param_list("a GeoJSON text"), None);
     // Every command's description splits into entries, each led by a key `param_keys` finds: one
     // cut in the wrong place (an unclosed bracket or quote in its prose) would lead with another.
@@ -9908,6 +9912,11 @@ fn param_keys_reads_descriptions() {
     assert_eq!(param_keys(r#"{"path": folder | "url": "https://…", "name"?: text}"#), Some(vec!["path", "url", "name"]));
     assert_eq!(param_keys(r#"{"lon" | "x": number, "lat" | "y": number}"#), Some(vec!["lon", "x", "lat", "y"]));
     assert_eq!(param_keys(r##"{"color": "#RRGGBB"|"#RRGGBBAA"}"##), Some(vec!["color"]));
+    // A quote after a backslash doesn't end a string (a Script line's value may have one); one
+    // after an escaped backslash does.
+    assert_eq!(param_keys(r#"{"lon": 2, "note": "a\"b", "lat": 3, ""#), Some(vec!["lon", "note", "lat"]));
+    assert_eq!(param_keys(r#"{"a": "x\\", "b": 1}"#), Some(vec!["a", "b"]));
+    assert_eq!(param_keys(r#"{"a": "x\"#), Some(vec!["a"]), "an unclosed string");
     assert_eq!(param_keys("a GeoJSON text"), None);
     // Every command's description reads as keys, and names a key once.
     for c in &Session::new(Project::default()).registry.commands {
