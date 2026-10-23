@@ -2878,9 +2878,10 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 const TILE_REDRAW_GAP: f64 = 0.25;
 
 /// The tile cache generation `key` holds at instead of its own, when tiles arrived within
-/// [`TILE_REDRAW_GAP`] of the last frame shown: the newest frame of this view, the one being
-/// drawn (`drawing`) or else the one on screen (`shown`), so the map is drawn at most a few times
-/// a second while they arrive.
+/// [`TILE_REDRAW_GAP`] of the last frame shown: the newest frame of this view, of the one being
+/// drawn (`drawing`) and the one on screen (`shown`), so the map is drawn at most a few times a
+/// second while they arrive. Generations only grow: a live GPU scene can show newer tiles than
+/// the frame still being drawn, and isn't held back to it.
 ///
 /// Holding at the frame on screen while a newer one was being drawn made the two alternate for
 /// good: each, once shown, differed from the key held at meanwhile, which started the other again
@@ -2888,7 +2889,7 @@ const TILE_REDRAW_GAP: f64 = 0.25;
 /// and over, keeping a core busy and the app slow).
 fn held_tiles(key: Key, drawing: Option<Key>, shown: Option<Key>, since_render: f64) -> Option<u64> {
     let same_view = |k: &Key| Key { tiles: k.tiles, ..key } == *k;
-    let newest = drawing.filter(same_view).or(shown.filter(same_view))?;
+    let newest = [drawing, shown].into_iter().flatten().filter(same_view).max_by_key(|k| k.tiles)?;
     (newest.tiles != key.tiles && since_render < TILE_REDRAW_GAP).then_some(newest.tiles)
 }
 
@@ -2915,6 +2916,9 @@ mod tile_redraw_tests {
         // The frame drawn with the tiles that arrived is on its way while an older one was just
         // shown: the key is that frame's, not the older one's.
         assert_eq!(held_tiles(key(28), Some(key(28)), Some(key(0)), 0.1), None);
+        // A live scene shown with newer tiles than the frame being drawn isn't held back to it.
+        assert_eq!(held_tiles(key(28), Some(key(5)), Some(key(28)), 0.1), None);
+        assert_eq!(held_tiles(key(30), Some(key(5)), Some(key(28)), 0.1), Some(28));
         // Simulated: the view's frames alternated between generations 0 and 28 for good.
         let (mut shown, mut drawing, mut since) = (Some(key(0)), Some(key(28)), 0.0);
         let mut started = 0;
