@@ -240,7 +240,9 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
             for (label, cur, key) in [("Closest", l.labels.default.closest, "closest"), ("Farthest", l.labels.default.farthest, "farthest")]
             {
                 ui.label(tl!(label));
-                let text = |d: Option<f64>| d.map(rustgis_engine::geom::format_distance).unwrap_or_else(|| tl!("<None>").to_string());
+                let imperial = app.ui.measurement_imperial;
+                let text =
+                    |d: Option<f64>| d.map(|d| crate::measure_units::distance(d, imperial)).unwrap_or_else(|| tl!("<None>").to_string());
                 egui::ComboBox::from_id_salt(("label_pane_distance", key)).selected_text(text(cur)).width(140.0).show_ui(ui, |ui| {
                     for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
                         if ui.selectable_label(d == cur, text(d)).clicked() {

@@ -380,12 +380,7 @@ fn level(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, node: &s
                 }
                 let keys = c.kind == "s3" && c.options.get("credentials").is_some_and(|v| v == "keys");
                 if (DATABASE_KINDS.contains(&c.kind.as_str()) || keys) && ui.small_button(tl!("Log In…")).clicked() {
-                    match app.run("ui.connection", json!({"id": c.id})) {
-                        Ok(_) => {
-                            app.dialogs.info = Some(tl!("Type the password or keys to log in for this session, then Save.").to_string())
-                        }
-                        Err(e) => app.session.notify(e, true),
-                    }
+                    crate::connectionui::log_in(app, &c.id);
                 }
             });
         }

@@ -17,6 +17,7 @@ mod picture;
 pub mod post;
 mod raster;
 pub mod report;
+mod stroke_paths;
 pub mod terrain;
 mod text;
 pub mod tile_mesh;
@@ -588,6 +589,10 @@ impl Ctx<'_> {
             self.ring_path(&mut pb, part, false);
         }
         let Some(path) = pb.finish() else { return };
+        self.stacked_path(pm, &path, s, strokes);
+    }
+
+    fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke]) {
         // Shifted once per offset: a casing and its core usually share one.
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
         for st in strokes {
@@ -596,10 +601,10 @@ impl Ctx<'_> {
                 continue;
             }
             if st.offset != 0.0 && !shifted.iter().any(|(o, _)| *o == st.offset) {
-                shifted.push((st.offset, offset_path(&path, st.offset * self.ppp)));
+                shifted.push((st.offset, offset_path(path, st.offset * self.ppp)));
             }
             let drawn = match st.offset {
-                0.0 => Some(&path),
+                0.0 => Some(path),
                 o => shifted.iter().find(|(x, _)| *x == o).and_then(|(_, p)| p.as_ref()),
             };
             let Some(drawn) = drawn else { continue };
@@ -2783,6 +2788,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         effects::extrude(dest, &ctx, ds_ptr, &geoms, &rows, x, px_per_m, |r| layer.symbol(r));
                     }
                 } else {
+                    let mut stroke_paths = stroke_paths::Paths::default();
                     for (row, g) in drawn.iter().enumerate() {
                         let Some(g) = g else { continue };
                         if rows.get(row) != Some(&true) || !visible(&extents.get(row).copied().unwrap_or_else(|| g.extent())) {
@@ -2814,7 +2820,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         }
                         match g {
                             Geometry::Line(parts) if !layer.line_strokes.is_empty() && !layer.graphics => {
-                                ctx.stacked_line(dest, parts, &sym, &layer.line_strokes)
+                                stroke_paths.draw(&ctx, dest, parts, &sym, &layer.line_strokes)
                             }
                             _ => ctx.feature(dest, g, &sym),
                         }

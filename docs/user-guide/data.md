@@ -146,9 +146,12 @@ connection without it. Without one, `PGPASSWORD` or libpq's password file (`~/.p
 `%APPDATA%\postgresql\pgpass.conf`) serve when you add a table. A project keeps a streamed
 table's connection and reads it again when it opens, sending only a password given in this
 session: a project file could name any host, and must never get your own credentials. When the
-server wants a password, connect again with **Add Data › Database…** (the layer reads again when
-the project is next opened). A small table's features are kept in the project as they were when
-added.
+server wants a password and the layer's database matches a saved connection, the project says
+which connection is waiting. Right-click that connection in **Data Sources › Connections**, or a
+waiting layer, and choose **Log In…**. Saving the password reopens every layer from that database.
+Without a matching connection, connect again with **Add Data › Database…** (the layer reads again
+when the project is next opened). A small table's features are kept in the project as they were
+when added.
 
 `layer.addSql` takes a connection as its `"database"` too, through DuckDB's `postgres` extension
 (installed the first time, like DuckDB Spatial), so a query names its tables plainly; the password
@@ -428,7 +431,11 @@ Browsing never changes the project or the saved connections.
 Addresses are saved without passwords or tokens. `connection.login` remembers a database
 `password`, or S3 `accessKeyId`, `secretAccessKey` and optional `sessionToken`, for this session
 only, using the same credential stores as the existing add commands. With login parameters,
-`connection.test` logs in first; a failed listing does not undo that session login.
+`connection.test` logs in first; a failed listing does not undo that session login. A database
+login also reopens project layers that read the same password-free address and were refused for a
+missing or wrong password. `connection.list` gives such waiting layers as `waiting`, and
+`connection.login` gives `reopened` and `failed` when it tries any of them. A server that is down
+or a missing table is not reported as waiting for a login.
 S3 profiles and environment credentials remain subject to the existing endpoint restrictions;
 editing an S3 name, endpoint or options disconnects its session login. S3 shares the name-based
 session registry used by the S3 dialog and `s3.connect`, so editing or removing a saved
@@ -707,6 +714,14 @@ map file or project. Data › Layer Templates adds empty layers with ready-made 
 routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser, which
 also lists the project's layouts, styles and tasks. A task's steps each run a command; New Task
 From History turns the geoprocessing history into a task you can replay.
+
+Saved projects, map and layer files, and packages keep no password, key, token or signature in
+layer web addresses. The open project keeps them for this session. RustGIS remembers the 32 most
+recent distinct saved snapshots whose addresses needed stripping. Opening a plain `.rgis` file
+whose bytes exactly match one of those snapshots restores its secrets; saving more distinct
+snapshots evicts the oldest. Changed files, packages, imports and files saved by another process
+never restore secrets. After a snapshot is evicted or RustGIS closes, add those layers again with
+their credentials.
 
 ### Complete streamed Shapefile rendering
 

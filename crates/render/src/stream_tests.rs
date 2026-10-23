@@ -232,6 +232,50 @@ fn complete_chunks_use_the_entire_mask_source() {
 }
 
 #[test]
+fn complete_chunks_preserve_reused_stroke_paths_with_overlap_and_alpha() {
+    let mut ds = Dataset::new("overlapping lines", GeometryType::Polyline, vec![Field::new("value", FieldType::Integer)]);
+    for i in 0..37 {
+        let y = (i % 5) as f64 * 0.006 - 0.012;
+        ds.push(
+            Some(Geometry::Line(vec![
+                vec![Coord::new(-0.06, y), Coord::new(0.0, y + 0.02), Coord::new(0.06, y)],
+                vec![Coord::new(-0.04, -y), Coord::new(0.04, -y)],
+            ])),
+            vec![Value::Int(i)],
+        );
+    }
+    let mut base = Map::new("stroke paths");
+    base.basemap = rustgis_map::Basemap::Blank;
+    base.add_dataset(ds);
+    let layer = &mut base.layers[0];
+    layer.definition_query = Some("value < 34".into());
+    layer.selection = vec![0];
+    layer.line_strokes = vec![
+        LineStroke { offset: 3.0, width: Some(6.0), color: Some(Rgba::new(20, 40, 180, 120)), ..Default::default() },
+        LineStroke { offset: 3.0, width: Some(2.0), color: Some(Rgba::new(220, 30, 40, 180)), ..Default::default() },
+        LineStroke { offset: -2.0, width: Some(1.5), color: Some(Rgba::new(40, 180, 80, 200)), ..Default::default() },
+    ];
+    for transparency in [0.0, 0.35] {
+        base.layers[0].transparency = transparency;
+        for ppp in [1.0, 1.5, 2.0] {
+            let view =
+                View { width: 240.0, height: 180.0, pixels_per_point: ppp, camera: Camera::new(Coord::new(0.0, 0.0), 80.0), sky: false };
+            let expected = render(&mut base.clone(), &view).unwrap();
+            for size in [1, 3, 11, 100] {
+                let mut actual = base.clone();
+                actual.layers[0] = streamed(&base.layers[0], size);
+                settle(&mut actual, &view);
+                let owner = actual.layers[0].dataset.features.clone();
+                let got = render(&mut actual, &view).unwrap();
+                assert!(got.pixmap.data() == expected.pixmap.data(), "size={size} ppp={ppp} transparency={transparency}");
+                assert_eq!(actual.layers[0].dataset.features, owner);
+                assert_eq!(render_png(&mut actual, &view).unwrap(), render_png(&mut base.clone(), &view).unwrap());
+            }
+        }
+    }
+}
+
+#[test]
 fn complete_chunks_preserve_label_classes_projection_rotation_and_png_export() {
     let mut ds =
         Dataset::new("lines", GeometryType::Polyline, vec![Field::new("name", FieldType::Text), Field::new("value", FieldType::Integer)]);

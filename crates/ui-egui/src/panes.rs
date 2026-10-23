@@ -1641,6 +1641,19 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         let _ = app.run("ui.refreshService", json!({"layer":l.id}));
         ui.close();
     }
+    let login = l
+        .source
+        .as_ref()
+        .is_some_and(|s| s.login)
+        .then(|| app.session.connections.for_layer(l))
+        .flatten()
+        .map(|c| (c.id.clone(), c.name.clone()));
+    if let Some((id, name)) = login
+        && ui.button(crate::i18n::fmt("Log In to {name}…", &[("name", &name)])).clicked()
+    {
+        crate::connectionui::log_in(app, &id);
+        ui.close();
+    }
     let items: &[(&str, &str)] = if l.is_raster() {
         &[("Zoom To Layer", "layer.zoomTo"), ("Symbology", "ui.pane.symbology")]
     } else {
