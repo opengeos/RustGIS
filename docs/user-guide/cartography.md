@@ -218,12 +218,12 @@ it unchanged.
 
 ## Labeling
 
-The **Labeling pane** brings together the Default label class's field, SQL clause, text symbol,
-placement and visibility limits, plus the map-wide label display controls. Open it for a
-feature layer with Layers › right-click › **Labeling Properties…**, **View › Windows › Labeling**,
-or **Style › Labels › Properties**. It runs the same commands as the ribbon, so each setting
-change undoes on its own (a dragged size or a colour pick is one step). Additional label classes
-are managed with commands, as described below.
+The **Labeling pane** brings together the label classes and the chosen class's field, SQL
+clause, text symbol, placement and visibility limits, plus the map-wide label display controls.
+Open it for a feature layer with Layers › right-click › **Labeling Properties…**, **View ›
+Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as the
+ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
+Label classes are described below.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
@@ -235,7 +235,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   expression**: write the clause (the field and operator buttons add to it), **Check** says
   whether it reads and how many of the features the layer draws at the map's scale match
   (after its definition query, display filters and time window), and **Apply** sets it in one
-  undo step; **Clear** removes the Default class's clause, leaving other classes unchanged
+  undo step; **Clear** removes the chosen class's clause, leaving other classes unchanged
   (`labels.class.update={"layer": "Cities", "where": "pop_max > 5000000"}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
@@ -254,7 +254,12 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   labels, use clauses that do not overlap: `pop_max > 5000000` for Large cities and
   `pop_max <= 5000000` for Default. Classes are placed in list order, Default last; a hidden
   class or one outside its visibility range labels nothing without excluding features from
-  other classes. There can be up to 64 classes besides Default. Make them with
+  other classes. There can be up to 64 classes besides Default. In the Labeling pane, the
+  **Class** list chooses the class every section shows and edits; **New** adds one with the
+  chosen class's field, text symbol, placement and range, listed before Default, and
+  **Rename**, **Move Up** / **Move Down**, **Remove** and **Visible** act on the chosen class
+  (Default can be renamed or hidden, not moved or removed). The ribbon edits Default. By
+  command, make them with
   `labels.class.add` (a new class copies Default's field, text symbol, placement and range, or
   those of the class named by `from`), then `labels.class.rename`, `labels.class.update` (`where` or `visible`),
   `labels.class.move` (`to`: 0 first), `labels.class.remove` and `labels.class.clear` (removes

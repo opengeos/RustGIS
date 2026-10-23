@@ -4246,7 +4246,7 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new(tl!("Color")).size(11.5));
                 ui.push_id(("label_color", layer.id), |ui| {
                     if crate::widgets::color_button(ui, &mut c).changed() {
-                        crate::labelpane::color_drag(app, ui, &layer, crate::theme::rgba(c));
+                        crate::labelpane::color_drag(app, ui, &layer, None, crate::theme::rgba(c));
                     }
                 });
             });

@@ -1,10 +1,12 @@
 //! The Labeling pane (#617): every label setting of the selected feature layer in one place, opened
 //! from a layer's right-click menu (Labeling Properties…) or View › Windows › Labeling. The ribbon
 //! keeps its label groups; both run the same `labels.*` commands, so the pane holds no state of its
-//! own (it reads the layer each frame, as the Symbology pane does) and every change undoes.
+//! own (it reads the layer each frame, as the Symbology pane does) and every change undoes. It
+//! edits one label class at a time, the one chosen in its Class section (#722); the ribbon edits
+//! Default.
 
 use egui::{RichText, Ui, vec2};
-use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, MAX_LABEL_CLASSES};
+use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, Labeling, MAX_LABEL_CLASSES, label_class_name};
 use rustgis_engine::map::{LabelPlacement, Layer, Rgba};
 use serde_json::{Value, json};
 
@@ -38,20 +40,88 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if ui.checkbox(&mut on, tl!("Label features in this layer")).changed() {
         run(app, "labels.enable", json!({"on": on}));
     }
-    class(app, ui, &l, t);
-    text_symbol(app, ui, &l);
-    position(app, ui, &l);
-    visibility(app, ui, &l);
+    let name = chosen(ui, app, &l);
+    let it = name.as_deref().and_then(|n| l.labels.class(n)).unwrap_or(&l.labels.default);
+    let c = Class { it, name: name.as_deref() };
+    class(app, ui, &l, &c, t);
+    text_symbol(app, ui, &l, &c);
+    position(app, ui, &c);
+    visibility(app, ui, &c);
     map_labeling(app, ui);
+}
+
+/// The label class the pane's sections show and edit (#722).
+struct Class<'a> {
+    it: &'a LabelClass,
+    /// `None` for Default: the commands change it when they get no class, so a step recorded on
+    /// it stays as it was before classes could be chosen.
+    name: Option<&'a str>,
+}
+
+impl Class<'_> {
+    /// A command's parameters for this class.
+    fn params(&self, p: Value) -> Value {
+        named(p, "class", self.name)
+    }
+}
+
+/// `p` with `name` as its `key`, or as it is without one.
+fn named(mut p: Value, key: &str, name: Option<&str>) -> Value {
+    if let (Some(n), Some(o)) = (name, p.as_object_mut()) {
+        o.insert(key.into(), json!(n));
+    }
+    p
+}
+
+/// The class `name` names on `labels` to change: Default when none.
+fn class_mut<'a>(labels: &'a mut Labeling, name: Option<&str>) -> Option<&'a mut LabelClass> {
+    match name {
+        None => Some(&mut labels.default),
+        Some(n) => labels.class_mut(n),
+    }
+}
+
+/// The classes listed before Default, as many as count.
+fn extras(l: &Layer) -> impl Iterator<Item = &LabelClass> {
+    l.labels.classes.iter().take(MAX_LABEL_CLASSES)
+}
+
+/// A class's name as the pane shows it: Default's own once renamed, else "Default" translated.
+fn shown(c: &Class) -> String {
+    match c.name {
+        None if c.it.name == DEFAULT_LABEL_CLASS => tl!("Default").to_string(),
+        _ => c.it.name.clone(),
+    }
+}
+
+/// Where the class chosen on a layer of this project is kept (another project may reuse the
+/// layer's id).
+fn chosen_key(app: &RustGisApp, l: &Layer) -> egui::Id {
+    egui::Id::new(("label_pane_class", app.session.opened, l.id))
+}
+
+/// The class chosen on `l`, by the name it has now; Default when none is, or when the one chosen
+/// went away (an undo, a script, the Assistant).
+fn chosen(ui: &Ui, app: &RustGisApp, l: &Layer) -> Option<String> {
+    let name = ui.data(|d| d.get_temp::<String>(chosen_key(app, l)))?;
+    extras(l).find(|c| c.name.eq_ignore_ascii_case(&name)).map(|c| c.name.clone())
+}
+
+fn choose(ui: &Ui, app: &RustGisApp, l: &Layer, name: Option<&str>) {
+    let key = chosen_key(app, l);
+    ui.data_mut(|d| match name {
+        Some(n) => {
+            d.insert_temp(key, n.to_string());
+        }
+        None => d.remove::<String>(key),
+    });
 }
 
 /// Runs a label command from the pane on the active layer, the one it shows; a refusal shows as a
 /// notice. The commands don't name the layer, as the ribbon's don't: a step recorded from them
 /// (Record Task) then names it, so it replays on that layer by name (`RustGisApp::record_step`).
-fn run(app: &mut RustGisApp, id: &str, params: Value) {
-    if let Err(e) = app.run(id, params) {
-        app.session.notify(e, true);
-    }
+fn run(app: &mut RustGisApp, id: &str, params: Value) -> Option<Value> {
+    app.run(id, params).map_err(|e| app.session.notify(e, true)).ok()
 }
 
 fn grid(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
@@ -66,17 +136,12 @@ enum ClassTab {
     Sql,
 }
 
-/// One class for now, "Default": the field it labels with, and the SQL clause (#618) choosing the
-/// features it labels (the other classes are made with commands for now).
-fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
+/// The class chosen, what makes, renames, removes and orders classes (#722), and the chosen
+/// class's field and SQL clause (#618) choosing the features it labels.
+fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     section(ui, "Class", |ui| {
-        // Its own name once renamed (`labels.class.rename`), else "Default" translated.
-        let name = &l.labels.default.name;
-        let name = if name == DEFAULT_LABEL_CLASS { tl!("Default").to_string() } else { name.clone() };
-        ui.horizontal(|ui| {
-            ui.label(tl!("Class"));
-            ui.label(RichText::new(name).color(t.text_dim));
-        });
+        classes(app, ui, l, c);
+        ui.add_space(4.0);
         let key = egui::Id::new("label_pane_class_tab");
         let mut tab = ui.data(|d| d.get_temp::<ClassTab>(key)).unwrap_or(ClassTab::Field);
         ui.horizontal(|ui| {
@@ -89,21 +154,139 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         ui.data_mut(|d| d.insert_temp(key, tab));
         ui.add_space(4.0);
         match tab {
-            ClassTab::Field => field(app, ui, l),
-            ClassTab::Sql => sql(app, ui, l, t),
+            ClassTab::Field => field(app, ui, l, c),
+            ClassTab::Sql => sql(app, ui, l, c, t),
         }
     });
 }
 
+/// A class being renamed: the name typed so far, for the class it was started on.
+#[derive(Clone)]
+struct Renaming {
+    /// The project, layer and class it was started on.
+    owner: egui::Id,
+    text: String,
+    focused: bool,
+}
+
+/// The class chooser, and New, Rename, Remove, Move Up, Move Down and Visible for the chosen
+/// class. Default, last in the list, can be renamed or hidden, but not removed or moved.
+fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
+    let rename_key = egui::Id::new("label_pane_rename");
+    let owner = egui::Id::new((app.session.opened, l.id, c.name));
+    // A rename started on another class or layer (chosen since, or by an undo) is dropped.
+    let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner);
+    ui.data_mut(|d| d.remove::<Renaming>(rename_key));
+    grid(ui, "class_pick", |ui| {
+        ui.label(tl!("Class"));
+        match renaming {
+            Some(r) => rename_box(app, ui, l, c, rename_key, r),
+            None => {
+                egui::ComboBox::from_id_salt("label_pane_class").selected_text(shown(c)).width(180.0).show_ui(ui, |ui| {
+                    for k in extras(l) {
+                        if ui.selectable_label(c.name == Some(k.name.as_str()), &k.name).clicked() {
+                            choose(ui, app, l, Some(&k.name));
+                        }
+                    }
+                    let default = Class { it: &l.labels.default, name: None };
+                    if ui.selectable_label(c.name.is_none(), shown(&default)).clicked() {
+                        choose(ui, app, l, None);
+                    }
+                });
+            }
+        }
+        ui.end_row();
+    });
+    let count = extras(l).count();
+    let at = c.name.and_then(|n| extras(l).position(|k| k.name == n));
+    ui.horizontal_wrapped(|ui| {
+        let full = l.labels.classes.len() >= MAX_LABEL_CLASSES;
+        let max = MAX_LABEL_CLASSES.to_string();
+        let new = ui
+            .add_enabled(!full, egui::Button::new(tl!("New")))
+            .on_hover_text(tl!("Add a class with this one's field and text symbol."))
+            .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
+        if new.clicked() {
+            let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
+            if let Some(added) = run(app, "labels.class.add", p) {
+                choose(ui, app, l, added.get("class").and_then(Value::as_str));
+            }
+        }
+        if ui.button(tl!("Rename")).clicked() {
+            let r = Renaming { owner, text: c.it.name.clone(), focused: false };
+            ui.data_mut(|d| d.insert_temp(rename_key, r));
+        }
+        if ui
+            .add_enabled(at.is_some(), egui::Button::new(tl!("Remove")))
+            .on_disabled_hover_text(tl!("The Default class stays: it can be renamed or hidden."))
+            .clicked()
+        {
+            run(app, "labels.class.remove", c.params(json!({})));
+            choose(ui, app, l, None);
+        }
+        let up = at.filter(|i| *i > 0).map(|i| i - 1);
+        let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
+        for (label, to) in [("Move Up", up), ("Move Down", down)] {
+            let moved = ui
+                .add_enabled(to.is_some(), egui::Button::new(tl!(label)))
+                .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
+            if moved.clicked() {
+                run(app, "labels.class.move", c.params(json!({"to": to})));
+            }
+        }
+    });
+    let mut visible = c.it.visible;
+    if ui.checkbox(&mut visible, tl!("Visible")).on_hover_text(tl!("A hidden class leaves its features unlabelled.")).changed() {
+        run(app, "labels.class.update", c.params(json!({"visible": visible})));
+    }
+}
+
+/// The box the chosen class is renamed in: Enter (or clicking away) renames it, Escape leaves it as
+/// it was. A name refused (empty, or another class's) keeps the box open, with the notice saying why.
+fn rename_box(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, key: egui::Id, mut r: Renaming) {
+    let keys = egui::EventFilter { escape: true, ..Default::default() };
+    let edit = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width(180.0).event_filter(keys));
+    if !r.focused {
+        edit.request_focus();
+        r.focused = true;
+    }
+    if edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        return;
+    }
+    if edit.lost_focus() {
+        let name = label_class_name(&r.text);
+        if name == c.it.name {
+            return;
+        }
+        if run(app, "labels.class.rename", json!({"class": c.it.name, "name": name})).is_some() {
+            // Default stays chosen by no name; another class goes by its new one.
+            if c.name.is_some() {
+                choose(ui, app, l, Some(&name));
+            }
+            return;
+        }
+        r.focused = false;
+    }
+    ui.data_mut(|d| d.insert_temp(key, r));
+}
+
+/// The first "Class N" no class on `labels` goes by.
+fn new_name(labels: &Labeling) -> String {
+    (1..=MAX_LABEL_CLASSES + 2)
+        .map(|n| crate::i18n::fmt("Class {n}", &[("n", &n.to_string())]))
+        .find(|n| labels.class(n).is_none())
+        .unwrap_or_default()
+}
+
 /// The field the class labels with.
-fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     grid(ui, "class", |ui| {
         ui.label(tl!("Field"));
-        let cur = &l.labels.default.field;
+        let cur = &c.it.field;
         egui::ComboBox::from_id_salt("label_pane_field").selected_text(cur.as_str()).width(180.0).show_ui(ui, |ui| {
             for f in &l.dataset.fields {
                 if ui.selectable_label(f.name == *cur, &f.name).clicked() {
-                    run(app, "labels.field", json!({"field": f.name}));
+                    run(app, "labels.field", c.params(json!({"field": f.name})));
                 }
             }
         });
@@ -111,27 +294,23 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     });
 }
 
-/// The Default class's SQL clause: its labels, and their style, go only to the features that
-/// match it; none labels every feature.
-fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
+/// The class's SQL clause: its labels, and their style, go only to the features that match it;
+/// none takes every feature.
+fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let labels = &l.labels;
     if !labels.enabled {
         ui.label(RichText::new(tl!("Labels are off for this layer: the clause applies once they are on.")).small().color(t.text_dim));
     }
-    if !labels.default.visible {
+    if !c.it.visible {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tl!("This class is hidden, so it labels nothing.")).small().color(t.text_dim));
             if ui.small_button(tl!("Show labels")).clicked() {
-                run(app, "labels.class.update", json!({"visible": true}));
+                run(app, "labels.class.update", c.params(json!({"visible": true})));
             }
         });
     }
     if !labels.classes.is_empty() {
-        let n = labels.classes.len().min(MAX_LABEL_CLASSES).to_string();
-        let said = crate::i18n::fmt(
-            "Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.",
-            &[("n", &n)],
-        );
+        let said = tl!("Each class labels the features its own clause matches, so a feature can get a label from more than one.");
         ui.label(RichText::new(said).small().color(t.text_dim));
     }
     // Counted among the features the layer draws at the map's scale, as its labels are.
@@ -143,55 +322,59 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         let n = rows.iter().enumerate().filter(|(i, r)| **r && rustgis_engine::data::query::eval(&e, &l.dataset, *i)).count();
         Ok((n, of))
     };
-    // A draft belongs to this layer of this project: another project may reuse the layer's id.
-    let owner = egui::Id::new((app.session.opened, l.id));
+    // A draft belongs to this class of this layer of this project: another project may reuse the
+    // layer's id.
+    let owner = egui::Id::new((app.session.opened, l.id, c.name));
     // A count holds for this project state at this scale (display filters follow the scale).
     let version = egui::Id::new((app.session.revision, scale.to_bits())).value();
-    match crate::sqlbox::show(ui, "label_sql", owner, version, labels.default.where_.as_deref(), &l.dataset, count) {
-        Some(crate::sqlbox::Apply::Clause(w)) => run(app, "labels.class.update", json!({"where": w})),
-        Some(crate::sqlbox::Apply::Clear) => run(app, "labels.class.update", json!({"where": null})),
-        None => {}
-    }
+    let applied = match crate::sqlbox::show(ui, "label_sql", owner, version, c.it.where_.as_deref(), &l.dataset, count) {
+        Some(crate::sqlbox::Apply::Clause(w)) => json!({"where": w}),
+        Some(crate::sqlbox::Apply::Clear) => json!({"where": null}),
+        None => return,
+    };
+    run(app, "labels.class.update", c.params(applied));
 }
 
-fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     section(ui, "Text Symbol", |ui| {
         grid(ui, "symbol", |ui| {
             ui.label(tl!("Size"));
             // The whole range `labels.style` accepts (#457); the map follows a drag and letting
             // go runs the command once, so a drag is one undo step.
-            let mut size = f64::from(l.labels.default.size);
+            let mut size = f64::from(c.it.size);
             let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt"));
             let id = l.id;
             crate::ribbon::live_drag(
                 app,
                 ui,
                 &r,
-                f64::from(l.labels.default.size),
+                f64::from(c.it.size),
                 size,
                 |app, x| {
-                    if let Some(l) = app.session.map_mut().layer_mut(id) {
-                        l.labels.default.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
+                    if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
+                        k.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
                     }
                 },
-                |app, x| run(app, "labels.style", json!({"size": x})),
+                |app, x| {
+                    run(app, "labels.style", c.params(json!({"size": x})));
+                },
             );
             ui.end_row();
             ui.label(tl!("Color"));
-            let mut c = c32(l.labels.default.color);
-            if crate::widgets::color_button(ui, &mut c).changed() {
-                color_drag(app, ui, l, rgba(c));
+            let mut color = c32(c.it.color);
+            if crate::widgets::color_button(ui, &mut color).changed() {
+                color_drag(app, ui, l, c.name, rgba(color));
             }
             ui.end_row();
             ui.label("");
             ui.horizontal(|ui| {
-                let mut bold = l.labels.default.bold;
+                let mut bold = c.it.bold;
                 if ui.checkbox(&mut bold, tl!("Bold")).changed() {
-                    run(app, "labels.style", json!({"bold": bold}));
+                    run(app, "labels.style", c.params(json!({"bold": bold})));
                 }
-                let mut halo = l.labels.default.halo;
+                let mut halo = c.it.halo;
                 if ui.checkbox(&mut halo, tl!("Halo")).changed() {
-                    run(app, "labels.style", json!({"halo": halo}));
+                    run(app, "labels.style", c.params(json!({"halo": halo})));
                 }
             });
             ui.end_row();
@@ -199,12 +382,12 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     });
 }
 
-fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+fn position(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
     section(ui, "Position", |ui| {
-        let cur = l.labels.default.placement;
+        let cur = c.it.placement;
         let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
             if ui.add_sized(vec2(92.0, 22.0), egui::Button::selectable(cur == pl, tl!(pl.label())).truncate()).clicked() && cur != pl {
-                run(app, "labels.placement", json!({"position": pl.code()}));
+                run(app, "labels.placement", c.params(json!({"position": pl.code()})));
             }
         };
         ui.horizontal(|ui| pick(app, ui, LabelPlacement::Auto));
@@ -220,25 +403,24 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     });
 }
 
-fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+fn visibility(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
     section(ui, "Visibility Range", |ui| {
         grid(ui, "range", |ui| {
-            for (label, cur, key) in [("Out Beyond", l.labels.default.min_scale, "min"), ("In Beyond", l.labels.default.max_scale, "max")] {
+            for (label, cur, key) in [("Out Beyond", c.it.min_scale, "min"), ("In Beyond", c.it.max_scale, "max")] {
                 ui.label(tl!(label));
                 egui::ComboBox::from_id_salt(("label_pane_scale", key))
                     .selected_text(crate::ribbon::scale_label(cur))
                     .width(140.0)
                     .show_ui(ui, |ui| {
-                        for c in std::iter::once(None).chain(crate::ribbon::SCALES.iter().map(|s| Some(*s))) {
-                            if ui.selectable_label(c == cur, crate::ribbon::scale_label(c)).clicked() {
-                                run(app, "labels.scaleRange", json!({key: c}));
+                        for s in std::iter::once(None).chain(crate::ribbon::SCALES.iter().map(|s| Some(*s))) {
+                            if ui.selectable_label(s == cur, crate::ribbon::scale_label(s)).clicked() {
+                                run(app, "labels.scaleRange", c.params(json!({key: s})));
                             }
                         }
                     });
                 ui.end_row();
             }
-            for (label, cur, key) in [("Closest", l.labels.default.closest, "closest"), ("Farthest", l.labels.default.farthest, "farthest")]
-            {
+            for (label, cur, key) in [("Closest", c.it.closest, "closest"), ("Farthest", c.it.farthest, "farthest")] {
                 ui.label(tl!(label));
                 let imperial = app.ui.measurement_imperial;
                 let text =
@@ -246,22 +428,20 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 egui::ComboBox::from_id_salt(("label_pane_distance", key)).selected_text(text(cur)).width(140.0).show_ui(ui, |ui| {
                     for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
                         if ui.selectable_label(d == cur, text(d)).clicked() {
-                            run(app, "labels.distanceRange", json!({key: d}));
+                            run(app, "labels.distanceRange", c.params(json!({key: d})));
                         }
                     }
                 });
                 ui.end_row();
             }
         });
-        let limited = [l.labels.default.min_scale, l.labels.default.max_scale, l.labels.default.closest, l.labels.default.farthest]
-            .iter()
-            .any(Option::is_some);
+        let limited = [c.it.min_scale, c.it.max_scale, c.it.closest, c.it.farthest].iter().any(Option::is_some);
         if ui
             .add_enabled(limited, egui::Button::new(tl!("Clear Limits")))
             .on_hover_text(tl!("Draw labels at every scale and distance."))
             .clicked()
         {
-            run(app, "labels.scaleRange", json!({"clear": true}));
+            run(app, "labels.scaleRange", c.params(json!({"clear": true})));
         }
     });
 }
@@ -296,25 +476,29 @@ const COLOR_DRAG: &str = "label_pane_color_drag";
 #[derive(Clone)]
 struct ColorDrag {
     layer: u32,
+    /// The class picked on: `None` for Default.
+    class: Option<String>,
     before: Rgba,
     color: Rgba,
 }
 
-/// Previews a colour pick on its layer until `finish_color_drag` commits the completed gesture.
-pub(crate) fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
+/// Previews a colour pick on its layer's class (`None`: Default) until `finish_color_drag` commits
+/// the completed gesture.
+pub(crate) fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, class: Option<&str>, color: Rgba) {
     let key = egui::Id::new(COLOR_DRAG);
     let mut pending = ui.data(|d| d.get_temp::<ColorDrag>(key));
-    // One left pending on another layer (the selection changed mid-pick, from the Assistant or a
-    // shortcut) is finished first rather than dropped with its preview in place.
-    if let Some(other) = pending.take_if(|d| d.layer != l.id) {
+    // One left pending on another layer or class (the selection changed mid-pick, from the
+    // Assistant or a shortcut) is finished first rather than dropped with its preview in place.
+    if let Some(other) = pending.take_if(|d| d.layer != l.id || d.class.as_deref() != class) {
         ui.data_mut(|d| d.remove::<ColorDrag>(key));
         apply_color_drag(app, other);
     }
+    let Some(now) = class.map_or(Some(&l.labels.default), |n| l.labels.class(n)).map(|k| k.color) else { return };
     // The colour before the first frame of this pick, kept while it goes on.
-    let before = pending.map_or(l.labels.default.color, |d| d.before);
-    ui.data_mut(|d| d.insert_temp(key, ColorDrag { layer: l.id, before, color }));
-    if let Some(layer) = app.session.map_mut().layer_mut(l.id) {
-        layer.labels.default.color = color;
+    let before = pending.map_or(now, |d| d.before);
+    ui.data_mut(|d| d.insert_temp(key, ColorDrag { layer: l.id, class: class.map(String::from), before, color }));
+    if let Some(k) = app.session.map_mut().layer_mut(l.id).and_then(|l| class_mut(&mut l.labels, class)) {
+        k.color = color;
     }
     app.session.revision = app.session.revision.wrapping_add(1);
 }
@@ -342,16 +526,19 @@ pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
 
 /// Puts the pre-pick colour back and runs the pick's labels.style: one undo step.
 fn apply_color_drag(app: &mut RustGisApp, drag: ColorDrag) {
-    // A layer removed mid-pick took its preview with it: there is nothing to restore or style.
-    let Some(layer) = app.session.map_mut().layer_mut(drag.layer) else { return };
-    layer.labels.default.color = drag.before;
+    // A layer or class removed mid-pick took its preview with it: there is nothing to restore or
+    // style.
+    let Some(k) = app.session.map_mut().layer_mut(drag.layer).and_then(|l| class_mut(&mut l.labels, drag.class.as_deref())) else {
+        return;
+    };
+    k.color = drag.before;
     if drag.before != drag.color {
         // On the layer the pick was made on, as the active one: the command reaches it by id
         // (a name two layers share would reach the first), and a recorded step names it, as
         // for the pane's other commands. The selection, if it moved mid-pick, is put back (as
         // `Session::run` does to check a named layer's conditions).
         let selected = app.session.active_layer.replace(drag.layer);
-        run(app, "labels.style", json!({"color": drag.color.hex()}));
+        run(app, "labels.style", named(json!({"color": drag.color.hex()}), "class", drag.class.as_deref()));
         app.session.active_layer = selected;
     }
 }
@@ -359,7 +546,7 @@ fn apply_color_drag(app: &mut RustGisApp, drag: ColorDrag) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     use rustgis_engine::map::Rgba;
     use serde_json::json;
 
@@ -480,7 +667,7 @@ mod tests {
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
-                    super::color_drag(app, ui, &l, c);
+                    super::color_drag(app, ui, &l, None, c);
                 }
                 super::finish_color_drag(app, ui);
             },
@@ -534,7 +721,7 @@ mod tests {
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
-                    super::color_drag(app, ui, &l, c);
+                    super::color_drag(app, ui, &l, None, c);
                 }
                 super::finish_color_drag(app, ui);
             },
@@ -655,15 +842,15 @@ mod tests {
         h.get_by_label("There is no expression defined.");
     }
 
-    /// Classes made with commands, and a hidden Default, are said in the SQL tab; Show labels
-    /// shows Default again.
+    /// The SQL tab says that every class labels what its clause matches, and that a hidden Default
+    /// labels nothing; Show labels shows Default again.
     #[test]
     fn the_sql_tab_says_what_else_decides_the_labels() {
         let mut app = with_cities();
         app.run("labels.class.add", json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap();
         app.run("labels.class.update", json!({"visible": false})).unwrap();
         let mut h = sql_tab(app);
-        assert!(h.query_by_label_contains("Other label classes on this layer (made with commands): 1.").is_some());
+        assert!(h.query_by_label_contains("Each class labels the features its own clause matches").is_some());
         h.get_by_label("Show labels").click();
         h.run();
         let l = &h.state().session.map().layer(h.state().session.active_layer.unwrap()).unwrap().labels;
@@ -737,5 +924,209 @@ mod tests {
         assert_eq!(last.command, "labels.class.update");
         assert_eq!(last.params.get("layer"), Some(&json!("Cities")));
         assert_eq!(last.params.get("class"), None);
+    }
+    fn labels(app: &RustGisApp) -> rustgis_engine::map::symbology::Labeling {
+        app.session.map().layer(app.session.active_layer.unwrap()).unwrap().labels.clone()
+    }
+
+    /// The layer's class names, in the order they are listed.
+    fn names(app: &RustGisApp) -> Vec<String> {
+        labels(app).in_order().map(|c| c.name.clone()).collect()
+    }
+
+    /// The class the pane's chooser shows.
+    fn shown(h: &egui_kittest::Harness<'static, RustGisApp>, name: &str) -> bool {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(name))
+    }
+
+    /// Chooses class `to` in the pane's chooser, which shows `from`.
+    fn pick_class(h: &mut egui_kittest::Harness<'static, RustGisApp>, from: &str, to: &str) {
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some(from)).unwrap().click();
+        h.run();
+        h.get_by_label(to).click();
+        h.run();
+    }
+
+    /// The pane edits the class chosen, and only it; its steps name it, and Default's name none
+    /// (#722).
+    #[test]
+    fn the_chosen_class_is_the_one_edited() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap();
+        app.ws.recording = Some(Vec::new());
+        let before = labels(&app).default;
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.get_by_label("Below Right").click();
+        h.run();
+        h.get_by_label("Bold").click();
+        h.run();
+        let l = labels(h.state());
+        let big = l.class("Big").unwrap();
+        assert_eq!((big.placement, big.bold), (rustgis_engine::map::LabelPlacement::BelowRight, !before.bold));
+        assert_eq!((l.default.placement, l.default.bold), (before.placement, before.bold), "Default is left as it was");
+        pick_class(&mut h, "Big", "Default");
+        h.get_by_label("Halo").click();
+        h.run();
+        assert_ne!(labels(h.state()).default.halo, before.halo);
+        let steps = h.state().ws.recording.clone().unwrap();
+        let classes: Vec<_> = steps.iter().map(|s| (s.command.as_str(), s.params.get("class").cloned())).collect();
+        assert_eq!(
+            classes,
+            [("labels.placement", Some(json!("Big"))), ("labels.style", Some(json!("Big"))), ("labels.style", None)],
+            "Default's step names no class"
+        );
+    }
+
+    /// A class chosen that goes away (an undo, a script, the Assistant) leaves Default chosen.
+    #[test]
+    fn the_pane_goes_back_to_default_when_its_class_goes_away() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        let before = labels(&app).default.bold;
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.state_mut().run("labels.class.remove", json!({"class": "Big"})).unwrap();
+        h.run();
+        assert!(shown(&h, "Default"));
+        h.get_by_label("Bold").click();
+        h.run();
+        assert_ne!(labels(h.state()).default.bold, before, "the pane edits Default again");
+    }
+
+    /// New, Move Up, Rename and Remove each run their command once: one undo step each.
+    #[test]
+    fn classes_are_made_renamed_ordered_and_removed_from_the_pane() {
+        let app = with_cities();
+        let steps = app.session.undo_depth();
+        let mut h = harness(app);
+        h.run();
+        assert!(h.get_by_label("Remove").accesskit_node().is_disabled(), "Default stays");
+        h.get_by_label("New").click();
+        h.run();
+        assert_eq!(names(h.state()), ["Class 1", "Default"]);
+        assert!(shown(&h, "Class 1"), "the new class is chosen");
+        h.get_by_label("New").click();
+        h.run();
+        assert_eq!(names(h.state()), ["Class 1", "Class 2", "Default"]);
+        assert!(h.get_by_label("Move Down").accesskit_node().is_disabled(), "the last before Default");
+        h.get_by_label("Move Up").click();
+        h.run();
+        assert_eq!(names(h.state()), ["Class 2", "Class 1", "Default"]);
+        h.get_by_label("Rename").click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text(" big");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(names(h.state()), ["Class 2 big", "Class 1", "Default"]);
+        assert!(shown(&h, "Class 2 big"), "still chosen by its new name");
+        h.get_by_label("Remove").click();
+        h.run();
+        assert_eq!(names(h.state()), ["Class 1", "Default"]);
+        assert!(shown(&h, "Default"));
+        assert_eq!(h.state().session.undo_depth(), steps + 5);
+    }
+
+    /// A name refused keeps the box open, saying why; Escape leaves the name as it was.
+    #[test]
+    fn a_refused_class_name_keeps_the_box_open() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        app.run("labels.class.add", json!({"name": "Big 2"})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.get_by_label("Rename").click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text(" 2");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(names(h.state()), ["Big", "Big 2", "Default"]);
+        assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("already a label class")));
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_some(), "the box stays open");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
+        assert_eq!(names(h.state()), ["Big", "Big 2", "Default"]);
+        assert!(shown(&h, "Big"));
+    }
+
+    /// New is off once the layer has as many classes as it keeps.
+    #[test]
+    fn new_is_off_at_the_class_limit() {
+        let mut app = with_cities();
+        for i in 0..rustgis_engine::map::symbology::MAX_LABEL_CLASSES {
+            app.run("labels.class.add", json!({"name": format!("C{i}")})).unwrap();
+        }
+        let steps = app.session.undo_depth();
+        let mut h = harness(app);
+        h.run();
+        assert!(h.get_by_label("New").accesskit_node().is_disabled());
+        h.get_by_label("New").click();
+        h.run();
+        assert_eq!(h.state().session.undo_depth(), steps);
+    }
+
+    /// The SQL tab shows and sets the chosen class's clause.
+    #[test]
+    fn the_sql_tab_edits_the_chosen_class() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.get_by_label("SQL").click();
+        h.run();
+        assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 5000000"));
+        h.get_by_label("Clear").click();
+        h.run();
+        let l = labels(h.state());
+        assert_eq!((l.class("Big").unwrap().where_.clone(), l.default.where_), (None, None));
+    }
+
+    /// A colour pick is kept on the class it was made on: one left pending when another class is
+    /// chosen mid-pick is finished first, as its own step naming its class.
+    #[test]
+    fn a_colour_pick_stays_on_its_class() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        app.ws.recording = Some(Vec::new());
+        let before = labels(&app).default.color;
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, (app, pick): &mut (RustGisApp, Option<(Option<&'static str>, Rgba)>)| {
+                if let Some((class, c)) = pick.take() {
+                    let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
+                    super::color_drag(app, ui, &l, class, c);
+                }
+                super::finish_color_drag(app, ui);
+            },
+            (app, None),
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(4.0, 4.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (red, blue) = (Rgba::new(200, 10, 10, 255), Rgba::new(10, 10, 200, 255));
+        h.event(button(true));
+        h.step();
+        h.state_mut().1 = Some((Some("Big"), red));
+        h.step();
+        let l = labels(&h.state().0);
+        assert_eq!((l.class("Big").unwrap().color, l.default.color), (red, before), "the pick previews on Big only");
+        h.state_mut().1 = Some((None, blue));
+        h.step();
+        h.event(button(false));
+        h.step();
+        let app = &h.state().0;
+        let l = labels(app);
+        assert_eq!((l.class("Big").unwrap().color, l.default.color), (red, blue));
+        let classes: Vec<_> = app.ws.recording.iter().flatten().map(|s| s.params.get("class").cloned()).collect();
+        assert_eq!(classes, [Some(json!("Big")), None]);
     }
 }
