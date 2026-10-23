@@ -2892,8 +2892,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                 }
             }
-            // Each feature is labelled by the first label class whose clause takes it, Default last;
-            // that class draws it when shown, in range and on a field the layer has (#618).
+            // Each label class labels every feature its clause takes, as in ArcGIS Pro (#732), when
+            // shown, in range and on a field the layer has (#618).
             let label_fields: Vec<Option<usize>> = if labels.enabled && !display.paused {
                 labels.in_order().map(|c| ds_ptr.field_index(&c.field).filter(|_| c.visible && c.in_range(scale, distance))).collect()
             } else {
@@ -2912,24 +2912,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         continue;
                     }
                     let Some((x, y)) = ctx.screen(c) else { continue };
-                    // The clauses are read for the features in view only.
-                    let Some((ci, class)) = classes.class_of(ds_ptr, row) else { continue };
-                    let Some(fi) = label_fields.get(ci).copied().flatten() else { continue };
-                    let v = ds_ptr.value(row, fi);
-                    if v.is_null() {
-                        continue;
-                    }
-                    let text = v.to_string();
                     let is_point = g.kind() == GeometryType::Point;
                     let marker = if is_point { layer.symbol(row).size } else { 0.0 };
-                    let (dx, dy) = class.placement.offset(
-                        text::block_width(&text, class.size, class.bold),
-                        text::block_height(&text, class.size),
-                        marker,
-                        is_point,
-                    );
                     // Bigger polygons get priority.
-                    let pri = match g {
+                    let area = match g {
                         Geometry::Polygon(_) => {
                             let e = g.extent();
                             // (An extent of no number counts as none.)
@@ -2937,28 +2923,47 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             if a.is_finite() { a.clamp(0.0, 1e8) } else { 0.0 }
                         }
                         _ => 0.0,
-                    } + (n_layers - li) as f64 * 1e9;
-                    label_candidates.push((
-                        PlacedLabel {
-                            text,
-                            x: x as f32 + dx,
-                            y: y as f32 + dy,
-                            size: class.size,
-                            color: class.color,
-                            halo: class.halo.then_some(halo_for(class.color)),
-                            bold: class.bold,
-                            icon: None,
-                            align: 0.0,
-                            framed: false,
-                            italic: false,
-                            spacing: 0.0,
-                            line_align: TextAlign::Left,
-                            angle: None,
-                            collide: Default::default(),
-                        },
-                        pri,
-                        (lid, label_row(row)),
-                    ));
+                    };
+                    // The clauses are read for the features in view only.
+                    for (ci, class) in classes.classes_of(ds_ptr, row) {
+                        let Some(fi) = label_fields.get(ci).copied().flatten() else { continue };
+                        let v = ds_ptr.value(row, fi);
+                        if v.is_null() {
+                            continue;
+                        }
+                        let text = v.to_string();
+                        let (dx, dy) = class.placement.offset(
+                            text::block_width(&text, class.size, class.bold),
+                            text::block_height(&text, class.size),
+                            marker,
+                            is_point,
+                        );
+                        // Layers above first, then the classes listed first (#732), then bigger
+                        // polygons: a step of one outweighs everything the next ones add (area up to
+                        // 1e8, at most MAX_LABEL_CLASSES + 1 classes of 1e9 each, under 1e12).
+                        let pri = area + label_fields.len().saturating_sub(ci) as f64 * 1e9 + (n_layers - li) as f64 * 1e12;
+                        label_candidates.push((
+                            PlacedLabel {
+                                text,
+                                x: x as f32 + dx,
+                                y: y as f32 + dy,
+                                size: class.size,
+                                color: class.color,
+                                halo: class.halo.then_some(halo_for(class.color)),
+                                bold: class.bold,
+                                icon: None,
+                                align: 0.0,
+                                framed: false,
+                                italic: false,
+                                spacing: 0.0,
+                                line_align: TextAlign::Left,
+                                angle: None,
+                                collide: Default::default(),
+                            },
+                            pri,
+                            (lid, label_row(row)),
+                        ));
+                    }
                 }
             }
             if complete_source && matches!(labels_to, Labels::Own | Labels::Turned(_)) {
@@ -4234,9 +4239,9 @@ mod tests {
         assert!(starfield(1e9).is_some_and(|t| t.width() == 2048));
     }
 
-    /// Each feature is labelled by the first label class whose clause takes it, Default last; a
-    /// hidden class keeps its features unlabelled, and a clause that no longer reads takes none
-    /// (#618).
+    /// Each label class labels every feature its clause takes, as in ArcGIS Pro (#732): a feature
+    /// two classes take gets a label from each, the class listed first placed first. A hidden
+    /// class labels none, and a clause that no longer reads takes none (#618).
     #[test]
     fn label_classes_label_their_features() {
         let mut m = Map::new("Map");
@@ -4261,13 +4266,24 @@ mod tests {
             v
         };
         let default = m.layer(id).unwrap().labels.default.size;
-        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default), ("Paris".to_string(), 20.0)], "Paris is a capital, Lyon the rest");
-        // Hidden, the class still has Paris: it goes unlabelled, not to Default.
+        let both = [("Lyon".to_string(), default), ("Paris".to_string(), default)];
+        // Default takes Paris too, but its label sits where Capitals' does: Capitals, listed
+        // first, is placed and Default's collides.
+        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default), ("Paris".to_string(), 20.0)], "Paris is a capital");
+        // Default below, Capitals above: both of Paris's labels fit.
+        m.layer_mut(id).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Below;
+        m.layer_mut(id).unwrap().labels.classes[0].placement = rustgis_map::LabelPlacement::Above;
+        let mut two = vec![("Lyon".to_string(), default), ("Paris".to_string(), default), ("Paris".to_string(), 20.0)];
+        two.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let mut got = sizes(&mut m);
+        got.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        assert_eq!(got, two, "a feature two classes take gets a label from each");
+        // Hidden, the class labels nothing; Default still labels Paris.
         m.layer_mut(id).unwrap().labels.classes[0].visible = false;
-        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default)]);
-        // A clause that doesn't read takes no feature: both go to Default.
+        assert_eq!(sizes(&mut m), both);
+        // A clause that doesn't read takes no feature.
         capitals(m.layer_mut(id).unwrap(), "gone = 1");
-        assert_eq!(sizes(&mut m), [("Lyon".to_string(), default), ("Paris".to_string(), default)]);
+        assert_eq!(sizes(&mut m), both);
     }
 
     #[test]

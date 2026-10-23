@@ -129,7 +129,7 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     if !labels.classes.is_empty() {
         let n = labels.classes.len().min(MAX_LABEL_CLASSES).to_string();
         let said = crate::i18n::fmt(
-            "Other label classes on this layer (made with commands): {n}. They are checked first; this clause is for the features they leave.",
+            "Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.",
             &[("n", &n)],
         );
         ui.label(RichText::new(said).small().color(t.text_dim));

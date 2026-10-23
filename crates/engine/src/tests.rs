@@ -1566,9 +1566,12 @@ fn label_classes_convert_and_outlive_a_deleted_field() {
     let a = s.map().layer(u32::try_from(r["layer"].as_u64().unwrap()).unwrap()).unwrap();
     let classes: Vec<_> = a.labels.in_order().map(|c| (c.name.clone(), c.where_.clone(), c.field.clone(), c.size)).collect();
     assert_eq!(classes[0], ("Big's".to_string(), Some(r#""CLASS" = 'Big''s'"#.to_string()), "TEXT".to_string(), 18.0));
-    assert_eq!((classes[1].1.as_ref(), classes[1].2.as_str()), (None, "TEXT"), "Default takes the rest");
-    let picked = rustgis_data::query::select(classes[0].1.as_deref().unwrap(), &a.dataset).unwrap().len();
-    assert_eq!(picked, big, "the class's clause picks the points it labelled");
+    assert_eq!((classes[1].1.as_deref(), classes[1].2.as_str()), (Some(r#""CLASS" = 'Default'"#), "TEXT"), "Default picks its own");
+    let picked = |w: &Option<String>| rustgis_data::query::select(w.as_deref().unwrap(), &a.dataset).unwrap().len();
+    assert_eq!(picked(&classes[0].1), big, "the class's clause picks the points it labelled");
+    // Default labels the big cities too (#732): each class gives them a point.
+    assert_eq!(picked(&classes[1].1), a.dataset.features.len() - big);
+    assert!(picked(&classes[1].1) > big, "Default labels every city, the big ones among them");
     // A deleted field: the class labels with Default's field, and is kept.
     s.run("layer.select", &json!({"layer": cities})).unwrap();
     s.run("labels.field", &json!({"class": "Big's", "field": "pop_max"})).unwrap();

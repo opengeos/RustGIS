@@ -881,9 +881,10 @@ pub fn label_class_name(name: &str) -> String {
     name.trim_end().to_string()
 }
 
-/// Label settings for a layer: on or off, and its label classes (#618). A feature is labelled by
-/// the first of `classes` whose SQL clause it matches, else by `default`, which is checked last
-/// (the rest of the features). Saved as before: the Default class's settings sit beside `enabled`
+/// Label settings for a layer: on or off, and its label classes (#618). As in ArcGIS Pro, each
+/// class labels every feature its SQL clause matches, so a feature two classes match gets a label
+/// from each (#732); `classes` come first and `default` last, the order their labels are placed
+/// in when they compete for room. Saved as before: the Default class's settings sit beside `enabled`
 /// and the other classes are listed only when there are any, so a project without them keeps
 /// its old form.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -938,12 +939,11 @@ impl From<LabelingFile> for Labeling {
 pub struct LabelClass {
     #[serde(default = "default_class_name", skip_serializing_if = "is_default_class_name")]
     pub name: String,
-    /// A hidden class draws none of its features (they don't go on to the next class).
+    /// A hidden class labels none of its features (the other classes still label theirs).
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub visible: bool,
     /// The SQL `WHERE` clause choosing its features (the definition query's language); none, or
-    /// blank, takes every feature that reaches it. One that no longer reads (a field since
-    /// removed) takes none, and they go on to the next class.
+    /// blank, takes every feature. One that no longer reads (a field since removed) takes none.
     #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
     pub where_: Option<String>,
     pub field: String,
@@ -1111,8 +1111,8 @@ impl LabelClass {
     }
 }
 
-/// A layer's label classes read against its data, in the order a feature is matched: the class
-/// labelling a row is the first whose clause takes it.
+/// A layer's label classes read against its data, in `Labeling::in_order`: every class whose
+/// clause takes a row labels it.
 pub struct LabelMatcher<'a> {
     classes: Vec<(&'a LabelClass, Option<Option<rustgis_data::query::Expr>>)>,
 }
@@ -1122,10 +1122,9 @@ impl<'a> LabelMatcher<'a> {
         LabelMatcher { classes: labels.in_order().map(|c| (c, c.query(ds))).collect() }
     }
 
-    /// The class `row` belongs to, and its place in `Labeling::in_order`; none when no class
-    /// takes it.
-    pub fn class_of(&self, ds: &Dataset, row: usize) -> Option<(usize, &'a LabelClass)> {
-        self.classes.iter().enumerate().find_map(|(i, (c, q))| match q {
+    /// The classes whose clause takes `row`, each with its place in `Labeling::in_order`.
+    pub fn classes_of<'m>(&'m self, ds: &'m Dataset, row: usize) -> impl Iterator<Item = (usize, &'a LabelClass)> + 'm {
+        self.classes.iter().enumerate().filter_map(move |(i, (c, q))| match q {
             Some(None) => Some((i, *c)),
             Some(Some(e)) if rustgis_data::query::eval(e, ds, row) => Some((i, *c)),
             _ => None,
@@ -1270,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_takes_the_first_class_that_matches_and_default_last() {
+    fn a_feature_takes_every_class_that_matches() {
         let mut ds = Dataset::new("t", GeometryType::Point, vec![Field::new("pop", FieldType::Integer)]);
         for pop in [5, 50, 500] {
             ds.push(None, vec![Value::Int(pop)]);
@@ -1278,17 +1277,19 @@ mod tests {
         let mut l = Labeling::default_for(&ds);
         let class = |name: &str, w: &str| LabelClass { name: name.into(), where_: Some(w.into()), ..LabelClass::default_for(&ds) };
         l.classes = vec![class("Big", "pop > 100"), class("Medium", "pop > 10"), class("Broken", "nope = 1")];
-        let m = LabelMatcher::new(&l, &ds);
-        let names: Vec<_> = (0..3).map(|r| m.class_of(&ds, r).map(|(i, c)| (i, c.name.clone()))).collect();
+        let names = |l: &Labeling| -> Vec<Vec<(usize, String)>> {
+            let m = LabelMatcher::new(l, &ds);
+            (0..3).map(|r| m.classes_of(&ds, r).map(|(i, c)| (i, c.name.clone())).collect()).collect()
+        };
+        let (big, medium, default) = ((0, "Big".to_string()), (1, "Medium".to_string()), (3, "Default".to_string()));
         assert_eq!(
-            names,
-            [Some((3, "Default".to_string())), Some((1, "Medium".to_string())), Some((0, "Big".to_string()))],
-            "500 is Big before it is Medium; a clause that doesn't read takes nothing"
+            names(&l),
+            [vec![default.clone()], vec![medium.clone(), default.clone()], vec![big.clone(), medium.clone(), default]],
+            "500 is Big, Medium and Default; a clause that doesn't read takes nothing"
         );
-        // A Default class with a clause leaves the rest unlabelled.
+        // A Default class with a clause labels only what it matches.
         l.default.where_ = Some("pop = 50".into());
-        let m = LabelMatcher::new(&l, &ds);
-        assert!(m.class_of(&ds, 0).is_none());
+        assert_eq!(names(&l), [vec![], vec![medium.clone(), (3, "Default".to_string())], vec![big, medium]]);
         assert_eq!(l.class("medium").map(|c| c.name.as_str()), Some("Medium"), "names match ASCII case aside");
     }
 
