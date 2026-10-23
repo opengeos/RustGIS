@@ -131,7 +131,7 @@ layer.strokeLevels={"layer":"Roads","on":true}
 ### Reference scale
 
 Symbol and label sizes are set in points, and normally keep that size on screen at every scale.
-A layer with a **Reference scale** (Style pane, **Layer**) has its sizes set for that scale
+A layer with a **Reference scale** (Symbology pane, under **Layer**) has its sizes set for that scale
 instead, as on a printed map: zoomed in to half of it, its lines, markers and labels are drawn
 twice as large; zoomed out to twice it, half as large (within 1/100 and 32 times). Pick a scale,
 **Current scale** to keep the sizes as they are now, or **None**. A topographic map designed for

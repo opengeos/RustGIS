@@ -226,7 +226,10 @@ pub fn commands() -> Vec<C> {
                 None | Some(Value::Null) => None,
                 Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => {
                     let now = s.map().scale().round();
-                    Some(now.is_finite().then(|| now.clamp(lo, hi)).ok_or("the map has no scale here")?)
+                    if !now.is_finite() {
+                        return Err("the map has no scale here".into());
+                    }
+                    Some(now.clamp(lo, hi))
                 }
                 Some(_) => Some(f(p, "scale").filter(|v| (lo..=hi).contains(v)).ok_or("scale is a number from 1 to 1000000000, \"current\" or null")?),
             };

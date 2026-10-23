@@ -2382,6 +2382,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     // (the full-resolution render), which waits for them; only the layers drawn at the view's
     // scale read. A tilted view's bands share its read.
     let scale = map.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+    // The labels a tilted view's bands hand back stand in that view, beside its upright markers:
+    // sized, for a reference scale, at its scale rather than the band's.
+    let label_scale = match &labels_to {
+        Labels::Tilted(to, _) => map.ground_res_at(&to.camera) / rustgis_geom::PIXEL_M,
+        _ => scale,
+    };
     let data_pending = match labels_to {
         Labels::Tilted(..) | Labels::Shared => false,
         _ => map.sync_sources(&view_lonlat(map, view), scale, full_res_rasters),
@@ -2944,6 +2950,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 Vec::new()
             };
             if label_fields.iter().any(Option::is_some) {
+                let label_factor = layer.size_factor(label_scale);
                 let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
                 let lid = layer.id;
                 for (row, g) in geoms.iter().enumerate() {
@@ -2957,7 +2964,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                     let Some((x, y)) = ctx.screen(c) else { continue };
                     let is_point = g.kind() == GeometryType::Point;
-                    let marker = if is_point { layer.symbol(row).size * size_factor } else { 0.0 };
+                    let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                     // Bigger polygons get priority.
                     let area = match g {
                         Geometry::Polygon(_) => {
@@ -2980,13 +2987,16 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             continue;
                         }
                         let text = v.to_string();
-                        let size = class.size * size_factor;
+                        // Placed as at its own size, then that much farther out: the gap between
+                        // the label and its feature grows with it too.
+                        let size = class.size * label_factor;
                         let (dx, dy) = class.placement.offset(
-                            text::block_width(&text, size, class.bold),
-                            text::block_height(&text, size),
+                            text::block_width(&text, class.size, class.bold),
+                            text::block_height(&text, class.size),
                             marker,
                             is_point,
                         );
+                        let (dx, dy) = (dx * label_factor, dy * label_factor);
                         // Layers above first, then the classes listed first (#732), then bigger
                         // polygons: a class (ci ≤ MAX_LABEL_CLASSES, 1e9 each) never outweighs a
                         // layer (1e12), nor an area (≤ 1e8) a class.
@@ -5497,6 +5507,51 @@ mod tests {
             let got = width(&mut m);
             assert!(got.abs_diff(want) <= 1, "reference 1:{reference:.0} at 1:{scale:.0}: {got} px, not about {want}");
         }
+        // The GPU path's meshes carry the same widths.
+        let gpu_width = |m: &mut Map| {
+            let Some(RenderOutput::Gpu(scene)) = render_backend(m, &view, Backend::Gpu) else { panic!("gpu scene") };
+            let widths = scene.cmds.iter().flat_map(|c| match c {
+                gpu_scene::DrawCmd::Mesh { vertices, .. } => vertices.iter().map(|v| v.stroke_px).collect(),
+                _ => Vec::new(),
+            });
+            widths.fold(0.0f32, f32::max)
+        };
+        m.layer_mut(id).unwrap().reference_scale = None;
+        let plain = gpu_width(&mut m);
+        assert!(plain > 0.0, "the line is meshed");
+        for (reference, k) in [(scale, 1.0), (scale * 2.0, 2.0), (scale / 2.0, 0.5)] {
+            m.layer_mut(id).unwrap().reference_scale = Some(reference);
+            assert!((gpu_width(&mut m) - plain * k).abs() < 1e-3, "gpu at reference 1:{reference:.0}");
+        }
+    }
+
+    #[test]
+    fn a_reference_scale_scales_labels_and_their_gap() {
+        // A point labelled to its right: at twice the size, the label is twice as large and twice
+        // as far from the point, the gap between them included.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("towns", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![Value::Text("Winterthur".into())]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        m.camera = camera;
+        let view = View { width: 400.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let l = m.layer_mut(id).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.field = "name".into();
+        l.labels.default.placement = rustgis_map::LabelPlacement::Right;
+        let label = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            let l = r.labels.first().expect("placed");
+            (l.x - 200.0, l.size)
+        };
+        let (dx, size) = label(&mut m);
+        assert!(dx > 0.0, "{dx}");
+        let scale = m.scale();
+        m.layer_mut(id).unwrap().reference_scale = Some(scale * 2.0);
+        let (dx2, size2) = label(&mut m);
+        assert!((size2 - size * 2.0).abs() < 1e-3 && (dx2 - dx * 2.0).abs() < 0.5, "{dx} {size} → {dx2} {size2}");
     }
 
     #[test]
