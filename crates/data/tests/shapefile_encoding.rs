@@ -283,3 +283,40 @@ fn dos_support_preserves_other_encodings_and_lossy_utf8_fallback() {
         assert!(layers[0].1.messages.is_empty(), "{:?}", layers[0].1.messages);
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn utf8_metadata_preserves_leading_bom_in_fields_and_values() {
+    use rustgis_data::source::{FeatureSource, Request, shp::ShpSource};
+    for (cpg, ldid) in [(None, 0), (None, 0xf0), (Some(b"UTF-8".as_slice()), 0x03), (Some(b"65001".as_slice()), 0x03)] {
+        // A BOM inside a fixed-width DBF field is content, not a file signature.
+        let mut files = parts(b"\xef\xbb\xbfCaf\xff", ldid, cpg);
+        let dbf = &mut files.iter_mut().find(|(n, _)| n.ends_with(".dbf")).unwrap().1;
+        dbf[32..43].fill(0);
+        dbf[32..39].copy_from_slice(b"\xef\xbb\xbfname");
+        let layers = io::read_zip("places.zip", &rustgis_data::zip::write(&files).unwrap()).unwrap();
+        assert_eq!(layers[0].0.fields[0].name, "\u{feff}name");
+        assert_eq!(layers[0].0.value(0, 0), &Value::Text("\u{feff}Caf�".into()));
+        assert!(layers[0].1.messages.is_empty(), "{:?}", layers[0].1.messages);
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in files {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let path = dir.path().join("places.shp");
+        let (ds, report) = io::read_path(&path).unwrap();
+        assert_eq!(ds.fields[0].name, "\u{feff}name");
+        assert_eq!(ds.value(0, 0), &Value::Text("\u{feff}Caf�".into()));
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+        let src = ShpSource::open_path(&path, "places").unwrap();
+        assert_eq!(src.info().fields[0].name, "\u{feff}name");
+        assert_eq!(src.read(&Request::all()).unwrap().features[0].attrs, [Value::Text("\u{feff}Caf�".into())]);
+        let mut attrs = Vec::new();
+        src.visit_chunks(None, 1024, &mut |features| {
+            attrs.extend(features.into_iter().map(|f| f.attrs));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(attrs, vec![vec![Value::Text("\u{feff}Caf�".into())]]);
+        assert!(src.info().notes.is_empty(), "{:?}", src.info().notes);
+    }
+}

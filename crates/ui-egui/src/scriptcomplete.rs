@@ -5,11 +5,13 @@
 //! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
 //! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
 //! whose own keys then go in its `"params": {…}`. Typing aids beside it: a command's parameters
-//! added on accept (`template`), and braces and brackets that close themselves (`brace`).
+//! added on accept (`template`), and braces, brackets and quotes that close themselves (`brace`).
+//! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};
 use egui::widgets::text_edit::{TextEditOutput, TextEditState};
 use egui::{Id, Key, Modifiers, Ui};
+use rustgis_engine::Quotes;
 use rustgis_engine::cmd::workflows::refused_in_script;
 
 /// The most suggestions the list shows.
@@ -92,14 +94,14 @@ pub fn hint_at(script: &str, at: usize) -> Option<Hint> {
     let line = before.get(line_start..)?;
     let id = crate::scriptcolor::line_id(line)?;
     let brace = line.find('{')?;
-    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    let (mut depth, mut q) = (0usize, Quotes::default());
     for c in line.get(brace..)?.chars() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
+        if !q.read(c) {
+            continue;
+        }
         match c {
-            '"' if !was_escaped => quoted = !quoted,
-            '{' if !quoted => depth += 1,
-            '}' if !quoted => depth = depth.saturating_sub(1),
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
             _ => {}
         }
     }
@@ -180,7 +182,7 @@ pub struct Nested {
 /// deeper. A top-level value follows its key and colon.
 fn scan(text: &str) -> Scan {
     let chars: Vec<char> = text.chars().collect();
-    let (mut depth, mut quoted, mut escaped, mut entry, mut start) = (0usize, false, false, false, None);
+    let (mut depth, mut q, mut entry, mut start) = (0usize, Quotes::default(), false, None);
     // The top-level key just read, the one whose colon was just read (its value comes next),
     // where the key being read starts, and the top-level value being read.
     let (mut named, mut valued, mut from, mut value) = (None::<String>, None::<String>, None, None);
@@ -189,22 +191,24 @@ fn scan(text: &str) -> Scan {
     let (mut array, mut nested) = (None::<String>, None::<(Nested, usize)>);
     let mut values = Vec::new();
     for (i, &c) in chars.iter().enumerate() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
-        if quoted {
-            if c == '"' && !was_escaped {
+        let was_quoted = q.quoted();
+        q.read(c);
+        if was_quoted {
+            // Its closing quote.
+            if !q.quoted() {
                 if let Some((v, key)) = value.take() {
                     values.push((key, chars.get(v..i).unwrap_or_default().iter().collect()));
                 }
-                (quoted, start) = (false, None);
+                start = None;
                 named = from.take().and_then(|f| chars.get(f..i)).map(|k| k.iter().collect());
             }
             continue;
         }
         let top = depth == 1 || nested.as_ref().is_some_and(|(_, d)| *d == depth);
         match c {
+            // An opening quote.
             '"' => {
-                (quoted, start) = (true, (top && entry).then_some(i + 1));
+                start = (top && entry).then_some(i + 1);
                 from = (depth == 1 && entry).then_some(i + 1);
                 value = valued.take().filter(|_| depth == 1).map(|k| (i + 1, k));
                 entry = false;
@@ -444,16 +448,12 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
 /// its array, a later key's) isn't read as holding its keys.
 fn object_rest(after: &str) -> &str {
     // In the key's quotes, then one level in.
-    let (mut depth, mut quoted, mut escaped) = (1usize, true, false);
+    let (mut depth, mut q) = (1usize, Quotes::in_string());
     for (i, c) in after.char_indices() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
-        if quoted {
-            quoted = !(c == '"' && !was_escaped);
+        if !q.read(c) {
             continue;
         }
         match c {
-            '"' => quoted = true,
             '{' | '[' | '(' => depth += 1,
             '}' | ']' | ')' => {
                 depth = depth.saturating_sub(1);
@@ -1125,17 +1125,13 @@ fn char_at(script: &str, at: usize) -> Option<char> {
     script.get(byte_at(script, at)?..)?.chars().next()
 }
 
-/// Whether the end of `line` is inside a string (quotes after a backslash don't count).
+/// Whether the end of `line` is inside a string.
 fn in_string(line: &str) -> bool {
-    let (mut quoted, mut escaped) = (false, false);
+    let mut q = Quotes::default();
     for c in line.chars() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
-        if c == '"' && !was_escaped {
-            quoted = !quoted;
-        }
+        q.read(c);
     }
-    quoted
+    q.quoted()
 }
 
 /// What this frame's input did to the box, as `brace` needs it: a brace, bracket or quote typed,
@@ -1722,6 +1718,7 @@ mod tests {
         assert_eq!(typed("x ab", 2, "{"), None, "before other text");
         assert_eq!(end(r#"x {"where": "a "#), None, "in a string");
         assert_eq!(end(r#"x {"where": "a \" "#), None, "an escaped quote doesn't end it");
+        assert_eq!(end(r#"x \"a "#), None, "a backslash outside a string escapes nothing (#741)");
         assert_eq!(end("  # x "), None, "in a comment line");
         assert_eq!(end("ñandú ").as_deref(), Some("ñandú {}"), "chars, not bytes");
         assert_eq!(typed("x ", 2, "{{"), None, "more than the brace typed");

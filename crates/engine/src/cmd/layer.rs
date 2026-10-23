@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Registers layer commands shared by the UI, CLI and command search.
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
@@ -149,6 +150,11 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA" (the fill; a polygon's outline is left as it is, set it with layer.outline)}"##),
+        C::new("layer.noFill", "No Fill", "Style › Drawing", |s, p| {
+            with(s, p, |l| l.renderer.map_symbols(|sym| sym.fill = sym.fill.with_alpha(0)))
+        })
+        .when(need_polygons)
+        .params(r#"{"layer"?: name|id (default: the active polygon layer; removes every symbol's fill, keeping its RGB and outline)}"#),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
@@ -324,6 +330,15 @@ impl Session {
             Some(c) => Rgba::from_hex(c).map(Some).ok_or_else(|| format!("{k} must be #RRGGBB or #RRGGBBAA")),
             None => Ok(None),
         }
+    }
+}
+
+/// A polygon layer is active.
+fn need_polygons(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if !l.is_raster() && l.geometry_type() == GeometryType::Polygon && !l.graphics => None,
+        Some(_) => Some("this works on polygon layers"),
+        None => Some("select a polygon layer in the Layers pane first"),
     }
 }
 

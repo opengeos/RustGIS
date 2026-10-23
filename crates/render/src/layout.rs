@@ -239,10 +239,15 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
                     None => placeholder(&mut pm, r, "Chart", ppp),
                 }
             }
-            ElementKind::Rectangle { fill, outline, width } => {
-                pm.fill_rect(r, &paint(*fill, 1.0), Transform::identity(), None);
+            ElementKind::Rectangle { fill, outline, width, radius } => {
+                // Square corners filled as before, so an existing layout draws to the same pixels.
+                let rounded = rounded_rect(r, (*radius * PT_PER_MM * ppp) as f32);
+                match &rounded {
+                    Some(p) => pm.fill_path(p, &paint(*fill, 1.0), FillRule::Winding, Transform::identity(), None),
+                    None => pm.fill_rect(r, &paint(*fill, 1.0), Transform::identity(), None),
+                }
+                let p = rounded.unwrap_or_else(|| PathBuilder::from_rect(r));
                 if *width > 0.0 {
-                    let p = PathBuilder::from_rect(r);
                     pm.stroke_path(
                         &p,
                         &paint(*outline, 1.0),
@@ -369,6 +374,30 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
         },
     };
     rustgis_map::graphics::expand(&t, &v)
+}
+
+/// A rectangle with its corners rounded by `rad` pixels (at most half its shorter side), each a
+/// quarter circle drawn as a cubic; `None` for square corners, drawn as the plain rectangle.
+fn rounded_rect(r: tiny_skia::Rect, rad: f32) -> Option<tiny_skia::Path> {
+    let rad = rad.min(r.width() / 2.0).min(r.height() / 2.0);
+    if rad.is_nan() || rad <= 0.0 {
+        return None;
+    }
+    // The control points' distance that makes a cubic a quarter circle.
+    let c = rad * 0.552_284_8;
+    let (l, t, rt, b) = (r.left(), r.top(), r.right(), r.bottom());
+    let mut pb = PathBuilder::new();
+    pb.move_to(l + rad, t);
+    pb.line_to(rt - rad, t);
+    pb.cubic_to(rt - rad + c, t, rt, t + rad - c, rt, t + rad);
+    pb.line_to(rt, b - rad);
+    pb.cubic_to(rt, b - rad + c, rt - rad + c, b, rt - rad, b);
+    pb.line_to(l + rad, b);
+    pb.cubic_to(l + rad - c, b, l, b - rad + c, l, b - rad);
+    pb.line_to(l, t + rad);
+    pb.cubic_to(l, t + rad - c, l + rad - c, t, l + rad, t);
+    pb.close();
+    pb.finish()
 }
 
 /// A number as printed with a decimal comma when `comma` (`0.05` to `0,05`, `6,300,000` to
@@ -533,7 +562,8 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid, comma: bool) {
     let label_color = Rgba::rgb(0x20, 0x20, 0x20);
     let vertical = g.label_orientation == Orientation::Vertical;
     let mut pb = PathBuilder::new();
-    let mut labels: Vec<(Edge, f32, String)> = Vec::new();
+    // Each label's edge, place along it, text, and whether it is a meridian's.
+    let mut labels: Vec<(Edge, f32, String, bool)> = Vec::new();
     let mut draw_line = |pb: &mut PathBuilder, pts: Vec<Coord>, v: f64, lon: bool| {
         let px: Vec<Option<(f32, f32)>> = pts.into_iter().map(to_px).collect();
         // Runs of points that projected, so a line breaks where its projection does.
@@ -562,7 +592,7 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid, comma: bool) {
                     Edge::Right => g.edges.right,
                 };
                 if g.labels && shown {
-                    labels.push((edge, at, decimal(grid_label(g, v, lon, step), comma)));
+                    labels.push((edge, at, decimal(grid_label(g, v, lon, step), comma), lon));
                 }
             }
         }
@@ -587,20 +617,14 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid, comma: bool) {
     if let Some(p) = pb.finish() {
         pm.stroke_path(&p, &paint_line, &stroke, Transform::identity(), None);
     }
-    // Labels sit just inside the frame, past the ticks, away from the corners: a label is
-    // skipped unless all of it, half its length either side of the crossing, fits on its edge.
+    // Labels sit just inside the frame, past the ticks.
     let inset = tick + 3.0 * ppp;
-    for (edge, at, s) in labels {
+    let along = |edge: Edge, s: &str| match edge {
+        Edge::Left | Edge::Right if !vertical => label_px,
+        _ => text::measure(s, label_px / 1.33, false),
+    };
+    for (edge, at, s) in kept_labels(labels, (pw, ph), along, label_px, ppp) {
         let tw = text::measure(&s, label_px / 1.33, false);
-        let (along_limit, along) = match edge {
-            Edge::Top | Edge::Bottom => (pw, tw),
-            Edge::Left | Edge::Right if vertical => (ph, tw),
-            Edge::Left | Edge::Right => (ph, label_px),
-        };
-        let margin = (along / 2.0 + 3.0 * ppp).max(12.0 * ppp);
-        if at < margin || at > along_limit - margin {
-            continue;
-        }
         match edge {
             Edge::Top => text::text_at(pm, &s, at, inset + label_px * 0.4, label_px, label_color, false, text::Align::Center, true),
             Edge::Bottom => text::text_at(pm, &s, at, ph - inset - label_px * 0.4, label_px, label_color, false, text::Align::Center, true),
@@ -610,6 +634,47 @@ fn draw_grid(pm: &mut Pixmap, map: &Map, view: &View, g: &Grid, comma: bool) {
             Edge::Right => text::text_at(pm, &s, pw - inset - tw, at, label_px, label_color, false, text::Align::Left, true),
         }
     }
+}
+
+/// The graticule labels drawn, of those at each edge crossing (`labels`: edge, place along it,
+/// text, a meridian's or not) on a frame `size` pixels, `label_h` tall: away from the corners (all
+/// of a label, `along` its edge, fits, and none at a side's ends by a top or bottom label), and
+/// none over another. Meridians are labelled along the top and
+/// bottom and parallels along the sides first; a line that leaves the frame through the other
+/// edges (a slanting meridian on a projected map) is labelled there only well clear of the labels
+/// already set on that edge.
+fn kept_labels(
+    mut labels: Vec<(Edge, f32, String, bool)>,
+    (pw, ph): (f32, f32),
+    along: impl Fn(Edge, &str) -> f32,
+    label_h: f32,
+    ppp: f32,
+) -> Vec<(Edge, f32, String)> {
+    let own_edge = |edge: Edge, lon: bool| matches!(edge, Edge::Top | Edge::Bottom) == lon;
+    labels.sort_by_key(|(edge, _, _, lon)| !own_edge(*edge, *lon));
+    let mut taken: Vec<(Edge, f32, f32)> = Vec::new();
+    let mut kept = Vec::new();
+    for (edge, at, s, lon) in labels {
+        let length = along(edge, &s);
+        let side = matches!(edge, Edge::Left | Edge::Right);
+        let limit = if side { ph } else { pw };
+        // A side's labels keep two label heights from the corners, below the top's labels and
+        // above the bottom's, so a corner holds no two.
+        let margin = (length / 2.0 + 3.0 * ppp).max(12.0 * ppp).max(if side { 2.0 * label_h } else { 0.0 });
+        if at < margin || at > limit - margin {
+            continue;
+        }
+        let (a, z) = (at - length / 2.0 - 2.0 * ppp, at + length / 2.0 + 2.0 * ppp);
+        // Off its own edge, a label keeps a further length of its own clear of the others, so
+        // it doesn't read as one of theirs.
+        let clear = if own_edge(edge, lon) { 0.0 } else { length };
+        if taken.iter().any(|(e, ta, tz)| *e == edge && a - clear < *tz && *ta < z + clear) {
+            continue;
+        }
+        taken.push((edge, a, z));
+        kept.push((edge, at, s));
+    }
+    kept
 }
 
 /// One line of haloed text centred on (`cx`, `cy`), turned to read from bottom to top.
@@ -1838,7 +1903,7 @@ mod tests {
         l.add(
             "Rule",
             (5.0, 10.0, 40.0, 0.15),
-            ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 0.0 },
+            ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 0.0, radius: 0.0 },
         );
         let pm = render(&l, &mut [], 300.0, &PageInfo::default()).unwrap();
         let x = pm.width() / 2;
@@ -2078,6 +2143,31 @@ mod tests {
         assert_eq!(scale_number(20.0 / 3.0, 10.0 / 3.0), "6.7");
         assert_eq!(scale_number(200.0 / 3.0, 100.0 / 3.0), "67");
         assert_eq!(scale_number(0.01 / 3.0, 0.01 / 3.0), "0.0033");
+    }
+
+    /// Graticule labels: meridians along the top and bottom and parallels along the sides come
+    /// first; a slanting meridian leaving through a side is labelled there only clear of the
+    /// parallels' labels, and none lands by a corner.
+    #[test]
+    fn graticule_labels_keep_clear_of_each_other() {
+        let along = |_: Edge, s: &str| s.len() as f32 * 5.0;
+        let label = |edge, at: f32, s: &str, lon| (edge, at, s.to_string(), lon);
+        let labels = vec![
+            // A meridian leaving through the right edge just by a parallel's label (put first, so
+            // only the order fixes it), and another well clear of any.
+            label(Edge::Right, 205.0, "36°W", true),
+            label(Edge::Right, 200.0, "6°S", false),
+            label(Edge::Right, 400.0, "34°W", true),
+            label(Edge::Top, 150.0, "42°W", true),
+            // A parallel curving out through the top near a meridian's label: clear of it, but
+            // too close to read as its own.
+            label(Edge::Top, 185.0, "2°S", false),
+            // By a corner: left out, and a side's label within two label heights of the top.
+            label(Edge::Top, 4.0, "44°W", true),
+            label(Edge::Right, 15.0, "2°S", false),
+        ];
+        let kept: Vec<String> = kept_labels(labels, (600.0, 500.0), along, 10.0, 1.0).into_iter().map(|(.., s)| s).collect();
+        assert_eq!(kept, ["6°S", "42°W", "34°W"]);
     }
 
     /// A layout with a decimal comma swaps the marks of the numbers it prints, `{scale}` included,

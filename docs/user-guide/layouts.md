@@ -17,7 +17,11 @@ the maps; while one is open, its groups lead the Publish tab:
     the map, and a footer of two boxed columns (sources, and the cartographic reference; one
     with nothing in it is left out, the other taking the width) with a note and the authorship
     under them. Text sizes follow the sheet: an A3's are 1.41 times an
-    A4's.
+    A4's. Given its size alone (`"a4"`, the default, `"a3"` or `"a2"`), a sheet is turned to
+    portrait or landscape, whichever the map comes out larger on: the area's extent east to west
+    against north to south, on the map's projection, with the room the style leaves the map. The
+    result names the profile chosen (`"profile": "a4-landscape"`); give it with its orientation
+    (`"a4-portrait"`) to have the other.
   - **Figures** for a journal (90, 140 or 190 mm wide, as tall as the map's shape asks) or a
     thesis (160 × 225 or 160 × 110 mm): the map edge to edge with a line of its projection and
     datum under it, at 7 pt. A figure's title and sources belong in its caption, so they are
@@ -54,6 +58,19 @@ the maps; while one is open, its groups lead the Publish tab:
     it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
     globe map no layout shows any more (its layout deleted) is replaced by the next sheet's rather
     than left beside it, which a warning says.
+  - **The style** (`"style"`, on any sheet, portrait or landscape): `"classic"` (the default) sets
+    the title over the map and the footer's boxes under it; `"banner"` puts the title and subtitle
+    in a band of the accent colour across the top, the title in white; `"panel"` sets the map at
+    the left and a pale panel at the right with the title, subtitle, locator and legend, and the
+    sources and reference at its foot, the note across the bottom; `"editorial"` sets the title
+    large in serif and a column at the right under a rule, with a heading (the third of
+    `headings`), the note, the locator and the legend; `"modular"` sets cards with rounded
+    corners on a light page: the map in one, the locator and the legend in one each beside it,
+    the sources and reference in tinted ones under them; `"poster"` colours the whole page, sets
+    the title and subtitle in light text across the top, the map in a light card and the footer
+    in darker blocks with amber headings. `"accent"` (`#RRGGBB`) colours the band, the panel's
+    tint, the headings and rules, and a poster's page (a deep brown, green or blue by default).
+    A figure leaves the style to its caption.
   - Every element is an ordinary one, to move or restyle afterwards. Running it again with
     another `profile` makes another layout of the same map.
 
@@ -124,8 +141,9 @@ the maps; while one is open, its groups lead the Publish tab:
 - **Shapes**: **Rectangle**, **Circle**, **Ellipse** and **Line** (horizontal, vertical or
   either diagonal) add a shape in the middle of the page, to frame, highlight or divide parts of
   it. A circle is an ellipse in a square box. The properties set a shape's fill, outline and
-  outline width (0 for none; a fill with no opacity leaves only the outline), and a line's colour,
-  width, arrowheads and angle. From a command:
+  outline width (0 for none; a fill with no opacity leaves only the outline), a rectangle's
+  rounded corners (`"radius"`, in mm), and a line's colour, width, arrowheads and angle. From a
+  command:
   `layout.addElement={"kind":"line","dir":"falling","color":"#C0392B","width":2}`.
 - **Arrows**: **Arrow** adds an arrow pointing right. Drag the round handle above a selected arrow
   or line to turn it about its centre: it snaps to level, upright and diagonal within 3°, and

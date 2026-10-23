@@ -1263,6 +1263,11 @@ fn hostile_params_never_panic() {
         json!({"type": "albers", "lon_0": f64::MAX, "lat_1": "x", "lat_2": -1e308}),
         json!({"kind": "legend", "element": 1, "exclude": [null, 7, "", {"x": 1}]}),
         json!({"kind": "text", "element": 1, "font": {"family": "serif"}, "italic": [], "align": 7}),
+        // A publication sheet's style, accent and orientation, and a shape's rounded corners.
+        // (The profile left out or valid, so the style and accent are reached.)
+        json!({"style": 7, "accent": "#XYZ", "kind": "ellipse", "element": 1, "radius": "x"}),
+        json!({"style": "", "accent": [], "kind": "rectangle", "element": 1, "radius": -1e308}),
+        json!({"profile": "a3", "style": "poster", "accent": "#ZZZZZZ", "kind": "rectangle", "radius": 1e308}),
         // A STAC trend's source: a valid band and period so the junk after them is reached, and an
         // API on a closed local port, so nothing is read.
         json!({"collection": "c", "asset": "NDVI", "url": "http://127.0.0.1:9/v1", "bbox": "nowhere", "cellSize": -1e308, "resampling": 3, "start": "2020", "end": "2021"}),
@@ -2704,6 +2709,210 @@ fn publication_layouts_fit_their_pages() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A publication sheet's style (#682): `classic` (the default) as before; `banner` the title and
+/// subtitle in a band of the accent colour across the top; `panel` the map at the left and a panel
+/// at the right holding the title, the locator, the legend, the sources and the reference;
+/// `editorial` the title large in serif and a column at the right with the note, the locator and
+/// the legend; `modular` cards with rounded corners; `poster` the page in the accent colour.
+///
+/// A figure leaves a style to its caption; an unknown style or a bad accent is refused.
+#[test]
+fn publication_layouts_take_a_style() {
+    use rustgis_map::layout::{ElementKind, FontFamily};
+    let dir = std::env::temp_dir().join(format!("rustgis-styles-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = world();
+    let piaui = json!([-46.8, -11.6, -38.5, -2.2]);
+    // On a portrait sheet (the arrangement is what is checked; the orientation chosen for an area
+    // has its own check below).
+    let texts = json!({"extent": piaui, "profile": "a4-portrait", "title": "PIAUÍ", "subtitle": "Greening and browning of the vegetation, 2001–2025",
+        "sources": ["NDVI: MOD13Q1 v6.1", "Boundaries: IBGE"], "note": "Only the cells with a significant trend are coloured.",
+        "headings": ["Sources", "Reference", "About this map"]});
+    let make = |s: &mut Session, style: &str, extra: Value| {
+        let mut p = texts.clone();
+        p["style"] = json!(style);
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let r = s.run("layout.publication", &p).unwrap();
+        s.run("layout.export", &json!({"path": dir.join(format!("{style}.png")).display().to_string(), "dpi": 48})).unwrap();
+        r
+    };
+    let inside = |a: &rustgis_map::layout::Element, b: &rustgis_map::layout::Element| {
+        a.x >= b.x - 1e-6 && a.y >= b.y - 1e-6 && a.x + a.w <= b.x + b.w + 1e-6 && a.y + a.h <= b.y + b.h + 1e-6
+    };
+    // Classic, the default: no band, no panel.
+    let r = s.run("layout.publication", &texts).unwrap();
+    assert_eq!(r["style"], "classic");
+    let l = s.project.layouts.last().unwrap();
+    assert!(l.elements.iter().all(|e| !matches!(e.name.as_str(), "Banner" | "Panel Box" | "Column Rule")));
+    // Banner: a band of the accent colour at the top, the title on it in white, the map under it.
+    let r = make(&mut s, "banner", json!({"accent": "#123456"}));
+    let l = s.project.layouts.last().unwrap();
+    let named = |n: &str| l.elements.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let (band, title, frame) = (named("Banner"), named("Title"), named("Map Frame"));
+    let ElementKind::Rectangle { fill, .. } = &band.kind else { panic!() };
+    assert_eq!(*fill, rustgis_map::Rgba::rgb(0x12, 0x34, 0x56));
+    let ElementKind::Text { color, .. } = &title.kind else { panic!() };
+    assert_eq!(*color, rustgis_map::Rgba::rgb(0xFF, 0xFF, 0xFF));
+    assert!(inside(title, band) && inside(named("Subtitle"), band) && frame.y >= band.y + band.h, "{r}");
+    // Panel: the map at the left, the panel at the right holding the texts, the locator and the
+    // legend; no boxed footer.
+    // An area as tall as the map's narrow column (its frame filled, not cut): everything in the
+    // panel.
+    let tall = json!([-46.0, -34.0, -40.0, 4.0]);
+    let r = make(&mut s, "panel", json!({"extent": tall}));
+    let l = s.project.layouts.last().unwrap();
+    let named = |n: &str| l.elements.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let (panel, frame) = (named("Panel Box"), named("Map Frame"));
+    assert!(frame.x + frame.w <= panel.x, "the map left of the panel: {r}");
+    for n in ["Title", "Subtitle", "Locator", "Legend Box", "Sources Heading", "Sources", "Reference"] {
+        assert!(inside(named(n), panel), "{n} in the panel: {r}");
+    }
+    assert!(l.elements.iter().all(|e| e.name != "Sources Box"));
+    // The legend under the locator, apart from it.
+    assert!(named("Legend Box").y >= named("Locator").y + named("Locator").h, "{r}");
+    let full = frame.h;
+    // A less tall area (Piauí) on that narrow column: the frame cut to its shape (a seventh more of its
+    // surroundings), the sources and reference boxed under the map, and all of it in the middle of
+    // the page; the neatline still round the whole sheet.
+    let r = make(&mut s, "panel", json!({}));
+    let l = s.project.layouts.last().unwrap();
+    let named = |n: &str| l.elements.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let (panel, frame, sources) = (named("Panel Box"), named("Map Frame"), named("Sources Box"));
+    assert!(frame.h < 0.9 * full && (panel.h - frame.h).abs() < 1e-6, "{} of {full}: {r}", frame.h);
+    assert!(sources.y >= frame.y + frame.h && inside(named("Legend Box"), panel), "{r}");
+    let (top, bottom) = (frame.y, l.height - named("Author").y - named("Author").h);
+    assert!((top - bottom).abs() < 1.0, "the content in the middle: {top} above, {bottom} below");
+    let neat = named("Frame");
+    assert!((neat.y + neat.h - (l.height - neat.y)).abs() < 1e-6, "the neatline round the sheet");
+    // In landscape too, every style on any sheet: the panel at the right of a wide map.
+    for style in ["banner", "panel", "editorial"] {
+        let r = make(&mut s, style, json!({"profile": "a4-landscape"}));
+        let l = s.project.layouts.last().unwrap();
+        let frame = l.elements.iter().find(|e| e.name == "Map Frame").unwrap();
+        assert!(frame.w > frame.h, "{style}: a wide map on a landscape sheet: {r}");
+        if style != "banner" {
+            assert!(
+                l.elements.iter().filter(|e| e.name == "Locator" || e.name == "Legend Box").all(|e| e.x >= frame.x + frame.w),
+                "{style}: {r}"
+            );
+            // The locator no larger than on a portrait sheet, though the column is wider.
+            let locator = l.elements.iter().find(|e| e.name == "Locator").unwrap();
+            assert!(locator.w <= 52.0 + 1e-6, "{style}: {}", locator.w);
+        }
+    }
+    // No locator: the legend takes its place at the top of the panel's free room.
+    let r = make(&mut s, "panel", json!({"locator": "none"}));
+    let l = s.project.layouts.last().unwrap();
+    assert!(l.elements.iter().all(|e| e.name != "Locator") && l.elements.iter().any(|e| e.name == "Legend Box"), "{r}");
+    // Editorial: the title in serif in the accent colour, a column at the right with its heading,
+    // the note, the locator and the legend.
+    let r = make(&mut s, "editorial", json!({}));
+    let l = s.project.layouts.last().unwrap();
+    let named = |n: &str| l.elements.iter().find(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let ElementKind::Text { font, color, .. } = &named("Title").kind else { panic!() };
+    assert_eq!((*font, *color), (FontFamily::Serif, rustgis_map::Rgba::rgb(0x1F, 0x2D, 0x4D)));
+    // Drawn in the sans where no serif is installed, said.
+    let said = r["warnings"].to_string().contains("the editorial title and subtitle: no serif font");
+    assert_eq!(said, !crate::render::fonts::serif_available(), "{r}");
+    let frame = named("Map Frame");
+    for n in ["Column Heading", "Note", "Locator", "Legend Box"] {
+        assert!(named(n).x >= frame.x + frame.w, "{n} right of the map: {r}");
+    }
+    // Modular: the map in a card drawn under it, the locator and the legend each in a card at the
+    // right, the footer's boxes with rounded corners and no neatline.
+    let radius = |e: &rustgis_map::layout::Element| match &e.kind {
+        ElementKind::Rectangle { radius, .. } => *radius,
+        _ => 0.0,
+    };
+    let r = make(&mut s, "modular", json!({}));
+    let l = s.project.layouts.last().unwrap();
+    let at = |n: &str| l.elements.iter().position(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let named = |n: &str| &l.elements[at(n)];
+    assert!(at("Map Card") < at("Map Frame") && inside(named("Map Frame"), named("Map Card")), "{r}");
+    let frame = named("Map Frame");
+    for n in ["Locator Card", "Locator", "Legend Box"] {
+        assert!(named(n).x >= frame.x + frame.w, "{n} right of the map: {r}");
+    }
+    assert!(inside(named("Locator"), named("Locator Card")) && named("Legend Box").y >= named("Locator Card").y + named("Locator Card").h);
+    assert!((named("Legend Box").w - named("Locator Card").w).abs() < 1e-6, "the two cards as wide: {r}");
+    assert!(radius(named("Map Card")) > 0.0 && radius(named("Legend Box")) > 0.0 && radius(named("Sources Box")) > 0.0);
+    assert!(l.elements.iter().all(|e| e.name != "Frame"));
+    // Poster: the page in the accent colour under everything, the title in white, the map in a
+    // light card, the footer in rounded blocks.
+    let r = make(&mut s, "poster", json!({}));
+    let l = s.project.layouts.last().unwrap();
+    let at = |n: &str| l.elements.iter().position(|e| e.name == n).unwrap_or_else(|| panic!("no {n}: {r}"));
+    let named = |n: &str| &l.elements[at(n)];
+    let back = named("Background");
+    assert_eq!((at("Background"), back.w, back.h), (0, l.width, l.height));
+    let ElementKind::Rectangle { fill, .. } = &back.kind else { panic!() };
+    assert_eq!(*fill, rustgis_map::Rgba::rgb(0x3A, 0x26, 0x18));
+    let ElementKind::Text { color, .. } = &named("Title").kind else { panic!() };
+    assert_eq!(*color, rustgis_map::Rgba::rgb(0xFF, 0xFF, 0xFF));
+    assert!(at("Map Card") < at("Map Frame") && inside(named("Map Frame"), named("Map Card")) && radius(named("Sources Box")) > 0.0);
+    assert!(l.elements.iter().all(|e| e.name != "Banner" && e.name != "Frame"));
+    // A rectangle's rounded corners by hand: added, changed, kept when its colour changes, saved only
+    // when rounded.
+    let id = s.run("layout.addElement", &json!({"kind": "rectangle", "x": 10, "y": 10, "w": 40, "h": 20, "radius": 4})).unwrap()["element"]
+        .clone();
+    let rect = |s: &Session| s.project.layouts.last().unwrap().elements.iter().find(|e| json!(e.id) == id).unwrap().kind.clone();
+    assert!(matches!(rect(&s), ElementKind::Rectangle { radius, .. } if radius == 4.0));
+    s.run("layout.update", &json!({"element": id, "fill": "#FFFFFF"})).unwrap();
+    assert!(matches!(rect(&s), ElementKind::Rectangle { radius, .. } if radius == 4.0));
+    s.run("layout.update", &json!({"element": id, "radius": 0})).unwrap();
+    assert!(!serde_json::to_string(&rect(&s)).unwrap().contains("radius"), "square corners aren't saved");
+    assert!(s.run("layout.update", &json!({"element": id, "radius": -1})).is_err());
+    assert!(s.run("layout.addElement", &json!({"kind": "rectangle", "radius": "x"})).is_err());
+    // Anything but a rectangle refuses rounded corners, rather than taking them as applied.
+    let n = s.project.layouts.last().unwrap().elements.len();
+    let e = s.run("layout.addElement", &json!({"kind": "ellipse", "radius": 4})).unwrap_err();
+    assert!(e.contains("only a rectangle rounds its corners") && s.project.layouts.last().unwrap().elements.len() == n, "{e}");
+    let oval = s.run("layout.addElement", &json!({"kind": "circle"})).unwrap()["element"].clone();
+    let e = s.run("layout.update", &json!({"element": oval, "radius": 4, "fill": "#FF0000"})).unwrap_err();
+    assert!(e.contains("only a rectangle rounds its corners"), "{e}");
+    let fill = |s: &Session| {
+        s.project.layouts.last().unwrap().elements.iter().find(|e| json!(e.id) == oval).and_then(|e| match e.kind {
+            ElementKind::Ellipse { fill, .. } => Some(fill),
+            _ => None,
+        })
+    };
+    assert!(fill(&s).is_some_and(|f| f != rustgis_map::Rgba::rgb(0xFF, 0, 0)), "an ellipse, unchanged");
+    // A sheet given its size alone (or none) is turned to the area's shape: portrait for a tall
+    // one, landscape for a wide one, the size kept; one given its orientation keeps it.
+    let wide = json!([-75.0, -14.0, -35.0, -2.0]);
+    for (p, want) in [
+        (json!({"extent": piaui}), "a4-portrait"),
+        (json!({"extent": wide}), "a4-landscape"),
+        (json!({"extent": wide, "profile": "a3"}), "a3-landscape"),
+        (json!({"extent": wide, "profile": "a4-portrait"}), "a4-portrait"),
+        (json!({"extent": piaui, "profile": "a4-landscape"}), "a4-landscape"),
+    ] {
+        let r = s.run("layout.publication", &p).unwrap();
+        assert_eq!(r["profile"], want, "{p}");
+        let l = s.project.layouts.last().unwrap();
+        assert_eq!(l.width > l.height, want.ends_with("landscape"), "{p}");
+    }
+    // A figure leaves the style to its caption; refused: an unknown style, a bad accent, either not
+    // given as text, and an unknown profile (its message naming the sizes turned to the area).
+    let r = s.run("layout.publication", &json!({"extent": piaui, "profile": "figure-1col", "style": "banner"})).unwrap();
+    assert!(r["warnings"].to_string().contains("style \\\"banner\\\""), "{r}");
+    let before = s.project.layouts.len();
+    for bad in [
+        json!({"extent": piaui, "style": "magazine"}),
+        json!({"extent": piaui, "style": "banner", "accent": "blue"}),
+        json!({"extent": piaui, "style": 3}),
+        json!({"extent": piaui, "accent": 7}),
+    ] {
+        assert!(s.run("layout.publication", &bad).is_err(), "{bad}");
+    }
+    let e = s.run("layout.publication", &json!({"extent": piaui, "profile": "a5"})).unwrap_err();
+    assert!(e.contains("a4, a3 or a2") && e.contains("a4-portrait"), "{e}");
+    assert_eq!(s.project.layouts.len(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A publication layout's locator (#682, part 2): on a sheet, by default, a globe (a new map of
 /// the vector layers on the globe, its diameter nearly the frame's) in a round frame at the map's
 /// top left, the area outlined by the map frame's extent indicator; `"inset"` the surrounding
@@ -2879,6 +3088,15 @@ fn publication_layouts_locate_their_area() {
             }
         }
     }
+    // The sheets above may never leave the legend that little room (the search keeps it off the
+    // locator's side), so the rule itself: short of the arrow or the scale bar it keeps 10 mm, short
+    // of the locator under 10 mm it is left out.
+    use crate::cmd::layout::{Surround, legend_room};
+    assert_eq!(legend_room(40.0, 30.0, 100.0, 80.0, None, None), Some((40.0, 30.0)));
+    assert_eq!(legend_room(40.0, 30.0, 100.0, 80.0, Some((Surround::Arrow, 70.0)), Some((Surround::Locator, 60.0))), Some((30.0, 20.0)));
+    assert_eq!(legend_room(40.0, 30.0, 100.0, 80.0, Some((Surround::Arrow, 95.0)), Some((Surround::Scale, 75.0))), Some((10.0, 10.0)));
+    assert_eq!(legend_room(40.0, 30.0, 100.0, 80.0, None, Some((Surround::Locator, 75.0))), None);
+    assert_eq!(legend_room(40.0, 30.0, 100.0, 80.0, Some((Surround::Locator, 95.0)), None), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -10409,6 +10627,36 @@ fn param_list_splits_a_description_into_entries() {
     }
 }
 
+/// Quoted text is read as JSON has it (#741): strings and their quotes aren't code, and a
+/// backslash escapes the char after it only in a string.
+#[test]
+fn quotes_read_text_as_json_does() {
+    use crate::{Quotes, string_end};
+    let code = |s: &str| {
+        let (mut q, mut out) = (Quotes::default(), String::new());
+        for c in s.chars() {
+            if q.read(c) {
+                out.push(c);
+            }
+        }
+        out
+    };
+    assert_eq!(code(r#"{"a": "b,c", "d": 1}"#), "{: , : 1}");
+    assert_eq!(code(r#"{"a\"b": 1}"#), "{: 1}", "an escaped quote");
+    assert_eq!(code(r#"{"a\\": 1}"#), "{: 1}", "an escaped backslash");
+    assert_eq!(code(r#"x \"a" y"#), r#"x \ y"#, "a backslash outside a string escapes nothing");
+    assert_eq!(code("ñ \"é\" ü"), "ñ  ü", "chars, not bytes");
+    let mut q = Quotes::default();
+    for c in r#"{"a": "b"#.chars() {
+        q.read(c);
+    }
+    assert!(q.quoted(), "ends in a string");
+    assert_eq!(string_end(r#"a\"b", 1"#), Some(4));
+    assert_eq!(string_end("é\""), Some(2), "a byte index");
+    assert_eq!(string_end(r#"a\""#), None, "nothing closes it");
+    assert_eq!(string_end(""), None);
+}
+
 #[test]
 fn param_keys_reads_descriptions() {
     use crate::param_keys;
@@ -12620,6 +12868,53 @@ fn layer_color_leaves_the_outline_alone() {
     s.run("layer.color", &json!({"layer": "Countries", "color": "#996633"})).unwrap();
     assert_eq!(symbol(&s).stroke, before, "changing the fill must not change a chosen outline");
     assert_eq!(rgb(symbol(&s).fill), (0x99, 0x66, 0x33), "changing the fill must set the requested RGB");
+}
+
+/// No Fill preserves renderer classes and outlines across persistence and one-step undo/redo.
+#[test]
+fn polygon_no_fill_keeps_classes_and_outlines_and_undoes_as_one_step() {
+    use rustgis_map::Symbol;
+
+    for kind in ["single", "unique", "graduated"] {
+        let mut s = world();
+        let field = if kind == "unique" { "continent" } else { "pop_est" };
+        s.run("layer.symbology", &json!({"layer": "Countries", "type": kind, "field": field})).unwrap();
+        s.run("layer.outline", &json!({"layer": "Countries", "color": "#2376A9CC", "width": 2.5})).unwrap();
+        let renderer = |s: &Session| s.map().layer_by_name("Countries").unwrap().renderer.clone();
+        let before = renderer(&s);
+        // The named polygon layer works even while a point layer is active.
+        s.run("layer.select", &json!({"layer": "Cities"})).unwrap();
+        s.run("layer.noFill", &json!({"layer": "Countries"})).unwrap();
+        let after = renderer(&s);
+        assert_eq!(after.kind_label(), before.kind_label(), "{kind}: classification stays in place");
+        let (old, new) = (before.legend(), after.legend());
+        assert_eq!(new.len(), old.len());
+        for (old, new) in old.iter().zip(&new) {
+            assert_eq!(new.label, old.label);
+            assert_eq!(new.symbol, Symbol { fill: old.symbol.fill.with_alpha(0), ..old.symbol });
+        }
+        let reopened = Project::from_json(&serde_json::to_string(&s.project).unwrap()).unwrap();
+        assert_eq!(reopened.map().layer_by_name("Countries").unwrap().renderer, after);
+        s.run("edit.undo", &Value::Null).unwrap();
+        assert_eq!(renderer(&s), before, "{kind}: one undo restores every symbol");
+        s.run("edit.redo", &Value::Null).unwrap();
+        assert_eq!(renderer(&s), after);
+        s.run("layer.noFill", &json!({"layer": "Countries"})).unwrap();
+        assert_eq!(renderer(&s), after, "No Fill is idempotent");
+    }
+}
+
+/// Unsupported or missing layers are refused without changing the project.
+#[test]
+fn polygon_no_fill_refuses_other_layers() {
+    let mut s = with_raster();
+    let raster = s.active_layer.unwrap();
+    for layer in [json!("Cities"), json!("Rivers"), json!(raster), json!(99999)] {
+        let before = serde_json::to_value(&s.project).unwrap();
+        assert!(s.run("layer.noFill", &json!({"layer": layer})).is_err());
+        assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
+    }
+    assert!(Session::new(Project::default()).run("layer.noFill", &Value::Null).is_err());
 }
 
 #[test]

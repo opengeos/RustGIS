@@ -34,6 +34,16 @@ and **Full Extent** zooms to them. A layer with [subtypes](editing.md#data-desig
 by them. **Style › Styles** saves symbology as styles to reuse on other layers and in other
 projects.
 
+For polygons, **No Fill** in the Symbology pane or **Style › Drawing** draws only the outlines.
+It keeps each symbol's outline colour and width, including in Unique Values and Graduated Colors,
+without changing the classes. Change the outline with **Outline color** and **Outline width** in
+the Single Symbol editor, or `layer.outline` for all classes. Undo restores the previous fills;
+the colour picker's opacity control can also make a fill visible again. By command:
+
+```text
+layer.noFill={"layer":"Countries"}
+```
+
 ### Edit a class
 
 With Unique Values or Graduated Colors, each class in the Symbology pane's list has a colour button

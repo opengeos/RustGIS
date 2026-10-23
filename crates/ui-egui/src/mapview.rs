@@ -592,13 +592,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         key.tiles = 0;
     } else if fetches_tiles(app.session.map()) {
         key.tiles = rustgis_engine::render::rustgis_tiles::cache::generation();
-        if let Some(old) = app.map.key
-            && old.tiles != key.tiles
-            && (Key { tiles: old.tiles, ..key }) == old
-            && time - app.map.last_render < 0.25
-        {
-            key.tiles = old.tiles;
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        if let Some(held) = held_tiles(key, app.map.tilt_settle.key(), app.map.key, time - app.map.last_render) {
+            key.tiles = held;
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(TILE_REDRAW_GAP));
         }
     }
     if app.map.view_px != key.size {
@@ -2876,6 +2872,75 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
     let held = cull_extent(&View { width: w, height: h, pixels_per_point: 1.0, camera: scene, sky: true }, GPU_CULL_MARGIN);
     let e = cam.extent(w, h);
     !e.is_empty() && e.min_x >= held.min_x && e.min_y >= held.min_y && e.max_x <= held.max_x && e.max_y <= held.max_y
+}
+
+/// How long (s) after a frame is shown tiles arriving wait before the map is drawn again.
+const TILE_REDRAW_GAP: f64 = 0.25;
+
+/// The tile cache generation `key` holds at instead of its own, when tiles arrived within
+/// [`TILE_REDRAW_GAP`] of the last frame shown: the newest frame of this view, of the one being
+/// drawn (`drawing`) and the one on screen (`shown`), so the map is drawn at most a few times a
+/// second while they arrive. Generations only grow: a live GPU scene can show newer tiles than
+/// the frame still being drawn, and isn't held back to it.
+///
+/// Holding at the frame on screen while a newer one was being drawn made the two alternate for
+/// good: each, once shown, differed from the key held at meanwhile, which started the other again
+/// (a tiled map in a projection other than Web Mercator, whose frames take longer, was drawn over
+/// and over, keeping a core busy and the app slow).
+fn held_tiles(key: Key, drawing: Option<Key>, shown: Option<Key>, since_render: f64) -> Option<u64> {
+    let same_view = |k: &Key| Key { tiles: k.tiles, ..key } == *k;
+    let newest = [drawing, shown].into_iter().flatten().filter(same_view).max_by_key(|k| k.tiles)?;
+    (newest.tiles != key.tiles && since_render < TILE_REDRAW_GAP).then_some(newest.tiles)
+}
+
+#[cfg(test)]
+mod tile_redraw_tests {
+    use super::{Key, held_tiles};
+
+    fn key(tiles: u64) -> Key {
+        Key { rev: 4, cam: (1, 2, 3, 0, 0), size: [800, 600], draft: false, tiles, sources: 0 }
+    }
+
+    #[test]
+    fn tiles_arriving_are_held_briefly_after_a_frame() {
+        // Shown a moment ago: the new tiles wait; a while ago, they are drawn.
+        assert_eq!(held_tiles(key(28), None, Some(key(0)), 0.1), Some(0));
+        assert_eq!(held_tiles(key(28), None, Some(key(0)), 0.3), None);
+        // Another view isn't held.
+        let moved = Key { cam: (9, 9, 9, 0, 0), ..key(0) };
+        assert_eq!(held_tiles(key(28), None, Some(moved), 0.1), None);
+    }
+
+    #[test]
+    fn a_frame_being_drawn_with_newer_tiles_is_not_drawn_again_with_older_ones() {
+        // The frame drawn with the tiles that arrived is on its way while an older one was just
+        // shown: the key is that frame's, not the older one's.
+        assert_eq!(held_tiles(key(28), Some(key(28)), Some(key(0)), 0.1), None);
+        // A live scene shown with newer tiles than the frame being drawn isn't held back to it.
+        assert_eq!(held_tiles(key(28), Some(key(5)), Some(key(28)), 0.1), None);
+        assert_eq!(held_tiles(key(30), Some(key(5)), Some(key(28)), 0.1), Some(28));
+        // Simulated: the view's frames alternated between generations 0 and 28 for good.
+        let (mut shown, mut drawing, mut since) = (Some(key(0)), Some(key(28)), 0.0);
+        let mut started = 0;
+        for _ in 0..50 {
+            let mut k = key(28);
+            if let Some(t) = held_tiles(k, drawing, shown, since) {
+                k.tiles = t;
+            }
+            // The frame being drawn finishes and is shown; another starts if the key differs.
+            if let Some(d) = drawing.take() {
+                shown = Some(d);
+                since = 0.0;
+            }
+            if shown != Some(k) {
+                drawing = Some(k);
+                started += 1;
+            }
+            since += 0.016;
+        }
+        assert_eq!(started, 0);
+        assert_eq!(shown, Some(key(28)));
+    }
 }
 
 #[cfg(test)]

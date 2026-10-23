@@ -3288,6 +3288,7 @@ fn ramp_swatch(ui: &mut Ui, ramp: &Ramp, w: f32, selected: bool, t: &Tokens) -> 
     resp
 }
 
+/// Shows the active layer's renderer controls, including No Fill for polygon layers.
 fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else {
         ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane.")).color(t.text_dim));
@@ -3354,6 +3355,12 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
     ui.add_space(8.0);
+    if g == GeometryType::Polygon && !l.graphics {
+        if ui.button(tl!("No Fill")).on_hover_text(tl!("Draw only polygon outlines, keeping their colors and widths.")).clicked() {
+            let _ = app.run("layer.noFill", Value::Null);
+        }
+        ui.add_space(6.0);
+    }
     let numeric: Vec<String> = l.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
     let all: Vec<String> = l.dataset.fields.iter().map(|f| f.name.clone()).collect();
     match &l.renderer {

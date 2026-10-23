@@ -4,6 +4,7 @@ use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
 use serde_json::json;
 
+/// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
@@ -15,6 +16,7 @@ fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     )
 }
 
+/// Runs a layer command through Command Search and checks that the search closes.
 fn search_layer_command(h: &mut egui_kittest::Harness<'_, RustGisApp>, command: &str) {
     h.state_mut().ui.command_search = Some(command.into());
     for _ in 0..3 {
@@ -25,6 +27,38 @@ fn search_layer_command(h: &mut egui_kittest::Harness<'_, RustGisApp>, command: 
         h.step();
     }
     assert!(h.state().ui.command_search.is_none());
+}
+
+/// Both No Fill controls preserve unique-value styling and undo, and stay hidden for points.
+#[test]
+fn polygon_no_fill_is_reachable_from_the_pane_and_the_ribbon() {
+    for pane in [true, false] {
+        let mut h = harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "continent"})).unwrap();
+        h.state_mut().run("layer.outline", json!({"color": "#2E6B4F", "width": 2})).unwrap();
+        let symbol =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer_by_name("Countries").unwrap().renderer.base_symbol();
+        let before = symbol(&h);
+        if pane {
+            h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+        } else {
+            h.state_mut().ui.tab = "Style".into();
+        }
+        h.run_steps(6);
+        h.get_by_label("No Fill").click();
+        h.run_steps(3);
+        let after = symbol(&h);
+        assert_eq!(after.fill.a(), 0);
+        assert_eq!(after.stroke, before.stroke);
+        assert_eq!(after.stroke_width, before.stroke_width);
+        assert_eq!(h.state().session.map().layer_by_name("Countries").unwrap().renderer.kind_label(), "Unique Values");
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(symbol(&h), before);
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label("No Fill").is_none(), "points must keep their fill");
+    }
 }
 
 #[test]

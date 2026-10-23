@@ -1043,6 +1043,7 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.polygon_shape(&[(4.0, 10.0), (7.0, 5.0), (13.0, 4.0), (19.0, 7.0), (20.0, 13.0), (15.0, 17.0), (8.0, 16.0)], 50);
             p.line(&[(8.0, 16.0), (7.0, 20.0), (9.0, 22.0)], 1.3, ink);
         }
+        "no_fill" => p.rect(3.0, 4.0, 18.0, 16.0, None, Some((1.6, ink)), 0.0),
         "g_rect" => {
             p.rect(3.0, 6.0, 18.0, 12.0, Some(p.tint(70)), Some((1.4, ink)), 0.5);
         }
