@@ -169,7 +169,7 @@ struct Renaming {
     focused: bool,
 }
 
-/// The class chooser, and New, Rename, Remove, Move Up, Move Down and Visible for the chosen
+/// The class chooser, and New, Rename, Move Up, Move Down, Remove and Visible for the chosen
 /// class. Default, last in the list, can be renamed or hidden, but not removed or moved.
 fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let rename_key = egui::Id::new("label_pane_rename");
@@ -216,14 +216,6 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             let r = Renaming { owner, text: c.it.name.clone(), focused: false };
             ui.data_mut(|d| d.insert_temp(rename_key, r));
         }
-        if ui
-            .add_enabled(at.is_some(), egui::Button::new(tl!("Remove")))
-            .on_disabled_hover_text(tl!("The Default class stays: it can be renamed or hidden."))
-            .clicked()
-        {
-            run(app, "labels.class.remove", c.params(json!({})));
-            choose(ui, app, l, None);
-        }
         let up = at.filter(|i| *i > 0).map(|i| i - 1);
         let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
         for (label, to) in [("Move Up", up), ("Move Down", down)] {
@@ -233,6 +225,16 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             if moved.clicked() {
                 run(app, "labels.class.move", c.params(json!({"to": to})));
             }
+        }
+        // Last and set apart: it is the one that deletes, and its name is close to Rename's.
+        ui.add_space(12.0);
+        if ui
+            .add_enabled(at.is_some(), egui::Button::new(tl!("Remove")))
+            .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."))
+            .clicked()
+        {
+            run(app, "labels.class.remove", c.params(json!({})));
+            choose(ui, app, l, None);
         }
     });
     let mut visible = c.it.visible;
