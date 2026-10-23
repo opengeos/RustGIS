@@ -412,6 +412,10 @@ impl Layer {
         if self.graphics {
             return &[];
         }
+        // Most layers have no class with strokes of its own: no need to class the feature.
+        if !self.renderer.has_class_strokes() {
+            return &self.line_strokes;
+        }
         self.renderer.strokes_for(&self.dataset, row).unwrap_or(&self.line_strokes)
     }
 
