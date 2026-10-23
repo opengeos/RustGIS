@@ -456,6 +456,56 @@ pub static TOOLS: &[ToolSpec] = &[
         ],
         run: kriging_interpolation,
     },
+    ToolSpec {
+        id: "zonalStats",
+        name: "Zonal Statistics",
+        toolbox: "Analysis › Raster",
+        summary: "Calculates raster summary statistics for each polygon feature.",
+        params: &[
+            P {
+                name: "raster",
+                label: "Input Raster",
+                kind: K::RasterLayer,
+                required: true,
+                default: "",
+                help: "The raster containing pixel values to summarize.",
+            },
+            P {
+                name: "polygons",
+                label: "Zone Polygons",
+                kind: K::PolygonLayer,
+                required: true,
+                default: "",
+                help: "Polygon layer defining the zones.",
+            },
+            P {
+                name: "bands",
+                label: "Bands",
+                kind: K::Text,
+                required: false,
+                default: "\"1\"",
+                help: "1-based band number(s) (e.g. 1 or [1, 2]); defaults to band 1.",
+            },
+            P {
+                name: "stats",
+                label: "Statistics",
+                kind: K::Text,
+                required: false,
+                default: "\"All\"",
+                help: "Statistical operations: All, Mean, Min, Max, Sum, Count, StdDev (comma-separated or array); defaults to All.",
+            },
+            P {
+                name: "prefix",
+                label: "Field Prefix",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Prefix for generated fields; defaults to raster/band name.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output polygon layer name." },
+        ],
+        run: zonal_stats,
+    },
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -1422,6 +1472,234 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Spatial Join: {written_features} features joined ({total_matches} matches)"))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatOp {
+    Mean,
+    Min,
+    Max,
+    Sum,
+    Count,
+    StdDev,
+}
+
+impl StatOp {
+    fn name(self) -> &'static str {
+        match self {
+            StatOp::Mean => "mean",
+            StatOp::Min => "min",
+            StatOp::Max => "max",
+            StatOp::Sum => "sum",
+            StatOp::Count => "count",
+            StatOp::StdDev => "stddev",
+        }
+    }
+
+    fn field_type(self) -> FieldType {
+        match self {
+            StatOp::Count => FieldType::Integer,
+            _ => FieldType::Double,
+        }
+    }
+
+    fn parse(raw: &str) -> Result<Vec<StatOp>, String> {
+        let clean = raw.trim().to_ascii_lowercase();
+        match clean.as_str() {
+            "all" | "" => Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]),
+            "mean" => Ok(vec![StatOp::Mean]),
+            "min" => Ok(vec![StatOp::Min]),
+            "max" => Ok(vec![StatOp::Max]),
+            "sum" => Ok(vec![StatOp::Sum]),
+            "count" => Ok(vec![StatOp::Count]),
+            "stddev" | "std" | "std_dev" => Ok(vec![StatOp::StdDev]),
+            other => Err(format!("unknown statistic '{other}': choose from mean, min, max, sum, count, stddev, or all")),
+        }
+    }
+}
+
+fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    let mut bands = Vec::new();
+    if let Some(arr) = p.get("bands").and_then(Json::as_array) {
+        for item in arr {
+            let b = match item {
+                Json::Number(n) => n.as_u64().map(|v| v as usize),
+                Json::String(str_val) => str_val.trim().parse::<usize>().ok(),
+                _ => None,
+            };
+            let b = b.ok_or_else(|| "band numbers must be positive integers".to_string())?;
+            bands.push(b);
+        }
+    } else if let Some(n) = p.get("bands").and_then(Json::as_u64) {
+        bands.push(n as usize);
+    } else {
+        let txt = s(p, "bands").trim();
+        if txt.is_empty() || txt.eq_ignore_ascii_case("all") {
+            bands.push(1);
+        } else {
+            let clean = txt.trim_matches(|c| c == '[' || c == ']');
+            for part in clean.split([',', ';', ' ']) {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                let b = part.parse::<usize>().map_err(|_| format!("invalid band number '{part}'"))?;
+                bands.push(b);
+            }
+        }
+    }
+    if bands.is_empty() {
+        bands.push(1);
+    }
+    for &b in &bands {
+        if b < 1 || b > total_bands {
+            return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+        }
+    }
+    Ok(bands.into_iter().map(|b| b - 1).collect())
+}
+
+fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
+    let mut out = Vec::new();
+    if let Some(arr) = p.get("stats").and_then(Json::as_array) {
+        if arr.is_empty() {
+            return Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]);
+        }
+        for item in arr {
+            let txt = item.as_str().ok_or_else(|| "statistic names must be strings".to_string())?;
+            let ops = StatOp::parse(txt)?;
+            for op in ops {
+                if !out.contains(&op) {
+                    out.push(op);
+                }
+            }
+        }
+    } else {
+        let txt = s(p, "stats").trim();
+        if txt.is_empty() {
+            return Ok(vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev]);
+        }
+        let clean = txt.trim_matches(|c| c == '[' || c == ']');
+        for part in clean.split([',', ';']) {
+            let part = part.trim().trim_matches('"');
+            if part.is_empty() {
+                continue;
+            }
+            let ops = StatOp::parse(part)?;
+            for op in ops {
+                if !out.contains(&op) {
+                    out.push(op);
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out = vec![StatOp::Mean, StatOp::Min, StatOp::Max, StatOp::Sum, StatOp::Count, StatOp::StdDev];
+    }
+    Ok(out)
+}
+
+fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let r_name = {
+        let n = s(p, "raster");
+        if n.is_empty() { s(p, "layer") } else { n }
+    };
+    if r_name.is_empty() {
+        return Err("parameter 'raster' is required".into());
+    }
+    let r_input = inp.raster(r_name).ok_or_else(|| format!("no raster layer named '{r_name}'"))?;
+    let r = r_input.raster;
+    r.require_coordinates()?;
+
+    let poly_param = if !s(p, "polygons").is_empty() { "polygons" } else { "input" };
+    let poly_ds = input(inp, p, poly_param)?;
+    if poly_ds.geometry_type != GeometryType::Polygon {
+        return Err(format!(
+            "layer '{}' is {} data; zonal statistics needs polygon geometries",
+            poly_ds.name,
+            poly_ds.geometry_type.label()
+        ));
+    }
+    if let Some(poly_crs) = poly_ds.crs {
+        poly_crs.transformer().map_err(|e| format!("polygon layer coordinate system isn't supported: {e}"))?;
+    }
+
+    let bands = parse_bands(p, r.band_count())?;
+    let stats = parse_stats(p)?;
+
+    let mut out = copy_schema(poly_ds, out_name(p, format!("{}_ZonalStats", poly_ds.name)), poly_ds.geometry_type);
+    out.source = None;
+    out.crs = poly_ds.crs;
+
+    let user_prefix = s(p, "prefix").trim();
+    let multi_bands = bands.len() > 1;
+    let mut out_fields = Vec::new();
+    let mut new_field_names: Vec<String> = Vec::new();
+
+    for (b_idx, &band) in bands.iter().enumerate() {
+        let band_num = band + 1;
+        let band_name = r.bands.get(band).map(|b| b.name.as_str()).unwrap_or("");
+        let prefix = if !user_prefix.is_empty() {
+            if multi_bands { format!("{user_prefix}_b{band_num}") } else { user_prefix.to_string() }
+        } else if multi_bands {
+            if !band_name.is_empty() && !band_name.starts_with("Band ") && band_name != "Gray" {
+                format!("{}_{}", r.name, band_name)
+            } else {
+                format!("{}_b{band_num}", r.name)
+            }
+        } else {
+            if !band_name.is_empty() && !band_name.starts_with("Band ") && band_name != "Gray" {
+                band_name.to_string()
+            } else {
+                r.name.to_string()
+            }
+        };
+
+        for &stat in &stats {
+            let base_name = format!("{prefix}_{}", stat.name());
+            let mut final_name = base_name.clone();
+            let mut counter = 1usize;
+            while out.field_index(&final_name).is_some() || new_field_names.iter().any(|n| n.eq_ignore_ascii_case(&final_name)) {
+                counter += 1;
+                final_name = format!("{base_name}_{counter}");
+            }
+            new_field_names.push(final_name.clone());
+            out_fields.push((b_idx, band, stat, final_name, stat.field_type()));
+        }
+    }
+
+    for (_, _, _, name, ty) in &out_fields {
+        out.fields.push(Field::new(name.clone(), *ty));
+    }
+
+    let target_rows = rows(inp, p, poly_param, poly_ds);
+    for r_idx in target_rows {
+        let Some(f) = poly_ds.features.get(r_idx) else { continue };
+        let stats_by_band = match &f.geometry {
+            Some(Geometry::Polygon(polys)) if !polys.is_empty() => crate::rasterops::zonal_statistics(r, &bands, polys)?,
+            _ => vec![crate::rasterops::ZoneStats::default(); bands.len()],
+        };
+
+        let mut attrs = f.attrs.clone();
+        for (b_idx, _, stat, _, _) in &out_fields {
+            let b_stats = stats_by_band.get(*b_idx);
+            let val = match (b_stats, stat) {
+                (Some(s), StatOp::Count) => Value::Int(s.count as i64),
+                (Some(s), StatOp::Mean) => s.mean.map(Value::Float).unwrap_or(Value::Null),
+                (Some(s), StatOp::Min) => s.min.map(Value::Float).unwrap_or(Value::Null),
+                (Some(s), StatOp::Max) => s.max.map(Value::Float).unwrap_or(Value::Null),
+                (Some(s), StatOp::Sum) => s.sum.map(Value::Float).unwrap_or(Value::Null),
+                (Some(s), StatOp::StdDev) => s.stddev.map(Value::Float).unwrap_or(Value::Null),
+                _ => Value::Null,
+            };
+            attrs.push(val);
+        }
+        attrs.resize(out.fields.len(), Value::Null);
+        out.features.push(rustgis_data::Feature { id: f.id, geometry: f.geometry.clone(), attrs });
+    }
+
+    let n_features = out.features.len();
+    result(out, format!("Calculated zonal statistics for {n_features} feature(s)"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2198,5 +2476,200 @@ mod tests {
         let m_crs = Map(HashMap::from([("polys".to_string(), polys_crs), ("pts".to_string(), pts_crs)]));
         let err = crate::run("spatialJoin", &m_crs, &serde_json::json!({"target": "pts", "join": "polys"})).unwrap_err();
         assert!(err.contains("coordinate reference system"));
+    }
+
+    #[test]
+    fn zonal_stats_tool_cases() {
+        struct RasterMap<'a> {
+            datasets: HashMap<String, Dataset>,
+            rasters: HashMap<String, &'a rustgis_data::raster::Raster>,
+        }
+
+        impl<'a> Inputs for RasterMap<'a> {
+            fn dataset(&self, layer: &str) -> Option<&Dataset> {
+                self.datasets.get(layer)
+            }
+            fn selection(&self, _: &str) -> &[usize] {
+                &[]
+            }
+            fn raster(&self, layer: &str) -> Option<crate::RasterInput<'_>> {
+                let r = self.rasters.get(layer)?;
+                Some(crate::RasterInput { raster: r, path: None, embedded: None })
+            }
+        }
+
+        let (w, h) = (10u32, 10u32);
+        let mut b1_data: Vec<f32> = Vec::with_capacity((w * h) as usize);
+        let mut b2_data: Vec<f32> = Vec::with_capacity((w * h) as usize);
+        for row in 0..h {
+            for col in 0..w {
+                b1_data.push((col * 10 + row) as f32);
+                let v2 = 100.0 - (col * 10 + row) as f32;
+                if col == 1 && row == 1 {
+                    b2_data.push(-9999.0);
+                } else {
+                    b2_data.push(v2);
+                }
+            }
+        }
+        let gt = rustgis_data::raster::GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let raster = rustgis_data::raster::Raster::new(
+            "elev",
+            w,
+            h,
+            vec![b1_data, b2_data],
+            gt,
+            rustgis_data::raster::Crs::LonLat,
+            Some(-9999.0),
+            rustgis_data::raster::ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap();
+
+        let mut poly_ds = Dataset::new(
+            "zones",
+            GeometryType::Polygon,
+            vec![Field::new("zone_id", FieldType::Integer), Field::new("elev_mean", FieldType::Double)],
+        );
+
+        let sq_geom = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(x0, y0),
+                Coord::new(x1, y0),
+                Coord::new(x1, y1),
+                Coord::new(x0, y1),
+                Coord::new(x0, y0),
+            ]]])
+        };
+
+        poly_ds.push(Some(sq_geom(1.0, 7.0, 3.0, 9.0)), vec![Value::Int(101), Value::Float(999.0)]);
+        poly_ds.push(Some(sq_geom(20.0, 20.0, 25.0, 25.0)), vec![Value::Int(102), Value::Float(888.0)]);
+
+        let hole_geom = Geometry::Polygon(vec![vec![
+            vec![Coord::new(0.0, 7.0), Coord::new(3.0, 7.0), Coord::new(3.0, 10.0), Coord::new(0.0, 10.0), Coord::new(0.0, 7.0)],
+            vec![Coord::new(1.0, 8.0), Coord::new(2.0, 8.0), Coord::new(2.0, 9.0), Coord::new(1.0, 9.0), Coord::new(1.0, 8.0)],
+        ]]);
+        poly_ds.push(Some(hole_geom), vec![Value::Int(103), Value::Float(777.0)]);
+        poly_ds.push(None, vec![Value::Int(104), Value::Float(666.0)]);
+
+        let input_clone = poly_ds.clone();
+        let m = RasterMap {
+            datasets: HashMap::from([("zones".to_string(), poly_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+
+        let res = crate::run(
+            "zonalStats",
+            &m,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "zones",
+                "bands": [1],
+            }),
+        )
+        .unwrap();
+
+        let out = layer(res);
+        assert_eq!(out.features.len(), 4);
+
+        assert_eq!(out.fields[0].name, "zone_id");
+        assert_eq!(out.fields[1].name, "elev_mean");
+        assert_eq!(out.value(0, 0), &Value::Int(101));
+        assert_eq!(out.value(0, 1), &Value::Float(999.0));
+
+        let mean_idx = out.field_index("elev_mean_2").expect("collision should produce elev_mean_2");
+        let min_idx = out.field_index("elev_min").unwrap();
+        let max_idx = out.field_index("elev_max").unwrap();
+        let sum_idx = out.field_index("elev_sum").unwrap();
+        let count_idx = out.field_index("elev_count").unwrap();
+        let stddev_idx = out.field_index("elev_stddev").unwrap();
+
+        assert_eq!(out.value(0, count_idx), &Value::Int(4));
+        assert_eq!(out.value(0, sum_idx), &Value::Float(66.0));
+        assert_eq!(out.value(0, min_idx), &Value::Float(11.0));
+        assert_eq!(out.value(0, max_idx), &Value::Float(22.0));
+        assert_eq!(out.value(0, mean_idx), &Value::Float(16.5));
+        let std_val = out.value(0, stddev_idx).as_f64().unwrap();
+        assert!((std_val - 25.25f64.sqrt()).abs() < 1e-10);
+
+        assert_eq!(out.value(1, count_idx), &Value::Int(0));
+        assert_eq!(out.value(1, sum_idx), &Value::Null);
+        assert_eq!(out.value(1, mean_idx), &Value::Null);
+        assert_eq!(out.value(1, min_idx), &Value::Null);
+        assert_eq!(out.value(1, max_idx), &Value::Null);
+        assert_eq!(out.value(1, stddev_idx), &Value::Null);
+
+        assert_eq!(out.value(2, count_idx), &Value::Int(8));
+
+        assert_eq!(out.value(3, count_idx), &Value::Int(0));
+        assert_eq!(out.value(3, mean_idx), &Value::Null);
+
+        let res_mb = crate::run(
+            "zonalStats",
+            &m,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "zones",
+                "bands": [1, 2],
+                "stats": ["mean", "count"],
+            }),
+        )
+        .unwrap();
+        let out_mb = layer(res_mb);
+        let b1_count = out_mb.field_index("elev_b1_count").unwrap();
+        let b2_count = out_mb.field_index("elev_b2_count").unwrap();
+        let b2_mean = out_mb.field_index("elev_b2_mean").unwrap();
+
+        assert_eq!(out_mb.value(0, b1_count), &Value::Int(4));
+        assert_eq!(out_mb.value(0, b2_count), &Value::Int(3));
+        let b2_m = out_mb.value(0, b2_mean).as_f64().unwrap();
+        assert!((b2_m - 245.0 / 3.0).abs() < 1e-10);
+
+        let mut pt_ds = Dataset::new("points", GeometryType::Point, vec![]);
+        pt_ds.push(Some(Geometry::Point(Coord::new(1.0, 8.0))), vec![]);
+        let m_pts =
+            RasterMap { datasets: HashMap::from([("points".to_string(), pt_ds)]), rasters: HashMap::from([("elev".to_string(), &raster)]) };
+        let err_pt = crate::run(
+            "zonalStats",
+            &m_pts,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "points",
+            }),
+        )
+        .unwrap_err();
+        assert!(err_pt.contains("Point data"));
+
+        let err_band = crate::run(
+            "zonalStats",
+            &m,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "zones",
+                "bands": [5],
+            }),
+        )
+        .unwrap_err();
+        assert!(err_band.contains("band index 5 is invalid"));
+
+        let empty_ds = Dataset::new("empty", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        let m_empty = RasterMap {
+            datasets: HashMap::from([("empty".to_string(), empty_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let res_empty = crate::run(
+            "zonalStats",
+            &m_empty,
+            &serde_json::json!({
+                "raster": "elev",
+                "polygons": "empty",
+            }),
+        )
+        .unwrap();
+        let out_empty = layer(res_empty);
+        assert_eq!(out_empty.features.len(), 0);
+        assert!(out_empty.field_index("elev_mean").is_some());
+
+        assert_eq!(m.datasets["zones"], input_clone);
     }
 }

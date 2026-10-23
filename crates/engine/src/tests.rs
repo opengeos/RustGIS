@@ -9586,7 +9586,14 @@ fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
 #[test]
 fn params_name_every_key_a_command_reads() {
     // Read by a shared helper but of no use to the command.
-    let unused = [("gp.spatialJoin", "input"), ("profile.alongSelected", "row"), ("sources.remove", "name"), ("sources.remove", "extra")];
+    let unused = [
+        ("gp.spatialJoin", "input"),
+        ("gp.zonalStats", "input"),
+        ("gp.zonalStats", "target"),
+        ("profile.alongSelected", "row"),
+        ("sources.remove", "name"),
+        ("sources.remove", "extra"),
+    ];
     let s = Session::new(Project::default());
     let mut missing = Vec::new();
     let found = keys_read_by_commands();
@@ -13360,4 +13367,110 @@ fn scans_have_no_coordinates_to_give_away() {
     s.run("raster.georeference", &json!({"layer": "flat", "extent": [10.0, 40.0, 12.0, 41.0]})).unwrap();
     assert!(s.run("share.exportRaster", &json!({"path": out.display().to_string()})).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn gp_zonal_stats_end_to_end_and_undo() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_geom::Coord;
+
+    let mut s = world();
+
+    let (w, h) = (10u32, 10u32);
+    let mut data = Vec::with_capacity((w * h) as usize);
+    for row in 0..h {
+        for col in 0..w {
+            data.push((col * 10 + row) as f32);
+        }
+    }
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let raster = Raster::new("dem", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let raster_layer = rustgis_map::RasterLayer::from_path(raster, "dem.tif");
+    s.map_mut().add_raster("dem", raster_layer);
+
+    let mut poly_ds = Dataset::new("districts", GeometryType::Polygon, vec![Field::new("code", FieldType::Text)]);
+    let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        Geometry::Polygon(vec![vec![vec![
+            Coord::new(x0, y0),
+            Coord::new(x1, y0),
+            Coord::new(x1, y1),
+            Coord::new(x0, y1),
+            Coord::new(x0, y0),
+        ]]])
+    };
+    poly_ds.push(Some(sq(1.0, 7.0, 3.0, 9.0)), vec![Value::Text("D1".into())]);
+    poly_ds.push(Some(sq(50.0, 50.0, 52.0, 52.0)), vec![Value::Text("D2".into())]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, poly_ds));
+
+    let layers_before = s.map().layers.len();
+
+    let res = s.run(
+        "gp.zonalStats",
+        &json!({
+            "raster": "dem",
+            "polygons": "districts",
+            "output": "zonal_out",
+        }),
+    );
+    assert!(res.is_ok(), "gp.zonalStats failed: {res:?}");
+    assert_eq!(s.map().layers.len(), layers_before + 1);
+
+    let out_layer = s.map().layer_by_name("zonal_out").expect("output layer should exist");
+    assert_eq!(out_layer.dataset.features.len(), 2);
+
+    let mean_idx = out_layer.dataset.field_index("dem_mean").expect("dem_mean field");
+    let count_idx = out_layer.dataset.field_index("dem_count").expect("dem_count field");
+    let min_idx = out_layer.dataset.field_index("dem_min").expect("dem_min field");
+    let max_idx = out_layer.dataset.field_index("dem_max").expect("dem_max field");
+    let sum_idx = out_layer.dataset.field_index("dem_sum").expect("dem_sum field");
+    let stddev_idx = out_layer.dataset.field_index("dem_stddev").expect("dem_stddev field");
+
+    assert_eq!(out_layer.dataset.value(0, 0), &Value::Text("D1".into()));
+    assert_eq!(out_layer.dataset.value(0, count_idx), &Value::Int(4));
+    assert_eq!(out_layer.dataset.value(0, mean_idx), &Value::Float(16.5));
+    assert_eq!(out_layer.dataset.value(0, min_idx), &Value::Float(11.0));
+    assert_eq!(out_layer.dataset.value(0, max_idx), &Value::Float(22.0));
+    assert_eq!(out_layer.dataset.value(0, sum_idx), &Value::Float(66.0));
+    let std = out_layer.dataset.value(0, stddev_idx).as_f64().unwrap();
+    assert!((std - 25.25f64.sqrt()).abs() < 1e-10);
+
+    assert_eq!(out_layer.dataset.value(1, 0), &Value::Text("D2".into()));
+    assert_eq!(out_layer.dataset.value(1, count_idx), &Value::Int(0));
+    assert_eq!(out_layer.dataset.value(1, mean_idx), &Value::Null);
+    assert_eq!(out_layer.dataset.value(1, min_idx), &Value::Null);
+    assert_eq!(out_layer.dataset.value(1, max_idx), &Value::Null);
+    assert_eq!(out_layer.dataset.value(1, sum_idx), &Value::Null);
+    assert_eq!(out_layer.dataset.value(1, stddev_idx), &Value::Null);
+
+    assert!(s.undo());
+    assert_eq!(s.map().layers.len(), layers_before);
+    assert!(s.map().layer_by_name("zonal_out").is_none());
+
+    assert!(s.redo());
+    assert_eq!(s.map().layers.len(), layers_before + 1);
+    assert!(s.map().layer_by_name("zonal_out").is_some());
+
+    let run_res = s.run(
+        "gp.run",
+        &json!({
+            "tool": "zonalStats",
+            "params": {
+                "raster": "dem",
+                "polygons": "districts",
+                "stats": ["mean", "count"],
+                "output": "via_gp_run",
+            }
+        }),
+    );
+    assert!(run_res.is_ok(), "gp.run with zonalStats failed: {run_res:?}");
+    let run_layer = s.map().layer_by_name("via_gp_run").expect("via_gp_run layer should exist");
+    assert!(run_layer.dataset.field_index("dem_mean").is_some());
+    assert!(run_layer.dataset.field_index("dem_count").is_some());
+    assert!(run_layer.dataset.field_index("dem_min").is_none());
+
+    assert!(s.run("gp.zonalStats", &json!({})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "nonexistent", "polygons": "districts"})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "Cities"})).is_err());
+    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [999]})).is_err());
 }

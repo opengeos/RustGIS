@@ -601,6 +601,127 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
     Some((cols, rows, trimmed))
 }
 
+/// Summary statistics of raster cells within a zone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneStats {
+    /// Number of valid raster cells inside the zone.
+    pub count: usize,
+    /// Arithmetic sum of valid raster cells inside the zone.
+    pub sum: Option<f64>,
+    /// Arithmetic mean of valid raster cells inside the zone.
+    pub mean: Option<f64>,
+    /// Minimum value among valid raster cells inside the zone.
+    pub min: Option<f64>,
+    /// Maximum value among valid raster cells inside the zone.
+    pub max: Option<f64>,
+    /// Population standard deviation of valid raster cells inside the zone: sqrt(sum((x - mean)^2) / n).
+    pub stddev: Option<f64>,
+}
+
+/// Numerically stable online accumulator using Welford's algorithm.
+#[derive(Clone, Debug, Default)]
+pub struct Accumulator {
+    count: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Accumulator {
+    pub fn new() -> Self {
+        Self { count: 0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY, mean: 0.0, m2: 0.0 }
+    }
+
+    /// Feeds a valid finite measurement into the accumulator.
+    pub fn add(&mut self, val: f64) {
+        if !val.is_finite() {
+            return;
+        }
+        self.count += 1;
+        self.sum += val;
+        if val < self.min {
+            self.min = val;
+        }
+        if val > self.max {
+            self.max = val;
+        }
+        let delta = val - self.mean;
+        self.mean += delta / (self.count as f64);
+        let delta2 = val - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    pub fn stats(&self) -> ZoneStats {
+        if self.count == 0 {
+            ZoneStats::default()
+        } else {
+            let variance = (self.m2 / (self.count as f64)).max(0.0);
+            ZoneStats {
+                count: self.count,
+                sum: Some(self.sum),
+                mean: Some(self.mean),
+                min: Some(self.min),
+                max: Some(self.max),
+                stddev: Some(variance.sqrt()),
+            }
+        }
+    }
+}
+
+/// Computes summary statistics (count, sum, mean, min, max, stddev) for each requested band
+/// over the raster cells whose centres fall inside `polygons` (exterior ring and holes in WGS 84 lon/lat).
+///
+/// Returns one `ZoneStats` per requested band. Cells with NoData, NaN, or non-finite values are
+/// excluded. If no valid cells fall inside the polygon or if the polygon is outside the raster extent,
+/// returns `ZoneStats` with `count = 0` and all numeric statistics set to `None`.
+pub fn zonal_statistics(r: &Raster, bands: &[usize], polygons: &[Vec<Vec<Coord>>]) -> Result<Vec<ZoneStats>, String> {
+    r.require_coordinates()?;
+    for &b in bands {
+        if b >= r.band_count() {
+            return Err(format!("band index {} is out of range: {} has {} bands", b + 1, r.name, r.band_count()));
+        }
+    }
+    if bands.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some((cols, rows, mask)) = polygon_mask(r, polygons) else {
+        return Ok(vec![ZoneStats::default(); bands.len()]);
+    };
+
+    let w = (cols.end - cols.start) as usize;
+    let mut accs: Vec<Accumulator> = (0..bands.len()).map(|_| Accumulator::new()).collect();
+
+    for (ri, row) in rows.enumerate() {
+        let line_offset = ri * w;
+        let line = match mask.get(line_offset..line_offset + w) {
+            Some(l) => l,
+            None => continue,
+        };
+        for (ci, &inside) in line.iter().enumerate() {
+            if !inside {
+                continue;
+            }
+            let col = cols.start + ci as u32;
+            for (acc_idx, &band) in bands.iter().enumerate() {
+                if let Some(v) = r.value(band, col as i64, row as i64)
+                    && let Some(acc) = accs.get_mut(acc_idx)
+                {
+                    acc.add(f64::from(v));
+                }
+            }
+        }
+    }
+
+    Ok(accs.into_iter().map(|acc| acc.stats()).collect())
+}
+
 /// A tiny arithmetic expression over band values.
 enum Expr {
     Num(f64),
@@ -784,5 +905,161 @@ mod tests {
         let p = profile(&r, 0, &[Coord::new(0.0005, 0.01), Coord::new(0.0195, 0.01)], 20);
         assert_eq!(p.len(), 20);
         assert!(p.last().and_then(|x| x.2).unwrap_or(0.0) > p[0].2.unwrap_or(0.0) + 150.0);
+    }
+
+    #[test]
+    fn accumulator_exact_math_and_numerical_stability() {
+        // 1. Exact math on [10.0, 20.0, 30.0, 40.0]
+        let mut acc = Accumulator::new();
+        for &x in &[10.0, 20.0, 30.0, 40.0] {
+            acc.add(x);
+        }
+        let st = acc.stats();
+        assert_eq!(st.count, 4);
+        assert_eq!(st.sum, Some(100.0));
+        assert_eq!(st.mean, Some(25.0));
+        assert_eq!(st.min, Some(10.0));
+        assert_eq!(st.max, Some(40.0));
+        let expected_stddev = 125.0f64.sqrt(); // sqrt(500 / 4)
+        assert!((st.stddev.unwrap() - expected_stddev).abs() < 1e-12);
+
+        // 2. Empty accumulator
+        let empty_st = Accumulator::new().stats();
+        assert_eq!(empty_st.count, 0);
+        assert_eq!(empty_st.sum, None);
+        assert_eq!(empty_st.mean, None);
+        assert_eq!(empty_st.min, None);
+        assert_eq!(empty_st.max, None);
+        assert_eq!(empty_st.stddev, None);
+
+        // 3. Single value
+        let mut single_acc = Accumulator::new();
+        single_acc.add(42.5);
+        let single_st = single_acc.stats();
+        assert_eq!(single_st.count, 1);
+        assert_eq!(single_st.sum, Some(42.5));
+        assert_eq!(single_st.mean, Some(42.5));
+        assert_eq!(single_st.min, Some(42.5));
+        assert_eq!(single_st.max, Some(42.5));
+        assert_eq!(single_st.stddev, Some(0.0));
+
+        // 4. Constant values
+        let mut const_acc = Accumulator::new();
+        for _ in 0..100 {
+            const_acc.add(7.0);
+        }
+        let const_st = const_acc.stats();
+        assert_eq!(const_st.count, 100);
+        assert_eq!(const_st.mean, Some(7.0));
+        assert_eq!(const_st.stddev, Some(0.0));
+
+        // 5. Large magnitude values (Welford's algorithm avoids catastrophic cancellation)
+        let base = 1e12;
+        let mut large_acc = Accumulator::new();
+        for &x in &[base + 1.0, base + 2.0, base + 3.0, base + 4.0] {
+            large_acc.add(x);
+        }
+        let large_st = large_acc.stats();
+        assert_eq!(large_st.count, 4);
+        assert_eq!(large_st.mean, Some(base + 2.5));
+        let std_large = large_st.stddev.unwrap();
+        // Variance of [1, 2, 3, 4] is 1.25, stddev is sqrt(1.25) = 1.118033988749895
+        assert!((std_large - 1.25f64.sqrt()).abs() < 1e-10, "large magnitude precision: {std_large}");
+
+        // 6. Non-finite values (NaN and inf) are rejected
+        let mut defensive_acc = Accumulator::new();
+        defensive_acc.add(10.0);
+        defensive_acc.add(f64::NAN);
+        defensive_acc.add(f64::INFINITY);
+        defensive_acc.add(f64::NEG_INFINITY);
+        defensive_acc.add(20.0);
+        let def_st = defensive_acc.stats();
+        assert_eq!(def_st.count, 2);
+        assert_eq!(def_st.sum, Some(30.0));
+        assert_eq!(def_st.mean, Some(15.0));
+    }
+
+    #[test]
+    fn zonal_statistics_known_cells_nodata_and_holes() {
+        let r = ramp(); // 20x20 raster, band 0: (i % 20) * 10, band 1: i / 20.
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+
+        // 1. Single known cell: col 5, row 5.
+        // origin_x = 0.0, origin_y = 0.02, pixel_width = 0.001, pixel_height = -0.001
+        // col 5 x in [0.005, 0.006], centre at 0.0055.
+        // row 5 y in [0.014, 0.015], centre at 0.0145.
+        let cell_poly = vec![vec![sq(0.005, 0.014, 0.006, 0.015)]];
+        let stats = zonal_statistics(&r, &[0, 1], &cell_poly).unwrap();
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].count, 1);
+        assert_eq!(stats[0].sum, Some(50.0)); // col 5 * 10 = 50
+        assert_eq!(stats[0].mean, Some(50.0));
+        assert_eq!(stats[0].min, Some(50.0));
+        assert_eq!(stats[0].max, Some(50.0));
+        assert_eq!(stats[0].stddev, Some(0.0));
+
+        assert_eq!(stats[1].count, 1);
+        assert_eq!(stats[1].sum, Some(5.0)); // row 5 = 5
+        assert_eq!(stats[1].mean, Some(5.0));
+        assert_eq!(stats[1].stddev, Some(0.0));
+
+        // 2. Polygon outside raster: empty zone result
+        let outside_poly = vec![vec![sq(1.0, 1.0, 2.0, 2.0)]];
+        let outside_stats = zonal_statistics(&r, &[0], &outside_poly).unwrap();
+        assert_eq!(outside_stats.len(), 1);
+        assert_eq!(outside_stats[0], ZoneStats::default());
+
+        // 3. Polygon with holes
+        let poly_with_hole = vec![vec![sq(0.005, 0.005, 0.015, 0.015), sq(0.009, 0.009, 0.011, 0.011)]];
+        let hole_stats = zonal_statistics(&r, &[0], &poly_with_hole).unwrap();
+        // 100 cells - 4 hole cells = 96 cells
+        assert_eq!(hole_stats[0].count, 96);
+        assert!(hole_stats[0].sum.is_some());
+        assert!(hole_stats[0].mean.is_some());
+
+        // 4. MultiPolygon
+        let multipoly = vec![
+            vec![sq(0.001, 0.018, 0.003, 0.019)], // 2 cells
+            vec![sq(0.005, 0.018, 0.007, 0.019)], // 2 cells
+        ];
+        let multi_stats = zonal_statistics(&r, &[0], &multipoly).unwrap();
+        assert_eq!(multi_stats[0].count, 4);
+
+        // 5. NoData handling: create a raster with NoData values
+        let (w, h) = (4u32, 4u32);
+        // cells:
+        // [ 10,   20, -9999,   40 ]
+        // [ 50,  NaN,   70,   80 ]
+        // [ -9999, -9999, -9999, -9999 ]
+        // [ 130, 140, 150, 160 ]
+        let data: Vec<f32> =
+            vec![10.0, 20.0, -9999.0, 40.0, 50.0, f32::NAN, 70.0, 80.0, -9999.0, -9999.0, -9999.0, -9999.0, 130.0, 140.0, 150.0, 160.0];
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r_nodata = Raster::new("nd", w, h, vec![data], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+
+        // Zone covering entire row 0: cells are 10, 20, -9999 (NoData), 40
+        // Valid values: 10, 20, 40 (count = 3, sum = 70, mean = 70/3, min = 10, max = 40)
+        let row0_poly = vec![vec![sq(0.0, 3.0, 4.0, 4.0)]];
+        let r0_stats = zonal_statistics(&r_nodata, &[0], &row0_poly).unwrap();
+        assert_eq!(r0_stats[0].count, 3);
+        assert_eq!(r0_stats[0].sum, Some(70.0));
+        assert_eq!(r0_stats[0].min, Some(10.0));
+        assert_eq!(r0_stats[0].max, Some(40.0));
+        assert!((r0_stats[0].mean.unwrap() - 70.0 / 3.0).abs() < 1e-10);
+
+        // Zone covering row 2 where ALL cells are NoData (-9999)
+        let row2_poly = vec![vec![sq(0.0, 1.0, 4.0, 2.0)]];
+        let r2_stats = zonal_statistics(&r_nodata, &[0], &row2_poly).unwrap();
+        assert_eq!(r2_stats[0].count, 0);
+        assert_eq!(r2_stats[0].sum, None);
+        assert_eq!(r2_stats[0].mean, None);
+        assert_eq!(r2_stats[0].min, None);
+        assert_eq!(r2_stats[0].max, None);
+        assert_eq!(r2_stats[0].stddev, None);
+
+        // 6. Invalid band index returns Err
+        assert!(zonal_statistics(&r, &[99], &cell_poly).is_err());
     }
 }

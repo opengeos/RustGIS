@@ -108,6 +108,7 @@ pub const SECTIONS: &[(&str, &str)] = &[
     ("rasterFunctions", "Raster Functions"),
     ("functionEditor", "Function Editor"),
     ("suitability", "Suitability Modeler"),
+    ("zonalStats", "Zonal Statistics"),
     ("visibility", "Visibility Analysis"),
     ("lineOfSight", "Exploratory 3D Analysis"),
     ("interpolate", "Geostatistical Wizard"),
@@ -188,6 +189,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let inputs = match w.section {
         "rasterFunctions" | "functionEditor" | "suitability" | "visibility" | "lineOfSight" | "georeference" | "change" | "spectral"
         | "classify" | "supervised" | "deepLearning" | "hosted" | "indices" | "process" | "pixels" | "mensuration" | "reality"
+        | "zonalStats"
         // The trend's one-layer mode takes a raster (a Zarr variable, or a raster of several bands).
         | "trend" => &rasters,
         "interpolate" => &points,
@@ -197,6 +199,9 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     };
     if !inputs.contains(&w.layer) {
         w.layer = inputs.first().cloned().unwrap_or_default();
+    }
+    if w.section == "zonalStats" && !polygons.contains(&w.layer2) {
+        w.layer2 = polygons.first().cloned().unwrap_or_default();
     }
     ui.add_space(6.0);
     match app.workflow.section {
@@ -244,6 +249,42 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     let steps: Vec<Value> = app.workflow.chain.iter().filter_map(|s| serde_json::from_str(s).ok()).collect();
                     run(app, "raster.functionChain", json!({"layer": app.workflow.layer, "steps": steps}));
                 }
+            }
+        }
+        "zonalStats" => {
+            heading(ui, "Calculate raster statistics per polygon");
+            ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
+            combo(ui, "wf_zs_raster", &mut app.workflow.layer, &rasters);
+            ui.label(egui::RichText::new(tl!("Polygon layer")).small().weak());
+            combo(ui, "wf_zs_poly", &mut app.workflow.layer2, &polygons);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Band"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0));
+                ui.label(tl!("Prefix"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("elev").desired_width(70.0));
+            });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Output"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("output layer name")).desired_width(120.0));
+            });
+            let can_run = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
+            if !can_run {
+                ui.label(egui::RichText::new(tl!("Add a raster and a polygon layer to calculate zonal statistics.")).small().weak());
+            }
+            if ui.add_enabled(can_run, egui::Button::new(tl!("Calculate Statistics"))).clicked() {
+                let band = app.workflow.number.trim().parse::<u64>().unwrap_or(1);
+                let mut params = json!({
+                    "raster": app.workflow.layer,
+                    "polygons": app.workflow.layer2,
+                    "bands": [band],
+                });
+                if !app.workflow.text.trim().is_empty() {
+                    params["prefix"] = json!(app.workflow.text.trim());
+                }
+                if !app.workflow.number2.trim().is_empty() {
+                    params["output"] = json!(app.workflow.number2.trim());
+                }
+                run(app, "gp.zonalStats", params);
             }
         }
         "suitability" => {
