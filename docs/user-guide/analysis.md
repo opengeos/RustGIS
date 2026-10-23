@@ -244,8 +244,10 @@ one closes it. In its `"params": {…}`, the keys offered are those of the tool 
 help; there the help by the cursor is the tool's. A `task.addStep` line works the same way: its
 `"command": "` offers the commands, and its `"params"` that command's keys and help. A `{` or `[`
 typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
-a `}` or `]` typed before the same one steps over it, and Backspace in an empty `{}` or `[]`
-deletes both. Pasting adds nothing.
+so does a `"`, unless it also follows a word. A `}` or `]` typed before the same one steps over
+it, as does a `"` typed before the quote that ends its string, and Backspace in an empty `{}`,
+`[]` or `""` deletes both. The lists open in a quote that closed itself, and accepting keeps that
+quote. Pasting adds nothing.
 
 ## ModelBuilder
 
