@@ -6,6 +6,7 @@
 (filtered)	(disaring)
 + Add Stop	+ Tambah Persinggahan
 + Input	+ Masukan
++ New expression	+ Ekspresi baru
 + Output	+ Keluaran
 /F	/F
 /PID	/PID
@@ -14,10 +15,12 @@
 06:00 UTC	06:00 UTC
 12:00 UTC	12:00 UTC
 18:00 UTC	18:00 UTC
+3035, vn2000tm3	3035, vn2000tm3
 3D mesh	Mesh 3D
 <None>	<Tidak ada>
 A 3D globe seen from space.	Globe 3D yang terlihat dari luar angkasa.
 A blank map with a basemap	Peta kosong dengan peta dasar
+A call for the rustgis Python package	Panggilan untuk paket Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Alamat katalog (CSW 2.0.2): cari rekamannya berdasarkan kata dan, jika mau, area peta, lalu tambahkan layanan dan file yang ditautkannya.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Batas penggunaan paket ChatGPT atau aplikasi telah tercapai. Tinjau penggunaan mingguan sebelum mencoba lagi.
 A ChatGPT sign-in can only be used with the OpenAI API.	Masuk dengan ChatGPT hanya dapat digunakan dengan API OpenAI.
@@ -30,26 +33,41 @@ A GeoLens server's datasets, read as features (the first 1,000 of each).	Dataset
 A globe scene.	Scene globe.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Lintang dan bujur (40.7, -74.0 atau 40°42'N 74°0'W), layer, penanda, atau nilai di tabel layer. Enter memilih baris yang disorot; Cari tempat mencari teks sebagai tempat
 A layer the model reads	Layer yang dibaca model
+A line for the Script pane	Satu baris untuk panel Skrip
 A magnifying lens that follows the pointer.	Lensa pembesar yang mengikuti penunjuk.
 A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	Alamat layanan peta, fitur, atau coverage: WMS, WMTS, WFS, WCS, OGC API Features atau Tiles, atau ArcGIS FeatureServer, MapServer, ImageServer, atau VectorTileServer (atau direktori layanan, untuk dijelajahi).
 a name, or owner/name such as giswqs/geospatial	nama, atau pemilik/nama seperti giswqs/geospatial
+A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.	Endpoint bernama yang dapat Anda gunakan kembali. Kata sandi dan kunci disimpan hingga RustGIS ditutup, tidak pernah disimpan permanen.
 A node cannot connect to itself.	Node tidak dapat terhubung ke dirinya sendiri.
 A notebook of text and command cells.	Buku catatan berisi sel teks dan sel perintah.
+A password or token in the address was left out: connections never keep secrets.	Kata sandi atau token di alamat tidak disertakan: koneksi tidak pernah menyimpan rahasia.
 A place or an address	Tempat atau alamat
 A project keeps at least one map	Proyek selalu menyimpan setidaknya satu peta
 A projected coordinate system.	Sistem koordinat terproyeksi.
 A report listing the selected layer's records, page after page.	Laporan yang mencantumkan rekaman layer terpilih, halaman demi halaman.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Hasil yang hanya menjadi masukan alat lain dihapus setelah model dijalankan; tambahkan keluaran untuk menyimpannya.
 A result the model keeps, under a name	Hasil yang disimpan model, dengan sebuah nama
+A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)	Perintah rustgis-cli, untuk shell POSIX (macOS, Linux, WSL, Git Bash)
 A service import or refresh is already running.	Impor atau penyegaran layanan sedang berjalan.
+A service's layers stay in their service group.	Layer suatu layanan tetap berada di grup layanannya.
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	Satu tugas memuat paling banyak 200 langkah: hentikan perekaman untuk membuatnya, lalu rekam sisanya sebagai tugas lain.
 A template with the first selected feature's values	Templat dengan nilai fitur terpilih pertama
+A tile layer per grid tile, each following the time slider through its dates.	Satu layer ubin per ubin grid, masing-masing mengikuti penggeser waktu melalui tanggal-tanggalnya.
 A tile service's address: raster tiles with {z}/{x}/{y} (or {-y}, {q}, {bbox-epsg-3857} for WMS), vector tiles (.pbf) or TileJSON, a MapLibre style, a PMTiles archive (a web address, or a file on this computer), or an MBTiles file on this computer.	Alamat layanan ubin: ubin raster dengan {z}/{x}/{y} (atau {-y}, {q}, {bbox-epsg-3857} untuk WMS), ubin vektor (.pbf) atau TileJSON, gaya MapLibre, arsip PMTiles (alamat web, atau berkas di komputer ini), atau berkas MBTiles di komputer ini.
 A token is set.	Token sudah diatur.
 A value, a field, or two of them joined by + − × ÷. Applies to the selected rows, or every row when none is selected.	Sebuah nilai, kolom, atau dua di antaranya yang digabung dengan + − × ÷. Berlaku untuk baris terpilih, atau semua baris jika tidak ada yang dipilih.
 a vector a pixel	satu vektor per piksel
 a vector an image patch	satu vektor per patch citra
 A Zarr store (format 2 or 3) by its web address, with consolidated metadata, or a folder on this computer. A variable's map is read for the steps picked of its other dimensions, such as time.	Penyimpanan Zarr (format 2 atau 3) melalui alamat webnya, dengan metadata terkonsolidasi, atau folder di komputer ini. Peta variabel dibaca untuk langkah yang dipilih dari dimensi lainnya, seperti waktu.
+A Zarr variable's values through time at points clicked on the map.	Nilai variabel Zarr sepanjang waktu di titik-titik yang diklik pada peta.
+A2 landscape sheet	Lembar A2 lanskap
+A2 portrait sheet	Lembar A2 potret
+A3 landscape sheet	Lembar A3 lanskap
+A3 portrait sheet	Lembar A3 potret
+A4 landscape sheet	Lembar A4 lanskap
+A4 portrait sheet	Lembar A4 potret
+A5 Grid	Grid A5
+A5's equal-area pentagonal cells at a resolution, over the map's extent, a layer or the world, as polygons with their ids.	Sel pentagonal luas sama A5 pada suatu resolusi, di atas cakupan peta, sebuah layer, atau seluruh dunia, sebagai poligon beserta id-nya.
 About	Tentang
 About plugins	Tentang plugin
 About RustGIS	Tentang RustGIS
@@ -65,6 +83,7 @@ Add	Tambah
 Add\nData	Tambah\nData
 Add ({n})	Tambah ({n})
 Add a bar chart of a layer's numeric field.	Tambahkan diagram batang dari kolom numerik suatu layer.
+Add a circle.	Tambahkan lingkaran.
 Add a colorbar of a raster layer's colour scale in the map frame.	Tambahkan bilah warna dari skala warna layer raster di bingkai peta.
 Add a description.	Tambahkan deskripsi.
 Add a field.	Tambahkan kolom.
@@ -78,22 +97,28 @@ Add a page layout for printing and exporting the map.	Tambahkan tata letak halam
 Add a page to the presentation.	Tambahkan halaman ke presentasi.
 Add a PNG or JPEG picture to the page.	Tambahkan gambar PNG atau JPEG ke halaman.
 Add a presentation file.	Tambahkan file presentasi.
+Add a rectangle, to frame or highlight part of the page.	Tambahkan persegi panjang, untuk membingkai atau menyorot bagian halaman.
 Add a report file, or a report template for the selected layer.	Tambahkan file laporan, atau templat laporan untuk layer terpilih.
 Add a scale bar for the map frame.	Tambahkan bilah skala untuk bingkai peta.
 add a second map first (Data › New Map)	tambahkan peta kedua terlebih dahulu (Data › Peta Baru)
 Add a second map frame first	Tambahkan bingkai peta kedua terlebih dahulu
+Add a straight line.	Tambahkan garis lurus.
 Add a text element.	Tambahkan elemen teks.
 Add a web basemap over the others instead of replacing them, to blend it with them. Click one that shows to take it off.	Tambahkan peta dasar web di atas yang lain alih-alih menggantinya, untuk memadukannya dengan yang lain. Klik peta dasar yang tampil untuk melepasnya.
+Add a Zarr variable first (Add Data › Zarr…).	Tambahkan variabel Zarr terlebih dahulu (Tambah Data › Zarr…).
 Add Administrative Boundaries	Tambah Batas Administratif
+Add an arrow. Turn it with the round handle above it, or set its angle in its properties.	Tambahkan panah. Putar dengan pegangan bulat di atasnya, atau atur sudutnya di propertinya.
 Add an Earthdata Login token (Earthdata Login, above) to put NASA GeoTIFFs on the map.	Tambahkan token Earthdata Login (Earthdata Login, di atas) untuk menampilkan GeoTIFF NASA di peta.
 Add an elevation raster first.	Tambahkan raster elevasi terlebih dahulu.
 Add an elevation raster to the map first	Tambahkan raster elevasi ke peta terlebih dahulu
+Add an ellipse.	Tambahkan elips.
 Add an empty layer with a ready-made schema, to draw into.	Tambahkan layer kosong dengan skema siap pakai, untuk digambari.
 Add an input for each layer the model reads.	Tambahkan masukan untuk setiap layer yang dibaca model.
 Add an output to keep a result under a name.	Tambahkan keluaran untuk menyimpan hasil dengan sebuah nama.
 Add and Open	Tambah dan Buka
 Add and Open Notebook	Tambah dan Buka Notebook
 Add Archive	Tambah Arsip
+Add as Time Series	Tambah sebagai Deret Waktu
 add at least two keyframes	tambahkan setidaknya dua keyframe
 Add Cell	Tambah Sel
 Add Color Ramp File…	Tambah File Ramp Warna…
@@ -132,6 +157,7 @@ Add Graphics Layer	Tambah Layer Grafik
 Add Input	Tambah Masukan
 Add Job	Tambah Pekerjaan
 Add Keyframe	Tambah Keyframe
+Add Label Class	Tambah Kelas Label
 Add Layer File	Tambah File Layer
 Add Open Data	Tambah Data Terbuka
 Add Output	Tambah Keluaran
@@ -147,9 +173,11 @@ Add Rule	Tambah Aturan
 Add sample countries	Tambah contoh negara
 Add Sample Data	Tambah Data Contoh
 Add Satellite Embeddings	Tambah Embedding Satelit
+Add Selected ({n})	Tambah Terpilih ({n})
 Add Service Layer	Tambah Layer Layanan
 Add skill…	Tambah skill…
 Add STAC Asset	Tambah Aset STAC
+Add STAC Data Cube	Tambah Kubus Data STAC
 Add STAC Footprints	Tambah Jejak STAC
 Add Step	Tambah Langkah
 Add Stroke	Tambah Goresan
@@ -171,6 +199,7 @@ Add to Favourites	Tambah ke Favorit
 Add to Map	Tambah ke Peta
 Add vector data.	Tambahkan data vektor.
 Add view	Tambah tampilan
+Add With Options…	Tambah dengan Opsi…
 Add Zarr Variable	Tambah Variabel Zarr
 Add Zarr Variable…	Tambah Variabel Zarr…
 Add ▾	Tambah ▾
@@ -203,6 +232,7 @@ Agent work	Agent work
 Agents have full access: they may run scripts, tasks, models and plugins. Click to stop the MCP relay	Agen memiliki akses penuh: mereka dapat menjalankan skrip, tugas, model, dan plugin. Klik untuk menghentikan relay MCP
 Agents on this computer that connect (Claude Code, Codex, Cursor and others) work on the map open here, with RustGIS's tools: they can open and save files and use the web. Scripts and plugin management stay off.	Agen di komputer ini yang terhubung (Claude Code, Codex, Cursor, dan lainnya) bekerja pada peta yang terbuka di sini dengan alat RustGIS: mereka dapat membuka dan menyimpan file serta menggunakan web. Skrip dan pengelolaan plugin tetap nonaktif.
 Agents then run commands, change files and use the web on this computer without asking you.	Agen akan menjalankan perintah, mengubah file, dan menggunakan web di komputer ini tanpa bertanya kepada Anda.
+Aggregate Points to A5	Agregasi Titik ke A5
 Aggregation	Agregasi
 Agricultural field boundaries the Fields of the World model found in Sentinel-2 imagery, worldwide, a year at a time (2nd Edition, CC BY 4.0). These are model predictions, not surveyed parcels.	Batas lahan pertanian yang ditemukan model Fields of the World pada citra Sentinel-2, di seluruh dunia, per tahun (Edisi ke-2, CC BY 4.0). Ini adalah prediksi model, bukan persil hasil survei.
 AI	AI
@@ -221,15 +251,18 @@ All steps done.	Semua langkah selesai.
 All tables with geometry	Semua tabel dengan geometri
 Allow	Izinkan
 Allow ChatGPT plan use when signing in. If your workspace doesn't permit it, ask its admin or choose an API key provider.	Izinkan penggunaan paket ChatGPT saat masuk. Jika workspace Anda tidak mengizinkannya, tanyakan kepada admin-nya atau pilih penyedia dengan kunci API.
+Allow Feature Selection	Izinkan Seleksi Fitur
 Allow only certain combinations of values across fields.	Izinkan hanya kombinasi nilai tertentu di antara kolom.
 Allow such actions for this conversation	Izinkan tindakan seperti ini untuk percakapan ini
 Allow this action?	Izinkan tindakan ini?
 Allow this agent's RustGIS action?	Izinkan tindakan RustGIS dari agen ini?
 Along Selected Line	Sepanjang Garis Terpilih
+Alt+	Alt+
 Alternating bar	Bilah berselang-seling
 Altitude	Ketinggian
 Always allow	Selalu izinkan
-Amazon S3, or an S3-compatible service (MinIO, Cloudflare R2, Wasabi…) by its endpoint. Keys are kept until RustGIS closes; a remembered connection keeps its name, endpoint and region, never its secret.	Amazon S3, atau layanan yang kompatibel dengan S3 (MinIO, Cloudflare R2, Wasabi…) melalui endpoint-nya. Kunci disimpan sampai RustGIS ditutup; koneksi yang diingat menyimpan nama, endpoint, dan wilayahnya, tidak pernah rahasianya.
+Amazon S3	Amazon S3
+Amazon S3, or an S3-compatible service (MinIO, Cloudflare R2, Wasabi…) by its endpoint. Keys are kept until RustGIS closes; a saved connection keeps its name, endpoint and region, never its secret.	Amazon S3, atau layanan yang kompatibel dengan S3 (MinIO, Cloudflare R2, Wasabi…) melalui endpoint-nya. Kunci disimpan hingga RustGIS ditutup; koneksi tersimpan menyimpan nama, endpoint, dan wilayahnya, tidak pernah rahasianya.
 amenity=cafe, shop	amenity=cafe, shop
 An agent on this computer asks to:	Agen di komputer ini meminta untuk:
 An AWS profile	Profil AWS
@@ -248,6 +281,7 @@ API key	Kunci API
 Apply	Terapkan
 Apply a function to a raster	Terapkan fungsi pada raster
 Apply Control Points	Terapkan Titik Kontrol
+Apply elevation	Terapkan elevasi
 Apply Style	Terapkan Gaya
 Apply to layers	Terapkan ke layer
 Apply to the selected layer	Terapkan pada layer terpilih
@@ -268,6 +302,8 @@ Area of use: within {r}° of {lon}°, {lat}°	Area penggunaan: dalam {r}° dari 
 Area {area}   ·   Perimeter {perimeter}	Luas {area}   ·   Keliling {perimeter}
 Areas (name, land use, area)	Area (nama, penggunaan lahan, luas)
 Arrange	Atur
+Arrow	Panah
+Arrowheads	Kepala panah
 Ask a question about your data, or describe what to do with the map. The assistant runs RustGIS commands for you; every change can be undone.	Ajukan pertanyaan tentang data Anda, atau jelaskan apa yang harus dilakukan pada peta. Asisten menjalankan perintah RustGIS untuk Anda; setiap perubahan dapat diurungkan.
 Ask about the map, or tell it what to do…	Tanyakan tentang peta, atau beri tahu apa yang harus dilakukan…
 Ask about your data, or tell the assistant what to do with the map.	Tanyakan tentang data Anda, atau beri tahu asisten apa yang harus dilakukan pada peta.
@@ -275,12 +311,13 @@ Asking NASA's CMR…	Menanyakan ke CMR NASA…
 Asking the catalog…	Menanyakan ke katalog…
 Asking the NLDI…	Menanyakan ke NLDI…
 Assistant settings	Pengaturan asisten
+At the end	Di akhir
+At the start	Di awal
 Atlas	Atlas
 Attachments	Lampiran
 Attribute\nTable	Tabel\nAtribut
 Attribute Rules	Aturan Atribut
 Attribute Table	Tabel Atribut
-Attribute table	Tabel atribut
 Attributes	Atribut
 Attribution	Atribusi
 Aurora	Aurora
@@ -295,11 +332,9 @@ Automatic (system language)	Otomatis (bahasa sistem)
 Automatic (system time zone and region)	Otomatis (zona waktu dan wilayah sistem)
 Automatic ({kind})	Otomatis ({kind})
 Avoid	Hindari
-AWS	AWS
 AWS, anonymous	AWS, anonim
 Azimuth	Azimut
 Back	Kembali
-Back to Explore; cancel a sketch	Kembali ke Jelajah; batalkan sketsa
 Back to the Map	Kembali ke Peta
 Back to the map	Kembali ke peta
 Back to tools	Kembali ke alat
@@ -314,8 +349,6 @@ Basemap	Peta dasar
 Basemaps	Peta dasar
 Basin from hydrolocation	DAS dari hidrolokasi
 Bearing	Arah
-Bearing {b}° · Pitch {p}°	Arah {b}° · Kemiringan {p}°
-Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset both.	Arah: arah yang dihadap bagian atas peta, searah jarum jam dari utara. Kemiringan: tingkat miring dari pandangan tegak lurus ke bawah. Klik untuk mengatur ulang keduanya.
 Before the event	Sebelum kejadian
 Below	Bawah
 Below 1:5,000,000 show everything; beyond it only what matches:	Di bawah 1:5.000.000 tampilkan semuanya; di atasnya hanya yang cocok:
@@ -328,10 +361,12 @@ Bilinear	Bilinear
 Bind To Time Slider	Ikat ke Penggeser Waktu
 Bind to Time Slider	Ikat ke penggeser waktu
 Blank	Kosong
+Blank for Amazon S3	Kosongkan untuk Amazon S3
 Blank Letter page	Halaman Letter kosong
 Blank Map	Peta kosong
 Blank Page	Halaman Kosong
 Blend: {mode}	Campuran: {mode}
+Block Feature Selection	Blokir Seleksi Fitur
 Blue	Biru
 Bold	Tebal
 Bold label text.	Teks label tebal.
@@ -339,6 +374,7 @@ Bookmark Description	Deskripsi Penanda
 Bookmarks	Penanda
 Bookmarks Pane	Panel Penanda
 Boolean	Boolean
+Both ends	Kedua ujung
 Bottom	Bawah
 Boundaries…	Batas…
 Bounding\nGeometry	Geometri\nBatas
@@ -346,6 +382,7 @@ Brightness	Kecerahan
 Brightness, contrast, saturation and sepia for the whole map.	Kecerahan, kontras, saturasi, dan sepia untuk seluruh peta.
 Bring this bookmark's map into view to update it	Tampilkan peta penanda ini untuk memperbaruinya
 Browse	Jelajahi
+Browse Connection	Jelajahi Koneksi
 Browse it in the Browser	Jelajahi di Peramban
 Browse Plugins	Jelajahi Plugin
 Browse the geoprocessing toolbox.	Jelajahi kotak alat geoprosesing.
@@ -357,6 +394,7 @@ Browser	Peramban
 Browser\nPane	Panel\nPeramban
 Browser View	Tampilan Peramban
 Bucket	Bucket
+Buckets	Bucket
 Buffer	Buffer
 Buffer A Point	Buffer Sebuah Titik
 Buffer the cities by 200 km	Buat buffer 200 km di sekitar kota-kota
@@ -381,7 +419,9 @@ Calculate Field	Hitung Kolom
 Calculate field	Hitung kolom
 Calculate field values.	Hitung nilai kolom.
 Calculate fields and enforce conditions on every edit.	Hitung kolom dan terapkan ketentuan pada setiap suntingan.
+Calculate Geometry	Hitung Geometri
 Calculate Geometry Attributes	Hitung Atribut Geometri
+Calculated {rows} features	{rows} fitur dihitung
 Calculation	Perhitungan
 Camera	Kamera
 Camera Effect	Efek Kamera
@@ -396,12 +436,14 @@ Case Field	Kolom Kasus
 Cast Shadow	Bayangan Jatuh
 Catalog	Katalog
 catalog is a static STAC catalog's catalog.json or collection.json	catalog adalah catalog.json atau collection.json dari katalog STAC statis
+Catalogue (CSW)	Katalog (CSW)
 Catalogue search (CSW)	Pencarian katalog (CSW)
 Celestial Bodies	Benda Langit
 Celestial Body	Benda Langit
 Celestial body: {body}	Benda langit: {body}
 Cell size	Ukuran sel
 cell size °	ukuran sel °
+Cells	Sel
 Center	Tengah
 Center Map Here	Pusatkan Peta di Sini
 Centered	Tengah
@@ -421,6 +463,7 @@ ChatGPT plan use is unavailable for this account or workspace.	Penggunaan paket 
 ChatGPT sign-in failed. Check the connection and local settings, then try again.	Gagal masuk ke ChatGPT. Periksa koneksi dan pengaturan lokal, lalu coba lagi.
 ChatGPT usage is temporarily unavailable. Keep your sign-in and try again later.	Penggunaan ChatGPT untuk sementara tidak tersedia. Pertahankan sesi masuk Anda dan coba lagi nanti.
 CHE	CHE
+Check	Periksa
 Check Again	Periksa Lagi
 Check for\nUpdates	Periksa\nPembaruan
 Check for Updates	Periksa Pembaruan
@@ -428,6 +471,7 @@ Check for Updates…	Periksa Pembaruan…
 Check the address and the service type.	Periksa alamat dan jenis layanan.
 Check the address and your connection.	Periksa alamat dan koneksi Anda.
 Check the address.	Periksa alamat.
+Check the clause, and count the features it takes.	Periksa klausa, dan hitung fitur yang dicakupnya.
 Check the integration's client, permissions, workspace policy and route configuration.	Periksa klien, izin, kebijakan ruang kerja, dan konfigurasi rute integrasi.
 Checking for updates…	Memeriksa pembaruan…
 China	Tiongkok
@@ -455,6 +499,7 @@ Choose which layers a click identifies.	Pilih layer mana yang diidentifikasi ole
 Choose which tabs the ribbon shows.	Pilih tab yang ditampilkan ribbon.
 Circle	Lingkaran
 Circle Radius (km)	Radius Lingkaran (km)
+Class	Kelas
 Class color	Warna kelas
 Class Style	Gaya Kelas
 Classes	Kelas
@@ -511,6 +556,7 @@ Click to add vertices · double-click to finish the line	Klik untuk menambah ver
 Click to edit the description	Klik untuk mengedit deskripsi
 Click to place a point graphic.	Klik untuk menempatkan grafik titik.
 Click to select the node	Klik untuk memilih node
+Click to select, double-click to add, right-click for more	Klik untuk memilih, klik ganda untuk menambahkan, klik kanan untuk opsi lain
 Click to switch between decimal degrees and DMS	Klik untuk beralih antara derajat desimal dan DMS
 Clip	Potong (Clip)
 Clip a raster to the view, or resample it.	Potong raster ke tampilan, atau lakukan resampling.
@@ -532,7 +578,7 @@ Close thread	Tutup utas
 Close {name}	Tutup {name}
 Closest	Terdekat
 Coded values, one per line: code=description	Nilai berkode, satu per baris: kode=deskripsi
-Collapse or expand the ribbon	Ciutkan atau perluas ribbon
+Collapse or Expand the Ribbon	Ciutkan atau Perluas Ribbon
 Collapse the ribbon (Ctrl+F1)	Ciutkan ribbon (Ctrl+F1)
 Collection	Koleksi
 Collection {id}: choose dates and Find Items	Koleksi {id}: pilih tanggal lalu Cari Item
@@ -552,6 +598,7 @@ Columns named like longitude/latitude, easting/northing or geometry are picked f
 Combinations from the box above, one per line	Kombinasi dari kotak di atas, satu per baris
 COMID {comid}	COMID {comid}
 Comma	Koma
+Comma-separated (optional)	Dipisahkan koma (opsional)
 Command\nSearch	Cari\nPerintah
 command is required	command wajib diisi
 Command Search	Cari Perintah
@@ -572,10 +619,13 @@ Connect	Hubungkan
 Connect a folder to the Browser.	Hubungkan folder ke Peramban.
 Connect to S3	Hubungkan ke S3
 Connect, or pick a layer	Hubungkan, atau pilih layer
+Connected to {kind} {title}	Terhubung ke {kind} {title}
 Connecting to {url}…	Menghubungkan ke {url}…
 Connection	Koneksi
+connection.new returned no id	connection.new tidak mengembalikan id
 Connections	Koneksi
-Connect…	Hubungkan…
+Connections you add are listed here	Koneksi yang Anda tambahkan tercantum di sini
+Connections…	Koneksi…
 Constant	Konstanta
 Constant height	Tinggi konstan
 Constant…	Konstanta…
@@ -583,11 +633,14 @@ Contingent Values	Nilai Kontingen
 Continue	Lanjutkan
 Continue with ChatGPT	Lanjutkan dengan ChatGPT
 Contrast	Kontras
+Control Point Fit	Kecocokan Titik Kontrol
 Conversion	Konversi
 Convert	Konversi
 Convert a layer to another format	Konversi layer ke format lain
 Convert the selected layer's labels into an annotation layer.	Konversi label layer terpilih menjadi layer anotasi.
+Convert this layer's labels into an annotation layer.	Konversi label layer ini menjadi layer anotasi.
 Convert To Annotation	Konversi ke Anotasi
+Convert to Annotation	Konversi ke Anotasi
 Converted data	Data hasil konversi
 Convert…	Konversi…
 Coordinate	Koordinat
@@ -599,11 +652,15 @@ Copied the map to the clipboard	Peta disalin ke papan klip
 Copied {path}	{path} disalin
 Copies the (selected) features of a layer to a new layer.	Menyalin fitur (terpilih) dari suatu layer ke layer baru.
 Copy	Salin
+Copy / Cut / Paste features	Salin / Potong / Tempel fitur
 Copy a model.run command that runs this model, for the Script pane or Python	Salin perintah model.run yang menjalankan model ini, untuk panel Skrip atau Python
 Copy Address	Salin Alamat
 Copy address	Salin alamat
 Copy an image of the map to the clipboard.	Salin gambar peta ke papan klip.
+Copy as CLI Command	Salin sebagai Perintah CLI
+Copy as Command	Salin sebagai Perintah
 Copy As GeoJSON	Salin sebagai GeoJSON
+Copy as Python	Salin sebagai Python
 Copy Command	Salin Perintah
 Copy coordinates to the clipboard	Salin koordinat ke papan klip
 Copy details	Salin detail
@@ -611,11 +668,13 @@ Copy Group	Salin Grup
 Copy Layer	Salin Layer
 Copy Layers	Salin Layer
 Copy Path	Salin Path
+Copy Run As Code	Salin Jalankan sebagai Kode
 Copy sign-in link	Salin tautan masuk
 Copy the selected features (also as GeoJSON text).	Salin fitur terpilih (juga sebagai teks GeoJSON).
 Copy the selected features and delete them.	Salin fitur terpilih lalu hapus.
 Copy the selected layer's data source path.	Salin path sumber data layer terpilih.
 Copy this element (Ctrl+D, ⌘D on a Mac)	Salin elemen ini (Ctrl+D, ⌘D di Mac)
+Copy this run as code, or open it in its tool	Salin jalannya ini sebagai kode, atau buka di alatnya
 Corrections	Koreksi
 Cost	Biaya
 could not draw the map	tidak dapat menggambar peta
@@ -625,6 +684,7 @@ Couldn't load the plugin registry: {error}	Tidak dapat memuat registri plugin: {
 Count, sum, mean, min, max and standard deviation of a field, optionally per case field.	Jumlah, total, rata-rata, min, maks, dan simpangan baku suatu kolom, opsional per kolom kasus.
 Countries, cities, rivers and lakes	Negara, kota, sungai, dan danau
 Country	Negara
+Counts a layer's points by the A5 cell holding them (cells of equal area, so the count is a density), with a field's sum and mean.	Menghitung titik suatu layer menurut sel A5 yang memuatnya (sel berluas sama, sehingga jumlahnya adalah kepadatan), beserta total dan rata-rata suatu kolom.
 Counts the points that fall inside each polygon.	Menghitung titik yang berada di dalam setiap poligon.
 Counts, totals and top categories of what's in view.	Jumlah, total, dan kategori teratas dari yang terlihat.
 CPU	CPU
@@ -647,12 +707,8 @@ Cross Section	Penampang Melintang
 Cross Section (2 clicks)	Penampang Melintang (2 klik)
 CSV	CSV
 Ctrl+	Ctrl+
-Ctrl+= / Ctrl+-	Ctrl+= / Ctrl+-
-Ctrl+F1	Ctrl+F1
 Ctrl+K	Ctrl+K
-Ctrl+N / O / S	Ctrl+N / O / S
 Ctrl+T	Ctrl+T
-Ctrl+Z / Ctrl+Y	Ctrl+Z / Ctrl+Y
 Cumulative	Kumulatif
 Current date	Tanggal saat ini
 Current Project	Proyek Saat Ini
@@ -680,13 +736,16 @@ Data type	Tipe data
 Data you add is listed here	Data yang Anda tambahkan tercantum di sini
 data.gov and CKAN catalogues	Katalog data.gov dan CKAN
 Database	Basis Data
-Databases	Basis Data
+Database connections are used by the desktop app	Koneksi basis data digunakan oleh aplikasi desktop
+databases are read through DuckDB, a program the browser can't run	basis data dibaca melalui DuckDB, program yang tidak dapat dijalankan peramban
 Database…	Basis Data…
 Dataset	Dataset
 Datasets on Hugging Face by name or owner/name; browse a dataset's files and add GeoTIFFs, GeoParquet, PMTiles, LiDAR and other files.	Dataset di Hugging Face berdasarkan nama atau pemilik/nama; jelajahi file dataset dan tambahkan GeoTIFF, GeoParquet, PMTiles, LiDAR, dan file lainnya.
 Data…	Data…
 Date	Tanggal
 Dates	Tanggal
+Dates a cell needs	Tanggal yang dibutuhkan sel
+Dates a cell needs is a whole number, or empty for half	Tanggal yang dibutuhkan sel berupa bilangan bulat, atau kosong untuk separuh
 Day	Hari
 Day and night shading for a time.	Bayangan siang dan malam untuk suatu waktu.
 Decimal	Desimal
@@ -715,7 +774,6 @@ Delete Notebook	Hapus Notebook
 Delete Page	Hapus Halaman
 Delete Presentation	Hapus Presentasi
 Delete Report	Hapus Laporan
-Delete selected features	Hapus fitur terpilih
 Delete selected rows	Hapus baris terpilih
 Delete Style	Hapus Gaya
 Delete Task	Hapus Tugas
@@ -736,11 +794,15 @@ Desktop and command line only	Hanya aplikasi desktop dan baris perintah
 Details	Detail
 Details of the selected layer.	Detail layer terpilih.
 Deviations	Simpangan
+DGGS	DGGS
 Diagnostic\nMonitor	Monitor\nDiagnostik
 Diagnostic Monitor	Monitor Diagnostik
 Diagnostics	Diagnostik
+Diagonal ↗	Diagonal ↗
+Diagonal ↘	Diagonal ↘
 Diamond	Belah ketupat
 Difference, ratio or percent change between two rasters.	Selisih, rasio, atau persentase perubahan antara dua raster.
+Digit	Digit
 Directions	Petunjuk Arah
 Directions From Here	Petunjuk Arah dari Sini
 Directions To Here	Petunjuk Arah ke Sini
@@ -758,6 +820,7 @@ Dissolve Field	Kolom Dissolve
 Distance	Jarak
 Distance (km)	Jarak (km)
 Distance Coefficient P	Koefisien Jarak P
+Distance units	Satuan jarak
 Distances along the surface, heights, areas and volumes.	Jarak di sepanjang permukaan, ketinggian, luas, dan volume.
 DISTINCT	DISTINCT
 Distinct	Unik
@@ -804,18 +867,23 @@ Drag to draw	Seret untuk menggambar
 Drag to draw a freehand line.	Seret untuk menggambar garis bebas.
 Drag to draw a freehand polygon.	Seret untuk menggambar poligon bebas.
 Drag to draw a rectangle.	Seret untuk menggambar persegi panjang.
+Drag to resize the message box	Seret untuk mengubah ukuran kotak pesan
 Drag tools from the palette onto the canvas.	Seret alat dari palet ke kanvas.
 Drag vertices on the map; click an edge to add one	Seret verteks di peta; klik tepi untuk menambah verteks
 Draw a halo around label text.	Gambar halo di sekitar teks label.
 Draw a labelled latitude/longitude grid over the map frame.	Gambar grid lintang/bujur berlabel di atas bingkai peta.
 Draw a model: chain tools from input layers to the results to keep	Gambar model: rangkai alat dari layer masukan ke hasil yang akan disimpan
 Draw a model: chain tools from input layers to the results to keep.	Gambar model: rangkai alat dari layer masukan ke hasil yang akan disimpan.
+Draw at its place in the stack, the bottom stroke first	Gambar di posisinya dalam tumpukan, goresan terbawah lebih dulu
+Draw every feature's strokes of one level before the next, so casings join under the cores where lines meet	Gambar goresan satu level dari setiap fitur sebelum level berikutnya, agar casing menyatu di bawah inti saat garis bertemu
 Draw labels at every scale and distance.	Gambar label di setiap skala dan jarak.
 Draw new features in the selected layer. Double-click to finish lines and polygons.	Gambar fitur baru di layer terpilih. Klik ganda untuk menyelesaikan garis dan poligon.
 Draw new single-band rasters with the inverted grey stretch again.	Gambar raster band tunggal baru kembali dengan peregangan abu-abu terbalik.
+Draw only polygon outlines, keeping their colors and widths.	Gambar garis tepi poligon saja, dengan mempertahankan warna dan lebarnya.
 Draw points as bins coloured by how many fall in each.	Gambar titik sebagai bin yang diwarnai menurut jumlah titik di setiap bin.
 Draw polygons as outlines only.	Gambar poligon hanya sebagai garis tepi.
 Draw single-band rasters added from now on with this color scheme, stretch and resampling.	Gambar raster band tunggal yang ditambahkan mulai sekarang dengan skema warna, peregangan, dan resampling ini.
+Draw strokes in levels	Gambar goresan per level
 Draw the layer at every scale.	Gambar layer pada semua skala.
 Draw the map on the GPU (beta; the globe, view effects and colour-vision simulation stay on the CPU renderer).	Gambar peta di GPU (beta; globe, efek tampilan, dan simulasi penglihatan warna tetap di perender CPU).
 Draw the selected layer above others.	Gambar layer terpilih di atas layer lain.
@@ -828,6 +896,7 @@ drawn by the server	digambar oleh server
 Drive	Mobil
 Drone and aerial imagery shared on OpenAerialMap, newest first, added as cloud-optimised GeoTIFFs.	Citra drone dan udara yang dibagikan di OpenAerialMap, terbaru lebih dulu, ditambahkan sebagai GeoTIFF yang dioptimalkan untuk cloud.
 Duplicate	Duplikat
+Duplicate Connection	Duplikat Koneksi
 Duplicate Element	Duplikat Elemen
 Duplicate Layout	Duplikat Tata Letak
 Duplicate Map	Duplikat Peta
@@ -843,6 +912,7 @@ e.g.  pop_est / 1000000   or   'Africa'   or   name	mis.  pop_est / 1000000   at
 e.g. 0, 255, -9999	mis. 0, 255, -9999
 e.g. continent = 'Europe'	mis. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	mis. pop_est > 100000000 AND continent = 'Asia'
+e.g. pop_max > 1000000	mis. pop_max > 1000000
 Each geoprocessing run becomes a step, chained by its outputs	Setiap proses geoprosesing menjadi satu langkah, dirangkai melalui keluarannya
 Earth Index has no points in the view	Earth Index tidak memiliki titik di tampilan
 Earth Search	Earth Search
@@ -865,6 +935,7 @@ Edit\nVertices	Edit\nVerteks
 Edit and run the notebook.	Edit dan jalankan notebook.
 Edit Attribute	Edit Atribut
 Edit Cell	Edit Sel
+Edit Connection	Edit Koneksi
 Edit Description	Edit Deskripsi
 Edit Graphic	Edit Grafik
 Edit Status	Status Edit
@@ -882,6 +953,7 @@ Editor\nTools	Alat\nEditor
 Editor Tools	Alat Editor
 Edits since the project was saved.	Suntingan sejak proyek disimpan.
 Edits the project	Mengedit proyek
+Edit…	Edit…
 Effects	Efek
 Element	Elemen
 Element Properties	Properti Elemen
@@ -898,21 +970,25 @@ Enable Lighting	Aktifkan Pencahayaan
 Enable Plugin	Aktifkan Plugin
 Enabled	Aktif
 Encloses each feature, or all features, in its convex hull.	Melingkupi setiap fitur, atau semua fitur, dengan convex hull-nya.
+Encoded polyline	Polyline terenkode
 End	Akhir
 End date	Tanggal akhir
 Endpoint	Endpoint
 Enhancement	Peningkatan
 Enter	Enter
 Enter an API key.	Masukkan kunci API.
+Enter an EPSG code as a number, such as 32650	Masukkan kode EPSG sebagai angka, misalnya 32650
 Enter the provider's address.	Masukkan alamat penyedia.
 Enter to send, Shift+Enter for a new line	Enter untuk mengirim, Shift+Enter untuk baris baru
 EnviroAtlas	EnviroAtlas
 EnviroAtlas…	EnviroAtlas…
 Environments	Lingkungan
 EPSG	EPSG
+EPSG code	Kode EPSG
 EPSG or ESRI code	Kode EPSG atau ESRI
 EPSG:	EPSG:
 EPSG:4326	EPSG:4326
+Equal	Equal
 Equal Earth	Equal Earth
 Equal Interval	Interval Sama
 Equirectangular (Plate Carrée)	Ekuirektangular (Plate Carrée)
@@ -922,14 +998,18 @@ Error	Galat
 Error Inspector	Pemeriksa Galat
 Error Inspector (validate)	Pemeriksa Galat (validasi)
 Esc	Esc
+Escape	Escape
 ESRI	ESRI
 ESRI:	ESRI:
 Europe Equal Area (ETRS89 LAEA)	Eropa Luas Sama (ETRS89 LAEA)
 Every band's value at a pixel.	Nilai setiap band pada suatu piksel.
 Every editing tool.	Semua alat penyuntingan.
+Every label setting of this layer, in the Labeling pane.	Semua pengaturan label layer ini, di panel Pelabelan.
 Every layer, as FEMA draws them	Setiap layer, seperti yang digambar FEMA
+Every run, in order, as a script that opens the project	Setiap jalannya, secara berurutan, sebagai skrip yang membuka proyek
 every Socrata site, or one such as data.cityofnewyork.us	semua situs Socrata, atau satu situs seperti data.cityofnewyork.us
 Everywhere	Di mana saja
+Existing field	Kolom yang ada
 Existing Template	Templat yang Ada
 exit rotary	keluar dari bundaran
 exit roundabout	keluar dari bundaran
@@ -948,6 +1028,7 @@ Export\nRaster	Ekspor\nRaster
 Export Animation	Ekspor Animasi
 Export Bookmarks	Ekspor Penanda
 Export Bookmarks…	Ekspor Penanda…
+Export CSV…	Ekspor CSV…
 Export Features	Ekspor Fitur
 Export Features (tool)	Ekspor Fitur (alat)
 Export Features needs a vector layer (Data › Export Raster writes a raster)	Ekspor Fitur memerlukan layer vektor (Data › Ekspor Raster menulis raster)
@@ -996,6 +1077,7 @@ Face Culling	Face Culling
 Faces	Muka
 Factor	Faktor
 Failed	Gagal
+FALSE	FALSE
 Farthest	Terjauh
 Faster drawing: no antialiasing.	Penggambaran lebih cepat: tanpa antialiasing.
 Favourite Data Source	Sumber Data Favorit
@@ -1023,6 +1105,8 @@ field * 2, 'text', a + b	field * 2, 'text', a + b
 Field boundaries	Batas lahan
 Field density	Kepadatan lahan
 Field name	Nama kolom
+Field Prefix	Awalan Kolom
+Field to Sum and Average	Kolom untuk Total dan Rata-rata
 Fields	Kolom
 Fields are drawn from zoom 9: zoom in to see them.	Lahan digambar mulai zoom 9: perbesar untuk melihatnya.
 Fields colored by score, drawn from zoom 9	Lahan diwarnai menurut skor, digambar mulai zoom 9
@@ -1079,6 +1163,8 @@ Folder Connections	Koneksi Folder
 folder connections need the desktop app	koneksi folder memerlukan aplikasi desktop
 Folders	Folder
 Folder…	Folder…
+Follow the time slider	Ikuti penggeser waktu
+Font	Fon
 for a store that doesn't say	untuk penyimpanan yang tidak menyebutkannya
 Forest	Hutan
 Forget Earthdata Login Token	Lupakan Token Earthdata Login
@@ -1090,9 +1176,11 @@ France	Prancis
 Free the prepared geometry.	Bebaskan geometri yang telah disiapkan.
 Freehand	Bebas
 FROM	FROM
+From	Dari
 From Selection	Dari Seleksi
 From Service…	Dari Layanan…
 From symbol	Dari simbol
+From the address	Dari alamat
 from the address	dari alamat
 from the service	dari layanan
 From URL…	Dari URL…
@@ -1196,6 +1284,7 @@ Hide features far from the view's centre.	Sembunyikan fitur yang jauh dari pusat
 Hide Group	Sembunyikan Grup
 Hide labels when the viewer is closer than this.	Sembunyikan label saat penampil lebih dekat dari nilai ini.
 Hide labels when the viewer is farther than this.	Sembunyikan label saat penampil lebih jauh dari nilai ini.
+Hide Layers	Sembunyikan Layer
 Hide other values	Sembunyikan nilai lain
 Hide Steps	Sembunyikan Langkah
 Hide the description	Sembunyikan deskripsi
@@ -1213,6 +1302,8 @@ Hold	Tahan
 HOME	HOME
 Home	Beranda
 Home › Add	Beranda › Tambah
+Home › Add Data	Beranda › Tambah Data
+Home › Inspect › Measure	Beranda › Periksa › Ukur
 Home › Navigate	Beranda › Navigasi
 Home › Navigate › Bookmarks	Beranda › Navigasi › Penanda
 Home › Web Data	Beranda › Data Web
@@ -1220,7 +1311,7 @@ Home › Web Data › United States	Beranda › Data Web › Amerika Serikat
 Homepage	Beranda
 Horizontal	Horizontal
 host=localhost dbname=gis user=postgres	host=localhost dbname=gis user=postgres
-host=… dbname=… user=…, or a .duckdb file	host=… dbname=… user=…, atau file .duckdb
+host=… dbname=… user=…	host=… dbname=… user=…
 Hosted Imagery	Citra Terhosting
 Hour	Jam
 How the layer's colours combine with the tile layers and basemap beneath.	Cara warna layer berpadu dengan layer ubin dan peta dasar di bawahnya.
@@ -1248,6 +1339,7 @@ Imagery Sharing	Berbagi Citra
 Imagery Tools	Alat Citra
 ImageServer	ImageServer
 Image…	Gambar…
+Imperial	Imperial
 Import	Impor
 Import\nProject	Impor\nProyek
 Import All	Impor semua
@@ -1267,6 +1359,7 @@ Import Task	Impor Tugas
 Import Task…	Impor Tugas…
 Import Thumbnail	Impor Thumbnail
 Import…	Impor…
+IN	IN
 In Beyond	Perbesar Melewati
 In memory	Di memori
 In Progress	Sedang Berjalan
@@ -1281,6 +1374,8 @@ Information	Informasi
 INPUT	MASUKAN
 Input	Masukan
 Input Features	Fitur Masukan
+Input Layer	Layer Masukan
+Input Points	Titik Masukan
 Input Polygons	Poligon Masukan
 Input Rows	Baris Masukan
 Input Summary Features	Fitur Ringkasan Masukan
@@ -1305,8 +1400,10 @@ Installed plugins are kept in {folder}	Plugin yang terpasang disimpan di {folder
 Installed with Homebrew, winget, the AUR or COPR? Update it there.	Dipasang dengan Homebrew, winget, AUR, atau COPR? Perbarui di sana.
 Installed {name} {version}. Find it on the Plugins tab; its tools are also in the Tools pane.	{name} {version} telah dipasang. Temukan di tab Plugin; alat-alatnya juga ada di panel Alat.
 Installing it downloads Python {version} and the packages it needs from the internet.	Memasangnya akan mengunduh Python {version} dan paket yang diperlukan dari internet.
+Integer field: values are rounded.	Kolom bilangan bulat: nilai dibulatkan.
 Interface font: {font}	Fon antarmuka: {font}
 Interpolate a surface from points (IDW)	Interpolasi permukaan dari titik (IDW)
+Interpolates a 2-band raster surface (Prediction and Variance) from point features using Ordinary Kriging.	Menginterpolasi permukaan raster 2 band (Prediksi dan Varians) dari fitur titik menggunakan Ordinary Kriging.
 Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	Menginterpolasi permukaan raster dari nilai fitur dengan pembobotan jarak terbalik (IDW), seperti di QGIS.
 Interpolation	Interpolasi
 Interpolation Attribute	Atribut Interpolasi
@@ -1316,10 +1413,13 @@ Invalid: {error}	Tidak valid: {error}
 Invert	Balik
 Invert color scheme	Balik skema warna
 Invert the selection.	Balik seleksi.
+IS	IS
 IS NULL	IS NULL
 it connects to an address on the internet	terhubung ke alamat di internet
 It has no code: nothing in it runs.	Tidak berisi kode: tidak ada yang dijalankan.
+It is locked, or one of its surrounds is: unlock it first	Elemen ini atau salah satu elemen pelengkapnya terkunci: buka kuncinya terlebih dahulu
 it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)	hanya boleh dilakukan oleh Anda (plugin, skrip, tugas, model, dan runner GeoLibre)
+it needs input: open it from its pane or button, or run it from a script or the assistant	perlu masukan: buka dari panel atau tombolnya, atau jalankan dari skrip atau asisten
 it reads or writes files on this computer	membaca atau menulis file di komputer ini
 it replaces the open project	mengganti proyek yang terbuka
 it runs a plugin's command	menjalankan perintah plugin
@@ -1332,20 +1432,30 @@ Italic	Miring
 Item Pop-ups	Pop-up Item
 Item {id}	Item {id}
 Its firewall ({firewall}) blocked RustGIS. The service may only allow some applications: contact its administrator and send them the details below.	Firewall-nya ({firewall}) memblokir RustGIS. Layanan ini mungkin hanya mengizinkan beberapa aplikasi: hubungi administratornya dan kirimkan detail di bawah.
+Its tool isn't available now (a plugin's, not loaded, or a suite's, not installed)	Alatnya tidak tersedia sekarang (milik plugin yang tidak dimuat, atau milik suite yang tidak dipasang)
 Jobs	Pekerjaan
 JOIN	JOIN
 Join	Sambungan
+Join Features	Fitur Gabungan
+Join Operation	Operasi Gabungan
+Joins attributes from a join layer to a target layer based on their spatial relationship.	Menggabungkan atribut dari layer gabungan ke layer target berdasarkan hubungan spasialnya.
+Journal figure, 1 column (90 mm)	Gambar jurnal, 1 kolom (90 mm)
+Journal figure, 1.5 columns (140 mm)	Gambar jurnal, 1,5 kolom (140 mm)
+Journal figure, 2 columns (190 mm)	Gambar jurnal, 2 kolom (190 mm)
 Keep a history of every edit to the layer, to look back or restore.	Simpan riwayat setiap suntingan pada layer, untuk ditinjau atau dipulihkan.
 Keep an archive of edits	Simpan arsip suntingan
 keep current	biarkan saat ini
+Keep it from being moved, resized, deleted or edited by mistake	Cegah agar tidak dipindahkan, diubah ukurannya, dihapus, atau diedit secara tidak sengaja
 Keep one value of each point's vector as its value field	Simpan satu nilai dari vektor setiap titik sebagai kolom nilainya
 Keep Result	Simpan Hasil
 Keep the labelled features fixed as the map moves.	Pertahankan fitur berlabel tetap saat peta bergerak.
 Keep the last drawing tool active after each graphic.	Biarkan alat gambar terakhir tetap aktif setelah setiap grafik.
 Keep the last tool active	Biarkan alat terakhir tetap aktif
+Keep this endpoint under Data Sources › Connections, without its password or keys	Simpan endpoint ini di Sumber Data › Koneksi, tanpa kata sandi atau kuncinya
 Keep this result	Simpan hasil ini
 Keep Tool	Pertahankan Alat
 Keep value	Simpan nilai
+Key	Key
 Keyboard Shortcuts	Pintasan Keyboard
 Keyboard shortcuts.	Pintasan keyboard.
 Keys from	Kunci dari
@@ -1356,13 +1466,20 @@ KMZ	KMZ
 Label	Label
 Label Class	Kelas Label
 Label Distance Range	Rentang Jarak Label
+Label features in this layer	Beri label fitur di layer ini
 Label Field	Kolom Label
+Label only the features that match.	Beri label hanya pada fitur yang cocok.
 Label Placement	Penempatan Label
 Label Range	Rentang Label
 Label the cities with their names	Beri label nama pada kota-kota
 Label Visibility Range	Rentang Visibilitas Label
 Labeling	Pelabelan
+Labeling Pane	Panel Pelabelan
+Labeling Properties…	Properti Pelabelan…
 Labels	Label
+labels are drawn for feature layers, not rasters	label digambar untuk layer fitur, bukan raster
+Labels are drawn for feature layers, not rasters.	Label digambar untuk layer fitur, bukan raster.
+Labels are off for this layer: the clause applies once they are on.	Label untuk layer ini nonaktif: klausa berlaku setelah label diaktifkan.
 Lagoon	Laguna
 Lambert Conformal Conic	Kerucut Konformal Lambert
 Lambert Cylindrical Equal Area	Silinder Luas Sama Lambert
@@ -1383,12 +1500,14 @@ Layer Blend	Campuran Layer
 Layer Extrusion	Ekstrusi Layer
 Layer File	File Layer
 Layer From\nSelection	Layer dari\nSeleksi
+Layer not found	Layer tidak ditemukan
 Layer Template	Templat Layer
 Layer Templates	Templat Layer
 layer {id}	layer {id}
 Layers	Layer
 Layers ({n})	Layer ({n})
 Layers and Table Views	Layer dan Tampilan Tabel
+Layers, a date each	Layer, masing-masing satu tanggal
 Layout	Tata Letak
 Layout\nFile	File\nTata Letak
 Layout after: {name}	Tata letak sesudah: {name}
@@ -1402,7 +1521,7 @@ Learning\nResources	Sumber\nBelajar
 Left	Kiri
 Legend	Legenda
 Legend label. Clear it to show the value again.	Label legenda. Kosongkan untuk menampilkan nilainya lagi.
-Length {length} · gain {gain} m · loss {loss} m	Panjang {length} · naik {gain} m · turun {loss} m
+Length {length} · gain {gain} · loss {loss}	Panjang {length} · naik {gain} · turun {loss}
 Let the assistant hand tasks to agents on this computer	Izinkan asisten menyerahkan tugas ke agen di komputer ini
 Let your Agents Control RustGIS	Biarkan agen Anda mengendalikan RustGIS
 Letter spacing	Spasi huruf
@@ -1439,6 +1558,7 @@ List by drawing order	Daftar menurut urutan gambar
 List by selection	Daftar menurut seleksi
 List Columns in File	Daftar Kolom dalam Berkas
 List Commands	Daftar Perintah
+List Connections	Daftar Koneksi
 List Data Sources	Daftar Sumber Data
 List Database Columns	Daftar Kolom Basis Data
 List Database Tables	Daftar Tabel Basis Data
@@ -1475,6 +1595,11 @@ Locate…	Temukan…
 Location	Lokasi
 Locator	Lokator
 Lock	Kunci
+Locked	Terkunci
+Locked: unlock it in the Format pane to move or change it	Terkunci: buka kuncinya di panel Format untuk memindahkan atau mengubahnya
+Log In to Connection	Masuk ke Koneksi
+Log In to {name}…	Masuk ke {name}…
+Log In…	Masuk…
 Long	Long
 Longitude	Bujur
 Longitude (X)	Bujur (X)
@@ -1493,6 +1618,7 @@ Manage	Kelola
 Manage Bookmarks	Kelola Penanda
 Manage Edits	Kelola Edit
 Manage Templates	Kelola Templat
+Mann–Kendall	Mann–Kendall
 Map	Peta
 Map\nFrame	Bingkai\nPeta
 Map (the current view)	Peta (tampilan saat ini)
@@ -1504,6 +1630,7 @@ Map File	File Peta
 Map Frame	Bingkai Peta
 Map Frames	Bingkai Peta
 Map frames per second (live while the map moves)	Frame peta per detik (langsung saat peta bergerak)
+Map Labeling	Pelabelan Peta
 Map Link	Tautan Peta
 Map name	Nama peta
 Map Page	Halaman Peta
@@ -1515,6 +1642,7 @@ Map style (JSON)	Gaya peta (JSON)
 Map Surrounds	Pelengkap Peta
 Map Thumbnail	Thumbnail Peta
 Map tiles of the whole world	Ubin peta seluruh dunia
+Map Tool: {tool}	Alat Peta: {tool}
 Map View	Tampilan Peta
 map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}	map.goToXY {"lon": 2.35, "lat": 48.85, "scale": 5000000}\nselect.byAttributes {"layer": "Cities", "where": "pop_max > 1000000"}
 Map: {kind}	Peta: {kind}
@@ -1525,9 +1653,11 @@ MapServer	MapServer
 Marker	Marker
 Mask Values	Mask Nilai
 Masking	Masking
+Match Option	Opsi Pencocokan
 Matching places	Tempat yang cocok
 Max	Maks
 Max %	Maks %
+Max Neighbors	Tetangga Maksimum
 Maximum zoom	Zoom maksimum
 MCP Relay	Relay MCP
 MCP relay is already listening on 127.0.0.1:{port}; stop it first to use port {asked}	Relay MCP sudah mendengarkan di 127.0.0.1:{port}; hentikan dulu untuk memakai port {asked}
@@ -1542,6 +1672,8 @@ Measure Distance	Ukur Jarak
 Measure geodesic distances and areas on the map.	Ukur jarak dan luas geodesik di peta.
 Measure on this body, with one of its basemaps.	Ukur pada benda langit ini, dengan salah satu peta dasarnya.
 Measure with an elevation raster	Ukur dengan raster elevasi
+Measurement units	Satuan pengukuran
+Measurement units must be metric or imperial	Satuan pengukuran harus metrik atau imperial
 Measurements so far.	Pengukuran sejauh ini.
 Mensuration	Mensurasi
 Mensuration Tools	Alat Mensurasi
@@ -1551,6 +1683,7 @@ Merges polygons that share a field value into one feature per value.	Menggabungk
 Messages appear here.	Pesan muncul di sini.
 Meters	Meter
 Method	Metode
+Metric	Metrik
 Midnight	Tengah Malam
 Miles	Mil
 Miller Cylindrical	Silinder Miller
@@ -1560,21 +1693,43 @@ Min must be less than Max	Min harus kurang dari Maks
 Min must not be more than Max	Min tidak boleh lebih dari Maks
 Minimum Bounding Geometry	Geometri Batas Minimum
 Minimum Maximum	Minimum Maksimum
+Minus	Minus
 Minutes	Menit
 minutes ago	menit lalu
 Miter	Runcing
 Mobile Map	Peta Seluler
 Mod+	Mod+
+Mod+C	Mod+C
+Mod+D	Mod+D
+Mod+Equals	Mod+Equals
+Mod+F1	Mod+F1
+Mod+K	Mod+K
+Mod+Minus	Mod+Minus
+Mod+N	Mod+N
+Mod+O	Mod+O
+Mod+Plus	Mod+Plus
+Mod+S	Mod+S
+Mod+Shift+S	Mod+Shift+S
+Mod+Shift+Z	Mod+Shift+Z
+Mod+T	Mod+T
+Mod+V	Mod+V
+Mod+X	Mod+X
+Mod+Y	Mod+Y
+Mod+Z	Mod+Z
 Model	Model
 Model\nBuilder	Model\nBuilder
 model id	id model
 Model output	Keluaran model
 ModelBuilder	ModelBuilder
 Models	Model
+Modified Mann–Kendall (Hamed & Rao)	Mann–Kendall Termodifikasi (Hamed & Rao)
+Modified Mann–Kendall (Yue & Wang)	Mann–Kendall Termodifikasi (Yue & Wang)
 Modify	Ubah
 Modify Selected Features	Ubah Fitur Terpilih
 Mollweide (equal-area world)	Mollweide (dunia luas sama)
 Month	Bulan
+Months	Bulan
+Months are numbers from 1 to 12 (12, 1, 2 for December to February)	Bulan berupa angka 1 sampai 12 (12, 1, 2 untuk Desember hingga Februari)
 More	Lainnya
 More basemaps:	Peta dasar lainnya:
 Mosaic images into an orthomosaic	Mosaikkan citra menjadi ortomosaik
@@ -1583,13 +1738,15 @@ Mosaic the visible rasters into an orthomosaic.	Mosaikkan raster yang terlihat m
 Most cloud cover (%)	Tutupan awan maksimum (%)
 Mouse wheel	Roda tetikus
 Move	Pindahkan
-Move (m)	Pindahkan (m)
 Move Bookmark	Pindahkan Penanda
 Move Down	Turunkan
 Move down	Turunkan
 Move Group	Pindahkan Grup
+Move Label Class	Pindahkan Kelas Label
 Move Task Step	Pindahkan Langkah Tugas
+Move To Bottom	Pindahkan ke Paling Bawah
 Move To Group	Pindahkan ke Grup
+Move To Top	Pindahkan ke Paling Atas
 Move To {group}	Pindahkan ke {group}
 Move Up	Naikkan
 Move up	Naikkan
@@ -1599,6 +1756,7 @@ MultiLineString	MultiLineString
 MultiPolygon	MultiPolygon
 My Buckets	Bucket Saya
 My OGC Layer	Layer OGC Saya
+MySQL/MariaDB	MySQL/MariaDB
 N/S/E/W	N/S/E/W
 Name	Nama
 name the plugin whose panel to open: {"id": plugin id}	sebutkan plugin yang panelnya akan dibuka: {"id": plugin id}
@@ -1633,13 +1791,15 @@ New\nNotebook	Notebook\nBaru
 New\nPresentation	Presentasi\nBaru
 New\nReport	Laporan\nBaru
 New\nWorkspace	Ruang Kerja\nBaru
-New / Open / Save project	Proyek Baru / Buka / Simpan
 New Bookmark	Penanda Baru
 New Bookmark…	Penanda Baru…
+New Connection	Koneksi Baru
+New Connection ▾	Koneksi Baru ▾
 New conversation	Percakapan baru
 New Custom Template	Templat Kustom Baru
 New Custom Template…	Templat Kustom Baru…
 New features use this template's values	Fitur baru menggunakan nilai templat ini
+New field	Kolom baru
 New Group	Grup Baru
 New job name	Nama pekerjaan baru
 New Layout	Tata Letak Baru
@@ -1649,6 +1809,7 @@ New Notebook	Notebook Baru
 New Presentation	Presentasi Baru
 New Project	Proyek Baru
 New project	Proyek baru
+New Publication Layout	Tata Letak Publikasi Baru
 New Relationship…	Relasi Baru…
 New Report	Laporan Baru
 New Selection	Seleksi Baru
@@ -1674,11 +1835,14 @@ No bookmarks yet. New Bookmark saves the current view of the map.	Belum ada pena
 No catalogs below this one: Find Items lists its items	Tidak ada katalog di bawah ini: Cari Item menampilkan item-nya
 No COMID was returned for this point.	Tidak ada COMID yang dikembalikan untuk titik ini.
 no command	tidak ada perintah
-No connections this session	Tidak ada koneksi di sesi ini
+No data at the points picked.	Tidak ada data di titik yang dipilih.
 No datasets match.	Tidak ada dataset yang cocok.
 No datasets with data RustGIS can add	Tidak ada dataset dengan data yang dapat ditambahkan RustGIS
+no date in the name	tidak ada tanggal di nama
 No edits since the project was saved	Tidak ada suntingan sejak proyek disimpan
 No field of this layer holds dates.	Tidak ada kolom layer ini yang berisi tanggal.
+No Fill	Tanpa Isian
+No geometry to calculate	Tidak ada geometri untuk dihitung
 No granules in this view and date range.	Tidak ada granule di tampilan dan rentang tanggal ini.
 no home folder	tidak ada folder home
 no layer	tidak ada layer
@@ -1705,6 +1869,7 @@ No relationships (Data Design › Relationships)	Tidak ada relasi (Desain Data �
 No relationships yet	Belum ada relasi
 No reports yet. Publish › New Report lists the selected layer's records.	Belum ada laporan. Publikasi › Laporan Baru mencantumkan rekaman layer terpilih.
 no row	tidak ada baris
+No serif font is installed, so this text is drawn in the sans-serif	Tidak ada fon serif yang terpasang, jadi teks ini digambar dengan sans-serif
 no service or file links	tidak ada tautan layanan atau file
 No services match your search.	Tidak ada layanan yang cocok dengan pencarian Anda.
 No standalone tables	Tidak ada tabel mandiri
@@ -1718,14 +1883,16 @@ Nominatim	Nominatim
 None	Tidak ada
 None (public buckets)	Tidak ada (bucket publik)
 none, a .duckdb file, or host=… dbname=… user=…	tidak ada, file .duckdb, atau host=… dbname=… user=…
-none, or from PGPASSWORD or MYSQL_PWD	tidak ada, atau dari PGPASSWORD atau MYSQL_PWD
+none, or from PGPASSWORD, MYSQL_PWD or SQLCMDPASSWORD	tidak ada, atau dari PGPASSWORD, MYSQL_PWD, atau SQLCMDPASSWORD
 None. Add one by address, or from a basemap plugin.	Tidak ada. Tambahkan melalui alamat, atau dari plugin peta dasar.
 North	Utara
 North\nArrow	Panah\nUtara
 North Polar Stereographic	Stereografis Kutub Utara
+NOT	NOT
 not a picture	bukan gambar
 not a RustGIS layout	bukan tata letak RustGIS
 not a RustGIS project	bukan proyek RustGIS
+Not applied yet.	Belum diterapkan.
 Not for texts: a text is edited in the Format pane.	Bukan untuk teks: teks diedit di panel Format.
 not needed	tidak diperlukan
 Not sandboxed	Tanpa sandbox
@@ -1739,9 +1906,12 @@ Nothing found where the map is	Tidak ada yang ditemukan di lokasi peta
 Nothing here	Tidak ada apa pun di sini
 Nothing named {name} to rename	Tidak ada yang bernama {name} untuk diganti namanya
 Nothing shared yet. Publish › Share As makes web maps, layers, styles, scenes and more.	Belum ada yang dibagikan. Publikasi › Bagikan Sebagai membuat peta web, layer, gaya, scene, dan lainnya.
+Nothing to add here	Tidak ada yang bisa ditambahkan di sini
+Nothing to test	Tidak ada yang bisa diuji
 Nothing was found at this address.	Tidak ada yang ditemukan di alamat ini.
 Nothing was recorded, so no task was made.	Tidak ada yang direkam, jadi tidak ada tugas yang dibuat.
 Now	Sekarang
+Nugget	Nugget
 NULL	NULL
 Nulls	Null
 Observations (observer, date, species, count)	Observasi (pengamat, tanggal, spesies, jumlah)
@@ -1766,6 +1936,7 @@ On the desktop, the key can also come from {vars}.	Di desktop, kunci juga dapat 
 On-screen compass, zoom slider and pan pad.	Kompas di layar, penggeser zoom, dan pad geser.
 One command per line: id {json}. Lines starting with # are comments.	Satu perintah per baris: id {json}. Baris yang diawali # adalah komentar.
 One DuckDB SELECT: DuckDB Spatial's ST_ functions, files and web addresses (read_parquet('…')), and the tables of the database below. Ctrl+Enter runs it.	Satu SELECT DuckDB: fungsi ST_ dari DuckDB Spatial, file dan alamat web (read_parquet('…')), serta tabel dari basis data di bawah. Ctrl+Enter menjalankannya.
+One layer: a Zarr variable or a raster's bands	Satu layer: variabel Zarr atau band suatu raster
 One page per feature of an index layer.	Satu halaman per fitur dari layer indeks.
 One per line: code=name	Satu per baris: kode=nama
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Satu goresan, dari simbol. Tambahkan goresan untuk casing, garis paralel, dan offset.
@@ -1789,6 +1960,7 @@ Open data products on Source Cooperative. GeoParquet, FlatGeobuf, cloud-optimise
 Open folder	Buka folder
 Open In Geoprocessing…	Buka di Geoprosesing…
 Open in ModelBuilder	Buka di ModelBuilder
+Open in Tool	Buka di Alat
 Open Layout	Buka Tata Letak
 Open ModelBuilder	Buka ModelBuilder
 Open Notebook	Buka Notebook
@@ -1797,6 +1969,7 @@ Open Presentation	Buka Presentasi
 Open Project	Buka Proyek
 Open project	Buka proyek
 Open Project (from text)	Buka Proyek (dari teks)
+Open Project…	Buka Proyek…
 Open Report	Buka Laporan
 Open the attribute table of the selected layer.	Buka tabel atribut layer terpilih.
 Open the Basemaps tab	Buka tab Peta dasar
@@ -1836,10 +2009,12 @@ Or run in a POSIX shell, for Claude Code or Codex:	Atau jalankan di shell POSIX,
 Or run in PowerShell, for Claude Code or Codex:	Atau jalankan di PowerShell, untuk Claude Code atau Codex:
 Or run, for Claude Code or Codex:	Atau jalankan, untuk Claude Code atau Codex:
 ORDER BY	ORDER BY
+Ordinary Kriging	Ordinary Kriging
 Orientation	Orientasi
 Ortho Mapping	Pemetaan Orto
 Other	Lainnya
 Other Data	Data Lainnya
+Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Kelas label lain di layer ini (dibuat dengan perintah): {n}. Masing-masing memberi label pada fitur yang cocok dengan klausanya sendiri, sehingga satu fitur bisa mendapat label dari lebih dari satu kelas.
 Out Beyond	Perkecil Melewati
 Outline	Garis tepi
 Outline another frame's extent in this map frame.	Gambar garis cakupan bingkai lain di bingkai peta ini.
@@ -1851,6 +2026,7 @@ Output	Keluaran
 Output Name	Nama Keluaran
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan yang berjalan di peramban, dengan unduhan sekali sekitar 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Lebih dari 1.000 alat raster, vektor, LiDAR, hidrologi, dan medan, dari unduhan opsional sekitar 20 MB.
+Overlapping	Tumpang tindih
 Overlay	Overlay
 overlay	overlay
 Overlay (a transparent layer kept on top, such as labels or roads)	Overlay (layer transparan yang tetap di atas, seperti label atau jalan)
@@ -1858,6 +2034,7 @@ Overture has no {ty} data where the map is	Overture tidak memiliki data {ty} di 
 Overture Maps	Overture Maps
 Overture Maps' open data: buildings, places, transportation, administrative divisions, base layers and addresses. Where the map is, its features are read in place from Overture's GeoParquet files (zoom to a city or smaller); the whole world comes as map tiles.	Data terbuka Overture Maps: bangunan, tempat, transportasi, pembagian administratif, layer dasar, dan alamat. Di area peta, fiturnya dibaca di tempat dari file GeoParquet Overture (perbesar ke kota atau lebih kecil); seluruh dunia tersedia sebagai ubin peta.
 Overture Maps…	Overture Maps…
+Overwrite existing values	Timpa nilai yang ada
 Package	Paket
 Package a trained deep learning model.	Kemas model deep learning yang telah dilatih.
 Package Map	Kemas Peta
@@ -1907,8 +2084,12 @@ Performance	Performa
 Phase	Fase
 Photon	Photon
 Pick a live value, such as the scale or date, then click the map to place it.	Pilih nilai langsung, seperti skala atau tanggal, lalu klik peta untuk menempatkannya.
+Pick a Point	Pilih Titik
+Pick a point on the map to see the variable's values through time there.	Pilih titik di peta untuk melihat nilai variabel sepanjang waktu di sana.
 Pick a route in the list, or click a grey route on the map.	Pilih rute di daftar, atau klik rute abu-abu di peta.
+Pick a single layer.	Pilih satu layer.
 Pick it on the map	Pilih di peta
+Pick one…	Pilih salah satu…
 Picture	Gambar
 Pictures	Gambar
 Pictures, attachments and chart	Gambar, lampiran, dan diagram
@@ -1966,8 +2147,11 @@ Portal	Portal
 Portolan	Portolan
 Portolan…	Portolan…
 Portrait	Potret
+Position	Posisi
+PostgreSQL/PostGIS	PostgreSQL/PostGIS
 Postprocessing	Pascaproses
 power 2	pangkat 2
+Precision 6 (OSRM, Valhalla)	Presisi 6 (OSRM, Valhalla)
 Prepare	Siapkan
 Prepare every layer's geometry for this projection.	Siapkan geometri setiap layer untuk proyeksi ini.
 Prepare Plugin Environment	Siapkan Lingkungan Plugin
@@ -2009,19 +2193,24 @@ Project templates: start projects from a saved setup.	Templat proyek: mulai proy
 project's path is required	path project wajib diisi
 Projection	Proyeksi
 Projections	Proyeksi
+Properties	Properti
+Property	Properti
 Proportional Symbols	Simbol Proporsional
 Provider	Penyedia
+Provinces:	Provinsi:
 Proximity	Kedekatan
 Public GIS portals of US counties and cities, by state.	Portal SIG publik county dan kota di AS, menurut negara bagian.
 Public GIS portals of US federal agencies, by department.	Portal SIG publik lembaga federal AS, menurut departemen.
 Public GIS portals of US states and the District of Columbia.	Portal SIG publik negara bagian AS dan District of Columbia.
 Public layers on ArcGIS Online or another ArcGIS portal: feature, map, image and vector tile services, web maps and GeoJSON files.	Layer publik di ArcGIS Online atau portal ArcGIS lainnya: layanan fitur, peta, citra, dan ubin vektor, peta web, dan file GeoJSON.
+Publication Layout	Tata Letak Publikasi
 Publish	Publikasi
 Publish › Output	Publikasi › Keluaran
 Put the layer back as it was then	Kembalikan layer seperti pada saat itu
 Python environment failed: {error}	Lingkungan Python gagal: {error}
 Python environment not prepared	Lingkungan Python belum disiapkan
 Python environment ready	Lingkungan Python siap
+Python script	Skrip Python
 Qualitative	Kualitatif
 Quantile	Kuantil
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	Kueri file, alamat web, dan basis data dengan DuckDB Spatial; tambahkan hasilnya ke peta.
@@ -2036,6 +2225,8 @@ Raise polygons by a height or a field.	Tinggikan poligon dengan nilai tinggi ata
 Raise Priority	Naikkan Prioritas
 Random points in polygons	Titik acak di dalam poligon
 Range	Rentang
+Range (Degrees)	Jangkauan (Derajat)
+range: 0, 0.9	rentang: 0, 0.9
 Raster	Raster
 Raster\nAnalysis	Analisis\nRaster
 Raster\nInformation	Informasi\nRaster
@@ -2075,6 +2266,7 @@ Redo {action}	Ulangi {action}
 Red–Blue	Merah–Biru
 Refine the search to see {n} more	Persempit pencarian untuk melihat {n} lagi
 Refresh	Segarkan
+Refresh every connection's lists	Segarkan daftar setiap koneksi
 Refresh Map Series	Segarkan Seri Peta
 Refresh the map series from its index layer.	Segarkan seri peta dari layer indeksnya.
 Region	Wilayah
@@ -2091,11 +2283,10 @@ Relationships	Relasi
 Release	Rilis
 Reload	Muat Ulang
 Reload Web Layers	Muat Ulang Layer Web
-Remember (without the secret)	Ingat (tanpa rahasia)
 Remember the key on this computer	Ingat kunci di komputer ini
-Remembered:	Diingat:
 Remove	Hapus
 Remove All	Hapus Semua
+Remove All Label Classes	Hapus Semua Kelas Label
 Remove an offline area.	Hapus area offline.
 Remove Bookmark	Hapus Penanda
 Remove Connection	Hapus Koneksi
@@ -2108,11 +2299,14 @@ Remove from Favourites	Hapus dari Favorit
 Remove From Group	Hapus dari Grup
 Remove Group	Hapus Grup
 Remove Keyframe	Hapus Keyframe
+Remove Label Class	Hapus Kelas Label
 Remove Section	Hapus Bagian
 Remove Table	Hapus Tabel
+Remove the clause.	Hapus klausa.
 Remove the last keyframe.	Hapus keyframe terakhir.
 Remove the layer from the map.	Hapus layer dari peta.
 Remove the strokes and draw the symbol's line alone	Hapus goresan dan gambar garis simbol saja
+Remove this class's own strokes and draw it with the layer's	Hapus goresan milik kelas ini dan gambar dengan goresan layer
 Remove this stop	Hapus persinggahan ini
 Remove Tile Layer	Hapus Layer Ubin
 Remove token	Hapus token
@@ -2122,6 +2316,8 @@ Removes vertices that deviate less than a tolerance (Douglas–Peucker).	Menghap
 Rename	Ganti Nama
 Rename Bookmark	Ganti Nama Penanda
 Rename Group	Ganti Nama Grup
+Rename it to save it: a connection has this name	Ganti namanya untuk menyimpan: sudah ada koneksi dengan nama ini
+Rename Label Class	Ganti Nama Kelas Label
 Rename Layer	Ganti Nama Layer
 Rename Layout	Ganti Nama Tata Letak
 Rename Map	Ganti Nama Peta
@@ -2149,6 +2345,7 @@ Reset Default	Atur Ulang Bawaan
 Reset Effects	Atur Ulang Efek
 Reset North	Atur Ulang Utara
 Reset north	Atur ulang utara
+Resolution (0–30)	Resolusi (0–30)
 Response	Respons
 Restore	Pulihkan
 Restore From Archive	Pulihkan dari Arsip
@@ -2162,6 +2359,7 @@ RGB	RGB
 Ribbon	Ribbon
 Right	Kanan
 Right-click a source to add it here	Klik kanan sumber untuk menambahkannya di sini
+Right-click for more	Klik kanan untuk opsi lain
 Robinson	Robinson
 Rotate	Putar
 Rotate (°)	Putar (°)
@@ -2229,22 +2427,26 @@ S3…	S3…
 Sample data (Natural Earth)	Data contoh (Natural Earth)
 Sample data © Natural Earth (public domain). RustGIS is licensed under Apache-2.0.	Data contoh © Natural Earth (domain publik). RustGIS dilisensikan di bawah Apache-2.0.
 Sample data: Natural Earth (public domain). Licensed under Apache-2.0.	Data contoh: Natural Earth (domain publik). Dilisensikan di bawah Apache-2.0.
+Sans-serif	Sans-serif
 Satellite Embedding Datasets	Dataset Embedding Satelit
 Satellite Embeddings	Embedding Satelit
 Satellite Embeddings…	Embedding Satelit…
 Saturation	Saturasi
 Save	Simpan
 Save As	Simpan Sebagai
+Save as Connection	Simpan sebagai Koneksi
 Save as Default	Simpan sebagai Bawaan
 Save as Default Raster Style	Simpan sebagai Gaya Raster Bawaan
 Save as Layer	Simpan sebagai Layer
 Save As Presentation File…	Simpan Sebagai File Presentasi…
+Save as Python Script…	Simpan sebagai Skrip Python…
 Save As Report File…	Simpan Sebagai File Laporan…
 Save As Report Template…	Simpan Sebagai Templat Laporan…
 Save as {name}	Simpan sebagai {name}
 Save As…	Simpan Sebagai…
 Save Color Ramps	Simpan Ramp Warna
 Save Data Source	Simpan Sumber Data
+Save History As Python Script	Simpan Riwayat sebagai Skrip Python
 Save Layer File	Simpan File Layer
 Save Layout File	Simpan File Tata Letak
 Save Map File	Simpan File Peta
@@ -2254,6 +2456,7 @@ save or load a pane set by name	simpan atau muat set panel berdasarkan nama
 Save Project	Simpan Proyek
 Save project	Simpan proyek
 Save Project As	Simpan Proyek Sebagai
+Save Project As…	Simpan Proyek Sebagai…
 Save Project Template	Simpan Templat Proyek
 Save Style Items	Simpan Item Gaya
 Save Task Item	Simpan Item Tugas
@@ -2264,6 +2467,7 @@ Save the model as a file (*.model.json)	Simpan model sebagai file (*.model.json)
 Save the model in the project	Simpan model di proyek
 Save the open layout as a layout file.	Simpan tata letak yang terbuka sebagai file tata letak.
 Save the panes you have open, and switch back to them.	Simpan panel yang sedang terbuka, dan kembali ke panel tersebut.
+Save the project too: the script opens its saved file, without changes made since.	Simpan juga proyeknya: skrip membuka file tersimpannya, tanpa perubahan yang dibuat setelahnya.
 Save the project under a new name.	Simpan proyek dengan nama baru.
 Save the project with your edits.	Simpan proyek beserta suntingan Anda.
 Save the project's custom color ramps to a color ramp file.	Simpan ramp warna kustom proyek ke file ramp warna.
@@ -2275,13 +2479,16 @@ Save Web Link Chart	Simpan Diagram Tautan Web
 Save Web Map	Simpan Peta Web
 Save Web Scene	Simpan Scene Web
 Saved	Tersimpan
+Saved as the connection {name}	Disimpan sebagai koneksi {name}
 Saved as the default style for new single-band rasters.	Disimpan sebagai gaya bawaan untuk raster band tunggal baru.
+Saved connection	Koneksi tersimpan
 Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Kunci yang disimpan disimpan tanpa enkripsi di preferensi aplikasi (di penyimpanan browser pada versi web).
 Saved models	Model tersimpan
 Saved symbology: apply it to the selected layer, or save the layer's.	Simbologi tersimpan: terapkan pada layer terpilih, atau simpan simbologi layer.
 Saved View	Tampilan tersimpan
 Saved {name}	{name} disimpan
 Saved {name}.	{name} disimpan.
+Saved {path}	{path} disimpan
 saving failed unexpectedly	penyimpanan gagal secara tak terduga
 Scale	Skala
 Scale\nBar	Bilah\nSkala
@@ -2304,7 +2511,7 @@ Search (this portal needs words)…	Cari (portal ini memerlukan kata kunci)…
 Search Catalogue	Cari Katalog
 Search commands — e.g. buffer, basemap, labels	Cari perintah — mis. buffer, peta dasar, label
 Search datasets, e.g. GEDI biomass	Cari dataset, mis. GEDI biomass
-Search Distance (km)	Jarak Pencarian (km)
+Search Distance	Jarak Pencarian
 Search every command and its parameters	Cari setiap perintah dan parameternya
 Search layers (e.g. temperature)	Cari layer (mis. temperature)
 Search layers, places, lat/lon…	Cari layer, tempat, lintang/bujur…
@@ -2329,6 +2536,8 @@ Searching the folders…	Mencari di folder…
 Searching works here, but NASA's data servers don't let web pages read their files (no CORS), so GeoTIFFs and downloads of protected data need the desktop app. Download opens a file in a new tab, where Earthdata Login asks you to sign in.	Pencarian berfungsi di sini, tetapi server data NASA tidak mengizinkan halaman web membaca file-nya (tanpa CORS), sehingga GeoTIFF dan unduhan data terlindungi memerlukan aplikasi desktop. Unduh membuka file di tab baru, tempat Earthdata Login meminta Anda masuk.
 Searching…	Mencari…
 Searching… try again in a moment.	Mencari… coba lagi sebentar lagi.
+Seasonal Mann–Kendall	Mann–Kendall Musiman
+Seasons a year	Musim per tahun
 Second standard parallel	Paralel standar kedua
 Seconds	Detik
 Secret access key	Kunci akses rahasia
@@ -2389,12 +2598,13 @@ Sentinel-2 scenes (Collection 1, Level-2A) from Earth Search, clearest first: ad
 Separator	Pemisah
 Sepia	Sepia
 Sequential	Sekuensial
+Serif	Serif
 Server	Server
 Service Group	Grup layanan
 Service group data exceeds 64 MB.	Data grup layanan melebihi 64 MB.
 Service Import Requests	Permintaan impor layanan
 Service Layers	Layer Layanan
-Services	Layanan
+Session token	Token sesi
 Set	Atur
 Set Cell Size	Atur Ukuran Sel
 Set Domain	Atur Domain
@@ -2411,6 +2621,7 @@ Shaded	Gelap
 Shaded Relief	Relief Bayangan
 Shape	Bentuk
 Shapefile	Shapefile
+Shapes	Bentuk
 Share	Bagikan
 Share As	Bagikan Sebagai
 Share every layer and table as OGC API Features collections.	Bagikan setiap layer dan tabel sebagai koleksi OGC API Features.
@@ -2439,7 +2650,9 @@ Show details when hovering items in the Browser view.	Tampilkan detail saat meng
 Show different features at different scales.	Tampilkan fitur yang berbeda pada skala yang berbeda.
 Show grid	Tampilkan grid
 Show Group	Tampilkan Grup
+Show labels	Tampilkan label
 Show latitude/longitude lines on the basemap.	Tampilkan garis lintang/bujur pada peta dasar.
+Show Layers	Tampilkan Layer
 Show layers through time: only the features whose date falls in the slider's window, and dated imagery for its date.	Tampilkan layer menurut waktu: hanya fitur yang tanggalnya berada dalam jendela penggeser, dan citra bertanggal untuk tanggalnya.
 Show Map	Tampilkan Peta
 Show Me	Tunjukkan
@@ -2455,6 +2668,7 @@ Show or hide the Tools pane.	Tampilkan atau sembunyikan panel Alat.
 Show rulers. Drag from a ruler to add a guide; drag a guide back onto it to remove it.	Tampilkan penggaris. Seret dari penggaris untuk menambah garis bantu; seret garis bantu kembali ke penggaris untuk menghapusnya.
 Show the bands picked, read in place as the map needs them	Tampilkan band yang dipilih, dibaca di tempat sesuai kebutuhan peta
 Show the description	Tampilkan deskripsi
+Show the Labeling pane for the selected layer.	Tampilkan panel Pelabelan untuk layer terpilih.
 Show the labels that don't fit, in red.	Tampilkan label yang tidak muat dengan warna merah.
 Show the layer only inside another layer's polygons.	Tampilkan layer hanya di dalam poligon layer lain.
 Show the layer only left of a divider, to compare it with what's beneath.	Tampilkan layer hanya di sebelah kiri pembatas, untuk membandingkannya dengan yang di bawahnya.
@@ -2491,8 +2705,10 @@ Sign-in cancelled.	Proses masuk dibatalkan.
 Sign-in timed out. Start again and allow the browser to reach this computer's loopback address.	Waktu masuk habis. Mulai lagi dan izinkan browser mengakses alamat loopback komputer ini.
 signed in	sudah masuk
 Signed out on this computer, but OpenAI didn't confirm it. You can disconnect RustGIS in ChatGPT's settings.	Keluar di komputer ini, tetapi OpenAI tidak mengonfirmasinya. Anda dapat memutus RustGIS di pengaturan ChatGPT.
+Significance level	Tingkat signifikansi
 Signing in with ChatGPT works in the desktop app.	Masuk dengan ChatGPT berfungsi di aplikasi desktop.
 Signing the asset (Planetary Computer)…	Menandatangani aset (Planetary Computer)…
+Sill	Sill
 Simplify	Sederhanakan
 Simulate the drive, or save the route as a layer.	Simulasikan perjalanan, atau simpan rute sebagai layer.
 Simulation	Simulasi
@@ -2506,6 +2722,7 @@ Skills for the AI Assistant: {names}	Skill untuk Asisten AI: {names}
 Slideshow, PDF or PNG	Tayangan slide, PDF, atau PNG
 slight left	sedikit ke kiri
 slight right	sedikit ke kanan
+Slope per	Kemiringan per
 Slope, aspect, hillshade, NDVI, band math, thresholds.	Kemiringan, aspek, hillshade, NDVI, aritmetika band, ambang batas.
 Slope, hillshade, NDVI and more.	Kemiringan, hillshade, NDVI, dan lainnya.
 Small scales	Skala kecil
@@ -2521,6 +2738,7 @@ Source Cooperative	Source Cooperative
 Source Cooperative…	Source Cooperative…
 South	Selatan
 South Polar Stereographic	Stereografis Kutub Selatan
+Spatial Join	Gabungan Spasial
 Speaker notes	Catatan pembicara
 Spectral Analysis	Analisis Spektral
 Spectral indices	Indeks spektral
@@ -2530,6 +2748,7 @@ Split (click the line)	Belah (klik garis)
 SQL	SQL
 SQL Pane	Panel SQL
 SQL queries run through DuckDB, a program the desktop app calls: open this project in the desktop app to query it.	Kueri SQL berjalan melalui DuckDB, program yang dipanggil aplikasi desktop: buka proyek ini di aplikasi desktop untuk mengkuerinya.
+SQL Server	SQL Server
 SQL that must be true, e.g. pop > 0	SQL yang harus bernilai benar, mis. pop > 0
 Square	Persegi
 Squares	Persegi
@@ -2588,6 +2807,7 @@ Start over at the end while playing.	Mulai lagi di akhir saat diputar.
 Start With	Mulai dengan
 Start-up	Memulai
 starting with a project file needs the desktop app	memulai dengan file proyek memerlukan aplikasi desktop
+Statistic	Statistik
 Statistics	Statistik
 Statistics Field	Kolom Statistik
 Status	Status
@@ -2613,8 +2833,10 @@ Stretch\nType	Tipe\nPeregangan
 Stretch it over the map view, or give control points (one per line: column row lon lat).	Regangkan di atas tampilan peta, atau berikan titik kontrol (satu per baris: kolom baris bujur lintang).
 Stretch Type	Tipe Peregangan
 Stretch type	Tipe peregangan
+Stroke Levels	Level Goresan
 Stroke {n}	Goresan {n}
 Strokes	Goresan
+Strokes for	Goresan untuk
 Style	Gaya
 Style Items	Item Gaya
 Style › Drawing	Gaya › Penggambaran
@@ -2624,7 +2846,10 @@ Subreport: {name}	Sublaporan: {name}
 Subtypes	Subtipe
 Subtypes, one per line: code=name	Subtipe, satu per baris: kode=nama
 Suitability Modeler	Pemodel Kesesuaian
+Summarise	Ringkas
+Summarise over time	Ringkas sepanjang waktu
 Summarise the conversation so far, so a long chat stays within the model's context	Ringkas percakapan sejauh ini agar obrolan panjang tetap muat dalam konteks model
+Summarise Zarr Over Time	Ringkas Zarr Sepanjang Waktu
 Summarising the earlier conversation to keep it within the model's context…	Meringkas percakapan sebelumnya agar tetap muat dalam konteks model…
 Summarize	Ringkas
 Summarize\nWithin	Ringkas\ndi Dalam
@@ -2658,6 +2883,8 @@ Table or layer	Tabel atau layer
 Tables	Tabel
 Tags	Tag
 Take the data in view offline, to edit and sync back later.	Bawa data yang terlihat ke mode offline, untuk disunting dan disinkronkan kembali nanti.
+Target Features	Fitur Target
+Target Records	Rekaman Target
 Task	Tugas
 Task Item	Item Tugas
 Task name	Nama tugas
@@ -2670,10 +2897,13 @@ Tennessee GIS…	Tennessee GIS…
 Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	Data SIG publik Tennessee (Tennessee GeoData, geodata.tn.gov): batas properti, transportasi, kesehatan, hidrologi, dan lainnya.
 Terrain	Medan
 Test	Test
+Test Connection	Uji Koneksi
+Testing…	Menguji…
 Text	Teks
 Text Symbol	Simbol Teks
 That connection would create a loop.	Koneksi itu akan membuat perulangan.
 The address fields are empty in every row.	Kolom alamat kosong di setiap baris.
+The answer isn't UTF-8 text	Jawabannya bukan teks UTF-8
 the answer isn't UTF-8 text	jawaban bukan teks UTF-8
 The assistant follows a skill's instructions when it uses it. Whatever they say, its commands that need your approval still ask.	Asisten mengikuti instruksi skill saat menggunakannya. Apa pun isinya, perintah yang memerlukan persetujuan Anda tetap meminta izin.
 The assistant is busy; stop it or wait for it to finish.	Asisten sedang sibuk; hentikan atau tunggu hingga selesai.
@@ -2682,6 +2912,7 @@ The Basemaps plugin's tab of public basemaps.	Tab peta dasar publik dari plugin 
 the capture failed unexpectedly	penangkapan gagal secara tak terduga
 The connection failed; trying again in {seconds} s.	Koneksi gagal; mencoba lagi dalam {seconds} dtk.
 The country list couldn't be read ({e}): type a country's code	Daftar negara tidak dapat dibaca ({e}): ketik kode negara
+The current elevation stays in effect while you edit inputs. Click Apply elevation to apply the value and units.	Elevasi saat ini tetap berlaku selama Anda mengedit masukan. Klik Terapkan elevasi untuk menerapkan nilai dan satuannya.
 The dataset has nothing RustGIS can add	Dataset ini tidak berisi apa pun yang dapat ditambahkan RustGIS
 The environment (AWS_ACCESS_KEY_ID…)	Lingkungan (AWS_ACCESS_KEY_ID…)
 The features where the map is	Fitur di area peta
@@ -2693,7 +2924,9 @@ The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flow
 The installed GeoLibre runner lists no tools.	Runner GeoLibre yang terpasang tidak mencantumkan alat apa pun.
 The job covers the map view	Pekerjaan mencakup tampilan peta
 The key is kept for this session only.	Kunci hanya disimpan untuk sesi ini.
+The layer shows the step the time slider is at, and turns the slider on over the variable's dates.	Layer menampilkan langkah tempat penggeser waktu berada, dan mengaktifkan penggeser di rentang tanggal variabel.
 The layer's file couldn't be read: {error}	Berkas layer tidak dapat dibaca: {error}
+The layer's strokes	Goresan layer
 the layout export failed unexpectedly	ekspor tata letak gagal secara tak terduga
 The link doesn't say its STAC API: Find Items searches {api}	Tautan tidak menyebutkan STAC API-nya: Cari Item mencari di {api}
 The list of plugins to browse. Leave it empty for the RustGIS plugin registry.	Daftar plugin untuk dijelajahi. Biarkan kosong untuk registri plugin RustGIS.
@@ -2726,6 +2959,7 @@ The project's thumbnail, from the map view.	Thumbnail proyek, dari tampilan peta
 The projection the map opens in.	Proyeksi saat peta dibuka.
 The provider's content filter stopped the reply.	Filter konten penyedia menghentikan balasan.
 The public server is free and shared by many: it answers light use, and may ask you to wait.	Server publik ini gratis dan dipakai bersama banyak orang: server melayani penggunaan ringan, dan mungkin meminta Anda menunggu.
+The range is two numbers, low and high (0, 0.9)	Rentang berupa dua angka, rendah dan tinggi (0, 0.9)
 The raster's data couldn't be read.	Data raster tidak dapat dibaca.
 The raster's data couldn't be read: {path}	Data raster tidak dapat dibaca: {path}
 the release isn't known	rilis tidak dikenal
@@ -2747,26 +2981,42 @@ The Shapefile's files download as one zip.	Berkas-berkas Shapefile diunduh sebag
 The share of each cell covered by fields, for the zoomed-out view	Proporsi setiap sel yang tertutup lahan, untuk tampilan yang diperkecil
 The sign-in expired or was revoked. Sign in again.	Sesi masuk kedaluwarsa atau dicabut. Masuk lagi.
 The sign-in is kept in the app's settings folder, for your user account only, and never in a project file.	Info masuk disimpan di folder pengaturan aplikasi, hanya untuk akun pengguna Anda, dan tidak pernah di berkas proyek.
+The significance level is a number, such as 0.05	Tingkat signifikansi berupa angka, misalnya 0.05
 The start-up project {path} didn't open: {error}	Proyek awal {path} tidak dapat dibuka: {error}
 The start-up project {path} isn't a RustGIS project file.	Proyek awal {path} bukan file proyek RustGIS.
 The step's layer {name} isn't in the map.	Layer langkah ini, {name}, tidak ada di peta.
 The store has no variables with two or more dimensions.	Penyimpanan tidak memiliki variabel dengan dua dimensi atau lebih.
 the store is gone	penyimpanan sudah tidak ada
+The summary couldn't start: {error}	Ringkasan tidak dapat dimulai: {error}
+The summary failed unexpectedly	Ringkasan gagal secara tak terduga
+The summary finished after another project was opened, so it wasn't added	Ringkasan selesai setelah proyek lain dibuka, sehingga tidak ditambahkan
 The task's steps changed, so the step being edited was closed: edit it again.	Langkah tugas berubah, jadi langkah yang sedang diedit ditutup: edit lagi.
 the time slider is off	penggeser waktu nonaktif
 The token expires on {date}.	Token kedaluwarsa pada {date}.
+The trend couldn't start: {error}	Tren tidak dapat dimulai: {error}
+The trend failed unexpectedly	Tren gagal secara tak terduga
+The trend finished after another project was opened, so it wasn't added	Tren selesai setelah proyek lain dibuka, sehingga tidak ditambahkan
+The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch.	Nilai yang ditampilkan dari hitam ke putih, sama untuk setiap tanggal dan ubin (dalam satuan band itu sendiri). Kosong: peregangan masing-masing file.
 the view has no extent	tampilan tidak memiliki cakupan
 The view is larger than one read: its centre was read (zoom in for the rest)	Tampilan lebih besar dari satu kali baca: bagian tengahnya dibaca (perbesar untuk sisanya)
 The web app always runs the latest release: reload the page to get it.	Aplikasi web selalu menjalankan rilis terbaru: muat ulang halaman untuk mendapatkannya.
 the window's screenshot didn't come back in time, so the map was drawn offscreen	tangkapan layar jendela tidak kembali tepat waktu, sehingga peta digambar di luar layar
 the window's screenshot didn't hold the map, so it was drawn offscreen	tangkapan layar jendela tidak memuat peta, sehingga peta digambar di luar layar
 Theme	Tema
+There is no expression defined.	Tidak ada ekspresi yang didefinisikan.
 Thermal	Termal
+Thesis figure, full page (160 × 225 mm)	Gambar tesis, satu halaman penuh (160 × 225 mm)
+Thesis figure, half page (160 × 110 mm)	Gambar tesis, setengah halaman (160 × 110 mm)
 Thinking…	Berpikir…
+Third-party licences	Lisensi pihak ketiga
+THIRD-PARTY-LICENSES.txt	THIRD-PARTY-LICENSES.txt
 this build can't download plugins	build ini tidak dapat mengunduh plugin
 this build can't reach AI providers	build ini tidak dapat menjangkau penyedia AI
 this build saves projects with Save As	build ini menyimpan proyek dengan Simpan Sebagai
 This ChatGPT account was already saved. Next time, choose it in the list instead of adding it again.	Akun ChatGPT ini sudah tersimpan. Lain kali, pilih dari daftar alih-alih menambahkannya lagi.
+This class is drawn with the layer's strokes. Changing them here gives it its own.	Kelas ini digambar dengan goresan layer. Mengubahnya di sini memberinya goresan sendiri.
+This class is hidden, so it labels nothing.	Kelas ini disembunyikan, sehingga tidak memberi label apa pun.
+This clause no longer reads, so no feature is labelled: {error}	Klausa ini tidak lagi terbaca, sehingga tidak ada fitur yang diberi label: {error}
 This map has no layers yet.	Peta ini belum memiliki layer.
 This map's thumbnail, from an image.	Thumbnail peta ini, dari sebuah gambar.
 This map's thumbnail, from the view.	Thumbnail peta ini, dari tampilan.
@@ -2775,6 +3025,8 @@ This plugin runs as a program on your computer, outside RustGIS's sandbox. It ca
 This request has no one-time allow option.	Permintaan ini tidak memiliki opsi izinkan sekali.
 This request uses an unsupported capability. Check the parameter and change the request.	Permintaan ini menggunakan kemampuan yang tidak didukung. Periksa parameter dan ubah permintaan.
 This result is kept	Hasil ini disimpan
+This run has no tool form to open	Jalannya ini tidak memiliki formulir alat untuk dibuka
+This session only (optional)	Hanya sesi ini (opsional)
 This step	Langkah ini
 This step names no tool to show.	Langkah ini tidak menyebut alat untuk ditunjukkan.
 Thumbnail	Thumbnail
@@ -2789,15 +3041,21 @@ Tilt Map	Miringkan Peta
 Tilt-shift	Tilt-shift
 Tilt-shift blur and film grain.	Blur tilt-shift dan butiran film.
 Time	Waktu
+Time\nSeries	Deret\nWaktu
 Time\nSlider	Penggeser\nWaktu
 Time Fields	Kolom Waktu
+Time Series	Deret Waktu
+Time series	Deret waktu
+Time Series at a Point	Deret Waktu di Suatu Titik
 Time Slider	Penggeser Waktu
 Time Slider Settings	Pengaturan Penggeser Waktu
 Tint by elevation	Warnai menurut elevasi
 Tissot's Indicatrix	Indikatriks Tissot
 Title	Judul
+To	Sampai
 Toggle Dark Mode	Alihkan Mode Gelap
 Toggle GPU Rendering	Alihkan Rendering GPU
+Toggle Imperial Measurements	Alihkan Pengukuran Imperial
 Tolerance (km)	Toleransi (km)
 Tolls	Jalan berbayar
 Tool Gallery	Galeri Alat
@@ -2828,7 +3086,10 @@ Train Deep Learning Model	Latih Model Deep Learning
 Trained models	Model terlatih
 Transparency	Transparansi
 Traverse	Poligon Traverse
+Trend Analysis	Analisis Tren
+Trend over a series of rasters	Tren pada serangkaian raster
 Triangle	Segitiga
+TRUE	TRUE
 Try again in a moment.	Coba lagi sebentar lagi.
 Try again later.	Coba lagi nanti.
 Turn editing on or off for the map.	Aktifkan atau nonaktifkan penyuntingan untuk peta.
@@ -2846,6 +3107,8 @@ type a longitude and latitude, or click the map	ketik bujur dan lintang, atau kl
 Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	Ketik skala, seperti 1:12,345, 12345, atau 25k, lalu tekan Enter
 Type an address or coordinates and press Enter, or click the map.	Ketik alamat atau koordinat lalu tekan Enter, atau klik peta.
 Type numbers separated by commas	Ketik angka yang dipisahkan koma
+Type the keys to log in for this session, then Save.	Ketik kunci untuk masuk pada sesi ini, lalu Simpan.
+Type the password or keys to log in for this session, then Save.	Ketik kata sandi atau kunci untuk masuk pada sesi ini, lalu Simpan.
 Typed below	Diketik di bawah
 UM	UM
 Unavailable: {reason}	Tidak tersedia: {reason}
@@ -2853,7 +3116,6 @@ Unbind From Time Slider	Lepas dari Penggeser Waktu
 Unbind from Time Slider	Lepas dari penggeser waktu
 Undo	Urungkan
 Undo (Ctrl+Z)	Urungkan (Ctrl+Z)
-Undo / Redo	Urungkan / Ulangi
 Undo doesn't remove the recorded step: delete it in Edit Steps once you stop recording.	Urungkan tidak menghapus langkah yang direkam: hapus di Edit Langkah setelah Anda menghentikan perekaman.
 Undo the last change.	Urungkan perubahan terakhir.
 Undo {action}	Urungkan {action}
@@ -2863,6 +3125,7 @@ Uninstall GeoLibre Tools	Copot alat GeoLibre
 Uninstall Plugin	Copot Plugin
 Uninstalled {id}.	{id} telah dicopot.
 Unique Values	Nilai Unik
+Unit	Satuan
 United States	Amerika Serikat
 Units	Satuan
 Units per step	Unit per langkah
@@ -2877,6 +3140,7 @@ Up a level	Naik satu tingkat
 Update	Perbarui
 Update Bookmark	Perbarui Penanda
 Update Job	Perbarui Pekerjaan
+Update Label Class	Perbarui Kelas Label
 Update to {version}	Perbarui ke {version}
 Upload File	Unggah File
 Upload File…	Unggah File…
@@ -2895,6 +3159,7 @@ Use another account	Gunakan akun lain
 Use Current View	Gunakan tampilan saat ini
 Use each feature's line color	Gunakan warna garis setiap fitur
 Use each feature's line width	Gunakan lebar garis setiap fitur
+Use the Layer's Strokes	Gunakan Goresan Layer
 USERPROFILE	USERPROFILE
 USGS 3DEP DEM	USGS 3DEP DEM
 USGS 3DEP DEM…	USGS 3DEP DEM…
@@ -2912,6 +3177,7 @@ Using ChatGPT plan	Menggunakan paket ChatGPT
 Utilities	Utilitas
 Valid combinations, one per line: a, b	Kombinasi valid, satu per baris: a, b
 Valid expression · {n} matching rows	Ekspresi valid · {n} baris cocok
+Valid: {n} of {of} features match	Valid: {n} dari {of} fitur cocok
 Validate	Validasi
 Validate Model	Validasi Model
 value (empty: no-data)	nilai (kosong: tanpa data)
@@ -2920,8 +3186,10 @@ Vantor Open Data	Vantor Open Data
 Vantor's open imagery of disasters: pick an event and a phase (before or after it), then Find Items.	Citra bencana terbuka dari Vantor: pilih kejadian dan fase (sebelum atau sesudahnya), lalu Cari Item.
 Vantor…	Vantor…
 Variable	Variabel
+Variogram Model	Model Variogram
 Vector and raster data	Data vektor dan raster
 Vector Layer	Layer Vektor
+vector tiles	ubin vektor
 Vector tiles (MVT)	Ubin vektor (MVT)
 Vectors a geospatial foundation model made for every pixel or image patch, found where the map is and shown as colours.	Vektor yang dibuat model fondasi geospasial untuk setiap piksel atau patch citra, ditemukan di lokasi peta dan ditampilkan sebagai warna.
 Version {version}	Versi {version}
@@ -2933,6 +3201,9 @@ Video file or URL	File video atau URL
 Video Page	Halaman Video
 Videos	Video
 Video…	Video…
+Vietnam national coordinate system (VN-2000) using 3-degree Transverse Mercator with a 7-parameter Helmert shift to WGS 84.	Sistem koordinat nasional Vietnam (VN-2000) menggunakan Transverse Mercator 3 derajat dengan pergeseran Helmert 7 parameter ke WGS 84.
+Vietnam national coordinate system (VN-2000) UTM zone 48N (102°E–108°E, central meridian 105°E).	Sistem koordinat nasional Vietnam (VN-2000) UTM zona 48N (102°BT–108°BT, meridian tengah 105°BT).
+Vietnam national coordinate system (VN-2000) UTM zone 49N (108°E–114°E, central meridian 111°E).	Sistem koordinat nasional Vietnam (VN-2000) UTM zona 49N (108°BT–114°BT, meridian tengah 111°BT).
 View	Tampilan
 View Clipping	Pemotongan Tampilan
 View Effects	Efek Tampilan
@@ -2952,6 +3223,9 @@ Visibility Range	Rentang Visibilitas
 Visible	Terlihat
 Visible Layers	Layer Terlihat
 Visual Effect	Efek Visual
+VN-2000 / TM-3 (Vietnam)	VN-2000 / TM-3 (Vietnam)
+VN-2000 / UTM zone 48N	VN-2000 / UTM zone 48N
+VN-2000 / UTM zone 49N	VN-2000 / UTM zone 49N
 Volume	Volume
 Waiting for the browser…	Menunggu peramban…
 Waiting for your answer	Menunggu jawaban Anda
@@ -2970,6 +3244,7 @@ Web Link Chart	Diagram Tautan Web
 Web maps	Peta web
 Web Mercator	Web Mercator
 Web Scene	Scene Web
+Web service (detected)	Layanan web (terdeteksi)
 Web Style	Gaya Web
 Web Tile Layers	Layer Ubin Web
 Web Tool	Alat Web
@@ -2992,6 +3267,7 @@ Where labels sit relative to their features.	Posisi label relatif terhadap fitur
 Where new features get their elevation (the z field).	Asal elevasi fitur baru (kolom z).
 Where the map opens: the full extent or a view you saved.	Tempat peta dibuka: cakupan penuh atau tampilan yang Anda simpan.
 Where tools work	Area kerja alat
+Whether the Select tool picks these layers' features on the map	Apakah alat Pilih memilih fitur layer ini di peta
 Which 5 countries have the largest GDP?	5 negara mana yang memiliki PDB terbesar?
 Whitebox and GeoLibre tools	Alat Whitebox dan GeoLibre
 Whole map	Seluruh peta
@@ -3032,6 +3308,7 @@ World, equal-area: true sizes with rounded poles.	Dunia, luas sama: ukuran seben
 World, equal-area: true sizes, shapes bend towards the edges.	Dunia, luas sama: ukuran sebenarnya, bentuk melengkung ke arah tepi.
 Worldview	Batas Negara
 Write a plugin	Tulis plugin
+Writes Sen's slope, the test's Z and p-value, and the slope where the trend is significant.	Menulis kemiringan Sen, nilai Z dan p-value uji, serta kemiringan di tempat tren signifikan.
 X (mm)	X (mm)
 X column	Kolom X
 X Field	Kolom X
@@ -3050,7 +3327,6 @@ Yours	Milik Anda
 YYYY-MM-DD	YYYY-MM-DD
 YYYY-MM-DD, for the layers that change with time	YYYY-MM-DD, untuk layer yang berubah seiring waktu
 YYYY-MM-DD, for time layers	YYYY-MM-DD, untuk layer waktu
-z (m)	z (m)
 Z factor	Faktor Z
 Zarr	Zarr
 Zarr Variables	Variabel Zarr
@@ -3061,7 +3337,6 @@ Zoom Box	Zoom Kotak
 Zoom Frame	Bingkai Zoom
 Zoom In	Perbesar
 Zoom in	Perbesar
-Zoom in / out	Perbesar / perkecil
 Zoom In Here	Perbesar di Sini
 Zoom in on the centre of the map.	Perbesar di tengah peta.
 Zoom in · finish a sketch	Perbesar · selesaikan sketsa
@@ -3073,6 +3348,7 @@ Zoom To\nLayer	Zoom ke\nLayer
 Zoom to a box (Explore)	Zoom ke kotak (Jelajah)
 Zoom To Extent	Zoom ke Cakupan
 Zoom To Layer	Zoom ke Layer
+Zoom To Layers	Zoom ke Layer
 Zoom To Map View	Zoom ke Tampilan Peta
 Zoom To Selection	Zoom ke Seleksi
 Zoom to selection	Zoom ke seleksi
@@ -3082,8 +3358,11 @@ Zoom to the layer's extent.	Zoom ke cakupan layer.
 Zoom to the selected features.	Zoom ke fitur terpilih.
 Zoom to the whole world.	Zoom ke seluruh dunia.
 Zoom to this bookmark	Zoom ke penanda ini
+Zoom To Tile Layer	Zoom ke Layer Ubin
 Zoom to Tokyo	Zoom ke Tokyo
 Zoom To World	Zoom ke Dunia
+Zoom {z} · Bearing {b}° · Pitch {p}°	Zoom {z} · Arah {b}° · Kemiringan {p}°
+Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top of the map faces, clockwise from north. Pitch: the tilt from looking straight down. Click to reset bearing and pitch.	Zoom: tingkat zoom peta, sebagaimana peta web menghitungnya. Arah: arah yang dihadap bagian atas peta, searah jarum jam dari utara. Kemiringan: kemiringan dari pandangan lurus ke bawah. Klik untuk mengatur ulang arah dan kemiringan.
 {agent} was stopped by you.	{agent} dihentikan oleh Anda.
 {id} changed since it was installed; install it again from the Plugin Manager.	{id} telah berubah sejak dipasang; pasang ulang dari Pengelola Plugin.
 {names}: needs Node.js (npx) for its ACP adapter.	{names}: memerlukan Node.js (npx) untuk adaptor ACP-nya.
