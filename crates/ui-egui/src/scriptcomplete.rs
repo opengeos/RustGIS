@@ -408,7 +408,13 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
         let (_, what) = named(&hint.id).filter(|(names, _)| key == *names)?;
         return match what {
             Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
-            Named::Command => value_ids(start, at, &word, ids.iter().map(String::as_str), Of::CommandIds),
+            // Those `task.addStep` takes, by its own rule (not a script's: it adds the step, it
+            // doesn't run it).
+            Named::Command => {
+                let steps =
+                    session.registry.commands.iter().map(|c| c.id).filter(|id| rustgis_engine::cmd::items::can_be_step(session, id));
+                value_ids(start, at, &word, steps, Of::CommandIds)
+            }
         };
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
@@ -2141,7 +2147,10 @@ mod tests {
         let offer = |s: &str| super::offer_at(s, s.chars().count(), &ids, &app.session);
         let o = offer(r#"task.addStep {"command": "LABELS.ST"#).unwrap();
         assert_eq!((o.items, o.of), (vec!["labels.style".to_string()], Some(super::Of::CommandIds)));
-        assert!(offer(r#"task.addStep {"command": "ui."#).is_none(), "none a script refuses");
+        assert!(offer(r#"task.addStep {"command": "ui."#).is_none(), "no interface command");
+        assert!(offer(r#"task.addStep {"command": "task."#).is_none(), "no task command: a step doesn't run a task");
+        let o = offer(r#"task.addStep {"command": "script."#).map(|o| o.items).unwrap_or_default();
+        assert!(o.iter().any(|id| id == "script.run"), "what task.addStep takes, not what a script runs: {o:?}");
         let all = offer(r#"task.addStep {"command": ""#).map(|o| o.items).unwrap_or_default();
         assert!(all.len() > super::MAX_ITEMS && all.is_sorted(), "every command, sorted as a line's first word offers them");
         assert!(offer(r#"task.addStep {"title": "labels.st"#).is_none(), "another key's value");
