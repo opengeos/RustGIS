@@ -3782,6 +3782,7 @@ fn stroke_json(st: &LineStroke) -> Value {
         "offset": st.offset,
         "cap": st.cap.code(),
         "join": st.join.code(),
+        "level": st.level,
     })
 }
 
@@ -3876,6 +3877,13 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     }
                 });
             });
+        }
+        if l.has_strokes() {
+            let mut on = l.stroke_levels;
+            let tip = tl!("Draw every feature's strokes of one level before the next, so casings join under the cores where lines meet");
+            if ui.checkbox(&mut on, tl!("Draw strokes in levels")).on_hover_text(tip).changed() {
+                let _ = app.run("layer.strokeLevels", json!({"on": on}));
+            }
         }
         // The composed symbol along a line drawn left to right: a positive offset shows below it.
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
@@ -4006,6 +4014,21 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     }
                 });
                 ui.end_row();
+                if l.stroke_levels {
+                    ui.label(tl!("Level"));
+                    ui.horizontal(|ui| {
+                        let mut lv = st.level_at(i);
+                        if ui.add_enabled(st.level.is_some(), egui::DragValue::new(&mut lv).range(0..=255).speed(0.1)).changed() {
+                            set(app, LineStroke { level: Some(lv), ..st });
+                        }
+                        let mut auto = st.level.is_none();
+                        let tip = tl!("Draw at its place in the stack, the bottom stroke first");
+                        if ui.checkbox(&mut auto, tl!("Auto")).on_hover_text(tip).changed() {
+                            set(app, LineStroke { level: if auto { None } else { Some(lv) }, ..st });
+                        }
+                    });
+                    ui.end_row();
+                }
             });
         }
         ui.add_space(4.0);
