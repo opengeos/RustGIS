@@ -378,9 +378,8 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
         };
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
-    let after = script.get(byte_at(script, at)?..)?.split('\n').next()?;
-    // The object the key goes in from its `{` (a nested one ends with its `}`: the rest of the
-    // line isn't read as its keys), the word being typed taken out.
+    let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+    // The object the key goes in, from its `{` to its `}`, the word being typed taken out.
     let brace = nested.as_ref().map_or(h.brace, |n| n.brace);
     let object = format!("{}{after}", script.get(byte_at(script, brace)?..byte_at(script, start)?)?);
     let Some(nested) = nested else {
@@ -401,6 +400,34 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
             offer_keys(Of::SubKeys { id: h.id.clone(), key: nested.key.clone() }, entries, &object, start, at, &word)
         }
     }
+}
+
+/// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
+/// object, or all of it when nothing closes it: an object after it on the line (the next one in
+/// its array, a later key's) isn't read as holding its keys.
+fn object_rest(after: &str) -> &str {
+    // In the key's quotes, then one level in.
+    let (mut depth, mut quoted, mut escaped) = (1usize, true, false);
+    for (i, c) in after.char_indices() {
+        let was_escaped = escaped;
+        escaped = c == '\\' && !was_escaped;
+        if quoted {
+            quoted = !(c == '"' && !was_escaped);
+            continue;
+        }
+        match c {
+            '"' => quoted = true,
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return after.get(..i + c.len_utf8()).unwrap_or(after);
+                }
+            }
+            _ => {}
+        }
+    }
+    after
 }
 
 /// The description of the second-level object entry `key` of parameter description `desc` takes:
@@ -1940,6 +1967,8 @@ mod tests {
         let s = r#"gp.run {"params": {""#;
         let o = super::offer_at(&format!(r#"{s}"}}, "output": 1, "tool": "buffer"}}"#), s.chars().count(), &[], &app.session).unwrap();
         assert!(o.items.iter().any(|k| k == "output"), "a top-level key after params isn't given in it");
+        let o = super::offer_at(&format!(r#"{s}"}}, "x": {{"output": 1}}, "tool": "buffer"}}"#), s.chars().count(), &[], &app.session);
+        assert!(o.is_some_and(|o| o.items.iter().any(|k| k == "output")), "nor a key of a later object");
         let o = super::offer_at(&format!("{s}\n\"tool\": \"buffer\"}}}}"), s.chars().count(), &[], &app.session);
         assert!(o.is_none(), "a tool on another line: a command is one line");
     }
@@ -2066,6 +2095,9 @@ mod tests {
         assert_eq!(keys(r#"layer.displayFilters {"filters": [{"name": "a", ""#), ["minScale", "maxScale", "where"]);
         let s = r#"layer.displayFilters {"filters": [{"name": "a"}, {""#;
         assert_eq!(keys(s), ["name", "minScale", "maxScale", "where"], "another object: nothing given in it");
+        let s = r#"layer.displayFilters {"filters": [{"na"#;
+        let later = super::offer_at(&format!(r#"{s}"}}, {{"name": "b"}}]}}"#), s.chars().count(), &[], &app.session);
+        assert_eq!(later.map(|o| o.items), Some(vec!["name".to_string()]), "a later object of the array isn't this one");
         assert!(keys(r#"topology.rules {"remove": {""#).is_empty(), "an entry that describes none");
         assert!(keys(r#"topology.rules {"nope": {""#).is_empty(), "no such entry");
         let of = offer(r#"topology.rules {"add": {""#).and_then(|o| o.of).unwrap();
@@ -2112,5 +2144,17 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().workflow.script, r#"task.addStep {"command": "labels.style", "params": {"size": "#);
+    }
+
+    /// What follows a key's cursor, up to the end of its object: past the key's closing quote,
+    /// nested braces and strings with braces in them; all of it when nothing closes it.
+    #[test]
+    fn object_rest_stops_at_the_keys_object() {
+        use super::object_rest;
+        assert_eq!(object_rest(r#"me": "a"}, {"name": "b"}]}"#), r#"me": "a"}"#);
+        assert_eq!(object_rest(r#"": {"b": [1]}, "c": "}"}, "d": 1}"#), r#"": {"b": [1]}, "c": "}"}"#, "nested, and a brace in a string");
+        assert_eq!(object_rest(r#"a\"b": 1}"#), r#"a\"b": 1}"#, "an escaped quote in the key");
+        assert_eq!(object_rest(r#"": 1, "b""#), r#"": 1, "b""#, "not closed");
+        assert_eq!(object_rest(""), "");
     }
 }
