@@ -5034,8 +5034,7 @@ mod tests {
         assert_eq!(f.values.get("output").map(String::as_str), Some("kept"), "not given");
     }
 
-    /// The Strokes for picker lists a value listed twice once, for its first class (the one its
-    /// features draw with), then `<all other values>`.
+    /// A dash being typed shows only on the stroke of the layer and class it was typed for.
     #[test]
     fn a_dash_draft_stays_with_its_layer_and_class() {
         let draft = || Some((3, Some(ClassRef::Index(1)), "4 2".to_string()));
@@ -5047,6 +5046,8 @@ mod tests {
         assert_eq!(draft_for(None, &(3, None)), None);
     }
 
+    /// The Strokes for picker lists a value listed twice once, for its first class (the one its
+    /// features draw with), then `<all other values>`.
     #[test]
     fn stroke_classes_list_a_repeated_value_once() {
         let (a, b) = (
