@@ -335,13 +335,13 @@ fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(v).map_err(|e| e.to_string())
 }
 
-/// The JSON of an item from `text`, or the file at `path`.
 /// Whether command `id` can be added as a task's step (`task.addStep`): a built-in command, and
 /// not a task's own (a step doesn't run a task).
 pub fn can_be_step(s: &Session, id: &str) -> bool {
     s.registry.get(id).is_some() && !id.starts_with("task.")
 }
 
+/// The JSON of an item from `text`, or the file at `path`.
 pub(crate) fn read_text(p: &Value) -> Result<String, String> {
     if let Some(d) = ps(p, "data") {
         use base64::Engine;
