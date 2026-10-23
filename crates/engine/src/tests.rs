@@ -10386,6 +10386,36 @@ fn param_list_splits_a_description_into_entries() {
     }
 }
 
+/// Quoted text is read as JSON has it (#741): strings and their quotes aren't code, and a
+/// backslash escapes the char after it only in a string.
+#[test]
+fn quotes_read_text_as_json_does() {
+    use crate::{Quotes, string_end};
+    let code = |s: &str| {
+        let (mut q, mut out) = (Quotes::default(), String::new());
+        for c in s.chars() {
+            if q.read(c) {
+                out.push(c);
+            }
+        }
+        out
+    };
+    assert_eq!(code(r#"{"a": "b,c", "d": 1}"#), "{: , : 1}");
+    assert_eq!(code(r#"{"a\"b": 1}"#), "{: 1}", "an escaped quote");
+    assert_eq!(code(r#"{"a\\": 1}"#), "{: 1}", "an escaped backslash");
+    assert_eq!(code(r#"x \"a" y"#), r#"x \ y"#, "a backslash outside a string escapes nothing");
+    assert_eq!(code("ñ \"é\" ü"), "ñ  ü", "chars, not bytes");
+    let mut q = Quotes::default();
+    for c in r#"{"a": "b"#.chars() {
+        q.read(c);
+    }
+    assert!(q.quoted(), "ends in a string");
+    assert_eq!(string_end(r#"a\"b", 1"#), Some(4));
+    assert_eq!(string_end("é\""), Some(2), "a byte index");
+    assert_eq!(string_end(r#"a\""#), None, "nothing closes it");
+    assert_eq!(string_end(""), None);
+}
+
 #[test]
 fn param_keys_reads_descriptions() {
     use crate::param_keys;

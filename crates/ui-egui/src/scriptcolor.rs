@@ -8,6 +8,7 @@ use std::ops::Range;
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Stroke};
 use rustgis_engine::cmd::workflows::{MAX_SCRIPT_LINES, refused_in_script};
+use rustgis_engine::string_end;
 
 /// What a piece of a script is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,16 +123,8 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
         let s = i;
         match c {
             b'"' => {
-                i += 1;
-                while let Some(&c) = b.get(i) {
-                    i += 1;
-                    match c {
-                        // The escaped char, whole: a multi-byte one isn't cut.
-                        b'\\' => i = next_char(text, i),
-                        b'"' => break,
-                        _ => {}
-                    }
-                }
+                // Past its closing quote, or to the end when nothing closes it.
+                i = text.get(i + 1..).and_then(string_end).map_or(text.len(), |n| i + n + 2);
                 // A key is a string with a colon after it.
                 let after = text.get(i..).map(str::trim_start);
                 // (A command's parameter description marks a key that may be left out with `?`:
@@ -170,11 +163,6 @@ fn json_spans(text: &str, at: usize, broken: bool, out: &mut Vec<Span>) {
             }
         }
     }
-}
-
-/// The byte after the char starting at `i` of `text` (its end when `i` is past it).
-fn next_char(text: &str, i: usize) -> usize {
-    text.get(i..).and_then(|t| t.chars().next()).map_or(text.len(), |c| i + c.len_utf8())
 }
 
 /// The colours of a script, one per kind. The theme's text, dimmed text and accent, and colours

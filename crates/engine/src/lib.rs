@@ -115,16 +115,15 @@ pub fn param_list(desc: &str) -> Option<Vec<Param<'_>>> {
     let body = desc.trim().strip_prefix('{')?;
     let inner = body.get(..body.rfind('}')?)?;
     let mut out = Vec::new();
-    let (mut depth, mut quoted, mut start, mut escaped) = (0usize, false, 0, false);
+    let (mut depth, mut start, mut q) = (0usize, 0, Quotes::default());
     for (i, c) in inner.char_indices() {
-        // A quote after a backslash (`\"`, in a plugin's description) doesn't open or close one.
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
+        if !q.read(c) {
+            continue;
+        }
         match c {
-            '"' if !was_escaped => quoted = !quoted,
-            '(' | '[' | '{' if !quoted => depth += 1,
-            ')' | ']' | '}' if !quoted => depth = depth.saturating_sub(1),
-            ',' if !quoted && depth == 0 => {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
                 out.extend(inner.get(start..i).and_then(param));
                 start = i + 1;
             }
@@ -144,15 +143,52 @@ fn param(part: &str) -> Option<Param<'_>> {
     Some(Param { key, optional, text })
 }
 
-/// Where the string whose text starts `s` ends: the byte index of its closing quote, the first
-/// one not after a backslash (`\"`). None when nothing closes it.
-fn string_end(s: &str) -> Option<usize> {
-    let mut escaped = false;
+/// Quoted text read one char at a time (`read`), as JSON has it: a `"` opens a string and the
+/// next one not escaped closes it; a backslash escapes the char after it only in a string. The
+/// one rule for everything that reads a description or a Script line by hand (#741).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Quotes {
+    quoted: bool,
+    escaped: bool,
+}
+
+impl Quotes {
+    /// Inside a string, after its opening quote.
+    pub fn in_string() -> Self {
+        Quotes { quoted: true, escaped: false }
+    }
+
+    /// Reads `c`: whether it's code, outside every string (a string's quotes aren't).
+    pub fn read(&mut self, c: char) -> bool {
+        if !self.quoted {
+            self.quoted = c == '"';
+            return !self.quoted;
+        }
+        if self.escaped {
+            self.escaped = false;
+        } else if c == '\\' {
+            self.escaped = true;
+        } else if c == '"' {
+            self.quoted = false;
+        }
+        false
+    }
+
+    /// Whether what was read ends in a string.
+    pub fn quoted(&self) -> bool {
+        self.quoted
+    }
+}
+
+/// Where the string whose text starts `s` ends: the byte index of its closing quote. None when
+/// nothing closes it.
+pub fn string_end(s: &str) -> Option<usize> {
+    let mut q = Quotes::in_string();
     for (i, c) in s.char_indices() {
-        if c == '"' && !escaped {
+        q.read(c);
+        if !q.quoted() {
             return Some(i);
         }
-        escaped = c == '\\' && !escaped;
     }
     None
 }
