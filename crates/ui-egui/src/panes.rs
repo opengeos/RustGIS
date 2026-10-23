@@ -3449,7 +3449,7 @@ fn reference_scale_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                     pick(ui, crate::ribbon::scale_label(Some(c)), json!(c), l.reference_scale == Some(c));
                 }
                 let label = crate::i18n::fmt("Current scale ({scale})", &[("scale", &crate::ribbon::scale_label(Some(current)))]);
-                pick(ui, label, json!("current"), false);
+                pick(ui, label, json!("current"), l.reference_scale == Some(current) && !REFERENCE_SCALE_CHOICES.contains(&current));
             },
         );
     });

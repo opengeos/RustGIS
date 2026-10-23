@@ -224,7 +224,10 @@ pub fn commands() -> Vec<C> {
             let (lo, hi) = rustgis_map::REFERENCE_SCALES;
             let scale = match p.get("scale") {
                 None | Some(Value::Null) => None,
-                Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => Some(s.map().scale().round().clamp(lo, hi)),
+                Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => {
+                    let now = s.map().scale().round();
+                    Some(now.is_finite().then(|| now.clamp(lo, hi)).ok_or("the map has no scale here")?)
+                }
                 Some(_) => Some(f(p, "scale").filter(|v| (lo..=hi).contains(v)).ok_or("scale is a number from 1 to 1000000000, \"current\" or null")?),
             };
             let id = s.layer_id(p)?;

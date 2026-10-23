@@ -2107,6 +2107,8 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
             continue;
         }
         let opacity = layer.opacity() * group_opacity.get(&layer.id).copied().unwrap_or(1.0);
+        // Markers sized for a reference scale grow and shrink with the map.
+        let size_factor = layer.size_factor(scale);
         let rows = layer.drawn_rows(scale);
         // Refreshes the projected copy for this projection.
         layer.projected_in(&flat, &key);
@@ -2129,6 +2131,9 @@ pub fn upright_markers(map: &mut Map, view: &View, margin: f64) -> Vec<UprightMa
                 }
             }
             let mut symbol = layer.symbol(row);
+            // Sized for its reference scale, as on the ground.
+            symbol.size *= size_factor;
+            symbol.stroke_width *= size_factor;
             let see = |c: Rgba| c.with_alpha((f32::from(c.a()) * opacity).round().clamp(0.0, 255.0) as u8);
             (symbol.fill, symbol.stroke) = (see(symbol.fill), see(symbol.stroke));
             let selected = layer.selection.contains(&row);
@@ -2668,6 +2673,23 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         } else {
             None
         };
+        // A layer with a reference scale draws its symbols (and labels) grown or shrunk
+        // with the map (built once for all of a streamed layer's batches): its points are wider or narrower in pixels.
+        let size_factor = layer.size_factor(scale);
+        let scaled_ctx;
+        let ctx = if size_factor == 1.0 {
+            &ctx
+        } else {
+            scaled_ctx = Ctx {
+                view: ctx.view,
+                ppp: ctx.ppp * size_factor,
+                wireframe: ctx.wireframe,
+                cull: ctx.cull,
+                globe: ctx.globe,
+                sprites: Default::default(),
+            };
+            &scaled_ctx
+        };
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
             // The definition query and the display filters that apply at this scale (a feature draws
             // only if it matches all of them).
@@ -2697,23 +2719,6 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
             // Everything below only reads the layer: borrow rather than copy its data each frame.
             let layer: &rustgis_map::Layer = layer;
-            // A layer with a reference scale draws its symbols (and labels, below) grown or shrunk
-            // with the map: its points are wider or narrower in pixels.
-            let size_factor = layer.size_factor(scale);
-            let scaled_ctx;
-            let ctx = if size_factor == 1.0 {
-                &ctx
-            } else {
-                scaled_ctx = Ctx {
-                    view: ctx.view,
-                    ppp: ctx.ppp * size_factor,
-                    wireframe: ctx.wireframe,
-                    cull: ctx.cull,
-                    globe: ctx.globe,
-                    sprites: Default::default(),
-                };
-                &scaled_ctx
-            };
             let label_row = |row: usize| if complete_source { layer.dataset.features.get(row).map_or(row, |f| f.id as usize) } else { row };
             let (labels, selection, ds_ptr) = (&layer.labels, &layer.selection, &layer.dataset);
             // The globe draws the lon/lat geometry itself; the flat map its Web Mercator copy.
@@ -3047,7 +3052,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             return None;
         }
         if let (Some(spool), Some(x)) = (&mut extrusions, &layer.extrusion)
-            && let Err(e) = spool.draw(if direct { &mut pm } else { &mut target }, &ctx, x)
+            && let Err(e) = spool.draw(if direct { &mut pm } else { &mut target }, ctx, x)
         {
             if let Some(source) = &mut layer.source {
                 source.error = Some(e.to_string());
@@ -3056,7 +3061,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         }
         if complete_source {
             if let (Some(a), Some(base)) = (layer.aggregation, aggregate_symbol) {
-                bins.draw(if direct { &mut pm } else { &mut target }, &ctx, a, &base);
+                bins.draw(if direct { &mut pm } else { &mut target }, ctx, a, &base);
             }
             if !direct {
                 composite(&mut pm, &target);
@@ -5120,6 +5125,13 @@ mod tests {
         let up = upright_markers(&mut m, &view, 0.3);
         assert_eq!(up.len(), 2);
         assert!(up.first().is_some_and(|u| u.selected) && up.get(1).is_some_and(|u| !u.selected));
+        // With a reference scale twice the view's, they stand twice the size.
+        let size = up.first().map(|u| u.symbol.size).unwrap_or_default();
+        let scale = m.ground_res_at(&view.camera) / rustgis_geom::PIXEL_M;
+        m.layer_mut(id).unwrap().reference_scale = Some(scale * 2.0);
+        let up = upright_markers(&mut m, &view, 0.3);
+        assert!(up.iter().all(|u| (u.symbol.size - size * 2.0).abs() < 1e-3), "{size}");
+        m.layer_mut(id).unwrap().reference_scale = None;
         // A point layer seen flat draws as before, and an aggregation stays on the ground.
         if let Some(l) = m.layer_mut(id) {
             l.aggregation = Some(rustgis_map::effects::Aggregation { hexagons: true, size: 20.0 });
