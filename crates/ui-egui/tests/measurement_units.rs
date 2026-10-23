@@ -1,11 +1,15 @@
 //! Headless interaction tests for the units users choose and the results they see.
 use egui_kittest::kittest::Queryable;
 use rustgis_engine::{Project, Session, data::Geometry, geom::lonlat_to_merc};
-use rustgis_ui_egui::RustGisApp;
+use rustgis_ui_egui::{RustGisApp, Services};
 use serde_json::json;
 
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
-    let mut app = RustGisApp::new(Session::new(Project::default()));
+    harness_with_services(Services::default())
+}
+
+fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, RustGisApp> {
+    let mut app = RustGisApp::new(Session::new(Project::default())).with_services(services);
     app.run("layer.template", json!({"template": "lines", "name": "Paths"})).unwrap();
     app.run("edit.addFeature", json!({"geometry": {"type": "LineString", "coordinates": [[0, 0], [0, 0.001]]}})).unwrap();
     app.run("select.rows", json!({"layer": "Paths", "rows": [0]})).unwrap();
@@ -19,6 +23,21 @@ fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     )
 }
 
+fn first_x_metres(h: &egui_kittest::Harness<'_, RustGisApp>) -> f64 {
+    let Geometry::Line(parts) = h.state().session.map().layer_by_name("Paths").unwrap().dataset.features[0].geometry.as_ref().unwrap()
+    else {
+        panic!("line")
+    };
+    lonlat_to_merc(parts[0][0]).x
+}
+
+fn choose_editing_units(h: &mut egui_kittest::Harness<'_, RustGisApp>, unit: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Distance units").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, unit).click();
+    h.step();
+}
+
 #[test]
 fn editing_pane_moves_in_feet() {
     let mut h = harness();
@@ -28,10 +47,7 @@ fn editing_pane_moves_in_feet() {
     for _ in 0..3 {
         h.step();
     }
-    h.get_by_value("Meters").click();
-    h.step();
-    h.get_by_label("Feet").click();
-    h.step();
+    choose_editing_units(&mut h, "Feet");
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Move").click();
     h.step();
     let Geometry::Line(parts) = h.state().session.map().layer_by_name("Paths").unwrap().dataset.features[0].geometry.as_ref().unwrap()
@@ -49,13 +65,66 @@ fn editing_pane_sets_constant_elevation_in_feet() {
     for _ in 0..3 {
         h.step();
     }
-    h.get_by_value("Meters").click();
-    h.step();
-    h.get_by_label("Feet").click();
-    h.step();
-    h.get_by_label("Constant").click();
+    choose_editing_units(&mut h, "Feet");
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Constant").click();
     h.step();
     assert_eq!(h.state().session.map().editing.settings.elevation, rustgis_engine::map::design::Elevation::Constant(304.8));
+}
+
+#[test]
+fn editing_units_are_remembered_and_applied_explicitly() {
+    use std::sync::{Arc, Mutex};
+    let saved = Arc::new(Mutex::new(Vec::new()));
+    let writes = saved.clone();
+    let mut h = harness_with_services(Services {
+        save_pref: Some(Box::new(move |key, value| writes.lock().unwrap().push((key.to_owned(), value.to_owned())))),
+        ..Services::default()
+    });
+    h.state_mut().run("edit.elevation", json!({"mode": "constant", "z": 1000})).unwrap();
+    h.state_mut().forms.z = "1000".into();
+    h.state_mut().run("ui.pane.editing", json!({})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    choose_editing_units(&mut h, "Feet");
+    assert!(saved.lock().unwrap().contains(&("editing_distance_units".into(), "Feet".into())), "editing units were not saved");
+    assert_eq!(h.state().session.map().editing.settings.elevation, rustgis_engine::map::design::Elevation::Constant(1000.0));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Apply elevation").click();
+    h.step();
+    assert_eq!(h.state().session.map().editing.settings.elevation, rustgis_engine::map::design::Elevation::Constant(304.8));
+    drop(h);
+
+    let reads = saved.clone();
+    let mut restored = harness_with_services(Services {
+        load_pref: Some(Box::new(move |key| reads.lock().unwrap().iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.clone()))),
+        ..Services::default()
+    });
+    restored.state_mut().forms.dx = "500".into();
+    restored.state_mut().forms.dy = "0".into();
+    restored.state_mut().run("ui.pane.editing", json!({})).unwrap();
+    for _ in 0..3 {
+        restored.step();
+    }
+    restored.get_by_role_and_label(egui::accesskit::Role::Button, "Move").click();
+    restored.step();
+    assert!((first_x_metres(&restored) - 152.4).abs() < 1e-6);
+
+    // Unset and obsolete preferences retain the existing metre default.
+    for value in [None, Some("unsupported")] {
+        let mut h = harness_with_services(Services {
+            load_pref: Some(Box::new(move |key| if key == "editing_distance_units" { value.map(str::to_owned) } else { None })),
+            ..Services::default()
+        });
+        h.state_mut().forms.dx = "500".into();
+        h.state_mut().forms.dy = "0".into();
+        h.state_mut().run("ui.pane.editing", json!({})).unwrap();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Move").click();
+        h.step();
+        assert!((first_x_metres(&h) - 500.0).abs() < 1e-6);
+    }
 }
 
 fn click_map(h: &mut egui_kittest::Harness<'_, RustGisApp>, at: egui::Pos2) {
@@ -99,11 +168,11 @@ fn measure_menu_switches_live_distance_and_area_readouts_to_imperial() {
     click_map(&mut h, center - egui::vec2(50.0, 0.0));
     click_map(&mut h, center + egui::vec2(50.0, 0.0));
     assert!(painted_text(&h).iter().any(|s| s.starts_with("Total ") && s.contains(" m")));
-    h.get_by_label("Measure").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Measure").click();
     for _ in 0..3 {
         h.step();
     }
-    h.get_by_label("Imperial").click();
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Imperial").click();
     h.step();
     // At 1:1000, 100 screen points span about 28 m, or 92 ft at the equator.
     let text = painted_text(&h);
@@ -132,8 +201,49 @@ fn measure_menu_switches_live_distance_and_area_readouts_to_imperial() {
 }
 
 #[test]
+fn imperial_measurements_preserve_small_positive_distances_and_areas() {
+    let mut h = harness();
+    h.state_mut().run("map.goToXY", json!({"lon": 0, "lat": 80, "scale": 1})).unwrap();
+    h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    let center = h.state().map.view_rect.unwrap().0.center();
+    // At this latitude and the closest zoom, five screen points span about 0.13 m.
+    // A very thin polygon exercises tiny areas while keeping its corners far enough apart
+    // to be separate clicks, rather than duplicate-click gestures.
+    for (line_end, area_second, area_third) in [
+        (egui::vec2(5.0, 0.0), egui::vec2(5.0, 0.0), egui::vec2(5.0, 5.0)),
+        (egui::vec2(0.05, 0.0), egui::vec2(20.0, 0.0), egui::vec2(-20.0, 0.0001)),
+    ] {
+        for (tool, prefix, unit) in [("measure", "Total ", "ft"), ("measureArea", "Area ", "ft²")] {
+            h.state_mut().run("tool.set", json!({"tool": tool})).unwrap();
+            h.state_mut().map.cancel_sketch();
+            h.step();
+            click_map(&mut h, center);
+            // Separate nearby clicks in time so they are not interpreted as a double-click.
+            for _ in 0..32 {
+                h.step();
+            }
+            click_map(&mut h, center + if tool == "measure" { line_end } else { area_second });
+            if tool == "measureArea" {
+                for _ in 0..32 {
+                    h.step();
+                }
+                click_map(&mut h, center + area_third);
+            }
+            let text = painted_text(&h);
+            let readout = text.iter().find(|s| s.starts_with(prefix)).unwrap_or_else(|| panic!("{text:?}"));
+            let mut words = readout.split_whitespace();
+            let value: f64 = words.nth(1).unwrap().parse().unwrap();
+            assert_eq!(words.next(), Some(unit), "{readout}");
+            assert!(value > 0.0, "positive measurement rounded to zero: {readout}");
+        }
+    }
+}
+
+#[test]
 fn measurement_unit_choice_is_saved_restored_and_available_to_scripts() {
-    use rustgis_ui_egui::Services;
     use std::sync::{Arc, Mutex};
     let saved = Arc::new(Mutex::new(Vec::new()));
     let writes = saved.clone();
@@ -142,11 +252,11 @@ fn measurement_unit_choice_is_saved_restored_and_available_to_scripts() {
     for _ in 0..3 {
         h.step();
     }
-    h.get_by_label("Measure").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Measure").click();
     for _ in 0..3 {
         h.step();
     }
-    h.get_by_label("Imperial").click();
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Imperial").click();
     h.step();
     assert!(saved.lock().unwrap().contains(&("measurement_units".into(), "imperial".into())));
     let mut restored = RustGisApp::new(Session::new(Project::default())).with_services(Services {

@@ -20,7 +20,10 @@ area includes square feet (`ft2`), acres (`ac`) and square miles (`mi2`). Every 
 
 The Edit tab's **Edit** button turns editing on or off for the map; with it off, the map is
 read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest. Its **Distance units**
-selector sets the units used for Move and constant elevation:
+selector sets the units used for Move and constant elevation. The choice is remembered independently
+of the live map's measurement units. The entered numbers are interpreted in the selected units when
+you click **Move**, **Constant** or **Apply elevation**. The current elevation stays in effect while
+you edit the value or choose units; click **Apply elevation** to apply the new inputs.
 
 - **Modify**: move the selected features by distances east and north, rotate them, scale them,
   merge them (polygons are unioned), explode multipart features, split a line where you click,

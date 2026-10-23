@@ -85,3 +85,35 @@ fn select_by_location_feet_selects_only_features_within_the_radius() {
     s.run("gp.run", &p).unwrap();
     assert_eq!(s.map().layer(id).unwrap().selection, vec![0], "omitted units still mean kilometres");
 }
+
+#[test]
+fn invalid_editing_units_and_scaled_overflow_leave_the_project_unchanged() {
+    for (command, params, overflow) in [
+        ("edit.move", json!({"dx": 1, "dy": 1}), json!({"dx": f64::MAX, "units": "Miles"})),
+        (
+            "edit.traverse",
+            json!({"start": [0, 0], "legs": [{"distance": 1, "bearing": 90}]}),
+            json!({"start": [0, 0], "legs": [{"distance": f64::MAX, "bearing": 90}], "units": "Miles"}),
+        ),
+        ("edit.elevation", json!({"mode": "constant", "z": 1}), json!({"mode": "constant", "z": f64::MAX, "units": "Miles"})),
+    ] {
+        let mut s = paths();
+        let before = serde_json::to_value(&s.project).unwrap();
+        let undo = s.undo_label();
+        let unchanged = |s: &Session| {
+            assert_eq!(serde_json::to_value(&s.project).unwrap(), before, "{command} changed the project after an error");
+            assert_eq!(s.undo_label(), undo, "{command} changed undo history after an error");
+        };
+        for units in [json!(7), json!(true), json!(["Feet"]), json!({"name": "Feet"}), json!("parsecs")] {
+            let mut p = params.clone();
+            p["units"] = units;
+            let error = s.run(command, &p).unwrap_err();
+            assert!(error.contains("units"), "{command}: {error}");
+            unchanged(&s);
+        }
+        let error = s.run(command, &overflow).unwrap_err();
+        assert!(error.contains("large") || error.contains("distance"), "{command}: {error}");
+        unchanged(&s);
+        assert!(s.run("info.project", &json!({})).is_ok(), "{command} left an unusable session");
+    }
+}

@@ -910,6 +910,15 @@ impl RustGisApp {
             self.session.raster_defaults = d.sanitized();
         }
         self.ui.raster_defaults_saved = self.session.raster_defaults.clone();
+        self.forms.distance_units = self
+            .services
+            .load_pref
+            .as_ref()
+            .and_then(|load| load(editpanes::DISTANCE_UNITS_PREF))
+            .and_then(|value| {
+                editpanes::DISTANCE_UNITS.iter().find(|unit| unit.eq_ignore_ascii_case(value.trim())).map(|unit| (*unit).to_owned())
+            })
+            .unwrap_or_default();
         self.ui.measurement_imperial =
             self.services.load_pref.as_ref().and_then(|load| load("measurement_units")).as_deref() == Some("imperial");
         // The GPU map backend: RUSTGIS_GPU forces it on, else the saved preference.

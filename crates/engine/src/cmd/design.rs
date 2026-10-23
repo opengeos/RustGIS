@@ -303,7 +303,7 @@ pub fn commands() -> Vec<C> {
                 (dx, dy) = ground_to_grid(dx, dy, k, rot);
             }
             if !(dx.is_finite() && dy.is_finite()) || dx.abs() > 4e7 || dy.abs() > 4e7 {
-                return Err("dx and dy are metres east and north".into());
+                return Err("dx and dy must be finite distances in the command's units (limit: 40,000 km per axis after ground-to-grid)".into());
             }
             modify(s, |g| Some(g.map_coords(&|c: Coord| shift(c, dx, dy))))
         })
