@@ -14,11 +14,12 @@ impl Paths {
         if let Some(path) = self.cached.take() {
             builder = path.clear();
         }
+        let mut starts = super::DashStarts::default();
         for part in parts {
-            ctx.ring_path(&mut builder, part, false);
+            ctx.ring_path_at(&mut builder, part, false, &mut starts);
         }
         let Some(path) = builder.finish() else { return };
-        ctx.stacked_path(pm, &path, symbol, strokes);
+        ctx.stacked_path(pm, &path, symbol, strokes, &starts);
         self.remember(path);
     }
     fn remember(&mut self, path: tiny_skia::Path) {
