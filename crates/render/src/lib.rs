@@ -2829,19 +2829,21 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             _ => ctx.feature(dest, g, &sym),
                         }
                     }
-                    let mut order: Vec<u8> =
-                        stacked.iter().flat_map(|(.., st)| st.iter().enumerate().map(|(i, s)| s.level_at(i))).collect();
-                    order.sort_unstable();
-                    order.dedup();
+                    // A turn per feature and level it has strokes at, by level and then the features'
+                    // order: a feature is visited only for its own levels, however many the layer has.
+                    let mut turns: Vec<(u8, usize)> = stacked
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(f, (.., st))| st.iter().enumerate().map(move |(i, s)| (s.level_at(i), f)))
+                        .collect();
+                    turns.sort_unstable();
+                    turns.dedup();
                     let mut one: Vec<LineStroke> = Vec::with_capacity(rustgis_map::symbology::MAX_STROKES);
-                    for level in order {
-                        for (parts, sym, strokes) in &stacked {
-                            one.clear();
-                            one.extend(strokes.iter().enumerate().filter(|(i, s)| s.level_at(*i) == level).map(|(_, s)| *s));
-                            if !one.is_empty() {
-                                stroke_paths.draw(&ctx, dest, parts, sym, &one);
-                            }
-                        }
+                    for (level, f) in turns {
+                        let Some((parts, sym, strokes)) = stacked.get(f) else { continue };
+                        one.clear();
+                        one.extend(strokes.iter().enumerate().filter(|(i, s)| s.level_at(*i) == level).map(|(_, s)| *s));
+                        stroke_paths.draw(&ctx, dest, parts, sym, &one);
                     }
                 }
                 cpu_dirty |= drawn_here;
