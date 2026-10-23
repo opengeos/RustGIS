@@ -4064,11 +4064,11 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             let w = (w * k).max(0.5);
             let y = r.center().y + st.offset * k;
             let pad = cap_pad(st, w);
-            // The dashes along the preview, scaled as the strokes are (solid when finer than a
-            // pixel a round, as the map draws them).
+            // The dashes along the preview, scaled as the strokes are. Solid when the map draws the
+            // pattern solid: under a pixel a round on this screen, at the pattern's own size.
             let steps: Vec<f32> = st.dash.map(|d| d.even_steps().iter().map(|v| v * k).collect()).unwrap_or_default();
             let mut runs = Vec::new();
-            if steps.iter().sum::<f32>() >= 1.0 {
+            if st.dash.is_some_and(|d| d.period() * ui.ctx().pixels_per_point() >= 1.0) && steps.iter().sum::<f32>() > 0.0 {
                 let (mut x, mut on) = (x0, true);
                 for step in steps.iter().cycle().take(4096) {
                     if x >= x1 {
@@ -4216,6 +4216,10 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                         ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
                     if r.changed() {
                         ui.data_mut(|m| m.insert_temp::<DashDraft>(id, (owner.0, owner.1.clone(), text.clone())));
+                    }
+                    // Text that isn't a pattern is outlined: it won't be kept when the box loses focus.
+                    if parse_dash(&text).is_none() {
+                        ui.painter().rect_stroke(r.rect, CornerRadius::same(2), egui::Stroke::new(1.5, t.red), egui::StrokeKind::Outside);
                     }
                     if r.lost_focus() {
                         ui.data_mut(|m| m.remove::<DashDraft>(id));
