@@ -153,8 +153,19 @@ pub(crate) fn with_labels(s: &mut Session, p: &Value, f: impl FnOnce(&mut Labeli
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     let mut labels = l.labels.clone();
     f(&mut labels)?;
+    let relock = !same_class_list(&l.labels, &labels);
     l.labels = labels;
+    if relock {
+        s.map_mut().label_lock = None;
+    }
     Ok(Value::Null)
+}
+
+/// Whether `a` and `b` list the same classes in the same order. A lock names each label by its
+/// class's place in the list (`LabelKey`), so when the list changes the labels are locked again
+/// where they are placed next (`Map::label_lock` emptied, #732).
+pub(crate) fn same_class_list(a: &Labeling, b: &Labeling) -> bool {
+    a.classes.iter().map(|c| &c.name).eq(b.classes.iter().map(|c| &c.name))
 }
 
 /// The place of the class named `name` among those checked before Default (of the

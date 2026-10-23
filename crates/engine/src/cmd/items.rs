@@ -99,6 +99,7 @@ pub fn commands() -> Vec<C> {
             }
             l.renderer = st.renderer;
             let field = l.labels.default.field.clone();
+            let relock = !super::labels::same_class_list(&l.labels, &st.labels);
             l.labels = st.labels;
             // The label field stays if the style's isn't in this layer.
             if l.dataset.field_index(&l.labels.default.field).is_none() {
@@ -106,6 +107,9 @@ pub fn commands() -> Vec<C> {
             }
             l.labels.repoint_missing_fields(&l.dataset);
             l.transparency = st.transparency;
+            if relock {
+                s.map_mut().label_lock = None;
+            }
             Ok(Value::Null)
         })
         .when(need_feature_layer)

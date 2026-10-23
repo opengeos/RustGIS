@@ -1462,6 +1462,38 @@ fn label_range_placement_lock_and_convert() {
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
+/// A lock names each label by its class's place in the list: a change to the list (a class added,
+/// moved or removed) locks the labels again on the next frame, a change within a class keeps the
+/// lock (#732).
+#[test]
+fn a_change_to_the_label_classes_locks_the_labels_again() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let draw = |s: &mut Session| {
+        let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        crate::render::render(s.map_mut(), &v).unwrap();
+    };
+    draw(&mut s);
+    assert!(s.map().label_lock.is_some());
+    s.run("labels.style", &json!({"layer": "Cities", "size": 14})).unwrap();
+    s.run("labels.class.update", &json!({"layer": "Cities", "visible": true})).unwrap();
+    assert!(s.map().label_lock.is_some(), "a change within a class keeps the lock");
+    for (id, p) in [
+        ("labels.class.add", json!({"layer": "Cities", "name": "Big"})),
+        ("labels.class.add", json!({"layer": "Cities", "name": "Small"})),
+        ("labels.class.move", json!({"layer": "Cities", "class": "Small", "to": 0})),
+        ("labels.class.remove", json!({"layer": "Cities", "class": "Big"})),
+        ("labels.class.clear", json!({"layer": "Cities"})),
+    ] {
+        s.run(id, &p).unwrap();
+        assert!(s.map().label_lock.is_none(), "{id} moves the classes: locked again");
+        draw(&mut s);
+        assert!(s.map().label_lock.is_some(), "{id}: locked on the next frame");
+    }
+}
+
 /// Label classes by command (#618): added from Default and checked before it, renamed, given
 /// a clause, moved, styled and removed; refusals change nothing, and Default stays last.
 #[test]
