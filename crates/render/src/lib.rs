@@ -602,7 +602,9 @@ impl Ctx<'_> {
     fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<tiny_skia::StrokeDash> {
         let steps: Vec<f32> = d.even_steps().iter().map(|v| v * self.ppp).collect();
         let period: f32 = steps.iter().sum();
-        if !(period >= 1.0 && path_length(path) / period <= MAX_DASHES) {
+        // Each round of the pattern draws one dash per pair of steps.
+        let dashes = path_length(path) / period * (steps.len() / 2) as f32;
+        if !(period >= 1.0 && dashes <= MAX_DASHES) {
             return None;
         }
         tiny_skia::StrokeDash::new(steps, 0.0)
@@ -5549,6 +5551,9 @@ mod tests {
         // A 1-pixel period would cut it into 200,000 dashes: drawn solid. A 4-pixel one is fine.
         assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[0.5, 0.5]).unwrap(), &zigzag).is_none());
         assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[2.0, 2.0]).unwrap(), &zigzag).is_some());
+        // Dashes count, not rounds of the pattern: four dashes a 4-pixel round is 200,000 too.
+        let four = rustgis_map::symbology::Dash::new(&[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]).unwrap();
+        assert!(ctx.dash(&four, &zigzag).is_none());
     }
 
     #[test]
