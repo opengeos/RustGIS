@@ -69,6 +69,14 @@ impl<K: Copy + PartialEq> TiltSettle<K> {
         return self.ready.is_some();
     }
 
+    /// The key of the frame being drawn (or drawn and not yet taken).
+    pub fn key(&self) -> Option<K> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.job.as_ref().map(|(k, _)| *k);
+        #[cfg(target_arch = "wasm32")]
+        return self.ready.as_ref().map(|(k, _)| *k);
+    }
+
     /// Starts drawing `map` (a copy) for `view`, keyed `key`, waking `ctx` when it is done.
     /// Does nothing while a frame is being drawn (the next starts once that one is taken), or
     /// for a key that couldn't be drawn.
