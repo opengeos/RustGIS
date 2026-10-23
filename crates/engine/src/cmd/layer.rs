@@ -117,8 +117,12 @@ pub fn commands() -> Vec<C> {
                 let g = l.geometry_type();
                 let fill = |sym: &rustgis_map::Symbol| {
                     let mut out = sym.with_fill(c, g);
-                    if explicit_alpha && g == GeometryType::Polygon {
-                        out.fill = c;
+                    if g == GeometryType::Polygon {
+                        // The outline is its own setting (`layer.outline`); only the fill changes.
+                        out.stroke = sym.stroke;
+                        if explicit_alpha {
+                            out.fill = c;
+                        }
                     }
                     out
                 };
@@ -130,7 +134,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA"}"##),
+        .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA" (the fill; a polygon's outline is left as it is, set it with layer.outline)}"##),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);

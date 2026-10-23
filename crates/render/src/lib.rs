@@ -803,12 +803,14 @@ fn offset_polyline(pts: &[(f32, f32)], d: f32) -> Vec<(f32, f32)> {
         (-dy / l, dx / l)
     };
     let mut out = Vec::with_capacity(p.len() + 4);
-    let (Some(&[a, b]), Some(&[y, z])) = (p.first_chunk::<2>(), p.last_chunk::<2>()) else { return out };
-    let n = normal(a, b);
+    let (Some(&[a, b]), Some(&z)) = (p.first_chunk::<2>(), p.last()) else { return out };
+    // Carry the previous segment normal forward; each segment is evaluated once.
+    let mut n = normal(a, b);
     out.push((a.0 + n.0 * d, a.1 + n.1 * d));
     for w in p.windows(3) {
-        let [a, v, b] = [w.first(), w.get(1), w.get(2)].map(|x| x.copied().unwrap_or_default());
-        let (na, nb) = (normal(a, v), normal(v, b));
+        let [v, b] = [w.get(1), w.get(2)].map(|x| x.copied().unwrap_or_default());
+        let (na, nb) = (n, normal(v, b));
+        n = nb;
         let (sx, sy) = (na.0 + nb.0, na.1 + nb.1);
         let s2 = sx * sx + sy * sy;
         if s2 >= 0.25 {
@@ -820,7 +822,6 @@ fn offset_polyline(pts: &[(f32, f32)], d: f32) -> Vec<(f32, f32)> {
             out.push((v.0 + nb.0 * d, v.1 + nb.1 * d));
         }
     }
-    let n = normal(y, z);
     out.push((z.0 + n.0 * d, z.1 + n.1 * d));
     out
 }
@@ -5347,3 +5348,81 @@ mod stream_tests;
 
 #[cfg(test)]
 mod budget_tests;
+
+#[cfg(test)]
+mod offset_normal_tests {
+    use super::offset_polyline;
+
+    /// Reusing a normal must preserve the previous algorithm's exact output, including signed zero.
+    #[test]
+    fn reused_normals_match_reference_bits() {
+        let mut cases = vec![
+            vec![],
+            vec![(1.0, 2.0)],
+            vec![(0.0, 0.0), (0.0, 0.0)],
+            vec![(-0.0, 0.0), (10.0, -0.0)],
+            vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)],
+            vec![(0.0, 0.0), (0.0, 0.0), (0.00001, 0.0), (3.0, 4.0)],
+            vec![(0.0, 0.0), (0.001, 0.0), (0.00101, 0.0), (3.0, 4.0)],
+            vec![(0.0, 0.0), (10.0, 0.0), (0.01, 0.01), (-5.0, 8.0)],
+            vec![(f32::NAN, 0.0), (0.0, 0.0), (3.0, 4.0), (f32::INFINITY, 0.0)],
+            vec![(40_500_000.0, 3_500_000.0), (40_500_020.0, 3_500_040.0)],
+            vec![(-f32::MAX, 0.0), (f32::MAX, 1.0), (0.0, -f32::MAX)],
+        ];
+        for variant in 0..32 {
+            let path: Vec<_> = (0..80)
+                .map(|i| {
+                    let x = (i as f32 * 0.37 + variant as f32).sin() * 100.0;
+                    let y = (i as f32 * 0.13 - variant as f32).cos() * 100.0;
+                    (x, y)
+                })
+                .collect();
+            cases.push(path.iter().rev().copied().collect());
+            cases.push(path);
+        }
+        for (case, points) in cases.iter().enumerate() {
+            for d in [-12.0, -0.0, 0.0, 0.25, 9.0] {
+                let bits = |p: Vec<(f32, f32)>| p.into_iter().map(|(x, y)| (x.to_bits(), y.to_bits())).collect::<Vec<_>>();
+                assert_eq!(bits(offset_polyline(points, d)), bits(reference_offset_polyline(points, d)), "case={case} offset={d}");
+            }
+        }
+        println!("normal cases: {} paths x 5 offsets", cases.len());
+    }
+
+    /// Frozen pre-optimization oracle; keep independent of the optimized implementation.
+    fn reference_offset_polyline(pts: &[(f32, f32)], d: f32) -> Vec<(f32, f32)> {
+        let mut p: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
+        for &q in pts.iter().filter(|q| q.0.is_finite() && q.1.is_finite()) {
+            if p.last().is_none_or(|l: &(f32, f32)| (l.0 - q.0).hypot(l.1 - q.1) > 1e-3) {
+                p.push(q);
+            }
+        }
+        // The unit normal to the right of a → b.
+        let normal = |a: (f32, f32), b: (f32, f32)| {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l = dx.hypot(dy);
+            (-dy / l, dx / l)
+        };
+        let mut out = Vec::with_capacity(p.len() + 4);
+        let (Some(&[a, b]), Some(&[y, z])) = (p.first_chunk::<2>(), p.last_chunk::<2>()) else { return out };
+        let n = normal(a, b);
+        out.push((a.0 + n.0 * d, a.1 + n.1 * d));
+        for w in p.windows(3) {
+            let [a, v, b] = [w.first(), w.get(1), w.get(2)].map(|x| x.copied().unwrap_or_default());
+            let (na, nb) = (normal(a, v), normal(v, b));
+            let (sx, sy) = (na.0 + nb.0, na.1 + nb.1);
+            let s2 = sx * sx + sy * sy;
+            if s2 >= 0.25 {
+                // The mitre: along the bisector, 2d / |na + nb|² times na + nb.
+                let k = 2.0 * d / s2;
+                out.push((v.0 + sx * k, v.1 + sy * k));
+            } else {
+                out.push((v.0 + na.0 * d, v.1 + na.1 * d));
+                out.push((v.0 + nb.0 * d, v.1 + nb.1 * d));
+            }
+        }
+        let n = normal(y, z);
+        out.push((z.0 + n.0 * d, z.1 + n.1 * d));
+        out
+    }
+}

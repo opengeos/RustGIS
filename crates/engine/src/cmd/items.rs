@@ -235,7 +235,7 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"name"?: string, "description"?: string, "steps"?: [{"title", "instructions"?, "command": id, "params"?: {}}], "fromHistory"?: bool (one step per geoprocessing run), "imported"?: bool (from a file: its steps may not touch files)}"#),
         C::new("task.addStep", "Add Task Step", "Tasks", |s, p| {
             let step: TaskStep = serde_json::from_value(p.clone()).map_err(|e| format!("a step needs a title and a command: {e}"))?;
-            if s.registry.get(&step.command).is_none() || step.command.starts_with("task.") {
+            if !can_be_step(s, &step.command) {
                 return Err(format!("'{}' can't be a task step", step.command));
             }
             let t = task_mut(s, p)?;
@@ -333,6 +333,12 @@ pub fn commands() -> Vec<C> {
 
 fn to_json<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(v).map_err(|e| e.to_string())
+}
+
+/// Whether command `id` can be added as a task's step (`task.addStep`): a built-in command, and
+/// not a task's own (a step doesn't run a task).
+pub fn can_be_step(s: &Session, id: &str) -> bool {
+    s.registry.get(id).is_some() && !id.starts_with("task.")
 }
 
 /// The JSON of an item from `text`, or the file at `path`.

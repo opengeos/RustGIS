@@ -236,12 +236,16 @@ when every key may be left out; a command with no parameters gets none, and a li
 parameters keeps them. While you type a command's parameters (the cursor inside its `{…}`), the same help stays by the cursor;
 Escape closes it. A quote that starts a key in a command's braces opens the list of its keys not
 given yet, beside the highlighted key's description; accepting one closes it with its colon
-(`"size": `). In a `gp.run` line, a quote after `"tool": ` opens the list of the tools, beside the
-highlighted tool's help; accepting one closes it. In its `"params": {…}`, the keys offered are those of the tool its
-`"tool"` names (by id or name, before or after `params`), beside the highlighted key's kind, name,
-default and help; there the help by the cursor is the tool's. A `{` typed closes itself, the cursor inside, unless text follows it or it's in a
-string or a comment; a `}` typed before a `}` steps over it, and Backspace in an empty `{}` deletes
-both. Pasting adds nothing.
+(`"size": `). The same goes in a key's own object, or in each object of its list, for the keys the
+command's description gives it (`topology.rules {"add": {"rule": …}}`). In a `gp.run` line, a
+quote after `"tool": ` opens the list of the tools, beside the highlighted tool's help; accepting
+one closes it. In its `"params": {…}`, the keys offered are those of the tool its `"tool"` names
+(by id or name, before or after `params`), beside the highlighted key's kind, name, default and
+help; there the help by the cursor is the tool's. A `task.addStep` line works the same way: its
+`"command": "` offers the commands, and its `"params"` that command's keys and help. A `{` or `[`
+typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
+a `}` or `]` typed before the same one steps over it, and Backspace in an empty `{}` or `[]`
+deletes both. Pasting adds nothing.
 
 ## ModelBuilder
 
