@@ -3,6 +3,11 @@
 use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 
+/// Subdivisions of the label fallback grid; both endpoints are sampled.
+const LABEL_GRID_STEPS: usize = 64;
+// Prefix construction can shift by steps + 1, which must also fit in u128.
+const _: () = assert!(LABEL_GRID_STEPS > 0 && LABEL_GRID_STEPS < (u128::BITS - 1) as usize);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GeometryType {
     Point,
@@ -151,7 +156,7 @@ impl Geometry {
                     outer.iter().for_each(|c| e.expand(*c));
                     e
                 };
-                let steps = 64;
+                let steps = LABEL_GRID_STEPS;
                 let mut best: Option<(f64, Coord)> = None;
                 for i in 1..steps {
                     let y = e.min_y + e.height() * i as f64 / steps as f64;
@@ -194,10 +199,10 @@ fn label_grid_ring(ring: &[Coord], y: f64, extent: &Extent) -> u128 {
     for point in ring {
         if (point.y > y) != (previous.y > y) {
             let crossing = (previous.x - point.x) * (y - point.y) / (previous.y - point.y) + point.x;
-            let (mut lo, mut hi) = (0usize, 65usize);
+            let (mut lo, mut hi) = (0usize, LABEL_GRID_STEPS + 1);
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                let x = extent.min_x + extent.width() * mid as f64 / 64.0;
+                let x = extent.min_x + extent.width() * mid as f64 / LABEL_GRID_STEPS as f64;
                 if x < crossing {
                     lo = mid + 1;
                 } else {
@@ -639,6 +644,7 @@ mod label_scanline_tests {
         assert_eq!(label_grid_ring(&[], 0.0, &Extent::EMPTY), 0);
     }
 
+    /// Frozen 64-step oracle; keep its constants independent of the optimized implementation.
     fn reference_label_point(geometry: &Geometry) -> Option<Coord> {
         match geometry {
             Geometry::Point(c) => Some(*c),
