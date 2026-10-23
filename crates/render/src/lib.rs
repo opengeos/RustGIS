@@ -1353,9 +1353,8 @@ fn visit_complete(
     Ok(result)
 }
 
-/// A label waiting to be placed: the label, its priority and its (layer id, row, label class): a
-/// feature has a label for each class labelling it (#732), each its own.
-type Candidate = (PlacedLabel, f64, (u32, usize, usize));
+/// A label waiting to be placed: the label, its priority and its key.
+type Candidate = (PlacedLabel, f64, rustgis_map::LabelKey);
 
 /// Keep exactly the candidates the upstream placement limit can consider, with stable ties.
 fn compact_label_candidates(candidates: &mut Vec<Candidate>) {
@@ -2541,7 +2540,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     if !display.locked {
         map.label_lock = None;
     }
-    let lock: Option<std::collections::HashSet<(u32, usize, usize)>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
+    let lock: Option<std::collections::HashSet<rustgis_map::LabelKey>> = map.label_lock.as_ref().map(|v| v.iter().copied().collect());
     let distance = viewing_distance(map.ground_res_at(&view.camera), view.height);
     // Graphics text: always drawn, and other labels keep clear of it.
     let mut fixed_labels: Vec<PlacedLabel> = Vec::new();
@@ -2944,9 +2943,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             is_point,
                         );
                         // Layers above first, then the classes listed first (#732), then bigger
-                        // polygons: a step of one outweighs everything the next ones add (area up to
-                        // 1e8, at most MAX_LABEL_CLASSES + 1 classes of 1e9 each, under 1e12).
-                        let pri = area + label_fields.len().saturating_sub(ci) as f64 * 1e9 + (n_layers - li) as f64 * 1e12;
+                        // polygons: a class (ci ≤ MAX_LABEL_CLASSES, 1e9 each) never outweighs a
+                        // layer (1e12), nor an area (≤ 1e8) a class.
+                        let pri = (n_layers - li) as f64 * 1e12 - ci as f64 * 1e9 + area;
                         label_candidates.push((
                             PlacedLabel {
                                 text,
@@ -3632,8 +3631,8 @@ fn halo_for(text: Rgba) -> Rgba {
 struct Placement {
     labels: Vec<PlacedLabel>,
     unplaced: Vec<PlacedLabel>,
-    /// (layer id, row, label class) of each placed label.
-    keys: Vec<(u32, usize, usize)>,
+    /// The key of each placed label.
+    keys: Vec<rustgis_map::LabelKey>,
 }
 
 /// Greedy collision-free placement, highest priority first. Locked labels are all placed (they
@@ -4283,10 +4282,11 @@ mod tests {
         let view = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera, sky: false };
         let sizes = |m: &mut Map| {
             let mut v: Vec<(String, f32)> = render(m, &view).unwrap().labels.into_iter().map(|l| (l.text, l.size)).collect();
-            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
             v
         };
         let default = m.layer(id).unwrap().labels.default.size;
+        assert!(default < 20.0, "so Paris's labels sort Default first");
         let both = [("Lyon".to_string(), default), ("Paris".to_string(), default)];
         // Default takes Paris too, but its label sits where Capitals' does: Capitals, listed
         // first, is placed and Default's collides.
@@ -4294,11 +4294,11 @@ mod tests {
         // Default below, Capitals above: both of Paris's labels fit.
         m.layer_mut(id).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Below;
         m.layer_mut(id).unwrap().labels.classes[0].placement = rustgis_map::LabelPlacement::Above;
-        let mut two = vec![("Lyon".to_string(), default), ("Paris".to_string(), default), ("Paris".to_string(), 20.0)];
-        two.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        let mut got = sizes(&mut m);
-        got.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        assert_eq!(got, two, "a feature two classes take gets a label from each");
+        assert_eq!(
+            sizes(&mut m),
+            [("Lyon".to_string(), default), ("Paris".to_string(), default), ("Paris".to_string(), 20.0)],
+            "a feature two classes take gets a label from each"
+        );
         // Locked with one of Paris's labels placed, it keeps that one only.
         m.layer_mut(id).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Above;
         m.label_display.locked = true;

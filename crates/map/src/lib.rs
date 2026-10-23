@@ -29,7 +29,7 @@ pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{
-    ClassMethod, LabelClass, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
+    ClassMethod, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
 };
 pub use tiles::{TileKind, TileLayer};
 
@@ -761,11 +761,10 @@ pub struct Map {
     /// Map-wide label display switches.
     #[serde(default)]
     pub label_display: LabelDisplay,
-    /// The labels placed when labels were locked, as (layer id, row, label class in
-    /// `Labeling::in_order`): only they are drawn while the lock holds, wherever the map moves.
-    /// Filled by the renderer.
+    /// The labels placed when labels were locked: only they are drawn while the lock holds,
+    /// wherever the map moves. Filled by the renderer.
     #[serde(skip)]
-    pub label_lock: Option<Vec<(u32, usize, usize)>>,
+    pub label_lock: Option<Vec<LabelKey>>,
     /// Relationships, snapping, topology rules and edit settings.
     #[serde(default)]
     pub editing: design::MapEditing,

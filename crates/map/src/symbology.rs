@@ -1111,6 +1111,10 @@ impl LabelClass {
     }
 }
 
+/// A label on the map, as (layer id, row, label class in `Labeling::in_order`): a feature has a
+/// label for each class labelling it (#732).
+pub type LabelKey = (u32, usize, usize);
+
 /// A layer's label classes read against its data, in `Labeling::in_order`: every class whose
 /// clause takes a row labels it.
 pub struct LabelMatcher<'a> {
@@ -1123,7 +1127,7 @@ impl<'a> LabelMatcher<'a> {
     }
 
     /// The classes whose clause takes `row`, each with its place in `Labeling::in_order`.
-    pub fn classes_of<'m>(&'m self, ds: &'m Dataset, row: usize) -> impl Iterator<Item = (usize, &'a LabelClass)> + 'm {
+    pub fn classes_of(&self, ds: &Dataset, row: usize) -> impl Iterator<Item = (usize, &'a LabelClass)> {
         self.classes.iter().enumerate().filter_map(move |(i, (c, q))| match q {
             Some(None) => Some((i, *c)),
             Some(Some(e)) if rustgis_data::query::eval(e, ds, row) => Some((i, *c)),
