@@ -837,7 +837,7 @@ impl RustGisApp {
             table: table::TableState::default(),
             layout: layoutview::LayoutView::default(),
             graphic_format: graphicformat::GraphicFormat::default(),
-            forms: editpanes::Forms::default(),
+            forms: editpanes::Forms { distance_units: "Meters".into(), ..editpanes::Forms::default() },
             workflow: analysispane::Workflow::default(),
             mb: modelbuilder::ModelBuilder::default(),
             ws: workspacepanes::WorkspaceState::default(),
@@ -918,7 +918,7 @@ impl RustGisApp {
             .and_then(|value| {
                 editpanes::DISTANCE_UNITS.iter().find(|unit| unit.eq_ignore_ascii_case(value.trim())).map(|unit| (*unit).to_owned())
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| "Meters".into());
         self.ui.measurement_imperial =
             self.services.load_pref.as_ref().and_then(|load| load("measurement_units")).as_deref() == Some("imperial");
         // The GPU map backend: RUSTGIS_GPU forces it on, else the saved preference.

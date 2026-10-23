@@ -1,5 +1,5 @@
 //! Headless interaction tests for the units users choose and the results they see.
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use rustgis_engine::{Project, Session, data::Geometry, geom::lonlat_to_merc};
 use rustgis_ui_egui::{RustGisApp, Services};
 use serde_json::json;
@@ -121,6 +121,12 @@ fn editing_units_are_remembered_and_applied_explicitly() {
         for _ in 0..3 {
             h.step();
         }
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Distance units").click();
+        h.step();
+        let metres = h.get_by_role_and_label(egui::accesskit::Role::Button, "Meters");
+        assert_eq!(metres.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "default metres option is not selected");
+        metres.click();
+        h.step();
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Move").click();
         h.step();
         assert!((first_x_metres(&h) - 500.0).abs() < 1e-6);

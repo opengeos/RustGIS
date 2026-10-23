@@ -17,7 +17,7 @@ pub(crate) const DISTANCE_UNITS_PREF: &str = "editing_distance_units";
 pub struct Forms {
     pub dx: String,
     pub dy: String,
-    /// Remembered units for Move and constant elevation; empty keeps the metre default.
+    /// Remembered units for Move and constant elevation.
     pub distance_units: String,
     pub angle: String,
     pub factor: String,
@@ -119,9 +119,8 @@ pub fn editing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let mut units_changed = false;
     ui.horizontal(|ui| {
         let unit_label = ui.label(tl!("Distance units"));
-        let label = if app.forms.distance_units.is_empty() { "Meters" } else { &app.forms.distance_units };
         let _ = egui::ComboBox::from_id_salt(DISTANCE_UNITS_PREF)
-            .selected_text(tl!(label))
+            .selected_text(tl!(&app.forms.distance_units))
             .show_ui(ui, |ui| {
                 for &unit in DISTANCE_UNITS {
                     units_changed |= ui.selectable_value(&mut app.forms.distance_units, unit.to_string(), tl!(unit)).changed();

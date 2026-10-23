@@ -297,8 +297,8 @@ pub fn commands() -> Vec<C> {
         C::new("edit.snap", "Snap Point", "Edit › Snapping", snap).view().params(r#"{"lon", "lat"}"#),
         // Modify features.
         C::new("edit.move", "Move", "Edit › Features › Modify", |s, p| {
-            let k = distance_unit_metres(p)?;
-            let (mut dx, mut dy) = (f(p, "dx").unwrap_or(0.0) * k, f(p, "dy").unwrap_or(0.0) * k);
+            let unit = distance_unit_metres(p)?;
+            let (mut dx, mut dy) = (f(p, "dx").unwrap_or(0.0) * unit, f(p, "dy").unwrap_or(0.0) * unit);
             if let Some((k, rot)) = s.map().editing.settings.ground_to_grid {
                 (dx, dy) = ground_to_grid(dx, dy, k, rot);
             }
