@@ -145,14 +145,15 @@ fn popup(ui: &Ui, id: Id, corner: egui::Pos2, room: f32, content: impl FnOnce(&m
 /// The ids in `ids` (the commands a script can run, `script_ids`) that complete `word`, typed
 /// from char `start` to `end`, case aside; the id typed whole isn't offered again.
 fn complete(start: usize, end: usize, word: &str, ids: &[String]) -> Option<Offer> {
-    let mut items: Vec<String> = ids
-        .iter()
-        .filter(|id| id.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)) && !id.eq_ignore_ascii_case(word))
-        .cloned()
-        .collect();
+    let mut items: Vec<String> = ids.iter().filter(|id| starts_with_ci(id, word) && !id.eq_ignore_ascii_case(word)).cloned().collect();
     items.sort();
     items.truncate(MAX_ITEMS);
     (!items.is_empty()).then_some(Offer { start, end, items, of: None })
+}
+
+/// Whether `text` starts with `word`, case aside (ASCII: ids and keys).
+fn starts_with_ci(text: &str, word: &str) -> bool {
+    text.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word))
 }
 
 /// Where a line's object leaves off at its end (`text`, from its `{`): where a quoted key being
@@ -293,15 +294,23 @@ pub fn key_at(script: &str, at: usize) -> Option<KeyAt> {
     Some(KeyAt { start: hint.brace + start, word, nested, hint })
 }
 
+/// A top-level value being typed (`value_at`): the command's line, where the word starts (after
+/// its quote, a char index of the script), the word, and its key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValueAt {
+    pub hint: Hint,
+    pub start: usize,
+    pub word: String,
+    pub key: String,
+}
+
 /// The top-level value being typed at char `at` of `script`: the cursor in a quoted word right
-/// after a key and its colon. The command's line, where the word starts (after its quote, a char
-/// index), the word, and its key.
-pub fn value_at(script: &str, at: usize) -> Option<(Hint, usize, String, String)> {
-    let (h, Scan { value, .. }, text) = scan_at(script, at)?;
+/// after a key and its colon.
+pub fn value_at(script: &str, at: usize) -> Option<ValueAt> {
+    let (hint, Scan { value, .. }, text) = scan_at(script, at)?;
     let (start, key) = value?;
     let word = word_from(text, start)?;
-    let start = h.brace + start;
-    Some((h, start, word, key))
+    Some(ValueAt { start: hint.brace + start, word, key, hint })
 }
 
 /// The top-level key of the second-level object of line `h`'s object that the cursor at char
@@ -355,9 +364,34 @@ fn offer_keys(of: Of, entries: Vec<Vec<String>>, line: &str, start: usize, end: 
         .into_iter()
         .filter(|keys| !keys.iter().any(|k| given.contains(&k.as_str())))
         .flatten()
-        .filter(|k| k.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)))
+        .filter(|k| starts_with_ci(k, word))
         .collect();
     (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
+}
+
+/// What a command's naming key gives (`named`): a geoprocessing tool, or a command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Named {
+    Tool,
+    Command,
+}
+
+/// The top-level key whose value names what command `id`'s `"params": {…}` hold the parameters
+/// of (`gp.run`'s `"tool"`, `task.addStep`'s `"command"`), and what it names; None for a command
+/// without one.
+fn named(id: &str) -> Option<(&'static str, Named)> {
+    match id {
+        "gp.run" => Some(("tool", Named::Tool)),
+        "task.addStep" => Some(("command", Named::Command)),
+        _ => None,
+    }
+}
+
+/// What line `h`'s `"params"` hold the parameters of: the tool or command its naming key gives
+/// (`named`), as written there.
+fn named_in(script: &str, h: &Hint) -> Option<(Named, String)> {
+    let (key, what) = named(&h.id)?;
+    Some((what, value_of(line_of(script, h)?, key)?))
 }
 
 /// What to offer at char `at` of `script`: the command ids for a line's first word, the keys of
@@ -369,12 +403,12 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
     if let Some((start, word)) = word_at(script, at) {
         return complete(start, at, &word, ids);
     }
-    if let Some((h, start, word, key)) = value_at(script, at) {
+    if let Some(ValueAt { hint, start, word, key }) = value_at(script, at) {
         // Other values come later (#662's third step).
-        return match (h.id.as_str(), key.as_str()) {
-            ("gp.run", "tool") => tool_ids(start, at, &word),
-            ("task.addStep", "command") => command_ids(start, at, &word, ids),
-            _ => None,
+        let (_, what) = named(&hint.id).filter(|(names, _)| key == *names)?;
+        return match what {
+            Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
+            Named::Command => value_ids(start, at, &word, ids.iter().map(String::as_str), Of::CommandIds),
         };
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
@@ -385,21 +419,18 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
     let Some(nested) = nested else {
         return complete_keys(&h.id, &params_of(session, &h.id)?, &object, start, at, &word);
     };
-    match (h.id.as_str(), nested.key.as_str()) {
-        ("gp.run", "params") => {
-            let tool = rustgis_engine::analysis::tool(&value_of(line_of(script, &h)?, "tool")?)?;
-            let entries = tool.params.iter().map(|p| vec![p.name.to_string()]).collect();
-            offer_keys(Of::ToolKeys(tool.id.to_string()), entries, &object, start, at, &word)
-        }
-        ("task.addStep", "params") => {
-            let command = value_of(line_of(script, &h)?, "command")?;
-            complete_keys(&command, &params_of(session, &command)?, &object, start, at, &word)
-        }
-        _ => {
-            let entries = entries(&sub_desc(&params_of(session, &h.id)?, &nested.key)?).into_iter().map(|(keys, _)| keys).collect();
-            offer_keys(Of::SubKeys { id: h.id.clone(), key: nested.key.clone() }, entries, &object, start, at, &word)
-        }
+    if nested.key == "params" && named(&h.id).is_some() {
+        return match named_in(script, &h)? {
+            (Named::Tool, name) => {
+                let tool = rustgis_engine::analysis::tool(&name)?;
+                let entries = tool.params.iter().map(|p| vec![p.name.to_string()]).collect();
+                offer_keys(Of::ToolKeys(tool.id.to_string()), entries, &object, start, at, &word)
+            }
+            (Named::Command, name) => complete_keys(&name, &params_of(session, &name)?, &object, start, at, &word),
+        };
     }
+    let entries = entries(&sub_desc(&params_of(session, &h.id)?, &nested.key)?).into_iter().map(|(keys, _)| keys).collect();
+    offer_keys(Of::SubKeys { id: h.id, key: nested.key }, entries, &object, start, at, &word)
 }
 
 /// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
@@ -440,24 +471,13 @@ fn sub_desc(desc: &str, key: &str) -> Option<String> {
     value.starts_with('{').then(|| value.to_string())
 }
 
-/// The command ids (`ids`, those a script can run) that complete `word`, typed from char `start`
-/// to `end`, case aside: the commands for a value (`"command": "`), offered from its quote.
-fn command_ids(start: usize, end: usize, word: &str, ids: &[String]) -> Option<Offer> {
-    let items: Vec<String> = ids.iter().filter(|id| id.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word))).cloned().collect();
-    (!items.is_empty()).then_some(Offer { start, end, items, of: Some(Of::CommandIds) })
-}
-
-/// The ids of the geoprocessing tools that complete `word`, typed from char `start` to `end`,
-/// case aside, in the order the tools are listed (a built-in tool first: an external one with
-/// the same id isn't the one Run finds).
-fn tool_ids(start: usize, end: usize, word: &str) -> Option<Offer> {
+/// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
+/// once, in order (a built-in tool first: an external one with the same id isn't the one Run
+/// finds): the tools or commands a value takes (`of`), offered from its quote.
+fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
     let mut seen = std::collections::HashSet::new();
-    let items: Vec<String> = rustgis_engine::analysis::tools()
-        .map(|t| t.id)
-        .filter(|id| id.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)) && seen.insert(*id))
-        .map(str::to_string)
-        .collect();
-    (!items.is_empty()).then_some(Offer { start, end, items, of: Some(Of::ToolIds) })
+    let items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
+    (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
 }
 
 /// What the help beside a list of keys says about key `key` of `of`'s parameters: the line
@@ -528,10 +548,9 @@ fn tool_help(t: &rustgis_engine::analysis::ToolSpec) -> Help {
 /// `"params"`, the tool's it runs, in a `task.addStep` line's, the command's it adds (when the
 /// line names one there is); elsewhere the line's command's.
 fn help_at(session: &rustgis_engine::Session, script: &str, at: usize, h: &Hint) -> Option<Help> {
-    let inner = || match (h.id.as_str(), nested_at(script, at, h)?.as_str()) {
-        ("gp.run", "params") => rustgis_engine::analysis::tool(&value_of(line_of(script, h)?, "tool")?).map(tool_help),
-        ("task.addStep", "params") => help(session, &value_of(line_of(script, h)?, "command")?),
-        _ => None,
+    let inner = || match named_in(script, h).filter(|_| nested_at(script, at, h).as_deref() == Some("params"))? {
+        (Named::Tool, name) => rustgis_engine::analysis::tool(&name).map(tool_help),
+        (Named::Command, name) => help(session, &name),
     };
     inner().or_else(|| help(session, &h.id))
 }
@@ -2014,7 +2033,7 @@ mod tests {
     /// colon; not a key, a nested value, an unquoted one, or one already closed.
     #[test]
     fn value_at_finds_a_value_being_typed() {
-        let at = |s: &str| super::value_at(s, s.chars().count()).map(|(h, start, word, key)| (h.id, start, word, key));
+        let at = |s: &str| super::value_at(s, s.chars().count()).map(|v| (v.hint.id, v.start, v.word, v.key));
         assert_eq!(at(r#"gp.run {"tool": "bu"#), Some(("gp.run".into(), 17, "bu".into(), "tool".into())));
         assert_eq!(at(r#"gp.run {"params": {}, "tool" : ""#).map(|v| (v.2, v.3)), Some((String::new(), "tool".into())), "after params");
         assert_eq!(at(r#"gp.run {"tool": "a", "x"#), None, "a key");
@@ -2023,7 +2042,7 @@ mod tests {
         assert_eq!(at(r#"gp.run {"tool" ""#), None, "no colon");
         assert_eq!(at(r#"gp.run {"tool": "a" "#), None, "closed");
         let s = r#"gp.run {"tool": "bu"}"#;
-        assert_eq!(super::value_at(s, 19).map(|v| v.2), Some("bu".into()), "a closing quote after the cursor");
+        assert_eq!(super::value_at(s, 19).map(|v| v.word), Some("bu".into()), "a closing quote after the cursor");
         assert!(super::value_at(s, 18).is_none(), "a letter after the cursor");
     }
 
