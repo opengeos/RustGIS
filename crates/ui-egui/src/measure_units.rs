@@ -1,14 +1,15 @@
-//! Display units for live map measurements and the scale bar. Geometry stays in SI units.
+//! Display units for measurements and distance controls. Inputs stay in metres or square metres.
 use rustgis_engine::geom;
 
-/// Keep positive measurements visible when rounding to whole units would erase them.
+/// Keep nonzero measurements visible when rounding to whole units would erase them.
 fn whole_or_small(value: f64) -> String {
-    if value > 0.0 && value < 0.5 {
-        if value < 0.0001 {
+    let magnitude = value.abs();
+    if magnitude > 0.0 && magnitude <= 0.5 {
+        if magnitude < 0.0001 {
             format!("{value:.1e}")
         } else {
             // Two significant figures, with at most five decimal places in this range.
-            let precision = (1.0 - value.log10().floor()) as usize;
+            let precision = (1.0 - magnitude.log10().floor()) as usize;
             format!("{value:.precision$}")
         }
     } else {
@@ -27,6 +28,15 @@ pub fn distance(m: f64, imperial: bool) -> String {
         crate::i18n::fmt("{distance} ft", &[("distance", &whole_or_small(ft))])
     } else {
         crate::i18n::fmt("{distance} mi", &[("distance", &format!("{:.1}", m / geom::METRES_PER_MILE))])
+    }
+}
+
+/// Format an elevation supplied in metres; imperial vertical measurements always use feet.
+pub fn elevation(m: f64, imperial: bool) -> String {
+    if imperial {
+        crate::i18n::fmt("{distance} ft", &[("distance", &whole_or_small(m / geom::METRES_PER_FOOT))])
+    } else {
+        crate::i18n::fmt("{distance} m", &[("distance", &rustgis_engine::map::symbology::fmt_num(m))])
     }
 }
 

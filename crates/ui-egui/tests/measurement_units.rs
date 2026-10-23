@@ -162,6 +162,108 @@ fn painted_text(h: &egui_kittest::Harness<'_, RustGisApp>) -> Vec<String> {
     text
 }
 
+fn profile_harness(length: f64) -> egui_kittest::Harness<'static, RustGisApp> {
+    let mut h = harness();
+    let grid = "ncols 2\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\n30 30\n30 30\n";
+    let raster = rustgis_engine::data::raster::ascii::read(grid, "Terrain", None).unwrap();
+    h.state_mut()
+        .session
+        .map_mut()
+        .add_raster("Terrain", rustgis_engine::map::RasterLayer::from_bytes(raster, "terrain.asc", grid.as_bytes().to_vec()));
+    h.state_mut().ws.profile = Some(json!({
+        "length": length, "min": 30, "max": 40, "gain": 10, "loss": 0,
+        "samples": [{"distance": 0, "elevation": 30}, {"distance": length, "elevation": 40}]
+    }));
+    h.state_mut().run("ui.pane.profile", json!({})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    h
+}
+
+#[test]
+fn measurement_preference_updates_an_existing_profile_length() {
+    let mut h = profile_harness(1000.0);
+    assert!(painted_text(&h).iter().any(|s| s.starts_with("Length 1.0 km")));
+    h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
+    h.step();
+    let text = painted_text(&h);
+    assert!(text.iter().any(|s| s.starts_with("Length 3281 ft")), "{text:?}");
+    assert!(text.iter().any(|s| s == "3281 ft"), "profile chart still uses metric: {text:?}");
+    h.state_mut().run("ui.measurementUnits", json!({"units": "metric"})).unwrap();
+    h.step();
+    assert!(painted_text(&h).iter().any(|s| s.starts_with("Length 1.0 km")));
+}
+
+#[test]
+fn half_foot_profile_elevations_and_gain_remain_nonzero() {
+    let mut h = profile_harness(1000.0);
+    // A rise from half a foot below sea level to sea level is exactly half a foot.
+    h.state_mut().ws.profile = Some(json!({
+        "length": 1000, "min": -0.1524, "max": 0, "gain": 0.1524, "loss": 0,
+        "samples": [{"distance": 0, "elevation": -0.1524}, {"distance": 1000, "elevation": 0}]
+    }));
+    h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
+    h.step();
+    let text = painted_text(&h);
+    assert!(text.iter().any(|s| s.contains("gain 0.50 ft") && s.contains("loss 0 ft")), "{text:?}");
+    assert!(text.iter().any(|s| s == "-0.50 ft"), "negative elevation lost its precision: {text:?}");
+}
+
+#[test]
+fn short_profile_reports_its_measured_length() {
+    let mut h = profile_harness(0.1524);
+    h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
+    h.step();
+    let text = painted_text(&h);
+    assert!(text.iter().any(|s| s.starts_with("Length 0.50 ft")), "{text:?}");
+    assert!(text.iter().any(|s| s == "0.50 ft"), "chart distance differs from the measured length: {text:?}");
+}
+
+#[test]
+fn distance_controls_follow_display_units_and_keep_metre_command_values() {
+    let mut h = harness();
+    h.set_size(egui::vec2(3200.0, 1800.0));
+    h.state_mut().run("labels.distanceRange", json!({"closest": 1000, "farthest": 100000})).unwrap();
+    h.state_mut().run("ui.pane.labeling", json!({"layer": "Paths"})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(painted_text(&h).iter().any(|s| s == "1.0 km"));
+    h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
+    h.step();
+    let text = painted_text(&h);
+    assert!(text.iter().any(|s| s == "3281 ft") && text.iter().any(|s| s == "62.1 mi"), "{text:?}");
+
+    h.state_mut().run("ui.pane.labeling", json!({})).unwrap();
+    h.state_mut().run("ui.tab", json!({"tab": "Style"})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Closest").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "6.2 mi").click();
+    h.step();
+    assert_eq!(h.state().session.map().layer_by_name("Paths").unwrap().labels.default.closest, Some(10000.0));
+
+    h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "View Clipping").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "62.1 mi").click();
+    h.step();
+    assert_eq!(h.state().session.map().view.clip_distance, Some(100000.0));
+
+    h.state_mut().run("ui.measurementUnits", json!({"units": "metric"})).unwrap();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "View Clipping").click();
+    h.step();
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::RadioButton, "100 km").is_some());
+    assert_eq!(h.state().session.map().view.clip_distance, Some(100000.0));
+}
+
 #[test]
 fn measure_menu_switches_live_distance_and_area_readouts_to_imperial() {
     let mut h = harness();

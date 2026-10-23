@@ -1856,7 +1856,10 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     ui.close();
                 }
                 for km in [100.0, 500.0, 1000.0, 3000.0] {
-                    if ui.radio(clip == Some(km * 1000.0), rustgis_engine::geom::format_distance(km * 1000.0)).clicked() {
+                    if ui
+                        .radio(clip == Some(km * 1000.0), crate::measure_units::distance(km * 1000.0, app.ui.measurement_imperial))
+                        .clicked()
+                    {
                         let _ = app.run("map.clipping", json!({"mode": "distance", "distance": km * 1000.0}));
                         ui.close();
                     }
@@ -4158,7 +4161,9 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
             ] {
                 small_menu(ui, app, "eye", label, desc, |ui, app| {
                     for d in [None, Some(1_000.0), Some(10_000.0), Some(100_000.0), Some(1_000_000.0), Some(10_000_000.0)] {
-                        let text = d.map(rustgis_engine::geom::format_distance).unwrap_or_else(|| tl!("<None>").to_string());
+                        let text = d
+                            .map(|d| crate::measure_units::distance(d, app.ui.measurement_imperial))
+                            .unwrap_or_else(|| tl!("<None>").to_string());
                         if ui.radio(cur == d, text).clicked() {
                             let _ = app.run("labels.distanceRange", json!({key: d}));
                             ui.close();

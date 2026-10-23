@@ -16,12 +16,15 @@ to it. More navigation tools are under [View
 effects](#view-effects) below.
 
 **Measurement units.** In **Home › Inspect › Measure**, choose **Metric** or **Imperial**.
-The choice is remembered and updates existing distance and area measurements and the live
-map scale bar. Imperial readouts use feet or miles for length, and square feet, acres or
-square miles for area, according to size. Feet are international feet (0.3048 m).
+The choice is remembered and updates existing distance and area measurements, the live
+map scale bar, elevation profiles, and distance labels and presets for label visibility
+and view clipping. Imperial readouts use feet or miles for length, and square feet, acres
+or square miles for area, according to size. Profile elevations and gain/loss use feet.
+Feet are international feet (0.3048 m).
 Scripts can set `ui.measurementUnits={"units":"imperial"}` or `{"units":"metric"}`;
-calling it without `units` toggles the choice. Editing tools, geoprocessing tools and layout
-scale bars have their own explicit unit controls.
+calling it without `units` toggles the choice. Distance presets still send metre values
+to commands. Editing tools, geoprocessing tools, directions and layout scale bars have
+their own explicit unit controls.
 
 **Zoom To Layer** in a layer's right-click menu shows that layer's extent instead of the whole
 map. It works for feature and raster data, PMTiles archives, cloud-optimised GeoTIFFs, and service
