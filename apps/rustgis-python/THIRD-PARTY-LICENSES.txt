@@ -29,10 +29,10 @@ semver, seq-macro, serde, serde_core, serde_derive, serde_json, sha1, sha2, shle
 simdutf8, siphasher, smallvec, socket2, spade, spki, stable_deref_trait, syn, sys-locale, tar,
 tempfile, thiserror, thiserror-impl, tiberius-macros, time, time-core, tinyvec, tokio-postgres,
 ttf-parser, typed-path, unicode-bidi, unicode-ident, unicode-normalization, unicode-properties,
-ureq, ureq-proto, url, utf8-zero, utf8_iter, uuid, vcpkg, version_check, wasm-bindgen,
-wasm-bindgen-macro, wasm-bindgen-macro-support, wasm-bindgen-shared, wasmi, wasmi_collections,
-wasmi_core, wasmi_ir, wasmparser, web-sys, weezl, whoami, winauth, wkt, x509-cert, xattr, zeroize,
-zune-core, zune-jpeg
+unicode-segmentation, ureq, ureq-proto, url, utf8-zero, utf8_iter, uuid, vcpkg, version_check,
+wasm-bindgen, wasm-bindgen-macro, wasm-bindgen-macro-support, wasm-bindgen-shared, wasmi,
+wasmi_collections, wasmi_core, wasmi_ir, wasmparser, web-sys, weezl, whoami, winauth, wkt,
+x509-cert, xattr, zeroize, zune-core, zune-jpeg
 ====================================================================================================
 
                                  Apache License

@@ -116,6 +116,7 @@ pub use tiny_skia::Pixmap;
 use tiny_skia::{
     FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke, Transform,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Selection highlight (cyan, as desktop GIS users expect).
 pub const SELECTION: Rgba = Rgba::rgb(0x00, 0xE5, 0xFF);
@@ -2962,13 +2963,23 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let label_factor = layer.size_factor(label_scale);
                 let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
                 let lid = layer.id;
+                // Whether a class labels lines along them: those take the stretch of a line in
+                // view, wherever its label point is.
+                let along_line = |placement: LabelPlacement, g: &Geometry| {
+                    matches!(placement, LabelPlacement::Parallel | LabelPlacement::Curved) && matches!(g, Geometry::Line(_))
+                };
+                let any_along = labels
+                    .in_order()
+                    .zip(&label_fields)
+                    .any(|(c, f)| f.is_some() && matches!(c.placement, LabelPlacement::Parallel | LabelPlacement::Curved));
                 for (row, g) in geoms.iter().enumerate() {
                     let Some(g) = g else { continue };
                     if rows.get(row) != Some(&true) {
                         continue;
                     }
                     let Some(c) = g.label_point() else { continue };
-                    if globe.is_none() && !ctx.cull.contains(c) {
+                    let point_in_view = globe.is_some() || ctx.cull.contains(c);
+                    if !point_in_view && !(any_along && matches!(g, Geometry::Line(_)) && ctx.cull.intersects(&g.extent())) {
                         continue;
                     }
                     let Some((x, y)) = ctx.screen(c) else { continue };
@@ -2993,6 +3004,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         if lock.as_ref().is_some_and(|k| !k.contains(&(lid, label_row(row), ci))) {
                             continue;
                         }
+                        if !point_in_view && !along_line(class.placement, g) {
+                            continue;
+                        }
                         let Some(fi) = label_fields.get(ci).copied().flatten() else { continue };
                         let v = ds_ptr.value(row, fi);
                         if v.is_null() {
@@ -3015,12 +3029,16 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             let Some(line) = line.as_deref() else { continue };
                             // It may run past the line's ends by about a letter, as QGIS's overrun.
                             let overrun = size;
-                            if class.placement == LabelPlacement::Parallel {
+                            // A text too long to curve character by character goes straight.
+                            let curved = class.placement == LabelPlacement::Curved
+                                && text.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
+                            if !curved {
                                 let width = text::block_width(&text, size, class.bold);
                                 let Some((cx, cy, a)) = line_labels::parallel(line, width, overrun) else { continue };
                                 (lx, ly, angle) = (cx, cy, Some(a));
                             } else {
-                                let chars: Vec<String> = text.chars().map(String::from).collect();
+                                // Each character with its accents, drawn as one.
+                                let chars: Vec<String> = text.graphemes(true).map(String::from).collect();
                                 let advances: Vec<f32> = chars.iter().map(|c| text::measure(c, size, class.bold)).collect();
                                 let Some(((cx, cy), at)) = line_labels::curved(line, &advances, overrun) else { continue };
                                 (lx, ly) = (cx, cy);
@@ -3689,23 +3707,21 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
     out
 }
 
+/// A line's longest stretch in view, in points (`None` when none has two points in sight): the
+/// one a label along the line follows. Each part is cut at the view's edges and where it goes
+/// out of sight (behind the globe), so a long part mostly off screen counts by what is on it.
+fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f32)>> {
+    let (w, h) = (ctx.view.width as f32, ctx.view.height as f32);
+    let length = |pts: &[(f32, f32)]| pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum::<f32>();
+    parts
+        .iter()
+        .flat_map(|part| line_labels::in_view(part.iter().map(|c| ctx.screen(*c).map(|(x, y)| (x as f32, y as f32))), w, h))
+        .max_by(|a, b| length(a).total_cmp(&length(b)))
+}
+
 /// Turns a label turned with the map (and its icon) as `at` moves it into another view (a
 /// turned or tilted one): its angle there is that of a short step along it, the text kept
 /// upright. Called before the label itself is moved.
-/// A line's longest part as it is on the screen, in points (`None` when no part has two points
-/// in sight): the one a label along the line follows.
-fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f32)>> {
-    let screen = |part: &Vec<Coord>| -> Vec<(f32, f32)> {
-        part.iter()
-            .filter_map(|c| ctx.screen(*c))
-            .map(|(x, y)| (x as f32, y as f32))
-            .filter(|p| p.0.is_finite() && p.1.is_finite())
-            .collect()
-    };
-    let length = |pts: &[(f32, f32)]| pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum::<f32>();
-    parts.iter().map(screen).filter(|pts| pts.len() >= 2).max_by(|a, b| length(a).total_cmp(&length(b)))
-}
-
 fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
     let turned = |x: f32, y: f32, a: f32| -> Option<f32> {
         let ((x0, y0), (x1, y1)) = (at(x, y)?, at(x + 4.0 * a.cos(), y + 4.0 * a.sin())?);
@@ -3730,17 +3746,38 @@ fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) 
         // Turned upside down (a map turned past a quarter): read from the other end.
         let back = l.glyphs.iter().map(|g| g.angle.cos()).sum::<f32>() < 0.0;
         if back {
-            let texts: Vec<String> = l.glyphs.iter().rev().map(|g| g.text.clone()).collect();
-            for (g, t) in l.glyphs.iter_mut().zip(texts) {
-                g.text = t;
-                g.angle += std::f32::consts::PI;
-            }
+            read_back(l);
         }
     }
     if let Some(i) = &mut l.icon
         && let Some(a) = i.angle
     {
         i.angle = Some(turned(i.x, i.y, a).unwrap_or(a));
+    }
+}
+
+/// A curved label's characters read from the line's other end, turned half round: each placed
+/// as far from that end as it was from the start, by its own width rather than that of the
+/// character whose place it takes, a step along the nearest one's angle from it.
+fn read_back(l: &mut PlacedLabel) {
+    let widths: Vec<f32> = l.glyphs.iter().map(|g| text::measure(&g.text, l.size, l.bold)).collect();
+    let total: f32 = widths.iter().sum();
+    // How far along the text each character's centre was.
+    let mut centres = Vec::with_capacity(widths.len());
+    let mut d = 0.0;
+    for w in &widths {
+        centres.push(d + w / 2.0);
+        d += w;
+    }
+    let before = l.glyphs.clone();
+    for (g, c) in l.glyphs.iter_mut().zip(&centres) {
+        let to = total - c;
+        let nearest = centres.iter().zip(&before).min_by(|a, b| (a.0 - to).abs().total_cmp(&(b.0 - to).abs()));
+        let Some((at, slot)) = nearest else { continue };
+        let step = to - at;
+        g.dx = slot.dx + step * slot.angle.cos();
+        g.dy = slot.dy + step * slot.angle.sin();
+        g.angle = slot.angle + std::f32::consts::PI;
     }
 }
 
@@ -5644,6 +5681,40 @@ mod tests {
     }
 
     #[test]
+    fn a_line_mostly_off_screen_is_labelled_along_its_stretch_in_view() {
+        // A river reaching far off to the east, its middle well out of view, and a road whose
+        // longer part is out of view too: both labelled on what is on the screen, and the
+        // river's accent (a combining one) kept on its letter.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("rivers", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.5, 0.5), Coord::new(30.0, 0.5)]])), vec![Value::Text("Rho\u{302}ne".into())]);
+        d.push(
+            Some(Geometry::Line(vec![
+                vec![Coord::new(-1.5, -1.0), Coord::new(1.5, -1.0)],
+                vec![Coord::new(10.0, -1.0), Coord::new(20.0, -1.0)],
+            ])),
+            vec![Value::Text("Seestrasse".into())],
+        );
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.3)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: false };
+        let l = m.layer_mut(id).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.field = "name".into();
+        l.labels.default.size = 12.0;
+        l.labels.default.placement = rustgis_map::LabelPlacement::Curved;
+        let r = render(&mut m, &view).unwrap();
+        for name in ["Rho\u{302}ne", "Seestrasse"] {
+            let l = r.labels.iter().find(|l| l.text == name).unwrap_or_else(|| panic!("{name} placed"));
+            assert!((0.0..400.0).contains(&l.x) && (0.0..400.0).contains(&l.y), "{name} in view: {} {}", l.x, l.y);
+        }
+        let river = r.labels.iter().find(|l| l.text.starts_with("Rho")).unwrap();
+        let glyphs: Vec<&str> = river.glyphs.iter().map(|g| g.text.as_str()).collect();
+        assert_eq!(glyphs, ["R", "h", "o\u{302}", "n", "e"]);
+    }
+
+    #[test]
     fn a_curved_label_turned_upside_down_reads_from_its_other_end() {
         // "AB" along a level line, then the map turned half round: the characters swap ends and
         // stay upright.
@@ -5668,8 +5739,17 @@ mod tests {
         };
         turn_with(&mut l, &|x, y| Some((200.0 - x, 200.0 - y)));
         let order: Vec<(&str, f32)> = l.glyphs.iter().map(|g| (g.text.as_str(), g.dx)).collect();
-        assert_eq!(order, [("B", 5.0), ("A", -5.0)]);
+        assert_eq!(order.iter().map(|g| g.0).collect::<Vec<_>>(), ["A", "B"]);
+        assert!(order[0].1 < order[1].1, "A on the left, read first: {order:?}");
         assert!(l.glyphs.iter().all(|g| g.angle.cos() > 0.99), "upright");
+        // Each placed by its own width: "Wi" turned round keeps "i" beside "W", not a "W" apart.
+        let (w, i) = (text::measure("W", 10.0, false), text::measure("i", 10.0, false));
+        l.glyphs = vec![glyph("W", -i / 2.0), glyph("i", w / 2.0)];
+        turn_with(&mut l, &|x, y| Some((200.0 - x, 200.0 - y)));
+        let (gw, gi) = (&l.glyphs[0], &l.glyphs[1]);
+        assert_eq!((gw.text.as_str(), gi.text.as_str()), ("W", "i"));
+        assert!(((gi.dx - gw.dx) - (w + i) / 2.0).abs() < 1e-3, "{gw:?} {gi:?}");
+        assert!((gw.dx + i / 2.0).abs() < 1e-3, "W first, at the left end: {gw:?}");
     }
 
     #[test]

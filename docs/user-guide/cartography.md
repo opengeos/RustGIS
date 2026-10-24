@@ -243,10 +243,11 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   eight positions around the feature (`labels.placement={"layer": "Cities", "position":
   "aboveRight"}`). Lines can be labelled **along** them (Position › Along lines): **Parallel**
   sets the text straight, turned to the line's direction across it; **Curved** turns each
-  character with the line where it bends. Both sit at the middle of the line's longest part on
-  screen, centred on the line and kept upright, and may run past its ends by about a letter; a
+  character with the line where it bends. Both sit at the middle of the line's longest stretch
+  in view, centred on the line and kept upright, and may run past its ends by about a letter; a
   line too short for its text, or (curved) one bending more than 25° from one character to the
-  next, is left unlabelled. Points and polygons with these placements are labelled as automatic
+  next, is left unlabelled. A text over 200 characters long is set straight rather than
+  curved. Points and polygons with these placements are labelled as automatic
   (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.

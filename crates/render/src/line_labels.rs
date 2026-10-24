@@ -6,6 +6,10 @@
 /// default limit, 25°. Past it, where a line bends sharply, the label is left out.
 pub(super) const MAX_TURN: f32 = 0.436;
 
+/// The most characters a label curves along a line: a longer one is placed straight, so a long
+/// attribute value on many lines doesn't lay out, and draw, character by character.
+pub(super) const MAX_CURVED_CHARS: usize = 200;
+
 /// A line in screen points, with how far along it each vertex is.
 struct Path {
     pts: Vec<(f32, f32)>,
@@ -51,6 +55,70 @@ impl Path {
         let t = if db > da { (d - da) / (db - da) } else { 0.0 };
         Some((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t))
     }
+}
+
+/// The stretches of a line in screen points that are in a view `w` × `h` points: cut where it
+/// crosses the view's edges and at points out of sight (`None`, or of no number), each with two
+/// points or more.
+pub(super) fn in_view(line: impl Iterator<Item = Option<(f32, f32)>>, w: f32, h: f32) -> Vec<Vec<(f32, f32)>> {
+    let mut runs: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut run: Vec<(f32, f32)> = Vec::new();
+    let mut prev: Option<(f32, f32)> = None;
+    let end = |run: &mut Vec<(f32, f32)>, runs: &mut Vec<Vec<(f32, f32)>>| {
+        let run = std::mem::take(run);
+        if run.len() >= 2 {
+            runs.push(run);
+        }
+    };
+    for p in line {
+        let p = p.filter(|p| p.0.is_finite() && p.1.is_finite());
+        match (prev, p) {
+            (Some(a), Some(b)) => match clip(a, b, w, h) {
+                Some((a, b, cut_end)) => {
+                    if run.last() != Some(&a) {
+                        end(&mut run, &mut runs);
+                        run.push(a);
+                    }
+                    run.push(b);
+                    // Left the view: what comes back in is another stretch.
+                    if cut_end {
+                        end(&mut run, &mut runs);
+                    }
+                }
+                None => end(&mut run, &mut runs),
+            },
+            _ => end(&mut run, &mut runs),
+        }
+        prev = p;
+    }
+    end(&mut run, &mut runs);
+    runs
+}
+
+/// The part of the segment `a`–`b` inside a view `w` × `h` points (Liang–Barsky), and whether it
+/// stops short of `b`; `None` when none of it is.
+fn clip(a: (f32, f32), b: (f32, f32), w: f32, h: f32) -> Option<((f32, f32), (f32, f32), bool)> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, q) in [(-dx, a.0), (dx, w - a.0), (-dy, a.1), (dy, h - a.1)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                t0 = t0.max(r);
+            } else {
+                t1 = t1.min(r);
+            }
+        }
+    }
+    if t0.is_nan() || t1.is_nan() || t0 > t1 {
+        return None;
+    }
+    let at = |t: f32| (a.0 + dx * t, a.1 + dy * t);
+    Some((if t0 > 0.0 { at(t0) } else { a }, if t1 < 1.0 { at(t1) } else { b }, t1 < 1.0))
 }
 
 /// The angle (radians, clockwise) from `a` to `b`.
@@ -133,6 +201,19 @@ mod tests {
         assert!(parallel(&[(0.0, 0.0), (30.0, 0.0)], 40.0, 0.0).is_none());
         assert!(parallel(&[(0.0, 0.0), (30.0, 0.0)], 40.0, 5.0).is_some());
         assert!(parallel(&[(0.0, 0.0), (0.0, 0.0)], 1.0, 5.0).is_none(), "no length");
+    }
+
+    #[test]
+    fn a_line_in_view_is_cut_at_its_edges_and_where_it_is_out_of_sight() {
+        // Across the view and out, back in and out again: two stretches, cut at the edges.
+        let line = [(-50.0, 50.0), (50.0, 50.0), (50.0, 150.0), (80.0, 150.0), (80.0, 50.0), (150.0, 50.0)];
+        let runs = in_view(line.iter().copied().map(Some), 100.0, 100.0);
+        assert_eq!(runs, [vec![(0.0, 50.0), (50.0, 50.0), (50.0, 100.0)], vec![(80.0, 100.0), (80.0, 50.0), (100.0, 50.0)]]);
+        // A point out of sight splits the line; a stretch of one point is none.
+        let runs =
+            in_view([Some((10.0, 10.0)), Some((20.0, 10.0)), None, Some((30.0, 10.0)), Some((f32::NAN, 0.0))].into_iter(), 100.0, 100.0);
+        assert_eq!(runs, [vec![(10.0, 10.0), (20.0, 10.0)]]);
+        assert!(in_view([Some((-10.0, -10.0)), Some((-20.0, 200.0))].into_iter(), 100.0, 100.0).is_empty());
     }
 
     #[test]
