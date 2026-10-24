@@ -31,12 +31,16 @@ pub const LIMIT: usize = 30;
 /// Most characters of a query, and of a value shown.
 const MAX_CHARS: usize = 200;
 
-/// Identifies a tile layer across stack reordering without relying on catalog metadata.
+/// Identifies a tile layer across stack reordering without relying on catalog metadata. It uses
+/// temporal source metadata rather than the current URL, which changes with the time slider.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TileIdentity {
     name: String,
     kind: rustgis_map::tiles::TileKind,
-    url: String,
+    /// Static URL, present only for non-dated sources.
+    url: Option<String>,
+    time_url: Option<String>,
+    has_time_urls: bool,
     overlay: bool,
     bounds: Option<[f64; 4]>,
     layers: Vec<String>,
@@ -48,20 +52,22 @@ impl TileIdentity {
         Self {
             name: tile.name.clone(),
             kind: tile.kind,
-            url: tile.time_url.as_ref().unwrap_or(&tile.url).clone(),
+            url: (tile.time_url.is_none() && tile.time_urls.is_empty()).then(|| tile.url.clone()),
+            time_url: tile.time_url.clone(),
+            has_time_urls: !tile.time_urls.is_empty(),
             overlay: tile.overlay,
             bounds: tile.bounds,
             layers: tile.layers.clone(),
             style_layers: tile.style_layers.clone(),
         }
     }
-}
 
-impl TileIdentity {
     pub(crate) fn matches(&self, tile: &rustgis_map::tiles::TileLayer) -> bool {
         self.name == tile.name
             && self.kind == tile.kind
-            && self.url == *tile.time_url.as_ref().unwrap_or(&tile.url)
+            && self.url.as_ref().is_none_or(|url| url == &tile.url)
+            && self.time_url == tile.time_url
+            && self.has_time_urls == !tile.time_urls.is_empty()
             && self.overlay == tile.overlay
             && self.bounds == tile.bounds
             && self.layers == tile.layers
@@ -630,6 +636,76 @@ mod tests {
         s.run("map.removeTiles", &json!({"name": "Coverage east"})).unwrap();
         let e = go_to(&mut s, &hit).unwrap_err();
         assert!(e.contains("has changed; search again"), "{e}");
+    }
+
+    #[test]
+    fn retained_tile_hit_resolves_past_the_limited_search_results() {
+        let mut s = Session::new(crate::Project::default());
+        for i in 0..rustgis_map::tiles::MAX_TILE_LAYERS - 1 {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/filler-{i}/{{z}}/{{x}}/{{y}}.png"),
+                    "name": format!("Coverage filler {i}"), "overlay": true,
+                    "bounds": [-5.0, -5.0, 5.0, 5.0]
+                }),
+            )
+            .unwrap();
+        }
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/target/{z}/{x}/{y}.png",
+                "name": "Coverage target", "overlay": true,
+                "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        let hit = search(&s, "Coverage", LIMIT).hits.remove(0);
+        s.run("map.setTiles", &json!({"name": "Coverage target", "move": "bottom"})).unwrap();
+        let Hit::Tile { identity, .. } = &hit else {
+            panic!("expected tile hit");
+        };
+        assert_eq!(super::super::tiles::index_of_identity(&s, identity), Some(rustgis_map::tiles::MAX_TILE_LAYERS - 1));
+        assert!(!search(&s, "Coverage", LIMIT).hits.iter().any(|h| matches!(h, Hit::Tile { name, .. } if name == "Coverage target")));
+        go_to(&mut s, &hit).unwrap();
+        let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+        assert!((c.x - 15.0).abs() < 1e-6, "{c:?}");
+    }
+
+    #[test]
+    fn retained_dated_tile_hits_survive_time_url_changes() {
+        let mut s = Session::new(crate::Project::default());
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/template/{z}/{x}/{y}.png",
+                "name": "Dated template", "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        s.map_mut().tiles[0].time_url = Some("https://example.invalid/{date:YYYY}/{z}/{x}/{y}.png".into());
+        s.map_mut().tiles[0].url = "https://example.invalid/2024/{z}/{x}/{y}.png".into();
+        let template_hit = search(&s, "Dated template", LIMIT).hits.remove(0);
+        s.map_mut().tiles[0].url = "https://example.invalid/2025/{z}/{x}/{y}.png".into();
+        go_to(&mut s, &template_hit).unwrap();
+
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/cube/2024/{z}/{x}/{y}.png",
+                "name": "Dated cube", "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        let cube = s.map_mut().tiles.get_mut(0).unwrap();
+        cube.time_urls = vec![
+            (2024.0, "https://example.invalid/cube/2024/{z}/{x}/{y}.png".into()),
+            (2025.0, "https://example.invalid/cube/2025/{z}/{x}/{y}.png".into()),
+        ];
+        let cube_hit = search(&s, "Dated cube", LIMIT).hits.remove(0);
+        s.map_mut().tiles[0].url = "https://example.invalid/cube/2025/{z}/{x}/{y}.png".into();
+        go_to(&mut s, &cube_hit).unwrap();
     }
 
     #[test]
