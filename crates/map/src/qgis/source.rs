@@ -142,12 +142,19 @@ fn table_of(s: &str) -> Option<String> {
 /// `path` from the project's folder `dir`, unless it is absolute or a web address.
 fn absolute(path: &str, dir: &str) -> String {
     let path = path.trim();
-    let windows_drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
-    if path.is_empty() || path.starts_with('/') || path.starts_with('\\') || windows_drive || path.contains("://") || dir.is_empty() {
+    if path.is_empty() || !is_relative(path) || dir.is_empty() {
         return path.to_string();
     }
     let rel = path.strip_prefix("./").unwrap_or(path);
     format!("{}/{}", dir.trim_end_matches(['/', '\\']), rel)
+}
+
+/// Whether `path` is relative to the project's folder: not absolute (`/…`, `\\…`, `C:…`) and not
+/// a web address.
+pub fn is_relative(path: &str) -> bool {
+    let path = path.trim();
+    let windows_drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);
+    !(path.starts_with('/') || path.starts_with('\\') || windows_drive || path.contains("://"))
 }
 
 /// Percent-decodes `s` (`%7B` to `{`); a broken escape is kept as it is.

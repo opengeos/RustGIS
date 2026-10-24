@@ -25,15 +25,20 @@ pub fn commands() -> Vec<C> {
 fn qgis_text(p: &Value) -> Result<String, String> {
     let bytes = match (ps(p, "data"), ps(p, "text"), ps(p, "path")) {
         (Some(d), ..) => {
+            // Base64 is 4 characters for 3 bytes: a payload past the file limit isn't decoded.
+            if d.len() as u64 > MAX_FILE / 3 * 4 + 4 {
+                return Err("data is too large for a QGIS file".into());
+            }
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|_| "data must be base64".to_string())?
         }
+        (None, Some(t), _) if t.len() as u64 > MAX_FILE => return Err("text is too large for a QGIS file".into()),
         (None, Some(t), _) => return Ok(t.to_string()),
         (None, None, Some(path)) => read_file(path)?,
         _ => return Err("path, text or data is required".into()),
     };
     if bytes.starts_with(b"PK") {
-        let entries = rustgis_data::zip::read_matching(&bytes, |n| n.to_ascii_lowercase().ends_with(".qgs"))?;
+        let entries = rustgis_data::zip::read_matching_within(&bytes, |n| n.to_ascii_lowercase().ends_with(".qgs"), MAX_FILE as usize)?;
         let (_, qgs) = entries.into_iter().next().ok_or("the .qgz holds no .qgs project")?;
         return String::from_utf8(qgs).map_err(|_| "the .qgz's project isn't text".to_string());
     }
@@ -77,7 +82,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     // Bottom first, so each is added on top of the ones below it.
     let mut added = Vec::new();
     for layer in project.layers.iter().rev() {
-        match add_layer(s, layer, &mut report) {
+        match add_layer(s, layer, dir.is_some(), &mut report) {
             Ok(Some(name)) => added.push(name),
             Ok(None) => {}
             Err(e) => report.skipped(&layer.name, format!("the layer: {e}")),
@@ -101,9 +106,18 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// Adds one QGIS layer to the active map with its style: `Ok(Some(name))` when added, `Ok(None)`
-/// when its source is one RustGIS doesn't read (noted).
-fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, report: &mut Report) -> Result<Option<String>, String> {
+/// when its source is one RustGIS doesn't read (noted). Without the project's folder (`has_dir`:
+/// a project given as text or data with no `dir`), a relative path has nothing to start from and
+/// is noted rather than looked for in the working directory.
+fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report: &mut Report) -> Result<Option<String>, String> {
     let name = layer.name.as_str();
+    if let Source::File { path, .. } | Source::Csv { path, .. } = &layer.source
+        && !has_dir
+        && qgis::is_relative(path)
+    {
+        report.skipped(name, format!("the file {path}, relative to the project's folder, which the import wasn't given (pass dir)"));
+        return Ok(None);
+    }
     match &layer.source {
         Source::File { path, layer: table, .. } => {
             let mut q = json!({"path": path, "name": name});
@@ -122,7 +136,8 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, report: &mut Report) -
             s.run_part("layer.addData", &q)?;
         }
         Source::Xyz { url, zmin, zmax, vector } => {
-            let mut q = json!({"url": url, "name": name, "kind": if *vector { "vector" } else { "raster" }});
+            // An overlay, as a WMS layer is, so web layers keep the tree's order between them.
+            let mut q = json!({"url": url, "name": name, "kind": if *vector { "vector" } else { "raster" }, "overlay": true});
             if let Some(z) = zmin {
                 q["minZoom"] = json!(z);
             }
@@ -209,7 +224,7 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
 }
 
 /// Gives the tile layer a QGIS web layer was added as (`added` is what `map.addTiles` or
-/// `service.add` answered) the layer's visibility and opacity. Tile layers have no scale range,
+/// `service.add` answered) the layer's visibility, opacity and blending mode. Tile layers have no scale range,
 /// so one is noted.
 fn tile_settings(s: &mut Session, added: &Value, layer: &qgis::ProjectLayer, report: &mut Report) {
     let name = layer.name.as_str();
@@ -219,6 +234,9 @@ fn tile_settings(s: &mut Session, added: &Value, layer: &qgis::ProjectLayer, rep
     match index.and_then(|i| s.map_mut().tiles.get_mut(i)) {
         Some(t) => {
             t.visible = layer.visible;
+            if let Some(blend) = st.blend {
+                t.blend = blend;
+            }
             if let Some(tr) = transparency {
                 t.opacity = (1.0 - tr / 100.0).clamp(0.0, 1.0);
             }
@@ -229,6 +247,9 @@ fn tile_settings(s: &mut Session, added: &Value, layer: &qgis::ProjectLayer, rep
             }
             if transparency.is_some() {
                 report.approximated(name, "its transparency: added opaque");
+            }
+            if st.blend.is_some_and(|b| b != rustgis_map::effects::Blend::default()) {
+                report.approximated(name, "its blending mode: added as normal");
             }
         }
     }

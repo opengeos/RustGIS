@@ -704,13 +704,24 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let qgs = r#"<qgis version="3.42.0"><title>Web</title>
   <layer-tree-group><layer-tree-layer id="x" checked="Qt::Unchecked"/></layer-tree-group>
   <projectlayers><maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>x</id><datasource>type=xyz&amp;url=https://tiles.example/%7Bz%7D/%7Bx%7D/%7By%7D.png&amp;zmax=19&amp;zmin=0</datasource><layername>Tiles</layername><provider>wms</provider>
-    <pipe><rasterrenderer opacity="0.25" type="singlebandcolordata"/></pipe></maplayer></projectlayers></qgis>"#;
+    <pipe><rasterrenderer opacity="0.25" type="singlebandcolordata"/></pipe><blendMode>13</blendMode></maplayer></projectlayers></qgis>"#;
     let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
     let t = s.map().tiles.iter().find(|t| t.name == "Tiles").expect("the web layer is added");
     assert!(!t.visible, "unchecked in the layer tree");
     assert!((t.opacity - 0.25).abs() < 1e-6, "{}", t.opacity);
     let text = serde_json::to_string(&out["notes"]).unwrap();
     assert!(text.contains("scale range"), "{text}");
+    // Web layers are overlays, so they stay in the tree's order, and take the layer's blending.
+    let t = s.map().tiles.iter().find(|t| t.name == "Tiles").unwrap();
+    assert!(t.overlay);
+    assert_eq!(t.blend, rustgis_map::effects::Blend::Multiply);
+    // A project given as text with no folder: a relative path is noted, not looked for in the
+    // working directory.
+    let rel = r#"<qgis version="3.42.0"><projectlayers><maplayer type="vector"><id>a</id><datasource>./data/roads.geojson</datasource><layername>Rel</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#;
+    let out = s.run("project.importQgis", &json!({"text": rel})).unwrap();
+    assert!(out["layers"].as_array().unwrap().is_empty());
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("pass dir"), "{text}");
     // Plugins can't run the import: a project names files and web addresses its layers come from.
     assert!(crate::cmd::plugins::user_only("project.importQgis"));
     std::fs::remove_dir_all(&dir).ok();

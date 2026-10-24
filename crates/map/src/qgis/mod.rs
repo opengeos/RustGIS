@@ -26,7 +26,7 @@ use crate::Rgba;
 use crate::effects::Blend;
 use crate::symbology::{Labeling, LineStroke, Renderer};
 pub use expr::to_sql;
-pub use source::Source;
+pub use source::{Source, is_relative};
 
 /// The most XML nodes a project or style is read with (a large project's file is some hundred
 /// thousand).
