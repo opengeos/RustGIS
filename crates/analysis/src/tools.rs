@@ -1301,15 +1301,10 @@ fn extent_contains(a: &Extent, b: &Extent) -> bool {
     !a.is_empty() && !b.is_empty() && a.min_x <= b.min_x && a.max_x >= b.max_x && a.min_y <= b.min_y && a.max_y >= b.max_y
 }
 
+/// Joins normalized lon/lat geometries, retaining the target's source CRS for export.
 fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let target = input(inp, p, "target")?;
     let join = input(inp, p, "join")?;
-
-    if let (Some(tc), Some(jc)) = (target.crs, join.crs)
-        && tc != jc
-    {
-        return Err("the target and join layers must have the same coordinate reference system".into());
-    }
 
     let match_opt = match s(p, "match") {
         "Contains" => "Contains",
@@ -2580,7 +2575,7 @@ mod tests {
         assert_eq!(ds_contains.value(24, jc_poly), &Value::Int(1));
         assert_eq!(ds_contains.value(12, jc_poly), &Value::Int(0));
 
-        // 8. Mismatched coordinate reference systems error
+        // Source CRS metadata must not affect spatial relationships: geometry is already lon/lat.
         let Some(pts_layer) = m.0.get("pts") else { panic!("missing pts") };
         let Some(polys_layer) = m.0.get("polys") else { panic!("missing polys") };
         let mut pts_crs = pts_layer.clone();
@@ -2588,8 +2583,18 @@ mod tests {
         let mut polys_crs = polys_layer.clone();
         polys_crs.crs = Some(rustgis_data::raster::Crs::WebMercator);
         let m_crs = Map(HashMap::from([("polys".to_string(), polys_crs), ("pts".to_string(), pts_crs)]));
-        let err = crate::run("spatialJoin", &m_crs, &serde_json::json!({"target": "pts", "join": "polys"})).unwrap_err();
-        assert!(err.contains("coordinate reference system"));
+        for (params, expected) in [
+            (serde_json::json!({"target": "pts", "join": "polys"}), &ds1),
+            (serde_json::json!({"target": "pts", "join": "polys", "match": "Within"}), &ds5),
+            (serde_json::json!({"target": "polys", "join": "pts", "match": "Contains"}), &ds4),
+        ] {
+            let actual = layer(crate::run("spatialJoin", &m_crs, &params).unwrap());
+            assert_eq!(actual.fields, expected.fields);
+            assert_eq!(actual.features, expected.features);
+            let target = m_crs.0.get(params["target"].as_str().unwrap()).unwrap();
+            assert_eq!(actual.crs, target.crs);
+            assert_eq!(actual.source, None);
+        }
     }
 
     #[test]

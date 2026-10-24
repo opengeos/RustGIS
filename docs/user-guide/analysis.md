@@ -128,7 +128,8 @@ numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the 
 named by `output`, and `<output>_variance`.
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
-to `target` features in the same coordinate system. `match` is **Intersects** (default),
+to `target` features. Layers may have different source coordinate systems: their geometry is
+stored in longitude/latitude before the join. `match` is **Intersects** (default),
 **Contains** (target contains join) or **Within** (target lies within join).
 **Join one to one** (the default `operation`) copies the first matching feature's attributes,
 not their sum or mean; **Join one to many** makes a row for each match. Both add `join_count`,
