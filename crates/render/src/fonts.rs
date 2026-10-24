@@ -344,10 +344,12 @@ pub fn script_font(script: ScriptFont) -> Option<&'static (Vec<u8>, u32)> {
 const SYMBOL_CANDIDATES: &[&str] = &[
     "C:\\Windows\\Fonts\\seguisym.ttf",
     "/System/Library/Fonts/Apple Symbols.ttf",
-    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
 ];
 
 /// Whether a face draws the check and cross marks.
