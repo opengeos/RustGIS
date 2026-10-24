@@ -1665,6 +1665,9 @@ mod tests {
         let read = |v: &serde_json::Value| serde_json::from_value::<Layer>(v.clone()).unwrap().line_strokes[0].dash;
         v["line_strokes"][0]["dash"] = serde_json::json!([1e30, -5, 2]);
         assert_eq!(read(&v).map(|d| d.steps().to_vec()), Some(vec![MAX_DASH_STEP, 0.0, 2.0]));
+        // Too large for an f32 (infinite once read): the longest step, as a large one is.
+        v["line_strokes"][0]["dash"] = serde_json::json!([1e40, 2]);
+        assert_eq!(read(&v).map(|d| d.steps().to_vec()), Some(vec![MAX_DASH_STEP, 2.0]));
         v["line_strokes"][0]["dash"] = serde_json::json!(vec![1.0; 5000]);
         assert_eq!(read(&v).map(|d| d.steps().len()), Some(MAX_DASH_STEPS));
         for solid in [serde_json::json!([0, 0]), serde_json::json!([]), serde_json::json!([-3])] {

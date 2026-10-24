@@ -620,7 +620,9 @@ impl Ctx<'_> {
     }
 
     /// `starts`: where along its line each of `path`'s pieces begins ([`Self::ring_path_at`]), so a
-    /// line cut at the clip box keeps its dashes where they'd be uncut.
+    /// line cut at the clip box keeps its dashes where they'd be uncut. An offset stroke takes the
+    /// same starts: exact on a straight line, a little off after bends, where the shifted line is
+    /// longer or shorter than the line.
     fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke], starts: &DashStarts) {
         // Shifted once per offset: a casing and its core usually share one.
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
@@ -1037,7 +1039,9 @@ fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<(f64, Vec<(f64, f64)>)> {
 }
 
 /// Where along its line each piece of a path begins, in device pixels, as [`Ctx::ring_path_at`]
-/// adds them. Nothing is kept while every piece begins at its line's start (nothing was cut).
+/// adds them. Nothing is kept while every piece begins at its line's start (nothing was cut):
+/// pieces starting at 0, 0 keep `at` empty; a third starting at 41 makes it [0, 0, 41]. `pieces`
+/// counts every piece pushed, so the zeros before the first cut can be filled in then.
 #[derive(Default)]
 pub(crate) struct DashStarts {
     pieces: usize,
