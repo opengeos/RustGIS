@@ -7075,6 +7075,12 @@ fn pmtiles_archives_frame_the_map_on_their_bounds() {
     assert_eq!(r["bounds"][0].as_f64().map(|w| (w + 24.5).abs() < 1e-6), Some(true), "{r}");
     let c = center(&s);
     assert!((c.x + 19.0).abs() < 0.5, "{c:?}");
+    // Search finds archives too and uses the header, even without service metadata bounds.
+    s.run("map.zoomToExtent", &json!({"extent": [0.0, 0.0, 10.0, 10.0]})).unwrap();
+    let r = s.run("map.search", &json!({"query": "iceland", "go": true})).unwrap();
+    assert_eq!(r["hits"][0]["kind"], "tile");
+    let c = center(&s);
+    assert!((c.x + 19.0).abs() < 0.5 && (c.y - 65.0).abs() < 1.5, "{c:?}");
     s.run("map.addTiles", &json!({"url": "https://tile.example.com/{z}/{x}/{y}.png", "name": "xyz"})).unwrap();
     assert!(s.run("map.zoomToTiles", &json!({"name": "xyz"})).is_err());
     assert!(s.run("map.zoomToTiles", &json!({})).is_err());

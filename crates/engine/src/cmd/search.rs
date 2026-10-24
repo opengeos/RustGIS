@@ -38,6 +38,8 @@ pub enum Hit {
     Coordinate { lon: f64, lat: f64 },
     /// A layer whose name matches.
     Layer { id: u32, name: String },
+    /// A web tile layer whose name matches; `index` is its position in the map's tile stack.
+    Tile { index: usize, name: String, overlay: bool },
     /// A bookmark whose name matches.
     Bookmark { name: String },
     /// A feature with a matching value.
@@ -51,6 +53,7 @@ impl Hit {
         match self {
             Hit::Coordinate { lon, lat } => json!({"kind": "coordinate", "lon": lon, "lat": lat, "label": format_lat_lon(*lat, *lon)}),
             Hit::Layer { id, name } => json!({"kind": "layer", "layer": id, "label": name}),
+            Hit::Tile { index, name, overlay } => json!({"kind": "tile", "index": index, "label": name, "overlay": overlay}),
             Hit::Bookmark { name } => json!({"kind": "bookmark", "label": name}),
             Hit::Feature { layer, layer_name, row, field, value, name } => {
                 json!({"kind": "feature", "layer": layer, "layerName": layer_name, "row": row, "field": field, "label": value, "name": name})
@@ -81,6 +84,11 @@ pub fn search(s: &Session, query: &str, limit: usize) -> Results {
     for l in &map.layers {
         if contains_ci(&l.name, &needle) {
             out.hits.push(Hit::Layer { id: l.id, name: l.name.clone() });
+        }
+    }
+    for (index, t) in map.tiles.iter().enumerate() {
+        if contains_ci(&t.name, &needle) {
+            out.hits.push(Hit::Tile { index, name: t.name.clone(), overlay: t.overlay });
         }
     }
     for b in &map.bookmarks {
@@ -207,6 +215,7 @@ pub fn go_to(s: &mut Session, hit: &Hit) -> CmdResult {
             }
             Ok(Value::Null)
         }
+        Hit::Tile { index, .. } => super::tiles::zoom_to_index(s, *index).map(|_| Value::Null),
         Hit::Bookmark { name } => {
             let cam =
                 s.map().bookmarks.iter().find(|b| b.name == *name).map(|b| b.camera).ok_or_else(|| format!("no bookmark '{name}'"))?;
@@ -499,6 +508,63 @@ mod tests {
         // Lowercasing İ makes it longer, so a match isn't refused by its length.
         assert_eq!(rank_text("İstanbul", "i̇stanbul"), Some(0));
         assert!(search(&s, "   ", 50).hits.is_empty());
+    }
+
+    #[test]
+    fn finds_tile_layers_without_bounds_or_visibility() {
+        let mut s = Session::new(crate::Project::default());
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/wms?BBOX={bbox-epsg-3857}",
+                "name": "OSM-WMS", "overlay": true
+            }),
+        )
+        .unwrap();
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/{z}/{x}/{y}.png",
+                "name": "OSM streets"
+            }),
+        )
+        .unwrap();
+        s.run("map.setTiles", &json!({"name": "OSM streets", "visible": false})).unwrap();
+        let r = s.run("map.search", &json!({"query": "  oSm  "})).unwrap();
+        assert_eq!(
+            r["hits"],
+            json!([
+                {"kind": "tile", "index": 0, "label": "OSM-WMS", "overlay": true},
+                {"kind": "tile", "index": 1, "label": "OSM streets", "overlay": false}
+            ])
+        );
+        let r = s.run("map.search", &json!({"query": "OSM-WMS", "limit": 1})).unwrap();
+        assert_eq!(r["hits"][0]["index"], 0);
+        let before = s.map().camera;
+        let e = s.run("map.search", &json!({"query": "OSM-WMS", "go": true})).unwrap_err();
+        assert!(e.contains("doesn't say what it covers"), "{e}");
+        assert_eq!(s.map().camera, before);
+    }
+
+    #[test]
+    fn going_to_tile_hits_uses_their_bounds() {
+        let mut s = Session::new(crate::Project::default());
+        for (name, bounds) in [("Coverage west", [-20.0, -5.0, -10.0, 5.0]), ("Coverage east", [10.0, -5.0, 20.0, 5.0])] {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/{}/{{z}}/{{x}}/{{y}}.png", name.replace(' ', "-")),
+                    "name": name, "bounds": bounds, "overlay": true
+                }),
+            )
+            .unwrap();
+        }
+        for (go, lon) in [(json!(true), 15.0), (json!(1), -15.0)] {
+            s.run("map.search", &json!({"query": "Coverage", "go": go})).unwrap();
+            let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+            assert!((c.x - lon).abs() < 1e-6 && c.y.abs() < 1e-6, "{c:?}");
+            assert!(s.map().camera.res < 10_000.0, "{:?}", s.map().camera);
+        }
     }
 
     #[test]
