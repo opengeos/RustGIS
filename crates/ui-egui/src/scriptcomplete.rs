@@ -5,10 +5,11 @@
 //! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
 //! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
 //! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
-//! `"layer"`, the line's layer's fields for a `"field"`, and in a `gp.run` line's `"params"` what
-//! the tool's parameter takes by its kind (`tool_value`), as the tool's form offers it. Typing
-//! aids beside it: a command's parameters added on accept (`template`), and braces, brackets and
-//! quotes that close themselves (`brace`).
+//! `"layer"`, the line's layer's fields for a `"field"`, the maps, layouts and standalone tables
+//! for a `"map"`, a `"layout"` and a `"table"`, the line's layer's label classes for a `"class"`
+//! (#800), and in a `gp.run` line's `"params"` what the tool's parameter takes by its kind
+//! (`tool_value`), as the tool's form offers it. Typing aids beside it: a command's parameters
+//! added on accept (`template`), and braces, brackets and quotes that close themselves (`brace`).
 //! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};
@@ -41,7 +42,9 @@ pub struct Offer {
 /// `"command"`; or what the project holds for a value: the map's layers for a `"layer"` (and the
 /// tables, for a tool's parameter that takes any layer), the fields of a layer (by its id) for a
 /// `"field"`, the fields of a tool's input (by the name its line gives) for a tool's field
-/// parameter, a tool's parameter's choices.
+/// parameter, a tool's parameter's choices; the project's maps, layouts and standalone tables for
+/// a `"map"`, a `"layout"` and a `"table"`, the label classes of a layer (by its id) for a
+/// `"class"`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Of {
     CommandKeys(String),
@@ -53,12 +56,16 @@ pub enum Of {
     Fields(u32),
     ToolFields(String),
     Choices,
+    Maps,
+    Layouts,
+    Tables,
+    Classes(u32),
 }
 
 impl Of {
     /// Whether its items are a value's (written as a JSON string's text), not keys.
     fn is_value(&self) -> bool {
-        matches!(self, Of::ToolIds | Of::CommandIds | Of::Layers | Of::Fields(_) | Of::ToolFields(_) | Of::Choices)
+        !matches!(self, Of::CommandKeys(_) | Of::SubKeys { .. } | Of::ToolKeys(_))
     }
 }
 
@@ -466,6 +473,26 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                 let l = line_layer(session, line_of(script, &hint)?)?;
                 value_ids(start, at, &word, l.dataset.fields.iter().map(|f| f.name.as_str()), Of::Fields(l.id))
             }
+            // Maps and layouts as Run finds them: the first of a name, case aside.
+            "map" => value_ids(start, at, &word, firsts(session.project.maps.iter().map(|m| m.name.as_str())), Of::Maps),
+            "layout" => value_ids(start, at, &word, firsts(session.project.layouts.iter().map(|l| l.name.as_str())), Of::Layouts),
+            "table" => {
+                // Those `find_table` finds by their name: of two named alike, the first.
+                let all = &session.project.tables;
+                let names = all.iter().enumerate().filter(|(i, t)| rustgis_engine::project::find_table(all, &t.name) == Some(*i));
+                value_ids(start, at, &word, names.map(|(_, t)| t.name.as_str()), Of::Tables)
+            }
+            "class" => {
+                // The line's layer's classes as Run finds them (Default before the listed ones,
+                // so one named as Default isn't found), Default last, as they are matched, unless
+                // the command refuses it.
+                let l = line_layer(session, line_of(script, &hint)?)?;
+                let labels = &l.labels;
+                let listed = labels.classes.iter().take(rustgis_engine::map::symbology::MAX_LABEL_CLASSES).map(|c| c.name.as_str());
+                let listed = firsts(listed.filter(|n| !n.eq_ignore_ascii_case(&labels.default.name)));
+                let default = (!refuses_default(session, &hint.id)).then_some(labels.default.name.as_str());
+                value_ids(start, at, &word, listed.chain(default), Of::Classes(l.id))
+            }
             _ => None,
         };
     }
@@ -575,11 +602,12 @@ fn sub_desc(desc: &str, key: &str) -> Option<String> {
 }
 
 /// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
-/// once: the tools, commands, layers, tables, fields or choices a value takes (`of`), offered
-/// from its quote, so not cut to `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's
-/// first word offers them; the rest in their order: tools with the built-in ones first (an
-/// external one with the same id isn't the one Run finds), layers top first (then tables), fields
-/// as the layer's table has them, choices as the tool lists them.
+/// once: the tools, commands, layers, tables, fields, choices, maps, layouts or label classes a
+/// value takes (`of`), offered from its quote, so not cut to `MAX_ITEMS` (the list scrolls).
+/// Commands sorted, as a line's first word offers them; the rest in their order: tools with the
+/// built-in ones first (an external one with the same id isn't the one Run finds), layers top
+/// first (then tables), fields as the layer's table has them, choices as the tool lists them,
+/// maps, layouts and tables as the project holds them, classes as they are matched.
 fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
     let mut seen = std::collections::HashSet::new();
     let mut items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
@@ -591,11 +619,16 @@ fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item =
 
 /// What the help beside a list says about item `item` of `of`: for a key, the line describing its
 /// parameter (`"size"?: number`) and a longer help under it (a tool's, when it has one); for a
-/// layer, what it holds, for a table its rows; for a field, its type and its alias.
+/// layer, what it holds, for a table its rows; for a field, its type and its alias; for a map,
+/// its layers; for a layout, its page's size; for a label class, the features it takes.
 fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(String, Option<String>)> {
     let described = |desc: &str| entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == item)).map(|(_, text)| (text, None));
     let field = |d: &rustgis_engine::data::Dataset| {
         d.fields.iter().find(|f| f.name == item).map(|f| (tl!(f.ty.label()).to_string(), f.alias.clone()))
+    };
+    let table = || {
+        let t = crate::panes::input_table(session, item)?;
+        Some((crate::i18n::fmt("Table · {n} rows", &[("n", &t.dataset.features.len().to_string())]), None))
     };
     match of {
         Of::CommandKeys(id) => described(&params_of(session, id)?),
@@ -607,8 +640,7 @@ fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(
         Of::Layers => {
             let Some(l) = session.map().layer_by_name(item) else {
                 // A table, after the layers (a tool's parameter that takes any layer).
-                let t = crate::panes::input_table(session, item)?;
-                return Some((crate::i18n::fmt("Table · {n} rows", &[("n", &t.dataset.features.len().to_string())]), None));
+                return table();
             };
             if l.is_raster() {
                 return Some((tl!("Raster").to_string(), None));
@@ -625,12 +657,29 @@ fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(
         }
         Of::Fields(id) => field(&session.map().layer(*id)?.dataset),
         Of::ToolFields(input) => field(crate::panes::input_dataset(session, input)?),
+        Of::Maps => {
+            let m = session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(item))?;
+            Some((crate::i18n::fmt("{n} layers", &[("n", &m.layers.len().to_string())]), None))
+        }
+        Of::Layouts => {
+            let l = session.project.layouts.iter().find(|l| l.name.eq_ignore_ascii_case(item))?;
+            // Rounded, as the layout view's status shows it.
+            let mm = |v: f64| format!("{v:.0}");
+            Some((crate::i18n::fmt("{w} × {h} mm", &[("w", &mm(l.width)), ("h", &mm(l.height))]), None))
+        }
+        Of::Tables => table(),
+        Of::Classes(id) => {
+            // As Run finds it: Default before the listed ones.
+            let labels = &session.map().layer(*id)?.labels;
+            let c = if labels.default.name.eq_ignore_ascii_case(item.trim()) { &labels.default } else { labels.class(item)? };
+            Some((c.where_.clone().unwrap_or_else(|| tl!("Every feature").to_string()), None))
+        }
         Of::ToolIds | Of::CommandIds | Of::Choices => None,
     }
 }
 
 /// The icon beside item `item` of a list of `of`: a layer's kind, as the Layers pane shows it, or
-/// a field's; none for ids and keys.
+/// a field's, a map's, a layout's, a table's, a label class's; none for ids and keys.
 fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> Option<&'static str> {
     use rustgis_engine::data::GeometryType;
     match of? {
@@ -646,6 +695,10 @@ fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> 
             })
         }
         Of::Fields(_) | Of::ToolFields(_) => Some("field"),
+        Of::Maps => Some("map"),
+        Of::Layouts => Some("new_layout"),
+        Of::Tables => Some("table"),
+        Of::Classes(_) => Some("label"),
         _ => None,
     }
 }
@@ -792,6 +845,19 @@ fn params_of(session: &rustgis_engine::Session, id: &str) -> Option<String> {
 /// Whether command `id`'s parameter description names top-level key `key`.
 fn takes(session: &rustgis_engine::Session, id: &str, key: &str) -> bool {
     params_of(session, id).is_some_and(|desc| rustgis_engine::param_keys(&desc).is_some_and(|keys| keys.contains(&key)))
+}
+
+/// Whether command `id` turns down the Default class for its `"class"`, as its description says
+/// (`"class": name (not Default)`).
+fn refuses_default(session: &rustgis_engine::Session, id: &str) -> bool {
+    params_of(session, id)
+        .is_some_and(|desc| entries(&desc).iter().any(|(keys, text)| keys.iter().any(|k| k == "class") && text.contains("(not Default)")))
+}
+
+/// The names of `names` that are the first of theirs, case aside: those Run finds by name.
+fn firsts<'a>(names: impl Iterator<Item = &'a str>) -> impl Iterator<Item = &'a str> {
+    let mut seen = std::collections::HashSet::new();
+    names.filter(move |n| seen.insert(n.to_ascii_lowercase()))
 }
 
 /// What accepting a command whose parameters `desc` describes puts after its id, and where the
@@ -2449,6 +2515,124 @@ mod tests {
         assert_eq!(item_help(s, &Of::Fields(cities.id), &f.name).map(|h| h.0), Some(f.ty.label().to_string()));
         assert_eq!(item_icon(s, Some(&Of::Fields(cities.id)), &f.name), Some("field"));
         assert_eq!(item_icon(s, Some(&Of::ToolIds), "buffer"), None);
+    }
+
+    /// A `"map"`, `"layout"` and `"table"` value offers the project's maps, layouts and standalone
+    /// tables, a `"class"` one the line's layer's label classes (#800), as Run finds them: the first
+    /// of two named alike, case aside, and Default last, left out where the command turns it down.
+    /// Only in a command that takes the key.
+    #[test]
+    fn project_items_are_offered_for_their_values() {
+        use rustgis_engine::data::{Dataset, GeometryType};
+        use serde_json::json;
+        let mut app = crate::RustGisApp::with_sample();
+        let offer = |app: &crate::RustGisApp, s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let s = &mut app.session;
+        let first = s.map().name.clone();
+        s.run("map.new", &json!({"name": "Inset"})).unwrap();
+        s.run("map.activate", &json!({"name": first})).unwrap();
+        s.run("layout.new", &json!({"name": "Poster"})).unwrap();
+        s.run("layout.new", &json!({"name": "Atlas"})).unwrap();
+        s.project.add_table(Dataset::new("Stats", GeometryType::None, vec![]));
+        s.project.add_table(Dataset::new("Stats", GeometryType::None, vec![]));
+        s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big"})).unwrap();
+        let maps: Vec<String> = s.project.maps.iter().map(|m| m.name.clone()).collect();
+        let layouts: Vec<String> = s.project.layouts.iter().map(|l| l.name.clone()).collect();
+        let cities = s.map().layer_by_name("Cities").unwrap();
+        let (id, labels) = (cities.id, &cities.labels);
+        let classes: Vec<String> = labels.classes.iter().map(|c| c.name.clone()).chain([labels.default.name.clone()]).collect();
+        let default = labels.default.name.clone();
+        assert!(maps.len() >= 2 && maps.contains(&"Inset".into()) && classes.contains(&"Big".into()));
+        let o = offer(&app, r#"map.rename {"map": ""#).unwrap();
+        assert_eq!((o.items, o.of), (maps.clone(), Some(super::Of::Maps)));
+        assert_eq!(offer(&app, r#"map.rename {"map": "ins"#).unwrap().items, ["Inset"], "case aside");
+        assert!(offer(&app, r#"map.goToXY {"map": ""#).is_none(), "a command that doesn't take a map");
+        let o = offer(&app, r#"layout.rename {"layout": ""#).unwrap();
+        assert_eq!((o.items, o.of), (layouts, Some(super::Of::Layouts)));
+        let o = offer(&app, r#"share.exportTable {"table": ""#).unwrap();
+        assert_eq!(o.of, Some(super::Of::Tables));
+        assert_eq!(o.items.iter().filter(|n| *n == "Stats").count(), 1, "of two named alike, the first");
+        let o = offer(&app, r#"labels.class.update {"layer": "Cities", "class": ""#).unwrap();
+        assert_eq!((o.items, o.of), (classes.clone(), Some(super::Of::Classes(id))), "Default last");
+        let s = r#"labels.class.update {"class": ""#;
+        let o = super::offer_at(&format!(r#"{s}", "layer": "Cities"}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(o.items, classes, "the layer after the class");
+        let o = offer(&app, r#"labels.class.remove {"layer": "Cities", "class": ""#).unwrap();
+        assert_eq!(o.items, classes[..classes.len() - 1], "not Default");
+        assert!(offer(&app, r#"labels.class.update {"layer": "Nowhere", "class": ""#).is_none(), "a layer that isn't there");
+        // Maps, layouts and classes named alike but for case: the first, the one Run finds.
+        let s = &mut app.session;
+        s.project.maps[1].name = s.project.maps[0].name.to_uppercase();
+        let atlas = s.project.layouts.iter().position(|l| l.name == "Atlas").unwrap();
+        s.project.layouts[atlas].name = "POSTER".into();
+        let labels = &mut s.map_mut().layer_mut(id).unwrap().labels;
+        let mut twin = labels.default.clone();
+        twin.name = default.to_uppercase();
+        labels.classes.push(twin);
+        assert_eq!(offer(&app, r#"map.rename {"map": ""#).unwrap().items.len(), maps.len() - 1, "once, case aside");
+        let o = offer(&app, r#"layout.rename {"layout": ""#).unwrap();
+        assert!(o.items.contains(&"Poster".into()) && !o.items.contains(&"POSTER".into()));
+        let o = offer(&app, r#"labels.class.update {"layer": "Cities", "class": ""#).unwrap();
+        assert_eq!(o.items, classes, "one named as Default isn't the one Run finds");
+    }
+
+    /// Beside a map its layers, a layout its page's size, a table its rows, a label class the
+    /// features it takes; each with its icon.
+    #[test]
+    fn project_items_have_help_and_icons() {
+        use super::{Of, item_help, item_icon};
+        use serde_json::json;
+        let mut app = crate::RustGisApp::with_sample();
+        let s = &mut app.session;
+        s.run("layout.new", &json!({"name": "Poster", "page": "a4", "orientation": "portrait"})).unwrap();
+        s.project.add_table(rustgis_engine::data::Dataset::new("Stats", rustgis_engine::data::GeometryType::None, vec![]));
+        s.run("labels.class.add", &json!({"layer": "Cities", "name": "Big"})).unwrap();
+        let id = s.map().layer_by_name("Cities").unwrap().id;
+        let labels = &mut s.map_mut().layer_mut(id).unwrap().labels;
+        labels.class_mut("Big").unwrap().where_ = Some("pop > 1000000".into());
+        let default = labels.default.name.clone();
+        let s = &app.session;
+        let map = s.map();
+        let help = |of: &Of, item: &str| item_help(s, of, item).map(|h| h.0);
+        assert_eq!(help(&Of::Maps, &map.name.to_uppercase()), Some(format!("{} layers", map.layers.len())), "case aside");
+        assert_eq!(help(&Of::Layouts, "Poster").as_deref(), Some("210 × 297 mm"));
+        assert_eq!(help(&Of::Tables, "Stats").as_deref(), Some("Table · 0 rows"));
+        assert_eq!(help(&Of::Classes(id), "Big").as_deref(), Some("pop > 1000000"));
+        assert_eq!(help(&Of::Classes(id), &default).as_deref(), Some("Every feature"));
+        let icons = [
+            (Of::Maps, map.name.as_str(), "map"),
+            (Of::Layouts, "Poster", "new_layout"),
+            (Of::Tables, "Stats", "table"),
+            (Of::Classes(id), "Big", "label"),
+        ];
+        for (of, item, icon) in icons {
+            assert_eq!(item_icon(s, Some(&of), item), Some(icon), "{of:?}");
+        }
+    }
+
+    /// A command that takes a label class turns Default down when its description says so
+    /// (`"class": name (not Default)`), and only then: what a `"class"` value leaves Default out by.
+    #[test]
+    fn a_class_description_says_whether_default_is_refused() {
+        use serde_json::{Map, Value, json};
+        let app = crate::RustGisApp::with_sample();
+        let ids: Vec<&str> =
+            app.session.registry.commands.iter().map(|c| c.id).filter(|id| super::takes(&app.session, id, "class")).collect();
+        assert!(ids.contains(&"labels.class.remove") && ids.contains(&"labels.style"), "{ids:?}");
+        let cities = app.session.map().layer_by_name("Cities").unwrap();
+        let (field, default) = (cities.dataset.fields[0].name.clone(), cities.labels.default.name.clone());
+        // What each takes besides the class, to reach the class.
+        let given = json!({"layer": "Cities", "class": default, "name": "Renamed", "to": 0, "field": field, "position": "auto"});
+        for id in ids {
+            let mut app = crate::RustGisApp::with_sample();
+            let keys = super::params_of(&app.session, id)
+                .and_then(|d| rustgis_engine::param_keys(&d).map(|k| k.iter().map(|k| k.to_string()).collect::<Vec<_>>()))
+                .unwrap_or_default();
+            let p: Map<String, Value> =
+                given.as_object().unwrap().iter().filter(|(k, _)| keys.contains(*k)).map(|(k, v)| (k.clone(), v.clone())).collect();
+            let refused = app.session.run(id, &Value::Object(p)).is_err_and(|e| e.contains("is the Default class"));
+            assert_eq!(refused, super::refuses_default(&app.session, id), "{id}");
+        }
     }
 
     /// In a `gp.run` line's `"params"`, a value offers what the tool's parameter of its key takes,
