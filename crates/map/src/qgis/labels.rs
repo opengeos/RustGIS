@@ -184,9 +184,8 @@ fn class(
         || weight >= 63.0
         || text.attribute("fontBold") == Some("1");
     let italic = style.contains("italic") || style.contains("oblique") || text.attribute("fontItalic") == Some("1");
-    if let Some(family) = text.attribute("fontFamily").filter(|f| !f.is_empty()) {
-        report.approximated(layer, format!("labels in {family}, drawn in RustGIS's label font"));
-    }
+    // QGIS's font family: drawn in it where it is installed, else in RustGIS's label font.
+    let font = text.attribute("fontFamily").and_then(crate::symbology::font_name);
     if num(text, "fontLetterSpacing").is_some_and(|s| s != 0.0) {
         report.approximated(layer, "label letter spacing, left out");
     }
@@ -220,7 +219,7 @@ fn class(
         farthest: None,
         placement,
         italic,
-        font: None,
+        font,
     })
 }
 

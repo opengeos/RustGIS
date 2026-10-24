@@ -144,6 +144,7 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     assert!(labels.enabled && labels.classes.is_empty());
     assert_eq!((d.field.as_str(), d.size, d.bold, d.italic, d.halo), ("name", 12.0, true, true, true));
     assert_eq!((d.color, d.placement), (Rgba::rgb(20, 40, 60), LabelPlacement::AboveRight));
+    assert_eq!(d.font.as_deref(), Some("Liberation Sans Narrow"), "QGIS's font family");
 
     // Roads: categories with stacked strokes in levels, a hidden one and the rest.
     let roads = &p.layers[1];
@@ -186,7 +187,8 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
         |layer: &str, kind: NoteKind, part: &str| report.notes.iter().any(|n| n.layer == layer && n.kind == kind && n.text.contains(part));
     assert!(said("Land", NoteKind::Approximated, "line pattern"));
     assert!(said("Land", NoteKind::Approximated, "above the last"), "values outside the ranges are noted");
-    assert!(said("Land", NoteKind::Approximated, "Liberation Sans Narrow"));
+    // A QGIS font family is the label class's font, drawn in it where it's installed.
+    assert!(!said("Land", NoteKind::Approximated, "Liberation Sans Narrow"), "no longer approximated");
     assert!(said("Roads", NoteKind::Approximated, "dashed"));
     assert!(said("Roads", NoteKind::Skipped, "markers and hash marks"));
     assert!(said("Roads", NoteKind::Skipped, "length("));
