@@ -15776,3 +15776,36 @@ fn toggling_out_the_only_picked_layer_leaves_none_active() {
     assert!(s.selected_layers().is_empty());
     assert!(s.run("layer.remove", &Value::Null).is_err(), "nothing picked, nothing removed");
 }
+
+#[test]
+fn a_layout_exports_to_svg_with_each_element_its_own_group() {
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape"})).unwrap();
+    let title = s
+        .run("layout.addElement", &json!({"kind": "text", "text": "Cities & rivers <2026>", "x": 20, "y": 10, "w": 150, "h": 15}))
+        .unwrap()["element"]
+        .as_u64()
+        .unwrap();
+    s.run("layout.addElement", &json!({"kind": "rectangle", "x": 5, "y": 5, "w": 40, "h": 20})).unwrap();
+    let out = std::env::temp_dir().join(format!("rustgis-layout-{}.svg", std::process::id()));
+    let r = s.run("layout.export", &json!({"path": out.to_string_lossy(), "dpi": 72})).unwrap();
+    let svg = std::fs::read_to_string(&out).unwrap();
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(r["bytes"].as_u64(), Some(svg.len() as u64));
+    // A page in millimetres, as the layout is.
+    assert!(
+        svg.starts_with("<?xml") && svg.contains(r#"width="297mm" height="210mm" viewBox="0 0 297 210""#),
+        "{}",
+        &svg[..300.min(svg.len())]
+    );
+    let layout = &s.project.layouts[0];
+    for e in layout.elements.iter().filter(|e| e.visible) {
+        assert!(svg.contains(&format!(r#"<g id="element-{}""#, e.id)), "element {} ({}) has a group", e.id, e.name);
+    }
+    // Text stays text, escaped; shapes stay shapes; what has no vector form yet is a picture in its place.
+    assert!(svg.contains("Cities &amp; rivers &lt;2026&gt;</text>"), "the title is text");
+    assert!(svg.contains(&format!(r#"<g id="element-{title}""#)));
+    assert!(svg.contains("<rect"), "the rectangle is a shape");
+    assert!(svg.contains(r#"<image"#) && svg.contains("data:image/png;base64,"), "the map frame is a picture");
+    assert!(svg.trim_end().ends_with("</svg>"));
+}

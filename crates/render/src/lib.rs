@@ -19,6 +19,7 @@ pub mod post;
 mod raster;
 pub mod report;
 mod stroke_paths;
+pub mod svg;
 pub mod terrain;
 mod text;
 pub mod tile_mesh;

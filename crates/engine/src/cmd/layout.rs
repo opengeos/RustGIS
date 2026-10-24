@@ -117,7 +117,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layout"?}"#),
         C::new("layout.export", "Export Layout", "Publish › Output", export)
             .view()
-            .params(r#"{"layout"?, "path": "*.png|*.pdf", "dpi"?: 72..600, "allPages"?: bool (default true: every map series page, up to 500; false: the current page; PDF)}"#),
+            .params(r#"{"layout"?, "path": "*.png|*.pdf|*.svg" (SVG: each element a group of its own; text and shapes as SVG, map frames and surrounds as pictures at dpi), "dpi"?: 72..600, "allPages"?: bool (default true: every map series page, up to 500; false: the current page; PDF)}"#),
         C::new("layout.save", "Save Layout File", "Publish › Save As", |s, p| {
             let path = ps(p, "path").ok_or("path is required")?;
             let l = active(s, p)?.clone();
@@ -3008,13 +3008,33 @@ fn export(s: &mut Session, p: &Value) -> CmdResult {
     let li = index(s, p)?;
     let lower = path.to_ascii_lowercase();
     let pdf = lower.ends_with(".pdf");
+    if lower.ends_with(".svg") {
+        let text = layout_svg(s, li, f(p, "dpi").unwrap_or(150.0))?;
+        rustgis_data::io::write_atomic(Path::new(&path), text.as_bytes()).map_err(|e| format!("{path}: {e}"))?;
+        s.notify(format!("Exported {path}"), false);
+        return Ok(json!({"path": path, "bytes": text.len()}));
+    }
     if !pdf && !lower.ends_with(".png") {
-        return Err("export to a .png or .pdf file".into());
+        return Err("export to a .png, .pdf or .svg file".into());
     }
     let bytes = layout_bytes(s, li, pdf, f(p, "dpi").unwrap_or(150.0), b(p, "allPages").unwrap_or(true))?;
     rustgis_data::io::write_atomic(Path::new(&path), &bytes).map_err(|e| format!("{path}: {e}"))?;
     s.notify(format!("Exported {path}"), false);
     Ok(json!({"path": path, "bytes": bytes.len()}))
+}
+
+/// The layout `li` as it is now (a map series at its current page) as SVG, pictures at `dpi`.
+fn layout_svg(s: &mut Session, li: usize, dpi: f64) -> Result<String, String> {
+    let dpi = if dpi.is_finite() { dpi.clamp(36.0, 600.0) } else { 150.0 };
+    let current = s.project.layouts.get(li).ok_or("no layout")?.series.as_ref().map_or(0, |sr| sr.page);
+    let series = series_info(s, li, current);
+    let info = rustgis_render::layout::PageInfo {
+        page: current + 1,
+        pages: series.as_ref().map_or(1, |i| i.0),
+        page_name: series.map(|i| i.1).unwrap_or_default(),
+    };
+    let layout = s.project.layouts.get(li).ok_or("no layout")?.clone();
+    rustgis_render::svg::layout_svg(&layout, &mut s.project.maps, dpi, &info).ok_or_else(|| "the page is too large to draw".into())
 }
 
 pub(crate) fn import(s: &mut Session, text: &str) -> CmdResult {

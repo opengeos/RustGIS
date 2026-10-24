@@ -200,7 +200,10 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
 - **Snap** starts on: a dragged or resized element snaps to the guides, the page's edges and centre, and
   the other elements' edges and centres, and the line it snapped to is highlighted. Hold Alt to
   place an element freely, or turn **Snap** off in the Page group.
-- **Export** writes PDF (every map series page by default, up to 500) or PNG of the current page;
+- **Export** writes PDF (every map series page by default, up to 500), or PNG or SVG of the current page.
+  In SVG each element is a group (an Inkscape layer) named after it: text stays text and rectangles,
+  ellipses and lines stay shapes, while map frames and the other surrounds are pictures at the export
+  resolution, so the page can be finished in a vector editor;
   `layout.export` accepts `dpi` and `"allPages": false` for just the current PDF
   page. **Print** opens the PDF in the system viewer on desktop; **Save Layout File** and
   **Import Layout** move layouts between projects (`.rgislayout`).

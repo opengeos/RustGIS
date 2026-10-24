@@ -1,0 +1,237 @@
+//! A layout as SVG: the page in millimetres, each element in a group of its own, named after it.
+//! Text, rectangles, ellipses and lines are SVG text and shapes, placed and styled as
+//! [`crate::layout::render`] draws them; the elements with no vector form yet (map frames and the
+//! surrounds) are each a picture of that element alone, in its place.
+
+use std::fmt::Write as _;
+
+use base64::Engine;
+use rustgis_map::Map;
+use rustgis_map::layout::{ElementKind, FontFamily, Layout, LineHead, PT_PER_MM, TextAlign, frame_camera};
+
+use crate::layout::{PageInfo, expand, render};
+
+/// Writes `layout` as an SVG document, pictures drawn at `dpi`; `None` when the page can't be drawn.
+pub fn layout_svg(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<String> {
+    let (pw, ph) = (layout.width, layout.height);
+    let mut s = String::new();
+    let _ = write!(
+        s,
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" "#,
+            r#"xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" "#,
+            r#"width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}">"#,
+            "\n",
+            r##"<rect width="{w}" height="{h}" fill="#ffffff"/>"##,
+            "\n"
+        ),
+        w = num(pw),
+        h = num(ph)
+    );
+    for e in layout.elements.iter().filter(|e| e.visible) {
+        let _ = writeln!(s, r#"<g id="element-{}" inkscape:label="{}" inkscape:groupmode="layer">"#, e.id, esc(&e.name));
+        let (x, y, w, h) = (e.x, e.y, e.w, e.h);
+        match &e.kind {
+            ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font } => {
+                let first = layout.first_frame().and_then(|id| layout.element(id)).and_then(|f| match &f.kind {
+                    ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } => {
+                        let m = maps.iter().find(|m| m.name.eq_ignore_ascii_case(map))?;
+                        Some((m, frame_camera(m, *center, *scale, *bearing, *pitch)))
+                    }
+                    _ => None,
+                });
+                let text = expand(t, layout, info, first);
+                // As the page draws it: the size in points, lines 1.25 apart, the first baseline
+                // 0.6 of the size below the top, lines past the frame left out.
+                let em = size.clamp(2.0, 400.0) * 1.33 / PT_PER_MM;
+                let (anchor, tx) = match align {
+                    TextAlign::Left => ("start", x),
+                    TextAlign::Center => ("middle", x + w / 2.0),
+                    TextAlign::Right => ("end", x + w),
+                };
+                let lines: Vec<(f64, &str)> = text
+                    .lines()
+                    .take(200)
+                    .enumerate()
+                    .map(|(i, l)| (y + em * (0.6 + 1.25 * i as f64), l))
+                    .take_while(|(ly, _)| *ly <= y + h + em)
+                    .collect();
+                let _ = write!(
+                    s,
+                    r#"<text x="{}" y="{}" font-family="{}" font-size="{}" font-weight="{}" font-style="{}" text-anchor="{anchor}" letter-spacing="{}"{} xml:space="preserve">"#,
+                    num(tx),
+                    num(lines.first().map_or(y + em * 0.6, |l| l.0)),
+                    if *font == FontFamily::Serif { "serif" } else { "sans-serif" },
+                    num(em),
+                    if *bold { "bold" } else { "normal" },
+                    if *italic { "italic" } else { "normal" },
+                    num(*letter_spacing * 1.33 / PT_PER_MM),
+                    paint("fill", *color),
+                );
+                match lines.as_slice() {
+                    [(_, only)] => s.push_str(&esc(only)),
+                    many => {
+                        for (ly, l) in many {
+                            let _ = write!(s, r#"<tspan x="{}" y="{}">{}</tspan>"#, num(tx), num(*ly), esc(l));
+                        }
+                    }
+                }
+                s.push_str("</text>\n");
+            }
+            ElementKind::Rectangle { fill, outline, width, radius } => {
+                let rx = radius.clamp(0.0, w.min(h) / 2.0);
+                let _ = writeln!(
+                    s,
+                    r#"<rect x="{}" y="{}" width="{}" height="{}" rx="{}"{}{}/>"#,
+                    num(x),
+                    num(y),
+                    num(w),
+                    num(h),
+                    num(rx),
+                    paint("fill", *fill),
+                    stroke(*outline, *width)
+                );
+            }
+            ElementKind::Ellipse { fill, outline, width } => {
+                let _ = writeln!(
+                    s,
+                    r#"<ellipse cx="{}" cy="{}" rx="{}" ry="{}"{}{}/>"#,
+                    num(x + w / 2.0),
+                    num(y + h / 2.0),
+                    num(w / 2.0),
+                    num(h / 2.0),
+                    paint("fill", *fill),
+                    stroke(*outline, *width)
+                );
+            }
+            ElementKind::Line { color, width, dir, head } => line(&mut s, dir.ends((x, y, w, h)), *color, *width, *head),
+            _ => {
+                if let Some(png) = alone(layout, e.id, maps, dpi, info) {
+                    let _ = writeln!(
+                        s,
+                        r#"<image x="{}" y="{}" width="{}" height="{}" preserveAspectRatio="none" xlink:href="data:image/png;base64,{}"/>"#,
+                        num(x),
+                        num(y),
+                        num(w),
+                        num(h),
+                        base64::engine::general_purpose::STANDARD.encode(png)
+                    );
+                }
+            }
+        }
+        s.push_str("</g>\n");
+    }
+    s.push_str("</svg>\n");
+    Some(s)
+}
+
+/// The element `id` drawn alone on the page at `dpi`, cut to its frame, as PNG.
+fn alone(layout: &Layout, id: u32, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<Vec<u8>> {
+    let mut solo = layout.clone();
+    for e in &mut solo.elements {
+        e.visible = e.id == id;
+    }
+    let e = layout.element(id)?;
+    let page = render(&solo, maps, dpi, info)?;
+    // Pixels per millimetre, as the page came out (a page too large draws at less).
+    let k = f64::from(page.width()) / layout.width.max(1e-9);
+    let x0 = (e.x * k).floor().clamp(0.0, f64::from(page.width()));
+    let y0 = (e.y * k).floor().clamp(0.0, f64::from(page.height()));
+    let x1 = ((e.x + e.w) * k).ceil().clamp(0.0, f64::from(page.width()));
+    let y1 = ((e.y + e.h) * k).ceil().clamp(0.0, f64::from(page.height()));
+    let rect = tiny_skia::IntRect::from_xywh(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32)?;
+    page.clone_rect(rect)?.encode_png().ok()
+}
+
+/// A line element as the page draws it: a shaft and a filled triangle for each head, in millimetres.
+fn line(s: &mut String, [(x0, y0), (x1, y1)]: [(f64, f64); 2], color: rustgis_map::Rgba, width: f64, head: LineHead) {
+    let w = (width / PT_PER_MM).max(0.5 / PT_PER_MM);
+    let (at_start, at_end) = (matches!(head, LineHead::Start | LineHead::Both), matches!(head, LineHead::End | LineHead::Both));
+    let len = (x1 - x0).hypot(y1 - y0);
+    let heads = f64::from(u8::from(at_start) + u8::from(at_end));
+    let head_len = if heads == 0.0 || len <= 0.0 { 0.0 } else { ((6.0 + 2.5 * width) / PT_PER_MM).min(len * 0.4 / heads) };
+    let (ux, uy) = if len > 0.0 { ((x1 - x0) / len, (y1 - y0) / len) } else { (1.0, 0.0) };
+    let inset = head_len * 0.8;
+    let (sx, sy) = if at_start { (x0 + ux * inset, y0 + uy * inset) } else { (x0, y0) };
+    let (ex, ey) = if at_end { (x1 - ux * inset, y1 - uy * inset) } else { (x1, y1) };
+    let _ = writeln!(s, r#"<path d="M{} {}L{} {}" fill="none"{}/>"#, num(sx), num(sy), num(ex), num(ey), stroke(color, width.max(0.5)));
+    let half = (head_len * 0.45).max(w);
+    for ((tx, ty), (dx, dy)) in
+        [(at_start, (x0, y0), (-ux, -uy)), (at_end, (x1, y1), (ux, uy))].into_iter().filter(|h| h.0).map(|h| (h.1, h.2))
+    {
+        let (bx, by) = (tx - dx * head_len, ty - dy * head_len);
+        let _ = writeln!(
+            s,
+            r#"<path d="M{} {}L{} {}L{} {}Z"{}/>"#,
+            num(tx),
+            num(ty),
+            num(bx - dy * half),
+            num(by + dx * half),
+            num(bx + dy * half),
+            num(by - dx * half),
+            paint("fill", color)
+        );
+    }
+}
+
+/// ` stroke="…" stroke-width="…"` for an outline `width` points wide, or `stroke="none"`.
+fn stroke(color: rustgis_map::Rgba, width: f64) -> String {
+    if width > 0.0 {
+        format!(r#"{} stroke-width="{}""#, paint("stroke", color), num(width / PT_PER_MM))
+    } else {
+        r#" stroke="none""#.into()
+    }
+}
+
+/// ` fill="#rrggbb"` (or stroke), with its opacity when it isn't opaque.
+fn paint(attr: &str, c: rustgis_map::Rgba) -> String {
+    let [r, g, b, a] = c.0;
+    let mut out = format!(r##" {attr}="#{r:02x}{g:02x}{b:02x}""##);
+    if a < 255 {
+        let _ = write!(out, r#" {attr}-opacity="{}""#, num(f64::from(a) / 255.0));
+    }
+    out
+}
+
+/// A number with at most three decimals and no trailing zeros.
+fn num(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".into();
+    }
+    let t = format!("{v:.3}");
+    let t = t.trim_end_matches('0').trim_end_matches('.');
+    if t == "-0" { "0".into() } else { t.into() }
+}
+
+/// Text escaped for SVG content and attributes.
+fn esc(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    for ch in t.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            // Control characters other than tab aren't allowed in XML.
+            c if c.is_control() && c != '\t' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbers_and_text_are_written_plainly() {
+        assert_eq!((num(297.0), num(0.1234), num(-0.0001), num(f64::NAN)), ("297".into(), "0.123".into(), "0".into(), "0".into()));
+        assert_eq!(esc("a & <b> \"c\" 'd'\u{1}"), "a &amp; &lt;b&gt; &quot;c&quot; &apos;d&apos;");
+        assert_eq!(paint("fill", rustgis_map::Rgba::new(255, 0, 16, 128)), r##" fill="#ff0010" fill-opacity="0.502""##);
+        assert_eq!(stroke(rustgis_map::Rgba::rgb(0, 0, 0), 0.0), r#" stroke="none""#);
+    }
+}

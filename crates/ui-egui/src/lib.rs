@@ -2366,7 +2366,7 @@ impl RustGisApp {
                     return self.run("project.saveAs", json!({"path": path}));
                 }
             }
-            // Layouts: export (PNG/PDF), print, save and import layout files, draw frames.
+            // Layouts: export (PDF/PNG/SVG), print, save and import layout files, draw frames.
             "ui.exportLayout" | "ui.printLayout" => {
                 let li = self.session.active_layout.ok_or("open a layout first")?;
                 let name = self.session.project.layouts.get(li).map(|l| l.name.clone()).unwrap_or_default();
@@ -2385,8 +2385,9 @@ impl RustGisApp {
                     open_with_system(&path)?;
                     self.session.notify(i18n::fmt("Opened {name} for printing", &[("name", &path.display().to_string())]), false);
                 } else {
-                    let exts: &[&str] = if pdf_only { &["pdf"] } else { &["pdf", "png"] };
-                    if let Some(path) = dialogs::pick_save(&format!("{name}.pdf"), exts, tl!("PDF or PNG")) {
+                    let (exts, kinds): (&[&str], _) =
+                        if pdf_only { (&["pdf"], tl!("PDF")) } else { (&["pdf", "png", "svg"], tl!("PDF, PNG or SVG")) };
+                    if let Some(path) = dialogs::pick_save(&format!("{name}.pdf"), exts, kinds) {
                         return self.run("layout.export", json!({"layout": li, "path": path, "dpi": 200}));
                     }
                 }
