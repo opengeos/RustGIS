@@ -321,9 +321,11 @@ pub fn open_shared(file_name: &str, bytes: std::sync::Arc<Vec<u8>>, layer: Optio
     }
 }
 
-/// Whether a web address names a file read in place by range: a FlatGeobuf or a GeoParquet.
+/// Whether a web address names a file read in place by range: a FlatGeobuf or a GeoParquet. An
+/// address read through a saved S3 connection ([`crate::s3_address`]) is judged by the address it
+/// wraps.
 pub fn is_remote_name(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
+    let lower = crate::s3_address::inner(url).to_ascii_lowercase();
     let path = lower.split(['?', '#']).next().unwrap_or(&lower);
     // `s3://` too: the app's fetchers check it and read it from its bucket's web address (signed
     // only for a connection that serves the bucket, see rustgis_tiles::s3).

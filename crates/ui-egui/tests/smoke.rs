@@ -7,6 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 mod remembered_database;
 
+mod remembered_s3;
 /// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
@@ -1805,6 +1806,11 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     h.state_mut().run("ui.dialog", json!({"name":"s3"})).unwrap();
     h.step();
     h.step();
+    // Other tests may have live process-wide connections, so the section can start collapsed.
+    if h.query_by_role_and_label(egui::accesskit::Role::Button, "Connect").is_none() {
+        h.get_by_label("Connection").click();
+        h.run_steps(3);
+    }
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Connect").click();
     h.step();
     h.get_by_label("Save as Connection").click();
@@ -1814,6 +1820,7 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     assert!(h.query_by_label("Save as Connection").is_none());
     assert!(h.query_by_label("Rename it to save it: a connection has this name").is_none());
     assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("default")));
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::disconnect("default");
 }
 
 /// A table list and the table chosen belong to the address they were listed for: editing the
@@ -3060,6 +3067,86 @@ fn geometry_calculator_switching_back_creates_a_unique_field() {
 }
 
 #[test]
+fn unique_symbology_lets_the_user_choose_a_text_field_before_applying() {
+    use rustgis_ui_egui::rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_ui_egui::rustgis_engine::geom::Coord;
+
+    let mut h = harness();
+    let mut ds = Dataset::new(
+        "Text attributes",
+        GeometryType::Point,
+        vec![Field::new("id", FieldType::Integer), Field::new("category", FieldType::Text), Field::new("other", FieldType::Text)],
+    );
+    ds.push(Some(Geometry::Point(Coord::new(117.0, 3.0))), vec![Value::Int(1), Value::Text("village".into()), Value::Text("town".into())]);
+    let id = h.state_mut().session.map_mut().add_dataset(ds);
+    h.state_mut().session.active_layer = Some(id);
+    h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+    h.step();
+    assert_eq!(h.state().ui.symbology_pending.as_ref().map(|pending| pending.field.as_str()), Some("category"));
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Field").click();
+    h.step();
+    h.step(); // Combo popups enter the accessibility tree on the following frame.
+    h.get_by_label("other").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Apply").click();
+    h.step();
+    let layer = h.state().session.map().layer(id).unwrap();
+    assert!(matches!(layer.renderer, rustgis_ui_egui::rustgis_engine::map::Renderer::Unique { ref field, .. } if field == "other"));
+    assert_eq!(h.state().ui.symbology_pending, None);
+}
+
+#[test]
+fn unique_symbology_pending_choice_follows_its_context() {
+    for change in ["map", "project", "renderer", "undo", "external renderer", "layer"] {
+        let mut h = harness();
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "single"})).unwrap();
+        // A second map deliberately has the same layer IDs and renderer as the first.
+        let mut other = h.state().session.map().clone();
+        other.name = "Other map".into();
+        h.state_mut().session.project.maps.push(other);
+        h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+        h.step();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+        h.step();
+        assert!(h.state().ui.symbology_pending.is_some());
+        // Failed commands leave the valid choice available for retry.
+        assert!(h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "missing field"})).is_err());
+        assert!(h.state().ui.symbology_pending.is_some());
+        if change != "external renderer" {
+            h.state_mut().ui.close_right(rustgis_ui_egui::RightPane::Symbology);
+        }
+        match change {
+            "map" => {
+                h.state_mut().run("map.activate", json!({"name": "Other map"})).unwrap();
+            }
+            "project" => {
+                h.state_mut().run("project.sample", json!(null)).unwrap();
+            }
+            "renderer" => {
+                h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+            }
+            "undo" => {
+                h.state_mut().run("edit.undo", json!(null)).unwrap();
+            }
+            "external renderer" => {
+                // Commands from other clients can bypass RustGisApp::run.
+                h.state_mut().session.run("layer.symbology", &json!({"type": "unique", "field": "name"})).unwrap();
+                h.step();
+            }
+            "layer" => {
+                h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(h.state().ui.symbology_pending.is_none(), "pending choice survived {change}");
+    }
+}
+
+#[test]
 fn map_and_layout_tabs_rename_from_their_menus() {
     let mut h = harness();
     h.state_mut().run("ui.language", json!({"code":"en"})).unwrap();
@@ -3127,4 +3214,24 @@ fn line_strokes_editor_edits_one_class() {
     h.step();
     assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 1);
     assert!(h.state().session.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty(), "the layer's own are untouched");
+}
+
+/// Out-of-range band input shows the raster's range and keeps calculation disabled.
+#[test]
+fn zonal_statistics_shows_available_band_range() {
+    use egui_kittest::kittest::NodeT;
+    use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let mut h = harness();
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let raster = Raster::new("dem", 1, 1, vec![vec![1.0]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    h.state_mut().session.map_mut().add_raster("dem", rustgis_engine::map::RasterLayer::from_path(raster, "dem.tif"));
+    h.state_mut().run("ui.pane.workflows", json!(null)).unwrap();
+    h.state_mut().workflow.section = "zonalStats";
+    h.state_mut().workflow.layer = "dem".into();
+    h.state_mut().workflow.layer2 = "Countries".into();
+    h.state_mut().workflow.zonal_stats.bands = "2".into();
+    h.run_steps(4);
+    assert!(h.query_by_label("Raster has bands 1 to 1.").is_some());
+    assert!(h.query_by_label("Band must be a positive integer, list of bands, or 'all'.").is_some());
+    assert!(h.get_by_label("Calculate Statistics").accesskit_node().is_disabled());
 }

@@ -182,10 +182,13 @@ pub fn try_connection_password<T>(dsn: &str, id: &str, password: &str, run: impl
     let result = run();
     if refused(&result) {
         let mut all = lock();
-        if let Some(previous) = previous {
-            all.insert(dsn.to_string(), previous);
-        } else {
-            all.remove(dsn);
+        // A concurrent login or Forget supersedes this attempt, even if the server refused it.
+        if all.get(dsn).is_some_and(|entry| entry.connection_id.as_deref() == Some(id) && entry.password.expose() == password) {
+            if let Some(previous) = previous {
+                all.insert(dsn.to_string(), previous);
+            } else {
+                all.remove(dsn);
+            }
         }
     }
     result
@@ -864,6 +867,32 @@ fn ours(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refused_password_does_not_restore_over_a_newer_login_or_forget() {
+        let dsn = "host=refused_password_newer_slot";
+        remember_password(dsn, "original");
+        try_connection_password(
+            dsn,
+            "refused-attempt",
+            "bad",
+            || {
+                remember_password(dsn, "newer");
+            },
+            |_| true,
+        );
+        assert_eq!(remembered_password(dsn).as_deref(), Some("newer"));
+        try_connection_password(
+            dsn,
+            "refused-attempt",
+            "bad",
+            || {
+                forget_connection_password("refused-attempt");
+            },
+            |_| true,
+        );
+        assert!(!has_password(dsn));
+    }
 
     #[test]
     fn remembered_database_cache_ownership_and_explicit_preservation() {

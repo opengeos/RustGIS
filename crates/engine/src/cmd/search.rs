@@ -2,6 +2,9 @@
 //! bookmarks and the values in its layers' attribute tables. Places (geocoding) are the UI's,
 //! asked for on Enter: the public servers don't allow searching as one types.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use rustgis_data::Value as Attr;
 use rustgis_geom::{Coord, Extent};
 use serde_json::{Value, json};
@@ -31,6 +34,65 @@ pub const LIMIT: usize = 30;
 /// Most characters of a query, and of a value shown.
 const MAX_CHARS: usize = 200;
 
+/// Identifies a tile layer across stack reordering without relying on catalog metadata. It uses
+/// temporal source metadata rather than the current URL, which changes with the time slider.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileIdentity {
+    name: String,
+    kind: rustgis_map::tiles::TileKind,
+    /// Static URL, present only for non-dated sources.
+    url: Option<String>,
+    time_url: Option<String>,
+    /// Digest of the per-date addresses, which stay put while the time slider moves. A dated cube
+    /// lists thousands of them, too many to keep a copy of (so a digest, compared within a
+    /// session, the only place an identity is used).
+    dated_sources: u64,
+    overlay: bool,
+    bounds: Option<[f64; 4]>,
+    layers: Vec<String>,
+    style_layers: String,
+}
+
+impl TileIdentity {
+    fn of(tile: &rustgis_map::tiles::TileLayer) -> Self {
+        Self {
+            name: tile.name.clone(),
+            kind: tile.kind,
+            url: (tile.time_url.is_none() && tile.time_urls.is_empty()).then(|| tile.url.clone()),
+            time_url: tile.time_url.clone(),
+            dated_sources: digest(&tile.time_urls),
+            overlay: tile.overlay,
+            bounds: tile.bounds,
+            layers: tile.layers.clone(),
+            style_layers: tile.style_layers.clone(),
+        }
+    }
+
+    pub(crate) fn matches(&self, tile: &rustgis_map::tiles::TileLayer) -> bool {
+        self.name == tile.name
+            && self.kind == tile.kind
+            && self.url.as_ref().is_none_or(|url| url == &tile.url)
+            && self.time_url == tile.time_url
+            && self.dated_sources == digest(&tile.time_urls)
+            && self.overlay == tile.overlay
+            && self.bounds == tile.bounds
+            && self.layers == tile.layers
+            && self.style_layers == tile.style_layers
+    }
+}
+
+/// Digest of a layer's per-date addresses and dates, which stand in for the list itself: two
+/// dated layers that share a name are told apart by their sources, not just by having some.
+fn digest(time_urls: &[(f64, String)]) -> u64 {
+    let mut h = DefaultHasher::new();
+    time_urls.len().hash(&mut h);
+    for (date, url) in time_urls {
+        date.to_bits().hash(&mut h);
+        url.hash(&mut h);
+    }
+    h.finish()
+}
+
 /// What a search found.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
@@ -38,6 +100,9 @@ pub enum Hit {
     Coordinate { lon: f64, lat: f64 },
     /// A layer whose name matches.
     Layer { id: u32, name: String },
+    /// A web tile layer whose name matches; `index` is the stack position it held when the search
+    /// ran, which tells alike layers apart when a hit is picked.
+    Tile { index: usize, identity: TileIdentity, name: String, overlay: bool },
     /// A bookmark whose name matches.
     Bookmark { name: String },
     /// A feature with a matching value.
@@ -51,6 +116,7 @@ impl Hit {
         match self {
             Hit::Coordinate { lon, lat } => json!({"kind": "coordinate", "lon": lon, "lat": lat, "label": format_lat_lon(*lat, *lon)}),
             Hit::Layer { id, name } => json!({"kind": "layer", "layer": id, "label": name}),
+            Hit::Tile { index, name, overlay, .. } => json!({"kind": "tile", "index": index, "label": name, "overlay": overlay}),
             Hit::Bookmark { name } => json!({"kind": "bookmark", "label": name}),
             Hit::Feature { layer, layer_name, row, field, value, name } => {
                 json!({"kind": "feature", "layer": layer, "layerName": layer_name, "row": row, "field": field, "label": value, "name": name})
@@ -81,6 +147,11 @@ pub fn search(s: &Session, query: &str, limit: usize) -> Results {
     for l in &map.layers {
         if contains_ci(&l.name, &needle) {
             out.hits.push(Hit::Layer { id: l.id, name: l.name.clone() });
+        }
+    }
+    for (index, t) in map.tiles.iter().enumerate() {
+        if contains_ci(&t.name, &needle) {
+            out.hits.push(Hit::Tile { index, identity: TileIdentity::of(t), name: t.name.clone(), overlay: t.overlay });
         }
     }
     for b in &map.bookmarks {
@@ -206,6 +277,11 @@ pub fn go_to(s: &mut Session, hit: &Hit) -> CmdResult {
                 s.zoom_to(&e);
             }
             Ok(Value::Null)
+        }
+        Hit::Tile { index, identity, name, .. } => {
+            let at = super::tiles::index_of_identity(s, identity, *index)
+                .ok_or_else(|| format!("tile layer '{name}' has changed; search again"))?;
+            super::tiles::zoom_to_index(s, at).map(|_| Value::Null)
         }
         Hit::Bookmark { name } => {
             let cam =
@@ -499,6 +575,212 @@ mod tests {
         // Lowercasing İ makes it longer, so a match isn't refused by its length.
         assert_eq!(rank_text("İstanbul", "i̇stanbul"), Some(0));
         assert!(search(&s, "   ", 50).hits.is_empty());
+    }
+
+    #[test]
+    fn finds_tile_layers_without_bounds_or_visibility() {
+        let mut s = Session::new(crate::Project::default());
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/wms?BBOX={bbox-epsg-3857}",
+                "name": "OSM-WMS", "overlay": true
+            }),
+        )
+        .unwrap();
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/{z}/{x}/{y}.png",
+                "name": "OSM streets"
+            }),
+        )
+        .unwrap();
+        s.run("map.setTiles", &json!({"name": "OSM streets", "visible": false})).unwrap();
+        let r = s.run("map.search", &json!({"query": "  oSm  "})).unwrap();
+        assert_eq!(
+            r["hits"],
+            json!([
+                {"kind": "tile", "index": 0, "label": "OSM-WMS", "overlay": true},
+                {"kind": "tile", "index": 1, "label": "OSM streets", "overlay": false}
+            ])
+        );
+        let r = s.run("map.search", &json!({"query": "OSM-WMS", "limit": 1})).unwrap();
+        assert_eq!(r["hits"][0]["index"], 0);
+        let before = s.map().camera;
+        let e = s.run("map.search", &json!({"query": "OSM-WMS", "go": true})).unwrap_err();
+        assert!(e.contains("doesn't say what it covers"), "{e}");
+        assert_eq!(s.map().camera, before);
+    }
+
+    #[test]
+    fn going_to_tile_hits_uses_their_bounds() {
+        let mut s = Session::new(crate::Project::default());
+        for (name, bounds) in [("Coverage west", [-20.0, -5.0, -10.0, 5.0]), ("Coverage east", [10.0, -5.0, 20.0, 5.0])] {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/{}/{{z}}/{{x}}/{{y}}.png", name.replace(' ', "-")),
+                    "name": name, "bounds": bounds, "overlay": true
+                }),
+            )
+            .unwrap();
+        }
+        for (go, lon) in [(json!(true), 15.0), (json!(1), -15.0)] {
+            s.run("map.search", &json!({"query": "Coverage", "go": go})).unwrap();
+            let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+            assert!((c.x - lon).abs() < 1e-6 && c.y.abs() < 1e-6, "{c:?}");
+            assert!(s.map().camera.res < 10_000.0, "{:?}", s.map().camera);
+        }
+    }
+
+    #[test]
+    fn retained_tile_hits_follow_reordering_and_reject_removed_layers() {
+        let mut s = Session::new(crate::Project::default());
+        for (name, bounds) in [("Coverage west", [-20.0, -5.0, -10.0, 5.0]), ("Coverage east", [10.0, -5.0, 20.0, 5.0])] {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/{}/{{z}}/{{x}}/{{y}}.png", name.replace(' ', "-")),
+                    "name": name, "bounds": bounds, "overlay": true
+                }),
+            )
+            .unwrap();
+        }
+        let hit = search(&s, "Coverage east", LIMIT).hits.remove(0);
+        s.run("map.setTiles", &json!({"name": "Coverage east", "move": "bottom"})).unwrap();
+        go_to(&mut s, &hit).unwrap();
+        let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+        assert!((c.x - 15.0).abs() < 1e-6, "{c:?}");
+        s.run("map.removeTiles", &json!({"name": "Coverage east"})).unwrap();
+        let e = go_to(&mut s, &hit).unwrap_err();
+        assert!(e.contains("has changed; search again"), "{e}");
+    }
+
+    #[test]
+    fn retained_tile_hit_resolves_past_the_limited_search_results() {
+        let mut s = Session::new(crate::Project::default());
+        for i in 0..rustgis_map::tiles::MAX_TILE_LAYERS - 1 {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/filler-{i}/{{z}}/{{x}}/{{y}}.png"),
+                    "name": format!("Coverage filler {i}"), "overlay": true,
+                    "bounds": [-5.0, -5.0, 5.0, 5.0]
+                }),
+            )
+            .unwrap();
+        }
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/target/{z}/{x}/{y}.png",
+                "name": "Coverage target", "overlay": true,
+                "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        let hit = search(&s, "Coverage", LIMIT).hits.remove(0);
+        s.run("map.setTiles", &json!({"name": "Coverage target", "move": "bottom"})).unwrap();
+        let Hit::Tile { index, identity, .. } = &hit else {
+            panic!("expected tile hit");
+        };
+        assert_eq!(super::super::tiles::index_of_identity(&s, identity, *index), Some(rustgis_map::tiles::MAX_TILE_LAYERS - 1));
+        assert!(!search(&s, "Coverage", LIMIT).hits.iter().any(|h| matches!(h, Hit::Tile { name, .. } if name == "Coverage target")));
+        go_to(&mut s, &hit).unwrap();
+        let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+        assert!((c.x - 15.0).abs() < 1e-6, "{c:?}");
+    }
+
+    #[test]
+    fn retained_dated_tile_hits_survive_time_url_changes() {
+        let mut s = Session::new(crate::Project::default());
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/template/{z}/{x}/{y}.png",
+                "name": "Dated template", "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        s.map_mut().tiles[0].time_url = Some("https://example.invalid/{date:YYYY}/{z}/{x}/{y}.png".into());
+        s.map_mut().tiles[0].url = "https://example.invalid/2024/{z}/{x}/{y}.png".into();
+        let template_hit = search(&s, "Dated template", LIMIT).hits.remove(0);
+        s.map_mut().tiles[0].url = "https://example.invalid/2025/{z}/{x}/{y}.png".into();
+        go_to(&mut s, &template_hit).unwrap();
+
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/cube/2024/{z}/{x}/{y}.png",
+                "name": "Dated cube", "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        let cube = s.map_mut().tiles.get_mut(0).unwrap();
+        cube.time_urls = vec![
+            (2024.0, "https://example.invalid/cube/2024/{z}/{x}/{y}.png".into()),
+            (2025.0, "https://example.invalid/cube/2025/{z}/{x}/{y}.png".into()),
+        ];
+        let cube_hit = search(&s, "Dated cube", LIMIT).hits.remove(0);
+        s.map_mut().tiles[0].url = "https://example.invalid/cube/2025/{z}/{x}/{y}.png".into();
+        go_to(&mut s, &cube_hit).unwrap();
+    }
+
+    #[test]
+    fn alike_tile_hits_still_resolve() {
+        let mut s = Session::new(crate::Project::default());
+        s.run(
+            "map.addTiles",
+            &json!({
+                "url": "https://example.invalid/twin/{z}/{x}/{y}.png",
+                "name": "Twin", "bounds": [10.0, -5.0, 20.0, 5.0]
+            }),
+        )
+        .unwrap();
+        // The same layer twice: `map.addTiles` replaces it, but a project load only repairs each
+        // layer and truncates the stack, duplicates and all, so two alike layers do occur.
+        let twin = s.map().tiles[0].clone();
+        s.map_mut().tiles.insert(0, twin);
+        let hits = search(&s, "Twin", LIMIT).hits;
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for hit in &hits {
+            let Hit::Tile { index, identity, .. } = hit else {
+                panic!("expected a tile hit, got {hit:?}");
+            };
+            // Alike layers are told apart by where the row was listed, not left to go stale.
+            assert_eq!(super::super::tiles::index_of_identity(&s, identity, *index), Some(*index));
+            go_to(&mut s, hit).unwrap();
+        }
+        let c = rustgis_geom::merc_to_lonlat(s.map().camera.center);
+        assert!((c.x - 15.0).abs() < 1e-6, "{c:?}");
+    }
+
+    #[test]
+    fn tile_hits_tell_dated_sources_apart() {
+        let mut s = Session::new(crate::Project::default());
+        for i in 0..2 {
+            s.run(
+                "map.addTiles",
+                &json!({
+                    "url": format!("https://example.invalid/cube-{i}/2024/{{z}}/{{x}}/{{y}}.png"),
+                    "name": "Coverage", "bounds": [10.0, -5.0, 20.0, 5.0]
+                }),
+            )
+            .unwrap();
+            // A dated cube: the current address is the slider's, the list is the source.
+            let t = s.map_mut().tiles.get_mut(0).unwrap();
+            t.time_urls = vec![(2024.0, format!("https://example.invalid/cube-{i}/{{z}}/{{x}}/{{y}}.png"))];
+        }
+        let hits = search(&s, "Coverage", LIMIT).hits;
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        // Each identity names its own layer, even asked for from the other's place in the stack.
+        for hit in &hits {
+            let Hit::Tile { index, identity, .. } = hit else {
+                panic!("expected a tile hit, got {hit:?}");
+            };
+            assert_eq!(super::super::tiles::index_of_identity(&s, identity, 1 - *index), Some(*index), "{hit:?}");
+        }
     }
 
     #[test]

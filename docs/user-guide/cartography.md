@@ -22,7 +22,9 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
   below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
   101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
-  out a class no value falls in, so a skewed field can get fewer classes than asked. If no field is
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
+  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  class** adds one, and the field's largest value closes the last class. If no field is
   chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
   field is used. If the layer has no numeric field, or the
   switch fails for another reason, the pane shows why and keeps the current renderer. When numeric
@@ -245,6 +247,13 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+  › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
+  italic take the family's own bold and italic faces where it has them. The family is saved by
+  its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
+  font there (the pane shows it as not installed), and in the browser, which reads no installed
+  fonts (`labels.style={"layer": "Rivers", "font": "Liberation Serif"}`; `labels.fonts` lists the
+  installed families, `{"font": ""}` goes back to the label font).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says

@@ -36,6 +36,7 @@ mod globe_drape;
 mod graphicformat;
 pub mod icons;
 mod keymap;
+mod labelfonts;
 mod labelpane;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,6 +88,7 @@ use serde_json::{Value, json};
 pub use chrome::{DoubleClick, TitlebarMetrics};
 pub use rustgis_assistant;
 pub use rustgis_engine;
+pub use widgets::big_split_menu;
 
 /// Files read asynchronously (browser uploads, drops) waiting to be opened: (file name, bytes).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
@@ -439,6 +441,35 @@ pub enum RightPane {
     Plugin,
 }
 
+/// A Unique Values field choice scoped to the layer and renderer that opened it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingUniqueSymbology {
+    project: u64,
+    map: usize,
+    layer: u32,
+    renderer: std::sync::Arc<rustgis_engine::map::Renderer>,
+    pub field: String,
+}
+
+impl PendingUniqueSymbology {
+    fn new(session: &Session, layer: &rustgis_engine::map::Layer, field: String) -> Self {
+        Self {
+            project: session.opened,
+            map: session.project.active_map,
+            layer: layer.id,
+            renderer: std::sync::Arc::new(layer.renderer.clone()),
+            field,
+        }
+    }
+
+    fn is_current(&self, session: &Session) -> bool {
+        self.project == session.opened
+            && self.map == session.project.active_map
+            && Some(self.layer) == session.active_layer
+            && session.map().layer(self.layer).is_some_and(|layer| layer.renderer == *self.renderer)
+    }
+}
+
 pub struct UiState {
     pub tab: String,
     pub backstage: bool,
@@ -564,6 +595,9 @@ pub struct UiState {
     pub s3: s3ui::State,
     /// New/Edit Connection: the form and the Test under way.
     pub connection: connectionui::State,
+    /// Choose S3 connection: the saved connection picked for each bucket the project's S3
+    /// sources wait on, for the project open.
+    pub s3_chooser: connectionui::Chooser,
     /// The datasets saved connections list under Data Sources › Connections, and the selection.
     pub connection_tree: connectiontree::State,
     /// OpenStreetMap and Boundaries: their choices and the request under way.
@@ -611,6 +645,8 @@ pub struct UiState {
     pub copy_image: Option<egui::ColorImage>,
     /// The scale being typed into the status bar, while its box has focus.
     pub scale_text: Option<String>,
+    /// A field chosen in the Symbology pane before applying Unique Values.
+    pub symbology_pending: Option<PendingUniqueSymbology>,
 }
 
 impl UiState {
@@ -699,6 +735,7 @@ impl Default for UiState {
             stac: Default::default(),
             s3: Default::default(),
             connection: Default::default(),
+            s3_chooser: Default::default(),
             connection_tree: Default::default(),
             portals: Default::default(),
             catalogs: Default::default(),
@@ -730,6 +767,7 @@ impl Default for UiState {
             layers_view: LayersView::DrawingOrder,
             dynamic_text: None,
             scale_text: None,
+            symbology_pending: None,
         }
     }
 }
@@ -803,6 +841,8 @@ pub struct RustGisApp {
     fonts_failed: Vec<String>,
     /// Fonts were installed this frame: `set_fonts` only takes effect on the next one.
     fonts_pending: bool,
+    /// Whether the installed font families were indexed by a frame (see `families::warm_up`).
+    label_fonts_indexed: bool,
     /// The language the interface is drawn in. It trails the chosen one until a font for its
     /// script is active, so switching to Chinese never draws a frame of missing-glyph boxes.
     shown_lang: i18n::Lang,
@@ -857,6 +897,8 @@ impl RustGisApp {
     }
 
     pub fn new(session: Session) -> Self {
+        // The installed fonts a label can be drawn in, indexed while the app starts.
+        rustgis_engine::render::families::warm_up();
         let mut s = session;
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
@@ -907,17 +949,17 @@ impl RustGisApp {
             fonts_requested: Vec::new(),
             fonts_failed: Vec::new(),
             fonts_pending: false,
+            label_fonts_indexed: false,
             shown_lang: i18n::Lang::EN,
             seen_project: None,
         }
     }
 
     pub fn with_services(mut self, services: Services) -> Self {
+        // Both saved database passwords and S3 keys use the same store, installed before prefs.
+        self.session.database_logins.set_store(services.secrets.clone());
         self.services = services;
         sourcespane::load_connections(&mut self);
-        // Saved database passwords live in the system's store, which the engine reaches through
-        // the session so the assistant and scripts see the same logins as the interface.
-        self.session.database_logins.set_store(self.services.secrets.clone());
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
@@ -1491,6 +1533,11 @@ impl RustGisApp {
         if let Err(e) = &r {
             log::info!("{id}: {e}");
         }
+        // Commands can replace the project, switch maps or change the renderer while the pane
+        // is closed. A field picked for the old context must not overwrite the new renderer.
+        if self.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&self.session)) {
+            self.ui.symbology_pending = None;
+        }
         // A project replacing this one hasn't been saved in the browser yet (opening a file
         // names it again).
         if r.is_ok() && matches!(id, "project.new" | "project.sample" | "project.open" | "project.openText" | "project.fromTemplate") {
@@ -1577,7 +1624,7 @@ impl RustGisApp {
         let active = self.session.active_layer.take();
         let needs = (spec.enabled)(&self.session).is_some();
         self.session.active_layer = active;
-        if !defaults && !(needs && (spec.enabled)(&self.session).is_none()) {
+        if !(defaults || needs && (spec.enabled)(&self.session).is_none()) {
             return None;
         }
         let map = self.session.map();
@@ -2144,7 +2191,9 @@ impl RustGisApp {
                             Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                         );
                     }
-                    self.session.notify(i18n::fmt("Reading {url}…", &[("url", url)]), false);
+                    // An address read through a saved S3 connection is said as the address it wraps.
+                    let shown = rustgis_engine::data::s3_address::inner(url);
+                    self.session.notify(i18n::fmt("Reading {url}…", &[("url", shown)]), false);
                     let mut probe = p.clone();
                     if let Some(o) = probe.as_object_mut() {
                         o.remove(connectiontree::ORIGIN);
@@ -2179,7 +2228,8 @@ impl RustGisApp {
                 if let Some(origin) = &origin {
                     q[connectiontree::ORIGIN] = json!(origin);
                 }
-                self.session.notify(i18n::fmt("Downloading {url}…", &[("url", &url)]), false);
+                let shown = rustgis_engine::data::s3_address::inner(&url);
+                self.session.notify(i18n::fmt("Downloading {url}…", &[("url", shown)]), false);
                 let id = self.session.download_started();
                 self.ui.downloads.push((id, url, q, slot));
             }
@@ -2193,6 +2243,9 @@ impl RustGisApp {
                     connectionui::start_test(self);
                 }
             }
+            // Choose S3 connection: the saved connection that reads the project's S3 sources
+            // waiting for a choice (`connection.resolveS3` does it).
+            "ui.s3Connections" => connectionui::open_chooser(self)?,
             // A map or feature service: the dialog, then (with an address) its capabilities,
             // fetched off the frame; the dialog lists its layers when they land.
             "ui.importService" => serviceui::start(self, p, false)?,
@@ -2336,8 +2389,12 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg"], tl!("RustGIS project")) {
-                    let r = self.run("project.open", json!({"path": path}));
+                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg", "qgs", "qgz"], tl!("Projects (RustGIS, QGIS)"))
+                {
+                    // A QGIS project opens as a new map of this one.
+                    let lower = path.to_ascii_lowercase();
+                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
+                    let r = self.run(cmd, json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
                     return r;
@@ -2482,6 +2539,8 @@ impl RustGisApp {
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
                     "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
+                    "qgisProject" => ("project.importQgis", &["qgs", "qgz"], "QGIS project"),
+                    "qgisStyle" => ("style.importQgis", &["qml"], "QGIS layer style"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
                     "bookmarks" => ("bookmark.import", &["rgisbookmarks"], "RustGIS bookmarks"),
@@ -3293,6 +3352,8 @@ impl RustGisApp {
         }
         // A project an agent or a script opened, before the frame draws the old one's fields.
         layoutview::follow_project(self);
+        // A project's S3 sources waiting for a choice of saved connection: asked once.
+        connectionui::follow_project(self);
         // Fonts installed last frame are active now.
         self.fonts_pending = false;
         i18n::set_current(self.lang());
@@ -3400,6 +3461,24 @@ impl RustGisApp {
             theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
             self.fonts_pending = true;
             self.map.invalidate();
+        }
+        // The label fonts the last frame's labels asked for (after the interface fonts, which
+        // would replace them). Not in a frame that set the interface fonts: those take effect on
+        // the next, and setting fonts now, from the definitions in effect, would undo them.
+        if self.fonts_pending {
+            ctx.request_repaint();
+        } else {
+            labelfonts::install_pending(ctx);
+        }
+        // Labels in a named family draw in the label font until the installed fonts are
+        // indexed (`families::warm_up`); then the map is drawn again in theirs.
+        if !self.label_fonts_indexed {
+            if rustgis_engine::render::families::installed_now().is_some() {
+                self.label_fonts_indexed = true;
+                self.map.invalidate();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {

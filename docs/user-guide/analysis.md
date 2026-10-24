@@ -297,6 +297,10 @@ help; there the help by the cursor is the tool's. A `task.addStep` line works th
 command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
 icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
 (before or after it), or of the active layer when it names none, with each field's type beside it.
+`"map": "`, `"layout": "` and `"table": "` offer the project's maps, layouts and standalone tables,
+with their layer counts, page sizes and row counts. `"class": "` offers the line's layer's label
+classes (or the active layer's), with each class's SQL clause, or **All features**. Default is
+included under its current name, except for commands that cannot remove or move it.
 In a `gp.run` line's `"params"`, a value offers what the tool's parameter takes, as the tool's
 form does: the layers of its kind (polygon, point, raster, vector; any layer, then the tables),
 the fields of the tool's input that it takes (numeric, holding coordinates), or its choices
@@ -539,10 +543,13 @@ rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","co
 
 ## Zonal statistics and polygon clipping
 
+Open **Zonal Statistics** through Command Search, or choose it in the Workflows pane.
+
 Zonal Statistics uses the selected polygon features when the layer has a selection. It keeps
 original geometries and fields, and reports features with missing or rejected polygon parts.
-If any polygon part fails validation or transformation, the feature receives count 0 and null
-statistics, so results never summarize only the surviving parts. Large
+If any polygon part fails validation or transformation to WGS 84, the feature receives count 0 and null
+statistics. If a part subsequently fails projection onto the raster grid, it is omitted and reported;
+statistics cover the remaining valid parts. Large
 overlapping zones each require a separate pass over their raster window.
 
 For `raster.process` polygon clipping, `selectedOnly: true` requires a selection,
@@ -550,6 +557,18 @@ For `raster.process` polygon clipping, `selectedOnly: true` requires a selection
 The Process pane initially checks Selected only when the chosen layer has a selection, and sends
 the choice explicitly. Clipping and Zonal Statistics share
 polygon transformation rules so a failed hole cannot silently enlarge the sampled area.
+A malformed ring or a failed projection rejects its complete polygon part in all raster masking
+operations. Clipping skips invalid features and reports their count in the command result;
+its output bounds cover the valid polygons only.
+
+An empty band field or `bands: ""` selects band 1. The pane disables calculation when raster
+data is unavailable, shows the available band range for invalid band input, and indicates when
+only selected polygons will appear in the output. Both tools report parts omitted during raster-grid
+projection while retaining the valid parts.
+
+Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
+case-insensitive names. An exact spelling takes precedence; otherwise a name matching several
+fields is rejected as ambiguous. This prevents silently using the wrong field.
 
 ## Deep learning and hosted imagery
 

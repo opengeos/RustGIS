@@ -164,7 +164,11 @@ pub fn is_tile(url: &str) -> bool {
 
 /// Whether an archive address is a file on this computer rather than a web address.
 /// (As `rustgis_map::tiles::is_local_archive` decides it, which a layer's address went through.)
+/// An address read through a saved S3 connection is never a file, well formed or not.
 pub fn is_local(archive: &str) -> bool {
+    if rustgis_data::s3_address::is_wrapper(archive) {
+        return false;
+    }
     let lower = archive.get(..8).unwrap_or(archive).to_ascii_lowercase();
     !(lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("s3://"))
 }
@@ -385,6 +389,17 @@ pub(crate) fn forget() {
     archives().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, s| matches!(s, State::Loading(_)));
     // Reads under way are kept: their waiting tiles are answered when they land.
     leaves().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, l| matches!(l, Leaf::Loading(_)));
+}
+
+/// Forgets what was read of one archive (its header, and its directories), but not a read under
+/// way: a failed read is made again with whatever login now signs the archive's address.
+pub(crate) fn forget_archive(archive: &str) {
+    let mut all = archives().lock().unwrap_or_else(|e| e.into_inner());
+    if all.get(archive).is_some_and(|s| !matches!(s, State::Loading(_))) {
+        all.remove(archive);
+    }
+    drop(all);
+    leaves().lock().unwrap_or_else(|e| e.into_inner()).retain(|(a, _), l| a != archive || matches!(l, Leaf::Loading(_)));
 }
 
 /// An archive's header and metadata: `Ok(None)` while they are read (the map draws again once

@@ -209,7 +209,7 @@ impl Agent {
     fn local_delegation(&self, call: &ToolCall) -> bool {
         if call.name != "delegate"
             || self.depth != 0
-            || !call.args.get("task").and_then(serde_json::Value::as_str).is_some_and(|s| !s.trim().is_empty())
+            || call.args.get("task").and_then(serde_json::Value::as_str).is_none_or(|s| s.trim().is_empty())
         {
             return false;
         }

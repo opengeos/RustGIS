@@ -587,11 +587,11 @@ pub fn find_field_case_insensitive(ds: &Dataset, name: &str) -> Result<usize, St
             matches.push(idx);
         }
     }
-    match matches.len() {
-        0 => Err(format!("no field named '{name}'")),
-        1 => Ok(matches[0]),
+    match matches.as_slice() {
+        [] => Err(format!("no field named '{name}'")),
+        [only] => Ok(*only),
         _ => {
-            let names: Vec<String> = matches.iter().map(|&i| ds.fields[i].name.clone()).collect();
+            let names: Vec<String> = matches.iter().filter_map(|&i| ds.fields.get(i).map(|f| f.name.clone())).collect();
             Err(format!(
                 "field name '{name}' is ambiguous: case-insensitive collision between {}",
                 names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(" and ")
@@ -1546,85 +1546,43 @@ impl StatOp {
 }
 
 /// Parses the `bands` parameter for zonal statistics.
+/// Null and an empty string default to band 1, matching the workflow form.
 pub fn zonal_bands(value: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
-    let dummy = serde_json::json!({ "bands": value });
-    parse_bands(&dummy, total_bands)
-}
-
-fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
     if total_bands == 0 {
         return Err("raster has no bands".into());
     }
-    match p.get("bands") {
-        None | Some(Json::Null) => Ok(vec![0]),
-        Some(Json::String(s)) => {
-            if s.trim().is_empty() {
-                return Err("bands parameter cannot be an empty string".into());
-            }
-            crate::rasterops::parse_bands_str(s, total_bands)
+    match value {
+        Json::Null => Ok(vec![0]),
+        Json::String(s) => crate::rasterops::parse_bands_str(s, total_bands),
+        Json::Number(n) => {
+            Ok(vec![crate::rasterops::band_from_f64(n.as_f64().ok_or_else(|| "invalid band number".to_string())?, total_bands)?])
         }
-        Some(Json::Number(n)) => {
-            let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
-            if !f.is_finite() {
-                return Err("band number must be a finite number".into());
-            }
-            if f <= 0.0 {
-                return Err("band numbers must be positive (1-based)".into());
-            }
-            if f.fract() != 0.0 {
-                return Err("band numbers must be integers, not decimals".into());
-            }
-            let b = f as usize;
-            if b > total_bands {
-                return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-            }
-            Ok(vec![b - 1])
-        }
-        Some(Json::Array(arr)) => {
+        Json::Array(arr) => {
             if arr.is_empty() {
                 return Err("bands array cannot be empty".into());
             }
             let mut out = Vec::new();
             for item in arr {
-                match item {
-                    Json::Number(n) => {
-                        let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
-                        if !f.is_finite() {
-                            return Err("band number must be a finite number".into());
-                        }
-                        if f <= 0.0 {
-                            return Err("band numbers must be positive (1-based)".into());
-                        }
-                        if f.fract() != 0.0 {
-                            return Err("band numbers must be integers, not decimals".into());
-                        }
-                        let b = f as usize;
-                        if b > total_bands {
-                            return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-                        }
-                        let b_idx = b - 1;
-                        if !out.contains(&b_idx) {
-                            out.push(b_idx);
-                        }
+                if !matches!(item, Json::Number(_) | Json::String(_)) {
+                    return Err("band items must be numbers or strings".into());
+                }
+                if item.as_str().is_some_and(|s| s.trim().is_empty()) {
+                    return Err("band items cannot be empty strings".into());
+                }
+                for band in zonal_bands(item, total_bands)? {
+                    if !out.contains(&band) {
+                        out.push(band);
                     }
-                    Json::String(s) => {
-                        if s.trim().is_empty() {
-                            return Err("band items cannot be empty strings".into());
-                        }
-                        let sub = crate::rasterops::parse_bands_str(s, total_bands)?;
-                        for b_idx in sub {
-                            if !out.contains(&b_idx) {
-                                out.push(b_idx);
-                            }
-                        }
-                    }
-                    _ => return Err("band items must be numbers or strings".into()),
                 }
             }
             Ok(out)
         }
         _ => Err("bands must be a number, string, or array of numbers/strings".into()),
     }
+}
+
+fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    zonal_bands(p.get("bands").unwrap_or(&Json::Null), total_bands)
 }
 
 fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
@@ -1750,6 +1708,7 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let target_rows = rows(inp, p, poly_param, poly_ds);
     let mut skipped_features = 0usize;
+    let mut skipped_parts = 0usize;
     let mut failure_details = Vec::new();
     for r_idx in target_rows {
         let Some(f) = poly_ds.features.get(r_idx) else { continue };
@@ -1757,7 +1716,13 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
                 match crate::rasterops::transform_feature_polygons_to_lonlat(polys, poly_tr.as_ref()) {
                     Ok(polys_lonlat) => {
-                        let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
+                        let mut failed_parts = Vec::new();
+                        let st = crate::rasterops::zonal_statistics_with_failures(r, &bands, &polys_lonlat, &mut failed_parts)?;
+                        skipped_parts += failed_parts.len();
+                        if !failed_parts.is_empty() {
+                            failure_details
+                                .push(format!("feature {}: raster projection failed for polygon part(s) {failed_parts:?}", f.id));
+                        }
                         (st, true)
                     }
                     Err(e) => {
@@ -1798,6 +1763,11 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut messages = vec![format!("Calculated zonal statistics for {n_features} feature(s)")];
     if skipped_features > 0 {
         messages.push(format!("{skipped_features} feature(s) had invalid geometry or failed coordinate transformation"));
+    }
+    if skipped_parts > 0 {
+        messages.push(format!("{skipped_parts} polygon part(s) could not be projected onto the raster grid; valid parts were retained"));
+    }
+    if !failure_details.is_empty() {
         for detail in failure_details.iter().take(5) {
             messages.push(detail.clone());
         }
@@ -3140,9 +3110,9 @@ mod tests {
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": ["median"]})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": [123]})).is_err());
 
-        // 2. Invalid bands inputs
+        // 2. An empty band string defaults to band 1; malformed inputs fail.
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": []})).is_err());
-        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": ""})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": ""})).is_ok());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 1.5})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 99})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": -1})).is_err());

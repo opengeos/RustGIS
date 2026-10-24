@@ -21,9 +21,101 @@
 //! `{"width": w, "height": h}` on the first line sets the size (default
 //! 1480×900 at 2×; `"dt": seconds` there sets each frame's length, default 0.25, and a
 //! short one such as 0.016 catches the map mid-motion). The window opens the World Atlas sample.
+//!
+//! Add `"ribbonSplit": true` to the first line for a compact reusable split-button showcase
+//! instead of the app. Its "Disable arrows", "Disable enclosing UI", and "Long two-line labels"
+//! checkboxes are script-clickable. `{"cmd":"ui.language","params":{"code":"de"}}` changes the
+//! language (untranslated strings fall back to English); `{"dark":true}` changes theme. The
+//! three checkboxes precede the buttons in Tab order; click "Select options" to open its menu.
+//! Shots retain pointer hover from the last click. No selection initially disables "Zoom To"
+//! but leaves "Zoom options" enabled.
 
 use egui_kittest::kittest::Queryable;
-use rustgis_ui_egui::RustGisApp;
+use rustgis_ui_egui::{RustGisApp, big_split_menu, i18n, theme};
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct RibbonSplitShowcase {
+    disable_arrows: bool,
+    disable_enclosing_ui: bool,
+    long_labels: bool,
+    fonts_installed: bool,
+    applied_dark: Option<bool>,
+}
+
+fn split_tool_menu(ui: &mut egui::Ui, app: &mut RustGisApp) {
+    for (label, tool) in [("Pan", "explore"), ("Measure Distance", "measure")] {
+        if ui.button(i18n::t(label)).clicked() {
+            if let Err(e) = app.run("tool.set", json!({"tool": tool})) {
+                eprintln!("tool.set: {e}");
+            }
+            ui.close();
+        }
+    }
+}
+
+impl RibbonSplitShowcase {
+    fn show(&mut self, ui: &mut egui::Ui, app: &mut RustGisApp) {
+        if !self.fonts_installed {
+            theme::install_fonts(ui.ctx(), &[], None);
+            self.fonts_installed = true;
+        }
+        if self.applied_dark != Some(app.ui.dark) {
+            let tokens = if app.ui.dark { theme::Tokens::dark() } else { theme::Tokens::light() };
+            theme::apply(ui.ctx(), &tokens);
+            self.applied_dark = Some(app.ui.dark);
+        }
+        i18n::set_current(app.chosen_lang());
+        ui.heading("Ribbon split buttons");
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.disable_arrows, "Disable arrows");
+            ui.checkbox(&mut self.disable_enclosing_ui, "Disable enclosing UI");
+            ui.checkbox(&mut self.long_labels, "Long two-line labels");
+        });
+        ui.add_space(8.0);
+        let tokens = theme::Tokens::get(ui.ctx());
+        egui::Frame::new().fill(tokens.ribbon).inner_margin(12.0).show(ui, |ui| {
+            ui.add_enabled_ui(!self.disable_enclosing_ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    let select_checked = app.session.tool.code() == "select";
+                    big_split_menu(
+                        ui,
+                        app,
+                        "select",
+                        if self.long_labels { "Select Features\nwith a rectangle" } else { "Select" },
+                        "Click or drag a box to select features. Shift adds, Ctrl removes.",
+                        "tool.set",
+                        json!({"tool": "select"}),
+                        select_checked,
+                        "Select options",
+                        "Choose an alternative map tool.",
+                        !self.disable_arrows,
+                        split_tool_menu,
+                    );
+                    ui.add_space(20.0);
+                    big_split_menu(
+                        ui,
+                        app,
+                        "zoom_sel",
+                        if self.long_labels { "Zoom To\nselected features" } else { "Zoom To" },
+                        "Zoom to the selected features.",
+                        "select.zoomTo",
+                        Value::Null,
+                        false,
+                        "Zoom options",
+                        "Choose a map tool even when nothing is selected.",
+                        !self.disable_arrows,
+                        split_tool_menu,
+                    );
+                });
+            });
+        });
+        ui.add_space(8.0);
+        ui.label(format!("Current tool: {} ({})", i18n::t(app.session.tool.label()), app.session.tool.code()));
+        ui.label("Select always runs selection; either options menu can switch to Pan or Measure Distance.");
+        ui.label("Zoom To needs selected features; its options remain available without a selection.");
+    }
+}
 
 fn main() {
     let path = std::env::args().nth(1).expect("usage: ui_shot script.jsonl");
@@ -33,6 +125,8 @@ fn main() {
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1480.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
     let dt = lines.iter().find_map(|l| l.get("dt").and_then(|v| v.as_f64())).unwrap_or(0.25) as f32;
+    let ribbon_split = lines.first().and_then(|l| l.get("ribbonSplit")).and_then(Value::as_bool).unwrap_or(false);
+    let mut split_showcase = RibbonSplitShowcase::default();
     let mut app = RustGisApp::with_sample();
     // One shared wgpu render state: the app's GPU map backend and the harness's renderer must
     // live on the same device for the map's paint callback to be valid.
@@ -55,10 +149,14 @@ fn main() {
         .with_step_dt(dt)
         .renderer(egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs))
         .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
+            move |ui, app: &mut RustGisApp| {
+                if ribbon_split {
+                    split_showcase.show(ui, app);
+                } else {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                }
             },
             app,
         );
