@@ -2784,6 +2784,51 @@ fn geolibre_web_card(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         });
 }
 
+/// Whether a tool's parameter of `kind` takes layer `l`, as the tool's form and the Script pane
+/// offer layers: by its geometry, or raster or not; any for a `Layer`. False for a kind that isn't
+/// a layer's.
+pub(crate) fn takes_layer(kind: ParamKind, l: &rustgis_engine::map::Layer) -> bool {
+    match kind {
+        ParamKind::Layer => true,
+        ParamKind::PolygonLayer => l.geometry_type() == GeometryType::Polygon,
+        ParamKind::PointLayer => l.geometry_type() == GeometryType::Point,
+        ParamKind::RasterLayer | ParamKind::RasterLayers => l.is_raster(),
+        ParamKind::VectorLayer | ParamKind::VectorLayers => !l.is_raster(),
+        _ => false,
+    }
+}
+
+/// Whether a tool's parameter of `kind` takes field `i` of `d`: a numeric one for a
+/// `NumericField`, one holding coordinates for a `CoordinateField`, any for a `Field`. False for
+/// a kind that isn't a field's.
+pub(crate) fn takes_field(kind: ParamKind, d: &rustgis_engine::data::Dataset, i: usize) -> bool {
+    match kind {
+        ParamKind::Field => true,
+        ParamKind::NumericField => d.fields.get(i).is_some_and(|f| f.ty.is_numeric()),
+        ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
+        _ => false,
+    }
+}
+
+/// The tool's first layer parameter, whose fields its field parameters take.
+pub(crate) fn first_layer(spec: &rustgis_engine::analysis::ToolSpec) -> Option<&rustgis_engine::analysis::ParamSpec> {
+    spec.params
+        .iter()
+        .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
+}
+
+/// The layer or table of name `name`, as a tool finds its input: a layer by its name, else a
+/// table (by its name, else its id).
+pub(crate) fn input_dataset<'a>(session: &'a Session, name: &str) -> Option<&'a rustgis_engine::data::Dataset> {
+    session.map().layer_by_name(name).map(|l| &l.dataset).or_else(|| input_table(session, name).map(|t| &t.dataset))
+}
+
+/// The standalone table of name `name`, as a tool finds one: by its name, else its id.
+pub(crate) fn input_table<'a>(session: &'a Session, name: &str) -> Option<&'a rustgis_engine::project::Table> {
+    let tables = &session.project.tables;
+    rustgis_engine::project::find_table(tables, name).and_then(|i| tables.get(i))
+}
+
 fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(spec) = app.gp.tool.and_then(rustgis_engine::analysis::tool) else {
         // Tool finder.
@@ -2963,18 +3008,11 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.add_space(4.0);
     // A standalone table is picked by its id, since names can repeat, and shown by its name.
     let tables: Vec<(u32, String)> = app.session.project.tables.iter().map(|t| (t.id, t.name.clone())).collect();
-    let layer_names = |filter: Option<GeometryType>| -> Vec<String> {
-        app.session.map().layers.iter().filter(|l| filter.is_none_or(|g| l.geometry_type() == g)).map(|l| l.name.clone()).collect()
-    };
-    let kind_names = |raster: bool| -> Vec<String> {
-        app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect()
+    let layer_names = |kind: ParamKind| -> Vec<String> {
+        app.session.map().layers.iter().filter(|l| takes_layer(kind, l)).map(|l| l.name.clone()).collect()
     };
     let plugin_tool = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
-    let first_layer = spec
-        .params
-        .iter()
-        .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
-        .map(|p| p.name);
+    let first_layer = first_layer(spec).map(|p| p.name);
     // The file parameter whose Browse was pressed: picked once the form is drawn.
     let mut browse_for = None;
     for p in spec.params {
@@ -2993,7 +3031,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     .selected_text(shown)
                     .width(ui.available_width() - 4.0)
                     .show_ui(ui, |ui| {
-                        for name in layer_names(None) {
+                        for name in layer_names(ParamKind::Layer) {
                             if ui.selectable_label(picked.is_none() && name == cur, &name).clicked() {
                                 app.gp.values.insert(p.name, name);
                                 app.gp.tables.remove(p.name);
@@ -3011,26 +3049,17 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.add_space(4.0);
                 continue;
             }
-            ParamKind::PolygonLayer => Some(layer_names(Some(GeometryType::Polygon))),
-            ParamKind::PointLayer => Some(layer_names(Some(GeometryType::Point))),
+            ParamKind::PolygonLayer | ParamKind::PointLayer => Some(layer_names(p.kind)),
             ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField => {
                 let lname = first_layer.and_then(|n| app.gp.values.get(n)).cloned().unwrap_or_default();
                 let table = first_layer.and_then(|n| app.gp.tables.get(n)).copied();
                 // The table picked; else the layer or table of that name, as the tool finds it.
                 let ds = match table {
                     Some(id) => app.session.project.table(id).map(|t| &t.dataset),
-                    None => app.session.map().layer_by_name(&lname).map(|l| &l.dataset).or_else(|| {
-                        let tables = &app.session.project.tables;
-                        rustgis_engine::project::find_table(tables, &lname).and_then(|i| tables.get(i)).map(|t| &t.dataset)
-                    }),
-                };
-                let offered = |d: &rustgis_engine::data::Dataset, i: usize, f: &rustgis_engine::data::Field| match p.kind {
-                    ParamKind::NumericField => f.ty.is_numeric(),
-                    ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
-                    _ => true,
+                    None => input_dataset(&app.session, &lname),
                 };
                 let fields = |d: &rustgis_engine::data::Dataset| -> Vec<String> {
-                    d.fields.iter().enumerate().filter(|(i, f)| offered(d, *i, f)).map(|(_, f)| f.name.clone()).collect()
+                    d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.clone()).collect()
                 };
                 // Telling which fields hold coordinates reads their rows, too much for every frame:
                 // the list is kept until the project or the input changes.
@@ -3063,15 +3092,14 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             ParamKind::Choice(c) => Some(c.iter().map(|s| s.to_string()).collect()),
             ParamKind::RasterLayer | ParamKind::VectorLayer => {
-                let mut v = kind_names(p.kind == ParamKind::RasterLayer);
+                let mut v = layer_names(p.kind);
                 if !p.required {
                     v.insert(0, String::new());
                 }
                 Some(v)
             }
             ParamKind::RasterLayers | ParamKind::VectorLayers => {
-                let raster = p.kind == ParamKind::RasterLayers;
-                let offered = app.session.map().layers.iter().filter(|l| l.is_raster() == raster).map(|l| l.name.clone()).collect();
+                let offered = layer_names(p.kind);
                 layer_list(&mut app.gp, ui, p.name, &cur, offered);
                 ui.add_space(4.0);
                 continue;

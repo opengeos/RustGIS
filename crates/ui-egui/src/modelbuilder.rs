@@ -1321,10 +1321,7 @@ fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
 
 /// The layer feeding a tool's first layer parameter, when it is an input node's (for its fields).
 fn source_layer(app: &RustGisApp, n: &ModelNode, spec: &ToolSpec) -> Option<String> {
-    let first = spec
-        .params
-        .iter()
-        .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))?;
+    let first = crate::panes::first_layer(spec)?;
     match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == first.name) {
         Some(e) => app.mb.graph.nodes.iter().find(|u| u.id == e.from && u.kind == ModelNodeKind::Input).and_then(|u| u.layer.clone()),
         None => n.params.get(first.name).and_then(Value::as_str).map(str::to_string),
