@@ -219,6 +219,7 @@ fn class(
         farthest: None,
         placement,
         italic,
+        font: None,
     })
 }
 

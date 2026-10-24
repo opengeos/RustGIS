@@ -740,7 +740,7 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         }
     });
     // A credential-source switch never carries opt-in to the newly chosen source.
-    if source_changed || (!database && !(st.kind == "s3" && st.credentials == "keys")) {
+    if source_changed || !(database || st.kind == "s3" && st.credentials == "keys") {
         st.remember = false;
     }
     if changed {
