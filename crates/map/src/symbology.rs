@@ -1195,6 +1195,12 @@ pub enum LabelPlacement {
 }
 
 impl LabelPlacement {
+    /// Whether a line is labelled along it ([`Parallel`](Self::Parallel) or
+    /// [`Curved`](Self::Curved)).
+    pub fn along_line(self) -> bool {
+        matches!(self, LabelPlacement::Parallel | LabelPlacement::Curved)
+    }
+
     pub const ALL: [LabelPlacement; 12] = [
         LabelPlacement::Auto,
         LabelPlacement::Center,

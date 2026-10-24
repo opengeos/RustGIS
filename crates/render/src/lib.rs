@@ -2965,13 +2965,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let lid = layer.id;
                 // Whether a class labels lines along them: those take the stretch of a line in
                 // view, wherever its label point is.
-                let along_line = |placement: LabelPlacement, g: &Geometry| {
-                    matches!(placement, LabelPlacement::Parallel | LabelPlacement::Curved) && matches!(g, Geometry::Line(_))
-                };
-                let any_along = labels
-                    .in_order()
-                    .zip(&label_fields)
-                    .any(|(c, f)| f.is_some() && matches!(c.placement, LabelPlacement::Parallel | LabelPlacement::Curved));
+                let along_line = |placement: LabelPlacement, g: &Geometry| placement.along_line() && matches!(g, Geometry::Line(_));
+                let any_along = labels.in_order().zip(&label_fields).any(|(c, f)| f.is_some() && c.placement.along_line());
                 for (row, g) in geoms.iter().enumerate() {
                     let Some(g) = g else { continue };
                     if rows.get(row) != Some(&true) {
@@ -3718,8 +3713,17 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
 fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f32)>> {
     let (w, h) = (ctx.view.width as f32, ctx.view.height as f32);
     let length = |pts: &[(f32, f32)]| pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum::<f32>();
+    // A part whose extent is out of view has no stretch in it: not projected point by point.
+    let near = |part: &[Coord]| {
+        ctx.globe.is_some() || {
+            let mut e = Extent::EMPTY;
+            part.iter().for_each(|c| e.expand(*c));
+            ctx.cull.intersects(&e)
+        }
+    };
     parts
         .iter()
+        .filter(|part| near(part))
         .flat_map(|part| line_labels::in_view(part.iter().map(|c| ctx.screen(*c).map(|(x, y)| (x as f32, y as f32))), w, h))
         .max_by(|a, b| length(a).total_cmp(&length(b)))
 }
@@ -5755,6 +5759,46 @@ mod tests {
         assert_eq!((gw.text.as_str(), gi.text.as_str()), ("W", "i"));
         assert!(((gi.dx - gw.dx) - (w + i) / 2.0).abs() < 1e-3, "{gw:?} {gi:?}");
         assert!((gw.dx + i / 2.0).abs() < 1e-3, "W first, at the left end: {gw:?}");
+    }
+
+    #[test]
+    fn a_curved_labels_halos_go_under_all_its_letters() {
+        // Two letters close together along a line, with a halo: the second one's halo does not
+        // cover the first one's strokes, so the letters are as dark as drawn without halos.
+        let glyph = |dx: f32| LabelGlyph { text: "l".into(), dx, dy: 0.0, angle: 0.0 };
+        let label = |halo: Option<Rgba>| PlacedLabel {
+            text: "ll".into(),
+            x: 20.0,
+            y: 20.0,
+            size: 12.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed: false,
+            italic: false,
+            spacing: 0.0,
+            line_align: TextAlign::Left,
+            angle: None,
+            collide: Default::default(),
+            glyphs: vec![glyph(-0.75), glyph(0.75)],
+        };
+        let drawn = |halo| {
+            let mut pm = Pixmap::new(40, 40).unwrap();
+            pm.fill(tiny_skia::Color::from_rgba8(128, 128, 128, 255));
+            text::draw(&mut pm, &label(halo), 1.0);
+            pm
+        };
+        let (plain, haloed) = (drawn(None), drawn(Some(Rgba::rgb(255, 255, 255))));
+        let mut letters = 0;
+        for (a, b) in plain.pixels().iter().zip(haloed.pixels()) {
+            if a.red() < 40 {
+                letters += 1;
+                assert!(b.red() < 80, "a letter's pixel covered by a halo: {} → {}", a.red(), b.red());
+            }
+        }
+        assert!(letters > 5, "the letters are drawn: {letters}");
     }
 
     #[test]
