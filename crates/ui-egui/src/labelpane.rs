@@ -1090,6 +1090,29 @@ mod tests {
         assert!(shown(&h, "Big"));
     }
 
+    /// A name that changes only in case is a rename, not another class's name.
+    #[test]
+    fn a_class_is_renamed_to_another_case() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        let steps = app.session.undo_depth();
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.get_by_label("Rename").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("big");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(names(h.state()), ["big", "Default"]);
+        assert!(shown(&h, "big"), "still chosen by its new name");
+        assert_eq!(h.state().session.undo_depth(), steps + 1);
+    }
+
     /// New is off once the layer has as many classes as it keeps.
     #[test]
     fn new_is_off_at_the_class_limit() {
