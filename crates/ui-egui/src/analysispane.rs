@@ -87,12 +87,16 @@ fn heading(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-fn combo(ui: &mut Ui, id: &str, value: &mut String, options: &[String]) {
-    egui::ComboBox::from_id_salt(id).selected_text(value.as_str()).width(180.0).show_ui(ui, |ui| {
-        for o in options {
-            ui.selectable_value(value, o.clone(), o.as_str());
-        }
-    });
+fn combo(ui: &mut Ui, id: &str, value: &mut String, options: &[String]) -> egui::Response {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(value.as_str())
+        .width(180.0)
+        .show_ui(ui, |ui| {
+            for o in options {
+                ui.selectable_value(value, o.clone(), o.as_str());
+            }
+        })
+        .response
 }
 
 fn run(app: &mut RustGisApp, id: &str, p: Value) {
@@ -263,23 +267,26 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "zonalStats" => {
             heading(ui, "Calculate raster statistics per polygon");
-            ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
-            combo(ui, "wf_zs_raster", &mut app.workflow.layer, &rasters);
-            ui.label(egui::RichText::new(tl!("Polygon layer")).small().weak());
-            combo(ui, "wf_zs_poly", &mut app.workflow.layer2, &polygons);
+            let raster_label = ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
+            combo(ui, "wf_zs_raster", &mut app.workflow.layer, &rasters).labelled_by(raster_label.id);
+            let polygon_label = ui.label(egui::RichText::new(tl!("Polygon layer")).small().weak());
+            combo(ui, "wf_zs_poly", &mut app.workflow.layer2, &polygons).labelled_by(polygon_label.id);
             ui.horizontal(|ui| {
-                ui.label(tl!("Band"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0));
-                ui.label(tl!("Prefix"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.prefix).hint_text("elev").desired_width(70.0));
+                let band_label = ui.label(tl!("Band"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0))
+                    .labelled_by(band_label.id);
+                let prefix_label = ui.label(tl!("Prefix"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.prefix).hint_text("elev").desired_width(70.0))
+                    .labelled_by(prefix_label.id);
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Output"));
+                let output_label = ui.label(tl!("Output"));
                 ui.add(
                     egui::TextEdit::singleline(&mut app.workflow.zonal_stats.output)
                         .hint_text(tl!("output layer name"))
                         .desired_width(120.0),
-                );
+                )
+                .labelled_by(output_label.id);
             });
             let band_str = app.workflow.zonal_stats.bands.trim();
             let total_bands = app
@@ -1209,6 +1216,26 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     // box's focus, cursor and selection.
     #[allow(deprecated)]
     let box_id = egui::Id::new("script_text");
+    // Ctrl+Enter (⌘+Enter) runs the script (#773), taken before the box sees it, so it runs rather
+    // than breaking the line; once a press, not again for each repeat of a key held down. The box
+    // keeps the focus, so the list closes, as Escape closes it.
+    let ctrl_enter = ui.memory(|m| m.has_focus(box_id))
+        && ui.input_mut(|i| {
+            let mut run = false;
+            i.events.retain(|e| match e {
+                egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat, modifiers, .. }
+                    if modifiers.matches_logically(egui::Modifiers::COMMAND) =>
+                {
+                    run |= !repeat;
+                    false
+                }
+                _ => true,
+            });
+            run
+        });
+    if ctrl_enter {
+        crate::scriptcomplete::close(ui, box_id);
+    }
     // The suggestion list's keys (#662), taken before the box sees them.
     if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id, &app.workflow.script) {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item, &app.session);
@@ -1235,7 +1262,9 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
         crate::scriptcomplete::braces(ui, before, &out.inner, &mut app.workflow.script);
     }
     ui.horizontal(|ui| {
-        if ui.button(tl!("Run")).clicked() {
+        let shortcut = if cfg!(target_os = "macos") { "⌘+Enter" } else { "Ctrl+Enter" };
+        let run = ui.button(tl!("Run")).on_hover_text(crate::i18n::fmt("Run the script ({keys})", &[("keys", shortcut)])).clicked();
+        if run || ctrl_enter {
             let script = app.workflow.script.clone();
             let out = app.run("script.run", json!({"script": script}));
             app.workflow.script_out = match out {
