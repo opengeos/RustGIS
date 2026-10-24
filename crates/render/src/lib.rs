@@ -2978,11 +2978,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         continue;
                     }
                     let Some(c) = g.label_point() else { continue };
-                    let point_in_view = globe.is_some() || ctx.cull.contains(c);
-                    if !point_in_view && !(any_along && matches!(g, Geometry::Line(_)) && ctx.cull.intersects(&g.extent())) {
+                    // Where the label point is on the screen, `None` when it is out of view (or
+                    // behind the globe): then only a line labelled along it can be, on its
+                    // stretch in view.
+                    let point = if globe.is_some() || ctx.cull.contains(c) { ctx.screen(c) } else { None };
+                    let line_in_view = || globe.is_some() || ctx.cull.intersects(&extents.get(row).copied().unwrap_or_else(|| g.extent()));
+                    if point.is_none() && !(any_along && matches!(g, Geometry::Line(_)) && line_in_view()) {
                         continue;
                     }
-                    let Some((x, y)) = ctx.screen(c) else { continue };
                     let is_point = g.kind() == GeometryType::Point;
                     // A line's longest part on the screen, for the classes placed along it: worked
                     // out once, for the first that asks.
@@ -3004,9 +3007,11 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         if lock.as_ref().is_some_and(|k| !k.contains(&(lid, label_row(row), ci))) {
                             continue;
                         }
-                        if !point_in_view && !along_line(class.placement, g) {
+                        if point.is_none() && !along_line(class.placement, g) {
                             continue;
                         }
+                        // (Along a line, the label is put on its stretch in view below.)
+                        let (x, y) = point.unwrap_or_default();
                         let Some(fi) = label_fields.get(ci).copied().flatten() else { continue };
                         let v = ds_ptr.value(row, fi);
                         if v.is_null() {
