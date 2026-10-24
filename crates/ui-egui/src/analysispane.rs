@@ -282,20 +282,24 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 );
             });
             let band_str = app.workflow.zonal_stats.bands.trim();
-            let band_valid = if band_str.is_empty() || band_str.eq_ignore_ascii_case("all") {
-                true
-            } else {
-                band_str.split([',', ';', ' ']).all(|part| {
-                    let p = part.trim().trim_matches(|c| c == '[' || c == ']' || c == '"');
-                    p.is_empty() || p.parse::<u64>().is_ok_and(|b| b >= 1)
-                })
-            };
+            let total_bands = app
+                .session
+                .map()
+                .layer_by_name(&app.workflow.layer)
+                .and_then(|l| l.raster.as_ref())
+                .and_then(|r| r.data.as_ref())
+                .map(|d| d.bands.len())
+                .unwrap_or(1);
+            let band_res =
+                if band_str.is_empty() { Ok(vec![0]) } else { rustgis_engine::analysis::rasterops::parse_bands_str(band_str, total_bands) };
+            let band_valid = band_res.is_ok();
+            let band_err = band_res.err();
             let layers_ready = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
             let can_run = layers_ready && band_valid;
             if !layers_ready {
                 ui.label(egui::RichText::new(tl!("Add a raster and a polygon layer to calculate zonal statistics.")).small().weak());
-            } else if !band_valid {
-                ui.label(egui::RichText::new(tl!("Band must be a positive integer, list of bands, or 'all'.")).small().color(t.amber));
+            } else if let Some(err) = band_err {
+                ui.label(egui::RichText::new(err).small().color(t.amber));
             }
             if ui.add_enabled(can_run, egui::Button::new(tl!("Calculate Statistics"))).clicked() {
                 let mut params = json!({
@@ -686,14 +690,12 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
 
                 if ui.add_enabled(can_clip_poly, egui::Button::new(tl!("Clip To Polygon"))).clicked() {
-                    let mut p = json!({
+                    let p = json!({
                         "layer": app.workflow.layer,
                         "operation": "clip",
                         "polygon": app.workflow.layer2,
+                        "selectedOnly": app.workflow.selected_only,
                     });
-                    if app.workflow.selected_only {
-                        p["selectedOnly"] = json!(true);
-                    }
                     run(app, "raster.process", p);
                 }
             } else {

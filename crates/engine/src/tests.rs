@@ -14989,6 +14989,185 @@ fn gp_zonal_stats_end_to_end_and_undo() {
 }
 
 #[test]
+fn raster_clip_polygon_selection_semantics_and_partial_failure() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_geom::Coord;
+
+    let mut s = world();
+
+    // 10x10 raster: origin (0.0, 10.0), cell size (1.0, -1.0)
+    let (w, h) = (10u32, 10u32);
+    let mut data = Vec::with_capacity((w * h) as usize);
+    for row in 0..h {
+        for col in 0..w {
+            data.push((col * 10 + row) as f32);
+        }
+    }
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 10.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let raster = Raster::new("dem", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let raster_layer = rustgis_map::RasterLayer::from_path(raster, "dem.tif");
+    s.map_mut().add_raster("dem", raster_layer);
+
+    let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        Geometry::Polygon(vec![vec![vec![
+            Coord::new(x0, y0),
+            Coord::new(x1, y0),
+            Coord::new(x1, y1),
+            Coord::new(x0, y1),
+            Coord::new(x0, y0),
+        ]]])
+    };
+
+    let mut poly_ds = Dataset::new("clip_zones", GeometryType::Polygon, vec![Field::new("name", FieldType::Text)]);
+    // Feature 0: [1.0, 7.0] to [3.0, 9.0]
+    poly_ds.push(Some(sq(1.0, 7.0, 3.0, 9.0)), vec![Value::Text("Z1".into())]);
+    // Feature 1: [2.0, 6.0] to [4.0, 8.0] (overlaps with Z1)
+    poly_ds.push(Some(sq(2.0, 6.0, 4.0, 8.0)), vec![Value::Text("Z2".into())]);
+    // Feature 2: [6.0, 1.0] to [8.0, 3.0] (separate area)
+    poly_ds.push(Some(sq(6.0, 1.0, 8.0, 3.0)), vec![Value::Text("Z3".into())]);
+    // Feature 3: Degenerate hole (< 3 coords) -> should trigger rejection of this feature
+    let bad_hole_poly = Geometry::Polygon(vec![vec![
+        vec![Coord::new(4.0, 4.0), Coord::new(6.0, 4.0), Coord::new(6.0, 6.0), Coord::new(4.0, 6.0), Coord::new(4.0, 4.0)],
+        vec![Coord::new(4.5, 4.5), Coord::new(5.0, 5.0)], // invalid hole with only 2 points
+    ]]);
+    poly_ds.push(Some(bad_hole_poly), vec![Value::Text("Z4_bad".into())]);
+
+    let poly_layer_id = s.map_mut().add_layer(rustgis_map::Layer::new(0, poly_ds));
+
+    // Test 1: selectedOnly: "invalid" or non-boolean returns validation error
+    let err_type = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": "yes",
+        }),
+    );
+    assert!(err_type.is_err());
+    assert!(err_type.unwrap_err().contains("must be a boolean"));
+
+    // Test 2: selectedOnly: true with empty selection returns error
+    let err_empty_sel = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": true,
+        }),
+    );
+    assert!(err_empty_sel.is_err());
+    assert!(err_empty_sel.unwrap_err().contains("no features are selected"));
+
+    // Test 3: selectedOnly: true with Feature 0 selected
+    {
+        let l = s.map_mut().layer_mut(poly_layer_id).unwrap();
+        l.selection = vec![0];
+    }
+    let res_sel = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": true,
+            "name": "dem_sel_0",
+        }),
+    );
+    assert!(res_sel.is_ok(), "clip selected failed: {res_sel:?}");
+    let sel_layer = s.map().layer_by_name("dem_sel_0").expect("dem_sel_0 exists");
+    let sel_raster = sel_layer.raster.as_ref().unwrap().data.as_ref().unwrap();
+    // Feature 0 covers x: [1.0, 3.0], y: [7.0, 9.0] -> 2 cols x 2 rows
+    assert_eq!(sel_raster.width, 2);
+    assert_eq!(sel_raster.height, 2);
+
+    // Test 4: Overlapping polygons combined coverage (Features 0 and 1)
+    {
+        let l = s.map_mut().layer_mut(poly_layer_id).unwrap();
+        l.selection = vec![0, 1];
+    }
+    let res_overlap = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": true,
+            "name": "dem_overlap",
+        }),
+    );
+    assert!(res_overlap.is_ok(), "clip overlap failed: {res_overlap:?}");
+    let ov_layer = s.map().layer_by_name("dem_overlap").expect("dem_overlap exists");
+    let ov_raster = ov_layer.raster.as_ref().unwrap().data.as_ref().unwrap();
+    // Features 0 & 1 union bounding box: x: [1.0, 4.0], y: [6.0, 9.0] -> 3 cols x 3 rows
+    assert_eq!(ov_raster.width, 3);
+    assert_eq!(ov_raster.height, 3);
+
+    // Test 5: selectedOnly: false ignores active selection and clips using all valid features
+    let res_all = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": false,
+            "name": "dem_all",
+        }),
+    );
+    assert!(res_all.is_ok(), "clip all failed: {res_all:?}");
+    let all_layer = s.map().layer_by_name("dem_all").expect("dem_all exists");
+    let all_raster = all_layer.raster.as_ref().unwrap().data.as_ref().unwrap();
+    // Features 0, 1, 2 bounding box spans x: [1.0, 8.0], y: [1.0, 9.0] -> 7 cols x 8 rows
+    assert_eq!(all_raster.width, 7);
+    assert_eq!(all_raster.height, 8);
+
+    // Test 6: Partial failure reporting: Feature 0 (valid) + Feature 3 (invalid hole)
+    // Feature 3 should be skipped with a warning, Feature 0 should succeed
+    {
+        let l = s.map_mut().layer_mut(poly_layer_id).unwrap();
+        l.selection = vec![0, 3];
+    }
+    let res_partial = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": true,
+            "name": "dem_partial",
+        }),
+    );
+    assert!(res_partial.is_ok(), "clip partial should succeed for valid feature: {res_partial:?}");
+    let partial_layer = s.map().layer_by_name("dem_partial").expect("dem_partial exists");
+    let partial_raster = partial_layer.raster.as_ref().unwrap().data.as_ref().unwrap();
+    assert_eq!(partial_raster.width, 2);
+    assert_eq!(partial_raster.height, 2);
+
+    // Test 7: Total failure when all selected features fail validation (only Feature 3 selected)
+    {
+        let l = s.map_mut().layer_mut(poly_layer_id).unwrap();
+        l.selection = vec![3];
+    }
+    let res_bad = s.run(
+        "raster.process",
+        &json!({
+            "layer": "dem",
+            "operation": "clip",
+            "polygon": "clip_zones",
+            "selectedOnly": true,
+            "name": "dem_bad",
+        }),
+    );
+    assert!(res_bad.is_err());
+    let err_msg = res_bad.unwrap_err();
+    assert!(err_msg.contains("has no valid polygon geometries"));
+    assert!(err_msg.contains("feature 4"));
+    assert!(err_msg.contains("hole 1 is invalid"));
+}
+
+#[test]
 fn layer_selection_replaces_toggles_and_extends() {
     let mut s = world();
     let name = |s: &Session, id: u32| s.map().layer(id).map(|l| l.name.clone()).unwrap_or_default();

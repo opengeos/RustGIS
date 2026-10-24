@@ -573,6 +573,30 @@ fn copy_schema(ds: &Dataset, name: String, g: GeometryType) -> Dataset {
     Dataset::new(name, g, ds.fields.clone())
 }
 
+/// Finds the index of a field by case-insensitive name, explicitly detecting collisions.
+///
+/// If multiple fields in `ds.fields` match `name` case-insensitively, returns an error
+/// detailing the collision rather than silently selecting an arbitrary field.
+pub fn find_field_case_insensitive(ds: &Dataset, name: &str) -> Result<usize, String> {
+    let mut matches = Vec::new();
+    for (idx, f) in ds.fields.iter().enumerate() {
+        if f.name.eq_ignore_ascii_case(name) {
+            matches.push(idx);
+        }
+    }
+    match matches.len() {
+        0 => Err(format!("no field named '{name}'")),
+        1 => Ok(matches[0]),
+        _ => {
+            let names: Vec<String> = matches.iter().map(|&i| ds.fields[i].name.clone()).collect();
+            Err(format!(
+                "field name '{name}' is ambiguous: case-insensitive collision between {}",
+                names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(" and ")
+            ))
+        }
+    }
+}
+
 /// Union of polygons; rings are oriented first because the overlay infers its fill rule from
 /// the first ring's winding, and input files mix orientations.
 fn union_all<'a>(polys: impl IntoIterator<Item = &'a geo::Polygon<f64>>) -> MultiPolygon<f64> {
@@ -682,7 +706,7 @@ fn dissolve(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err("Dissolve needs a polygon layer".into());
     }
     let field = s(p, "field").trim();
-    let fi = if field.is_empty() { None } else { Some(ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?) };
+    let fi = if field.is_empty() { None } else { Some(find_field_case_insensitive(ds, field)?) };
     let mut groups: Vec<(Value, Vec<MultiPolygon<f64>>)> = Vec::new();
     for r in rows(inp, p, "input", ds) {
         let Some(mp) = ds.features.get(r).and_then(|f| f.geometry.as_ref()).and_then(to_multipolygon) else { continue };
@@ -795,7 +819,7 @@ fn xy_table_to_point(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let field = |k: &str| {
         let name = s(p, k).trim();
-        ds.field_index(name).ok_or_else(|| format!("no field named '{name}'"))
+        find_field_case_insensitive(ds, name)
     };
     let (xi, yi) = (field("x")?, field("y")?);
     let crs = match s(p, "crs").trim() {
@@ -913,7 +937,7 @@ fn select_by_attributes(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String
 fn idw_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let field = s(p, "field");
-    let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+    let fi = find_field_case_insensitive(ds, field)?;
     let mut pts: Vec<(Coord, f64)> = Vec::new();
     for r in rows(inp, p, "input", ds) {
         let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
@@ -985,7 +1009,7 @@ fn kriging_interpolation(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Strin
         return Err("kriging interpolation expects coordinates in degrees (WGS 84 / EPSG:4326)".into());
     }
     let field = s(p, "field");
-    let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+    let fi = find_field_case_insensitive(ds, field)?;
     let mut raw_pts: Vec<(Coord, f64)> = Vec::new();
     for r in rows(inp, p, "input", ds) {
         let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
@@ -1205,9 +1229,9 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
 fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let field = s(p, "field");
-    let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
+    let fi = find_field_case_insensitive(ds, field)?;
     let case = s(p, "case").trim();
-    let ci = if case.is_empty() { None } else { Some(ds.field_index(case).ok_or_else(|| format!("no field named '{case}'"))?) };
+    let ci = if case.is_empty() { None } else { Some(find_field_case_insensitive(ds, case)?) };
     let mut groups: Vec<(Value, Vec<f64>)> = Vec::new();
     for r in rows(inp, p, "input", ds) {
         let key = ci.map(|c| ds.value(r, c).clone()).unwrap_or(Value::Null);
@@ -1505,21 +1529,32 @@ impl StatOp {
     fn parse(raw: &str) -> Result<Vec<StatOp>, String> {
         let clean = raw.trim().to_ascii_lowercase();
         match clean.as_str() {
-            "all" | "" => Ok(Self::ALL.to_vec()),
+            "all" => Ok(Self::ALL.to_vec()),
             "mean" => Ok(vec![StatOp::Mean]),
             "min" => Ok(vec![StatOp::Min]),
             "max" => Ok(vec![StatOp::Max]),
             "sum" => Ok(vec![StatOp::Sum]),
             "count" => Ok(vec![StatOp::Count]),
             "stddev" | "std" | "std_dev" => Ok(vec![StatOp::StdDev]),
+            "" => Err("empty statistic name: choose from mean, min, max, sum, count, stddev, or all".into()),
             other => Err(format!("unknown statistic '{other}': choose from mean, min, max, sum, count, stddev, or all")),
         }
     }
 }
 
-fn parse_single_band(item: &Json, total_bands: usize, out: &mut Vec<usize>) -> Result<(), String> {
-    match item {
-        Json::Number(n) => {
+fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    if total_bands == 0 {
+        return Err("raster has no bands".into());
+    }
+    match p.get("bands") {
+        None | Some(Json::Null) => Ok(vec![0]),
+        Some(Json::String(s)) => {
+            if s.trim().is_empty() {
+                return Err("bands parameter cannot be an empty string".into());
+            }
+            crate::rasterops::parse_bands_str(s, total_bands)
+        }
+        Some(Json::Number(n)) => {
             let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
             if !f.is_finite() {
                 return Err("band number must be a finite number".into());
@@ -1534,167 +1569,100 @@ fn parse_single_band(item: &Json, total_bands: usize, out: &mut Vec<usize>) -> R
             if b > total_bands {
                 return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
             }
-            out.push(b);
-            Ok(())
+            Ok(vec![b - 1])
         }
-        Json::String(s) => {
-            let txt = s.trim();
-            if txt.eq_ignore_ascii_case("all") {
-                out.extend(1..=total_bands);
-                Ok(())
-            } else {
-                let clean = txt.trim_matches(|c| c == '[' || c == ']');
-                for part in clean.split([',', ';', ' ']) {
-                    let part = part.trim().trim_matches('"');
-                    if part.is_empty() {
-                        continue;
-                    }
-                    if part.eq_ignore_ascii_case("all") {
-                        out.extend(1..=total_bands);
-                        continue;
-                    }
-                    let f: f64 = part.parse().map_err(|_| format!("invalid band number '{part}'"))?;
-                    if !f.is_finite() {
-                        return Err("band number must be a finite number".into());
-                    }
-                    if f <= 0.0 {
-                        return Err("band numbers must be positive (1-based)".into());
-                    }
-                    if f.fract() != 0.0 {
-                        return Err("band numbers must be integers, not decimals".into());
-                    }
-                    let b = f as usize;
-                    if b > total_bands {
-                        return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-                    }
-                    out.push(b);
-                }
-                Ok(())
+        Some(Json::Array(arr)) => {
+            if arr.is_empty() {
+                return Err("bands array cannot be empty".into());
             }
-        }
-        _ => Err("band numbers must be positive integers or 'all'".into()),
-    }
-}
-
-fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
-    let mut raw_bands = Vec::new();
-    if let Some(arr) = p.get("bands").and_then(Json::as_array) {
-        if arr.is_empty() {
-            raw_bands.push(1);
-        } else {
+            let mut out = Vec::new();
             for item in arr {
-                parse_single_band(item, total_bands, &mut raw_bands)?;
+                match item {
+                    Json::Number(n) => {
+                        let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
+                        if !f.is_finite() {
+                            return Err("band number must be a finite number".into());
+                        }
+                        if f <= 0.0 {
+                            return Err("band numbers must be positive (1-based)".into());
+                        }
+                        if f.fract() != 0.0 {
+                            return Err("band numbers must be integers, not decimals".into());
+                        }
+                        let b = f as usize;
+                        if b > total_bands {
+                            return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+                        }
+                        let b_idx = b - 1;
+                        if !out.contains(&b_idx) {
+                            out.push(b_idx);
+                        }
+                    }
+                    Json::String(s) => {
+                        let sub = crate::rasterops::parse_bands_str(s, total_bands)?;
+                        for b_idx in sub {
+                            if !out.contains(&b_idx) {
+                                out.push(b_idx);
+                            }
+                        }
+                    }
+                    _ => return Err("band items must be numbers or strings".into()),
+                }
             }
+            Ok(out)
         }
-    } else if let Some(v) = p.get("bands") {
-        if v.is_null() {
-            raw_bands.push(1);
-        } else {
-            parse_single_band(v, total_bands, &mut raw_bands)?;
-        }
-    } else {
-        raw_bands.push(1);
+        _ => Err("bands must be a number, string, or array of numbers/strings".into()),
     }
-    if raw_bands.is_empty() {
-        raw_bands.push(1);
-    }
-    let mut unique = Vec::new();
-    for b in raw_bands {
-        if !unique.contains(&b) {
-            unique.push(b);
-        }
-    }
-    Ok(unique.into_iter().map(|b| b - 1).collect())
 }
 
 fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
-    let mut out = Vec::new();
-    if let Some(arr) = p.get("stats").and_then(Json::as_array) {
-        if arr.is_empty() {
-            return Ok(StatOp::ALL.to_vec());
-        }
-        for item in arr {
-            let txt = item.as_str().ok_or_else(|| "statistic names must be strings".to_string())?;
-            let ops = StatOp::parse(txt)?;
-            for op in ops {
-                if !out.contains(&op) {
-                    out.push(op);
+    match p.get("stats") {
+        None | Some(Json::Null) => Ok(StatOp::ALL.to_vec()),
+        Some(Json::Array(arr)) => {
+            if arr.is_empty() {
+                return Err("stats array cannot be empty".into());
+            }
+            let mut out = Vec::new();
+            for item in arr {
+                let txt = item.as_str().ok_or_else(|| "statistic names must be strings".to_string())?;
+                if txt.trim().is_empty() {
+                    return Err("statistic name cannot be empty".into());
+                }
+                let ops = StatOp::parse(txt)?;
+                for op in ops {
+                    if !out.contains(&op) {
+                        out.push(op);
+                    }
                 }
             }
+            Ok(out)
         }
-    } else {
-        let txt = s(p, "stats").trim();
-        if txt.is_empty() {
-            return Ok(StatOp::ALL.to_vec());
-        }
-        let clean = txt.trim_matches(|c| c == '[' || c == ']');
-        for part in clean.split([',', ';']) {
-            let part = part.trim().trim_matches('"');
-            if part.is_empty() {
-                continue;
+        Some(Json::String(txt)) => {
+            let trimmed = txt.trim();
+            if trimmed.is_empty() {
+                return Err("stats parameter cannot be empty string".into());
             }
-            let ops = StatOp::parse(part)?;
-            for op in ops {
-                if !out.contains(&op) {
-                    out.push(op);
+            let clean = trimmed.trim_matches(|c| c == '[' || c == ']');
+            if clean.trim().is_empty() {
+                return Err("stats parameter cannot be empty brackets".into());
+            }
+            let mut out = Vec::new();
+            for part in clean.split([',', ';']) {
+                let part = part.trim().trim_matches('"').trim();
+                if part.is_empty() {
+                    return Err("stats selection contains an empty statistic entry".into());
+                }
+                let ops = StatOp::parse(part)?;
+                for op in ops {
+                    if !out.contains(&op) {
+                        out.push(op);
+                    }
                 }
             }
+            Ok(out)
         }
+        _ => Err("stats parameter must be a string or array of strings".into()),
     }
-    if out.is_empty() {
-        out = StatOp::ALL.to_vec();
-    }
-    Ok(out)
-}
-
-/// Projects a polygon (exterior ring + optional holes) to WGS 84 lon/lat coordinates.
-///
-/// Returns `None` if the exterior ring fails transformation or has fewer than 3 vertices.
-/// A hole is never promoted to become the exterior ring.
-/// Holes whose vertices fail transformation or have fewer than 3 vertices are skipped,
-/// preserving the valid exterior ring and any surviving valid holes.
-/// If any coordinate in a ring cannot be transformed, the entire ring is rejected rather
-/// than silently dropping vertices and distorting the zone boundary.
-fn reproject_polygon(rings: &[Vec<Coord>], tr: &rustgis_data::raster::Transformer) -> Option<Vec<Vec<Coord>>> {
-    let exterior = rings.first()?;
-    let mut ext_lonlat = Vec::with_capacity(exterior.len());
-    for &c in exterior {
-        ext_lonlat.push(tr.to_lonlat(c)?);
-    }
-    if ext_lonlat.len() < 3 {
-        return None;
-    }
-    let mut out_rings = vec![ext_lonlat];
-    for hole in rings.iter().skip(1) {
-        let mut hole_lonlat = Vec::with_capacity(hole.len());
-        let mut ok = true;
-        for &c in hole {
-            if let Some(ll) = tr.to_lonlat(c) {
-                hole_lonlat.push(ll);
-            } else {
-                ok = false;
-                break;
-            }
-        }
-        if ok && hole_lonlat.len() >= 3 {
-            out_rings.push(hole_lonlat);
-        }
-    }
-    Some(out_rings)
-}
-
-fn validate_lonlat_polygon(rings: &[Vec<Coord>]) -> Option<Vec<Vec<Coord>>> {
-    let exterior = rings.first()?;
-    if exterior.len() < 3 {
-        return None;
-    }
-    let mut out_rings = vec![exterior.clone()];
-    for hole in rings.iter().skip(1) {
-        if hole.len() >= 3 {
-            out_rings.push(hole.clone());
-        }
-    }
-    Some(out_rings)
 }
 
 fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -1770,22 +1738,26 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let target_rows = rows(inp, p, poly_param, poly_ds);
     let mut skipped_features = 0usize;
+    let mut failure_details = Vec::new();
     for r_idx in target_rows {
         let Some(f) = poly_ds.features.get(r_idx) else { continue };
         let (stats_by_band, feature_valid) = match &f.geometry {
             Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
-                let polys_lonlat: Vec<Vec<Vec<Coord>>> = match &poly_tr {
-                    Some(tr) => polys.iter().filter_map(|rings| reproject_polygon(rings, tr)).collect(),
-                    None => polys.iter().filter_map(|rings| validate_lonlat_polygon(rings)).collect(),
-                };
-                if polys_lonlat.is_empty() {
-                    (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
-                } else {
-                    let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
-                    (st, true)
+                match crate::rasterops::transform_feature_polygons_to_lonlat(polys, poly_tr.as_ref()) {
+                    Ok(polys_lonlat) => {
+                        let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
+                        (st, true)
+                    }
+                    Err(e) => {
+                        failure_details.push(format!("feature {}: {e}", f.id));
+                        (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
+                    }
                 }
             }
-            _ => (vec![crate::rasterops::ZoneStats::default(); bands.len()], false),
+            _ => {
+                failure_details.push(format!("feature {}: missing or empty geometry", f.id));
+                (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
+            }
         };
 
         if !feature_valid {
@@ -1793,6 +1765,7 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         }
 
         let mut attrs = f.attrs.clone();
+        attrs.resize(poly_ds.fields.len(), Value::Null);
         for (b_idx, _, stat, _, _) in &out_fields {
             let b_stats = stats_by_band.get(*b_idx);
             let val = match (b_stats, stat) {
@@ -1806,7 +1779,6 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             };
             attrs.push(val);
         }
-        attrs.resize(out.fields.len(), Value::Null);
         out.features.push(rustgis_data::Feature { id: f.id, geometry: f.geometry.clone(), attrs });
     }
 
@@ -1814,6 +1786,12 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut messages = vec![format!("Calculated zonal statistics for {n_features} feature(s)")];
     if skipped_features > 0 {
         messages.push(format!("{skipped_features} feature(s) had invalid geometry or failed coordinate transformation"));
+        for detail in failure_details.iter().take(5) {
+            messages.push(detail.clone());
+        }
+        if failure_details.len() > 5 {
+            messages.push(format!("... and {} more feature failure(s)", failure_details.len() - 5));
+        }
     }
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
@@ -1821,6 +1799,7 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustgis_data::Feature;
     use std::collections::HashMap;
 
     struct Map(HashMap<String, Dataset>);
@@ -1830,6 +1809,24 @@ mod tests {
         }
         fn selection(&self, _: &str) -> &[usize] {
             &[]
+        }
+    }
+
+    struct RasterMap<'a> {
+        datasets: HashMap<String, Dataset>,
+        rasters: HashMap<String, &'a rustgis_data::raster::Raster>,
+    }
+
+    impl<'a> Inputs for RasterMap<'a> {
+        fn dataset(&self, layer: &str) -> Option<&Dataset> {
+            self.datasets.get(layer)
+        }
+        fn selection(&self, _: &str) -> &[usize] {
+            &[]
+        }
+        fn raster(&self, layer: &str) -> Option<crate::RasterInput<'_>> {
+            let r = self.rasters.get(layer)?;
+            Some(crate::RasterInput { raster: r, path: None, embedded: None })
         }
     }
 
@@ -2615,24 +2612,6 @@ mod tests {
 
     #[test]
     fn zonal_stats_tool_cases() {
-        struct RasterMap<'a> {
-            datasets: HashMap<String, Dataset>,
-            rasters: HashMap<String, &'a rustgis_data::raster::Raster>,
-        }
-
-        impl<'a> Inputs for RasterMap<'a> {
-            fn dataset(&self, layer: &str) -> Option<&Dataset> {
-                self.datasets.get(layer)
-            }
-            fn selection(&self, _: &str) -> &[usize] {
-                &[]
-            }
-            fn raster(&self, layer: &str) -> Option<crate::RasterInput<'_>> {
-                let r = self.rasters.get(layer)?;
-                Some(crate::RasterInput { raster: r, path: None, embedded: None })
-            }
-        }
-
         let (w, h) = (10u32, 10u32);
         let mut b1_data: Vec<f32> = Vec::with_capacity((w * h) as usize);
         let mut b2_data: Vec<f32> = Vec::with_capacity((w * h) as usize);
@@ -2947,5 +2926,209 @@ mod tests {
         assert_eq!(out_hole.value(0, hole_cnt_idx), &Value::Int(8));
 
         assert_eq!(m.datasets["zones"], input_clone);
+    }
+
+    #[test]
+    fn zonal_stats_attribute_padding_and_alignment_regression() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+
+        let (w, h) = (4u32, 4u32);
+        let data: Vec<f32> = (1..=16).map(|v| v as f32).collect();
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let raster = Raster::new("elev", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+
+        let fields =
+            vec![Field::new("name", FieldType::Text), Field::new("category", FieldType::Text), Field::new("score", FieldType::Double)];
+        let mut ds = Dataset::new("zones_pad", GeometryType::Polygon, fields);
+        let sq_geom = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(x0, y0),
+                Coord::new(x1, y0),
+                Coord::new(x1, y1),
+                Coord::new(x0, y1),
+                Coord::new(x0, y0),
+            ]]])
+        };
+        let geom = Some(sq_geom(0.0, 3.0, 2.0, 4.0)); // 2 cells: 1.0, 2.0
+
+        // Feature 1: shorter attribute array (only 1 attribute instead of 3)
+        ds.features.push(Feature { id: 1, geometry: geom.clone(), attrs: vec![Value::Text("FeatureA".into())] });
+        // Feature 2: full attribute array (3 attributes)
+        ds.features.push(Feature {
+            id: 2,
+            geometry: geom.clone(),
+            attrs: vec![Value::Text("FeatureB".into()), Value::Text("Cat1".into()), Value::Float(88.5)],
+        });
+        // Feature 3: empty attribute array (0 attributes)
+        ds.features.push(Feature { id: 3, geometry: geom, attrs: vec![] });
+
+        let m =
+            RasterMap { datasets: HashMap::from([("zones_pad".to_string(), ds)]), rasters: HashMap::from([("elev".to_string(), &raster)]) };
+
+        let res = crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones_pad"})).unwrap();
+        let out = layer(res);
+
+        // Schema must contain 3 original fields + 6 stat fields
+        assert_eq!(out.fields.len(), 9);
+        assert_eq!(out.fields[0].name, "name");
+        assert_eq!(out.fields[1].name, "category");
+        assert_eq!(out.fields[2].name, "score");
+        assert_eq!(out.fields[3].name, "elev_mean");
+        assert_eq!(out.fields[4].name, "elev_min");
+        assert_eq!(out.fields[5].name, "elev_max");
+        assert_eq!(out.fields[6].name, "elev_sum");
+        assert_eq!(out.fields[7].name, "elev_count");
+        assert_eq!(out.fields[8].name, "elev_stddev");
+
+        // Feature 1: attrs must be padded to 3 before stats fields!
+        let f1 = &out.features[0];
+        assert_eq!(f1.attrs.len(), 9);
+        assert_eq!(f1.attrs[0], Value::Text("FeatureA".into()));
+        assert_eq!(f1.attrs[1], Value::Null, "missing category attribute must be padded with Null");
+        assert_eq!(f1.attrs[2], Value::Null, "missing score attribute must be padded with Null");
+        assert_eq!(f1.attrs[3], Value::Float(1.5), "elev_mean must be at index 3, not in column 1!");
+        assert_eq!(f1.attrs[7], Value::Int(2), "elev_count must be at index 7");
+
+        // Feature 2: complete attributes
+        let f2 = &out.features[1];
+        assert_eq!(f2.attrs.len(), 9);
+        assert_eq!(f2.attrs[0], Value::Text("FeatureB".into()));
+        assert_eq!(f2.attrs[1], Value::Text("Cat1".into()));
+        assert_eq!(f2.attrs[2], Value::Float(88.5));
+        assert_eq!(f2.attrs[3], Value::Float(1.5));
+
+        // Feature 3: empty attributes padded completely
+        let f3 = &out.features[2];
+        assert_eq!(f3.attrs.len(), 9);
+        assert_eq!(f3.attrs[0], Value::Null);
+        assert_eq!(f3.attrs[1], Value::Null);
+        assert_eq!(f3.attrs[2], Value::Null);
+        assert_eq!(f3.attrs[3], Value::Float(1.5));
+    }
+
+    #[test]
+    fn field_name_case_insensitive_and_collision_regression() {
+        let fields = vec![Field::new("Population", FieldType::Double), Field::new("Area_KM2", FieldType::Double)];
+        let mut ds = Dataset::new("cities", GeometryType::None, fields);
+        ds.push(None, vec![Value::Float(100.0), Value::Float(10.0)]);
+        ds.push(None, vec![Value::Float(200.0), Value::Float(20.0)]);
+
+        // 1. Case-insensitive lookup succeeds when casing differs
+        assert_eq!(find_field_case_insensitive(&ds, "population").unwrap(), 0);
+        assert_eq!(find_field_case_insensitive(&ds, "POPULATION").unwrap(), 0);
+        assert_eq!(find_field_case_insensitive(&ds, "area_km2").unwrap(), 1);
+        assert_eq!(find_field_case_insensitive(&ds, "AREA_km2").unwrap(), 1);
+
+        // 2. Missing field
+        assert!(find_field_case_insensitive(&ds, "unknown").is_err());
+
+        // 3. Summary statistics with lowercase lookup preserves original casing in output fields
+        let m = Map(HashMap::from([("cities".to_string(), ds.clone())]));
+        let res = crate::run("summaryStatistics", &m, &serde_json::json!({"input": "cities", "field": "population"})).unwrap();
+        let out = layer(res);
+        assert!(out.field_index("COUNT_Population").is_some(), "output field must preserve original casing");
+        assert!(out.field_index("SUM_Population").is_some());
+        assert!(out.field_index("MEAN_Population").is_some());
+
+        // 4. Case-insensitive collision detection
+        let colliding_fields = vec![Field::new("Population", FieldType::Double), Field::new("population", FieldType::Double)];
+        let ds_collision = Dataset::new("colliding", GeometryType::None, colliding_fields);
+        let err = find_field_case_insensitive(&ds_collision, "population").unwrap_err();
+        assert!(err.contains("ambiguous") && err.contains("collision"), "collision must be explicitly reported: {err}");
+        let err2 = find_field_case_insensitive(&ds_collision, "POPULATION").unwrap_err();
+        assert!(err2.contains("collision"));
+    }
+
+    #[test]
+    fn zonal_stats_partial_feature_failures_regression() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+
+        let (w, h) = (4u32, 4u32);
+        let data: Vec<f32> = (1..=16).map(|v| v as f32).collect();
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let raster = Raster::new("elev", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+
+        let fields = vec![Field::new("zone_id", FieldType::Integer)];
+        let mut ds = Dataset::new("mixed_zones", GeometryType::Polygon, fields);
+
+        let sq_ring = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+
+        // Feature 1: Valid polygon with hole (outer square 0..3, inner hole 1..2)
+        let f1_geom = Geometry::Polygon(vec![vec![
+            sq_ring(0.0, 1.0, 3.0, 4.0), // outer 3x3 = 9 cells
+            sq_ring(1.0, 2.0, 2.0, 3.0), // hole 1x1 = 1 cell
+        ]]);
+        ds.features.push(Feature { id: 101, geometry: Some(f1_geom), attrs: vec![Value::Int(1)] });
+
+        // Feature 2: Defective polygon: hole has fewer than 3 vertices!
+        let f2_geom = Geometry::Polygon(vec![vec![
+            sq_ring(0.0, 1.0, 3.0, 4.0),
+            vec![Coord::new(1.0, 2.0), Coord::new(2.0, 3.0)], // only 2 points!
+        ]]);
+        ds.features.push(Feature { id: 102, geometry: Some(f2_geom), attrs: vec![Value::Int(2)] });
+
+        // Feature 3: Valid simple polygon
+        let f3_geom = Geometry::Polygon(vec![vec![sq_ring(0.0, 3.0, 1.0, 4.0)]]); // 1 cell
+        ds.features.push(Feature { id: 103, geometry: Some(f3_geom), attrs: vec![Value::Int(3)] });
+
+        let m = RasterMap {
+            datasets: HashMap::from([("mixed_zones".to_string(), ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+
+        let res = crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "mixed_zones"})).unwrap();
+        let messages = res.messages.clone();
+        let out = layer(res);
+
+        assert_eq!(out.features.len(), 3);
+        let count_idx = out.field_index("elev_count").unwrap();
+        let mean_idx = out.field_index("elev_mean").unwrap();
+
+        // Feature 1 succeeded (9 - 1 = 8 cells)
+        assert_eq!(out.value(0, count_idx), &Value::Int(8));
+        assert!(out.value(0, mean_idx).as_f64().is_some());
+
+        // Feature 2 failed (hole was defective -> polygon rejected -> default stats)
+        assert_eq!(out.value(1, count_idx), &Value::Int(0));
+        assert_eq!(out.value(1, mean_idx), &Value::Null);
+
+        // Feature 3 succeeded (1 cell)
+        assert_eq!(out.value(2, count_idx), &Value::Int(1));
+        assert!(out.value(2, mean_idx).as_f64().is_some());
+
+        // Messages must explicitly report feature 102 failure
+        assert!(messages.iter().any(|m| m.contains("1 feature(s) had invalid geometry")));
+        assert!(messages.iter().any(|m| m.contains("feature 102") && m.contains("fewer than 3 vertices")));
+    }
+
+    #[test]
+    fn parse_bands_and_stats_validation_regression() {
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+
+        let (w, h) = (2u32, 2u32);
+        let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 2.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let raster = Raster::new("elev", w, h, vec![data], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+
+        let mut ds = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        let sq_ring = vec![Coord::new(0.0, 0.0), Coord::new(2.0, 0.0), Coord::new(2.0, 2.0), Coord::new(0.0, 2.0), Coord::new(0.0, 0.0)];
+        ds.push(Some(Geometry::Polygon(vec![vec![sq_ring]])), vec![Value::Int(1)]);
+
+        let m = RasterMap { datasets: HashMap::from([("zones".to_string(), ds)]), rasters: HashMap::from([("elev".to_string(), &raster)]) };
+
+        // 1. Invalid stats inputs
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": []})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": ""})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": ["median"]})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": [123]})).is_err());
+
+        // 2. Invalid bands inputs
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": []})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": ""})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 1.5})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 99})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": -1})).is_err());
     }
 }

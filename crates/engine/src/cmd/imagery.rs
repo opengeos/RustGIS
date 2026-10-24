@@ -519,6 +519,28 @@ fn index(s: &mut Session, p: &Value) -> CmdResult {
     add(s, rasterops::derive(&r, &name(p, format!("{}_{idx}", r.name)), vec![out])?, false)
 }
 
+/// Processes a raster via clipping or resampling.
+///
+/// ### Polygon Clipping Semantics (`operation: "clip"`, `"polygon": "<layer>"`)
+/// - **Selection Propagation (`selectedOnly`)**:
+///   - When `Some(true)`: Clips strictly using features currently selected in the polygon layer.
+///     If the selection is empty, returns an actionable error (`"<layer>: no features are selected"`).
+///   - When `Some(false)`: Clips using all features in the polygon layer, ignoring any selection.
+///   - When omitted (`None` or `null`): For backward compatibility, clips to the selection if non-empty,
+///     otherwise clips using all features.
+///   - Non-boolean values are rejected with an explicit validation error.
+/// - **Per-Zone and Overlap Semantics**:
+///   - Every polygon geometry (including multipart geometries) is transformed to WGS 84 lon/lat.
+///   - Polygon exterior rings and interior holes are strictly validated; invalid or failed holes reject
+///     the containing polygon rather than distorting the boundary.
+///   - Polygons are combined into a composite scanline mask over the raster. Holes cut out cells using the
+///     even-odd rule within each polygon. Where multiple polygons overlap, their coverage is combined
+///     (union: any cell falling inside at least one polygon is retained).
+///   - The raster is cropped to the tight bounding box of all selected polygons, and cells outside the
+///     polygons receive NoData.
+/// - **Partial Failure Reporting**:
+///   - Features with invalid geometry or unprojectable coordinates are skipped and logged with a warning.
+///   - If all features fail, the operation fails and reports the specific failure cause of the first feature.
 fn process(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
     match ps(p, "operation").ok_or("operation is required")? {
@@ -531,20 +553,20 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
                 .layer_by_name(pl)
                 .filter(|l| l.geometry_type() == GeometryType::Polygon)
                 .ok_or_else(|| format!("no polygon layer '{pl}'"))?;
-            let rows: Vec<usize> = match b(p, "selectedOnly") {
-                Some(true) => {
+            let rows: Vec<usize> = match p.get("selectedOnly") {
+                Some(Value::Bool(true)) => {
                     if l.selection.is_empty() {
                         return Err(format!("{pl}: no features are selected"));
                     }
                     l.selection.clone()
                 }
-                Some(false) => (0..l.dataset.features.len()).collect(),
-                None => {
-                    if l.selection.is_empty() {
-                        (0..l.dataset.features.len()).collect()
-                    } else {
-                        l.selection.clone()
-                    }
+                Some(Value::Bool(false)) => (0..l.dataset.features.len()).collect(),
+                None | Some(Value::Null) => {
+                    // Backward-compatible default: if features are selected, clip to selection; otherwise clip all.
+                    if l.selection.is_empty() { (0..l.dataset.features.len()).collect() } else { l.selection.clone() }
+                }
+                Some(_) => {
+                    return Err("parameter 'selectedOnly' must be a boolean (true or false)".into());
                 }
             };
             if rows.is_empty() {
@@ -556,66 +578,33 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
                 }
                 _ => None,
             };
-            let polygons: Vec<Vec<Vec<Coord>>> = rows
-                .iter()
-                .filter_map(|row| match l.dataset.features.get(*row).and_then(|f| f.geometry.as_ref()) {
-                    Some(Geometry::Polygon(polys)) => {
-                        let rings: Vec<Vec<Vec<Coord>>> = match &poly_tr {
-                            Some(tr) => polys
-                                .iter()
-                                .filter_map(|rings| {
-                                    let exterior = rings.first()?;
-                                    let mut ext_pts = Vec::with_capacity(exterior.len());
-                                    for &c in exterior {
-                                        ext_pts.push(tr.to_lonlat(c)?);
-                                    }
-                                    if ext_pts.len() < 3 {
-                                        return None;
-                                    }
-                                    let mut valid_rings = vec![ext_pts];
-                                    for hole in rings.iter().skip(1) {
-                                        let mut hole_pts = Vec::with_capacity(hole.len());
-                                        let mut ok = true;
-                                        for &c in hole {
-                                            if let Some(ll) = tr.to_lonlat(c) {
-                                                hole_pts.push(ll);
-                                            } else {
-                                                ok = false;
-                                                break;
-                                            }
-                                        }
-                                        if ok && hole_pts.len() >= 3 {
-                                            valid_rings.push(hole_pts);
-                                        }
-                                    }
-                                    Some(valid_rings)
-                                })
-                                .collect(),
-                            None => polys
-                                .iter()
-                                .filter_map(|rings| {
-                                    let exterior = rings.first()?;
-                                    if exterior.len() < 3 {
-                                        return None;
-                                    }
-                                    let mut valid_rings = vec![exterior.clone()];
-                                    for hole in rings.iter().skip(1) {
-                                        if hole.len() >= 3 {
-                                            valid_rings.push(hole.clone());
-                                        }
-                                    }
-                                    Some(valid_rings)
-                                })
-                                .collect(),
-                        };
-                        Some(rings.into_iter())
+            let mut polygons: Vec<Vec<Vec<Coord>>> = Vec::new();
+            let mut failed_features = Vec::new();
+            for &row in &rows {
+                let Some(f) = l.dataset.features.get(row) else { continue };
+                match &f.geometry {
+                    Some(Geometry::Polygon(polys)) => match rasterops::transform_feature_polygons_to_lonlat(polys, poly_tr.as_ref()) {
+                        Ok(transformed) => {
+                            polygons.extend(transformed);
+                        }
+                        Err(e) => {
+                            failed_features.push((f.id, e));
+                        }
+                    },
+                    _ => {
+                        failed_features
+                            .push((f.id, rasterops::PolygonTransformError::InvalidExterior("missing or non-polygon geometry".into())));
                     }
-                    _ => None,
-                })
-                .flatten()
-                .collect();
+                }
+            }
             if polygons.is_empty() {
+                if let Some((first_id, first_err)) = failed_features.first() {
+                    return Err(format!("{pl}: has no valid polygon geometries (feature {first_id}: {first_err})"));
+                }
                 return Err(format!("{pl}: has no valid polygon geometries"));
+            }
+            if !failed_features.is_empty() {
+                log::warn!("{pl}: {} feature(s) failed polygon transformation during clipping", failed_features.len());
             }
             let (cols, rows, mask) =
                 rasterops::polygon_mask(&r, &polygons).ok_or_else(|| format!("no cell of {} falls inside {pl}", r.name))?;

@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, Transformer};
 use rustgis_geom::{Coord, Extent};
 
 /// The no-data value written by these operations.
@@ -523,6 +523,176 @@ pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Option<
     (n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n))
 }
 
+/// An error encountered while validating or transforming a polygon geometry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PolygonTransformError {
+    EmptyPolygon,
+    InvalidExterior(String),
+    InvalidHole { index: usize, reason: String },
+}
+
+impl std::fmt::Display for PolygonTransformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPolygon => write!(f, "polygon has no rings"),
+            Self::InvalidExterior(r) => write!(f, "exterior ring is invalid: {r}"),
+            Self::InvalidHole { index, reason } => write!(f, "hole {index} is invalid: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PolygonTransformError {}
+
+/// Transforms a single polygon's rings (exterior ring + optional holes) to WGS 84 lon/lat coordinates.
+///
+/// - The exterior ring must have at least 3 points and all points must project successfully.
+/// - Every interior ring (hole) must have at least 3 points and all points must project successfully.
+/// - If any hole fails or is invalid, the entire polygon is rejected with an error rather than
+///   silently discarding the hole or altering the polygon geometry.
+pub fn transform_polygon_to_lonlat(rings: &[Vec<Coord>], tr: Option<&Transformer>) -> Result<Vec<Vec<Coord>>, PolygonTransformError> {
+    let exterior = rings.first().ok_or(PolygonTransformError::EmptyPolygon)?;
+    let mut ext_lonlat = Vec::with_capacity(exterior.len());
+    for &c in exterior {
+        if !c.is_finite() {
+            return Err(PolygonTransformError::InvalidExterior("non-finite coordinate".into()));
+        }
+        let ll = match tr {
+            Some(t) => t.to_lonlat(c).ok_or_else(|| PolygonTransformError::InvalidExterior("coordinate transformation failed".into()))?,
+            None => c,
+        };
+        if !ll.is_finite() {
+            return Err(PolygonTransformError::InvalidExterior("transformed coordinate is non-finite".into()));
+        }
+        ext_lonlat.push(ll);
+    }
+    if ext_lonlat.len() < 3 {
+        return Err(PolygonTransformError::InvalidExterior("fewer than 3 vertices".into()));
+    }
+
+    let mut out_rings = vec![ext_lonlat];
+    for (idx, hole) in rings.iter().skip(1).enumerate() {
+        let hole_num = idx + 1;
+        let mut hole_lonlat = Vec::with_capacity(hole.len());
+        for &c in hole {
+            if !c.is_finite() {
+                return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "non-finite coordinate".into() });
+            }
+            let ll = match tr {
+                Some(t) => t.to_lonlat(c).ok_or_else(|| PolygonTransformError::InvalidHole {
+                    index: hole_num,
+                    reason: "coordinate transformation failed".into(),
+                })?,
+                None => c,
+            };
+            if !ll.is_finite() {
+                return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "transformed coordinate is non-finite".into() });
+            }
+            hole_lonlat.push(ll);
+        }
+        if hole_lonlat.len() < 3 {
+            return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "fewer than 3 vertices".into() });
+        }
+        out_rings.push(hole_lonlat);
+    }
+
+    Ok(out_rings)
+}
+
+/// Transforms and validates all polygon parts of a (multi-)polygon feature to WGS 84 lon/lat coordinates.
+pub fn transform_feature_polygons_to_lonlat(
+    polys: &[Vec<Vec<Coord>>],
+    tr: Option<&Transformer>,
+) -> Result<Vec<Vec<Vec<Coord>>>, PolygonTransformError> {
+    if polys.is_empty() {
+        return Err(PolygonTransformError::EmptyPolygon);
+    }
+    let mut out = Vec::with_capacity(polys.len());
+    for (part_idx, rings) in polys.iter().enumerate() {
+        let valid_poly = transform_polygon_to_lonlat(rings, tr).map_err(|e| match e {
+            PolygonTransformError::InvalidHole { index, reason } => {
+                PolygonTransformError::InvalidHole { index, reason: format!("part {part_idx}: {reason}") }
+            }
+            PolygonTransformError::InvalidExterior(reason) => PolygonTransformError::InvalidExterior(format!("part {part_idx}: {reason}")),
+            other => other,
+        })?;
+        out.push(valid_poly);
+    }
+    Ok(out)
+}
+
+/// Parses a band specification string into 0-based band indices.
+///
+/// Supported inputs:
+/// - `""` (empty string): defaults to band 1 (`vec![0]`)
+/// - `"all"`: all bands `0..total_bands`
+/// - comma, semicolon, or space-separated list of 1-based band numbers: `"1, 2, 3"`, `"[1, 2]"`, etc.
+///
+/// Validates that:
+/// - Every entry is a valid, finite positive integer.
+/// - Decimals (e.g. `"1.5"`), negative numbers (e.g. `"-1"`), zero (`"0"`), non-numeric (e.g. `"abc"`),
+///   or non-finite values (e.g. `"NaN"`, `"Infinity"`) are strictly rejected.
+/// - Every band number is within `1..=total_bands`.
+/// - Empty parts (such as `"1,,2"` or `","`) are rejected.
+pub fn parse_bands_str(s: &str, total_bands: usize) -> Result<Vec<usize>, String> {
+    if total_bands == 0 {
+        return Err("raster has no bands".into());
+    }
+    let txt = s.trim();
+    if txt.is_empty() {
+        return Ok(vec![0]);
+    }
+    if txt.eq_ignore_ascii_case("all") {
+        return Ok((0..total_bands).collect());
+    }
+    let clean = txt.trim_matches(|c| c == '[' || c == ']');
+    if clean.trim().is_empty() {
+        return Err("band selection cannot be empty brackets".into());
+    }
+    let mut out = Vec::new();
+    for part in clean.split([',', ';']) {
+        let part = part.trim().trim_matches('"').trim();
+        if part.is_empty() {
+            return Err("band selection contains an empty band entry".into());
+        }
+        for subpart in part.split_whitespace() {
+            let subpart = subpart.trim();
+            if subpart.is_empty() {
+                continue;
+            }
+            if subpart.eq_ignore_ascii_case("all") {
+                for b in 0..total_bands {
+                    if !out.contains(&b) {
+                        out.push(b);
+                    }
+                }
+                continue;
+            }
+            let f: f64 = subpart.parse().map_err(|_| format!("invalid band number '{subpart}'"))?;
+            if !f.is_finite() {
+                return Err("band number must be a finite number".into());
+            }
+            if f <= 0.0 {
+                return Err("band numbers must be positive (1-based)".into());
+            }
+            if f.fract() != 0.0 {
+                return Err("band numbers must be integers, not decimals".into());
+            }
+            let b = f as usize;
+            if b > total_bands {
+                return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
+            }
+            let b_idx = b - 1;
+            if !out.contains(&b_idx) {
+                out.push(b_idx);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("no valid band numbers found in input".into());
+    }
+    Ok(out)
+}
+
 /// The cells of `r` whose centres fall inside any of `polygons` (each an exterior ring and its
 /// holes, in longitude/latitude): the column and row window around the polygons, clamped to the
 /// raster, and a row-major mask over it. `None` when no cell centre falls inside.
@@ -537,8 +707,15 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
             let exterior = rings.first()?;
             let mut ext_pts = Vec::with_capacity(exterior.len());
             for c in exterior {
+                if !c.is_finite() {
+                    return None;
+                }
                 let w = tr.from_lonlat(*c)?;
-                ext_pts.push(r.transform.to_pixel(w));
+                let pt = r.transform.to_pixel(w);
+                if !pt.0.is_finite() || !pt.1.is_finite() {
+                    return None;
+                }
+                ext_pts.push(pt);
             }
             if ext_pts.len() < 3 {
                 return None;
@@ -546,18 +723,21 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
             let mut valid_rings = vec![ext_pts];
             for hole in rings.iter().skip(1) {
                 let mut hole_pts = Vec::with_capacity(hole.len());
-                let mut ok = true;
                 for c in hole {
-                    if let Some(w) = tr.from_lonlat(*c) {
-                        hole_pts.push(r.transform.to_pixel(w));
-                    } else {
-                        ok = false;
-                        break;
+                    if !c.is_finite() {
+                        return None;
                     }
+                    let w = tr.from_lonlat(*c)?;
+                    let pt = r.transform.to_pixel(w);
+                    if !pt.0.is_finite() || !pt.1.is_finite() {
+                        return None;
+                    }
+                    hole_pts.push(pt);
                 }
-                if ok && hole_pts.len() >= 3 {
-                    valid_rings.push(hole_pts);
+                if hole_pts.len() < 3 {
+                    return None;
                 }
+                valid_rings.push(hole_pts);
             }
             Some(valid_rings)
         })
@@ -1157,5 +1337,112 @@ mod tests {
         let nan_ext_stats = zonal_statistics(&r, &[0], &nan_ext_with_hole).unwrap();
         assert_eq!(nan_ext_stats[0], ZoneStats::default());
         assert!(polygon_mask(&r, &nan_ext_with_hole).is_none());
+
+        // 9. Polygon with defective hole (< 3 vertices or non-finite) is rejected rather than silently discarding the hole
+        let bad_hole_poly = vec![vec![
+            sq(0.005, 0.005, 0.015, 0.015),                           // valid exterior (5 points)
+            vec![Coord::new(0.009, 0.009), Coord::new(0.011, 0.011)], // invalid hole: only 2 points!
+        ]];
+        assert!(polygon_mask(&r, &bad_hole_poly).is_none(), "polygon with defective hole must be rejected");
+        let bad_hole_stats = zonal_statistics(&r, &[0], &bad_hole_poly).unwrap();
+        assert_eq!(bad_hole_stats[0], ZoneStats::default());
+
+        let nan_hole_poly = vec![vec![
+            sq(0.005, 0.005, 0.015, 0.015),
+            vec![Coord::new(f64::NAN, 0.009), Coord::new(0.011, 0.009), Coord::new(0.011, 0.011), Coord::new(f64::NAN, 0.009)],
+        ]];
+        assert!(polygon_mask(&r, &nan_hole_poly).is_none(), "polygon with non-finite hole must be rejected");
+    }
+
+    #[test]
+    fn polygon_transformation_and_hole_validation_semantics() {
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+        let ext = sq(0.0, 0.0, 10.0, 10.0);
+        let hole1 = sq(2.0, 2.0, 4.0, 4.0);
+        let hole2 = sq(6.0, 6.0, 8.0, 8.0);
+
+        // Valid exterior and valid holes
+        let valid_poly = vec![ext.clone(), hole1.clone(), hole2.clone()];
+        let res = transform_polygon_to_lonlat(&valid_poly, None).unwrap();
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].len(), ext.len());
+        assert_eq!(res[1].len(), hole1.len());
+        assert_eq!(res[2].len(), hole2.len());
+
+        // Empty polygon
+        let empty_poly: Vec<Vec<Coord>> = Vec::new();
+        assert_eq!(transform_polygon_to_lonlat(&empty_poly, None), Err(PolygonTransformError::EmptyPolygon));
+
+        // Invalid exterior: fewer than 3 vertices
+        let bad_ext = vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&bad_ext, None), Err(PolygonTransformError::InvalidExterior(_))));
+
+        // Invalid exterior: non-finite coordinate
+        let nan_ext = vec![vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, 1.0), Coord::new(2.0, 2.0), Coord::new(0.0, 0.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&nan_ext, None), Err(PolygonTransformError::InvalidExterior(_))));
+
+        // Invalid hole 1: fewer than 3 vertices
+        let bad_hole = vec![ext.clone(), vec![Coord::new(2.0, 2.0), Coord::new(3.0, 3.0)]];
+        assert_eq!(
+            transform_polygon_to_lonlat(&bad_hole, None),
+            Err(PolygonTransformError::InvalidHole { index: 1, reason: "fewer than 3 vertices".into() })
+        );
+
+        // Invalid hole 2: non-finite coordinate
+        let nan_hole = vec![ext.clone(), hole1.clone(), vec![Coord::new(6.0, 6.0), Coord::new(f64::INFINITY, 8.0), Coord::new(8.0, 8.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&nan_hole, None), Err(PolygonTransformError::InvalidHole { index: 2, .. })));
+
+        // Multipart features
+        let multi_valid = vec![vec![ext.clone(), hole1.clone()], vec![sq(20.0, 20.0, 30.0, 30.0)]];
+        let multi_res = transform_feature_polygons_to_lonlat(&multi_valid, None).unwrap();
+        assert_eq!(multi_res.len(), 2);
+        assert_eq!(multi_res[0].len(), 2);
+        assert_eq!(multi_res[1].len(), 1);
+
+        // Multipart with failing part
+        let multi_bad = vec![vec![ext.clone()], vec![vec![Coord::new(1.0, 1.0)]]];
+        assert!(transform_feature_polygons_to_lonlat(&multi_bad, None).is_err());
+    }
+
+    #[test]
+    fn parse_bands_str_validation_and_boundaries() {
+        let total = 3usize;
+
+        // Valid formats
+        assert_eq!(parse_bands_str("", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("   ", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("all", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("ALL", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("1", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("3", total).unwrap(), vec![2]); // boundary: total_bands
+        assert_eq!(parse_bands_str("1, 2", total).unwrap(), vec![0, 1]);
+        assert_eq!(parse_bands_str("[1, 2, 3]", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("1; 3", total).unwrap(), vec![0, 2]);
+        assert_eq!(parse_bands_str(" 1   2 ", total).unwrap(), vec![0, 1]);
+
+        // De-duplication
+        assert_eq!(parse_bands_str("1, 1, 2, 2, 3", total).unwrap(), vec![0, 1, 2]);
+
+        // Boundary violations and negative
+        assert!(parse_bands_str("0", total).is_err(), "0 is invalid (1-based)");
+        assert!(parse_bands_str("-1", total).is_err(), "negative band is invalid");
+        assert!(parse_bands_str("4", total).is_err(), "out of range band is invalid");
+        assert!(parse_bands_str("999", total).is_err(), "out of range band is invalid");
+
+        // Decimals and non-finite
+        assert!(parse_bands_str("1.5", total).is_err(), "decimal band is invalid");
+        assert_eq!(parse_bands_str("1.0", total).unwrap(), vec![0]); // 1.0 has fract == 0.0
+        assert!(parse_bands_str("NaN", total).is_err(), "NaN is invalid");
+        assert!(parse_bands_str("Infinity", total).is_err(), "Infinity is invalid");
+
+        // Malformed strings
+        assert!(parse_bands_str("abc", total).is_err(), "non-numeric string is invalid");
+        assert!(parse_bands_str("[]", total).is_err(), "empty brackets are invalid");
+        assert!(parse_bands_str("[   ]", total).is_err(), "whitespace brackets are invalid");
+        assert!(parse_bands_str("1,,2", total).is_err(), "empty item between commas is invalid");
+        assert!(parse_bands_str(",", total).is_err(), "standalone comma is invalid");
+        assert!(parse_bands_str(";", total).is_err(), "standalone semicolon is invalid");
     }
 }
