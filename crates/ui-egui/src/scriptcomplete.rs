@@ -889,6 +889,7 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
 }
 
 /// Closes the list as Escape does: not shown again until what's typed changes.
+#[allow(dead_code)]
 pub fn close(ui: &Ui, box_id: Id) {
     let mut list = load(ui, box_id);
     if let Some((offer, _)) = list.open.take() {
