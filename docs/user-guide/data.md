@@ -57,6 +57,14 @@ GeoParquet and FlatGeobuf carry their coordinate system in the file. Rasters kee
 coordinate system and are reprojected as they draw. The map uses Web Mercator by default, but
 **View › Projection** can change it; see [Maps](maps.md).
 
+ESRI `.prj` files without an EPSG code use their projection parameters and, for ED50,
+Monte Mario, OSGB36, DHDN, Amersfoort, GGRS87, CH1903/CH1903+ and S-JTSK, the same built-in
+Helmert datum transformation as the EPSG definition. A `TOWGS84` transformation in the file
+takes precedence. RDN2008 and IGM95 are treated as WGS 84-like datums. These transformations
+do not replace regional grid corrections for survey accuracy. An unrecognized datum keeps
+its ellipsoid and produces a notice when no transformation is available. Swiss oblique
+Mercator and the standard Krovak East/North variant are supported from their parameters.
+
 Shapefile text uses a supported `.cpg` encoding, otherwise the `.dbf` code page, with UTF-8 as
 the fallback. Keep the sidecar files together.
 
