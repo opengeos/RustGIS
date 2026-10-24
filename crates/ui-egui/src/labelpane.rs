@@ -95,8 +95,10 @@ fn shown(c: &Class) -> String {
 }
 
 /// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
-fn layer_key(app: &RustGisApp, l: &Layer) -> (u64, usize, u32) {
-    (app.session.opened, app.session.project.active_map, l.id)
+/// A map goes by its place and its name, as Define Projection's does: deleting a map moves the
+/// next one into its place, and a copy keeps its layer ids.
+fn layer_key(app: &RustGisApp, l: &Layer) -> (u64, usize, String, u32) {
+    (app.session.opened, app.session.project.active_map, app.session.map().name.clone(), l.id)
 }
 
 /// Where the class chosen on a layer is kept.
@@ -1015,15 +1017,24 @@ mod tests {
         let mut h = harness(app);
         h.run();
         pick_class(&mut h, "Default", "Big");
-        h.state_mut().run("map.duplicate", json!({})).unwrap();
+        let copy = h.state_mut().run("map.duplicate", json!({})).unwrap()["name"].as_str().unwrap().to_string();
         h.run();
-        assert_ne!(h.state().session.map().name, map, "the copy is in view");
+        assert_eq!(h.state().session.map().name, copy, "the copy is in view");
         assert!(shown(&h, "Default"));
         h.state_mut().run("map.activate", json!({"name": map})).unwrap();
         let id = layer_id(h.state(), "Cities");
         h.state_mut().run("layer.select", json!({"layer": id})).unwrap();
         h.run();
         assert!(shown(&h, "Big"), "back on its map");
+        // Deleted, its copy moves into its place, and still starts on Default.
+        let at = h.state().session.project.active_map;
+        h.state_mut().run("map.remove", json!({"name": map})).unwrap();
+        h.state_mut().run("map.activate", json!({"name": copy})).unwrap();
+        assert_eq!(h.state().session.project.active_map, at, "the copy is where its map was");
+        let id = layer_id(h.state(), "Cities");
+        h.state_mut().run("layer.select", json!({"layer": id})).unwrap();
+        h.run();
+        assert!(shown(&h, "Default"));
     }
 
     /// New, Move Up, Rename and Remove each run their command once: one undo step each.
