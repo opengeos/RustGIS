@@ -342,7 +342,7 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let owner = egui::Id::unique((layer_key(app, l), c.name));
     // A count holds for this project state at this scale (display filters follow the scale).
     let version = egui::Id::unique((app.session.revision, scale.to_bits())).value();
-    let applied = match crate::sqlbox::show(ui, "label_sql", owner, version, c.it.where_.as_deref(), &l.dataset, count) {
+    let applied = match crate::sqlbox::show(ui, ("label_sql", owner), owner, version, c.it.where_.as_deref(), &l.dataset, count) {
         Some(crate::sqlbox::Apply::Clause(w)) => json!({"where": w}),
         Some(crate::sqlbox::Apply::Clear) => json!({"where": null}),
         None => return,
@@ -1175,6 +1175,24 @@ mod tests {
         h.get_by_label("New").click();
         h.run();
         assert_eq!(h.state().session.undo_depth(), steps);
+    }
+
+    #[test]
+    fn sql_drafts_survive_switching_label_classes() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        let mut h = sql_tab(app);
+        h.get_by_label("+ New expression").click();
+        h.run();
+        type_clause(&mut h, "pop_max > 123");
+        pick_class(&mut h, "Default", "Big");
+        h.get_by_label("+ New expression").click();
+        h.run();
+        type_clause(&mut h, "pop_max > 456");
+        pick_class(&mut h, "Big", "Default");
+        assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 123"));
+        pick_class(&mut h, "Default", "Big");
+        assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 456"));
     }
 
     /// The SQL tab shows and sets the chosen class's clause.
