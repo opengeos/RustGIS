@@ -2535,7 +2535,10 @@ fn render_turned(map: &mut Map, view: &View, full_res_rasters: bool) -> Option<R
 }
 
 /// Draws one north-up frame. `labels_to` says where its labels go: a turned or tilted view the
-/// frame stands in for places them itself (and draws their icons).
+/// frame stands in for places them itself (and draws their icons). `full_res_rasters` marks an
+/// export, which draws everything as it will stay: rasters at full resolution, and labels in
+/// their installed font families, waiting for those to be indexed (`families::find`). A frame on
+/// screen passes `false`, and never waits for the index (`families::find_ready`).
 fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Backend, mut labels_to: Labels<'_>) -> Option<RenderOutput> {
     let (w, h) = view.pixel_size();
     let mut pm = Pixmap::new(w, h)?;
@@ -3108,8 +3111,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             };
             if label_fields.iter().any(Option::is_some) {
                 let label_factor = layer.size_factor(label_scale);
-                // Each class's font, where it is installed. An export waits for the installed
-                // fonts to be indexed; a frame on screen doesn't (see `find_ready`).
+                // Each class's font, where it is installed. An export (`full_res_rasters`: see
+                // `render_frame`'s contract) waits for the font index; a frame on screen doesn't.
                 let find = if full_res_rasters { families::find } else { families::find_ready };
                 let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(find)).collect();
                 let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);

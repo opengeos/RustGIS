@@ -103,7 +103,13 @@ pub fn find(name: &str) -> Option<u16> {
 /// draws in the label font for a moment; elsewhere (a script, the command line, which never warm
 /// up) the families are indexed now, so an export draws in the named family.
 pub fn find_ready(name: &str) -> Option<u16> {
-    if WARMING.load(Ordering::Relaxed) { find_in(installed_now()?, name) } else { find(name) }
+    find_in(available()?, name)
+}
+
+/// The installed families without waiting for [`warm_up`]'s index: `None` while it runs (the
+/// app); where nothing warmed up (a script, the command line), indexed now.
+pub fn available() -> Option<&'static [Family]> {
+    if WARMING.load(Ordering::Relaxed) { installed_now() } else { Some(installed()) }
 }
 
 fn find_in(families: &[Family], name: &str) -> Option<u16> {
@@ -326,7 +332,8 @@ fn name(table: &[u8], id: u16) -> Option<String> {
     let strings = usize::from(u16_at(table, 4)?);
     let mut best: Option<(u8, String)> = None;
     for i in 0..usize::from(count) {
-        let rec = table.get(6 + i * 12..6 + i * 12 + 12)?;
+        // A table cut short keeps the records before the cut (and what they matched).
+        let Some(rec) = table.get(6 + i * 12..6 + i * 12 + 12) else { break };
         let (platform, lang, name_id) = (u16_at(rec, 0)?, u16_at(rec, 4)?, u16_at(rec, 6)?);
         if name_id != id {
             continue;
@@ -430,6 +437,21 @@ mod tests {
         let mut seen = HashSet::new();
         walk(dir.path(), 0, &mut files, &mut seen);
         assert_eq!((files.len(), seen.len()), (1, 1), "{files:?}");
+    }
+
+    #[test]
+    fn a_name_table_cut_short_keeps_the_names_before_the_cut() {
+        // Two records listed, the second cut off: the first's family name still reads.
+        let text: Vec<u8> = "Sans".encode_utf16().flat_map(u16::to_be_bytes).collect();
+        let strings = 6 + 12 + 4;
+        let mut table = vec![0, 0, 0, 2];
+        table.extend((strings as u16).to_be_bytes());
+        for v in [3u16, 1, 0x0409, 1, text.len() as u16, 0] {
+            table.extend(v.to_be_bytes());
+        }
+        table.extend([0, 3, 0, 1]);
+        table.extend(&text);
+        assert_eq!(name(&table, 1).as_deref(), Some("Sans"));
     }
 
     #[test]
