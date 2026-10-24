@@ -18,8 +18,15 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval or quantile. If no field is chosen, the current renderer's field is kept when it is
-  numeric; otherwise the first numeric field is used. If the layer has no numeric field, or the
+  interval, quantile, geometric interval or standard deviation. Geometric interval makes class
+  widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
+  below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
+  101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
+  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  class** adds one, and the field's largest value closes the last class. If no field is
+  chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
+  field is used. If the layer has no numeric field, or the
   switch fails for another reason, the pane shows why and keeps the current renderer. When numeric
   fields exist, a field picker lets you try another one; the error stays visible if a retry fails.
   A problem no field can fix, such as a definition query that keeps no features, needs fixing
@@ -127,6 +134,16 @@ same). By command, name the class as `layer.classStyle` does, with `value`, `ind
 layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A1E","width":7},{"color":"#F28C28","width":5},{"color":"#FFFFFF","width":0.6}]}
 ```
 
+A stroke can be dashed: **Dash** takes the lengths in points, dash and gap in turn (`4 2`, or
+`4 2 1 2` for dash-dot; an odd list is repeated, as in SVG), and its menu offers dashed,
+dotted, dash-dot and long-dash patterns sized to the stroke's width. Empty is a solid line. With
+flat caps the dashes are as long as given; round and square caps add half the width at each end.
+By command, `"dash"` on a stroke (`null` for solid):
+
+```text
+layer.lineStrokes={"layer":"Paths","strokes":[{"color":"#000000","width":1.2,"cap":"flat","dash":[6,3]}]}
+```
+
 By default, each feature draws its whole stack in turn, so where two roads meet, the second one's
 casing cuts across the first one's core. **Draw strokes in levels** (symbol levels) draws all
 stacked strokes at a lower level before those at a higher one, so the casings join underneath
@@ -229,7 +246,14 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
-  colour, halo and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+  colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+  › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
+  italic take the family's own bold and italic faces where it has them. The family is saved by
+  its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
+  font there (the pane shows it as not installed), and in the browser, which reads no installed
+  fonts (`labels.style={"layer": "Rivers", "font": "Liberation Serif"}`; `labels.fonts` lists the
+  installed families, `{"font": ""}` goes back to the label font).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says
@@ -241,7 +265,14 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
 - **Placement**: automatic (above points, centred on lines and polygons), centred, or one of
   eight positions around the feature (`labels.placement={"layer": "Cities", "position":
-  "aboveRight"}`).
+  "aboveRight"}`). Lines can be labelled **along** them (Position › Along lines): **Parallel**
+  sets the text straight, turned to the line's direction across it; **Curved** turns each
+  character with the line where it bends. Both sit at the middle of the line's longest stretch
+  in view, centred on the line and kept upright, and may run past its ends by about a letter; a
+  line too short for its text, or (curved) one bending more than 25° from one character to the
+  next, is left unlabelled. A text over 200 characters long is set straight rather than
+  curved. Points and polygons with these placements are labelled as automatic
+  (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its

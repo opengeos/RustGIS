@@ -109,7 +109,7 @@ pub fn commands() -> Vec<C> {
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile", "ramp"?: string}"#),
+            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
         C::new("layer.ramp", "Color Scheme", "Style › Drawing", |s, p| {
             let r = s.ramp(s_req(p, "ramp")?)?;
             with(s, p, |l| match &mut l.raster {
@@ -177,7 +177,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
             .when(need_lines)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
@@ -287,8 +287,14 @@ pub fn commands() -> Vec<C> {
         C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
             let color = s.get_color(p, "color")?;
-            let (halo, bold) = (b(p, "halo"), b(p, "bold"));
+            let (halo, bold, italic) = (b(p, "halo"), b(p, "bold"), b(p, "italic"));
+            // A family by name, whether or not this machine has it: the project may be drawn on
+            // one that does. Blank goes back to the label font.
+            let font = ps(p, "font").map(rustgis_map::symbology::font_name);
             super::labels::with_class(s, p, |c| {
+                if let Some(name) = font.clone() {
+                    c.font = name;
+                }
                 if let Some(v) = size {
                     c.size = v;
                 }
@@ -301,10 +307,13 @@ pub fn commands() -> Vec<C> {
                 if let Some(bb) = bold {
                     c.bold = bb;
                 }
+                if let Some(it) = italic {
+                    c.italic = it;
+                }
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font)}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;
@@ -423,7 +432,26 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
                     .ok_or_else(|| format!("stroke {}: level is a whole number from 0 to 255", i + 1))?,
             ),
         };
-        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level }.clamped());
+        let bad_dash = || {
+            format!(
+                "stroke {}: dash is a list of 1 to {} lengths in points (dash, gap, …), each 0 to {}, not all 0",
+                i + 1,
+                rustgis_map::symbology::MAX_DASH_STEPS,
+                rustgis_map::symbology::MAX_DASH_STEP
+            )
+        };
+        // A pattern out of range is an error here, so a script learns of it; a project file's is
+        // brought into range instead (`de_dash`), so a hand-edited file still opens.
+        let dash = match o.get("dash") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(a)) => {
+                let steps: Vec<f32> =
+                    a.iter().map(|v| v.as_f64().map(|x| x.clamp(-1e6, 1e6) as f32)).collect::<Option<_>>().ok_or_else(bad_dash)?;
+                Some(rustgis_map::symbology::Dash::new(&steps).ok_or_else(bad_dash)?)
+            }
+            Some(_) => return Err(bad_dash()),
+        };
+        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level, dash }.clamped());
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
@@ -1934,6 +1962,8 @@ fn add_layer_file(s: &mut Session, path: &str) -> CmdResult {
 /// Adds a layer from a layer file's JSON.
 pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     let mut layer: rustgis_map::Layer = serde_json::from_str(text).map_err(|e| format!("not a RustGIS layer file: {e}"))?;
+    // A binding in a file is no authority to use a login here.
+    crate::s3_connections::clear_bindings(layer.addresses_mut());
     // A fresh id and a unique name in this map; the rest goes through project repair.
     let base = layer.name.clone();
     let mut i = 1;
@@ -1948,6 +1978,7 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     // Only the database the added layer reads can change here.
     let keys: Vec<_> = s.map().layer(id).and_then(|l| l.source.as_ref()).map(super::connections::layer_keys).unwrap_or_default();
     super::connections::resolve_keys(s, &keys);
+    crate::s3_connections::resolve_project_s3(s);
     super::connections::note_waiting(s);
     s.active_layer = Some(id);
     Ok(json!({"layer": id}))
@@ -2148,7 +2179,9 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
 /// Add Data › From URL does, so a plugin, a script or the assistant can add data by address too.
 pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
-    let lower = url.to_ascii_lowercase();
+    // An address read through a saved S3 connection is judged by the address it wraps; the whole
+    // address stays what is fetched and kept.
+    let lower = rustgis_data::s3_address::inner(url).to_ascii_lowercase();
     if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://")) {
         return Err(format!("{url}: give an http://, https:// or s3:// address (Add Data opens files)"));
     }
@@ -2254,6 +2287,7 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
 
 /// Whether a web address names a GeoTIFF (by its path's extension).
 pub fn is_tiff_url(url: &str) -> bool {
+    let url = rustgis_data::s3_address::inner(url);
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     path.ends_with(".tif") || path.ends_with(".tiff")
 }
@@ -2650,7 +2684,20 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         Some(n) => Some(s.ramp(n).or_else(|e| current.filter(|r| r.name().eq_ignore_ascii_case(n.trim())).ok_or(e))?),
         None => current,
     };
-    let method = ps(p, "method").and_then(ClassMethod::from_name).unwrap_or_default();
+    // Manual bounds, as typed; "breaks" alone means manual.
+    let typed = match p.get("breaks") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => Some(a.iter().map(|v| v.as_f64().ok_or("breaks are numbers")).collect::<Result<Vec<f64>, _>>()?),
+        Some(_) => return Err("breaks are a list of numbers".into()),
+    };
+    let method = match ps(p, "method").and_then(ClassMethod::from_name) {
+        Some(m) if m != ClassMethod::Manual && typed.is_some() => {
+            return Err(format!("breaks go with the manual method, not {}", m.label()));
+        }
+        Some(m) => m,
+        None if typed.is_some() => ClassMethod::Manual,
+        None => ClassMethod::default(),
+    };
     let classes = f(p, "classes").map(|c| c.clamp(1.0, 12.0) as usize).unwrap_or(5);
     let l = s.map().layer(id).ok_or("no such layer")?;
     let g = l.geometry_type();
@@ -2692,7 +2739,17 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         "single" | "singlesymbol" => Renderer::Single(base),
         "unique" | "uniquevalues" => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
         "graduated" | "graduatedcolors" => {
-            Renderer::graduated(&l.dataset, &rows()?, &field(true)?, classes, method, ramp.unwrap_or(Ramp::Ember), base)?
+            let (field, ramp) = (field(true)?, ramp.unwrap_or(Ramp::Ember));
+            // Manual with no bounds keeps the layer's current ones on the same field, so switching
+            // to it changes nothing.
+            let kept = match &l.renderer {
+                Renderer::Graduated { field: f, breaks, .. } if *f == field => Some(breaks.clone()),
+                _ => None,
+            };
+            match (method, typed.or(kept)) {
+                (ClassMethod::Manual, Some(b)) => Renderer::graduated_manual(&l.dataset, &rows()?, &field, &b, ramp, base)?,
+                _ => Renderer::graduated(&l.dataset, &rows()?, &field, classes, method, ramp, base)?,
+            }
         }
         "proportional" | "proportionalsymbols" => {
             if g != GeometryType::Point {

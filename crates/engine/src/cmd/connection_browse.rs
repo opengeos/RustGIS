@@ -100,19 +100,19 @@ fn level(c: &Connection, node: &str) -> Result<Level, String> {
     Err(not_a_node())
 }
 
-/// The session's S3 connection for an S3 level, logging in with what needs no typing.
+/// The session's S3 connection for an S3 level, logging in with what needs no typing (a profile,
+/// the environment, anonymously, or the keys saved on this computer: browsing is the user action
+/// that may ask the system to unlock its store).
 /// (A probe logs in too, as `connection.test` does: the address it names, and the signature the
 /// fetch needs, depend on the connection.)
 fn s3_login(s: &mut Session, c: &Connection, level: &Level) -> Result<Option<s3::Connection>, String> {
     if !matches!(level, Level::S3Root | Level::S3Prefix { .. }) {
         return Ok(None);
     }
-    if s3::connection(&c.name).is_none() && c.options.get("credentials").is_none_or(|v| v != "keys") {
-        super::login(s, c, &Value::Null)?;
-    }
+    super::ensure_login(s, c)?;
     let conn = s3::connection(&c.name).ok_or("log in first: connection.login {id, accessKeyId, secretAccessKey}")?;
     if let Level::S3Prefix { bucket, .. } = level {
-        s3::grant(&conn.name, bucket);
+        super::grant(s, c, &conn, bucket);
     }
     Ok(Some(conn))
 }
@@ -130,10 +130,16 @@ fn fetch_url(s: &Session, c: &Connection, level: &Level, conn: Option<&s3::Conne
         Level::StacCatalog { url } | Level::StacItem { url } => Some(url.clone()),
         Level::S3Root => match (super::first_bucket(c), conn) {
             (Some(_), _) => None,
-            (None, Some(conn)) if conn.credentials.is_some() => Some(s3::buckets_url(conn)),
+            (None, Some(conn)) if conn.credentials.is_some() => Some(super::through(s, c, conn, s3::buckets_url(conn))?),
             _ => return Err("name a bucket under Buckets to browse an anonymous S3 connection".into()),
         },
-        Level::S3Prefix { bucket, prefix } => Some(s3::list_url(bucket, prefix, None, conn)),
+        Level::S3Prefix { bucket, prefix } => {
+            let url = s3::list_url(bucket, prefix, None, conn);
+            Some(match conn {
+                Some(conn) => super::through(s, c, conn, url)?,
+                None => url,
+            })
+        }
     })
 }
 
@@ -211,7 +217,10 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
                 Level::StacItem { url } => item_file(bytes, url)?,
                 Level::StacCollection { .. } => items(bytes, at)?,
                 Level::S3Root => buckets(s3::parse_buckets(bytes)?.into_iter()),
-                Level::S3Prefix { bucket, prefix } => objects(bytes, bucket, prefix)?,
+                Level::S3Prefix { bucket, prefix } => {
+                    let binding = conn.as_ref().and_then(|conn| super::saved_binding(s, &c, conn));
+                    objects(bytes, bucket, prefix, binding.as_deref())?
+                }
                 Level::Database | Level::Service { .. } => Found::default(),
             }
         }
@@ -483,25 +492,49 @@ fn buckets(names: impl Iterator<Item = String>) -> Found {
     )
 }
 
-/// One level of a bucket: its folders (each a node) and its files.
-fn objects(bytes: &[u8], bucket: &str, prefix: &str) -> Result<Found, String> {
+/// One level of a bucket: its folders (each a node) and its files. Through a saved connection's
+/// login (`binding`), a file's add command carries an address that names it, so the layer is read
+/// with that connection's keys and no other's; its key and name stay the plain object's.
+fn objects(bytes: &[u8], bucket: &str, prefix: &str, binding: Option<&str>) -> Result<Found, String> {
     let list = s3::parse_list(bytes)?;
     let last = |k: &str| k.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
     let folders = list.prefixes.iter().map(|p| {
         let node = format!("s3:{bucket}/{p}");
         json!({"key": node, "node": node, "name": format!("{}/", last(p)), "what": "prefix"})
     });
-    let files = list.objects.iter().filter(|o| o.key != prefix && !o.key.ends_with('/')).map(|o| {
+    let mut dropped = false;
+    let files = list.objects.iter().filter(|o| o.key != prefix && !o.key.ends_with('/')).filter_map(|o| {
         let url = format!("s3://{bucket}/{}", o.key);
-        json!({
+        let add = match binding {
+            Some(b) => match s3::bound_url(b, &url) {
+                Ok(bound) => bound,
+                Err(_) => {
+                    dropped = true;
+                    return None;
+                }
+            },
+            None => url.clone(),
+        };
+        Some(json!({
             "key": url,
             "name": last(&o.key),
             "what": "object",
             "detail": o.size.to_string(),
-            "add": {"command": "layer.addUrl", "params": {"url": url}},
-        })
+            "add": {"command": "layer.addUrl", "params": {"url": add}},
+        }))
     });
     let mut found = Found::new(folders.chain(files).take(MAX_CHILDREN + 1).collect());
-    found.truncated |= list.next.is_some();
+    found.truncated |= dropped || list.next.is_some();
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn failed_saved_login_addresses_mark_the_object_listing_incomplete() {
+        let xml = b"<ListBucketResult><Contents><Key>object.fgb</Key><Size>42</Size></Contents></ListBucketResult>";
+        let result = super::objects(xml, "data", "", Some("not-a-live-binding")).unwrap();
+        assert!(result.truncated);
+        assert!(result.children.is_empty());
+    }
 }

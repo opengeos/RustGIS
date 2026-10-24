@@ -4,6 +4,7 @@
 '{text}' isn't a scale: type one such as 1:12,345	'{text}'은(는) 축척이 아닙니다: 1:12,345처럼 입력하세요
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(필터링됨)
+({selected} of {total})	({total}개 중 {selected}개)
 + Add Stop	+ 경유지 추가
 + Input	+ 입력
 + New expression	+ 새 표현식
@@ -18,12 +19,14 @@
 3035, vn2000tm3	3035, vn2000tm3
 3D mesh	3D 메시
 <None>	<없음>
+A .qgs or .qgz project as a map	.qgs 또는 .qgz 프로젝트를 지도로
 A 3D globe seen from space.	우주에서 본 3D 지구본.
 A blank map with a basemap	배경지도가 있는 빈 지도
 A call for the rustgis Python package	rustgis Python 패키지용 호출
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	카탈로그(CSW 2.0.2) 주소: 단어와 원하면 지도 영역으로 레코드를 검색한 다음, 연결된 서비스와 파일을 추가합니다.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT 요금제 또는 앱 사용 한도에 도달했습니다. 다시 시도하기 전에 주간 사용량을 확인하세요.
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT 로그인은 OpenAI API에서만 사용할 수 있습니다.
+A connection has this name: give this one another name to remember its keys.	이 이름의 연결이 이미 있습니다. 키를 기억하려면 다른 이름을 지정하세요.
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	geoBoundaries(CC BY 4.0)의 국가 행정 경계: 국가 자체(ADM0), 1단계 행정 구역(ADM1, 주 등) 및 그보다 세분화된 구역.
 A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	사용자 지정 스트레치는 이 래스터 고유의 단위로 되어 있습니다. 기본값으로 저장하려면 다른 스트레치 유형을 선택하세요.
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	순수 Rust로 작성된 빠르고 무료인 오픈 소스 GIS로, 데스크톱과 브라우저에서 지리공간 데이터를 지도화하고 분석하고 공유할 수 있습니다.
@@ -37,17 +40,21 @@ A line for the Script pane	스크립트 창용 한 줄
 A magnifying lens that follows the pointer.	포인터를 따라 움직이는 돋보기.
 A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	지도, 피처 또는 커버리지 서비스 주소: WMS, WMTS, WFS, WCS, OGC API Features 또는 Tiles, 또는 ArcGIS FeatureServer, MapServer, ImageServer 또는 VectorTileServer(찾아보려면 서비스 디렉터리).
 a name, or owner/name such as giswqs/geospatial	이름 또는 giswqs/geospatial 같은 소유자/이름
-A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.	다시 사용할 수 있는 이름이 지정된 엔드포인트입니다. 비밀번호와 키는 RustGIS를 닫을 때까지 유지되며 저장되지 않습니다.
+A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.	재사용할 수 있는 이름 있는 엔드포인트입니다. 키와 토큰은 RustGIS를 닫을 때까지 유지되며 저장되지 않습니다.
+A named endpoint you can reuse. Keys are kept until RustGIS closes unless you choose to remember them on this computer; the connection itself never keeps them.	재사용할 수 있는 이름 있는 엔드포인트입니다. 이 컴퓨터에 기억하도록 선택하지 않으면 키는 RustGIS를 닫을 때까지 유지됩니다. 연결 자체는 키를 보관하지 않습니다.
+A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store.	재사용할 수 있는 이름 있는 엔드포인트입니다. 이 컴퓨터의 비밀번호 저장소에 기억하도록 선택하지 않으면 비밀번호는 이 세션 동안만 유지됩니다.
 A node cannot connect to itself.	노드는 자기 자신에 연결할 수 없습니다.
 A notebook of text and command cells.	텍스트 셀과 명령 셀로 이루어진 노트북.
-A password or token in the address was left out: connections never keep secrets.	주소에 포함된 비밀번호 또는 토큰은 제외되었습니다. 연결은 비밀 정보를 보관하지 않습니다.
+A password or token in the address was left out of the saved connection definition.	주소에 포함된 비밀번호 또는 토큰은 저장된 연결 정의에서 제외되었습니다.
 A place or an address	장소 또는 주소
+A previously saved key is still kept unencrypted in the app's preferences until it can be moved to the system keychain.	이전에 저장한 키는 시스템 키체인으로 옮길 수 있을 때까지 앱 환경설정에 암호화되지 않은 상태로 보관됩니다.
 A project keeps at least one map	프로젝트에는 지도가 하나 이상 있어야 합니다
 A projected coordinate system.	투영 좌표계.
 A report listing the selected layer's records, page after page.	선택한 레이어의 레코드를 페이지별로 나열하는 보고서.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	다른 도구에만 전달되는 결과는 모델 실행 후 제거됩니다. 유지하려면 출력을 추가하세요.
 A result the model keeps, under a name	모델이 이름을 붙여 유지하는 결과
 A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)	rustgis-cli 명령(POSIX 셸용: macOS, Linux, WSL, Git Bash)
+A saved key could not be read. A key entered now will be kept for this session only.	저장된 키를 읽을 수 없습니다. 지금 입력한 키는 이 세션 동안만 유지됩니다.
 A service import or refresh is already running.	서비스 가져오기 또는 새로 고침이 이미 진행 중입니다.
 A service's layers stay in their service group.	서비스의 레이어는 해당 서비스 그룹 안에 유지됩니다.
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	태스크 하나에는 최대 200단계까지 담을 수 있습니다. 기록을 중지해 태스크를 만든 다음 나머지는 다른 태스크로 기록하세요.
@@ -77,6 +84,7 @@ Above Left	왼쪽 위
 Above Right	오른쪽 위
 Access key ID	액세스 키 ID
 Accessibility	접근성
+Accessing the system keychain…	시스템 키체인에 액세스하는 중…
 Account	계정
 Activate Map	지도 활성화
 Add	추가
@@ -88,6 +96,7 @@ Add a colorbar of a raster layer's colour scale in the map frame.	맵 프레임�
 Add a description.	설명을 추가합니다.
 Add a field.	필드를 추가합니다.
 Add a file path	파일 경로 추가
+Add a group…	그룹 추가…
 Add a legend of the map frame's layers.	맵 프레임 레이어의 범례를 추가합니다.
 Add a map frame showing a map of the project.	프로젝트의 지도를 표시하는 맵 프레임을 추가합니다.
 Add a new map to the project.	프로젝트에 새 지도를 추가합니다.
@@ -97,6 +106,7 @@ Add a page layout for printing and exporting the map.	지도를 인쇄하고 내
 Add a page to the presentation.	프레젠테이션에 페이지를 추가합니다.
 Add a PNG or JPEG picture to the page.	페이지에 PNG 또는 JPEG 그림을 추가합니다.
 Add a presentation file.	프레젠테이션 파일을 추가합니다.
+Add a raster and a polygon layer to calculate zonal statistics.	구역 통계를 계산하려면 래스터와 폴리곤 레이어를 추가하세요.
 Add a rectangle, to frame or highlight part of the page.	페이지의 일부를 둘러싸거나 강조하는 사각형을 추가합니다.
 Add a report file, or a report template for the selected layer.	보고서 파일 또는 선택한 레이어의 보고서 템플릿을 추가합니다.
 Add a scale bar for the map frame.	맵 프레임용 축척 막대를 추가합니다.
@@ -223,6 +233,7 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	행정 경계
+After	뒤
 After the event	이벤트 이후
 Agent input exceeds the protocol line limit.	에이전트 입력이 프로토콜의 줄 길이 제한을 초과합니다.
 Agent input pipe closed.	에이전트 입력 파이프가 닫혔습니다.
@@ -256,6 +267,7 @@ Allow only certain combinations of values across fields.	필드 간 특정 값 �
 Allow such actions for this conversation	이 대화에서 이러한 작업 허용
 Allow this action?	이 작업을 허용하시겠습니까?
 Allow this agent's RustGIS action?	이 에이전트의 RustGIS 작업을 허용하시겠습니까?
+Along lines	선을 따라
 Along Selected Line	선택한 라인을 따라
 Alt+	Alt+
 Alternating bar	교대 막대
@@ -310,6 +322,7 @@ Ask about your data, or tell the assistant what to do with the map.	데이터에
 Asking NASA's CMR…	NASA CMR에 문의하는 중…
 Asking the catalog…	카탈로그에 요청하는 중…
 Asking the NLDI…	NLDI에 문의하는 중…
+Asset	에셋
 Assistant settings	어시스턴트 설정
 At the end	끝
 At the start	시작
@@ -341,6 +354,7 @@ Back to tools	도구로 돌아가기
 Backdrop	배경
 Band	밴드
 Band Combination	밴드 조합
+Band must be a positive integer, list of bands, or 'all'.	밴드는 양의 정수, 밴드 목록 또는 'all'이어야 합니다.
 Band values at a point	지점의 밴드 값
 Band {n}	밴드 {n}
 Bands	밴드
@@ -349,6 +363,7 @@ Basemap	배경지도
 Basemaps	배경지도
 Basin from hydrolocation	수문 위치에서 유역 구하기
 Bearing	방위
+Before	앞
 Before the event	이벤트 이전
 Below	아래
 Below 1:5,000,000 show everything; beyond it only what matches:	1:5,000,000보다 크면 모두 표시하고, 그보다 작으면 일치하는 항목만 표시:
@@ -394,6 +409,7 @@ Browser	브라우저
 Browser\nPane	브라우저\n창
 Browser View	브라우저 뷰
 Bucket	버킷
+Bucket {bucket} at {endpoint}	{endpoint}의 버킷 {bucket}
 Buckets	버킷
 Buffer	버퍼
 Buffer A Point	포인트 버퍼
@@ -410,6 +426,7 @@ Bundle the project and its data into one file to share.	공유할 수 있도록 
 Bundle the visible layers, with simplified geometry for phones and tablets.	휴대폰과 태블릿용으로 지오메트리를 단순화하여 표시 레이어를 묶습니다.
 By\nAttributes	속성\n기준
 By\nLocation	위치\n기준
+By layer	레이어별
 by {author}	작성자: {author}
 By {field}	{field} 기준
 cached tiles	캐시된 타일
@@ -421,7 +438,10 @@ Calculate field values.	필드 값을 계산합니다.
 Calculate fields and enforce conditions on every edit.	편집할 때마다 필드를 계산하고 조건을 적용합니다.
 Calculate Geometry	지오메트리 계산
 Calculate Geometry Attributes	지오메트리 속성 계산
+Calculate raster statistics per polygon	폴리곤별 래스터 통계 계산
+Calculate Statistics	통계 계산
 Calculated {rows} features	피처 {rows}개를 계산했습니다
+Calculates raster summary statistics for each polygon feature.	각 폴리곤 피처에 대한 래스터 요약 통계를 계산합니다.
 Calculation	계산
 Camera	카메라
 Camera Effect	카메라 효과
@@ -438,6 +458,7 @@ Catalog	카탈로그
 catalog is a static STAC catalog's catalog.json or collection.json	catalog는 정적 STAC 카탈로그의 catalog.json 또는 collection.json입니다
 Catalogue (CSW)	카탈로그(CSW)
 Catalogue search (CSW)	카탈로그 검색(CSW)
+Category	범주
 Celestial Bodies	천체
 Celestial Body	천체
 Celestial body: {body}	천체: {body}
@@ -481,27 +502,39 @@ Choose a contrast stretch for the raster layer.	래스터 레이어의 대비 �
 Choose a country	국가 선택
 Choose a delimited text file or a spreadsheet, then pick its columns.	구분 기호로 분리된 텍스트 파일이나 스프레드시트를 선택한 다음 열을 고르세요.
 Choose a destination	목적지 선택
+Choose a field to apply this renderer:	이 렌더러를 적용할 필드를 선택하세요:
 choose a file first	먼저 파일을 선택하세요
 Choose a layer…	레이어 선택…
 Choose a model.	모델을 선택하세요.
 Choose a resampling type for the raster layer.	래스터 레이어의 리샘플링 유형을 선택합니다.
+Choose a saved S3 connection before opening this source.	이 소스를 열기 전에 저장된 S3 연결을 선택하세요.
 Choose a start	출발지 선택
 Choose a stop	경유지 선택
+Choose a zipped Shapefile, or pick its .shp and .dbf together.	압축된 Shapefile을 선택하거나 .shp와 .dbf를 함께 선택하세요.
 Choose an account	계정 선택
+Choose Connection	연결 선택
+Choose Connection…	연결 선택…
 Choose extra buttons for the Quick Access Toolbar.	빠른 실행 도구 모음에 추가할 버튼을 선택합니다.
 Choose File…	파일 선택…
 Choose how the flat map lays out the Earth.	평면 지도가 지구를 표현하는 방식을 선택합니다.
 Choose how the layer is drawn.	레이어를 그리는 방식을 선택합니다.
 Choose how the raster is drawn.	래스터를 그리는 방법을 선택합니다.
 Choose Project…	프로젝트 선택…
+Choose S3 Connection	S3 연결 선택
+Choose S3 connection	S3 연결 선택
+Choose S3 connection…	S3 연결 선택…
 Choose the interface language.	인터페이스 언어를 선택합니다.
+Choose the source coordinate system before importing	가져오기 전에 원본 좌표계 선택
+Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file.	가져오기 전에 원본 좌표계를 선택합니다. 원본 파일을 바꾸지 않고 없거나 잘못된 .prj를 대체합니다.
 Choose which layers a click identifies.	클릭으로 식별할 레이어를 선택합니다.
+Choose which saved connection to use for this database. This choice lasts for this session.	이 데이터베이스에 사용할 저장된 연결을 선택하세요. 이 선택은 이 세션 동안 유지됩니다.
 Choose which tabs the ribbon shows.	리본에 표시할 탭을 선택합니다.
 Circle	원
 Circle Radius (km)	원 반경(km)
 Class	클래스
 Class color	클래스 색상
 Class Style	클래스 스타일
+Class {n} up to	클래스 {n} 상한
 Classes	클래스
 Classes from training polygons.	훈련 폴리곤으로 클래스를 만듭니다.
 Classic arrow	클래식 화살표
@@ -563,6 +596,8 @@ Clip a raster to the view, or resample it.	래스터를 뷰에 맞춰 자르거�
 Clip Features	피처 자르기
 Clip or resample	자르기 또는 리샘플링
 Clip To Map View	지도 뷰로 자르기
+Clip To Polygon	폴리곤으로 자르기
+Clip to polygon layer	폴리곤 레이어로 자르기
 Clipboard	클립보드
 Close	닫기
 Close (Esc)	닫기 (Esc)
@@ -678,6 +713,7 @@ Copy this run as code, or open it in its tool	이 실행을 코드로 복사하�
 Corrections	보정
 Cost	비용
 could not draw the map	지도를 그릴 수 없습니다
+could not start the keychain worker	키체인 작업자를 시작할 수 없음
 Couldn't check for updates: {error}	업데이트를 확인할 수 없습니다: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} 글꼴을 다운로드할 수 없습니다. 다시 시도하려면 언어를 다시 선택하세요.
 Couldn't load the plugin registry: {error}	플러그인 레지스트리를 불러올 수 없습니다: {error}
@@ -707,13 +743,16 @@ Cross Section	횡단면
 Cross Section (2 clicks)	횡단면(2회 클릭)
 CSV	CSV
 Ctrl+	Ctrl+
+Ctrl+Enter	Ctrl+Enter
 Ctrl+K	Ctrl+K
 Ctrl+T	Ctrl+T
 Cumulative	누적
 Current date	현재 날짜
 Current Project	현재 프로젝트
+Current scale ({scale})	현재 축척 ({scale})
 Current time	현재 시간
 Curve	곡선
+Curved	곡선
 Custom	사용자 지정
 Custom Min/Max	사용자 지정 최소/최대
 Customize	사용자 지정
@@ -721,6 +760,10 @@ Cut	잘라내기
 Cut a raster into web map tiles	래스터를 웹 지도 타일로 자르기
 Cut a raster into web map tiles (XYZ PNG) with a viewer page.	래스터를 뷰어 페이지와 함께 웹 지도 타일(XYZ PNG)로 자릅니다.
 Dark\nMode	다크\n모드
+Dash	대시
+Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line.	대시와 간격 길이를 포인트 단위로 번갈아 입력합니다(예: 4 2). 실선은 비워 두세요.
+Dash-dot	일점쇄선
+Dashed	파선
 Data	데이터
 Data\nSources	데이터\n원본
 Data Design	데이터 디자인
@@ -755,6 +798,8 @@ Deep Learning\nTools	딥러닝\n도구
 Deep Learning Package	딥러닝 패키지
 Deep Learning Tools	딥러닝 도구
 Default	기본값
+Define Projection	투영 정의
+Define Projection…	투영 정의…
 Definition\nQuery	정의\n쿼리
 Definition Query	정의 쿼리
 Definition query	정의 쿼리
@@ -791,6 +836,8 @@ Descending	내림차순
 Describing	설명 가져오는 중
 Description	설명
 Desktop and command line only	데스크톱 앱과 명령줄 전용
+Destination	도착지
+Destination key	도착지 키
 Details	세부 정보
 Details of the selected layer.	선택한 레이어의 세부 정보입니다.
 Deviations	표준편차 수
@@ -832,6 +879,7 @@ Do the step for me	이 단계를 대신 실행
 Documents	문서
 Domains	도메인
 Done	완료
+Dotted	점선
 Double	실수
 Double-click	더블클릭
 Double-click to add	더블클릭하여 추가
@@ -863,6 +911,7 @@ Drag inside map frames to pan their maps and turn the wheel to zoom them, instea
 Drag the frame's outline · Esc to stop	프레임의 외곽선 드래그 · Esc로 중지
 drag the picture's rectangle on the map first	먼저 지도에서 그림의 사각형을 드래그하세요
 Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.	선택한 피처의 버텍스를 드래그하여 이동하고, 가장자리를 클릭하여 버텍스를 추가하며, Delete로 버텍스를 삭제합니다.
+Drag to an input to connect	입력으로 끌어 연결
 Drag to draw	드래그하여 그리기
 Drag to draw a freehand line.	드래그하여 자유곡선 라인을 그립니다.
 Drag to draw a freehand polygon.	드래그하여 자유곡선 폴리곤을 그립니다.
@@ -987,6 +1036,7 @@ EPSG	EPSG
 EPSG code	EPSG 코드
 EPSG or ESRI code	EPSG 또는 ESRI 코드
 EPSG:	EPSG:
+EPSG:2263	EPSG:2263
 EPSG:4326	EPSG:4326
 Equal	Equal
 Equal Earth	이퀄 어스 도법
@@ -1145,6 +1195,7 @@ Finish Profile	단면도 완료
 Finish Tool Run	도구 실행 완료
 Finished: {tool}	완료: {tool}
 Firewall	방화벽
+First raster	첫 번째 래스터
 First standard parallel	제1 표준 위선
 First-Person	1인칭
 First-Person Navigation	1인칭 탐색
@@ -1168,6 +1219,8 @@ Font	글꼴
 for a store that doesn't say	지정하지 않은 저장소의 경우
 Forest	숲
 Forget Earthdata Login Token	Earthdata Login 토큰 삭제
+Forget Saved Keys	저장된 키 삭제
+Forget Saved Password	저장된 비밀번호 삭제
 Format	형식
 Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	찾음: {names}. 에이전트는 RustGIS의 도구와 자체 도구(웹, 스크립트, 파일)로 이 지도에서 작업하며, 문서 › RustGIS › Agent work에 보관되는 전용 폴더를 사용합니다. 작업마다 먼저 확인을 요청합니다.
 Frame rate	프레임 속도
@@ -1188,6 +1241,7 @@ Full Extent	전체 범위
 Full extent	전체 범위
 Full lines	전체 선
 Full size	전체 크기
+Function	함수
 Function Editor	함수 편집기
 Gamma	감마
 Gemini stopped the reply ({reason}).	Gemini가 응답을 중단했습니다({reason}).
@@ -1208,7 +1262,9 @@ GeoLens	GeoLens
 GeoLens…	GeoLens…
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre 도구
+Geometric Interval	기하 간격
 Geometry	지오메트리
+Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.	가져오는 동안 손실된 지오메트리는 여기서 복구할 수 없습니다. '원본 파일 가져오기'를 사용해 읽기 전에 좌표계를 선택하세요. 스트리밍 레이어는 먼저 메모리에 로드해야 합니다.
 GeoPackage	GeoPackage
 GeoParquet	GeoParquet
 Geoprocessing	지오프로세싱
@@ -1349,10 +1405,16 @@ Import Deep Learning Package	딥러닝 패키지 가져오기
 Import Layout	레이아웃 가져오기
 Import Layout…	레이아웃 가져오기…
 Import Model	모델 가져오기
+Import Original File…	원본 파일 가져오기…
 Import Package…	패키지 가져오기…
 Import Presentation	프레젠테이션 가져오기
+Import QGIS Project	QGIS 프로젝트 가져오기
+Import QGIS Style	QGIS 스타일 가져오기
+Import QGIS Style…	QGIS 스타일 가져오기…
 Import Report	보고서 가져오기
 Import Service	서비스 가져오기
+Import Shapefile with Projection	투영을 지정하여 Shapefile 가져오기
+Import Shapefile with Projection…	투영을 지정하여 Shapefile 가져오기…
 Import Styles	스타일 가져오기
 Import Styles From…	다음에서 스타일 가져오기…
 Import Task	태스크 가져오기
@@ -1366,6 +1428,7 @@ In Progress	진행 중
 in progress	진행 중
 In project	프로젝트 내
 In RustGIS, it can:	RustGIS에서 할 수 있는 작업:
+In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP.	브라우저에서는 .shp와 .dbf를 부속 파일과 함께 선택하거나 ZIP을 선택하세요. 재정의는 ZIP 안의 모든 Shapefile에 적용됩니다.
 In use	사용 중
 Indexes	지수
 Indices	지수
@@ -1377,6 +1440,7 @@ Input Features	입력 피처
 Input Layer	입력 레이어
 Input Points	입력 포인트
 Input Polygons	입력 폴리곤
+Input Raster	입력 래스터
 Input Rows	입력 행
 Input Summary Features	입력 요약 피처
 Input Table	입력 테이블
@@ -1407,6 +1471,7 @@ Interpolates a 2-band raster surface (Prediction and Variance) from point featur
 Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	QGIS와 같은 방식으로 역거리 가중법을 사용해 피처 값에서 래스터 표면을 보간합니다.
 Interpolation	보간
 Interpolation Attribute	보간 속성
+Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	레이어의 기본 좌표를 이 좌표계로 해석합니다. 그려지는 위치가 바뀌며 원본 파일은 변경되지 않습니다.
 Interval	간격
 invalid child id	잘못된 자식 프로세스 ID
 Invalid: {error}	유효하지 않음: {error}
@@ -1455,10 +1520,14 @@ Keep this endpoint under Data Sources › Connections, without its password or k
 Keep this result	이 결과 유지
 Keep Tool	도구 유지
 Keep value	값 유지
+Keeps the access key ID and secret access key in this computer's credential store, never in the connection or the project.	액세스 키 ID와 비밀 액세스 키를 연결이나 프로젝트가 아닌 이 컴퓨터의 자격 증명 저장소에 보관합니다.
 Key	Key
 Keyboard Shortcuts	키보드 단축키
 Keyboard shortcuts.	키보드 단축키.
+Keys are available for this session but were not remembered on this computer.	키는 이 세션에서 사용할 수 있지만 이 컴퓨터에 기억되지 않았습니다.
+Keys are kept for this session only: there is no credential store to remember them in here.	키는 이 세션 동안만 유지됩니다. 여기에는 키를 기억할 자격 증명 저장소가 없습니다.
 Keys from	키 출처
+Keys were saved for this connection, but there is no credential store here to read them from.	이 연결의 키가 저장되어 있지만 여기에는 키를 읽어올 자격 증명 저장소가 없습니다.
 Kilometers	킬로미터
 kind is required	kind가 필요합니다
 KML	KML
@@ -1468,6 +1537,8 @@ Label Class	라벨 클래스
 Label Distance Range	라벨 거리 범위
 Label features in this layer	이 레이어의 피처에 라벨 표시
 Label Field	라벨 필드
+Label font	라벨 글꼴
+Label Fonts	라벨 글꼴
 Label only the features that match.	일치하는 피처에만 라벨을 표시합니다.
 Label Placement	라벨 배치
 Label Range	라벨 범위
@@ -1518,6 +1589,7 @@ Layout: {kind}	레이아웃: {kind}
 Layouts	레이아웃
 Learn	학습
 Learning\nResources	학습\n자료
+Leave the keys blank to log in with the keys saved on this computer, or type others, then Save.	이 컴퓨터에 저장된 키로 로그인하려면 키를 비워 두거나, 다른 키를 입력한 후 저장을 누르세요.
 Left	왼쪽
 Legend	범례
 Legend label. Clear it to show the value again.	범례 라벨입니다. 지우면 값이 다시 표시됩니다.
@@ -1600,7 +1672,9 @@ Locked: unlock it in the Format pane to move or change it	잠김: 이동하거�
 Log In to Connection	연결에 로그인
 Log In to {name}…	{name}에 로그인…
 Log In…	로그인…
+Logged in for this session	이 세션에 로그인됨
 Long	정수
+Long dash	긴 대시
 Longitude	경도
 Longitude (X)	경도(X)
 Look for {name}, outlined on the ribbon.	리본에서 테두리로 강조된 {name}을(를) 찾으세요.
@@ -1619,6 +1693,7 @@ Manage Bookmarks	북마크 관리
 Manage Edits	편집 관리
 Manage Templates	템플릿 관리
 Mann–Kendall	Mann–Kendall
+Manual	수동
 Map	지도
 Map\nFrame	맵\n프레임
 Map (the current view)	지도(현재 뷰)
@@ -1732,6 +1807,7 @@ Months	월
 Months are numbers from 1 to 12 (12, 1, 2 for December to February)	월은 1부터 12까지의 숫자입니다(12월부터 2월까지는 12, 1, 2)
 More	더 보기
 More basemaps:	더 많은 배경지도:
+More than one saved connection could read these buckets. Choose the one that reads each; the project's sources that read it stay closed until you do.	이 버킷을 읽을 수 있는 저장된 연결이 둘 이상 있습니다. 각 버킷을 읽을 연결을 선택하세요. 선택할 때까지 해당 버킷을 읽는 프로젝트 소스는 닫힌 상태로 유지됩니다.
 Mosaic images into an orthomosaic	영상을 정사 모자이크로 합성
 Mosaic Rasters	래스터 모자이크
 Mosaic the visible rasters into an orthomosaic.	표시된 래스터를 정사 모자이크로 합성합니다.
@@ -1840,6 +1916,7 @@ No datasets match.	일치하는 데이터 세트가 없습니다.
 No datasets with data RustGIS can add	RustGIS가 추가할 수 있는 데이터가 있는 데이터 세트가 없습니다
 no date in the name	이름에 날짜 없음
 No edits since the project was saved	프로젝트를 저장한 이후 편집 내용이 없습니다
+No features are selected in this layer.	이 레이어에 선택된 피처가 없습니다.
 No field of this layer holds dates.	이 레이어에는 날짜를 담은 필드가 없습니다.
 No Fill	채우기 없음
 No geometry to calculate	계산할 지오메트리가 없습니다
@@ -1848,6 +1925,7 @@ no home folder	홈 폴더 없음
 no layer	레이어 없음
 No layer has a field of dates.	날짜 필드가 있는 레이어가 없습니다.
 no layer has a field of dates: add one that has, or a tile layer whose address has a date (map.addTiles)	날짜 필드가 있는 레이어가 없습니다: 날짜 필드가 있는 레이어나 주소에 날짜가 있는 타일 레이어(map.addTiles)를 추가하세요
+No layer selected	선택된 레이어 없음
 No layers match	일치하는 레이어 없음
 No layers match your search.	검색과 일치하는 레이어가 없습니다.
 No mask	마스크 없음
@@ -1860,20 +1938,24 @@ No place matches that address.	해당 주소와 일치하는 장소가 없습니
 No plugin panel is open.	열린 플러그인 패널이 없습니다.
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	설치된 플러그인이 없습니다. 플러그인 레지스트리를 둘러보거나 .rgplugin 파일을 설치하세요.
 No plugins match.	일치하는 플러그인이 없습니다.
+No polygon layer available in the map.	지도에 사용할 수 있는 폴리곤 레이어가 없습니다.
 No Pop-ups	팝업 없음
 No presentations yet. Publish › New Presentation starts one.	아직 프레젠테이션이 없습니다. 게시 › 새 프레젠테이션으로 시작합니다.
 No products	제품이 없습니다
 No project opened or saved yet	아직 열거나 저장한 프로젝트가 없습니다
+No project sources are waiting for an S3 connection.	S3 연결을 기다리는 프로젝트 소스가 없습니다.
 No properties	속성 없음
 No relationships (Data Design › Relationships)	관계 없음(데이터 디자인 › 관계)
 No relationships yet	아직 관계가 없습니다
 No reports yet. Publish › New Report lists the selected layer's records.	아직 보고서가 없습니다. 게시 › 새 보고서로 선택한 레이어의 레코드를 나열합니다.
 no row	행 없음
+No saved S3 keys. Enter accessKeyId and secretAccessKey.	저장된 S3 키가 없습니다. accessKeyId와 secretAccessKey를 입력하세요.
 No serif font is installed, so this text is drawn in the sans-serif	세리프 글꼴이 설치되어 있지 않아 이 텍스트는 산세리프로 그려집니다
 no service or file links	서비스 또는 파일 링크가 없습니다
 No services match your search.	검색과 일치하는 서비스가 없습니다.
 No standalone tables	독립 테이블 없음
 No styles yet	아직 스타일이 없습니다
+no system keychain in this build	이 빌드에는 시스템 키체인이 없음
 No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	아직 태스크가 없습니다. 하나를 기록하거나 분석 › 태스크에서 지오프로세싱 기록으로 만드세요.
 no text graphic there	그곳에 텍스트 그래픽이 없습니다
 No tools match your search.	검색과 일치하는 도구가 없습니다.
@@ -1941,6 +2023,7 @@ One page per feature of an index layer.	인덱스 레이어의 피처마다 한 
 One per line: code=name	한 줄에 하나씩: code=이름
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	심볼에서 가져온 선 하나. 외곽선, 평행선, 오프셋을 위해 선을 추가하세요.
 Only features matching this expression draw in {layer}.	이 표현식과 일치하는 피처만 {layer}에 그려집니다.
+Only selected polygons will be included in the output.	선택한 폴리곤만 출력에 포함됩니다.
 Only where the map is	지도 영역만
 Opacity	불투명도
 Open	열기
@@ -2001,6 +2084,7 @@ OpenStreetMap's public server	OpenStreetMap 공개 서버
 OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.	플러그인 레지스트리의 OpenStreetMap, Esri, USGS, NASA 등.
 OpenStreetMap…	OpenStreetMap…
 Open…	열기…
+Optional	선택 사항
 Optional. Shift+Enter starts a new line.	선택 사항. Shift+Enter로 줄을 바꿉니다.
 Options	옵션
 OR	OR
@@ -2011,6 +2095,8 @@ Or run, for Claude Code or Codex:	또는 Claude Code나 Codex에서는 다음을
 ORDER BY	ORDER BY
 Ordinary Kriging	정규 크리깅
 Orientation	방향
+Origin	출발지
+Origin key	출발지 키
 Ortho Mapping	정사 매핑
 Other	기타
 Other Data	기타 데이터
@@ -2023,6 +2109,7 @@ Outline width	외곽선 두께
 Outlines {frame}	외곽선 {frame}
 OUTPUT	출력
 Output	출력
+output layer name	출력 레이어 이름
 Output Name	출력 이름
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	브라우저에서 실행되는 래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (최초 1회 약 25MB 다운로드).
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	래스터, 벡터, LiDAR, 수문, 지형 도구 1,000개 이상 (약 20MB의 선택적 다운로드).
@@ -2062,6 +2149,7 @@ Pan with the mouse, zoom with the wheel and click features to see their attribut
 Pan/Zoom\nMap	지도\n이동/확대/축소
 Pane Sets	창 세트
 Paper	종이
+Parallel	평행
 Parent folder	상위 폴더
 parks, bike lanes, flood zones…	공원, 자전거 도로, 침수 구역…
 Password	비밀번호
@@ -2138,10 +2226,12 @@ Polar, conformal: Antarctica and the Southern Ocean.	극지, 정각: 남극 대�
 Polar, conformal: the Arctic and the northern lands.	극지, 정각: 북극과 북쪽 육지.
 Polygon	폴리곤
 Polygon (draw)	폴리곤(그리기)
+Polygon layer	폴리곤 레이어
 Polygons	폴리곤
 Polyline	폴리라인
 Pop-up Mode	팝업 모드
 pop_max > 1000000	pop_max > 1000000
+Popular datasets…	인기 데이터셋…
 Populated Places	인구 밀집 지역
 Portal	포털
 Portolan	Portolan
@@ -2152,6 +2242,7 @@ PostgreSQL/PostGIS	PostgreSQL/PostGIS
 Postprocessing	후처리
 power 2	거듭제곱 2
 Precision 6 (OSRM, Valhalla)	정밀도 6(OSRM, Valhalla)
+Prefix	접두사
 Prepare	준비
 Prepare every layer's geometry for this projection.	이 투영에 맞게 모든 레이어의 지오메트리를 준비합니다.
 Prepare Plugin Environment	플러그인 환경 준비
@@ -2193,6 +2284,7 @@ Project templates: start projects from a saved setup.	프로젝트 템플릿: �
 project's path is required	프로젝트 경로가 필요합니다
 Projection	투영
 Projections	투영
+Projects (RustGIS, QGIS)	프로젝트 (RustGIS, QGIS)
 Properties	속성
 Property	속성
 Proportional Symbols	비례 심볼
@@ -2211,6 +2303,9 @@ Python environment failed: {error}	Python 환경 준비 실패: {error}
 Python environment not prepared	Python 환경이 준비되지 않음
 Python environment ready	Python 환경 준비됨
 Python script	Python 스크립트
+QGIS layer style	QGIS 레이어 스타일
+QGIS project	QGIS 프로젝트
+QGIS Project…	QGIS 프로젝트…
 Qualitative	정성적
 Quantile	분위수
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	DuckDB Spatial로 파일, 웹 주소, 데이터베이스를 쿼리하고 결과를 지도에 추가합니다.
@@ -2231,10 +2326,13 @@ Raster	래스터
 Raster\nAnalysis	래스터\n분석
 Raster\nInformation	래스터\n정보
 Raster Data	래스터 데이터
+Raster data is unavailable.	래스터 데이터를 사용할 수 없습니다.
 Raster Effects	래스터 효과
 Raster Functions	래스터 함수
+Raster has bands 1 to {count}.	래스터에는 밴드 1~{count}이(가) 있습니다.
 Raster Information	래스터 정보
 Raster Layer	래스터 레이어
+Raster layer	래스터 레이어
 Raster tiles (XYZ)	래스터 타일(XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	래스터 · {w} × {h} · 밴드 {n}개 · {renderer}
 Read and write files on this computer	이 컴퓨터의 파일 읽기 및 쓰기
@@ -2245,9 +2343,11 @@ Reading a granule's files needs an Earthdata Login token, which works for every 
 Reading the catalog: {n} documents read, {m} items found…	카탈로그를 읽는 중: 문서 {n}개 읽음, 항목 {m}개 찾음…
 Reading the catalog…	카탈로그를 읽는 중…
 Reading the embeddings…	임베딩을 읽는 중…
+Reading the installed fonts…	설치된 글꼴을 읽는 중…
 Reading the store… ({n} files to go)	저장소를 읽는 중… (남은 파일 {n}개)
 Reading the tileset of	타일셋을 읽는 중:
 Reading {n} of Overture's {ty} files where the map is: {attribution}	지도 영역의 Overture {ty} 파일 {n}개를 읽는 중: {attribution}
+Reading {url} page by page…	{url}을(를) 페이지 단위로 읽는 중…
 Reading {url}…	{url} 읽는 중…
 Reads and writes files	파일 읽기 및 쓰기
 Reads the map	지도 읽기
@@ -2264,6 +2364,8 @@ Redo (Ctrl+Y)	다시 실행(Ctrl+Y)
 Redo the change you undid.	실행 취소한 변경을 다시 실행합니다.
 Redo {action}	{action} 다시 실행
 Red–Blue	빨강–파랑
+Reference Scale	기준 축척
+Reference scale	기준 축척
 Refine the search to see {n} more	검색을 좁히면 {n}개를 더 볼 수 있습니다
 Refresh	새로 고침
 Refresh every connection's lists	모든 연결의 목록 새로 고침
@@ -2283,6 +2385,7 @@ Relationships	관계
 Release	릴리스
 Reload	다시 불러오기
 Reload Web Layers	웹 레이어 다시 불러오기
+Remember on this computer	이 컴퓨터에 기억
 Remember the key on this computer	이 컴퓨터에 키 기억
 Remove	제거
 Remove All	모두 제거
@@ -2373,9 +2476,11 @@ roundabout turn	회전교차로에서 회전
 Routes (name, surface, length)	경로(이름, 노면, 길이)
 Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	경로는 OpenStreetMap 데이터 기반의 Valhalla(FOSSGIS)가 제공합니다. 이동 시간에는 실시간 교통 상황이 반영되지 않습니다.
 Rows	행
+Rule	규칙
 Rule name	규칙 이름
 Rulers	눈금자
 Run	실행
+Run #{n} ({secs} s)	실행 #{n} ({secs}초)
 Run a query whose result has a geometry column	결과에 지오메트리 열이 있는 쿼리를 실행하세요
 Run All	모두 실행
 Run All Steps	모든 단계 실행
@@ -2390,12 +2495,14 @@ Run Script	스크립트 실행
 Run SQL Query	SQL 쿼리 실행
 Run Task	태스크 실행
 Run the model	모델 실행
+Run the script ({keys})	스크립트 실행 ({keys})
 Run Tool	도구 실행
 Run {name}	{name} 실행
 Running the query for the map…	지도용 쿼리를 실행하는 중…
 Running…	실행 중…
 RustGIS	RustGIS
 RustGIS bookmarks	RustGIS 북마크
+RustGIS could not confirm that any previously saved key was deleted from the system keychain.	RustGIS는 이전에 저장한 키가 시스템 키체인에서 삭제되었는지 확인할 수 없습니다.
 RustGIS couldn't reach the server.	RustGIS가 서버에 연결할 수 없습니다.
 RustGIS deep learning package	RustGIS 딥러닝 패키지
 RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	지난번에 RustGIS가 제대로 종료되지 않아 시작 프로젝트 대신 World Atlas로 시작했습니다. 준비되면 프로젝트 메뉴에서 프로젝트를 여세요.
@@ -2482,8 +2589,15 @@ Saved	저장됨
 Saved as the connection {name}	연결 {name}(으)로 저장했습니다
 Saved as the default style for new single-band rasters.	새 단일 밴드 래스터의 기본 스타일로 저장했습니다.
 Saved connection	저장된 연결
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	저장된 키는 앱 환경설정에 암호화되지 않은 상태로 보관됩니다(웹에서는 브라우저 저장소).
+Saved keys	저장된 키
+Saved keys are kept unencrypted in the browser's storage.	저장된 키는 브라우저 저장소에 암호화되지 않은 상태로 보관됩니다.
+Saved keys unavailable	저장된 키를 사용할 수 없음
+Saved keys: leave the keys blank to log in with those this computer keeps.	저장된 키: 이 컴퓨터에 보관된 키로 로그인하려면 키를 비워 두세요.
 Saved models	저장된 모델
+Saved password	저장된 비밀번호
+Saved S3 keys are unavailable. Enter the keys for this session.	저장된 S3 키를 사용할 수 없습니다. 이 세션에 사용할 키를 입력하세요.
+Saved S3 keys could not be forgotten. The connection was not changed.	저장된 S3 키를 삭제할 수 없습니다. 연결은 변경되지 않았습니다.
+Saved S3 keys could not be used. Enter the keys again.	저장된 S3 키를 사용할 수 없습니다. 키를 다시 입력하세요.
 Saved symbology: apply it to the selected layer, or save the layer's.	저장된 심볼: 선택한 레이어에 적용하거나 레이어의 심볼을 저장합니다.
 Saved View	저장된 보기
 Saved {name}	{name} 저장됨
@@ -2513,6 +2627,7 @@ Search commands — e.g. buffer, basemap, labels	명령 검색 — 예: buffer, 
 Search datasets, e.g. GEDI biomass	데이터 세트 검색(예: GEDI biomass)
 Search Distance	검색 거리
 Search every command and its parameters	모든 명령과 매개변수 검색
+Search fonts	글꼴 검색
 Search layers (e.g. temperature)	레이어 검색(예: temperature)
 Search layers, places, lat/lon…	레이어, 장소, 위도/경도 검색…
 Search layers…	레이어 검색…
@@ -2538,6 +2653,7 @@ Searching…	검색하는 중…
 Searching… try again in a moment.	검색하는 중… 잠시 후 다시 시도하세요.
 Seasonal Mann–Kendall	계절 Mann–Kendall
 Seasons a year	연간 계절 수
+Second raster	두 번째 래스터
 Second standard parallel	제2 표준 위선
 Seconds	초
 Secret access key	비밀 액세스 키
@@ -2552,6 +2668,7 @@ Select (click)	선택(클릭)
 Select (rectangle)	선택(사각형)
 Select a direction…	방향 선택…
 Select a feature layer in the Layers pane	레이어 창에서 피처 레이어를 선택하세요
+Select a field	필드 선택
 Select a layer in Layers to style it.	스타일을 지정하려면 레이어 창에서 레이어를 선택하세요.
 Select a layer in the Layers pane	레이어 창에서 레이어를 선택하세요
 select a layer in the Layers pane first	먼저 레이어 창에서 레이어를 선택하세요
@@ -2733,18 +2850,26 @@ Snap Point	스냅 지점
 Snapping	스냅
 Snow	눈
 Socrata	Socrata
+Solid	실선
+Some of the project's S3 sources wait for you to choose the saved connection that reads them	프로젝트의 일부 S3 소스가 이를 읽을 저장된 연결을 선택하기를 기다리고 있습니다
+Sort	정렬
+Sort: {field}	정렬: {field}
 Source	소스
 Source Cooperative	Source Cooperative
 Source Cooperative…	Source Cooperative…
+Source coordinate system	원본 좌표계
+Source coordinate system is required	원본 좌표계가 필요합니다
 South	남
 South Polar Stereographic	남극 평사도법
 Spatial Join	공간 조인
 Speaker notes	발표자 노트
 Spectral Analysis	분광 분석
 Spectral indices	분광 지수
+Speed	속도
 Speed Display	속도 표시
 Split	분할
 Split (click the line)	분할(라인 클릭)
+Split the widest class	가장 넓은 클래스 분할
 SQL	SQL
 SQL Pane	SQL 창
 SQL queries run through DuckDB, a program the desktop app calls: open this project in the desktop app to query it.	SQL 쿼리는 데스크톱 앱이 호출하는 프로그램인 DuckDB로 실행됩니다: 쿼리하려면 이 프로젝트를 데스크톱 앱에서 여세요.
@@ -2839,6 +2964,7 @@ Strokes	선
 Strokes for	선 적용 대상
 Style	스타일
 Style Items	스타일 항목
+Style this layer as a QGIS layer style file (.qml) does	QGIS 레이어 스타일 파일(.qml)대로 이 레이어 스타일 지정
 Style › Drawing	스타일 › 그리기
 Styles	스타일
 Subreport	하위 보고서
@@ -2847,6 +2973,7 @@ Subtypes	하위 유형
 Subtypes, one per line: code=name	하위 유형, 한 줄에 하나씩: code=이름
 Suitability Modeler	적합성 모델러
 Summarise	요약
+Summarise a Data Cube over Time	시간에 따라 데이터 큐브 요약
 Summarise over time	시간에 따라 요약
 Summarise the conversation so far, so a long chat stays within the model's context	지금까지의 대화를 요약해 긴 채팅이 모델의 컨텍스트 안에 들어가도록 합니다
 Summarise Zarr Over Time	시간에 따라 Zarr 요약
@@ -2883,6 +3010,7 @@ Table or layer	테이블 또는 레이어
 Tables	테이블
 Tags	태그
 Take the data in view offline, to edit and sync back later.	보기 내 데이터를 오프라인으로 가져가 편집하고 나중에 다시 동기화합니다.
+Take this bound out	이 경계 제거
 Target Features	대상 피처
 Target Records	대상 레코드
 Task	태스크
@@ -2892,6 +3020,8 @@ Tasks	태스크
 Tasks: guided steps that each run a command.	태스크: 각 단계가 명령을 실행하는 안내형 단계.
 Template name	템플릿 이름
 Templates	템플릿
+Temporary credentials (with a session token) are kept for this session only.	임시 자격 증명(세션 토큰 포함)은 이 세션 동안만 유지됩니다.
+Temporary credentials are session-only. Previously saved keys are unchanged.	임시 자격 증명은 이 세션에만 적용됩니다. 이전에 저장한 키는 변경되지 않았습니다.
 Tennessee GIS	Tennessee GIS
 Tennessee GIS…	Tennessee GIS…
 Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	테네시주의 공개 GIS 데이터(Tennessee GeoData, geodata.tn.gov): 필지 경계, 교통, 보건, 수문 등.
@@ -2902,6 +3032,7 @@ Testing…	테스트하는 중…
 Text	텍스트
 Text Symbol	텍스트 심볼
 That connection would create a loop.	이 연결은 순환을 만듭니다.
+The active project or map changed; reopen Define Projection for the intended layer.	활성 프로젝트 또는 지도가 변경되었습니다. 대상 레이어에 대해 '투영 정의'를 다시 여세요.
 The address fields are empty in every row.	모든 행에서 주소 필드가 비어 있습니다.
 The answer isn't UTF-8 text	응답이 UTF-8 텍스트가 아닙니다
 the answer isn't UTF-8 text	응답이 UTF-8 텍스트가 아닙니다
@@ -2911,6 +3042,7 @@ The assistant wants to run this, and {why}:	어시스턴트가 다음 작업을 
 The Basemaps plugin's tab of public basemaps.	배경지도 플러그인의 공개 배경지도 탭.
 the capture failed unexpectedly	캡처가 예기치 않게 실패했습니다
 The connection failed; trying again in {seconds} s.	연결에 실패했습니다. {seconds}초 후 다시 시도합니다.
+the connection has no id	연결에 ID가 없음
 The country list couldn't be read ({e}): type a country's code	국가 목록을 읽을 수 없습니다({e}): 국가 코드를 입력하세요
 The current elevation stays in effect while you edit inputs. Click Apply elevation to apply the value and units.	입력을 편집하는 동안에는 현재 고도가 그대로 적용됩니다. 값과 단위를 적용하려면 고도 적용을 클릭하세요.
 The dataset has nothing RustGIS can add	이 데이터 세트에는 RustGIS가 추가할 수 있는 것이 없습니다
@@ -2924,6 +3056,11 @@ The flowtrace didn't answer: the whole flowline nearest the point is shown.	흐�
 The installed GeoLibre runner lists no tools.	설치된 GeoLibre 실행기에 도구가 없습니다.
 The job covers the map view	작업 범위는 지도 뷰입니다
 The key is kept for this session only.	키는 이 세션 동안만 보관됩니다.
+The key is kept for this session only; it has not been remembered.	키는 이 세션 동안만 유지되며 기억되지 않았습니다.
+The key is saved in the system keychain.	키가 시스템 키체인에 저장되었습니다.
+the keychain backend stopped unexpectedly	키체인 백엔드가 예기치 않게 중지됨
+the keychain worker stopped	키체인 작업자가 중지됨
+The keys saved on this computer were forgotten; a login in this session keeps working.	이 컴퓨터에 저장된 키를 삭제했습니다. 이 세션의 로그인은 계속 유지됩니다.
 The layer shows the step the time slider is at, and turns the slider on over the variable's dates.	레이어에는 시간 슬라이더의 현재 단계가 표시되며, 변수의 날짜 범위로 슬라이더가 켜집니다.
 The layer's file couldn't be read: {error}	레이어 파일을 읽을 수 없습니다: {error}
 The layer's strokes	레이어의 선
@@ -2947,6 +3084,7 @@ The National Map	The National Map
 The National Map…	The National Map…
 the NLDI's answer isn't UTF-8 text	NLDI의 응답이 UTF-8 텍스트가 아닙니다
 the page is too large to draw	페이지가 너무 커서 그릴 수 없습니다
+The password was refused. Type a password to try again.	비밀번호가 거부되었습니다. 비밀번호를 입력하고 다시 시도하세요.
 the picture is too large to show	그림이 너무 커서 표시할 수 없습니다
 the picture is too large to show, or isn't one	그림이 너무 커서 표시할 수 없거나 그림이 아닙니다
 The places leave this device for the public Valhalla server at {server}, run by FOSSGIS. Don't continue if your project is bound by data privacy or data sovereignty rules.	이 장소들은 이 기기를 떠나 FOSSGIS가 운영하는 공개 Valhalla 서버 {server}(으)로 전송됩니다. 프로젝트가 데이터 개인정보 보호 또는 데이터 주권 규정을 따라야 한다면 계속하지 마세요.
@@ -2961,7 +3099,7 @@ The provider's content filter stopped the reply.	제공자의 콘텐츠 필터�
 The public server is free and shared by many: it answers light use, and may ask you to wait.	공개 서버는 무료이며 많은 사람이 함께 사용합니다. 가벼운 사용에는 응답하지만 기다리라고 요청할 수 있습니다.
 The range is two numbers, low and high (0, 0.9)	범위는 최솟값과 최댓값 두 숫자입니다(0, 0.9)
 The raster's data couldn't be read.	래스터 데이터를 읽을 수 없습니다.
-The raster's data couldn't be read: {path}	래스터 데이터를 읽을 수 없습니다: {path}
+The raster's data couldn't be read: {error}	래스터 데이터를 읽을 수 없습니다: {error}
 the release isn't known	릴리스를 알 수 없습니다
 The reply reached its length limit.	응답이 길이 한도에 도달했습니다.
 The reply stopped before completion; no actions were run.	응답이 완료되기 전에 중단되었습니다. 실행된 작업은 없습니다.
@@ -2969,7 +3107,10 @@ The reply stopped early ({reason}).	응답이 일찍 중단되었습니다({reas
 the report export failed unexpectedly	보고서 내보내기가 예기치 않게 실패했습니다
 The request failed.	요청이 실패했습니다.
 The result wired into this output is added to the map under this name.	이 출력에 연결된 결과는 이 이름으로 지도에 추가됩니다.
+The saved password could not be used. Type a password to try again; check Remember on this computer to replace the saved password.	저장된 비밀번호를 사용할 수 없습니다. 비밀번호를 입력하고 다시 시도하세요. 저장된 비밀번호를 바꾸려면 '이 컴퓨터에 기억'을 선택하세요.
+The saved S3 connection no longer matches this source.	저장된 S3 연결이 더 이상 이 소스와 일치하지 않습니다.
 The saved sign-in changed. Select your account again.	저장된 로그인 정보가 변경되었습니다. 계정을 다시 선택하세요.
+The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper.	레이어의 심볼과 라벨 크기가 맞춰진 축척입니다. 다른 축척에서는 종이 지도처럼 지도와 함께 커지거나 작아집니다.
 The server had a problem answering.	서버가 응답하는 중 문제가 발생했습니다.
 The server is limiting requests.	서버가 요청을 제한하고 있습니다.
 The server refused the request.	서버가 요청을 거부했습니다.
@@ -2990,6 +3131,9 @@ the store is gone	저장소가 없어졌습니다
 The summary couldn't start: {error}	요약을 시작할 수 없습니다: {error}
 The summary failed unexpectedly	요약이 예기치 않게 실패했습니다
 The summary finished after another project was opened, so it wasn't added	다른 프로젝트를 연 뒤에 요약이 완료되어 추가되지 않았습니다
+The system keychain could not complete the request.	시스템 키체인이 요청을 완료할 수 없습니다.
+The system keychain is locked or access was refused.	시스템 키체인이 잠겨 있거나 액세스가 거부되었습니다.
+The system keychain is unavailable.	시스템 키체인을 사용할 수 없습니다.
 The task's steps changed, so the step being edited was closed: edit it again.	태스크 단계가 변경되어 편집 중인 단계를 닫았습니다. 다시 편집하세요.
 the time slider is off	시간 슬라이더가 꺼져 있습니다
 The token expires on {date}.	토큰은 {date}에 만료됩니다.
@@ -3017,6 +3161,8 @@ This ChatGPT account was already saved. Next time, choose it in the list instead
 This class is drawn with the layer's strokes. Changing them here gives it its own.	이 클래스는 레이어의 선으로 그려집니다. 여기서 변경하면 이 클래스 자체의 선이 됩니다.
 This class is hidden, so it labels nothing.	이 클래스는 숨겨져 있어 아무것도 라벨을 표시하지 않습니다.
 This clause no longer reads, so no feature is labelled: {error}	이 절을 더 이상 해석할 수 없어 라벨이 표시되는 피처가 없습니다: {error}
+This computer keeps keys for this connection: leave the keys blank to log in with them.	이 컴퓨터에 이 연결의 키가 보관되어 있습니다. 해당 키로 로그인하려면 키를 비워 두세요.
+This computer keeps this connection's keys: logging in reads them.	이 컴퓨터에 이 연결의 키가 보관되어 있습니다. 로그인할 때 읽어옵니다.
 This map has no layers yet.	이 지도에는 아직 레이어가 없습니다.
 This map's thumbnail, from an image.	이미지로 만든 이 지도의 썸네일.
 This map's thumbnail, from the view.	뷰로 만든 이 지도의 썸네일.
@@ -3026,7 +3172,7 @@ This request has no one-time allow option.	이 요청에는 1회 허용 옵션�
 This request uses an unsupported capability. Check the parameter and change the request.	이 요청은 지원되지 않는 기능을 사용합니다. 매개변수를 확인하고 요청을 변경하세요.
 This result is kept	이 결과는 유지됩니다
 This run has no tool form to open	이 실행에는 열 수 있는 도구 양식이 없습니다
-This session only (optional)	이 세션에만 해당(선택 사항)
+This S3 connection choice is no longer available.	이 S3 연결 선택은 더 이상 사용할 수 없습니다.
 This step	이 단계
 This step names no tool to show.	이 단계에는 표시할 도구가 지정되어 있지 않습니다.
 Thumbnail	썸네일
@@ -3035,6 +3181,7 @@ Ticks	눈금
 Ticks only	눈금만
 Tile archive	타일 아카이브
 Tile Archive File…	타일 아카이브 파일…
+Tile layer has changed; search again	타일 레이어가 변경되었습니다. 다시 검색하세요
 Tile Layer Properties	타일 레이어 속성
 Tile Layers	타일 레이어
 Tilt Map	지도 기울이기
@@ -3084,6 +3231,7 @@ Train a neural network on training polygons and classify every pixel.	훈련 폴
 Train And Classify	훈련 및 분류
 Train Deep Learning Model	딥러닝 모델 훈련
 Trained models	훈련된 모델
+Training polygons	학습 폴리곤
 Transparency	투명도
 Traverse	트래버스
 Trend Analysis	추세 분석
@@ -3107,8 +3255,10 @@ type a longitude and latitude, or click the map	경도와 위도를 입력하거
 Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	1:12,345, 12345 또는 25k 같은 축척을 입력하고 Enter를 누르세요
 Type an address or coordinates and press Enter, or click the map.	주소나 좌표를 입력하고 Enter를 누르거나 지도를 클릭하세요.
 Type numbers separated by commas	쉼표로 구분된 숫자 입력
+Type the access key ID and the secret access key to remember them on this computer.	이 컴퓨터에 기억하려면 액세스 키 ID와 비밀 액세스 키를 입력하세요.
 Type the keys to log in for this session, then Save.	이 세션에 로그인할 키를 입력한 다음 저장하세요.
-Type the password or keys to log in for this session, then Save.	이 세션에 로그인할 비밀번호 또는 키를 입력한 다음 저장하세요.
+Type the password to remember it on this computer.	이 컴퓨터에 기억하려면 비밀번호를 입력하세요.
+Type the password, then Save. Remember on this computer is optional.	비밀번호를 입력한 후 저장을 누르세요. '이 컴퓨터에 기억'은 선택 사항입니다.
 Typed below	아래에 입력
 UM	UM
 Unavailable: {reason}	사용할 수 없음: {reason}
@@ -3129,6 +3279,7 @@ Unit	단위
 United States	미국
 Units	단위
 Units per step	단계당 단위
+unknown (an older project)	알 수 없음 (이전 프로젝트)
 UNKNOWN TOOL	알 수 없는 도구
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre 도구를 언로드하고 RustGIS 시작 시 더 이상 불러오지 않습니다.
 Unsaved changes	저장하지 않은 변경 내용
@@ -3156,6 +3307,7 @@ USA Contiguous Albers Equal Area	미국 본토 앨버스 정적도법
 Use	사용
 Use a Single Stroke	단일 선 사용
 Use another account	다른 계정 사용
+Use Connection	연결 사용
 Use Current View	현재 보기 사용
 Use each feature's line color	각 피처의 선 색상 사용
 Use each feature's line width	각 피처의 선 두께 사용
@@ -3286,6 +3438,7 @@ WMTS	WMTS
 Words	단어
 words in the name	이름에 포함된 단어
 words to keep to (optional)	제한할 단어(선택 사항)
+Workflow	워크플로
 Workflow Manager	워크플로 관리자
 Workflows	워크플로
 Working	작업 중
@@ -3331,6 +3484,8 @@ Z factor	Z 계수
 Zarr	Zarr
 Zarr Variables	Zarr 변수
 Zarr…	Zarr…
+Zonal Statistics	구역 통계
+Zone Polygons	구역 폴리곤
 Zoom	확대/축소
 Zoom about the pointer	포인터 기준 확대/축소
 Zoom Box	영역 확대/축소
@@ -3381,5 +3536,6 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 © OpenStreetMap contributors	© OpenStreetMap 기여자
 ±, dequantised	±, 역양자화됨
 — fps	— fps
+⌘+Enter	⌘+Enter
 ⌘K	⌘K
 ▶ Simulate	▶ 시뮬레이션

@@ -8,6 +8,7 @@
 use egui::{RichText, Ui, vec2};
 use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, Labeling, MAX_LABEL_CLASSES, label_class_name};
 use rustgis_engine::map::{LabelPlacement, Layer, Rgba};
+use rustgis_engine::render::families;
 use serde_json::{Value, json};
 
 use crate::RustGisApp;
@@ -45,7 +46,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let c = Class { it, name: name.as_deref() };
     class(app, ui, &l, &c, t);
     text_symbol(app, ui, &l, &c);
-    position(app, ui, &c);
+    position(app, ui, &l, &c);
     visibility(app, ui, &c);
     map_labeling(app, ui);
 }
@@ -297,15 +298,20 @@ fn new_name(labels: &Labeling) -> String {
 /// The field the class labels with.
 fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     grid(ui, "class", |ui| {
-        ui.label(tl!("Field"));
+        let input_label = ui.label(tl!("Field"));
         let cur = &c.it.field;
-        egui::ComboBox::from_id_salt("label_pane_field").selected_text(cur.as_str()).width(180.0).show_ui(ui, |ui| {
-            for f in &l.dataset.fields {
-                if ui.selectable_label(f.name == *cur, &f.name).clicked() {
-                    run(app, "labels.field", c.params(json!({"field": f.name})));
+        egui::ComboBox::from_id_salt("label_pane_field")
+            .selected_text(cur.as_str())
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for f in &l.dataset.fields {
+                    if ui.selectable_label(f.name == *cur, &f.name).clicked() {
+                        run(app, "labels.field", c.params(json!({"field": f.name})));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
     });
 }
@@ -353,11 +359,13 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
 fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     section(ui, "Text Symbol", |ui| {
         grid(ui, "symbol", |ui| {
-            ui.label(tl!("Size"));
+            font(app, ui, l, c);
+            ui.end_row();
+            let input_label = ui.label(tl!("Size"));
             // The whole range `labels.style` accepts (#457); the map follows a drag and letting
             // go runs the command once, so a drag is one undo step.
             let mut size = f64::from(c.it.size);
-            let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt"));
+            let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt")).labelled_by(input_label.id);
             let id = l.id;
             crate::ribbon::live_drag(
                 app,
@@ -387,6 +395,10 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                 if ui.checkbox(&mut bold, tl!("Bold")).changed() {
                     run(app, "labels.style", c.params(json!({"bold": bold})));
                 }
+                let mut italic = c.it.italic;
+                if ui.checkbox(&mut italic, tl!("Italic")).changed() {
+                    run(app, "labels.style", c.params(json!({"italic": italic})));
+                }
                 let mut halo = c.it.halo;
                 if ui.checkbox(&mut halo, tl!("Halo")).changed() {
                     run(app, "labels.style", c.params(json!({"halo": halo})));
@@ -397,7 +409,59 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     });
 }
 
-fn position(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
+/// The most installed families the font list shows at once (a machine can have thousands); the
+/// rest are found by typing part of a name.
+const MAX_FONTS_SHOWN: usize = 200;
+
+/// The installed family the labels are drawn in: the label font, or one picked from the
+/// installed families (found by typing part of the name). A family this machine lacks, from a
+/// project made on another, is shown as missing and drawn in the label font.
+fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
+    let input_label = ui.label(tl!("Font"));
+    // The installed fonts are indexed on a thread of their own; until then there's none to pick.
+    let Some(installed) = families::installed_now() else {
+        families::warm_up();
+        ui.add_enabled(false, egui::Button::new(tl!("Reading the installed fonts…"))).labelled_by(input_label.id);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    };
+    let cur = c.it.font.as_deref();
+    let shown = match cur {
+        None => tl!("Label font").to_string(),
+        Some(name) if families::find(name).is_some() => name.to_string(),
+        Some(name) => crate::i18n::fmt("{name} (not installed)", &[("name", name)]),
+    };
+    let search_id = egui::Id::unique(("label_pane_font_search", l.id));
+    egui::ComboBox::from_id_salt("label_pane_font")
+        .selected_text(shown)
+        .width(180.0)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+            if ui.add(egui::TextEdit::singleline(&mut search).hint_text(tl!("Search fonts"))).changed() {
+                ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
+            }
+            if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
+                run(app, "labels.style", c.params(json!({"font": ""})));
+            }
+            let search = search.to_lowercase();
+            let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
+            for f in matching.by_ref().take(MAX_FONTS_SHOWN) {
+                let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
+                if ui.selectable_label(on, &f.name).clicked() && !on {
+                    run(app, "labels.style", c.params(json!({"font": f.name})));
+                }
+            }
+            let more = matching.count();
+            if more > 0 {
+                ui.weak(crate::i18n::fmt("{count} more: type part of a name", &[("count", &more.to_string())]));
+            }
+        })
+        .response
+        .labelled_by(input_label.id);
+}
+
+fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     section(ui, "Position", |ui| {
         let cur = c.it.placement;
         let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
@@ -415,6 +479,15 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
                 ui.end_row();
             }
         });
+        // Lines: the text along them, straight or bending with them.
+        if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
+            ui.add_space(4.0);
+            ui.label(RichText::new(tl!("Along lines")).size(11.5));
+            ui.horizontal(|ui| {
+                pick(app, ui, LabelPlacement::Parallel);
+                pick(app, ui, LabelPlacement::Curved);
+            });
+        }
     });
 }
 
@@ -422,7 +495,7 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
     section(ui, "Visibility Range", |ui| {
         grid(ui, "range", |ui| {
             for (label, cur, key) in [("Out Beyond", c.it.min_scale, "min"), ("In Beyond", c.it.max_scale, "max")] {
-                ui.label(tl!(label));
+                let input_label = ui.label(tl!(label));
                 egui::ComboBox::from_id_salt(("label_pane_scale", key))
                     .selected_text(crate::ribbon::scale_label(cur))
                     .width(140.0)
@@ -432,21 +505,28 @@ fn visibility(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
                                 run(app, "labels.scaleRange", c.params(json!({key: s})));
                             }
                         }
-                    });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
                 ui.end_row();
             }
             for (label, cur, key) in [("Closest", c.it.closest, "closest"), ("Farthest", c.it.farthest, "farthest")] {
-                ui.label(tl!(label));
+                let input_label = ui.label(tl!(label));
                 let imperial = app.ui.measurement_imperial;
                 let text =
                     |d: Option<f64>| d.map(|d| crate::measure_units::distance(d, imperial)).unwrap_or_else(|| tl!("<None>").to_string());
-                egui::ComboBox::from_id_salt(("label_pane_distance", key)).selected_text(text(cur)).width(140.0).show_ui(ui, |ui| {
-                    for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
-                        if ui.selectable_label(d == cur, text(d)).clicked() {
-                            run(app, "labels.distanceRange", c.params(json!({key: d})));
+                egui::ComboBox::from_id_salt(("label_pane_distance", key))
+                    .selected_text(text(cur))
+                    .width(140.0)
+                    .show_ui(ui, |ui| {
+                        for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
+                            if ui.selectable_label(d == cur, text(d)).clicked() {
+                                run(app, "labels.distanceRange", c.params(json!({key: d})));
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
                 ui.end_row();
             }
         });
@@ -581,7 +661,7 @@ mod tests {
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         // The pane's fonts (its semibold heading) are installed on the first frame, as the app does.
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(360.0, 900.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_size(egui::vec2(360.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -593,6 +673,24 @@ mod tests {
             },
             app,
         )
+    }
+
+    /// Inputs remain reachable by their purpose, independently of the selected value (#790).
+    #[test]
+    fn inputs_are_reachable_by_their_row_labels() {
+        use egui::accesskit::Role;
+        let mut h = harness(with_cities());
+        h.run();
+        for label in ["Field", "Font", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
+            assert!(h.query_by_role_and_label(Role::ComboBox, label).is_some(), "missing input: {label}");
+        }
+        assert!(h.query_by_role_and_label(Role::SpinButton, "Size").is_some());
+        h.get_by_role_and_label(Role::ComboBox, "Field").click();
+        h.run();
+        h.get_by_label("name").click();
+        h.run();
+        assert_eq!(h.state().session.map().layer_by_name("Cities").unwrap().labels.default.field, "name");
+        assert!(h.query_by_role_and_label(Role::ComboBox, "Field").is_some());
     }
 
     #[test]
@@ -678,7 +776,7 @@ mod tests {
         let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.color;
         let (cities_before, countries_before) = (color(&app, cities), color(&app, countries));
         let steps = app.session.undo_depth();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
@@ -732,7 +830,7 @@ mod tests {
         let before = app.session.map().layer(id).unwrap().labels.default.color;
         let steps = app.session.undo_depth();
         // The picker's colour each frame, if it reports one, as `text_symbol` hands it on.
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
@@ -993,6 +1091,43 @@ mod tests {
             [("labels.placement", Some(json!("Big"))), ("labels.style", Some(json!("Big"))), ("labels.style", None)],
             "Default's step names no class"
         );
+    }
+
+    /// Controls added on main keep editing the chosen class after the merge.
+    #[test]
+    fn font_italic_and_line_placement_edit_the_chosen_class() {
+        super::families::installed();
+        let mut app = with_cities();
+        let rivers = layer_id(&app, "Rivers");
+        app.session.run("layer.select", &json!({"layer": rivers})).unwrap();
+        app.run("labels.class.add", json!({"name": "Named"})).unwrap();
+        app.run("labels.style", json!({"class": "Named", "font": "Missing test font"})).unwrap();
+        let before = labels(&app).default;
+        let steps = app.session.undo_depth();
+        app.ws.recording = Some(Vec::new());
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Named");
+        h.get_by_label("Italic").click();
+        h.run();
+        h.get_by_label("Curved").click();
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").click();
+        h.run();
+        h.get_by_label("Label font").click();
+        h.run();
+        let l = labels(h.state());
+        let named = l.class("Named").unwrap();
+        assert_eq!(named.italic, !before.italic);
+        assert_eq!(named.placement, rustgis_engine::map::LabelPlacement::Curved);
+        assert_eq!(named.font, None);
+        assert_eq!((l.default.italic, l.default.placement, l.default.font), (before.italic, before.placement, before.font));
+        assert_eq!(h.state().session.undo_depth(), steps + 3);
+        for step in h.state().ws.recording.as_ref().unwrap() {
+            assert_eq!(step.params.get("class"), Some(&json!("Named")));
+        }
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(labels(h.state()).class("Named").unwrap().font.as_deref(), Some("Missing test font"));
     }
 
     /// A class chosen that goes away (an undo, a script, the Assistant) leaves Default chosen.

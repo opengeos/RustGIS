@@ -284,10 +284,23 @@ fn whole_world(e: &rustgis_geom::Extent) -> bool {
 
 fn zoom_to(s: &mut Session, p: &Value) -> CmdResult {
     let i = find(s, p)?.ok_or("give the tile layer's name or index")?;
+    let e = zoom_to_index(s, i)?;
+    Ok(json!({"bounds": [e.min_x, e.min_y, e.max_x, e.max_y]}))
+}
+
+/// Zooms to the same bounds from the Layers pane or a search hit.
+pub(super) fn zoom_to_index(s: &mut Session, i: usize) -> Result<rustgis_geom::Extent, String> {
     let t = s.map().tiles.get(i).ok_or("no tile layer at that index")?;
     let e = extent_of(t)?.ok_or_else(|| format!("{}: still being read; try again in a moment", t.name))?;
     s.zoom_to(&e);
-    Ok(json!({"bounds": [e.min_x, e.min_y, e.max_x, e.max_y]}))
+    Ok(e)
+}
+
+/// The tile layer a retained search hit names: the match nearest the stack position the hit was
+/// listed at, so layers that are wholly alike (the same one added twice) still resolve. Zero
+/// matches mean the layer has gone.
+pub fn index_of_identity(s: &Session, identity: &super::search::TileIdentity, near: usize) -> Option<usize> {
+    s.map().tiles.iter().enumerate().filter(|(_, tile)| identity.matches(tile)).map(|(i, _)| i).min_by_key(|i| i.abs_diff(near))
 }
 
 /// The date a dated tile layer starts at: the time slider's step. Its `start` (and `end`,

@@ -296,7 +296,15 @@ help; there the help by the cursor is the tool's. A `task.addStep` line works th
 `"command": "` offers the commands, and its `"params"` that command's keys and help. For a
 command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
 icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
-(before or after it), or of the active layer when it names none, with each field's type beside it. Accepting one writes its name
+(before or after it), or of the active layer when it names none, with each field's type beside it.
+`"map": "`, `"layout": "` and `"table": "` offer the project's maps, layouts and standalone tables,
+with their layer counts, page sizes and row counts. `"class": "` offers the line's layer's label
+classes (or the active layer's), with each class's SQL clause, or **All features**. Default is
+included under its current name, except for commands that cannot remove or move it.
+In a `gp.run` line's `"params"`, a value offers what the tool's parameter takes, as the tool's
+form does: the layers of its kind (polygon, point, raster, vector; any layer, then the tables),
+the fields of the tool's input that it takes (numeric, holding coordinates), or its choices
+(`"units": "` offers `Kilometers`, `Meters`, …). Accepting one writes its name
 as the line's JSON needs it (`"Big \"lakes\""`). A `{` or `[`
 typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
 so does a `"` where a string can start (after a space, `{`, `[`, `,` or `:`). A `}` or `]` typed
@@ -480,14 +488,42 @@ variable, a STAC collection's band): **mean**, **min**, **max**, **sum**, **std*
 standard deviation), **count** of values, or **countAbove** a threshold (`"above"`), as Summarise
 over time does for a Zarr variable (see [Data](data.md)).
 
+- **Classes:** a series of categorical rasters, such as yearly land-cover maps (MapBiomas, ESA
+  WorldCover), is summarised as classes with eight more statistics:
+  - **mode**, each cell's most frequent class, the least of those tied (`"majority"` too);
+  - **modeCount**, at how many dates it had that class;
+  - **variety**, how many classes it had;
+  - **changes**, how many times its class changed from one date with a class to the next, in date
+    order. A date with no data is skipped, so A, no data, B is one change. Within each group, so by
+    year a change is one within the year;
+  - **longestRun**, the class it kept for the most dates in a row, in date order, the least of those
+    tied. A date with no data neither breaks a run nor adds to it, so A, no data, A is a run of two;
+  - **longestRunLength**, how many dates that run lasted;
+  - **frequency**, a layer for each class met (`… frequency 1985–2023 class 3`), each cell's count
+    of dates in that class. By year or month, a layer for each class of each group;
+  - **countIn**, at how many dates it was one of the classes given (`"classes": [3, 4, 5]`, whole
+    numbers from 0 to 255), such as the years a cell was forest.
+
+  They take the values as classes: a value that isn't a whole number (an NDVI) is refused with the
+  value, as is a run with more than 1,000 classes, or more than 64 million cells × classes in the
+  groups being read at once (16 million in the web app; for frequency, whose classes are each a
+  layer, the outputs' 32 million values). These are the data cube summary's only: Summarise over time for a
+  Zarr variable refuses them and points here. Mode, modeCount, variety and frequency keep a count
+  of each class in each cell while they read, 2 bytes a class, for each group being read: by
+  month, every month's at once, so a large area by month may need a smaller area or a group by
+  year. **changes**,
+  **longestRun** and **longestRunLength** read a STAC collection one date at a time, in order, so
+  they are slower there than the other statistics, which read several dates at once.
+
 - **Groups:** `"by": "all"` (the default) makes one layer of the whole period, `"year"` one for
   each calendar year (an annual mean NDVI from 16-day composites), `"month"` one for each month of
   the year across the years (a climatology). `"start"`, `"end"` and `"months"` pick the dates as for
   a trend.
 - **Missing values:** no-data and missing values are skipped cell by cell. A cell keeps no value
   where it had fewer values than `"minValid"` (a share of its group's dates, 0 by default: 0.5
-  wants half of a year's composites); with the default, **count** and **countAbove** give 0 where
-  a cell never had a value.
+  wants half of a year's composites); with the default, **count**, **countAbove**, **countIn**,
+  **modeCount**, **variety**, **changes**, **longestRunLength** and **frequency** give 0 where a cell
+  never had a value, and **mode** and **longestRun** give none.
 - **Size:** the slices are folded into running totals as they are read, so a long period takes no
   more memory than a short one; a STAC collection's area is read in pieces, as for a trend. The
   outputs hold up to 32 million values (cells times groups; 8 million in the web app). A summary by
@@ -501,8 +537,38 @@ over time does for a Zarr variable (see [Data](data.md)).
 
 ```sh
 rustgis-cli run --cmd 'cube.reduce={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"stat":"max"}'
+rustgis-cli run --data cobertura_1985.tif --data cobertura_1986.tif --data cobertura_1987.tif --cmd 'cube.reduce={"layers":["cobertura_1985","cobertura_1986","cobertura_1987"],"stat":"changes"}'
 rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-44.8,-7.5,-44.3,-7.0],"start":"2001","end":"2025","cellSize":1000,"stat":"mean","by":"year","minValid":0.5,"name":"NDVI"}' --save urucui.rgis
 ```
+
+## Zonal statistics and polygon clipping
+
+Open **Zonal Statistics** through Command Search, or choose it in the Workflows pane.
+
+Zonal Statistics uses the selected polygon features when the layer has a selection. It keeps
+original geometries and fields, and reports features with missing or rejected polygon parts.
+If any polygon part fails validation or transformation to WGS 84, the feature receives count 0 and null
+statistics. If a part subsequently fails projection onto the raster grid, it is omitted and reported;
+statistics cover the remaining valid parts. Large
+overlapping zones each require a separate pass over their raster window.
+
+For `raster.process` polygon clipping, `selectedOnly: true` requires a selection,
+`selectedOnly: false` uses every polygon, and omitting it uses the selection when present.
+The Process pane initially checks Selected only when the chosen layer has a selection, and sends
+the choice explicitly. Clipping and Zonal Statistics share
+polygon transformation rules so a failed hole cannot silently enlarge the sampled area.
+A malformed ring or a failed projection rejects its complete polygon part in all raster masking
+operations. Clipping skips invalid features and reports their count in the command result;
+its output bounds cover the valid polygons only.
+
+An empty band field or `bands: ""` selects band 1. The pane disables calculation when raster
+data is unavailable, shows the available band range for invalid band input, and indicates when
+only selected polygons will appear in the output. Both tools report parts omitted during raster-grid
+projection while retaining the valid parts.
+
+Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
+case-insensitive names. An exact spelling takes precedence; otherwise a name matching several
+fields is rejected as ambiguous. This prevents silently using the wrong field.
 
 ## Deep learning and hosted imagery
 

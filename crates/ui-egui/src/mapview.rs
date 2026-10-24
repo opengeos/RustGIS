@@ -1171,15 +1171,26 @@ fn tex_rect(app: &RustGisApp, cam: Camera, rect: Rect, globe_view: bool) -> Rect
     Rect::from_min_max(to_screen(0.0, 0.0), to_screen(tw, th))
 }
 
-/// Map text laid out as the map view draws it: its font, and a text graphic's style (#535), its
-/// lines aligned in their block, slanted (egui's own slant, as the fonts have no italic face)
-/// and letter-spaced. The one layout for drawing a label and for picking or dragging a text
-/// graphic, so they agree.
-fn label_job(text: &str, size: f32, bold: bool, italic: bool, spacing: f32, align: TextAlign) -> egui::text::LayoutJob {
-    let font_id = if bold { semibold(size * 1.33) } else { regular(size * 1.33) };
+/// Map text laid out as the map view draws it: its font (a label class's installed `family`, as
+/// [`crate::labelfonts::family`] gives it, and whether egui slants it), and a text graphic's
+/// style (#535), its lines aligned in their block, slanted (egui's own slant, as the interface
+/// fonts have no italic face) and letter-spaced. The one layout for drawing a label and for
+/// picking or dragging a text graphic, so they agree.
+fn label_job(
+    text: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    spacing: f32,
+    align: TextAlign,
+    family: Option<(egui::FontFamily, bool)>,
+) -> egui::text::LayoutJob {
+    let (font_id, italics) = match family {
+        Some((family, slanted)) => (egui::FontId::new(size * 1.33, family), slanted),
+        None => (if bold { semibold(size * 1.33) } else { regular(size * 1.33) }, italic),
+    };
     // Letter spacing in points, scaled as the size is.
-    let format =
-        egui::TextFormat { font_id, color: Color32::WHITE, italics: italic, extra_letter_spacing: spacing * 1.33, ..Default::default() };
+    let format = egui::TextFormat { font_id, color: Color32::WHITE, italics, extra_letter_spacing: spacing * 1.33, ..Default::default() };
     let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
     job.halign = match align {
         TextAlign::Left => egui::Align::LEFT,
@@ -1197,7 +1208,27 @@ fn place_galley(anchor: Align2, at: Pos2, g: &egui::Galley) -> (Pos2, Rect) {
 }
 
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
-    let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align));
+    // Curved along a line: each character turned into its place, every character's halo first,
+    // so none covers the letter before it.
+    if !l.glyphs.is_empty() {
+        let inks: &[(bool, bool)] = if l.halo.is_some() { &[(true, false), (false, true)] } else { &[(false, true)] };
+        // (The label without its characters, copied for each: not the characters each time.)
+        let base = PlacedLabel { text: String::new(), align: 0.0, glyphs: Vec::new(), ..l.clone() };
+        for &(halo, text) in inks {
+            for g in &l.glyphs {
+                let one = PlacedLabel { text: g.text.clone(), angle: Some(g.angle), ..base.clone() };
+                draw_label_ink(p, &one, at + vec2(g.dx, g.dy), halo, text);
+            }
+        }
+        return;
+    }
+    draw_label_ink(p, l, at, true, true);
+}
+
+/// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
+fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
+    let family = crate::labelfonts::family(p.ctx(), l.font, l.bold, l.italic);
+    let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align, family));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
     let anchor = if l.align < -0.25 {
         Align2::LEFT_CENTER
@@ -1214,13 +1245,15 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
                 .with_override_text_color(color)
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
-        if let Some(h) = l.halo {
+        if let Some(h) = l.halo.filter(|_| halo) {
             let hc = c32(h);
             for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
                 p.add(shape(vec2(dx, dy), hc));
             }
         }
-        p.add(shape(egui::Vec2::ZERO, c32(l.color)));
+        if text {
+            p.add(shape(egui::Vec2::ZERO, c32(l.color)));
+        }
         return;
     }
     let (pos, r) = place_galley(anchor, at, &galley);
@@ -1229,13 +1262,15 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
         let cyan = c32(rustgis_engine::render::SELECTION);
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
-    if let Some(h) = l.halo {
+    if let Some(h) = l.halo.filter(|_| halo) {
         let hc = c32(h);
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
             p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
         }
     }
-    p.galley_with_override_text_color(pos, galley, c32(l.color));
+    if text {
+        p.galley_with_override_text_color(pos, galley, c32(l.color));
+    }
 }
 
 /// The globe as seen in this view, when the map is a globe.
@@ -1313,6 +1348,7 @@ fn text_shown(
         graphics::italic(ds, row),
         graphics::letter_spacing(ds, row),
         graphics::align(ds, row),
+        None,
     );
     Some((at, job))
 }
@@ -2777,7 +2813,7 @@ pub fn confirm_delete(app: &mut RustGisApp, ctx: &egui::Context) {
         Deletion::Map(n) => crate::i18n::fmt("Delete the map {name}?", &[("name", n)]),
         Deletion::Layout(n) => crate::i18n::fmt("Delete the layout {name}?", &[("name", n)]),
     };
-    let undo = crate::widgets::shortcut_text(app, "edit.undo");
+    let undo = crate::widgets::shortcut_text(ctx, app, "edit.undo");
     let mut decision = None;
     egui::Modal::new(egui::Id::unique("confirm_delete")).show(ctx, |ui| {
         ui.set_width(360.0);
@@ -2970,18 +3006,14 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         app.run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
         app.run("map.projection", json!({"type": "globe"})).expect("globe");
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(900.0, 550.0))
-            .with_max_steps(10_000)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_max_steps(10_000).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while h.state().map.key.is_none() || h.state().map.drawing() {
             assert!(std::time::Instant::now() < end, "exact globe frame did not arrive");
@@ -2999,12 +3031,8 @@ mod tests {
     /// the map is drawn once at it.
     #[test]
     fn a_pane_drag_draws_the_map_once_it_stops() {
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(1200.0, 700.0))
-            .with_step_dt(1.0 / 60.0)
-            .with_max_steps(10_000)
-            .build_ui_state(
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).with_step_dt(1.0 / 60.0).with_max_steps(10_000).build_ui_state(
                 |ui, app: &mut RustGisApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);

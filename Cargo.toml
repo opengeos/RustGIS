@@ -47,6 +47,9 @@ bytemuck = { version = "1", features = ["derive"] }
 lyon = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"
+# A label curved along a line: its text cut into the characters drawn as one (a letter with its
+# accents).
+unicode-segmentation = "1.13"
 # Rasters: GeoTIFF decoding/encoding, and coordinate systems by EPSG code (pure Rust, except the
 # Zstandard decoder `rustgis-data` turns on, C that clang compiles for the browser build too).
 tiff = "0.11"

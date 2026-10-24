@@ -114,14 +114,15 @@ impl Chord {
         m
     }
 
-    /// As shown to the user: `⇧⌘S` on macOS, `Ctrl+Shift+S` elsewhere.
-    pub fn text(self) -> String {
+    /// As shown to the user: `⇧⌘S` on a Mac (`mac`, as egui reads the keys: `ctx.os().is_mac()`, a
+    /// browser's too), `Ctrl+Shift+S` elsewhere.
+    pub fn text(self, mac: bool) -> String {
         let key = match self.key {
             Key::Escape => "Esc",
             Key::Plus | Key::Minus | Key::Equals => self.key.symbol_or_name(),
             k => k.name(),
         };
-        if cfg!(target_os = "macos") {
+        if mac {
             let mut s = String::new();
             for (on, sym) in [(self.alt, "⌥"), (self.shift, "⇧"), (self.command, "⌘")] {
                 if on {
@@ -261,9 +262,9 @@ pub fn is_clipboard(chord: Chord) -> bool {
 
 /// The first shortcut of `command` with `params` as shown to the user (a clipboard command's
 /// fixed key included), or empty for none.
-pub fn shortcut_text(app: &RustGisApp, command: &str, params: &Value) -> String {
+pub fn shortcut_text(ctx: &egui::Context, app: &RustGisApp, command: &str, params: &Value) -> String {
     let clipboard = || CLIPBOARD.iter().find(|(_, c)| *c == command).and_then(|(keys, _)| Chord::parse(keys));
-    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(Chord::text).unwrap_or_default()
+    app.ui.keymap.keys_for(command, params).next().or_else(clipboard).map(|c| c.text(ctx.os().is_mac())).unwrap_or_default()
 }
 
 /// What a binding runs, translated: the command's label, or the map tool it picks.
@@ -374,6 +375,22 @@ mod tests {
         }
     }
 
+    /// Shown as egui reads the keys, by the OS it tells (a browser's from its user agent), not the
+    /// one the app was built for: a web app on a Mac shows ⌘ (#799).
+    #[test]
+    fn chords_show_the_keys_of_the_os_egui_reads() {
+        let c = Chord::parse("Mod+Shift+S");
+        assert_eq!(c.map(|c| c.text(true)).as_deref(), Some("⇧⌘S"));
+        assert_eq!(c.map(|c| c.text(false)).as_deref(), Some("Ctrl+Shift+S"));
+        let app = RustGisApp::with_sample();
+        let ctx = egui::Context::default();
+        use egui::os::OperatingSystem as Os;
+        for (os, undo) in [(Os::Mac, "⌘Z"), (Os::IOS, "⌘Z"), (Os::Windows, "Ctrl+Z")] {
+            ctx.set_os(os);
+            assert_eq!(shortcut_text(&ctx, &app, "edit.undo", &Value::Null), undo, "{os:?}");
+        }
+    }
+
     #[test]
     fn every_default_parses_once() {
         let map = Keymap::default();
@@ -398,7 +415,7 @@ mod tests {
         // Copy, Cut and Paste declare Mod+C/X/V: binding them too would run each twice.
         let app = RustGisApp::with_sample();
         assert!(app.ui.keymap.bindings.iter().all(|b| !is_clipboard(b.chord)));
-        assert!(!shortcut_text(&app, "edit.copy", &Value::Null).is_empty(), "but Copy still shows its key");
+        assert!(!shortcut_text(&egui::Context::default(), &app, "edit.copy", &Value::Null).is_empty(), "but Copy still shows its key");
         // A command's own key joins the defaults only where it is free.
         assert_eq!(app.ui.keymap.keys_for("layer.remove", &Value::Null).count(), 0, "Delete deletes features");
     }

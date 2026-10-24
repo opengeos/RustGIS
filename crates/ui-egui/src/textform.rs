@@ -95,10 +95,12 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
     });
     out.typing = r.has_focus() && !out.text;
     egui::Grid::new(id.with("style")).num_columns(2).min_col_width(LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Size"));
+        let input_label = ui.label(tl!("Size"));
         let saved = *f.size;
         let drag = Dragged::lend(ui, id.with("size"), f.size);
-        let r = ui.add(egui::DragValue::new(f.size).range(rustgis_engine::map::graphics::FONT_SIZE).speed(0.2).suffix(" pt"));
+        let r = ui
+            .add(egui::DragValue::new(f.size).range(rustgis_engine::map::graphics::FONT_SIZE).speed(0.2).suffix(" pt"))
+            .labelled_by(input_label.id);
         // Named for assistive technology, as its label sits in the other column.
         let size = *f.size;
         r.widget_info(|| egui::WidgetInfo { label: Some(tl!("Size").to_string()), ..egui::WidgetInfo::drag_value(true, size) });
@@ -110,41 +112,46 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
             ui.end_row();
         }
         if let Some(b) = f.bold {
-            ui.label(tl!("Bold"));
-            let r = ui.checkbox(b, "");
+            let input_label = ui.label(tl!("Bold"));
+            let r = ui.checkbox(b, "").labelled_by(input_label.id);
             let on = *b;
             r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, tl!("Bold")));
             out.bold = r.changed();
             ui.end_row();
         }
         if let Some(it) = f.italic {
-            ui.label(tl!("Italic"));
+            let input_label = ui.label(tl!("Italic"));
             // Named for assistive technology, as its label sits in the other column.
-            let r = ui.checkbox(it, "");
+            let r = ui.checkbox(it, "").labelled_by(input_label.id);
             let on = *it;
             r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, tl!("Italic")));
             out.italic = r.changed();
             ui.end_row();
         }
         if let Some(a) = f.align {
-            ui.label(tl!("Alignment"));
+            let input_label = ui.label(tl!("Alignment"));
             let shown = tl!(a.label());
-            egui::ComboBox::from_id_salt(id.with("align")).selected_text(shown).show_ui(ui, |ui| {
-                for v in TextAlign::ALL {
-                    if ui.selectable_label(*a == v, tl!(v.label())).clicked() && *a != v {
-                        *a = v;
-                        out.align = true;
+            egui::ComboBox::from_id_salt(id.with("align"))
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for v in TextAlign::ALL {
+                        if ui.selectable_label(*a == v, tl!(v.label())).clicked() && *a != v {
+                            *a = v;
+                            out.align = true;
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .labelled_by(input_label.id);
             ui.end_row();
         }
         if let Some(ls) = f.letter_spacing {
-            ui.label(tl!("Letter spacing"));
+            let input_label = ui.label(tl!("Letter spacing"));
             let saved = *ls;
             let drag = Dragged::lend(ui, id.with("letter_spacing"), ls);
-            let r =
-                ui.add(egui::DragValue::new(ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"));
+            let r = ui
+                .add(egui::DragValue::new(ls).range(MIN_LETTER_SPACING..=MAX_LETTER_SPACING).speed(0.1).max_decimals(1).suffix(" pt"))
+                .labelled_by(input_label.id);
             let now = *ls;
             r.widget_info(|| egui::WidgetInfo {
                 label: Some(tl!("Letter spacing").to_string()),
@@ -154,17 +161,21 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
             ui.end_row();
         }
         if let Some(fam) = f.font {
-            ui.label(tl!("Font"));
-            let list = egui::ComboBox::from_id_salt(id.with("font")).selected_text(tl!(fam.label())).show_ui(ui, |ui| {
-                for v in FontFamily::ALL {
-                    if ui.selectable_label(*fam == v, tl!(v.label())).clicked() && *fam != v {
-                        *fam = v;
-                        out.font = true;
+            let input_label = ui.label(tl!("Font"));
+            let list = egui::ComboBox::from_id_salt(id.with("font"))
+                .selected_text(tl!(fam.label()))
+                .show_ui(ui, |ui| {
+                    for v in FontFamily::ALL {
+                        if ui.selectable_label(*fam == v, tl!(v.label())).clicked() && *fam != v {
+                            *fam = v;
+                            out.font = true;
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .labelled_by(input_label.id);
             // Named for assistive technology, as its label sits in the other column.
-            list.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Font")));
+            list.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Font")));
             ui.end_row();
             // A serif asked for where none is installed is drawn in the sans: said here, so the
             // page never differs from what was asked unsaid.
@@ -199,7 +210,7 @@ mod tests {
     }
 
     fn harness(form: Form) -> egui_kittest::Harness<'static, Form> {
-        egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        egui_kittest::Harness::builder().build_ui_state(
             |ui, f: &mut Form| {
                 // The numbers are lent saved and kept only once settled, as the pane's callers do.
                 let (mut size, mut spacing) = (f.size, f.letter_spacing);

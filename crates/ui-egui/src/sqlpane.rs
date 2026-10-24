@@ -316,16 +316,18 @@ fn body(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     }
     ui.label(RichText::new(tl!("One DuckDB SELECT: DuckDB Spatial's ST_ functions, files and web addresses (read_parquet('…')), and the tables of the database below. Ctrl+Enter runs it.")).small().weak());
     egui::Grid::new("sql_db").num_columns(2).spacing(egui::vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Database"));
+        let input_label = ui.label(tl!("Database"));
         ui.add(
             egui::TextEdit::singleline(&mut app.ui.sql.database)
                 .hint_text(tl!("none, a .duckdb file, or host=… dbname=… user=…"))
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .labelled_by(input_label.id);
         ui.end_row();
         if database_text(&app.ui.sql.database).starts_with("postgres") || app.ui.sql.database.contains("://") {
-            ui.label(tl!("Password"));
-            ui.add(egui::TextEdit::singleline(&mut app.ui.sql.password).password(true).desired_width(f32::INFINITY));
+            let input_label = ui.label(tl!("Password"));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.sql.password).password(true).desired_width(f32::INFINITY))
+                .labelled_by(input_label.id);
             ui.end_row();
         }
     });

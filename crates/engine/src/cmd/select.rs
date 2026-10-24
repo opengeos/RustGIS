@@ -218,7 +218,7 @@ fn identify(s: &mut Session, p: &Value) -> CmdResult {
     let map = s.map();
     let mut results: Vec<Value> = hits.iter().filter_map(|(id, row)| feature_json(map, *id, *row)).collect();
     // Then the features of vector tile layers, beneath the layers; tiles are never selectable.
-    if matches!(mode, PopupMode::Topmost | PopupMode::Visible) && !(first_layer && !results.is_empty()) {
+    if matches!(mode, PopupMode::Topmost | PopupMode::Visible) && (!first_layer || results.is_empty()) {
         let room = MAX_IDENTIFIED.saturating_sub(results.len());
         results.extend(tile_features(s, lon, lat, tol_px, first_layer, room));
     }

@@ -294,7 +294,11 @@ pub fn geodesic_ring_area_m2(ring: &[Coord]) -> f64 {
     let mut total = 0.0;
     for i in 0..n {
         let (Some(p1), Some(p2)) = (ring.get(i), ring.get((i + 1) % n)) else { continue };
-        total += (p2.x - p1.x).to_radians() * (2.0 + p1.y.to_radians().sin() + p2.y.to_radians().sin());
+        // An edge that jumps across the antimeridian (179° to -179°) is a short hop east, not 358°
+        // west. A full 360° edge (-180° to 180°, as a world-wide rectangle has) is kept as it is.
+        let dlon = p2.x - p1.x;
+        let dlon = if dlon.abs() > 180.0 && dlon.abs() < 360.0 { wrap_lon(dlon) } else { dlon };
+        total += dlon.to_radians() * (2.0 + p1.y.to_radians().sin() + p2.y.to_radians().sin());
     }
     (total * EARTH_RADIUS_M * EARTH_RADIUS_M / 2.0).abs()
 }
@@ -444,6 +448,22 @@ mod tests {
         let ring = [Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 1.0)];
         let a = geodesic_ring_area_m2(&ring);
         assert!((a - 1.2364e10).abs() / 1.2364e10 < 0.01, "{a}");
+    }
+
+    #[test]
+    fn ring_area_across_the_antimeridian() {
+        let c = Coord::new;
+        let across = geodesic_ring_area_m2(&[c(179.0, 0.0), c(-179.0, 0.0), c(-179.0, 2.0), c(179.0, 2.0)]);
+        let unwrapped = geodesic_ring_area_m2(&[c(179.0, 0.0), c(181.0, 0.0), c(181.0, 2.0), c(179.0, 2.0)]);
+        let reversed = geodesic_ring_area_m2(&[c(179.0, 2.0), c(-179.0, 2.0), c(-179.0, 0.0), c(179.0, 0.0)]);
+        assert!((across - unwrapped).abs() / unwrapped < 1e-9, "{across} vs {unwrapped}");
+        assert!((reversed - unwrapped).abs() / unwrapped < 1e-9, "{reversed}");
+        // The same box away from the antimeridian has the same area to within the latitude band.
+        let plain = geodesic_ring_area_m2(&[c(0.0, 0.0), c(2.0, 0.0), c(2.0, 2.0), c(0.0, 2.0)]);
+        assert!((across - plain).abs() / plain < 1e-9, "{across} vs {plain}");
+        // A full -180° to 180° edge is not collapsed: a world-wide band keeps its area.
+        let band = geodesic_ring_area_m2(&[c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 10.0), c(-180.0, 10.0)]);
+        assert!(band > 1.0e13, "{band}");
     }
 
     #[test]

@@ -10,6 +10,10 @@ pub mod connections;
 pub mod geometry_calc;
 pub mod model;
 pub mod project;
+pub mod s3_connections;
+pub mod s3_keys;
+#[cfg(test)]
+mod s3_saved_tests;
 pub mod sample;
 pub mod sources;
 #[cfg(test)]
@@ -465,9 +469,15 @@ pub struct Session {
     pub sources: sources::Sources,
     /// Saved connections (`connection.*`): kept with the app's preferences, not the project; never a secret.
     pub connections: connections::Connections,
-    /// The database logins of this run: the system's secret store (desktop app only), passwords
-    /// given and read, which saved connection each database uses, and the logins to ask for. Never
-    /// saved; see [`connections::DatabaseLogins`].
+    /// The runtime token of each saved S3 connection's login in this session, by saved id (see
+    /// `rustgis_tiles::s3::connect_saved`): given on the first successful login, kept after.
+    pub(crate) s3_bindings: std::collections::BTreeMap<String, String>,
+    /// Project sources that read an S3 bucket through a saved connection and wait for the user to
+    /// choose which (see [`s3_connections`]); none is fetched meanwhile.
+    pub s3_pending: Vec<s3_connections::PendingS3>,
+    /// This run's connection credential store (desktop only), plus database passwords, selections
+    /// and login requests. S3 uses the same store through `DatabaseLogins::secret_store`.
+    /// Never saved; see [`connections::DatabaseLogins`].
     pub database_logins: connections::DatabaseLogins,
     /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
     /// preferences, not the project).
@@ -681,6 +691,8 @@ impl Session {
             dirty: false,
             sources: sources::Sources::default(),
             connections: connections::Connections::default(),
+            s3_bindings: std::collections::BTreeMap::new(),
+            s3_pending: Vec::new(),
             database_logins: connections::DatabaseLogins::default(),
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
@@ -833,6 +845,18 @@ impl Session {
     /// map moved.
     pub fn follow_style_view(&mut self) -> bool {
         cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
+    }
+
+    /// Runs command `id` as a part of the one running now (a command made of others): its
+    /// changes are in that command's one undo step, not a step of their own. A part that fails
+    /// (or panics) is undone by its own `run`, which restores what it started from; the parts
+    /// before it stay until the command made of them fails too, whose `run` restores the project
+    /// as the whole command found it. The stacks are put back on every return.
+    pub(crate) fn run_part(&mut self, id: &str, params: &Value) -> CmdResult {
+        let (undo, redo) = (std::mem::take(&mut self.undo), std::mem::take(&mut self.redo));
+        let res = self.run(id, params);
+        (self.undo, self.redo) = (undo, redo);
+        res
     }
 
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a

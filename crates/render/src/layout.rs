@@ -52,15 +52,51 @@ pub(crate) fn frame_requires_complete(map: &Map, view: &View) -> bool {
 
 /// Renders a layout at `dpi` (dots per inch). `maps` are the project's maps, found by name.
 pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<Pixmap> {
+    let (w, h, k) = page_geometry(layout, dpi);
+    let bounds = tiny_skia::IntRect::from_xywh(0, 0, w, h)?;
+    draw_page(layout, maps, info, k, bounds, None)
+}
+
+/// Page pixel dimensions and the shared millimetre scale, capped to the renderer's budget.
+pub(crate) fn page_geometry(layout: &Layout, dpi: f64) -> (u32, u32, f64) {
     let ppp = (if dpi.is_finite() { dpi } else { 96.0 } / 96.0).clamp(0.25, 8.0);
-    let k = PT_PER_MM * ppp; // pixels per millimetre
+    let k = PT_PER_MM * ppp;
     let k = k.min((MAX_PIXELS / (layout.width * layout.height).max(1.0)).sqrt());
     let (w, h) = ((layout.width * k).clamp(1.0, MAX_SIDE), (layout.height * k).clamp(1.0, MAX_SIDE));
-    let k = k.min(w / layout.width).min(h / layout.height);
-    // A page too large for the cap draws at a lower resolution throughout.
+    (w as u32, h as u32, k.min(w / layout.width).min(h / layout.height))
+}
+
+/// One element on transparency, allocating only its on-page pixel bounds.
+/// Outer `None` means rendering failed; inner `None` means the element is off-page.
+pub(crate) fn render_element(layout: &Layout, id: u32, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<Option<(Pixmap, [f64; 4])>> {
+    let e = layout.element(id)?;
+    let (w, h, k) = page_geometry(layout, dpi);
+    let x0 = (e.x * k).floor().clamp(0.0, f64::from(w));
+    let y0 = (e.y * k).floor().clamp(0.0, f64::from(h));
+    let x1 = ((e.x + e.w) * k).ceil().clamp(0.0, f64::from(w));
+    let y1 = ((e.y + e.h) * k).ceil().clamp(0.0, f64::from(h));
+    let Some(bounds) = tiny_skia::IntRect::from_xywh(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32) else {
+        return Some(None);
+    };
+    let pm = draw_page(layout, maps, info, k, bounds, Some(id))?;
+    Some(Some((pm, [x0 / k, y0 / k, (x1 - x0) / k, (y1 - y0) / k])))
+}
+
+/// Draws the selected region with the full layout's frame and dynamic-text context.
+fn draw_page(
+    layout: &Layout,
+    maps: &mut [Map],
+    info: &PageInfo,
+    k: f64,
+    bounds: tiny_skia::IntRect,
+    element: Option<u32>,
+) -> Option<Pixmap> {
     let ppp = k / PT_PER_MM;
-    let mut pm = Pixmap::new(w as u32, h as u32)?;
-    pm.fill(tiny_skia::Color::WHITE);
+    let mut pm = Pixmap::new(bounds.width(), bounds.height())?;
+    if element.is_none() {
+        pm.fill(tiny_skia::Color::WHITE);
+    }
+    let visible = |e: &&rustgis_map::layout::Element| e.visible && element.is_none_or(|id| e.id == id);
     // Frame cameras first: surrounds and extent indicators read them.
     let frames: Vec<(u32, usize, rustgis_map::Camera, f64, f64)> = layout
         .elements
@@ -79,7 +115,7 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
     // to that frame's view first, so a streamed layer holds that frame's features whichever order
     // the frames and legends come in, and whichever other frame showed the map last.
     let mut shown: Vec<(u32, Vec<(u32, Vec<LegendEntry>)>)> = Vec::new();
-    for e in layout.elements.iter().filter(|e| e.visible) {
+    for e in layout.elements.iter().filter(visible) {
         if let ElementKind::Legend { frame: f, all_classes: false, .. } = &e.kind
             && !shown.iter().any(|(id, _)| id == f)
             && let Some(&(_, mi, cam, fw, fh)) = frame(*f)
@@ -92,8 +128,9 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
             shown.push((*f, complete_shown_legends(map, scale)?));
         }
     }
-    for e in layout.elements.iter().filter(|e| e.visible) {
-        let (x, y, ew, eh) = ((e.x * k) as f32, (e.y * k) as f32, (e.w * k) as f32, (e.h * k) as f32);
+    for e in layout.elements.iter().filter(visible) {
+        let (x, y, ew, eh) =
+            ((e.x * k - f64::from(bounds.x())) as f32, (e.y * k - f64::from(bounds.y())) as f32, (e.w * k) as f32, (e.h * k) as f32);
         let Some(r) = Rect::from_xywh(x, y, ew.max(1.0), eh.max(1.0)) else { continue };
         match &e.kind {
             ElementKind::MapFrame { shape, grid, extent_of, extent_color, extent_width, .. } => {
@@ -203,7 +240,8 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
             ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font } => {
                 let first = layout.first_frame().and_then(frame);
                 let s = expand(t, layout, info, first.and_then(|f| maps.get(f.1).map(|m| (m, f.2))));
-                let face = text::Face { bold: *bold, italic: *italic, serif: *font == rustgis_map::layout::FontFamily::Serif };
+                let face =
+                    text::Face { bold: *bold, italic: *italic, serif: *font == rustgis_map::layout::FontFamily::Serif, family: None };
                 let style = TextStyle { face, align: *align, spacing: *letter_spacing as f32 };
                 text_block(&mut pm, r, &s, *size as f32, *color, style, ppp);
             }

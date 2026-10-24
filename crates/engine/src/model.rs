@@ -223,7 +223,7 @@ pub fn validate(s: &Session, g: &ModelGraph) -> Vec<Problem> {
                 };
                 for p in t.params.iter().filter(|p| p.required) {
                     let port = port_kind(p.kind).is_some();
-                    if !(port && wired(p.name)) && !is_set(n.params.get(p.name)) && p.default.is_empty() {
+                    if !(port && wired(p.name) || is_set(n.params.get(p.name))) && p.default.is_empty() {
                         let msg = if port { "\"{p}\" needs a connection or a layer." } else { "\"{p}\" needs a value." };
                         out.push(problem("missing-input", Some(&n.id), msg.replace("{p}", p.label)));
                     }

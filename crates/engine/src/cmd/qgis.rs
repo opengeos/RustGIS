@@ -1,0 +1,334 @@
+//! QGIS projects and layer styles: `project.importQgis` opens a `.qgs` (or `.qgz`) as a new map,
+//! with its layers, their order, visibility and styles, its coordinate system and its view;
+//! `style.importQgis` gives a layer a `.qml` style. Both say what they couldn't carry over
+//! (`rustgis_map::qgis::Report`).
+
+use rustgis_geom::{Coord, Extent};
+use rustgis_map::qgis::{self, NoteKind, Report, Source};
+use serde_json::{Value, json};
+
+use super::{need_feature_layer, ps};
+use crate::{CmdResult, CommandSpec as C, Session};
+
+pub fn commands() -> Vec<C> {
+    vec![
+        C::new("project.importQgis", "Import QGIS Project", "Project › Import", import_project).params(
+            r#"{"path"?: "*.qgs|*.qgz", "text"?: "a .qgs file's text", "data"?: "a .qgs or .qgz file, base64", "dir"?: "the folder its relative paths start from (default: the file's)"} → the layers added and notes on what wasn't carried over"#,
+        ),
+        C::new("style.importQgis", "Import QGIS Style", "Style › Styles", import_style).when(need_feature_layer).params(
+            r#"{"layer"?, "path"?: "*.qml", "text"?: "a .qml file's text", "data"?: "a .qml file, base64"} → notes on what wasn't carried over"#,
+        ),
+    ]
+}
+
+/// A QGIS file's text: a `.qgs` or `.qml` as it is, a `.qgz` (a zip archive) its `.qgs`.
+fn qgis_text(p: &Value) -> Result<String, String> {
+    let bytes = match (ps(p, "data"), ps(p, "text"), ps(p, "path")) {
+        (Some(d), ..) => {
+            // Base64 is 4 characters for 3 bytes: a payload past the file limit isn't decoded.
+            if d.len() as u64 > MAX_FILE / 3 * 4 + 4 {
+                return Err("data is too large for a QGIS file".into());
+            }
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|_| "data must be base64".to_string())?
+        }
+        (None, Some(t), _) if t.len() > MAX_XML => return Err("text is too large for a QGIS project or style".into()),
+        (None, Some(t), _) => return Ok(t.to_string()),
+        (None, None, Some(path)) => read_file(path)?,
+        _ => return Err("path, text or data is required".into()),
+    };
+    if bytes.starts_with(b"PK") {
+        let entries = rustgis_data::zip::read_matching_within(&bytes, |n| n.to_ascii_lowercase().ends_with(".qgs"), MAX_XML)?;
+        let (_, qgs) = entries.into_iter().next().ok_or("the .qgz holds no .qgs project")?;
+        return String::from_utf8(qgs).map_err(|_| "the .qgz's project isn't text".to_string());
+    }
+    if bytes.len() > MAX_XML {
+        return Err("too large for a QGIS project or style".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "not a QGIS file (it isn't text)".to_string())
+}
+
+/// The most bytes of a QGIS file read (a `.qgz` can carry data files beside its project).
+const MAX_FILE: u64 = 256 << 20;
+/// The most bytes of a project's or style's XML parsed: its tree is several times larger than
+/// the text, and real ones are a few megabytes.
+const MAX_XML: usize = 64 << 20;
+
+/// Reads at most [`MAX_FILE`] bytes of `path` (natively: the web app passes `text` or `data`).
+fn read_file(path: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(MAX_FILE + 1).read_to_end(&mut bytes)).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > MAX_FILE {
+        return Err(format!("{path} is too large for a QGIS project"));
+    }
+    Ok(bytes)
+}
+
+fn import_project(s: &mut Session, p: &Value) -> CmdResult {
+    let text = qgis_text(p)?;
+    // The folder relative paths start from: `dir` (a blank one is none, so they don't start
+    // from the working directory), else the file's own (`.` for a file named without one).
+    let dir = ps(p, "dir").filter(|d| !d.trim().is_empty()).map(str::to_string).or_else(|| {
+        ps(p, "path").and_then(|path| std::path::Path::new(path).parent()).map(|d| match d.to_string_lossy() {
+            d if d.is_empty() => ".".to_string(),
+            d => d.into_owned(),
+        })
+    });
+    let mut report = Report::default();
+    let project = qgis::read_project(&text, dir.as_deref().unwrap_or_default(), &mut report)?;
+    // A map of its own, named as the project.
+    let name = if project.title.is_empty() { "QGIS project" } else { project.title.as_str() };
+    s.run_part("map.new", &json!({"name": name}))?;
+    // QGIS draws a project on its canvas alone: no basemap, no graticule.
+    let m = s.map_mut();
+    m.basemap = rustgis_map::Basemap::Blank;
+    m.graticule = false;
+    if let Some(crs) = &project.crs {
+        let code = match crs.as_str() {
+            "EPSG:3857" | "EPSG:900913" => "mercator",
+            other => other,
+        };
+        if let Err(e) = s.run_part("map.projection", &json!({"type": code})) {
+            report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator"));
+        }
+    }
+    // Bottom first, so each is added on top of the ones below it.
+    let mut added = Vec::new();
+    for layer in project.layers.iter().rev() {
+        match add_layer(s, layer, dir.is_some(), &mut report) {
+            Ok(Some(name)) => added.push(name),
+            Ok(None) => {}
+            Err(e) => report.skipped(&layer.name, format!("the layer: {e}")),
+        }
+    }
+    go_to_view(s, &project);
+    let notes: Vec<Value> = report.notes.iter().map(note_json).collect();
+    if !report.notes.is_empty() {
+        let left = report.notes.iter().filter(|n| n.kind == NoteKind::Skipped).count();
+        s.notify(
+            format!(
+                "Imported {} of {} QGIS layers; {} things drawn differently, {left} left out (see the import's notes)",
+                added.len(),
+                project.layers.len(),
+                report.notes.len() - left
+            ),
+            false,
+        );
+    }
+    Ok(json!({"map": name, "layers": added, "notes": notes}))
+}
+
+/// Adds one QGIS layer to the active map with its style: `Ok(Some(name))` when added, `Ok(None)`
+/// when its source is one RustGIS doesn't read (noted). Without the project's folder (`has_dir`:
+/// a project given as text or data with no `dir`), a relative path has nothing to start from and
+/// is noted rather than looked for in the working directory.
+fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report: &mut Report) -> Result<Option<String>, String> {
+    let name = layer.name.as_str();
+    if let Source::File { path, .. } | Source::Csv { path, .. } = &layer.source {
+        if !has_dir && qgis::is_relative(path) {
+            report.skipped(name, format!("the file {path}, relative to the project's folder, which the import wasn't given (pass dir)"));
+            return Ok(None);
+        }
+        // `C:roads.gpkg`: relative to the working directory on drive C, which no folder fixes.
+        if qgis::is_drive_relative(path) {
+            report.skipped(name, format!("the file {path}, relative to a drive's working directory (give a full path in QGIS)"));
+            return Ok(None);
+        }
+    }
+    match &layer.source {
+        Source::File { path, layer: table, .. } => {
+            let mut q = json!({"path": path, "name": name});
+            if let Some(t) = table {
+                q["layer"] = json!(t);
+            }
+            s.run_part("layer.addData", &q)?;
+        }
+        Source::Csv { path, x, y, wkt, crs } => {
+            let mut q = json!({"path": path, "name": name});
+            for (k, v) in [("x", x), ("y", y), ("wkt", wkt), ("crs", crs)] {
+                if let Some(v) = v {
+                    q[k] = json!(v);
+                }
+            }
+            s.run_part("layer.addData", &q)?;
+        }
+        Source::Xyz { url, zmin, zmax, vector } => {
+            // An overlay, as a WMS layer is, so web layers keep the tree's order between them.
+            let mut q = json!({"url": url, "name": name, "kind": if *vector { "vector" } else { "raster" }, "overlay": true});
+            if let Some(z) = zmin {
+                q["minZoom"] = json!(z);
+            }
+            if let Some(z) = zmax {
+                q["maxZoom"] = json!(z);
+            }
+            let before = s.active_layer;
+            let added = s.run_part("map.addTiles", &q)?;
+            web_settings(s, &added, before, layer, report);
+            return Ok(Some(name.to_string()));
+        }
+        Source::Wms { url, layer: wms, .. } => {
+            let before = s.active_layer;
+            let added = s.run_part("service.add", &json!({"url": url, "type": "wms", "layer": wms, "name": name}))?;
+            web_settings(s, &added, before, layer, report);
+            return Ok(Some(name.to_string()));
+        }
+        Source::Wfs { url, layer: typename } => {
+            report.skipped(name, format!("the WFS layer {typename} at {url} (add it with Add Data › Web Data)"));
+            return Ok(None);
+        }
+        Source::Postgres { connection, table } => {
+            report.skipped(name, format!("the PostGIS table {table} ({connection}): connect to the database to add it"));
+            return Ok(None);
+        }
+        Source::Other { provider } => {
+            report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {provider} sources"));
+            return Ok(None);
+        }
+    }
+    let id = s.active_layer.ok_or("the layer wasn't added")?;
+    let Some(l) = s.map_mut().layer_mut(id) else { return Err("the layer wasn't added".into()) };
+    let added_name = l.name.clone();
+    l.visible = layer.visible;
+    if l.is_raster() {
+        // A raster takes its opacity, visibility and scale range; its colouring is noted.
+        let st = &layer.style;
+        let t = st.transparency;
+        let (min, max) = (st.min_scale, st.max_scale);
+        if let Some(t) = t {
+            l.transparency = t;
+        }
+        if let Some(m) = min {
+            l.min_scale = m;
+        }
+        if let Some(m) = max {
+            l.max_scale = m;
+        }
+        return Ok(Some(added_name));
+    }
+    layer.style.apply(l);
+    // What reads only against the layer's fields: its definition query, and what the style names.
+    if let Some(q) = &layer.definition_query {
+        match rustgis_data::query::parse(q, &l.dataset) {
+            Ok(_) => l.definition_query = Some(q.clone()),
+            Err(e) => report.skipped(name, format!("its filter `{q}` ({e})")),
+        }
+    }
+    check_fields(l, name, report);
+    Ok(Some(added_name))
+}
+
+/// Checks what a style names against the layer's fields: its label classes' clauses and fields
+/// (a class that can't label is switched off) and the field a Unique Values or Graduated Colors
+/// renderer classes by.
+fn check_fields(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
+    for c in std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut()) {
+        if let Some(w) = c.where_.clone()
+            && let Err(e) = rustgis_data::query::parse(&w, &l.dataset)
+        {
+            report.skipped(name, format!("the label class \"{}\", whose clause `{w}` doesn't fit the layer ({e})", c.name));
+            c.visible = false;
+        }
+        // (A class with no field set labels nothing, and isn't noted.)
+        if c.visible && !c.field.is_empty() && l.dataset.field_index(&c.field).is_none() {
+            report.skipped(name, format!("labels from the field {}, which the layer hasn't", c.field));
+            c.visible = false;
+        }
+    }
+    let field = match &l.renderer {
+        rustgis_map::Renderer::Unique { field, .. } | rustgis_map::Renderer::Graduated { field, .. } => Some(field.clone()),
+        _ => None,
+    };
+    if let Some(f) = field.filter(|f| l.dataset.field_index(f).is_none()) {
+        report.approximated(name, format!("classes by the field {f}, which the layer hasn't: every feature draws as the rest"));
+    }
+}
+
+/// Gives what a QGIS web layer was added as the layer's visibility, opacity and blending mode.
+/// `added` is what `map.addTiles` or `service.add` answered: a tile layer's `index`, or no index
+/// when the service offered the layer as features or a coverage, which come in as a map layer
+/// (the active one, if it isn't `before` any more), which takes the scale range too. A tile layer
+/// has no scale range, so one is noted.
+pub(crate) fn web_settings(s: &mut Session, added: &Value, before: Option<u32>, layer: &qgis::ProjectLayer, report: &mut Report) {
+    let name = layer.name.as_str();
+    let st = &layer.style;
+    let transparency = st.transparency.filter(|t| t.is_finite() && *t > 0.0);
+    let index = added.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    if index.is_none()
+        && let Some(id) = s.active_layer.filter(|id| Some(*id) != before)
+        && let Some(l) = s.map_mut().layer_mut(id)
+    {
+        l.visible = layer.visible;
+        if let Some(tr) = transparency {
+            l.transparency = tr.clamp(0.0, 100.0);
+        }
+        if let Some(blend) = st.blend {
+            l.blend = blend;
+        }
+        if let Some(m) = st.min_scale {
+            l.min_scale = m;
+        }
+        if let Some(m) = st.max_scale {
+            l.max_scale = m;
+        }
+        return;
+    }
+    match index.and_then(|i| s.map_mut().tiles.get_mut(i)) {
+        Some(t) => {
+            t.visible = layer.visible;
+            if let Some(blend) = st.blend {
+                t.blend = blend;
+            }
+            if let Some(tr) = transparency {
+                t.opacity = (1.0 - tr / 100.0).clamp(0.0, 1.0);
+            }
+        }
+        None => {
+            if !layer.visible {
+                report.approximated(name, "a hidden web layer, added shown");
+            }
+            if transparency.is_some() {
+                report.approximated(name, "its transparency: added opaque");
+            }
+            if st.blend.is_some_and(|b| b != rustgis_map::effects::Blend::default()) {
+                report.approximated(name, "its blending mode: added as normal");
+            }
+        }
+    }
+    if st.min_scale.flatten().is_some() || st.max_scale.flatten().is_some() {
+        report.approximated(name, "its scale range: a web layer draws at every scale");
+    }
+}
+
+/// Goes to the project's saved view, or to its layers when that view shows none of them.
+fn go_to_view(s: &mut Session, project: &qgis::Project) {
+    let data = s.map().full_extent();
+    let saved = project.extent.and_then(|[x0, y0, x1, y1]| {
+        let m = s.map();
+        let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| m.to_lonlat(Coord::new(x, y)));
+        corners.iter().flatten().fold(None, |e: Option<Extent>, c| Some(e.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y))))
+    });
+    let target = match saved {
+        Some(e) if !e.is_empty() && (data.is_empty() || e.intersects(&data)) => e,
+        _ => data,
+    };
+    if !target.is_empty() {
+        s.zoom_to(&target);
+    }
+}
+
+fn note_json(n: &qgis::Note) -> Value {
+    json!({"layer": n.layer, "kind": n.kind, "text": n.text, "count": n.count})
+}
+
+fn import_style(s: &mut Session, p: &Value) -> CmdResult {
+    let text = qgis_text(p)?;
+    let id = s.layer_id(p)?;
+    let name = s.map().layer(id).map(|l| l.name.clone()).ok_or("no such layer")?;
+    let mut report = Report::default();
+    let style = qgis::read_style(&text, &name, &mut report)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    style.apply(l);
+    check_fields(l, &name, &mut report);
+    Ok(json!({"notes": report.notes.iter().map(note_json).collect::<Vec<_>>()}))
+}

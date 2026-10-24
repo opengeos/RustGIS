@@ -111,7 +111,7 @@ pub fn trend_with(t: &[f64], y: &[f64], test: Test, alpha: f64, slopes: &mut Vec
     kept.sort_by(|a, b| a.0.total_cmp(&b.0));
     let (t, y): (Vec<f64>, Vec<f64>) = kept.into_iter().unzip();
     let n = y.len();
-    if !(MIN_VALUES..=MAX_VALUES).contains(&n) || !(alpha > 0.0 && alpha < 1.0) {
+    if !((MIN_VALUES..=MAX_VALUES).contains(&n) && alpha > 0.0 && alpha < 1.0) {
         return None;
     }
     if let Test::Seasonal(m) = test {
@@ -222,7 +222,7 @@ pub fn trend_seasonal_with(t: &[f64], y: &[f64], season: &[usize], alpha: f64, s
     let mut kept: Vec<(f64, f64, usize)> =
         t.iter().zip(y).zip(season).filter(|((t, y), _)| t.is_finite() && y.is_finite()).map(|((t, y), s)| (*t, *y, *s)).collect();
     kept.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if !(MIN_VALUES..=MAX_VALUES).contains(&kept.len()) || !(alpha > 0.0 && alpha < 1.0) {
+    if !((MIN_VALUES..=MAX_VALUES).contains(&kept.len()) && alpha > 0.0 && alpha < 1.0) {
         return None;
     }
     let t: Vec<f64> = kept.iter().map(|k| k.0).collect();

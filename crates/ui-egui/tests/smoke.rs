@@ -7,9 +7,10 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 mod remembered_database;
 
+mod remembered_s3;
 /// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
-    egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+    egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -235,6 +236,30 @@ fn command_search_workflow_collects_inputs_before_georeferencing() {
     assert_eq!(h.state().ui.right, Some(rustgis_ui_egui::RightPane::Workflows));
 }
 
+/// Clipping follows a selection until the user explicitly opts out, even after changing it.
+#[test]
+fn polygon_clip_defaults_to_selection_and_honors_opt_out() {
+    let mut h = harness();
+    h.state_mut().workflow.layer2 = "Countries".into();
+    h.state_mut().run("ui.pane.workflows", json!(null)).unwrap();
+    h.state_mut().workflow.section = "process";
+    h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(0);
+    h.run_steps(4);
+    assert_eq!(h.state().workflow.selected_only, None);
+    let total = h.state().session.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    assert!(h.query_by_label(&format!("(1 of {total})")).is_some());
+    h.get_by_label("Selected only").click();
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(false));
+    h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(1);
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(false));
+    assert!(h.query_by_label(&format!("(2 of {total})")).is_some());
+    h.get_by_label("Selected only").click();
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(true));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn mcp_relay_early_start_wakes_queued_request_and_updates_ui() {
@@ -258,18 +283,14 @@ fn mcp_relay_early_start_wakes_queued_request_and_updates_ui() {
     writeln!(client, "{}", json!({"jsonrpc":"2.0","id":1,"method":"ping"})).expect("queue ping");
     client.flush().expect("flush request");
 
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 860.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     let mut input = BufReader::new(client.try_clone().expect("clone stream"));
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut reply = String::new();
@@ -443,8 +464,7 @@ fn every_tab_pane_and_dialog_renders() {
     }
     for tab in ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"] {
         h.state_mut().ui.tab = tab.into();
-        h.step();
-        h.step();
+        h.run();
     }
     for (id, p) in [
         ("ui.pane.symbology", json!(null)),
@@ -466,15 +486,13 @@ fn every_tab_pane_and_dialog_renders() {
         ("ui.backstage", json!({"open": true})),
     ] {
         h.state_mut().run(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
-        h.step();
-        h.step();
+        h.run();
     }
     h.state_mut().ui.backstage = false;
     // Every language, the collapsed and peeked ribbon.
     for l in rustgis_ui_egui::i18n::Lang::all() {
         h.state_mut().run("ui.language", json!({"code": l.code()})).unwrap();
-        h.step();
-        h.step();
+        h.run();
     }
     h.state_mut().run("ui.language", json!({"code": "auto"})).unwrap();
     assert!(h.state_mut().run("ui.language", json!({"code": "xx"})).is_err());
@@ -1275,18 +1293,14 @@ fn delimited_text_options_go_with_the_picked_file() {
 fn delimited_text_dialog_lists_the_picked_files_columns() {
     let services = rustgis_ui_egui::Services { open_async: Some(Box::new(|_: &str| {})), ..Default::default() };
     let app = RustGisApp::with_sample().with_services(services);
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 860.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     h.state_mut().run("ui.addDelimited", json!(null)).unwrap();
     let picked = format!("{}parks.csv", rustgis_ui_egui::DELIMITED_PICK);
     h.state_mut().open_picked(&picked, b"name;east;north\nCentral Park;992000;220000\n").unwrap();
@@ -1411,6 +1425,55 @@ fn data_from_a_web_address_lands_later() {
     assert!(h.state().session.map().layer_by_name("Pin").is_some());
     assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("never fetched")));
     assert!(h.state().ui.downloads.is_empty());
+}
+
+/// A service layer added from the app (Add From Service, the Connections tree) is read past its
+/// first page off the frame (#764): an ArcGIS layer again from the start in pages ordered by its
+/// object ids, an OGC API collection by its `next` links; the layer is added once the pages are
+/// in, with no note.
+#[test]
+fn service_features_are_read_page_by_page_off_the_frame() {
+    use ogc_server::{Route, Server, arcgis_layer, arcgis_page};
+    let q = "where=1%3D1&outFields=*&f=geojson";
+    let layer = "/arcgis/rest/services/P/MapServer/0";
+    let page = |offset: u32| format!("{layer}/query?{q}&resultOffset={offset}&resultRecordCount=2&orderByFields=OBJECTID");
+    let collection = |ids: &[u32], next: Option<&str>| {
+        let mut c: serde_json::Value = serde_json::from_str(&arcgis_page(ids, false)).unwrap();
+        if let Some(href) = next {
+            c["links"] = json!([{"rel": "next", "href": href}]);
+        }
+        c.to_string()
+    };
+    let server = Server::new(vec![
+        Route::new(&format!("{layer}/query?{q}"), &arcgis_page(&[3, 0], true)),
+        Route::new(layer, &arcgis_layer(2, true)),
+        Route::new(&page(0), &arcgis_page(&[0, 1], true)),
+        Route::new(&page(2), &arcgis_page(&[2, 3], true)),
+        Route::new(&page(4), &arcgis_page(&[4], false)),
+        Route::new("/collections/wells/items?page=2", &collection(&[2], None)),
+        Route::new("/collections/wells/items", &collection(&[0, 1], Some("items?page=2"))),
+    ]);
+    let mut h = harness();
+    h.step();
+    let base = server.base.clone();
+    h.state_mut().run("ui.addUrl", json!({"url": format!("{base}{layer}/query?{q}"), "name": "Parcels", "service": true})).unwrap();
+    h.state_mut().run("ui.addUrl", json!({"url": format!("{base}/collections/wells/items"), "name": "Wells", "service": true})).unwrap();
+    let ids = |app: &RustGisApp, name: &str| {
+        app.session.map().layer_by_name(name).map(|l| l.dataset.features.iter().map(|f| f.attrs[0].as_f64()).collect::<Vec<_>>())
+    };
+    wait_for_ogc(&mut h, |app| ids(app, "Parcels").is_some() && ids(app, "Wells").is_some());
+    let notes: Vec<_> = h.state().session.notices.iter().map(|n| n.text.clone()).collect();
+    let n = |i: &[u32]| Some(i.iter().map(|&i| Some(f64::from(i))).collect::<Vec<_>>());
+    assert_eq!((ids(h.state(), "Parcels"), ids(h.state(), "Wells")), (n(&[0, 1, 2, 3, 4]), n(&[0, 1, 2])), "{notes:?}");
+    assert!(!notes.iter().any(|n| n.contains("aren't read")), "{notes:?}");
+    assert!(h.state().ui.service_pages.is_empty() && h.state().ui.downloads.is_empty());
+    let offsets: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.ends_with("/0/query"))
+        .map(|r| r.query.into_iter().find(|(k, _)| k == "resultOffset").map(|(_, v)| v))
+        .collect();
+    assert_eq!(offsets, [None, Some("0".into()), Some("2".into()), Some("4".into())]);
 }
 
 /// A project by its web address (a `?project=` link) downloads off the frame and replaces the
@@ -1743,6 +1806,11 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     h.state_mut().run("ui.dialog", json!({"name":"s3"})).unwrap();
     h.step();
     h.step();
+    // Other tests may have live process-wide connections, so the section can start collapsed.
+    if h.query_by_role_and_label(egui::accesskit::Role::Button, "Connect").is_none() {
+        h.get_by_label("Connection").click();
+        h.run_steps(3);
+    }
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Connect").click();
     h.step();
     h.get_by_label("Save as Connection").click();
@@ -1752,6 +1820,7 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     assert!(h.query_by_label("Save as Connection").is_none());
     assert!(h.query_by_label("Rename it to save it: a connection has this name").is_none());
     assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("default")));
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::disconnect("default");
 }
 
 /// A table list and the table chosen belong to the address they were listed for: editing the
@@ -2036,19 +2105,14 @@ fn connections_tree_browses_and_adds() {
         }
     });
     // Frames 0.05 s apart, so two clicks fall within egui's double-click delay.
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 860.0))
-        .with_max_steps(64)
-        .with_step_dt(0.05)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            RustGisApp::with_sample(),
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).with_step_dt(0.05).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        RustGisApp::with_sample(),
+    );
     h.state_mut().run("connection.new", json!({"kind":"wms","address":format!("http://{addr}/wms"),"name":"Local"})).unwrap();
     h.state_mut().run("ui.pane.sources", json!({})).unwrap();
     h.step();
@@ -2118,18 +2182,14 @@ fn web_save_asks_for_the_file_name() {
         ..Default::default()
     };
     let app = RustGisApp::with_sample().with_services(services);
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 860.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     let names = |got: &std::sync::Mutex<Vec<(String, Vec<u8>)>>| got.lock().unwrap().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
     // A project never saved: Save asks first, with the project's name.
     h.state_mut().run("layer.color", json!({"layer": "Countries", "color": "#336699"})).unwrap();
@@ -2300,18 +2360,14 @@ fn letting_agents_control_rustgis_starts_the_relay_and_shows_how_to_connect() {
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
     // The connection instructions expand below the checkbox: keep the settings above the
     // bottom composer so both pointer clicks reach the checkbox.
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 2000.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 2000.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     // The first frame loads the assistant's settings and closes the form when they're complete (a
     // key in the environment): open it after that.
     h.step();
@@ -2364,18 +2420,14 @@ fn agents_on_this_computer_switches_tick_and_stick() {
         }
     }));
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 2000.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 2000.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     // The first frame loads the assistant's settings and closes the form when they're complete (a
     // key in the environment): open it after that.
     h.step();
@@ -2959,8 +3011,12 @@ fn help_shortcuts_lists_the_keymap() {
     h.step();
     // What it opened shows on the next frame.
     h.step();
-    let undo = if cfg!(target_os = "macos") { "⌘Z" } else { "Ctrl+Z" };
-    assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
+    // Named by the OS egui reads (a browser's from its user agent), not the build's (#799): the
+    // harness tells Linux, whatever runs it.
+    assert!(h.query_by_label("Ctrl+Z").is_some(), "Help › Shortcuts lists Undo's key");
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.step();
+    assert!(h.query_by_label("⌘Z").is_some(), "with ⌘ on a Mac");
     assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
 }
 
@@ -3008,6 +3064,86 @@ fn geometry_calculator_switching_back_creates_a_unique_field() {
     let active = &h.state().session.map().layer(other).unwrap().dataset;
     assert!(active.field_index("x_deg_2").is_none(), "the active layer is left alone");
     assert_eq!(active.value(0, 0).as_f64(), Some(5.0));
+}
+
+#[test]
+fn unique_symbology_lets_the_user_choose_a_text_field_before_applying() {
+    use rustgis_ui_egui::rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_ui_egui::rustgis_engine::geom::Coord;
+
+    let mut h = harness();
+    let mut ds = Dataset::new(
+        "Text attributes",
+        GeometryType::Point,
+        vec![Field::new("id", FieldType::Integer), Field::new("category", FieldType::Text), Field::new("other", FieldType::Text)],
+    );
+    ds.push(Some(Geometry::Point(Coord::new(117.0, 3.0))), vec![Value::Int(1), Value::Text("village".into()), Value::Text("town".into())]);
+    let id = h.state_mut().session.map_mut().add_dataset(ds);
+    h.state_mut().session.active_layer = Some(id);
+    h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+    h.step();
+    assert_eq!(h.state().ui.symbology_pending.as_ref().map(|pending| pending.field.as_str()), Some("category"));
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Field").click();
+    h.step();
+    h.step(); // Combo popups enter the accessibility tree on the following frame.
+    h.get_by_label("other").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Apply").click();
+    h.step();
+    let layer = h.state().session.map().layer(id).unwrap();
+    assert!(matches!(layer.renderer, rustgis_ui_egui::rustgis_engine::map::Renderer::Unique { ref field, .. } if field == "other"));
+    assert_eq!(h.state().ui.symbology_pending, None);
+}
+
+#[test]
+fn unique_symbology_pending_choice_follows_its_context() {
+    for change in ["map", "project", "renderer", "undo", "external renderer", "layer"] {
+        let mut h = harness();
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "single"})).unwrap();
+        // A second map deliberately has the same layer IDs and renderer as the first.
+        let mut other = h.state().session.map().clone();
+        other.name = "Other map".into();
+        h.state_mut().session.project.maps.push(other);
+        h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+        h.step();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+        h.step();
+        assert!(h.state().ui.symbology_pending.is_some());
+        // Failed commands leave the valid choice available for retry.
+        assert!(h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "missing field"})).is_err());
+        assert!(h.state().ui.symbology_pending.is_some());
+        if change != "external renderer" {
+            h.state_mut().ui.close_right(rustgis_ui_egui::RightPane::Symbology);
+        }
+        match change {
+            "map" => {
+                h.state_mut().run("map.activate", json!({"name": "Other map"})).unwrap();
+            }
+            "project" => {
+                h.state_mut().run("project.sample", json!(null)).unwrap();
+            }
+            "renderer" => {
+                h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+            }
+            "undo" => {
+                h.state_mut().run("edit.undo", json!(null)).unwrap();
+            }
+            "external renderer" => {
+                // Commands from other clients can bypass RustGisApp::run.
+                h.state_mut().session.run("layer.symbology", &json!({"type": "unique", "field": "name"})).unwrap();
+                h.step();
+            }
+            "layer" => {
+                h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(h.state().ui.symbology_pending.is_none(), "pending choice survived {change}");
+    }
 }
 
 #[test]
@@ -3078,4 +3214,24 @@ fn line_strokes_editor_edits_one_class() {
     h.step();
     assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 1);
     assert!(h.state().session.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty(), "the layer's own are untouched");
+}
+
+/// Out-of-range band input shows the raster's range and keeps calculation disabled.
+#[test]
+fn zonal_statistics_shows_available_band_range() {
+    use egui_kittest::kittest::NodeT;
+    use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    let mut h = harness();
+    let gt = GeoTransform { origin_x: 0.0, origin_y: 1.0, pixel_width: 1.0, pixel_height: -1.0 };
+    let raster = Raster::new("dem", 1, 1, vec![vec![1.0]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    h.state_mut().session.map_mut().add_raster("dem", rustgis_engine::map::RasterLayer::from_path(raster, "dem.tif"));
+    h.state_mut().run("ui.pane.workflows", json!(null)).unwrap();
+    h.state_mut().workflow.section = "zonalStats";
+    h.state_mut().workflow.layer = "dem".into();
+    h.state_mut().workflow.layer2 = "Countries".into();
+    h.state_mut().workflow.zonal_stats.bands = "2".into();
+    h.run_steps(4);
+    assert!(h.query_by_label("Raster has bands 1 to 1.").is_some());
+    assert!(h.query_by_label("Band must be a positive integer, list of bands, or 'all'.").is_some());
+    assert!(h.get_by_label("Calculate Statistics").accesskit_node().is_disabled());
 }

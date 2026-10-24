@@ -5,9 +5,10 @@
 //! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
 //! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
 //! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
-//! `"layer"`, the line's layer's fields for a `"field"`. Typing aids beside it: a command's
-//! parameters added on accept (`template`), and braces, brackets and quotes that close themselves
-//! (`brace`).
+//! `"layer"`, the line's layer's fields for a `"field"`, maps, layouts, tables and label classes,
+//! and in a `gp.run` line's `"params"` what the tool's parameter takes by its kind (`tool_value`),
+//! as the tool's form offers it. Typing aids beside it: a command's parameters added on accept
+//! (`template`), and braces, brackets and quotes that close themselves (`brace`).
 //! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};
@@ -37,8 +38,10 @@ pub struct Offer {
 /// its id), the keys of the second-level object of a command's entry `key`, a geoprocessing
 /// tool's parameter keys (by its id) in a `gp.run` line's `"params"`, or the ids a value takes:
 /// the tools for a `gp.run` line's `"tool"`, the commands for a `task.addStep` line's
-/// `"command"`; or what the project holds for a value: the map's layers for a `"layer"`, the
-/// fields of a layer (by its id) for a `"field"`.
+/// `"command"`; or what the project holds for a value: the map's layers for a `"layer"` (and the
+/// tables, for a tool's parameter that takes any layer), the fields of a layer (by its id) for a
+/// `"field"`, maps, layouts, tables or a layer's label classes; the fields of a tool's input (by
+/// the name its line gives) for a tool's field parameter, a tool's parameter's choices.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Of {
     CommandKeys(String),
@@ -48,12 +51,30 @@ pub enum Of {
     CommandIds,
     Layers,
     Fields(u32),
+    Maps,
+    Layouts,
+    Tables,
+    Classes(u32),
+    ToolFields(String),
+    Choices,
 }
 
 impl Of {
     /// Whether its items are a value's (written as a JSON string's text), not keys.
     fn is_value(&self) -> bool {
-        matches!(self, Of::ToolIds | Of::CommandIds | Of::Layers | Of::Fields(_))
+        matches!(
+            self,
+            Of::ToolIds
+                | Of::CommandIds
+                | Of::Layers
+                | Of::Fields(_)
+                | Of::Maps
+                | Of::Layouts
+                | Of::Tables
+                | Of::Classes(_)
+                | Of::ToolFields(_)
+                | Of::Choices
+        )
     }
 }
 
@@ -426,8 +447,8 @@ fn line_layer<'a>(session: &'a rustgis_engine::Session, line: &str) -> Option<&'
 /// What to offer at char `at` of `script`: the command ids for a line's first word, the keys of
 /// the line's command for a key being typed in its `{…}`, and in its second-level objects the
 /// keys their entries describe; in a `gp.run` line the tool ids for its `"tool"` and the tool's
-/// keys in its `"params"`, in a `task.addStep` line the command ids for its `"command"` and that
-/// command's keys in its `"params"`.
+/// keys and values (`tool_value`) in its `"params"`, in a `task.addStep` line the command ids for
+/// its `"command"` and that command's keys in its `"params"`.
 fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::Session) -> Option<Offer> {
     if let Some((start, word)) = word_at(script, at) {
         return complete(start, at, &word, ids);
@@ -461,8 +482,39 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                 let l = line_layer(session, line_of(script, &hint)?)?;
                 value_ids(start, at, &word, l.dataset.fields.iter().map(|f| f.name.as_str()), Of::Fields(l.id))
             }
+            "map" => {
+                let mut seen = std::collections::HashSet::new();
+                let names = session.project.maps.iter().map(|m| m.name.as_str()).filter(|n| seen.insert(n.to_ascii_lowercase()));
+                value_ids(start, at, &word, names, Of::Maps)
+            }
+            "layout" => {
+                let mut seen = std::collections::HashSet::new();
+                let names = session.project.layouts.iter().map(|l| l.name.as_str()).filter(|n| seen.insert(n.to_ascii_lowercase()));
+                value_ids(start, at, &word, names, Of::Layouts)
+            }
+            "table" => {
+                // Exact duplicates are removed by value_ids; distinct case variants each
+                // resolve to their own table, since find_table prefers an exact name.
+                let names = session.project.tables.iter().map(|t| t.name.as_str());
+                value_ids(start, at, &word, names, Of::Tables)
+            }
+            "class" => {
+                let l = line_layer(session, line_of(script, &hint)?)?;
+                let without_default = matches!(hint.id.as_str(), "labels.class.remove" | "labels.class.move");
+                let mut seen = std::collections::HashSet::new();
+                let names = l
+                    .labels
+                    .in_order()
+                    .filter(|c| !without_default || !c.name.eq_ignore_ascii_case(&l.labels.default.name))
+                    .map(|c| c.name.as_str())
+                    .filter(|n| seen.insert(n.to_ascii_lowercase()));
+                value_ids(start, at, &word, names, Of::Classes(l.id))
+            }
             _ => None,
         };
+    }
+    if let Some(offer) = tool_value(script, at, session) {
+        return Some(offer);
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
     let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
@@ -484,6 +536,52 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
     }
     let entries = entries(&sub_desc(&params_of(session, &h.id)?, &nested.key)?).into_iter().map(|(keys, _)| keys).collect();
     offer_keys(Of::SubKeys { id: h.id, key: nested.key }, entries, &object, start, at, &word)
+}
+
+/// What a `gp.run` line's tool takes for the value being typed in its `"params"` (#788), by the
+/// kind of the tool's parameter of that key, as the tool's form offers it (`takes_layer`,
+/// `takes_field`): the layers of its kind, then the tables for one that takes any layer; the
+/// fields it takes of the layer or table the tool's first layer parameter names (before or after
+/// it); or its choices. None for another kind: a number, a bool, a path, a text, several layers in
+/// one string.
+fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Option<Offer> {
+    use crate::panes::{takes_field, takes_layer};
+    use rustgis_engine::analysis::ParamKind as K;
+    let (h, Scan { nested, .. }, _) = scan_at(script, at)?;
+    let brace = h.brace + nested.filter(|n| n.key == "params")?.brace;
+    let (Named::Tool, name) = named_in(script, &h)? else {
+        return None;
+    };
+    let tool = rustgis_engine::analysis::tool(&name)?;
+    // The `"params"` object, read as a line's object from its `{`.
+    let text = script.get(byte_at(script, brace)?..byte_at(script, at)?)?;
+    let (start, key) = scan(text).value?;
+    let word = word_from(text, start)?;
+    let start = brace + start;
+    let p = tool.params.iter().find(|p| p.name == key)?;
+    let map = session.map();
+    match p.kind {
+        K::Layer | K::PolygonLayer | K::PointLayer | K::RasterLayer | K::VectorLayer => {
+            // Those Run finds by their name, as for a `"layer"`; then the tables no layer's name
+            // hides, as the form lists them, of two named alike the one Run finds.
+            let layers = map.layers.iter().filter(|l| map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id) && takes_layer(p.kind, l));
+            let all = &session.project.tables;
+            let tables = all.iter().enumerate().filter(|(i, t)| {
+                p.kind == K::Layer && map.layer_by_name(&t.name).is_none() && rustgis_engine::project::find_table(all, &t.name) == Some(*i)
+            });
+            let names = layers.map(|l| l.name.as_str()).chain(tables.map(|(_, t)| t.name.as_str()));
+            value_ids(start, at, &word, names, Of::Layers)
+        }
+        K::Field | K::NumericField | K::CoordinateField => {
+            let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+            let input = value_of(&format!("{text}{after}"), crate::panes::first_layer(tool)?.name)?;
+            let d = crate::panes::input_dataset(session, &input)?;
+            let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
+            value_ids(start, at, &word, names, Of::ToolFields(input))
+        }
+        K::Choice(choices) => value_ids(start, at, &word, choices.iter().copied(), Of::Choices),
+        _ => None,
+    }
 }
 
 /// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
@@ -521,10 +619,11 @@ fn sub_desc(desc: &str, key: &str) -> Option<String> {
 }
 
 /// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
-/// once: the tools, commands, layers or fields a value takes (`of`), offered from its quote, so
-/// not cut to `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's first word offers
-/// them; the rest in their order: tools with the built-in ones first (an external one with the
-/// same id isn't the one Run finds), layers top first, fields as the layer's table has them.
+/// once: the tools, commands, layers, tables, fields or choices a value takes (`of`), offered
+/// from its quote, so not cut to `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's
+/// first word offers them; the rest in their order: tools with the built-in ones first (an
+/// external one with the same id isn't the one Run finds), layers top first (then tables), fields
+/// as the layer's table has them, choices as the tool lists them.
 fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
     let mut seen = std::collections::HashSet::new();
     let mut items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
@@ -536,9 +635,12 @@ fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item =
 
 /// What the help beside a list says about item `item` of `of`: for a key, the line describing its
 /// parameter (`"size"?: number`) and a longer help under it (a tool's, when it has one); for a
-/// layer, what it holds; for a field, its type and its alias.
+/// layer, what it holds, for a table its rows; for a field, its type and its alias.
 fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(String, Option<String>)> {
     let described = |desc: &str| entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == item)).map(|(_, text)| (text, None));
+    let field = |d: &rustgis_engine::data::Dataset| {
+        d.fields.iter().find(|f| f.name == item).map(|f| (tl!(f.ty.label()).to_string(), f.alias.clone()))
+    };
     match of {
         Of::CommandKeys(id) => described(&params_of(session, id)?),
         Of::SubKeys { id, key: entry } => described(&sub_desc(&params_of(session, id)?, entry)?),
@@ -547,7 +649,11 @@ fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(
             Some((param_line(p), (!p.help.is_empty()).then(|| tl!(p.help).to_string())))
         }
         Of::Layers => {
-            let l = session.map().layer_by_name(item)?;
+            let Some(l) = session.map().layer_by_name(item) else {
+                // A table, after the layers (a tool's parameter that takes any layer).
+                let t = crate::panes::input_table(session, item)?;
+                return Some((crate::i18n::fmt("Table · {n} rows", &[("n", &t.dataset.features.len().to_string())]), None));
+            };
             if l.is_raster() {
                 return Some((tl!("Raster").to_string(), None));
             }
@@ -561,11 +667,26 @@ fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(
             );
             Some((text, None))
         }
-        Of::Fields(id) => {
-            let f = session.map().layer(*id)?.dataset.fields.iter().find(|f| f.name == item)?;
-            Some((tl!(f.ty.label()).to_string(), f.alias.clone()))
+        Of::Fields(id) => field(&session.map().layer(*id)?.dataset),
+        Of::ToolFields(input) => field(crate::panes::input_dataset(session, input)?),
+        Of::Maps => {
+            let m = session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(item))?;
+            Some((crate::i18n::fmt("{n} layers", &[("n", &m.layers.len().to_string())]), None))
         }
-        Of::ToolIds | Of::CommandIds => None,
+        Of::Layouts => {
+            let l = session.project.layouts.iter().find(|l| l.name.eq_ignore_ascii_case(item))?;
+            Some((crate::i18n::fmt("{width} × {height} mm", &[("width", &l.width.to_string()), ("height", &l.height.to_string())]), None))
+        }
+        Of::Tables => {
+            let t = session.project.tables.get(rustgis_engine::project::find_table(&session.project.tables, item)?)?;
+            Some((crate::i18n::fmt("{n} rows", &[("n", &t.features.len().to_string())]), None))
+        }
+        Of::Classes(id) => {
+            let labels = &session.map().layer(*id)?.labels;
+            let c = if labels.default.name.eq_ignore_ascii_case(item) { &labels.default } else { labels.class(item)? };
+            Some((c.where_.clone().filter(|w| !w.trim().is_empty()).unwrap_or_else(|| tl!("All features").to_string()), None))
+        }
+        Of::ToolIds | Of::CommandIds | Of::Choices => None,
     }
 }
 
@@ -575,7 +696,9 @@ fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> 
     use rustgis_engine::data::GeometryType;
     match of? {
         Of::Layers => {
-            let l = session.map().layer_by_name(item)?;
+            let Some(l) = session.map().layer_by_name(item) else {
+                return crate::panes::input_table(session, item).map(|_| "table");
+            };
             Some(match l.geometry_type() {
                 _ if l.is_raster() => "raster_layer",
                 GeometryType::Point => "point_layer",
@@ -583,7 +706,11 @@ fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> 
                 _ => "polygon_layer",
             })
         }
-        Of::Fields(_) => Some("field"),
+        Of::Fields(_) | Of::ToolFields(_) => Some("field"),
+        Of::Maps => Some("map"),
+        Of::Layouts => Some("new_layout"),
+        Of::Tables => Some("table"),
+        Of::Classes(_) => Some("label"),
         _ => None,
     }
 }
@@ -1411,14 +1538,10 @@ mod tests {
     fn pane() -> egui_kittest::Harness<'static, crate::RustGisApp> {
         use egui_kittest::kittest::Queryable;
         // Without the interface fonts (`theme::install_fonts`) egui's faces have no "→".
-        let mut h = egui_kittest::Harness::builder()
-            .allow_missing_glyphs()
-            .with_accessibility_check(false)
-            .with_size(egui::vec2(500.0, 700.0))
-            .build_ui_state(
-                |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
-                crate::RustGisApp::with_sample(),
-            );
+        let mut h = egui_kittest::Harness::builder().allow_missing_glyphs().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+            crate::RustGisApp::with_sample(),
+        );
         h.run();
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
         h.run();
@@ -1824,7 +1947,7 @@ mod tests {
     fn a_narrow_window_puts_the_help_under_the_list() {
         use egui_kittest::kittest::Queryable;
         let width = 380.0;
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -1846,7 +1969,7 @@ mod tests {
     fn a_short_window_scrolls_the_list() {
         use egui_kittest::kittest::Queryable;
         let (width, height) = (380.0, 300.0);
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, height)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -2365,7 +2488,7 @@ mod tests {
         assert_eq!(offer(&app, r#"labels.field {"field": ""#).unwrap().items, fields, "the active layer");
         app.session.active_layer = None;
         assert!(offer(&app, r#"labels.field {"field": ""#).is_none(), "no active layer");
-        assert!(offer(&app, r#"gp.run {"params": {"layer": ""#).is_none(), "a second-level value (#662's 3b)");
+        assert!(offer(&app, r#"gp.run {"params": {"layer": ""#).is_none(), "in params, without a tool");
         // Two layers named alike but for case: the first, the one Run finds by either name.
         let other = app.session.map().layers.iter().position(|l| l.name != "Cities").unwrap();
         app.session.map_mut().layers[other].name = "CITIES".into();
@@ -2393,6 +2516,87 @@ mod tests {
         assert_eq!(item_icon(s, Some(&Of::ToolIds), "buffer"), None);
     }
 
+    /// In a `gp.run` line's `"params"`, a value offers what the tool's parameter of its key takes,
+    /// by its kind, as the tool's form offers it (#788): the layers of a polygon parameter, every
+    /// layer then the tables for any layer, the numeric fields of the input for a numeric field (the
+    /// input before or after it, a table's too), a choice's choices in order; nothing for a
+    /// number, nor in another command's `"params"`.
+    #[test]
+    fn a_tools_values_are_offered_by_kind() {
+        use rustgis_engine::data::{Dataset, Field, FieldType, GeometryType};
+        let mut app = crate::RustGisApp::with_sample();
+        let offer = |app: &crate::RustGisApp, s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let names = |app: &crate::RustGisApp, keep: fn(&rustgis_engine::map::Layer) -> bool| -> Vec<String> {
+            app.session.map().layers.iter().filter(|l| keep(l)).map(|l| l.name.clone()).collect()
+        };
+        let polygons = names(&app, |l| l.geometry_type() == GeometryType::Polygon);
+        assert!(polygons.iter().any(|n| n == "Countries") && !polygons.iter().any(|n| n == "Cities"));
+        let o = offer(&app, r#"gp.run {"tool": "dissolve", "params": {"input": ""#).unwrap();
+        assert_eq!((o.items, o.of), (polygons, Some(super::Of::Layers)), "a polygon layer");
+        // A table after the layers; one named as a layer isn't the one Run finds, so not offered.
+        app.session.project.add_table(Dataset::new("Stats", GeometryType::None, vec![Field::new("total", FieldType::Integer)]));
+        app.session.project.add_table(Dataset::new("Cities", GeometryType::None, vec![]));
+        let mut any = names(&app, |_| true);
+        any.push("Stats".into());
+        assert_eq!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": ""#).unwrap().items, any, "any layer, then the tables");
+        assert_eq!(
+            offer(&app, r#"gp.run {"tool": "Buffer", "params": {"input": "st"#).unwrap().items,
+            ["Stats"],
+            "the tool by name, case aside"
+        );
+        let cities = app.session.map().layer_by_name("Cities").unwrap();
+        let fields: Vec<String> = cities.dataset.fields.iter().map(|f| f.name.clone()).collect();
+        let numeric: Vec<String> = cities.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+        assert!(!numeric.is_empty() && numeric.len() < fields.len());
+        let o = offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Cities", "field": ""#).unwrap();
+        assert_eq!((o.items, o.of), (numeric.clone(), Some(super::Of::ToolFields("Cities".into()))), "a numeric field");
+        let o = offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Cities", "case": ""#).unwrap();
+        assert_eq!(o.items, fields, "any field");
+        let s = r#"gp.run {"tool": "summaryStatistics", "params": {"field": ""#;
+        let o = super::offer_at(&format!(r#"{s}", "input": "Cities"}}}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(o.items, numeric, "the input after the field");
+        let o = offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Stats", "field": ""#).unwrap();
+        assert_eq!(o.items, ["total"], "a table's fields");
+        assert!(offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"field": ""#).is_none(), "no input");
+        assert!(offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Nowhere", "field": ""#).is_none());
+        let o = offer(&app, r#"gp.run {"tool": "buffer", "params": {"units": ""#).unwrap();
+        assert_eq!((o.items, o.of), (["Kilometers", "Meters", "Miles", "Feet"].map(String::from).to_vec(), Some(super::Of::Choices)));
+        assert_eq!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"units": "mi"#).unwrap().items, ["Miles"], "case aside");
+        assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"distance": ""#).is_none(), "a number");
+        assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"nope": ""#).is_none(), "a key the tool doesn't take");
+        assert!(offer(&app, r#"gp.run {"tool": "nope", "params": {"input": ""#).is_none(), "a tool that isn't there");
+        assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": {"x": ""#).is_none(), "deeper");
+        assert!(offer(&app, r#"task.addStep {"command": "buffer", "params": {"input": ""#).is_none(), "another command's params");
+    }
+
+    /// Beside a table, its rows and the table icon; beside a tool's field, its type and the field
+    /// icon; no help for a choice.
+    #[test]
+    fn a_tools_values_have_help_and_icons() {
+        use super::{Of, item_help, item_icon};
+        use rustgis_engine::data::{Dataset, Field, FieldType, GeometryType};
+        let mut app = crate::RustGisApp::with_sample();
+        app.session.project.add_table(Dataset::new("Stats", GeometryType::None, vec![Field::new("total", FieldType::Integer)]));
+        let s = &app.session;
+        assert_eq!(item_help(s, &Of::Layers, "Stats").map(|h| h.0), Some("Table · 0 rows".into()));
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Stats"), Some("table"));
+        let of = Of::ToolFields("Stats".into());
+        assert_eq!(item_help(s, &of, "total").map(|h| h.0), Some(FieldType::Integer.label().to_string()));
+        assert_eq!(item_icon(s, Some(&of), "total"), Some("field"));
+        assert_eq!(item_help(s, &Of::Choices, "Miles"), None);
+    }
+
+    /// In the pane: accepting a choice closes it, the cursor after its quote.
+    #[test]
+    fn a_tools_choice_is_accepted() {
+        let mut h = pane();
+        type_in(&mut h, r#"gp.run {"tool": "buffer", "params": {"units": "Mi"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        type_in(&mut h, "}");
+        assert_eq!(h.state().workflow.script, r#"gp.run {"tool": "buffer", "params": {"units": "Miles"}"#);
+    }
+
     /// In the pane: accepting a layer closes its name, written as a JSON string holds it.
     #[test]
     fn a_layer_is_accepted_as_json_writes_it() {
@@ -2402,6 +2606,135 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(h.state().workflow.script, r#"labels.style {"layer": "Big \"lakes\"""#);
+    }
+
+    fn named_objects(app: &mut crate::RustGisApp) {
+        use rustgis_engine::data::{Dataset, GeometryType};
+        app.session.map_mut().name = "Atlas".into();
+        app.session.project.layouts.push(rustgis_engine::map::layout::Layout::new("Sheet", 297.0, 210.0));
+        let mut dataset = Dataset::new("Stats", GeometryType::None, vec![]);
+        dataset.push(None, vec![]);
+        dataset.push(None, vec![]);
+        app.session.project.tables.push(rustgis_engine::project::Table { id: 1, dataset });
+        app.session
+            .run("labels.class.add", &serde_json::json!({"layer": "Cities", "name": "Large", "where": "pop_max > 1000000"}))
+            .unwrap();
+        app.session.active_layer = Some(app.session.map().layer_by_name("Cities").unwrap().id);
+    }
+
+    #[test]
+    fn project_names_are_offered_only_for_commands_that_take_them() {
+        use super::Of;
+        let mut app = crate::RustGisApp::with_sample();
+        named_objects(&mut app);
+        let offer = |app: &crate::RustGisApp, text: &str| super::offer_at(text, text.chars().count(), &[], &app.session);
+        for (text, name, of) in [
+            (r#"bookmark.add {"map": "at"#, "Atlas", Of::Maps),
+            (r#"layout.page {"layout": "sh"#, "Sheet", Of::Layouts),
+            (r#"table.remove {"table": "st"#, "Stats", Of::Tables),
+        ] {
+            let o = offer(&app, text).unwrap();
+            assert_eq!((o.items, o.of), (vec![name.to_string()], Some(of)));
+        }
+        for key in ["map", "layout", "table", "class"] {
+            let text = format!("map.goToXY {{\"{key}\": \"");
+            assert!(offer(&app, &text).is_none(), "a key the command doesn't take: {key}");
+        }
+        app.session.project.layouts.clear();
+        app.session.project.tables.clear();
+        assert!(offer(&app, r#"layout.page {"layout": ""#).is_none());
+        assert!(offer(&app, r#"table.remove {"table": ""#).is_none());
+    }
+
+    #[test]
+    fn project_name_duplicates_follow_the_commands_lookup_rules() {
+        let mut app = crate::RustGisApp::with_sample();
+        named_objects(&mut app);
+        let mut map = app.session.map().clone();
+        map.name = "ATLAS".into();
+        app.session.project.maps.push(map);
+        app.session.project.layouts.push(rustgis_engine::map::layout::Layout::new("SHEET", 1.0, 1.0));
+        let mut table = app.session.project.tables[0].clone();
+        table.id = 2;
+        app.session.project.tables.push(table.clone());
+        table.id = 3;
+        table.name = "STATS".into();
+        app.session.project.tables.push(table);
+        let names = |text: &str| super::offer_at(text, text.chars().count(), &[], &app.session).unwrap().items;
+        assert_eq!(names(r#"bookmark.add {"map": ""#), ["Atlas"]);
+        assert_eq!(names(r#"layout.page {"layout": ""#), ["Sheet"]);
+        // Tables prefer an exact name: these two spellings each address a different table.
+        assert_eq!(names(r#"table.remove {"table": ""#), ["Stats", "STATS"]);
+    }
+
+    #[test]
+    fn class_values_follow_the_lines_layer_and_leave_default_out_when_refused() {
+        let mut app = crate::RustGisApp::with_sample();
+        named_objects(&mut app);
+        app.session.run("labels.class.rename", &serde_json::json!({"layer": "Cities", "class": "Default", "name": "Base"})).unwrap();
+        let offer = |app: &crate::RustGisApp, text: &str| super::offer_at(text, text.chars().count(), &[], &app.session);
+        assert_eq!(offer(&app, r#"labels.style {"class": ""#).unwrap().items, ["Large", "Base"]);
+        assert_eq!(offer(&app, r#"labels.style {"layer": "Cities", "class": "la"#).unwrap().items, ["Large"]);
+        let text = r#"labels.style {"class": ""#;
+        let later = format!(r#"{text}", "layer": "Countries"}}"#);
+        assert_eq!(super::offer_at(&later, text.chars().count(), &[], &app.session).unwrap().items, ["Default"]);
+        for id in ["labels.class.remove", "labels.class.move"] {
+            let text = format!("{id} {{\"class\": \"");
+            assert_eq!(offer(&app, &text).unwrap().items, ["Large"]);
+            assert!(app.session.run(id, &serde_json::json!({"layer": "Cities", "class": "Base", "to": 0})).is_err());
+        }
+        assert!(offer(&app, r#"labels.style {"layer": "Missing", "class": ""#).is_none());
+        app.session.active_layer = None;
+        assert!(offer(&app, r#"labels.style {"class": ""#).is_none());
+    }
+
+    #[test]
+    fn project_values_have_their_own_help_and_icons() {
+        use super::{Of, item_help, item_icon};
+        let mut app = crate::RustGisApp::with_sample();
+        named_objects(&mut app);
+        let s = &app.session;
+        let city = s.map().layer_by_name("Cities").unwrap().id;
+        for (of, name, text, icon) in [
+            (Of::Maps, "Atlas", "4 layers", "map"),
+            (Of::Layouts, "Sheet", "297 × 210 mm", "new_layout"),
+            (Of::Tables, "Stats", "2 rows", "table"),
+            (Of::Classes(city), "Large", "pop_max > 1000000", "label"),
+            (Of::Classes(city), "Default", "All features", "label"),
+        ] {
+            assert_eq!(item_help(s, &of, name).unwrap().0, text);
+            assert_eq!(item_icon(s, Some(&of), name), Some(icon));
+        }
+    }
+
+    #[test]
+    fn project_values_are_accepted_as_json_strings_in_the_pane() {
+        for (id, key, prefix) in [
+            ("bookmark.add", "map", "Atlas"),
+            ("layout.page", "layout", "Sheet"),
+            ("table.remove", "table", "Stats"),
+            ("labels.style", "class", "Large"),
+        ] {
+            let mut h = pane();
+            named_objects(h.state_mut());
+            let name = format!("{prefix} \"北\"");
+            let s = &mut h.state_mut().session;
+            match key {
+                "map" => s.map_mut().name = name.clone(),
+                "layout" => s.project.layouts[0].name = name.clone(),
+                "table" => s.project.tables[0].name = name.clone(),
+                _ => {
+                    let id = s.active_layer.unwrap();
+                    s.map_mut().layer_mut(id).unwrap().labels.classes[0].name = name.clone();
+                }
+            }
+            type_in(&mut h, &format!("{id} {{\"{key}\": \"{prefix}"));
+            h.key_press(egui::Key::Enter);
+            h.run();
+            let (_, params) = h.state().workflow.script.split_once(' ').unwrap();
+            let params: serde_json::Value = serde_json::from_str(&format!("{params}}}")).unwrap();
+            assert_eq!(params[key], name);
+        }
     }
 
     /// In the pane: a quote after `"tool": ` in a `gp.run` line offers the tools with the

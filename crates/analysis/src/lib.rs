@@ -24,7 +24,7 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
-pub use tools::{TOOLS, holds_coordinates, simplify_geometry};
+pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
 use serde_json::Value;

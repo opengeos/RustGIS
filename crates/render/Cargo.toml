@@ -16,6 +16,7 @@ tiny-skia = { workspace = true }
 bytemuck = { workspace = true }
 lyon = { workspace = true }
 ab_glyph = { workspace = true }
+unicode-segmentation = { workspace = true }
 epaint_default_fonts = { workspace = true }
 log = { workspace = true }
 image = { workspace = true, features = ["jpeg"] }

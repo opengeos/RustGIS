@@ -1,7 +1,7 @@
 //! The Project backstage: start a project (blank or from the sample), open, save and export.
 
 use egui::{Align2, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::chrome::header_layout;
 use crate::theme::{BRAND, Tokens, regular, semibold};
@@ -118,6 +118,10 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         if card(ui, t, "Open…", "Open a .rgis project", "open") {
             let _ = app.run("ui.open", Value::Null);
+        }
+        if card(ui, t, "QGIS Project…", "A .qgs or .qgz project as a map", "open") {
+            let _ = app.run("ui.openItem", json!({"kind": "qgisProject"}));
+            app.ui.backstage = false;
         }
     });
     ui.add_space(28.0);

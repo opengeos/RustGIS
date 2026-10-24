@@ -1817,8 +1817,8 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                         ("Sepia", "sepia", fx.sepia, 0.0),
                     ] {
                         ui.horizontal(|ui| {
-                            ui.label(tl!(label));
-                            let r = ui.add(egui::Slider::new(&mut val, lo..=100.0));
+                            let input_label = ui.label(tl!(label));
+                            let r = ui.add(egui::Slider::new(&mut val, lo..=100.0)).labelled_by(input_label.id);
                             if r.drag_stopped() || (r.changed() && !r.dragged()) {
                                 let _ = app.run("map.effects", json!({key: val}));
                             }
@@ -3392,8 +3392,10 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                 tl!("Display Filters").to_string()
             };
             small_form_menu(ui, app, "filter", &label, "Show different features at different scales.", |ui, app| {
-                ui.label(egui::RichText::new(tl!("Below 1:5,000,000 show everything; beyond it only what matches:")).small().weak());
-                ui.add(egui::TextEdit::singleline(&mut app.forms.expression).hint_text("pop_max > 1000000").desired_width(220.0));
+                let input_label =
+                    ui.label(egui::RichText::new(tl!("Below 1:5,000,000 show everything; beyond it only what matches:")).small().weak());
+                ui.add(egui::TextEdit::singleline(&mut app.forms.expression).hint_text("pop_max > 1000000").desired_width(220.0))
+                    .labelled_by(input_label.id);
                 if ui.button(tl!("Set Filter")).clicked() {
                     let w = app.forms.expression.trim().to_string();
                     let _ =
@@ -3455,10 +3457,12 @@ fn effects_groups(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_engine::map
                     ui.add_space(8.0);
                     let mut k = xx.factor;
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
+                        let input_label = ui.label(egui::RichText::new(tl!("Factor")).size(11.5));
                         // Kept across a drag until it is let go (#607).
                         let drag = Dragged::lend(ui, egui::Id::unique(("extrusion_factor", layer.id)), &mut k);
-                        let r = ui.add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02));
+                        let r = ui
+                            .add(egui::DragValue::new(&mut k).range(0.0..=1e6).speed(xx.factor.max(0.0001) * 0.02))
+                            .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut k) && k != xx.factor {
                             let t = if xx.field.is_some() { "field" } else { "height" };
                             let _ = app.run("layer.extrusion", json!({"type": t, "field": xx.field, "factor": k}));
@@ -3669,22 +3673,27 @@ fn visibility_and_effects(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_eng
             ui.add_space(6.0);
             for (label, cur, key) in [("Out Beyond", layer.min_scale, "min"), ("In Beyond", layer.max_scale, "max")] {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
-                    egui::ComboBox::from_id_salt(format!("scale_{key}")).selected_text(scale_label(cur)).width(118.0).show_ui(ui, |ui| {
-                        let mut choices: Vec<Option<f64>> = vec![None];
-                        choices.extend(SCALES.iter().map(|s| Some(*s)));
-                        for c in choices {
-                            if ui.selectable_label(c == cur, scale_label(c)).clicked() {
-                                let (mut min, mut max) = (layer.min_scale, layer.max_scale);
-                                if key == "min" {
-                                    min = c;
-                                } else {
-                                    max = c;
+                    let input_label = ui.label(egui::RichText::new(tl!(label)).size(11.5));
+                    egui::ComboBox::from_id_salt(format!("scale_{key}"))
+                        .selected_text(scale_label(cur))
+                        .width(118.0)
+                        .show_ui(ui, |ui| {
+                            let mut choices: Vec<Option<f64>> = vec![None];
+                            choices.extend(SCALES.iter().map(|s| Some(*s)));
+                            for c in choices {
+                                if ui.selectable_label(c == cur, scale_label(c)).clicked() {
+                                    let (mut min, mut max) = (layer.min_scale, layer.max_scale);
+                                    if key == "min" {
+                                        min = c;
+                                    } else {
+                                        max = c;
+                                    }
+                                    let _ = app.run("layer.scaleRange", json!({"min": min, "max": max}));
                                 }
-                                let _ = app.run("layer.scaleRange", json!({"min": min, "max": max}));
                             }
-                        }
-                    });
+                        })
+                        .response
+                        .labelled_by(input_label.id);
                 });
             }
         });
@@ -3701,7 +3710,7 @@ fn visibility_and_effects(app: &mut RustGisApp, ui: &mut Ui, layer: &rustgis_eng
             });
             let mut v = layer.transparency;
             ui.spacing_mut().slider_width = 130.0;
-            let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).suffix(" %").integer());
+            let r = ui.add(egui::Slider::new(&mut v, 0.0..=100.0).suffix(" %").integer()).on_hover_text(tl!("Transparency"));
             live_drag(
                 app,
                 ui,
@@ -3888,7 +3897,7 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
             let mut x = app.session.map().swipe.map_or(0.5, |(_, x)| x);
             ui.vertical(|ui| {
                 ui.add_space(14.0);
-                if ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false)).changed() {
+                if ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false)).on_hover_text(tl!("Swipe")).changed() {
                     let _ = app.run("layer.swipe", json!({"position": x}));
                 }
             });
@@ -4022,10 +4031,10 @@ fn raster_style_groups(app: &mut RustGisApp, ui: &mut Ui) {
                     let t = Tokens::get(ui.ctx());
                     let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
                     icons::paint(ui.painter(), r, icon, t.icon, t.accent);
-                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
+                    let input_label = ui.label(egui::RichText::new(tl!(label)).size(11.5));
                     ui.add_space((70.0 - text_w(ui, tl!(label), regular(11.5))).max(0.0));
                     let mut v = value;
-                    let resp = ui.add(egui::DragValue::new(&mut v).range(range).speed(speed).max_decimals(2));
+                    let resp = ui.add(egui::DragValue::new(&mut v).range(range).speed(speed).max_decimals(2)).labelled_by(input_label.id);
                     live_drag(
                         app,
                         ui,
@@ -4177,10 +4186,11 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
                 [("Out Beyond", layer.labels.default.min_scale, "min"), ("In Beyond", layer.labels.default.max_scale, "max")]
             {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!(label)).size(11.5));
-                    egui::ComboBox::from_id_salt(format!("label_scale_{key}")).selected_text(scale_label(cur)).width(118.0).show_ui(
-                        ui,
-                        |ui| {
+                    let input_label = ui.label(egui::RichText::new(tl!(label)).size(11.5));
+                    egui::ComboBox::from_id_salt(format!("label_scale_{key}"))
+                        .selected_text(scale_label(cur))
+                        .width(118.0)
+                        .show_ui(ui, |ui| {
                             let mut choices: Vec<Option<f64>> = vec![None];
                             choices.extend(SCALES.iter().map(|s| Some(*s)));
                             for c in choices {
@@ -4188,8 +4198,9 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
                                     let _ = app.run("labels.scaleRange", json!({key: c}));
                                 }
                             }
-                        },
-                    );
+                        })
+                        .response
+                        .labelled_by(input_label.id);
                 });
             }
         });
@@ -4247,11 +4258,11 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
             // The whole range `labels.style` accepts (#457), so a larger label isn't cut back.
             let mut size = f64::from(layer.labels.default.size);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Size")).size(11.5));
+                let input_label = ui.label(egui::RichText::new(tl!("Size")).size(11.5));
                 let range = rustgis_engine::map::symbology::LABEL_SIZE;
                 // Another layer gets a distinct widget, so an in-flight drag cannot move to it.
                 ui.push_id(("label_size", layer.id), |ui| {
-                    if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).changed() {
+                    if ui.add(egui::DragValue::new(&mut size).range(range).speed(0.1).suffix(" pt")).labelled_by(input_label.id).changed() {
                         label_size_drag(app, ui, &layer, size);
                     }
                 });
@@ -4468,7 +4479,7 @@ mod tests {
         app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
         app.ws.recording = Some(Vec::new());
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1600.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 700.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -4566,18 +4577,14 @@ mod tests {
             let mut app = RustGisApp::with_sample();
             app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
             app.ui.tab = "Style".into();
-            let mut h = egui_kittest::Harness::builder()
-                .with_accessibility_check(false)
-                .with_size(vec2(1200.0, 800.0))
-                .with_max_steps(64)
-                .build_ui_state(
-                    |ui, app: &mut RustGisApp| {
-                        let ctx = ui.ctx().clone();
-                        app.logic(&ctx);
-                        app.ui(ui);
-                    },
-                    app,
-                );
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
             h.run();
             for _ in 0..2 {
                 h.get_by_label("Scroll the ribbon right").click();

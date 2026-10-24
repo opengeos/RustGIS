@@ -572,6 +572,9 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
             "classify" => {
                 let classes = f(p, "classes").map(|c| c.clamp(1.0, 32.0) as usize).unwrap_or(5);
                 let method = ps(p, "method").and_then(ClassMethod::from_name).unwrap_or_default();
+                if method == ClassMethod::Manual {
+                    return Err("manual breaks are for Graduated Colors; a raster's classes are worked out".into());
+                }
                 let ramp = ramp.or(cur_ramp.filter(|r| !r.is_qualitative())).unwrap_or(Ramp::Ember);
                 classify_masked(r, bi, classes, method, ramp, &rl.style.mask)
             }

@@ -560,7 +560,7 @@ impl Globe {
     pub fn drape_mesh(&self, merc: &Extent) -> DrapeMesh {
         use rustgis_geom::merc_to_lonlat;
         let mut out = DrapeMesh::default();
-        if merc.is_empty() || !(merc.width() > 0.0 && merc.height() > 0.0) || !merc.width().is_finite() || !merc.height().is_finite() {
+        if !(!merc.is_empty() && merc.width() > 0.0 && merc.height() > 0.0 && merc.width().is_finite() && merc.height().is_finite()) {
             return out;
         }
         let ll =
