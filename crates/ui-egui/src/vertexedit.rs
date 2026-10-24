@@ -136,14 +136,18 @@ pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
     true
 }
 
-/// The dragged vertex follows the pointer, snapping when snapping is on.
+/// A dragged line/polygon vertex follows the pointer, excluding itself and its incident edges.
+/// Point/multipoint moves keep whole-feature exclusion. An insertion also excludes its whole
+/// feature, so its source edge cannot become a target.
 pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
     let Some(c) = screen_to_lonlat(app, rect, p) else { return };
     let Some(d) = app.map.vertex_drag else { return };
     // Asked directly, not as a command: commands mark the map changed, redrawing it every frame.
-    // The feature being changed isn't a snap target: its old vertex and edges would hold the
-    // vertex in place.
-    let snap = rustgis_engine::cmd::design::snap_except(&mut app.session, c, Some((d.layer, d.row)));
+    let snap = if d.insert {
+        rustgis_engine::cmd::design::snap_except(&mut app.session, c, Some((d.layer, d.row)))
+    } else {
+        rustgis_engine::cmd::design::snap_vertex_except(&mut app.session, c, Some((d.layer, d.row, d.vertex)))
+    };
     if let Some(d) = &mut app.map.vertex_drag {
         d.at = snap.map_or(c, |(at, _)| at);
         d.snapped = snap.is_some();
