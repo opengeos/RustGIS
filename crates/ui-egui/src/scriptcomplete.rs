@@ -888,6 +888,15 @@ pub fn filter(ui: &Ui, box_id: Id) -> egui::EventFilter {
     }
 }
 
+/// Closes the list as Escape does: not shown again until what's typed changes.
+pub fn close(ui: &Ui, box_id: Id) {
+    let mut list = load(ui, box_id);
+    if let Some((offer, _)) = list.open.take() {
+        list.dismissed = Some(offer);
+        store(ui, box_id, list);
+    }
+}
+
 /// Before the box sees the keys: with the list open and the box focused, ↑/↓ move the highlight,
 /// Enter or Tab accept it (so Enter doesn't break the line, nor Tab indent), Escape closes the list
 /// (and the box keeps the focus). Returns the item to accept, if any. A list worked out for
@@ -1401,10 +1410,15 @@ mod tests {
     /// The pane with an empty script, its box focused.
     fn pane() -> egui_kittest::Harness<'static, crate::RustGisApp> {
         use egui_kittest::kittest::Queryable;
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
-            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
-            crate::RustGisApp::with_sample(),
-        );
+        // Without the interface fonts (`theme::install_fonts`) egui's faces have no "→".
+        let mut h = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .with_size(egui::vec2(500.0, 700.0))
+            .build_ui_state(
+                |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+                crate::RustGisApp::with_sample(),
+            );
         h.run();
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
         h.run();
@@ -1459,6 +1473,76 @@ mod tests {
         assert!(h.query_by_label("labels.style").is_none(), "not opened again");
         type_in(&mut h, "l");
         h.get_by_label("labels.style");
+    }
+
+    /// Ctrl+Enter (⌘+Enter) runs the script (#773): no line break, and the box keeps the focus.
+    /// The line above the results tells the run's number, so a run made again shows, how long it
+    /// took and when it started.
+    #[test]
+    fn ctrl_enter_runs_the_script() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        type_in(&mut h, "map.zoomFull");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        h.run();
+        let out = &h.state().workflow.script_out;
+        assert!(out.iter().any(|(line, err)| !err && line.starts_with("map.zoomFull")), "{out:?}");
+        assert_eq!(h.state().workflow.script, "map.zoomFull", "no line break");
+        assert!(h.ctx.memory(|m| m.has_focus(egui::Id::unique("script_text"))));
+        h.get_by_label_contains("Run #1 (");
+        h.get_by_label_contains(" UTC");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        h.run();
+        h.get_by_label_contains("Run #2 (");
+    }
+
+    /// A key held down runs the script once: its repeats are taken (no line break), not run.
+    /// Presses with no release between them, as a held key sends: egui marks all but the first
+    /// as repeats itself, whatever the event says.
+    #[test]
+    fn a_held_ctrl_enter_runs_once() {
+        let mut h = pane();
+        type_in(&mut h, "map.zoomFull");
+        for _ in 0..3 {
+            h.event(egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+                physical_key: None,
+            });
+            h.run();
+        }
+        assert_eq!(h.state().workflow.script_last.as_ref().map(|r| r.n), Some(1), "the repeats don't run it");
+        assert_eq!(h.state().workflow.script, "map.zoomFull", "nor break the line");
+    }
+
+    /// With the list open, Ctrl+Enter runs the script and closes the list, as Escape does: it
+    /// accepts nothing, and the list isn't opened again for that word.
+    #[test]
+    fn ctrl_enter_closes_the_list() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = pane();
+        type_in(&mut h, "labels.sty");
+        h.get_by_label("labels.style");
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        h.run();
+        assert!(h.state().workflow.script_last.is_some(), "it ran");
+        assert_eq!(h.state().workflow.script, "labels.sty", "nothing accepted");
+        h.run();
+        assert!(h.query_by_label("labels.style").is_none(), "closed");
+    }
+
+    /// Ctrl+Enter once the box has lost the focus runs nothing.
+    #[test]
+    fn ctrl_enter_elsewhere_runs_nothing() {
+        let mut h = pane();
+        type_in(&mut h, "map.zoomFull");
+        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("script_text")));
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+        h.run();
+        assert!(h.state().workflow.script_last.is_none());
     }
 
     /// A click accepts an item, and the box keeps the focus. Pressed and let go in frames of their
