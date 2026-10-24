@@ -3917,9 +3917,17 @@ fn draft_for(draft: Option<DashDraft>, owner: &(u32, Option<ClassRef>)) -> Optio
     draft.filter(|(layer, class, _)| *layer == owner.0 && *class == owner.1).map(|(.., text)| text)
 }
 
-/// A dash pattern as the stroke editor shows it: `4 2`.
+/// A dash pattern as the stroke editor shows it: `4 2`. Each length is written as it is kept, so
+/// the text reads back as the same pattern.
 fn dash_text(d: &Dash) -> String {
-    d.steps().iter().map(|v| format!("{}", (v * 100.0).round() / 100.0)).collect::<Vec<_>>().join(" ")
+    d.steps().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// The pattern the dash box sets when it loses focus: `None` unless the text was typed (focusing
+/// and leaving the box is no change), Escape wasn't what ended it, and it is a pattern other than
+/// `current`.
+fn dash_commit(typed: bool, escaped: bool, text: &str, current: Option<Dash>) -> Option<Option<Dash>> {
+    parse_dash(text).filter(|d| typed && !escaped && *d != current)
 }
 
 /// A dash pattern typed in the stroke editor: `Some(None)` for none (solid), `None` when it isn't
@@ -4209,8 +4217,9 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     let id = ui.id().with(("stroke_dash", i));
                     let owner = (l.id, class.cloned());
                     let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
-                    let draft = ui.data_mut(|m| m.get_temp::<DashDraft>(id));
-                    let mut text = draft_for(draft, &owner).unwrap_or(shown);
+                    let draft = draft_for(ui.data_mut(|m| m.get_temp::<DashDraft>(id)), &owner);
+                    let typed = draft.is_some();
+                    let mut text = draft.unwrap_or(shown);
                     let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
                     let r =
                         ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
@@ -4223,7 +4232,9 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     }
                     if r.lost_focus() {
                         ui.data_mut(|m| m.remove::<DashDraft>(id));
-                        if let Some(dash) = parse_dash(&text).filter(|d| *d != st.dash) {
+                        // As the class label box does, Escape drops what was typed.
+                        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if let Some(dash) = dash_commit(typed || r.changed(), escaped, &text, st.dash) {
                             set(app, LineStroke { dash, ..st });
                         }
                     }
@@ -5048,6 +5059,23 @@ mod tests {
         assert_eq!(draft_for(draft(), &(3, Some(ClassRef::Index(2)))), None);
         assert_eq!(draft_for(draft(), &(3, None)), None);
         assert_eq!(draft_for(None, &(3, None)), None);
+    }
+
+    /// The dash box shows a pattern as kept, and sets one only when it was typed and not escaped:
+    /// focusing and leaving it never rounds the stroke's pattern.
+    #[test]
+    fn the_dash_box_sets_only_a_typed_pattern() {
+        let kept = Dash::new(&[5.332, 2.666]);
+        let text = dash_text(&kept.unwrap());
+        assert_eq!(text, "5.332 2.666");
+        assert_eq!(parse_dash(&text), Some(kept), "the shown text reads back as the same pattern");
+        assert_eq!(dash_commit(false, false, &text, kept), None, "focused and left");
+        assert_eq!(dash_commit(false, false, "4 2", kept), None, "not typed");
+        assert_eq!(dash_commit(true, true, "4 2", kept), None, "Escape drops it");
+        assert_eq!(dash_commit(true, false, "4 2", kept), Some(Dash::new(&[4.0, 2.0])));
+        assert_eq!(dash_commit(true, false, "", kept), Some(None), "emptied: solid");
+        assert_eq!(dash_commit(true, false, "4 x", kept), None, "not a pattern");
+        assert_eq!(dash_commit(true, false, "5.332 2.666", kept), None, "typed back as it was");
     }
 
     /// The Strokes for picker lists a value listed twice once, for its first class (the one its
