@@ -36,7 +36,8 @@ impl Arrived {
         if arrived.0 == tag { arrived.1.take() } else { None }
     }
 
-    /// Keeps `image` if it is the screenshot numbered `tag` waited for.
+    /// Keeps `image` if it is the screenshot numbered `tag` waited for. One dropped (a late one, or
+    /// a poisoned lock) is safe: the snapshot waits out its grace and draws the map offscreen.
     fn arrive(&self, tag: u64, image: Arc<ColorImage>) {
         if let Ok(mut arrived) = self.0.lock()
             && arrived.0 == tag

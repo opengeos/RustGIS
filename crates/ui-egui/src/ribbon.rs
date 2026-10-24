@@ -167,7 +167,8 @@ fn scroll_buttons<R>(ui: &mut Ui, t: &Tokens, scroll: &egui::scroll_area::Scroll
 /// at its edges.
 fn arrow_scroll_area<R>(ui: &mut Ui, t: &Tokens, name: &str, area: egui::ScrollArea, tips: [&str; 2], add: impl FnOnce(&mut Ui) -> R) {
     // egui sets a scroll area's offset only as it is built, so a click moves it on the next frame.
-    // The offset is kept until the area is there, as a frame egui discards doesn't move it.
+    // It is asked for once, on a frame egui keeps: a discarded one doesn't move the area, and asking
+    // on every frame would pin the area there against the wheel.
     let key = ui.make_persistent_id(("arrow_scroll_offset", name));
     let mut area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
     let pending = ui.data(|d| d.get_temp::<f32>(key));
@@ -175,7 +176,7 @@ fn arrow_scroll_area<R>(ui: &mut Ui, t: &Tokens, name: &str, area: egui::ScrollA
         area = area.horizontal_scroll_offset(x);
     }
     let scroll = area.show(ui, add);
-    if pending.is_some_and(|x| (scroll.state.clamped_offset().x - x).abs() < 0.5) {
+    if pending.is_some() && !ui.ctx().will_discard() {
         ui.data_mut(|d| d.remove_temp::<f32>(key));
     }
     if let Some(x) = scroll_buttons(ui, t, &scroll, tips) {
