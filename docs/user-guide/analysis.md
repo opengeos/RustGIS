@@ -298,6 +298,10 @@ help; there the help by the cursor is the tool's. A `task.addStep` line works th
 command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
 icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
 (before or after it), or of the active layer when it names none, with each field's type beside it.
+So do the other keys a command describes as taking a field or fields, also inside their arrays
+(without the fields the array already lists):
+`"fields": ["` in `data.explore` (only the numeric ones, as it says), `"sort": "` in `report.new`,
+`"address": ["` in `layer.geocode` (the fields of its `"table"` when it names one).
 `"map": "`, `"layout": "` and `"table": "` offer the project's maps, layouts and standalone tables,
 with their layer counts, page sizes and row counts. `"class": "` offers the line's layer's label
 classes (or the active layer's), with each class's SQL clause, or **All features**. Default is

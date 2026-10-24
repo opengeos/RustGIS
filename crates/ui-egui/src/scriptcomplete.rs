@@ -5,7 +5,8 @@
 //! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
 //! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
 //! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
-//! `"layer"`, the line's layer's fields for a `"field"`, maps, layouts, tables and label classes,
+//! `"layer"`, the line's layer's fields for a `"field"` and the keys described as taking fields
+//! (in their arrays too, #846), maps, layouts, tables and label classes,
 //! and in a `gp.run` line's `"params"` what the tool's parameter takes by its kind (`tool_value`),
 //! as the tool's form offers it. Typing aids beside it: a command's parameters added on accept
 //! (`template`), and braces, brackets and quotes that close themselves (`brace`).
@@ -40,8 +41,9 @@ pub struct Offer {
 /// the tools for a `gp.run` line's `"tool"`, the commands for a `task.addStep` line's
 /// `"command"`; or what the project holds for a value: the map's layers for a `"layer"` (and the
 /// tables, for a tool's parameter that takes any layer), the fields of a layer (by its id) for a
-/// `"field"`, maps, layouts, tables or a layer's label classes; the fields of a tool's input (by
-/// the name its line gives) for a tool's field parameter, a tool's parameter's choices.
+/// `"field"`, of a standalone table (by its id) for one a `layer.geocode` line names, maps,
+/// layouts, tables or a layer's label classes; the fields of a tool's input (by the name its line
+/// gives) for a tool's field parameter, a tool's parameter's choices.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Of {
     CommandKeys(String),
@@ -51,6 +53,7 @@ pub enum Of {
     CommandIds,
     Layers,
     Fields(u32),
+    TableFields(u32),
     Maps,
     Layouts,
     Tables,
@@ -68,6 +71,7 @@ impl Of {
                 | Of::CommandIds
                 | Of::Layers
                 | Of::Fields(_)
+                | Of::TableFields(_)
                 | Of::Maps
                 | Of::Layouts
                 | Of::Tables
@@ -194,12 +198,13 @@ fn starts_with_ci(text: &str, word: &str) -> bool {
 /// Where a line's object leaves off at its end (`text`, from its `{`): where a quoted key being
 /// typed starts (after its quote, a char index of `text`; None when the end isn't in one), the
 /// second-level object the end is in (`nested`), where a top-level quoted value being typed
-/// starts, with its key, and the top-level quoted values read whole, each with its key, in order.
+/// starts, with its key and whether it's right in that key's array (`"fields": ["a", "|`), and
+/// the top-level quoted values read whole, each with its key and whether in its array, in order.
 struct Scan {
     start: Option<usize>,
     nested: Option<Nested>,
-    value: Option<(usize, String)>,
-    values: Vec<(String, String)>,
+    value: Option<(usize, String, bool)>,
+    values: Vec<(String, String, bool)>,
 }
 
 /// A second-level object: the value of a top-level key (`"add": {…}`), or one of the objects in
@@ -229,8 +234,8 @@ fn scan(text: &str) -> Scan {
         if was_quoted {
             // Its closing quote.
             if !q.quoted() {
-                if let Some((v, key)) = value.take() {
-                    values.push((key, chars.get(v..i).unwrap_or_default().iter().collect()));
+                if let Some((v, key, listed)) = value.take() {
+                    values.push((key, chars.get(v..i).unwrap_or_default().iter().collect(), listed));
                 }
                 start = None;
                 named = from.take().and_then(|f| chars.get(f..i)).map(|k| k.iter().collect());
@@ -243,7 +248,12 @@ fn scan(text: &str) -> Scan {
             '"' => {
                 start = (top && entry).then_some(i + 1);
                 from = (depth == 1 && entry).then_some(i + 1);
-                value = valued.take().filter(|_| depth == 1).map(|k| (i + 1, k));
+                // A top-level key's value, or one right in its array.
+                value = match (valued.take(), &array) {
+                    (Some(key), _) if depth == 1 => Some((i + 1, key, false)),
+                    (_, Some(key)) if depth == 2 => Some((i + 1, key.clone(), true)),
+                    _ => None,
+                };
                 entry = false;
             }
             '{' | '[' | '(' => {
@@ -332,22 +342,23 @@ pub fn key_at(script: &str, at: usize) -> Option<KeyAt> {
 }
 
 /// A top-level value being typed (`value_at`): the command's line, where the word starts (after
-/// its quote, a char index of the script), the word, and its key.
+/// its quote, a char index of the script), the word, its key, and whether it's in that key's array.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueAt {
     pub hint: Hint,
     pub start: usize,
     pub word: String,
     pub key: String,
+    pub listed: bool,
 }
 
 /// The top-level value being typed at char `at` of `script`: the cursor in a quoted word right
-/// after a key and its colon.
+/// after a key and its colon, or right in that key's array.
 pub fn value_at(script: &str, at: usize) -> Option<ValueAt> {
     let (hint, Scan { value, .. }, text) = scan_at(script, at)?;
-    let (start, key) = value?;
+    let (start, key, listed) = value?;
     let word = word_from(text, start)?;
-    Some(ValueAt { start: hint.brace + start, word, key, hint })
+    Some(ValueAt { start: hint.brace + start, word, key, listed, hint })
 }
 
 /// The top-level key of the second-level object of line `h`'s object that the cursor at char
@@ -361,7 +372,7 @@ fn nested_at(script: &str, at: usize, h: &Hint) -> Option<String> {
 /// `"params"`; the last one given, as Run reads it. None without one, or when it isn't a plain
 /// string.
 pub fn value_of(line: &str, key: &str) -> Option<String> {
-    scan(line).values.into_iter().rev().find(|(k, _)| k == key).map(|(_, v)| v).filter(|v| !v.contains('\\'))
+    scan(line).values.into_iter().rev().find(|(k, _, listed)| k == key && !listed).map(|(_, v, _)| v).filter(|v| !v.contains('\\'))
 }
 
 /// Line `h`'s object, from its `{` to the line's end.
@@ -453,7 +464,13 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
     if let Some((start, word)) = word_at(script, at) {
         return complete(start, at, &word, ids);
     }
-    if let Some(ValueAt { hint, start, word, key }) = value_at(script, at) {
+    if let Some(ValueAt { hint, start, word, key, listed }) = value_at(script, at) {
+        // In an array only a key's whose type is a list of fields (#846): another's, a layer's
+        // or a tool's, is turned down by Run.
+        let field = field_type(session, &hint.id, &key);
+        if listed && !field.is_some_and(|(_, list)| list) {
+            return None;
+        }
         if let Some((_, what)) = named(&hint.id).filter(|(names, _)| key == *names) {
             return match what {
                 Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
@@ -477,10 +494,6 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                 let map = session.map();
                 let names = map.layers.iter().filter(|l| map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id)).map(|l| l.name.as_str());
                 value_ids(start, at, &word, names, Of::Layers)
-            }
-            "field" => {
-                let l = line_layer(session, line_of(script, &hint)?)?;
-                value_ids(start, at, &word, l.dataset.fields.iter().map(|f| f.name.as_str()), Of::Fields(l.id))
             }
             "map" => {
                 let mut seen = std::collections::HashSet::new();
@@ -509,6 +522,35 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                     .map(|c| c.name.as_str())
                     .filter(|n| seen.insert(n.to_ascii_lowercase()));
                 value_ids(start, at, &word, names, Of::Classes(l.id))
+            }
+            // A `"field"`, and the keys whose type is a field or fields (#846) in a command that
+            // takes a `"layer"`: another's are those of the layers it names otherwise
+            // (`data.relate`'s `"origin"`), or of a report's.
+            key if key == "field" || (field.is_some() && takes(session, &hint.id, "layer")) => {
+                let numeric = field.is_some_and(|(numeric, _)| numeric);
+                let line = line_of(script, &hint)?;
+                // A table's, where the line gives the `"table"` the command reads them from
+                // (`layer.geocode`; by its name, as `line_layer` reads a layer), else the line's
+                // layer's.
+                let table =
+                    takes(session, &hint.id, "table") && rustgis_engine::param_keys(line).is_some_and(|keys| keys.contains(&"table"));
+                let (d, of) = if table {
+                    let t = crate::panes::input_table(session, &value_of(line, "table")?)?;
+                    (&t.dataset, Of::TableFields(t.id))
+                } else {
+                    let l = line_layer(session, line)?;
+                    (&l.dataset, Of::Fields(l.id))
+                };
+                // Not those its array already gives, before or after it: twice is the same work
+                // twice. The line's object without the word being typed, as `complete_keys` reads it.
+                let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+                let given = scan(&format!("{}{after}", script.get(byte_at(script, hint.brace)?..byte_at(script, start)?)?)).values;
+                let names = d
+                    .fields
+                    .iter()
+                    .filter(|f| (!numeric || f.ty.is_numeric()) && !given.iter().any(|(k, v, _)| k == key && *v == f.name))
+                    .map(|f| f.name.as_str());
+                value_ids(start, at, &word, names, of)
             }
             _ => None,
         };
@@ -555,7 +597,8 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
     let tool = rustgis_engine::analysis::tool(&name)?;
     // The `"params"` object, read as a line's object from its `{`.
     let text = script.get(byte_at(script, brace)?..byte_at(script, at)?)?;
-    let (start, key) = scan(text).value?;
+    // A tool's parameter takes no array.
+    let (start, key, false) = scan(text).value? else { return None };
     let word = word_from(text, start)?;
     let start = brace + start;
     let p = tool.params.iter().find(|p| p.name == key)?;
@@ -668,6 +711,7 @@ fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(
             Some((text, None))
         }
         Of::Fields(id) => field(&session.map().layer(*id)?.dataset),
+        Of::TableFields(id) => field(&session.project.tables.iter().find(|t| t.id == *id)?.dataset),
         Of::ToolFields(input) => field(crate::panes::input_dataset(session, input)?),
         Of::Maps => {
             let m = session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(item))?;
@@ -706,7 +750,7 @@ fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> 
                 _ => "polygon_layer",
             })
         }
-        Of::Fields(_) | Of::ToolFields(_) => Some("field"),
+        Of::Fields(_) | Of::TableFields(_) | Of::ToolFields(_) => Some("field"),
         Of::Maps => Some("map"),
         Of::Layouts => Some("new_layout"),
         Of::Tables => Some("table"),
@@ -857,6 +901,18 @@ fn params_of(session: &rustgis_engine::Session, id: &str) -> Option<String> {
 /// Whether command `id`'s parameter description names top-level key `key`.
 fn takes(session: &rustgis_engine::Session, id: &str, key: &str) -> bool {
     params_of(session, id).is_some_and(|desc| rustgis_engine::param_keys(&desc).is_some_and(|keys| keys.contains(&key)))
+}
+
+/// Whether key `key` of command `id` takes fields, as its description's type says: `field`,
+/// `[fields]`, `[field, …]`, `field | [fields]`…; with whether only numeric ones
+/// (`[numeric fields]`) and whether in a list (a `[`). None for any other type
+/// (`[related fields]`, `[names]`).
+fn field_type(session: &rustgis_engine::Session, id: &str, key: &str) -> Option<(bool, bool)> {
+    let (_, text) = entries(&params_of(session, id)?).into_iter().find(|(keys, _)| keys.iter().any(|k| k == key))?;
+    let ty = text.split_once(':')?.1.trim_start();
+    let first = ty.trim_start_matches('[');
+    let numeric = first.starts_with("numeric field");
+    (numeric || first.starts_with("field")).then_some((numeric, ty.contains('[')))
 }
 
 /// What accepting a command whose parameters `desc` describes puts after its id, and where the
@@ -2495,6 +2551,53 @@ mod tests {
         let cities = app.session.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case("cities")).count();
         assert_eq!(cities, 2);
         assert_eq!(offer(&app, r#"labels.style {"layer": "ci"#).unwrap().items.len(), 1, "once, case aside");
+    }
+
+    /// A key whose description gives a field as its type offers the line's layer's fields, in a
+    /// string or right in its array (#846); the numeric ones where it says so; a `layer.geocode`
+    /// line's table's where it names one. Not for a command that takes no `"layer"` (its fields
+    /// are another layer's), nor for a type that isn't a field.
+    #[test]
+    fn keys_that_take_fields_offer_them_in_arrays_too() {
+        use rustgis_engine::data::{Dataset, Field, FieldType, GeometryType};
+        let mut app = crate::RustGisApp::with_sample();
+        let offer = |app: &crate::RustGisApp, s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let cities = app.session.map().layer_by_name("Cities").unwrap();
+        let id = cities.id;
+        let fields: Vec<String> = cities.dataset.fields.iter().map(|f| f.name.clone()).collect();
+        let numeric: Vec<String> = cities.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+        assert!(!numeric.is_empty() && numeric.len() < fields.len());
+        let o = offer(&app, r#"data.explore {"layer": "Cities", "fields": [""#).unwrap();
+        assert_eq!((o.items, o.of), (numeric.clone(), Some(super::Of::Fields(id))), "[numeric fields]");
+        let s = format!(r#"data.explore {{"layer": "Cities", "fields": ["{}", ""#, numeric[0]);
+        assert_eq!(offer(&app, &s).unwrap().items, numeric[1..], "not one given before");
+        let s = r#"data.explore {"layer": "Cities", "fields": [""#;
+        let line = format!(r#"{s}", "{}"]}}"#, numeric[1]);
+        let o = super::offer_at(&line, s.chars().count(), &[], &app.session).unwrap();
+        assert!(!o.items.contains(&numeric[1]) && o.items.contains(&numeric[0]), "nor one given after");
+        let s = format!(r#"data.explore {{"layer": "Cities", "fields": ["{}"#, numeric[0]);
+        assert_eq!(offer(&app, &s).unwrap().items[0], numeric[0], "the one being typed stays");
+        assert_eq!(offer(&app, r#"share.locator {"layer": "Cities", "fields": [""#).unwrap().items, fields, "[fields searched]");
+        assert_eq!(offer(&app, r#"data.convert {"layer": "Cities", "nameField": ""#).unwrap().items, fields, "field");
+        assert_eq!(offer(&app, r#"layer.geocode {"layer": "Cities", "address": [""#).unwrap().items, fields, "field | [fields]");
+        assert!(offer(&app, r#"data.relate {"origin": "Countries", "originKey": ""#).is_none(), "no layer: another's fields");
+        assert!(offer(&app, r#"report.subreport {"fields": [""#).is_none(), "[related fields]");
+        assert!(offer(&app, r#"data.contingentValues {"layer": "Cities", "combos": [[""#).is_none(), "deeper in an array");
+        // In an array only a list of fields: Run turns down an array for another key.
+        assert!(offer(&app, r#"labels.field {"layer": "Cities", "field": [""#).is_none(), "one field, not a list");
+        assert!(offer(&app, r#"labels.style {"layer": [""#).is_none(), "a layer");
+        assert!(offer(&app, r#"gp.run {"tool": [""#).is_none(), "a tool");
+        assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": [""#).is_none(), "a tool's parameter");
+        assert!(offer(&app, r#"labels.field {"layer": ["Cities"], "field": ""#).is_none(), "nor is a layer given in one the line's");
+        let table =
+            app.session.project.add_table(Dataset::new("Addresses", GeometryType::None, vec![Field::new("street", FieldType::Text)]));
+        let o = offer(&app, r#"layer.geocode {"table": "addresses", "address": ""#).unwrap();
+        assert_eq!((o.items, o.of), (vec!["street".to_string()], Some(super::Of::TableFields(table))), "a table's");
+        let s = super::item_help(&app.session, &super::Of::TableFields(table), "street").map(|h| h.0);
+        assert_eq!(s.as_deref(), Some(FieldType::Text.label()));
+        assert_eq!(super::item_icon(&app.session, Some(&super::Of::TableFields(table)), "street"), Some("field"));
+        assert!(offer(&app, r#"layer.geocode {"table": "Nowhere", "address": ""#).is_none(), "a table that isn't there");
+        assert!(offer(&app, r#"layer.geocode {"table": 7, "address": ""#).is_none(), "a table given as a number: not the layer's");
     }
 
     /// Beside a layer, what it holds and its kind's icon, as the Layers pane shows it; beside a
