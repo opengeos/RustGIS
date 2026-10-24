@@ -209,8 +209,9 @@ Open questions rather than plans; discuss before building.
   scenes, locators), offline areas with sync, deep learning pixel classification, hosted
   imagery tiles.
 - The AI Assistant (Anthropic, OpenAI, ChatGPT sign-in, Gemini, OpenRouter, Ollama,
-  OpenAI-compatible) in the app, the web app and `rustgis-cli ask`; an MCP server (`rustgis-cli mcp`)
-  for AI agents such as Claude Code, Cursor and VS Code, with the documentation built in.
+  OpenAI-compatible) in the app, the web app and `rustgis-cli ask`; an MCP server
+  (`rustgis-cli mcp`) for AI agents such as Claude Code, Cursor and VS Code, with the
+  documentation built in.
 - The AI Assistant's skills, subagents and ACP clients; MCP over HTTP, an audited loopback
   relay and a file bridge, which let external AI clients drive the app. Database passwords, S3
   keys and AI provider keys optionally remembered in the desktop OS keychain.

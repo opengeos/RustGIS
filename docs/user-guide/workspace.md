@@ -181,7 +181,7 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Plugins**: **Plugins › Plugin Manager** installs, updates and removes [plugins](../plugins.md)
   from the registry at [plugins.rustgis.app](https://plugins.rustgis.app) or from a file.
 - **Language**: **Settings › Language** switches the interface among
-  [17 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
+  [18 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
   borders.
 - **Start-up**: **Settings › Start-up** sets what RustGIS opens with: **Start With** the World Atlas
   sample or a blank map, or, in the desktop app, **Last Project** (the `.rgis` project last opened
