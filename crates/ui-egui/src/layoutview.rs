@@ -556,7 +556,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // A stable id: dragging an element selects it and opens the Format pane beside the page,
     // and an automatic id would change with it, losing the drag before it is dropped (#325).
     ui.advance_cursor_after_rect(area);
-    let resp = ui.interact(area, ui.id().with("layout_page"), Sense::click_and_drag());
+    let resp = ui.interact(area, ui.scope_id().with("layout_page"), Sense::click_and_drag());
     let painter = ui.painter_at(area);
     painter.rect_filled(area, 0.0, if t.dark { Color32::from_gray(38) } else { Color32::from_rgb(0xD9, 0xDD, 0xE3) });
     let (page, s) = page_rect(&app.layout, area, &layout);
@@ -1152,14 +1152,21 @@ pub(crate) fn save_drafts(app: &mut RustGisApp) {
 
 /// A text field whose typing is kept in the view's state while it has focus. Returns the new text
 /// when the field loses focus with a change.
-fn text_field(app: &mut RustGisApp, ui: &mut Ui, key: (usize, u32, &'static str), current: &str, multiline: bool) -> Option<String> {
+fn text_field(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    key: (usize, u32, &'static str),
+    current: &str,
+    multiline: bool,
+    label_id: egui::Id,
+) -> Option<String> {
     let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| current.to_string());
     let edit = if multiline {
         egui::TextEdit::multiline(&mut buf).desired_rows(3).desired_width(240.0)
     } else {
         egui::TextEdit::singleline(&mut buf)
     };
-    let r = ui.add(edit);
+    let r = ui.add(edit).labelled_by(label_id);
     if r.lost_focus() {
         return (buf != current).then_some(buf);
     }
@@ -1177,30 +1184,36 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
     }
     let Some(g) = grid else { return };
     // Each number kept across a drag until it is let go (#607).
-    let key = |field: &str| egui::Id::new(("grid_drag", id, field));
+    let key = |field: &str| egui::Id::unique(("grid_drag", id, field));
     egui::Grid::new(("grid_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Interval"));
+        let input_label = ui.label(tl!("Interval"));
         let mut step = g.step;
         let drag = Dragged::lend(ui, key("step"), &mut step);
-        let r = ui.add(
-            egui::DragValue::new(&mut step)
-                .range(0.0..=90.0)
-                .speed(0.05)
-                .max_decimals(4)
-                .custom_formatter(|v, _| if v <= 0.0 { tl!("Auto").to_string() } else { format!("{v}°") }),
-        );
+        let r = ui
+            .add(
+                egui::DragValue::new(&mut step)
+                    .range(0.0..=90.0)
+                    .speed(0.05)
+                    .max_decimals(4)
+                    .custom_formatter(|v, _| if v <= 0.0 { tl!("Auto").to_string() } else { format!("{v}°") }),
+            )
+            .labelled_by(input_label.id);
         if drag.settled(ui, &r, &mut step) && (step - g.step).abs() > 1e-9 {
             set(app, json!({"step": step}));
         }
         ui.end_row();
-        ui.label(tl!("Style"));
-        egui::ComboBox::from_id_salt(("grid_style", id)).selected_text(tl!(g.style.label())).show_ui(ui, |ui| {
-            for v in GridStyle::ALL {
-                if ui.selectable_label(g.style == v, tl!(v.label())).clicked() && g.style != v {
-                    set(app, json!({"style": v.code()}));
+        let input_label = ui.label(tl!("Style"));
+        egui::ComboBox::from_id_salt(("grid_style", id))
+            .selected_text(tl!(g.style.label()))
+            .show_ui(ui, |ui| {
+                for v in GridStyle::ALL {
+                    if ui.selectable_label(g.style == v, tl!(v.label())).clicked() && g.style != v {
+                        set(app, json!({"style": v.code()}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         ui.label(tl!("Color"));
         let mut c = crate::theme::c32(g.color);
@@ -1208,27 +1221,31 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
             set(app, json!({"color": crate::theme::rgba(c).hex()}));
         }
         ui.end_row();
-        ui.label(tl!("Line width"));
+        let input_label = ui.label(tl!("Line width"));
         let mut w = g.width;
         let drag = Dragged::lend(ui, key("width"), &mut w);
-        let r = ui.add(egui::DragValue::new(&mut w).range(0.0..=MAX_GRID_WIDTH).speed(0.05).max_decimals(2).suffix(" pt"));
+        let r = ui
+            .add(egui::DragValue::new(&mut w).range(0.0..=MAX_GRID_WIDTH).speed(0.05).max_decimals(2).suffix(" pt"))
+            .labelled_by(input_label.id);
         if drag.settled(ui, &r, &mut w) && (w - g.width).abs() > 1e-9 {
             set(app, json!({"width": w}));
         }
         ui.end_row();
         if g.style.ticks() {
-            ui.label(tl!("Tick length"));
+            let input_label = ui.label(tl!("Tick length"));
             let mut t = g.tick_length;
             let drag = Dragged::lend(ui, key("tickLength"), &mut t);
-            let r = ui.add(egui::DragValue::new(&mut t).range(0.0..=MAX_TICK_MM).speed(0.1).max_decimals(1).suffix(" mm"));
+            let r = ui
+                .add(egui::DragValue::new(&mut t).range(0.0..=MAX_TICK_MM).speed(0.1).max_decimals(1).suffix(" mm"))
+                .labelled_by(input_label.id);
             if drag.settled(ui, &r, &mut t) && (t - g.tick_length).abs() > 1e-9 {
                 set(app, json!({"tickLength": t}));
             }
             ui.end_row();
         }
-        ui.label(tl!("Labels"));
+        let input_label = ui.label(tl!("Labels"));
         let mut labels = g.labels;
-        if ui.checkbox(&mut labels, "").changed() {
+        if ui.checkbox(&mut labels, "").labelled_by(input_label.id).changed() {
             set(app, json!({"labels": labels}));
         }
         ui.end_row();
@@ -1244,9 +1261,10 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
             }
         });
         ui.end_row();
-        ui.label(tl!("N/S/E/W"));
+        let input_label = ui.label(tl!("N/S/E/W"));
         let mut hemi = g.hemisphere;
-        if ui.checkbox(&mut hemi, "").on_hover_text(tl!("Off, west and south are negative: -112.5°.")).changed() {
+        if ui.checkbox(&mut hemi, "").labelled_by(input_label.id).on_hover_text(tl!("Off, west and south are negative: -112.5°.")).changed()
+        {
             set(app, json!({"hemisphere": hemi}));
         }
         ui.end_row();
@@ -1320,7 +1338,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
     // Each number kept across a drag until it is let go (#607): one key per layout, element and field.
-    let drag_key = |field: &str| egui::Id::new(("layout_drag", li, id, field));
+    let drag_key = |field: &str| egui::Id::unique(("layout_drag", li, id, field));
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;
         p["layout"] = json!(li);
@@ -1331,24 +1349,24 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         egui::Grid::new(("layout_props", id)).num_columns(2).min_col_width(crate::textform::LABEL_W).spacing(vec2(8.0, 6.0)).show(
             ui,
             |ui| {
-                ui.label(tl!("Name"));
-                if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false) {
+                let input_label = ui.label(tl!("Name"));
+                if let Some(name) = text_field(app, ui, (li, id, "name"), &e.name, false, input_label.id) {
                     update(app, json!({"name": name}));
                 }
                 ui.end_row();
                 for (label, key, v) in [("X (mm)", "x", e.x), ("Y (mm)", "y", e.y), ("Width (mm)", "w", e.w), ("Height (mm)", "h", e.h)] {
-                    ui.label(tl!(label));
+                    let input_label = ui.label(tl!(label));
                     let mut val = v;
                     let drag = Dragged::lend(ui, drag_key(key), &mut val);
-                    let r = ui.add(egui::DragValue::new(&mut val).speed(0.5).max_decimals(1));
+                    let r = ui.add(egui::DragValue::new(&mut val).speed(0.5).max_decimals(1)).labelled_by(input_label.id);
                     if drag.settled(ui, &r, &mut val) && (val - v).abs() > 1e-6 {
                         update(app, json!({key: val}));
                     }
                     ui.end_row();
                 }
-                ui.label(tl!("Visible"));
+                let input_label = ui.label(tl!("Visible"));
                 let mut vis = e.visible;
-                if ui.checkbox(&mut vis, "").changed() {
+                if ui.checkbox(&mut vis, "").labelled_by(input_label.id).changed() {
                     update(app, json!({"visible": vis}));
                 }
                 ui.end_row();
@@ -1356,33 +1374,33 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                     // Its text, size, colour and boldness: the shared form, below the grid.
                     ElementKind::Text { .. } => {}
                     ElementKind::Legend { title, all_classes, hide_other, .. } => {
-                        ui.label(tl!("Title"));
-                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
+                        let input_label = ui.label(tl!("Title"));
+                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false, input_label.id) {
                             update(app, json!({"title": tt}));
                         }
                         ui.end_row();
                         // Off, the legend lists only what the frame draws (#207).
-                        ui.label(tl!("All classes"));
+                        let input_label = ui.label(tl!("All classes"));
                         let mut all = *all_classes;
-                        if ui.checkbox(&mut all, "").changed() {
+                        if ui.checkbox(&mut all, "").labelled_by(input_label.id).changed() {
                             update(app, json!({"allClasses": all}));
                         }
                         ui.end_row();
-                        ui.label(tl!("Hide other values"));
+                        let input_label = ui.label(tl!("Hide other values"));
                         let mut hide = *hide_other;
-                        if ui.checkbox(&mut hide, "").changed() {
+                        if ui.checkbox(&mut hide, "").labelled_by(input_label.id).changed() {
                             update(app, json!({"hideOther": hide}));
                         }
                         ui.end_row();
                     }
                     ElementKind::Colorbar { frame, layer, title, orientation, ticks, tick_side, reverse } => {
-                        ui.label(tl!("Title"));
-                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false) {
+                        let input_label = ui.label(tl!("Title"));
+                        if let Some(tt) = text_field(app, ui, (li, id, "title"), title, false, input_label.id) {
                             update(app, json!({"title": tt}));
                         }
                         ui.end_row();
                         // The rasters of the frame's map; none picked follows the top visible one.
-                        ui.label(tl!("Layer"));
+                        let input_label = ui.label(tl!("Layer"));
                         let rasters: Vec<String> = match layout.element(*frame).map(|f| &f.kind) {
                             Some(ElementKind::MapFrame { map, .. }) => app
                                 .session
@@ -1395,9 +1413,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             _ => Vec::new(),
                         };
                         let top = tl!("Top visible raster");
-                        egui::ComboBox::from_id_salt(("colorbar_layer", id)).selected_text(layer.as_deref().unwrap_or(top)).show_ui(
-                            ui,
-                            |ui| {
+                        egui::ComboBox::from_id_salt(("colorbar_layer", id))
+                            .selected_text(layer.as_deref().unwrap_or(top))
+                            .show_ui(ui, |ui| {
                                 if ui.selectable_label(layer.is_none(), top).clicked() {
                                     update(app, json!({"layer": ""}));
                                 }
@@ -1406,8 +1424,9 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                                         update(app, json!({"layer": n}));
                                     }
                                 }
-                            },
-                        );
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
                         let vertical = *orientation == Orientation::Vertical;
                         ui.label(tl!("Orientation"));
@@ -1430,37 +1449,43 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             }
                         });
                         ui.end_row();
-                        ui.label(tl!("Ticks"));
+                        let input_label = ui.label(tl!("Ticks"));
                         let mut n = *ticks as u64;
                         let drag = Dragged::lend(ui, drag_key("ticks"), &mut n);
-                        let r = ui.add(egui::DragValue::new(&mut n).range(2..=MAX_COLORBAR_TICKS as u64));
+                        let r = ui.add(egui::DragValue::new(&mut n).range(2..=MAX_COLORBAR_TICKS as u64)).labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut n) && n as usize != *ticks {
                             update(app, json!({"ticks": n}));
                         }
                         ui.end_row();
-                        ui.label(tl!("Reverse"));
+                        let input_label = ui.label(tl!("Reverse"));
                         let mut rev = *reverse;
-                        if ui.checkbox(&mut rev, "").changed() {
+                        if ui.checkbox(&mut rev, "").labelled_by(input_label.id).changed() {
                             update(app, json!({"reverse": rev}));
                         }
                         ui.end_row();
                     }
                     ElementKind::MapFrame { map, scale, bearing, pitch, .. } => {
-                        ui.label(tl!("Map"));
+                        let input_label = ui.label(tl!("Map"));
                         let maps: Vec<String> = app.session.project.maps.iter().map(|m| m.name.clone()).collect();
-                        egui::ComboBox::from_id_salt(("frame_map", id)).selected_text(map.as_str()).show_ui(ui, |ui| {
-                            for m in maps {
-                                if ui.selectable_label(m == *map, m.as_str()).clicked() {
-                                    update(app, json!({"map": m}));
+                        egui::ComboBox::from_id_salt(("frame_map", id))
+                            .selected_text(map.as_str())
+                            .show_ui(ui, |ui| {
+                                for m in maps {
+                                    if ui.selectable_label(m == *map, m.as_str()).clicked() {
+                                        update(app, json!({"map": m}));
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
-                        ui.label(tl!("Scale 1:"));
+                        let input_label = ui.label(tl!("Scale 1:"));
                         let mut sc = *scale;
                         let speed = sc * 0.01;
                         let drag = Dragged::lend(ui, drag_key("scale"), &mut sc);
-                        let r = ui.add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0));
+                        let r = ui
+                            .add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0))
+                            .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut sc) && (sc - scale).abs() > 0.5 {
                             update(app, json!({"scale": sc}));
                         }
@@ -1469,10 +1494,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         for (label, key, current, range) in
                             [("Bearing", "bearing", *bearing, -180.0..=180.0), ("Pitch", "pitch", *pitch, 0.0..=85.0)]
                         {
-                            ui.label(tl!(label));
+                            let input_label = ui.label(tl!(label));
                             let mut v = current;
                             let drag = Dragged::lend(ui, drag_key(key), &mut v);
-                            let r = ui.add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"));
+                            let r = ui
+                                .add(egui::DragValue::new(&mut v).range(range).speed(0.5).max_decimals(1).suffix("°"))
+                                .labelled_by(input_label.id);
                             if drag.settled(ui, &r, &mut v) && (v - current).abs() > 1e-6 {
                                 update(app, json!({key: v}));
                             }
@@ -1480,14 +1507,18 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                     }
                     ElementKind::NorthArrow { style, fill, outline, .. } => {
-                        ui.label(tl!("Style"));
-                        egui::ComboBox::from_id_salt(("arrow_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
-                            for v in ArrowStyle::ALL {
-                                if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
-                                    update(app, json!({"style": v.code()}));
+                        let input_label = ui.label(tl!("Style"));
+                        egui::ComboBox::from_id_salt(("arrow_style", id))
+                            .selected_text(tl!(style.label()))
+                            .show_ui(ui, |ui| {
+                                for v in ArrowStyle::ALL {
+                                    if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
+                                        update(app, json!({"style": v.code()}));
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
                         for (label, key, current) in [("Fill", "fill", *fill), ("Outline", "outline", *outline)] {
                             ui.label(tl!(label));
@@ -1499,38 +1530,46 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         }
                     }
                     ElementKind::ScaleBar { units, divisions, style, .. } => {
-                        ui.label(tl!("Style"));
-                        egui::ComboBox::from_id_salt(("scale_style", id)).selected_text(tl!(style.label())).show_ui(ui, |ui| {
-                            for v in ScaleBarStyle::ALL {
-                                if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
-                                    update(app, json!({"style": v.code()}));
+                        let input_label = ui.label(tl!("Style"));
+                        egui::ComboBox::from_id_salt(("scale_style", id))
+                            .selected_text(tl!(style.label()))
+                            .show_ui(ui, |ui| {
+                                for v in ScaleBarStyle::ALL {
+                                    if ui.selectable_label(*style == v, tl!(v.label())).clicked() && *style != v {
+                                        update(app, json!({"style": v.code()}));
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
-                        ui.label(tl!("Units"));
-                        egui::ComboBox::from_id_salt(("scale_units", id)).selected_text(tl!(units.label())).show_ui(ui, |ui| {
-                            for v in ScaleUnits::ALL {
-                                if ui.selectable_label(*units == v, tl!(v.label())).clicked() && *units != v {
-                                    update(app, json!({"units": v.code()}));
+                        let input_label = ui.label(tl!("Units"));
+                        egui::ComboBox::from_id_salt(("scale_units", id))
+                            .selected_text(tl!(units.label()))
+                            .show_ui(ui, |ui| {
+                                for v in ScaleUnits::ALL {
+                                    if ui.selectable_label(*units == v, tl!(v.label())).clicked() && *units != v {
+                                        update(app, json!({"units": v.code()}));
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
-                        ui.label(tl!("Divisions"));
+                        let input_label = ui.label(tl!("Divisions"));
                         let mut n = *divisions as u64;
                         let drag = Dragged::lend(ui, drag_key("divisions"), &mut n);
-                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=MAX_SCALE_DIVISIONS as u64));
+                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=MAX_SCALE_DIVISIONS as u64)).labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut n) && n as usize != *divisions {
                             update(app, json!({"divisions": n}));
                         }
                         ui.end_row();
                     }
                     ElementKind::Table { rows, .. } => {
-                        ui.label(tl!("Rows"));
+                        let input_label = ui.label(tl!("Rows"));
                         let mut n = *rows as u64;
                         let drag = Dragged::lend(ui, drag_key("rows"), &mut n);
-                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=500));
+                        let r = ui.add(egui::DragValue::new(&mut n).range(1..=500)).labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut n) && n as usize != *rows {
                             update(app, json!({"rows": n}));
                         }
@@ -1546,10 +1585,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             }
                             ui.end_row();
                         }
-                        ui.label(tl!("Outline width"));
+                        let input_label = ui.label(tl!("Outline width"));
                         let mut wd = *width;
                         let drag = Dragged::lend(ui, drag_key("width"), &mut wd);
-                        let r = ui.add(egui::DragValue::new(&mut wd).range(0.0..=50.0).speed(0.1).max_decimals(1).suffix(" pt"));
+                        let r = ui
+                            .add(egui::DragValue::new(&mut wd).range(0.0..=50.0).speed(0.1).max_decimals(1).suffix(" pt"))
+                            .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut wd) && (wd - width).abs() > 1e-6 {
                             update(app, json!({"width": wd}));
                         }
@@ -1562,29 +1603,37 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                             update(app, json!({"color": crate::theme::rgba(c).hex()}));
                         }
                         ui.end_row();
-                        ui.label(tl!("Width"));
+                        let input_label = ui.label(tl!("Width"));
                         let mut wd = *width;
                         let drag = Dragged::lend(ui, drag_key("width"), &mut wd);
-                        let r = ui.add(egui::DragValue::new(&mut wd).range(0.1..=50.0).speed(0.1).max_decimals(1).suffix(" pt"));
+                        let r = ui
+                            .add(egui::DragValue::new(&mut wd).range(0.1..=50.0).speed(0.1).max_decimals(1).suffix(" pt"))
+                            .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut wd) && (wd - width).abs() > 1e-6 {
                             update(app, json!({"width": wd}));
                         }
                         ui.end_row();
-                        ui.label(tl!("Arrowheads"));
-                        egui::ComboBox::from_id_salt(("line_head", id)).selected_text(tl!(head.label())).show_ui(ui, |ui| {
-                            for h in LineHead::ALL {
-                                if ui.selectable_label(h == *head, tl!(h.label())).clicked() {
-                                    update(app, json!({"head": h.code()}));
+                        let input_label = ui.label(tl!("Arrowheads"));
+                        egui::ComboBox::from_id_salt(("line_head", id))
+                            .selected_text(tl!(head.label()))
+                            .show_ui(ui, |ui| {
+                                for h in LineHead::ALL {
+                                    if ui.selectable_label(h == *head, tl!(h.label())).clicked() {
+                                        update(app, json!({"head": h.code()}));
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                         ui.end_row();
                         // Anticlockwise from pointing right; the rotation handle above it turns it too.
-                        ui.label(tl!("Angle"));
+                        let input_label = ui.label(tl!("Angle"));
                         let current = line_angle((e.x, e.y, e.w, e.h), *dir, *head);
                         let mut a = current;
                         let drag = Dragged::lend(ui, drag_key("angle"), &mut a);
-                        let r = ui.add(egui::DragValue::new(&mut a).range(-180.0..=180.0).speed(1.0).max_decimals(1).suffix("°"));
+                        let r = ui
+                            .add(egui::DragValue::new(&mut a).range(-180.0..=180.0).speed(1.0).max_decimals(1).suffix("°"))
+                            .labelled_by(input_label.id);
                         if drag.settled(ui, &r, &mut a) && (a - current).abs() > 1e-6 {
                             update(app, json!({"angle": a}));
                         }
@@ -1700,16 +1749,18 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                     update(app, json!({"extentIndicator": {"color": crate::theme::rgba(c).hex()}}));
                 }
                 ui.end_row();
-                ui.label(tl!("Line width"));
+                let input_label = ui.label(tl!("Line width"));
                 let mut w = *extent_width;
                 let drag = Dragged::lend(ui, drag_key("extentWidth"), &mut w);
-                let r = ui.add(
-                    egui::DragValue::new(&mut w)
-                        .range(rustgis_engine::map::layout::MIN_INDICATOR_WIDTH..=rustgis_engine::map::layout::MAX_INDICATOR_WIDTH)
-                        .speed(0.05)
-                        .max_decimals(2)
-                        .suffix(" pt"),
-                );
+                let r = ui
+                    .add(
+                        egui::DragValue::new(&mut w)
+                            .range(rustgis_engine::map::layout::MIN_INDICATOR_WIDTH..=rustgis_engine::map::layout::MAX_INDICATOR_WIDTH)
+                            .speed(0.05)
+                            .max_decimals(2)
+                            .suffix(" pt"),
+                    )
+                    .labelled_by(input_label.id);
                 if drag.settled(ui, &r, &mut w) && (w - extent_width).abs() > 1e-6 {
                     update(app, json!({"extentIndicator": {"width": w}}));
                 }

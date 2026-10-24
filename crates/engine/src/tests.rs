@@ -2,6 +2,14 @@ use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/remembered_database.rs"]
+mod remembered_database;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "tests/remembered_database_packets.rs"]
+mod remembered_database_packets;
+
 /// Keeps tests away from the user's installed plugins.
 fn isolate_plugins() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -351,6 +359,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             cap: LineCap::Round,
             join: LineJoin::Round,
             level: None,
+            dash: None,
         },
         LineStroke {
             color: Some(Rgba::rgb(0xFF, 0x8C, 0)),
@@ -359,6 +368,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             cap: LineCap::Butt,
             join: LineJoin::Miter,
             level: None,
+            dash: None,
         },
         LineStroke { offset: -2.0, ..LineStroke::default() },
     ];
@@ -403,6 +413,22 @@ fn line_strokes_stack_and_survive_save_and_undo() {
     assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes.len(), 1);
+}
+
+#[test]
+fn a_stroke_is_dashed_by_command() {
+    let mut s = world();
+    let stroke = |dash: Value| json!({"layer": "Rivers", "strokes": [{"color": "#000000", "width": 2, "dash": dash}]});
+    s.run("layer.lineStrokes", &stroke(json!([4, 2.5]))).unwrap();
+    let dash = |s: &Session| s.map().layer_by_name("Rivers").unwrap().line_strokes[0].dash.map(|d| d.steps().to_vec());
+    assert_eq!(dash(&s), Some(vec![4.0, 2.5]));
+    let depth = s.undo_depth();
+    for bad in [json!([]), json!([0, 0]), json!([-1, 2]), json!([1, "2"]), json!("4 2"), json!([1, 1, 1, 1, 1, 1, 1, 1, 1]), json!([1e9])] {
+        assert!(s.run("layer.lineStrokes", &stroke(bad.clone())).is_err(), "{bad}");
+    }
+    assert_eq!((s.undo_depth(), dash(&s)), (depth, Some(vec![4.0, 2.5])), "a refused pattern changes nothing");
+    s.run("layer.lineStrokes", &stroke(Value::Null)).unwrap();
+    assert_eq!(dash(&s), None, "null: solid");
 }
 
 #[test]
@@ -1316,6 +1342,11 @@ fn hostile_params_never_panic() {
         // A summary over time: a statistic given, so its threshold, groups and share are reached.
         json!({"stat": "countAbove", "above": "x", "by": 7, "minValid": -1e308, "months": [13, "x", null], "name": {"a": 1}}),
         json!({"stat": "std", "by": "month", "minValid": f64::NAN, "dates": ["x", 7, null]}),
+        // A categorical summary: countIn's classes, and a mode by groups with a share out of range.
+        json!({"stat": "countIn", "classes": [1e308, -1, "x", null, 3.5, {"a": 1}]}),
+        json!({"stat": "countIn", "classes": "all", "by": "year"}),
+        json!({"stat": "mode", "by": "month", "minValid": 2, "months": []}),
+        json!({"stat": "frequency", "by": "year", "minValid": -1, "name": []}),
         // MySQL addresses that can't be read, so nothing connects.
         json!({"database": "mysql://u:p#@[::1/x?ssl-mode=nope", "password": 7, "layer": ":", "crs": "EPSG:-1"}),
         json!({"database": "MARIADB://u@h:99999999/%zz?ssl-mode=VERIFY_CA&ssl-ca=/nonexistent", "sql": "SELECT 1"}),
@@ -1330,9 +1361,10 @@ fn hostile_params_never_panic() {
         json!({"transform": "affine", "crs": 32613, "pointsCrs": 4326, "cellSize": 1e-300, "path": "/nonexistent/x.tif", "points": [[0, 0, 1, 1], [1, 0, 2, 1], [0, 1, 1, 2]]}),
         json!({"points": [[0, 0, f64::MAX, f64::MAX], [1, 0, -f64::MAX, f64::MAX], [0, 1, f64::MAX, -f64::MAX]], "compare": true}),
         // Connections: junk kinds, options and secrets; no connection exists in a fresh session.
-        json!({"id": "c1", "kind": "s3", "address": "http://127.0.0.1:9", "name": "\u{7}", "group": 5, "options": {"credentials": "nope", "buckets": "NO_", "region": [1]}, "password": 7, "accessKeyId": "A", "secretAccessKey": 9}),
+        json!({"id": "c1", "kind": "s3", "address": "http://127.0.0.1:9", "name": "\u{7}", "group": 5, "options": {"credentials": "nope", "buckets": "NO_", "region": [1]}, "password": 7, "remember": [true], "accessKeyId": "A", "secretAccessKey": 9}),
         json!({"id": "", "kind": "postgres", "address": "postgres:host=127.0.0.1 port=9 password=x", "options": "x"}),
         json!({"kind": "wms", "address": "http://127.0.0.1:9/wms", "probe": "x", "answer": 7}),
+        json!({"id": {"unexpected":"object"}, "remember": "true", "password": []}),
         json!({"kind": "stac", "address": "http://127.0.0.1:9/stac", "answer": "\u{0}{"}),
         json!({"id": "c1", "node": "s3:/\u{7}", "probe": true, "answer": 7, "documents": "x"}),
     ];
@@ -9020,6 +9052,105 @@ fn a_zarr_variable_summarised_over_time() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Where nothing but a shell waits on them (`rustgis-cli run`: `long_runs` set), a trend and a
+/// summary tell their progress up to its end and give what they give anywhere else; and there a
+/// STAC trend's or summary's search takes more items than in the app (a state's four MODIS tiles
+/// over 25 years are 2,304).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_trend_where_nothing_waits_tells_its_progress() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    use std::sync::Mutex;
+    // What was told, by this test alone: no other test sets `long_runs` with this `tell`.
+    static TOLD: Mutex<Vec<(String, f64)>> = Mutex::new(Vec::new());
+    fn tell(what: &str, share: f64) {
+        assert!((0.0..=1.0).contains(&share), "{what}: {share}");
+        TOLD.lock().unwrap().push((what.to_string(), share));
+    }
+    // The last share each run told: its end, 1, however soon it finished, and told only then.
+    let ended = |what: &str| {
+        let told = TOLD.lock().unwrap();
+        let ends = told.iter().filter(|(w, x)| w == what && *x >= 1.0).count();
+        assert!(ends <= 1, "{what} told its end {ends} times");
+        told.iter().rev().find(|(w, _)| w == what).map(|(_, x)| *x)
+    };
+    let gt = GeoTransform { origin_x: -56.0, origin_y: -12.0, pixel_width: 0.01, pixel_height: -0.01 };
+    let slope = |s: &mut Session| {
+        let mut names = Vec::new();
+        for (k, y) in (2013..2025).enumerate() {
+            let name = format!("ndvi_{y}-07-01");
+            let r = Raster::new(&name, 2, 1, vec![vec![0.3 + 0.02 * k as f32, 0.5]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32")
+                .unwrap();
+            let bytes = geotiff::write(&r, 0).unwrap();
+            crate::cmd::raster::add_raster(s, &name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+            names.push(name);
+        }
+        let band = |s: &Session, r: &Value| {
+            let id = r["layers"][0].as_u64().unwrap() as u32;
+            s.map().layer(id).unwrap().raster.as_ref().unwrap().data.clone().unwrap().bands[0].data.clone()
+        };
+        let trend = s.run("cube.trend", &json!({"layers": names})).unwrap();
+        let mean = s.run("cube.reduce", &json!({"layers": names, "stat": "mean"})).unwrap();
+        (band(s, &trend), band(s, &mean))
+    };
+    let mut plain = Session::new(Project::default());
+    let mut told = Session::new(Project::default());
+    told.long_runs = Some(tell);
+    let ((a, mean_a), (b, mean_b)) = (slope(&mut plain), slope(&mut told));
+    assert_eq!(a, b);
+    assert_eq!(mean_a, mean_b);
+    assert!((a[0] - 0.02).abs() < 1e-4, "{a:?}");
+    assert!((mean_a[0] - 0.41).abs() < 1e-5 && (mean_a[1] - 0.5).abs() < 1e-6, "{mean_a:?}");
+    assert_eq!(ended("cube.trend"), Some(1.0), "the trend's progress is told to its end");
+    assert_eq!(ended("cube.reduce"), Some(1.0), "the summary's progress is told to its end");
+    // 2,100 items (a tile each, one day) in eleven pages of 200: too many for the time slider and
+    // for a trend in the app, not for a trend or a summary where nothing waits, which go on to
+    // read their first file (here on a closed port).
+    let item = |k: usize| {
+        format!(
+            r#"{{"type": "Feature", "id": "i{k}", "collection": "c", "bbox": [10, 45, 11, 46], "geometry": null, "properties": {{"datetime": "2024-01-01T00:00:00Z", "bdc:tiles": ["t{k}"]}}, "assets": {{"NDVI": {{"href": "http://127.0.0.1:9/i{k}.tif"}}}}}}"#
+        )
+    };
+    let page = |n: usize| {
+        let items: Vec<String> = (n * 200..((n + 1) * 200).min(2100)).map(item).collect();
+        let next = if (n + 1) * 200 < 2100 {
+            format!(r#", "links": [{{"rel": "next", "href": "{{base}}/v1/search?page=p{:02}"}}]"#, n + 1)
+        } else {
+            String::new()
+        };
+        format!(r#"{{"type": "FeatureCollection", "features": [{}]{next}}}"#, items.join(","))
+    };
+    // The pages by their marks first: the search's own address is a prefix of theirs.
+    const MARKS: [&str; 10] = [
+        "/v1/search?page=p01",
+        "/v1/search?page=p02",
+        "/v1/search?page=p03",
+        "/v1/search?page=p04",
+        "/v1/search?page=p05",
+        "/v1/search?page=p06",
+        "/v1/search?page=p07",
+        "/v1/search?page=p08",
+        "/v1/search?page=p09",
+        "/v1/search?page=p10",
+    ];
+    let mut routes: Vec<(&'static str, String)> = MARKS.iter().enumerate().map(|(i, m)| (*m, page(i + 1))).collect();
+    routes.push(("/v1/search", page(0)));
+    // Eleven pages for each of the four searches, with room to spare.
+    let api = format!("{}/v1", serve_routes(routes, 60));
+    let p = json!({"url": api, "collection": "c", "asset": "NDVI", "bbox": [10, 45, 11, 46], "start": "2024", "end": "2024"});
+    let e = plain.run("stac.addCube", &p).unwrap_err();
+    assert!(e.contains("more than 2000 items"), "{e}");
+    let e = plain.run("cube.trend", &p).unwrap_err();
+    assert!(e.contains("more than 2000 items"), "the app's trend doesn't take them: {e}");
+    // Taken, they go on to the first file, which can't be read.
+    let e = told.run("cube.trend", &p).unwrap_err();
+    assert!(e.contains("127.0.0.1:9/i") && !e.contains("items"), "a trend takes them: {e}");
+    let mut summary = p.clone();
+    summary["stat"] = json!("mean");
+    let e = told.run("cube.reduce", &summary).unwrap_err();
+    assert!(e.contains("127.0.0.1:9/i") && !e.contains("items"), "a summary takes them: {e}");
+}
+
 /// A trend over a data cube (#579), from the three kinds of cube: a stack of raster layers dated
 /// by their names, a raster whose bands are dates, and a Zarr variable along its time dimension.
 /// A cell with a clear trend gets Sen's slope and a significant slope; noise gets a slope but no
@@ -9325,6 +9456,169 @@ fn a_short_cube_is_summarised_but_not_trended() {
     // One date has nothing to summarise.
     let e = s.run("cube.reduce", &json!({"layers": [names[0]], "stat": "mean"})).unwrap_err();
     assert!(e.contains("summary's stack needs 2 layers"), "{e}");
+}
+
+/// A stack of land-cover maps summarised as classes: each cell's most frequent class (the least
+/// of those tied) and how many dates had it, how many classes it had, how many times its class
+/// changed and the class and length of its longest run, in date order (the layers added out of it), how many
+/// dates it was in some classes, and a layer for each class with its count of dates. A cell left
+/// without a class at a date (no data) is skipped. What isn't a class, too many classes, and a categorical
+/// statistic asked of zarr.reduce are refused.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_categorical_stack_summarised_over_time() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let gt = GeoTransform { origin_x: -44.0, origin_y: -7.0, pixel_width: 0.01, pixel_height: -0.01 };
+    let add = |s: &mut Session, name: &str, cells: Vec<f32>| {
+        let r = Raster::new(name, cells.len() as u32, 1, vec![cells], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        let bytes = geotiff::write(&r, 0).unwrap();
+        crate::cmd::raster::add_raster(s, name, rustgis_map::RasterLayer::from_bytes(r, format!("{name}.tif"), bytes)).unwrap();
+    };
+    let nan = f32::NAN;
+    // Four cells over six years: 3 3 4 3 4 4; always 15; 21 21 33 with no data between; and
+    // 5 7 7 7 5 5, whose mode (5, the least of two tied) isn't its longest run's class (7).
+    let years: [(u32, [f32; 4]); 6] = [
+        (2000, [3.0, 15.0, nan, 5.0]),
+        (2001, [3.0, 15.0, 21.0, 7.0]),
+        (2002, [4.0, 15.0, nan, 7.0]),
+        (2003, [3.0, 15.0, 21.0, 7.0]),
+        (2004, [4.0, 15.0, 33.0, 5.0]),
+        (2005, [4.0, 15.0, nan, 5.0]),
+    ];
+    let mut s = Session::new(Project::default());
+    let mut names = Vec::new();
+    // Added out of date order: changes go by the dates, not the layers' order.
+    for k in [3, 0, 5, 1, 4, 2] {
+        let (y, cells) = years[k];
+        let name = format!("cobertura_{y}");
+        add(&mut s, &name, cells.to_vec());
+        names.push(name);
+    }
+    let run = |s: &mut Session, p: Value| {
+        let r = s.run("cube.reduce", &p).unwrap();
+        let id = r["layers"][0].as_u64().unwrap() as u32;
+        let l = s.map().layer(id).unwrap();
+        (l.name.clone(), l.raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].data.clone())
+    };
+    let (name, mode) = run(&mut s, json!({"layers": names, "stat": "mode"}));
+    assert_eq!(mode, vec![3.0, 15.0, 21.0, 5.0]);
+    assert_eq!(name, "cobertura mode 2000-01-01–2005-01-01");
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "majority"})).1, mode);
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "modeCount"})).1, vec![3.0, 6.0, 2.0, 3.0]);
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "variety"})).1, vec![2.0, 1.0, 2.0, 2.0]);
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "changes"})).1, vec![3.0, 0.0, 1.0, 2.0]);
+    // Runs of 2 in 3 and in 4 (the least), 6 in 15, 21 through its gap, 3 in 7.
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "longestRun"})).1, vec![3.0, 15.0, 21.0, 7.0]);
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "longestRunLength"})).1, vec![2.0, 6.0, 2.0, 3.0]);
+    assert_eq!(run(&mut s, json!({"layers": names, "stat": "countIn", "classes": [4, 33]})).1, vec![3.0, 0.0, 1.0, 0.0]);
+    // A share of the dates: the third cell has a class at half of them, so it's left out at 0.6.
+    let (_, half) = run(&mut s, json!({"layers": names, "stat": "mode", "minValid": 0.6}));
+    assert_eq!((half[0], half[1], half[3]), (3.0, 15.0, 5.0));
+    assert!(half[2].is_nan(), "{half:?}");
+    // Frequency: a layer for each class met, each cell's count of dates in it.
+    let layers = |s: &Session, r: &Value| -> Vec<(String, Vec<f32>)> {
+        r["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| {
+                let l = s.map().layer(id.as_u64().unwrap() as u32).unwrap();
+                (l.name.clone(), l.raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].data.clone())
+            })
+            .collect()
+    };
+    let r = s.run("cube.reduce", &json!({"layers": names, "stat": "frequency"})).unwrap();
+    let got = layers(&s, &r);
+    let want: Vec<(String, Vec<f32>)> = [
+        (3, [3.0, 0.0, 0.0, 0.0]),
+        (4, [3.0, 0.0, 0.0, 0.0]),
+        (5, [0.0, 0.0, 0.0, 3.0]),
+        (7, [0.0, 0.0, 0.0, 3.0]),
+        (15, [0.0, 6.0, 0.0, 0.0]),
+        (21, [0.0, 0.0, 2.0, 0.0]),
+        (33, [0.0, 0.0, 1.0, 0.0]),
+    ]
+    .iter()
+    .map(|(c, n)| (format!("cobertura frequency 2000-01-01–2005-01-01 class {c}"), n.to_vec()))
+    .collect();
+    assert_eq!(got, want);
+    // With a share, a cell with too few values is left out of every class's layer.
+    let r = s.run("cube.reduce", &json!({"layers": names, "stat": "frequency", "minValid": 0.6, "name": "freq"})).unwrap();
+    let got = layers(&s, &r);
+    assert_eq!(got.len(), 7);
+    assert!(got.iter().all(|(_, n)| n[2].is_nan()), "{got:?}");
+    assert_eq!(got[0].0, "freq class 3");
+    assert_eq!((got[0].1[0], got[0].1[1], got[0].1[3]), (3.0, 0.0, 0.0));
+    // A raster whose bands are the years out of order, their dates given in the bands' order:
+    // changes still go by the dates.
+    let order = [3, 0, 5, 1, 4, 2];
+    let bands: Vec<Vec<f32>> = order.iter().map(|&k| years[k].1.to_vec()).collect();
+    let dates: Vec<String> = order.iter().map(|&k| format!("{}-01-01", years[k].0)).collect();
+    let r = Raster::new("bandas", 4, 1, bands, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&r, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "bandas", rustgis_map::RasterLayer::from_bytes(r, "bandas.tif".to_string(), bytes)).unwrap();
+    assert_eq!(run(&mut s, json!({"layer": "bandas", "dates": dates, "stat": "changes"})).1, vec![3.0, 0.0, 1.0, 2.0]);
+    assert_eq!(run(&mut s, json!({"layer": "bandas", "dates": dates, "stat": "longestRun"})).1, vec![3.0, 15.0, 21.0, 7.0]);
+    assert_eq!(run(&mut s, json!({"layer": "bandas", "dates": dates, "stat": "longestRunLength"})).1, vec![2.0, 6.0, 2.0, 3.0]);
+    // By year, a change is one within the year: none, with one date a year.
+    let r = s.run("cube.reduce", &json!({"layers": names, "stat": "changes", "by": "year"})).unwrap();
+    assert_eq!(r["layers"].as_array().unwrap().len(), 6);
+    // Every key a categorical summary takes is read, none said to be ignored.
+    let mark = s.notice_mark();
+    run(&mut s, json!({"layers": names, "stat": "countIn", "classes": [3], "minValid": 0.5, "name": "floresta"}));
+    let ignored: Vec<String> = s.notices_since(mark).iter().map(|n| n.text.clone()).filter(|t| t.contains("ignores")).collect();
+    assert!(ignored.is_empty(), "{ignored:?}");
+    // Refused, nothing added.
+    let before = s.map().layers.len();
+    for (bad, said) in [
+        (json!({"layers": names, "stat": "countIn"}), "countIn takes \"classes\""),
+        (json!({"layers": names, "stat": "countIn", "classes": []}), "countIn takes \"classes\""),
+        (json!({"layers": names, "stat": "countIn", "classes": [3.5]}), "whole numbers from 0 to 255"),
+        (json!({"layers": names, "stat": "countIn", "classes": [256]}), "whole numbers from 0 to 255"),
+        (json!({"layers": names, "stat": "countIn", "classes": "3"}), "countIn takes \"classes\""),
+        (json!({"layers": names, "stat": "countIn", "classes": vec![3; 257]}), "countIn takes \"classes\""),
+    ] {
+        let e = s.run("cube.reduce", &bad).unwrap_err();
+        assert!(e.contains(said), "{bad}: {e}");
+    }
+    // Values that aren't classes (an NDVI): said, with the value.
+    let ndvi = ["ndvi_2020", "ndvi_2021"];
+    for (k, name) in ndvi.iter().enumerate() {
+        add(&mut s, name, vec![0.25 + k as f32 * 0.5]);
+    }
+    let before_ndvi = s.map().layers.len();
+    for stat in ["mode", "variety", "changes", "countIn"] {
+        let e = s.run("cube.reduce", &json!({"layers": ndvi, "stat": stat, "classes": [0]})).unwrap_err();
+        assert!(e.contains("0.25 isn't a class") && e.contains(stat), "{stat}: {e}");
+    }
+    assert_eq!(s.map().layers.len(), before_ndvi);
+    // More classes than a land-cover map has: refused, not a count for each.
+    let many = ["muitas_2020", "muitas_2021"];
+    for name in many {
+        add(&mut s, name, (0..1001).map(|c| c as f32).collect());
+    }
+    let after_many = s.map().layers.len();
+    let e = s.run("cube.reduce", &json!({"layers": many, "stat": "variety"})).unwrap_err();
+    assert!(e.contains("more than 1000 classes") && e.contains("variety"), "{e}");
+    assert_eq!(s.map().layers.len(), after_many);
+    assert_eq!(before_ndvi - before, ndvi.len());
+    // A Zarr axis out of date order (days 31, 0, 59) whose classes are 2, 1, 2 along it: in date
+    // order they are 1, 2, 2, one change, not the axis's two, and a longest run in 2, where the
+    // axis's runs are all of one date (and the least class, 1, would win).
+    let (dir, path) = zarr_store_at("cube-reduce-classes-order", &[31, 0, 59]);
+    for (t, class) in [(0, 2.0f32), (1, 1.0), (2, 2.0)] {
+        let chunk: Vec<u8> = std::iter::repeat_n(class, 12).flat_map(|x| x.to_le_bytes()).collect();
+        std::fs::write(std::path::Path::new(&path).join(format!("t/{t}.0.0")), chunk).unwrap();
+    }
+    assert_eq!(run(&mut s, json!({"path": path, "variable": "t", "stat": "changes"})).1, vec![1.0; 12]);
+    assert_eq!(run(&mut s, json!({"path": path, "variable": "t", "stat": "longestRun"})).1, vec![2.0; 12]);
+    assert_eq!(run(&mut s, json!({"path": path, "variable": "t", "stat": "longestRunLength"})).1, vec![2.0; 12]);
+    let _ = std::fs::remove_dir_all(dir);
+    // zarr.reduce doesn't take them: it points to cube.reduce.
+    let (dir, path) = zarr_store_over_time("cube-reduce-classes");
+    let e = s.run("zarr.reduce", &json!({"path": path, "variable": "t", "stat": "mode"})).unwrap_err();
+    assert!(e.contains("cube.reduce"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A Zarr axis in decreasing order: a trend refuses it, a summary takes it and names its period from
@@ -9700,6 +9994,38 @@ fn streamed_layer_outside_its_zoom_range_reads_nothing() {
     assert!(sent.load(std::sync::atomic::Ordering::Relaxed) > before);
 }
 
+/// Load All Features on a layer whose web source is still opening waits for it to open, rather
+/// than fail with "the layer's source isn't open" (the server here holds its answers a while).
+#[test]
+fn load_all_features_waits_for_a_source_still_opening() {
+    use rustgis_data::{Dataset, Feature, Geometry, GeometryType};
+    let mut ds = Dataset::new("pts", GeometryType::Point, vec![]);
+    for i in 0..100u32 {
+        let c = rustgis_geom::Coord::new(f64::from(i) * 0.1, 1.0);
+        ds.features.push(Feature { id: u64::from(i) + 1, geometry: Some(Geometry::Point(c)), attrs: vec![] });
+    }
+    let fgb = rustgis_data::source::fgb::write(&ds).unwrap();
+    let (base, _) = serve_ranges(fgb.clone());
+    let mut s = Session::new(Project::default());
+    s.run("layer.addUrl", &json!({"url": format!("{base}/pts.fgb")})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (slow, _) = serve_gated(fgb, true, Some(gate.clone()));
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text": text.replace(&base, &slow)})).unwrap();
+    let layer = t.map().layers.iter().find(|l| l.is_streamed()).unwrap().clone();
+    // Started as the view starts it, and held by the server: still opening when the load begins.
+    let mut started = layer.source.clone().unwrap();
+    started.open().unwrap();
+    assert!(!started.is_open() && started.is_pending());
+    let load = std::thread::spawn(move || layer.load_all());
+    // Still waiting while the server holds its answers, rather than failed at once.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!load.is_finished(), "the load didn't wait for the source: {:?}", load.join().unwrap().err());
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(load.join().unwrap().unwrap().features.len(), 100);
+}
+
 /// A FlatGeobuf and a GeoParquet by their address are read in place, by range: a view fetches a
 /// small part of the file; the project keeps the address and reads it again; asked to, a file is
 /// downloaded whole instead.
@@ -10041,9 +10367,9 @@ fn database_layers_wait_for_their_connection_login() {
     assert_eq!(result["failed"], 2);
     assert!(t.map().layers.iter().take(2).all(|l| l.source.as_ref().unwrap().login));
     assert_eq!(t.run("connection.list", &Value::Null).unwrap()["connections"][0]["waiting"], 2);
-    // Duplicate saved connections use list order for reporting, but either can log in.
+    // Duplicate addresses have no inferred connection identity; either can be selected explicitly.
     t.run("connection.new", &json!({"kind":"postgres","name":"Same database","address":dsn})).unwrap();
-    assert_eq!(t.connections.for_layer(&t.map().layers[0]).unwrap().name, "Production GIS");
+    assert!(t.connections.for_layer(&t.map().layers[0]).is_none());
     let result = t.run("connection.login", &json!({"id":"Same database","password":"wrong"})).unwrap();
     assert_eq!(result["failed"], 2);
 }
@@ -10150,7 +10476,7 @@ fn connections_commands() {
         assert_eq!(list["connections"][0]["loggedIn"], true);
         assert!(!s.connections.to_json().contains("pw"));
         let copy = s.run("connection.duplicate", &json!({"id":db["id"]})).unwrap();
-        assert_eq!(copy["loggedIn"], true, "the existing password store is shared by public DSN");
+        assert_eq!(copy["loggedIn"], false, "a duplicate must not inherit another saved ID's session login");
         let edited = s
             .run("connection.edit", &json!({"id":db["id"],"address":"postgres:host=127.0.0.1 port=9 dbname=connections_other user=u"}))
             .unwrap();
@@ -10158,7 +10484,7 @@ fn connections_commands() {
         s.run("connection.remove", &json!({"id":db["id"]})).unwrap();
         let list = s.run("connection.list", &json!({"kind":"postgres"})).unwrap();
         assert_eq!(list["connections"][0]["id"], copy["id"]);
-        assert_eq!(list["connections"][0]["loggedIn"], true, "removing a shortcut must not log out another connection using that DSN");
+        assert_eq!(list["connections"][0]["loggedIn"], false);
     }
     s.run("connection.new", &json!({"kind":"s3","name":"conn-test-s3","options":{"credentials":"keys","buckets":"b11"}})).unwrap();
     assert!(s.run("connection.test", &json!({"id":"conn-test-s3"})).unwrap_err().contains("log in first"));
@@ -10182,6 +10508,7 @@ fn connections_commands() {
         "connection.duplicate",
         "connection.remove",
         "connection.login",
+        "connection.forgetPassword",
         "connection.test",
         "connection.browse",
     ] {

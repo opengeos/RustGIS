@@ -15,6 +15,7 @@
 
 use super::Family;
 use super::external::{self, TempFile, fnv1a, output, stamp, touch};
+use crate::secrets::Secret;
 use crate::{DataError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -128,25 +129,91 @@ fn split_password(dsn: &str) -> (String, Option<String>) {
 
 pub use super::pgconn::public_label;
 
-fn passwords() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
-    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
-    P.get_or_init(Default::default)
+/// A password remembered for a connection's address. `connection_id` names the saved connection
+/// it was activated for (see [`set_connection_password`]); `None` is one typed for the address.
+struct Entry {
+    password: Secret,
+    connection_id: Option<String>,
 }
 
-/// Remembers a connection's password for this session (never saved: projects name connections
-/// without them, and libpq's `PGPASSWORD` or `~/.pgpass` serve when it isn't remembered).
+type Passwords = std::collections::HashMap<String, Entry>;
+
+static PASSWORDS: std::sync::LazyLock<std::sync::Mutex<Passwords>> = std::sync::LazyLock::new(Default::default);
+
+fn lock() -> std::sync::MutexGuard<'static, Passwords> {
+    PASSWORDS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Remembers a connection's password for this session, as typed for its address (the saved
+/// connections' own are activated by [`set_connection_password`]): projects name connections
+/// without them, and libpq's `PGPASSWORD` or `~/.pgpass` serve when it isn't remembered.
 pub fn remember_password(dsn: &str, password: &str) {
-    passwords().lock().unwrap_or_else(|e| e.into_inner()).insert(dsn.to_string(), password.to_string());
+    lock().insert(dsn.to_string(), Entry { password: Secret::new(password), connection_id: None });
+}
+
+/// Makes saved connection `id`'s password the one connections to `dsn` use (`Some`), replacing
+/// whatever was remembered for the address; or takes away a password a saved connection
+/// activated there, whichever one (`None`), leaving one typed for the address.
+pub fn set_connection_password(dsn: &str, id: &str, password: Option<&str>) {
+    let mut all = lock();
+    match password {
+        Some(p) => {
+            all.insert(dsn.to_string(), Entry { password: Secret::new(p), connection_id: Some(id.to_string()) });
+        }
+        None => {
+            if all.get(dsn).is_some_and(|e| e.connection_id.is_some()) {
+                all.remove(dsn);
+            }
+        }
+    }
+}
+
+/// Whether this driver's exact address slot is currently owned by saved connection `id`.
+/// Unlike runtime selection, this also accounts for a later explicitly typed address password.
+pub fn has_connection_password(dsn: &str, id: &str) -> bool {
+    lock().get(dsn).is_some_and(|entry| entry.connection_id.as_deref() == Some(id))
+}
+
+/// Tries an explicitly supplied password, restoring the previous address slot and its ownership
+/// when `refused` classifies the outcome as an authentication refusal. Other failures retain
+/// the new password. Never holds the cache lock during network I/O.
+pub fn try_connection_password<T>(dsn: &str, id: &str, password: &str, run: impl FnOnce() -> T, refused: impl FnOnce(&T) -> bool) -> T {
+    let previous = lock().insert(dsn.to_string(), Entry { password: Secret::new(password), connection_id: Some(id.to_string()) });
+    let result = run();
+    if refused(&result) {
+        let mut all = lock();
+        if let Some(previous) = previous {
+            all.insert(dsn.to_string(), previous);
+        } else {
+            all.remove(dsn);
+        }
+    }
+    result
+}
+
+/// Takes away every password saved connection `id` activated.
+pub fn forget_connection_password(id: &str) {
+    lock().retain(|_, e| e.connection_id.as_deref() != Some(id));
+}
+
+/// Takes away every password a saved connection activated, leaving the typed ones.
+pub fn forget_connection_passwords() {
+    lock().retain(|_, e| e.connection_id.is_none());
 }
 
 /// The password remembered for a connection this session, if any.
 pub(crate) fn remembered_password(dsn: &str) -> Option<String> {
-    passwords().lock().unwrap_or_else(|e| e.into_inner()).get(dsn).cloned()
+    lock().get(dsn).map(|e| e.password.expose().to_string())
 }
 
-/// Whether a password is remembered for a connection this session.
+/// Whether a password is remembered for a connection this session, typed or activated.
 pub fn has_password(dsn: &str) -> bool {
-    passwords().lock().unwrap_or_else(|e| e.into_inner()).contains_key(dsn)
+    lock().contains_key(dsn)
+}
+
+/// Whether a password typed for this address (not one a saved connection activated) is remembered.
+pub fn has_explicit_password(dsn: &str) -> bool {
+    lock().get(dsn).is_some_and(|e| e.connection_id.is_none())
 }
 
 /// The remembered password of a query's database, handed to DuckDB's PostgreSQL client in its
@@ -154,7 +221,7 @@ pub fn has_password(dsn: &str) -> bool {
 /// would show it.
 fn password(database: Option<&Database>) -> Option<String> {
     match database? {
-        Database::Postgres(dsn) => passwords().lock().unwrap_or_else(|e| e.into_inner()).get(dsn).cloned(),
+        Database::Postgres(dsn) => remembered_password(dsn),
         Database::File(_) | Database::Mysql(_) | Database::Sqlserver(_) => None,
     }
 }
@@ -797,6 +864,30 @@ fn ours(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remembered_database_cache_ownership_and_explicit_preservation() {
+        let a = "host=remembered_cache_a user=one";
+        let b = "mysql://remembered_cache_b/db";
+        set_connection_password(a, "cache-c1", Some("one"));
+        assert!(!has_explicit_password(a));
+        assert_eq!(remembered_password(a).as_deref(), Some("one"));
+        set_connection_password(a, "cache-c2", Some("two"));
+        forget_connection_password("cache-c1");
+        assert_eq!(remembered_password(a).as_deref(), Some("two"));
+        set_connection_password(a, "cache-c1", None);
+        assert!(!has_password(a));
+        remember_password(a, "explicit");
+        set_connection_password(a, "cache-c2", None);
+        assert!(has_explicit_password(a));
+        assert_eq!(remembered_password(a).as_deref(), Some("explicit"));
+        set_connection_password(b, "cache-c2", Some("owned"));
+        forget_connection_passwords();
+        assert!(!has_password(b));
+        assert_eq!(remembered_password(a).as_deref(), Some("explicit"));
+        assert_eq!(password(Some(&Database::Postgres(a.into()))).as_deref(), Some("explicit"));
+        lock().remove(a);
+    }
 
     #[test]
     fn databases_by_name() {

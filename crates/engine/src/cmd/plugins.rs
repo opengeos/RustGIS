@@ -275,6 +275,7 @@ const NEVER: &[&str] = &[
     "connection.duplicate",
     "connection.remove",
     "connection.login",
+    "connection.forgetPassword",
     "connection.test",
     "connection.browse",
     "s3.connect",

@@ -523,6 +523,29 @@ pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Option<
     (n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n))
 }
 
+/// Transforms one polygon part, keeping its exterior and holes together.
+/// A failed coordinate or degenerate ring (< 3 points) rejects the entire polygon part.
+pub fn transform_polygon(rings: &[Vec<Coord>], mut transform: impl FnMut(Coord) -> Option<Coord>) -> Option<Vec<Vec<Coord>>> {
+    if rings.first()?.len() < 3 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for ring in rings {
+        if ring.len() < 3 {
+            return None;
+        }
+        let transformed: Option<Vec<Coord>> = ring
+            .iter()
+            .map(|&c| {
+                let p = transform(c)?;
+                (p.x.is_finite() && p.y.is_finite()).then_some(p)
+            })
+            .collect();
+        out.push(transformed?);
+    }
+    Some(out)
+}
+
 /// An error encountered while validating or transforming a polygon geometry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolygonTransformError {

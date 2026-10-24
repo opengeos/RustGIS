@@ -84,6 +84,7 @@ impl eframe::App for Bench {
                 delta: egui::vec2(0.0, (dir * 600.0 * dt) as f32),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
+                source: egui::MouseWheelSource::Wheel,
             });
         }
     }

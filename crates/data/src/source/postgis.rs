@@ -168,11 +168,11 @@ impl Conn {
             let client = guard.as_mut().ok_or_else(|| DataError::Format("not connected".into()))?;
             let r = f(client);
             if !client.is_closed() {
-                return r.map_err(err);
+                return r.map_err(|e| redacted(&self.config, err(e)));
             }
             *guard = None;
             if attempt == 1 || r.is_ok() {
-                return r.map_err(err);
+                return r.map_err(|e| redacted(&self.config, err(e)));
             }
         }
         Err(DataError::Format("not connected".into()))
@@ -197,7 +197,19 @@ impl Conn {
     }
 }
 
+/// Connects, with the password taken out of any error: a server or the client may echo what it was given.
 fn open_client(config: &postgres::Config, tls: &Tls) -> Result<postgres::Client> {
+    connect_client(config, tls).map_err(|e| redacted(config, e))
+}
+
+fn redacted(config: &postgres::Config, error: DataError) -> DataError {
+    match config.get_password().and_then(|p| std::str::from_utf8(p).ok()) {
+        Some(password) => error.redact_secret(password),
+        None => error,
+    }
+}
+
+fn connect_client(config: &postgres::Config, tls: &Tls) -> Result<postgres::Client> {
     let mut client = match tls {
         Tls::Disable => config.connect(postgres::NoTls),
         Tls::Unverified | Tls::Verified(_) => config.connect(tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config(tls)?)),

@@ -255,7 +255,7 @@ pub type Cache = egui::cache::FrameCache<LayoutJob, Highlighter>;
 /// commands don't change while the app runs.
 pub fn unknown_ids_cached(ui: &egui::Ui, session: &rustgis_engine::Session, script: &str) -> std::sync::Arc<Vec<String>> {
     type Kept = (u64, u64, std::sync::Arc<Vec<String>>);
-    let key = egui::Id::new("script_unknown_ids");
+    let key = egui::Id::unique("script_unknown_ids");
     let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
     if let Some((t, p, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
         && (t, p) == (text, plugins)
@@ -522,13 +522,15 @@ mod tests {
         assert!(!underlined("map.zoomFull"), "a good id isn't");
     }
 
-    /// A run's results, however long, stay in view under the buttons, in a scroll of their own.
+    /// A run's results, however long, stay in view under the buttons, in a scroll of their own. The
+    /// line above them, the run and when it started, too.
     #[test]
     fn long_results_stay_in_view() {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
         app.workflow.script_out = (0..12).map(|i| (format!("line {i}: {}", "a long error ".repeat(30)), true)).collect();
+        app.workflow.script_last = Some(crate::analysispane::ScriptRun { n: 1, secs: 0.5, at: 1_800_000_000 });
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
@@ -537,6 +539,7 @@ mod tests {
         assert!(h.get_by_label("Run").rect().max.y < 700.0);
         let first = h.get_by_label_contains("line 0:").rect();
         assert!(first.min.y < 700.0, "the first result shows: {first:?}");
+        assert!(h.get_by_label_contains("Run #1 (").rect().max.y < first.min.y, "the run above them");
     }
 
     /// The kept unknown ids follow the script: a change is read again, the same script isn't.

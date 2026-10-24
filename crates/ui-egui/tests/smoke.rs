@@ -4,6 +4,9 @@ use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
 use serde_json::json;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod remembered_database;
+
 /// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
@@ -101,6 +104,7 @@ fn command_search_basemap_gallery_selects_and_can_open_tile_dialog() {
         delta: egui::vec2(0.0, -800.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
     });
     for _ in 0..6 {
         h.step();
@@ -229,6 +233,27 @@ fn command_search_workflow_collects_inputs_before_georeferencing() {
     search_layer_command(&mut h, "deeplearning");
     assert_eq!(h.state().workflow.section, "deepLearning");
     assert_eq!(h.state().ui.right, Some(rustgis_ui_egui::RightPane::Workflows));
+}
+
+/// Clipping follows a selection until the user explicitly opts out, even after changing it.
+#[test]
+fn polygon_clip_defaults_to_selection_and_honors_opt_out() {
+    let mut h = harness();
+    h.state_mut().workflow.layer2 = "Countries".into();
+    h.state_mut().run("ui.pane.workflows", json!(null)).unwrap();
+    h.state_mut().workflow.section = "process";
+    h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(0);
+    h.run_steps(4);
+    assert_eq!(h.state().workflow.selected_only, None);
+    h.get_by_label("Selected only").click();
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(false));
+    h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(1);
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(false));
+    h.get_by_label("Selected only").click();
+    h.run_steps(3);
+    assert_eq!(h.state().workflow.selected_only, Some(true));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -428,13 +453,14 @@ fn nested_ogc_children_sort_on_import_rename_refresh_and_reopen() {
 #[test]
 fn every_tab_pane_and_dialog_renders() {
     let mut h = harness();
+    // Every language is shown: no face in the monospace chain has some of their letters (ə).
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     for _ in 0..4 {
         h.step();
     }
     for tab in ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"] {
         h.state_mut().ui.tab = tab.into();
-        h.step();
-        h.step();
+        h.run();
     }
     for (id, p) in [
         ("ui.pane.symbology", json!(null)),
@@ -456,15 +482,13 @@ fn every_tab_pane_and_dialog_renders() {
         ("ui.backstage", json!({"open": true})),
     ] {
         h.state_mut().run(id, p).unwrap_or_else(|e| panic!("{id}: {e}"));
-        h.step();
-        h.step();
+        h.run();
     }
     h.state_mut().ui.backstage = false;
     // Every language, the collapsed and peeked ribbon.
     for l in rustgis_ui_egui::i18n::Lang::all() {
         h.state_mut().run("ui.language", json!({"code": l.code()})).unwrap();
-        h.step();
-        h.step();
+        h.run();
     }
     h.state_mut().run("ui.language", json!({"code": "auto"})).unwrap();
     assert!(h.state_mut().run("ui.language", json!({"code": "xx"})).is_err());
@@ -677,6 +701,8 @@ fn browse_lists_thousands_of_plugins_quickly() {
     h.state_mut().plugins.set_registry(Some(Ok(entries)));
     h.state_mut().run("ui.plugins", json!({"open": true, "tab": "browse"})).unwrap();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     let _ = h.get_by_label("5000 plugins");
     // Only the visible rows are laid out, so a frame stays cheap with thousands of plugins
     // (about 1 ms in a release build; it was over 100 ms when every card was drawn). The bound
@@ -725,6 +751,8 @@ fn browse_lists_thousands_of_plugins_quickly() {
 #[test]
 fn language_switch_waits_for_its_font() {
     let mut h = harness();
+    // A machine without a CJK face draws Chinese as boxes, whenever it switches.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     h.state_mut().run("ui.language", json!({"code": "en"})).unwrap();
     for _ in 0..4 {
         h.step();
@@ -1655,6 +1683,8 @@ fn add_service_keeps_and_picks_connections() {
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Pick one…")).unwrap().click();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Other user").click();
     h.step();
     assert_eq!(h.state().dialogs.connection.as_deref(), Some(other_id.as_str()));
@@ -1682,6 +1712,8 @@ fn add_database_picks_and_keeps_connections() {
     h.step();
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Pick one…")).unwrap().click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Picked DB").click();
     h.step();
@@ -1853,6 +1885,8 @@ fn stac_dialog_keeps_and_picks_connections() {
     h.state_mut().ui.stac.api = "https://other.example/stac".into();
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Other")).unwrap().click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Picked STAC").click();
     h.step();
@@ -2069,6 +2103,8 @@ fn connections_tree_browses_and_adds() {
     assert_eq!(h.state().session.map().tiles.len(), before);
     // Recent now lists the added layer under "Local" too, above the connection's own row.
     h.query_all_by_label("Local").last().unwrap().click_secondary();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Refresh").click();
     h.step();
@@ -2506,6 +2542,8 @@ fn ogc_group_context_menus_refresh_all_or_one_child() {
     let before = server.requests().len();
     h.get_by_label("Places").click_secondary();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Refresh").click();
     wait_for_ogc(&mut h, |app| app.ui.service_import.is_none());
     assert!(serde_json::to_string(&h.state().session.map().layer(point).unwrap().dataset).unwrap().contains("New Place"));
@@ -2515,6 +2553,8 @@ fn ogc_group_context_menus_refresh_all_or_one_child() {
     }
     let before = server.requests().len();
     h.get_by_label("My OGC Layer").click_secondary();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Refresh").click();
     wait_for_ogc(&mut h, |app| app.ui.service_import.is_none());
@@ -2686,6 +2726,8 @@ fn a_run_opens_again_in_its_tool_from_the_history() {
     assert!(h.query_all_by_label_contains(" UTC").next().is_some(), "when it ran");
     h.get_by_role_and_label(egui::accesskit::Role::Button, "⋯").click_accesskit();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Open in Tool").click_accesskit();
     h.step();
     let app = h.state();
@@ -2774,6 +2816,8 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.step();
     h.get_by_label("Dynamic Text").click_accesskit();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Map scale  {scale}").click_accesskit();
     h.step();
     assert_eq!(h.state().session.tool.code(), "graphicText");
@@ -2794,6 +2838,8 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     assert_eq!(selected_text(&h).as_deref(), Some("Text"));
     // Another tool forgets the value.
     h.get_by_label("Dynamic Text").click_accesskit();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Current date  {date}").click_accesskit();
     h.step();
@@ -2904,8 +2950,14 @@ fn help_shortcuts_lists_the_keymap() {
     h.step();
     h.state_mut().run("ui.shortcuts", json!(null)).unwrap();
     h.step();
-    let undo = if cfg!(target_os = "macos") { "⌘Z" } else { "Ctrl+Z" };
-    assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
+    // What it opened shows on the next frame.
+    h.step();
+    // Named by the OS egui reads (a browser's from its user agent), not the build's (#799): the
+    // harness tells Linux, whatever runs it.
+    assert!(h.query_by_label("Ctrl+Z").is_some(), "Help › Shortcuts lists Undo's key");
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.step();
+    assert!(h.query_by_label("⌘Z").is_some(), "with ⌘ on a Mac");
     assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
 }
 
@@ -3005,6 +3057,8 @@ fn line_strokes_editor_edits_one_class() {
     };
     // The layer's strokes first; class 1 is marked as having its own.
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("All classes")).unwrap().click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("1 •").click_accesskit();
     h.step();

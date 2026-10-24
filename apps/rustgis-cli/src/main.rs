@@ -26,8 +26,9 @@
 //! be run with `--cmd`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// `println!` that ignores a closed pipe (`rustgis-cli commands | head`).
 macro_rules! out {
@@ -54,10 +55,41 @@ fn print(v: &Value) {
     out!("{}", serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string()));
 }
 
+// The progress line's state, for the one command `run` runs at a time (and resets after it).
+
+/// Whether a progress line is left without its end (a run that failed partway).
+static PROGRESS_OPEN: AtomicBool = AtomicBool::new(false);
+/// The tenth of a run last told where standard error isn't a terminal (a log, CI).
+static TOLD_TENTH: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// A long run's progress on standard error, one line rewritten (`cube.trend: 42%`); in a log, a
+/// line every tenth and at the end.
+fn progress(what: &str, share: f64) {
+    let percent = (share * 100.0).clamp(0.0, 100.0);
+    let ended = share >= 1.0;
+    if !std::io::stderr().is_terminal() {
+        let tenth = (percent / 10.0) as usize;
+        if TOLD_TENTH.swap(if ended { usize::MAX } else { tenth }, Ordering::Relaxed) != tenth || ended {
+            eprintln!("{what}: {percent:.0}%");
+        }
+        return;
+    }
+    eprint!("\r{what}: {percent:.0}%");
+    if ended {
+        eprintln!();
+    }
+    PROGRESS_OPEN.store(!ended, Ordering::Relaxed);
+}
+
 /// Runs a command; what it said beside its result (the app's status bar) goes to standard error.
 fn run(s: &mut Session, id: &str, p: Value) -> Result<Value, String> {
     let mark = s.notice_mark();
     let r = s.run(id, &p);
+    // A progress line a failure cut short ends here, so what follows starts a line of its own.
+    if PROGRESS_OPEN.swap(false, Ordering::Relaxed) {
+        eprintln!();
+    }
+    TOLD_TENTH.store(usize::MAX, Ordering::Relaxed);
     // A failure is noted too; it's printed once, by the caller.
     for n in s.notices_since(mark).iter().filter(|n| r.as_ref().err() != Some(&n.text)) {
         eprintln!("rustgis-cli: {}{}", if n.error { "error: " } else { "" }, n.text);
@@ -701,6 +733,9 @@ fn main() -> ExitCode {
             mcp(&mut s, &args)
         }
         "run" => {
+            // Nothing waits on `run` but the shell (an assistant or an MCP client does, and has a
+            // timeout): long runs take the app's bounds, their progress on stderr.
+            s.long_runs = Some(progress);
             open_inputs(&mut s, &args)?;
             for (i, a) in args.iter().enumerate() {
                 if a == "--cmd"

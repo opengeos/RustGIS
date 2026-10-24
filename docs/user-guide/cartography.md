@@ -127,6 +127,16 @@ same). By command, name the class as `layer.classStyle` does, with `value`, `ind
 layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A1E","width":7},{"color":"#F28C28","width":5},{"color":"#FFFFFF","width":0.6}]}
 ```
 
+A stroke can be dashed: **Dash** takes the lengths in points, dash and gap in turn (`4 2`, or
+`4 2 1 2` for dash-dot; an odd list is repeated, as in SVG), and its menu offers dashed,
+dotted, dash-dot and long-dash patterns sized to the stroke's width. Empty is a solid line. With
+flat caps the dashes are as long as given; round and square caps add half the width at each end.
+By command, `"dash"` on a stroke (`null` for solid):
+
+```text
+layer.lineStrokes={"layer":"Paths","strokes":[{"color":"#000000","width":1.2,"cap":"flat","dash":[6,3]}]}
+```
+
 By default, each feature draws its whole stack in turn, so where two roads meet, the second one's
 casing cuts across the first one's core. **Draw strokes in levels** (symbol levels) draws all
 stacked strokes at a lower level before those at a higher one, so the casings join underneath

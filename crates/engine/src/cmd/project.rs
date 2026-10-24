@@ -40,6 +40,9 @@ pub(crate) fn reset_to(s: &mut Session, p: Project) {
 }
 
 fn reset(s: &mut Session, p: Project) {
+    super::connections::clear_active();
+    s.database_logins.clear_activations();
+    s.database_logins.clear_requests();
     // Kept until the command ends: a failure gives the project back with its history.
     s.put_aside();
     s.project = p;
@@ -74,19 +77,29 @@ const MAX_PACKAGE: u64 = 1 << 30;
 fn open(s: &mut Session, p: &Value) -> CmdResult {
     let path = PathBuf::from(super::ps(p, "path").ok_or("path is required")?);
     let is_package = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rgispkg"));
-    let proj = if is_package {
-        // Read at most a byte past the limit, so a huge file is refused rather than loaded.
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        std::fs::File::open(&path)
-            .and_then(|f| f.take(MAX_PACKAGE + 1).read_to_end(&mut bytes))
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        if bytes.len() as u64 > MAX_PACKAGE {
-            return Err("the package is too large".into());
+    super::connections::clear_active();
+    let proj = (|| {
+        if is_package {
+            // Read at most a byte past the limit, so a huge file is refused rather than loaded.
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .and_then(|f| f.take(MAX_PACKAGE + 1).read_to_end(&mut bytes))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if bytes.len() as u64 > MAX_PACKAGE {
+                return Err("the package is too large".into());
+            }
+            Project::from_import_json(&super::items::package_text(&bytes)?)
+        } else {
+            Project::load(&path)
         }
-        Project::from_import_json(&super::items::package_text(&bytes)?)?
-    } else {
-        Project::load(&path)?
+    })();
+    let proj = match proj {
+        Ok(proj) => proj,
+        Err(error) => {
+            super::connections::restore_active(s);
+            return Err(error);
+        }
     };
     reset(s, proj);
     // A package opens as a new, unsaved project (saving writes a plain project file).
@@ -95,13 +108,22 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.path = if is_package { None } else { Some(path) };
     s.notify(format!("Opened {}", s.project.name), false);
+    super::connections::resolve_project(s);
     super::connections::note_waiting(s);
     Ok(Value::Null)
 }
 
 fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     let text = super::ps(p, "text").ok_or("text is required")?;
-    let proj = if super::b(p, "package").unwrap_or(false) { Project::from_import_json(text)? } else { Project::from_json(text)? };
+    super::connections::clear_active();
+    let proj = if super::b(p, "package").unwrap_or(false) { Project::from_import_json(text) } else { Project::from_json(text) };
+    let proj = match proj {
+        Ok(proj) => proj,
+        Err(error) => {
+            super::connections::restore_active(s);
+            return Err(error);
+        }
+    };
     reset(s, proj);
     // The browser opens files by name and contents: the name still names the project.
     if let Some(file) = super::ps(p, "fileName") {
@@ -109,6 +131,7 @@ fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     }
     s.path = None;
     s.notify(format!("Opened {}", s.project.name), false);
+    super::connections::resolve_project(s);
     super::connections::note_waiting(s);
     Ok(Value::Null)
 }

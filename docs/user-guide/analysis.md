@@ -270,8 +270,11 @@ the environment does not set their output grids. Raster Functions › Resample m
 raster's grid.
 
 The **Script** pane runs commands from text, one per line (`id {json}`); its box grows with the script down to the bottom of the pane,
-short of the buttons, and then scrolls, so **Run** stays in view. It colours them as you type, in
-both themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
+short of the buttons, and then scrolls, so **Run** stays in view; Ctrl+Enter (⌘+Enter on macOS)
+in the box runs the script too. Above a run's results, a line tells its number, how long it took
+and when it started (`Run #2 (0.84 s)`, and `14:04 UTC` on the right), so a run made again by
+mistake shows (Undo takes a whole run back). It colours the commands as you type, in both
+themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
 `true`/`false`/`null`; an id no command has, or one that can't run in a script (`ui.*`, `script.*`,
 `notebook.run`), and parameters that aren't valid JSON are red and underlined. A script is read to
 its 10,000th line; any further are dimmed, as Run doesn't read them. Typing a line's first word
@@ -426,7 +429,7 @@ and a **Mann–Kendall** test of whether the trend is significant.
     the map shows one of them. This source is given as parameters (a script, the assistant, the
     command line); `cube.trend` waits for the search and the reads with no Cancel, the app with
     it, as for a Zarr store's address, so keep the area and period small there, or run a large
-    one from the command line.
+    one from the command line (see **Long runs** below).
 
   The rasters have to be on one grid; put them on one first with Raster Functions › Resample.
 - **The test:** NDVI and temperature series are autocorrelated, which makes the plain test report
@@ -455,6 +458,14 @@ and a **Mann–Kendall** test of whether the trend is significant.
   16-day composites (645 × 984 cells × 576 dates) is six pieces. Its area is up to 25 million
   cells. The seasonal test compares only pairs within a season, so its time limit counts those.
   It runs in the background with progress and Cancel.
+- **Long runs:** in the app, a trend run from the Script pane or the assistant waits with no
+  Cancel, so it takes a tenth of the panes' limit on pairs compared (2 billion), as Python does.
+  `rustgis-cli run`, where nothing but a shell waits on it, takes the panes' limit (20 billion):
+  Piauí's 576 composites at about 1 km with the seasonal test (about 4.4 billion pairs)
+  run in one call there, and `rustgis-cli run` prints its progress (`cube.trend: 42%`). There, a
+  STAC collection's search also takes up to 10,000 items for a trend or a summary (a state's four
+  MODIS tiles over 25 years are 2,304). In the app, whose Script pane and assistant wait for the
+  search with no Cancel, and in Python, it takes 2,000, as a data cube on the time slider does.
 
 ```sh
 rustgis-cli run --cmd 'cube.trend={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"per":"decade"}'
@@ -469,27 +480,72 @@ variable, a STAC collection's band): **mean**, **min**, **max**, **sum**, **std*
 standard deviation), **count** of values, or **countAbove** a threshold (`"above"`), as Summarise
 over time does for a Zarr variable (see [Data](data.md)).
 
+- **Classes:** a series of categorical rasters, such as yearly land-cover maps (MapBiomas, ESA
+  WorldCover), is summarised as classes with eight more statistics:
+  - **mode**, each cell's most frequent class, the least of those tied (`"majority"` too);
+  - **modeCount**, at how many dates it had that class;
+  - **variety**, how many classes it had;
+  - **changes**, how many times its class changed from one date with a class to the next, in date
+    order. A date with no data is skipped, so A, no data, B is one change. Within each group, so by
+    year a change is one within the year;
+  - **longestRun**, the class it kept for the most dates in a row, in date order, the least of those
+    tied. A date with no data neither breaks a run nor adds to it, so A, no data, A is a run of two;
+  - **longestRunLength**, how many dates that run lasted;
+  - **frequency**, a layer for each class met (`… frequency 1985–2023 class 3`), each cell's count
+    of dates in that class. By year or month, a layer for each class of each group;
+  - **countIn**, at how many dates it was one of the classes given (`"classes": [3, 4, 5]`, whole
+    numbers from 0 to 255), such as the years a cell was forest.
+
+  They take the values as classes: a value that isn't a whole number (an NDVI) is refused with the
+  value, as is a run with more than 1,000 classes, or more than 64 million cells × classes in the
+  groups being read at once (16 million in the web app; for frequency, whose classes are each a
+  layer, the outputs' 32 million values). These are the data cube summary's only: Summarise over time for a
+  Zarr variable refuses them and points here. Mode, modeCount, variety and frequency keep a count
+  of each class in each cell while they read, 2 bytes a class, for each group being read: by
+  month, every month's at once, so a large area by month may need a smaller area or a group by
+  year. **changes**,
+  **longestRun** and **longestRunLength** read a STAC collection one date at a time, in order, so
+  they are slower there than the other statistics, which read several dates at once.
+
 - **Groups:** `"by": "all"` (the default) makes one layer of the whole period, `"year"` one for
   each calendar year (an annual mean NDVI from 16-day composites), `"month"` one for each month of
   the year across the years (a climatology). `"start"`, `"end"` and `"months"` pick the dates as for
   a trend.
 - **Missing values:** no-data and missing values are skipped cell by cell. A cell keeps no value
   where it had fewer values than `"minValid"` (a share of its group's dates, 0 by default: 0.5
-  wants half of a year's composites); with the default, **count** and **countAbove** give 0 where
-  a cell never had a value.
+  wants half of a year's composites); with the default, **count**, **countAbove**, **countIn**,
+  **modeCount**, **variety**, **changes**, **longestRunLength** and **frequency** give 0 where a cell
+  never had a value, and **mode** and **longestRun** give none.
 - **Size:** the slices are folded into running totals as they are read, so a long period takes no
   more memory than a short one; a STAC collection's area is read in pieces, as for a trend. The
   outputs hold up to 32 million values (cells times groups; 8 million in the web app). A summary by
   month keeps every month's totals while it reads, up to five times the outputs' memory for
   **std** (three for mean, min, max, sum and countAbove), so a large area by month may need a
-  coarser cell size or a smaller area. The layers
+  coarser cell size or a smaller area. `rustgis-cli run` takes a STAC collection's search up to
+  10,000 items, as for a trend (the app and Python 2,000), and prints a summary's progress
+  (`cube.reduce: 42%`). The layers
   are named after what they hold (`NDVI mean 2001`, `NDVI mean 2001–2025 month 03`, or the
   `"name"` given and the group) and kept in the project as GeoTIFFs.
 
 ```sh
 rustgis-cli run --cmd 'cube.reduce={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"stat":"max"}'
+rustgis-cli run --data cobertura_1985.tif --data cobertura_1986.tif --data cobertura_1987.tif --cmd 'cube.reduce={"layers":["cobertura_1985","cobertura_1986","cobertura_1987"],"stat":"changes"}'
 rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-44.8,-7.5,-44.3,-7.0],"start":"2001","end":"2025","cellSize":1000,"stat":"mean","by":"year","minValid":0.5,"name":"NDVI"}' --save urucui.rgis
 ```
+
+## Zonal statistics and polygon clipping
+
+Zonal Statistics uses the selected polygon features when the layer has a selection. It keeps
+original geometries and fields, and reports features with missing or rejected polygon parts.
+If any polygon part fails validation or transformation, the feature receives count 0 and null
+statistics, so results never summarize only the surviving parts. Large
+overlapping zones each require a separate pass over their raster window.
+
+For `raster.process` polygon clipping, `selectedOnly: true` requires a selection,
+`selectedOnly: false` uses every polygon, and omitting it uses the selection when present.
+The Process pane initially checks Selected only when the chosen layer has a selection, and sends
+the choice explicitly. Clipping and Zonal Statistics share
+polygon transformation rules so a failed hole cannot silently enlarge the sampled area.
 
 ## Deep learning and hosted imagery
 

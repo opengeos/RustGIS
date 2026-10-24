@@ -1542,6 +1542,12 @@ impl StatOp {
     }
 }
 
+/// Parses the `bands` parameter for zonal statistics.
+pub fn zonal_bands(value: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    let dummy = serde_json::json!({ "bands": value });
+    parse_bands(&dummy, total_bands)
+}
+
 fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
     if total_bands == 0 {
         return Err("raster has no bands".into());

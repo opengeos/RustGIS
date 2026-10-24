@@ -42,6 +42,8 @@ pub enum Script {
     /// Arabic script (Persian): a face with Arabic and Latin letters, drawn ahead of the
     /// interface font.
     Arabic,
+    /// Bengali: an Indic script with a face discovered on the desktop where available.
+    Bengali,
 }
 
 /// Which CJK face reads best for a language (the glyph shapes differ by region).
@@ -81,7 +83,7 @@ macro_rules! lang {
 }
 
 /// The registry. English first: it is the source language and the fallback.
-pub static LANGUAGES: [LangInfo; 17] = [
+pub static LANGUAGES: [LangInfo; 18] = [
     LangInfo {
         code: "en",
         name: "English",
@@ -107,6 +109,7 @@ pub static LANGUAGES: [LangInfo; 17] = [
     lang!("ja", "日本語", "Japanese", Script::Cjk(CjkFont::Japanese), "ja.tsv"),
     lang!("ko", "한국어", "Korean", Script::Cjk(CjkFont::Korean), "ko.tsv"),
     lang!("ka", "ქართული", "Georgian", Script::Alphabetic, "ka.tsv"),
+    lang!("bn", "বাংলা", "Bengali", Script::Bengali, "bn.tsv"),
 ];
 
 fn unescape(s: &str) -> String {

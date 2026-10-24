@@ -730,7 +730,7 @@ fn palette_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, canvas: Rect) {
                     for tool in tools {
                         let resp = {
                             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(tool.name)));
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(tool.name)));
                             if resp.hovered() {
                                 ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
                             }
@@ -776,7 +776,7 @@ fn drag_source(ui: &Ui, resp: &egui::Response, what: &Add, label: &str) {
         && let Some(p) = ui.ctx().pointer_latest_pos()
     {
         let t = Tokens::get(ui.ctx());
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("mb_drag")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("mb_drag")));
         let galley = painter.layout_no_wrap(label.to_string(), semibold(12.0), t.text);
         let r = Rect::from_min_size(p + vec2(12.0, 8.0), galley.size() + vec2(16.0, 10.0));
         painter.rect(r, CornerRadius::same(6), t.pane, Stroke::new(1.5, kind_color(ModelNodeKind::Tool, &t)), egui::StrokeKind::Inside);
@@ -831,7 +831,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         app.mb.fit = false;
         fit(&mut app.mb, rect);
     }
-    let bg = ui.interact(rect, egui::Id::new("mb_canvas"), Sense::click_and_drag());
+    let bg = ui.interact(rect, egui::Id::unique("mb_canvas"), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, t.canvas);
     // Zoom (Ctrl+wheel, pinch) about the pointer; the wheel pans.
@@ -930,7 +930,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         if !r.intersects(rect.expand(50.0)) {
             continue;
         }
-        let resp = ui.interact(r.intersect(rect), egui::Id::new(("mb_node", &n.id)), Sense::click_and_drag());
+        let resp = ui.interact(r.intersect(rect), egui::Id::unique(("mb_node", &n.id)), Sense::click_and_drag());
         if resp.drag_started() {
             drag_started = true;
             clicked_node = Some(n.id.clone());
@@ -1020,7 +1020,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         }
         let p = view.to_screen(out_port_pos(&n));
         let pr = Rect::from_center_size(p, Vec2::splat(18.0 * z.max(0.7)));
-        let resp = ui.interact(pr, egui::Id::new(("mb_out", &n.id)), Sense::drag()).on_hover_text(tl!("Drag to an input to connect"));
+        let resp = ui.interact(pr, egui::Id::unique(("mb_out", &n.id)), Sense::drag()).on_hover_text(tl!("Drag to an input to connect"));
         if resp.drag_started() {
             app.mb.wiring = Some(n.id.clone());
         }
@@ -1268,9 +1268,11 @@ fn inspector_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model
         match n.kind {
             ModelNodeKind::Input => input_settings(app, ui, i, &n),
             ModelNodeKind::Output => {
-                ui.label(egui::RichText::new(tl!("Result name")).size(12.0));
+                let input_label = ui.label(egui::RichText::new(tl!("Result name")).size(12.0));
                 let mut name = n.name.clone().unwrap_or_default();
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tl!("Model output")).desired_width(f32::INFINITY));
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut name).hint_text(tl!("Model output")).desired_width(f32::INFINITY))
+                    .labelled_by(input_label.id);
                 if r.gained_focus() {
                     app.mb.edit();
                 }
@@ -1291,19 +1293,24 @@ fn inspector_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model
 }
 
 fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
-    ui.label(egui::RichText::new(tl!("Layer")).size(12.0));
+    let input_label = ui.label(egui::RichText::new(tl!("Layer")).size(12.0));
     let mut names: Vec<String> = app.session.map().layers.iter().map(|l| l.name.clone()).collect();
     names.extend(app.session.project.tables.iter().map(|t| t.name.clone()));
     let cur = n.layer.clone().unwrap_or_default();
     let shown = if cur.is_empty() { tl!("Choose a layer…").to_string() } else { cur.clone() };
     let mut picked = None;
-    egui::ComboBox::from_id_salt(("mb_layer", &n.id)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(ui, |ui| {
-        for name in names {
-            if ui.selectable_label(name == cur, &name).clicked() {
-                picked = Some(name);
+    egui::ComboBox::from_id_salt(("mb_layer", &n.id))
+        .selected_text(shown)
+        .width(ui.available_width() - 4.0)
+        .show_ui(ui, |ui| {
+            for name in names {
+                if ui.selectable_label(name == cur, &name).clicked() {
+                    picked = Some(name);
+                }
             }
-        }
-    });
+        })
+        .response
+        .labelled_by(input_label.id);
     if let Some(p) = picked.filter(|p| *p != cur) {
         app.mb.edit();
         if let Some(m) = app.mb.graph.nodes.get_mut(i) {
@@ -1394,9 +1401,10 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 .map(|l| l.name.clone())
                 .collect();
             let shown = if text.is_empty() { tl!("Connect, or pick a layer").to_string() } else { text.clone() };
-            egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                ui,
-                |ui| {
+            egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                .selected_text(shown)
+                .width(ui.available_width() - 4.0)
+                .show_ui(ui, |ui| {
                     if ui.selectable_label(text.is_empty(), "—").clicked() {
                         set = Some((p.name, Value::Null));
                     }
@@ -1405,15 +1413,16 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                             set = Some((p.name, json!(name)));
                         }
                     }
-                },
-            );
+                })
+                .response
+                .on_hover_text(tl!(p.label));
             ui.add_space(4.0);
             continue;
         }
         match p.kind {
             ParamKind::Bool => {
                 let mut on = cur.as_bool().unwrap_or(text == "true" || (cur.is_null() && default == "true"));
-                if ui.checkbox(&mut on, "").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(tl!(p.label)).changed() {
                     set = Some((p.name, json!(on)));
                 }
             }
@@ -1423,23 +1432,26 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 } else {
                     tl!(&text).to_string()
                 };
-                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                    .selected_text(shown)
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
                         for o in c {
                             if ui.selectable_label(*o == text, tl!(o)).clicked() {
                                 set = Some((p.name, json!(o)));
                             }
                         }
-                    },
-                );
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
             }
             ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField if !fields.is_empty() => {
                 let numeric = p.kind == ParamKind::NumericField;
                 let shown = if text.is_empty() { "—".to_string() } else { text.clone() };
-                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                    .selected_text(shown)
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
                         if !p.required && ui.selectable_label(text.is_empty(), "—").clicked() {
                             set = Some((p.name, Value::Null));
                         }
@@ -1448,8 +1460,9 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                                 set = Some((p.name, json!(f)));
                             }
                         }
-                    },
-                );
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
             }
             _ => {
                 let mut s = text.clone();
@@ -1459,7 +1472,7 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                     } else {
                         default.clone()
                     };
-                let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(hint).desired_width(f32::INFINITY));
+                let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(hint).desired_width(f32::INFINITY)).on_hover_text(tl!(p.label));
                 if r.gained_focus() {
                     focus = true;
                 }
@@ -1628,7 +1641,7 @@ fn log_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Prob
 fn confirm(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(p) = app.mb.confirm.clone() else { return };
     let mut answer = None;
-    egui::Modal::new(egui::Id::new("mb_confirm")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("mb_confirm")).show(ctx, |ui| {
         ui.set_width(320.0);
         ui.label(egui::RichText::new(tl!("Discard unsaved changes to the current model?")).strong());
         ui.add_space(8.0);

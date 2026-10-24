@@ -251,30 +251,43 @@ fn header(app: &mut RustGisApp, ui: &mut Ui, t: &TimeSlider, steps: &[f64], tk: 
         // Speed, show, step.
         let speeds = [(2000u32, "0.5×"), (1200, "0.75×"), (800, "1×"), (400, "2×"), (200, "4×")];
         let now = speeds.iter().min_by_key(|(ms, _)| ms.abs_diff(t.speed_ms)).map_or("1×", |(_, l)| *l);
-        egui::ComboBox::from_id_salt("time_speed").selected_text(now).width(56.0).show_ui(ui, |ui| {
-            for (ms, l) in speeds {
-                if ui.selectable_label(t.speed_ms == ms, l).clicked() {
-                    let _ = app.run("time.set", json!({"speed": ms}));
+        egui::ComboBox::from_id_salt("time_speed")
+            .selected_text(now)
+            .width(56.0)
+            .show_ui(ui, |ui| {
+                for (ms, l) in speeds {
+                    if ui.selectable_label(t.speed_ms == ms, l).clicked() {
+                        let _ = app.run("time.set", json!({"speed": ms}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!("Speed"));
         let looped = t.looping;
         if ui.selectable_label(looped, tl!("Loop")).on_hover_text(tl!("Start over at the end while playing.")).clicked() {
             let _ = app.run("time.set", json!({"loop": !looped}));
         }
         let presets = rustgis_engine::cmd::time::SHOWS;
         let shown = presets.iter().find(|(_, b, a, c)| *b == t.before && *a == t.after && *c == t.cumulative).map_or("custom", |p| p.0);
-        egui::ComboBox::from_id_salt("time_show").selected_text(show_label(shown)).width(130.0).show_ui(ui, |ui| {
-            for (code, ..) in presets {
-                if ui.button(show_label(code)).clicked() {
-                    let _ = app.run("time.set", json!({"show": code}));
+        egui::ComboBox::from_id_salt("time_show")
+            .selected_text(show_label(shown))
+            .width(130.0)
+            .show_ui(ui, |ui| {
+                for (code, ..) in presets {
+                    if ui.button(show_label(code)).clicked() {
+                        let _ = app.run("time.set", json!({"show": code}));
+                    }
                 }
-            }
-        });
-        ui.label(egui::RichText::new(tl!("Show")).font(regular(11.5)).color(tk.text_dim));
+            })
+            .response
+            .on_hover_text(tl!("Show"));
+        let input_label = ui.label(egui::RichText::new(tl!("Show")).font(regular(11.5)).color(tk.text_dim));
         // Applied when the drag or the typing ends: one undo step, not one a frame.
         let mut every = app.time.interval.unwrap_or(t.interval);
-        let r = ui.add(egui::DragValue::new(&mut every).range(1..=1000).speed(0.1)).on_hover_text(tl!("Units per step"));
+        let r = ui
+            .add(egui::DragValue::new(&mut every).range(1..=1000).speed(0.1))
+            .labelled_by(input_label.id)
+            .on_hover_text(tl!("Units per step"));
         if r.changed() {
             app.time.interval = Some(every);
         }
@@ -282,13 +295,18 @@ fn header(app: &mut RustGisApp, ui: &mut Ui, t: &TimeSlider, steps: &[f64], tk: 
         if done && let Some(n) = app.time.interval.take() {
             let _ = app.run("time.set", json!({"interval": n}));
         }
-        egui::ComboBox::from_id_salt("time_unit").selected_text(unit_label(t.unit)).width(70.0).show_ui(ui, |ui| {
-            for u in Unit::ALL {
-                if ui.selectable_label(t.unit == u, unit_label(u)).clicked() {
-                    let _ = app.run("time.set", json!({"unit": u.code()}));
+        egui::ComboBox::from_id_salt("time_unit")
+            .selected_text(unit_label(t.unit))
+            .width(70.0)
+            .show_ui(ui, |ui| {
+                for u in Unit::ALL {
+                    if ui.selectable_label(t.unit == u, unit_label(u)).clicked() {
+                        let _ = app.run("time.set", json!({"unit": u.code()}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!("Unit"));
         ui.label(egui::RichText::new(tl!("Step")).font(regular(11.5)).color(tk.text_dim));
     });
 }
@@ -319,14 +337,19 @@ fn layers_menu(app: &mut RustGisApp, ui: &mut Ui) {
                     let _ = if on { app.run("time.bind", json!({"layer": id})) } else { app.run("time.unbind", json!({"layer": id})) };
                 }
                 let current = bound.clone().or_else(|| fields.first().map(|f| f.0.clone())).unwrap_or_default();
-                egui::ComboBox::from_id_salt(("time_field", *id)).selected_text(current.as_str()).show_ui(ui, |ui| {
-                    for (f, share) in fields {
-                        let label = crate::i18n::fmt("{field} ({share}%)", &[("field", f), ("share", &format!("{:.0}", share * 100.0))]);
-                        if ui.selectable_label(*f == current, label).clicked() {
-                            let _ = app.run("time.bind", json!({"layer": id, "field": f}));
+                egui::ComboBox::from_id_salt(("time_field", *id))
+                    .selected_text(current.as_str())
+                    .show_ui(ui, |ui| {
+                        for (f, share) in fields {
+                            let label =
+                                crate::i18n::fmt("{field} ({share}%)", &[("field", f), ("share", &format!("{:.0}", share * 100.0))]);
+                            if ui.selectable_label(*f == current, label).clicked() {
+                                let _ = app.run("time.bind", json!({"layer": id, "field": f}));
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .on_hover_text(tl!("Field"));
             });
         }
         if !dated_tiles.is_empty() {

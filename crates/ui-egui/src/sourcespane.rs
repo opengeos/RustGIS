@@ -252,6 +252,9 @@ fn connections(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, list: &[Connection
             }
         });
         if ui.small_button("⟳").on_hover_text(tl!("Refresh every connection's lists")).clicked() {
+            for c in list.iter().filter(|c| DATABASE_KINDS.contains(&c.kind.as_str())) {
+                app.session.database_logins.retry_saved(&c.id);
+            }
             crate::connectiontree::refresh(app, None);
         }
     });
@@ -312,6 +315,10 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
     } else {
         ui.link(&c.name).on_hover_text(if c.kind == "s3" && c.address.is_empty() { tl!("Amazon S3") } else { &c.address })
     };
+    // The status precedes the kind: the narrow pane clips trailing row text.
+    if DATABASE_KINDS.contains(&c.kind.as_str()) && c.remembered {
+        ui.label(RichText::new(tl!("Saved password")).small().weak());
+    }
     ui.label(RichText::new(tl!(crate::connectionui::label(&c.kind))).small().weak());
     response.context_menu(|ui| {
         let mut items = vec![
@@ -336,7 +343,17 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
                 crate::connectionui::log_in(app, &c.id);
                 ui.close();
             }
+            if DATABASE_KINDS.contains(&c.kind.as_str()) && c.remembered && ui.button(tl!("Forget Saved Password")).clicked() {
+                match app.run("connection.forgetPassword", json!({"id":c.id})) {
+                    Ok(_) => crate::connectiontree::refresh(app, Some(&c.id)),
+                    Err(e) => app.session.notify(e, true),
+                }
+                ui.close();
+            }
             if ui.button(tl!("Refresh")).clicked() {
+                if DATABASE_KINDS.contains(&c.kind.as_str()) {
+                    app.session.database_logins.retry_saved(&c.id);
+                }
                 crate::connectiontree::refresh(app, Some(&c.id));
                 ui.close();
             }
@@ -353,8 +370,9 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
             ui.close();
         }
         if ui.button(tl!("Remove")).clicked() {
-            if let Err(e) = app.run("connection.remove", json!({"id":c.id})) {
-                app.session.notify(e, true);
+            match app.run("connection.remove", json!({"id":c.id})) {
+                Ok(_) => crate::connectiontree::refresh(app, Some(&c.id)),
+                Err(e) => app.session.notify(e, true),
             }
             ui.close();
         }

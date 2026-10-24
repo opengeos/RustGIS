@@ -33,6 +33,8 @@ fn first_x_metres(h: &egui_kittest::Harness<'_, RustGisApp>) -> f64 {
 
 fn choose_editing_units(h: &mut egui_kittest::Harness<'_, RustGisApp>, unit: &str) {
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Distance units").click();
+    // The list opens on the frame after the click.
+    h.step();
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, unit).click();
     h.step();
@@ -122,6 +124,8 @@ fn editing_units_are_remembered_and_applied_explicitly() {
             h.step();
         }
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Distance units").click();
+        h.step();
+        // What it opened shows on the next frame.
         h.step();
         let metres = h.get_by_role_and_label(egui::accesskit::Role::Button, "Meters");
         assert_eq!(metres.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "default metres option is not selected");
@@ -241,6 +245,8 @@ fn distance_controls_follow_display_units_and_keep_metre_command_values() {
         h.step();
     }
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Closest").click();
+    // The list opens on the frame after the click.
+    h.step();
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "6.2 mi").click();
     h.step();
@@ -252,6 +258,8 @@ fn distance_controls_follow_display_units_and_keep_metre_command_values() {
     }
     h.get_by_role_and_label(egui::accesskit::Role::Button, "View Clipping").click();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "62.1 mi").click();
     h.step();
     assert_eq!(h.state().session.map().view.clip_distance, Some(100000.0));
@@ -259,6 +267,8 @@ fn distance_controls_follow_display_units_and_keep_metre_command_values() {
     h.state_mut().run("ui.measurementUnits", json!({"units": "metric"})).unwrap();
     h.step();
     h.get_by_role_and_label(egui::accesskit::Role::Button, "View Clipping").click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     assert!(h.query_by_role_and_label(egui::accesskit::Role::RadioButton, "100 km").is_some());
     assert_eq!(h.state().session.map().view.clip_distance, Some(100000.0));

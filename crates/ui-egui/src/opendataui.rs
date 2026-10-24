@@ -471,26 +471,31 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
         let st = &mut app.ui.opendata;
         match svc {
             None => {
-                ui.label(tl!("Portal"));
+                let input_label = ui.label(tl!("Portal"));
                 let shown = PORTALS.iter().find(|(k, _, _)| *k == st.portal).map(|(_, n, _)| tl!(*n).to_string()).unwrap_or_default();
-                egui::ComboBox::from_id_salt("od_portal").selected_text(shown).width(w).show_ui(ui, |ui| {
-                    for (kind, name, _) in PORTALS {
-                        if ui.selectable_label(st.portal == kind, tl!(name)).clicked() && st.portal != kind {
-                            st.portal = kind;
-                            st.url.clear();
+                egui::ComboBox::from_id_salt("od_portal")
+                    .selected_text(shown)
+                    .width(w)
+                    .show_ui(ui, |ui| {
+                        for (kind, name, _) in PORTALS {
+                            if ui.selectable_label(st.portal == kind, tl!(name)).clicked() && st.portal != kind {
+                                st.portal = kind;
+                                st.url.clear();
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
                 ui.end_row();
-                ui.label(tl!("Address"));
+                let input_label = ui.label(tl!("Address"));
                 let hint = PORTALS.iter().find(|(k, _, _)| *k == st.portal).map(|(_, _, h)| tl!(*h)).unwrap_or_default();
-                ui.add(egui::TextEdit::singleline(&mut st.url).hint_text(hint).desired_width(w));
+                ui.add(egui::TextEdit::singleline(&mut st.url).hint_text(hint).desired_width(w)).labelled_by(input_label.id);
                 ui.end_row();
             }
             Some(s) => {
                 if let Some(hint) = s.address {
-                    ui.label(tl!("Address"));
-                    ui.add(egui::TextEdit::singleline(&mut st.url).hint_text(tl!(hint)).desired_width(w));
+                    let input_label = ui.label(tl!("Address"));
+                    ui.add(egui::TextEdit::singleline(&mut st.url).hint_text(tl!(hint)).desired_width(w)).labelled_by(input_label.id);
                     ui.end_row();
                 }
                 // A service with one portal (Tennessee) has nothing to pick.
@@ -498,13 +503,18 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     catalog_picker(ui, st, sets, w);
                 }
                 if s.id == "usgs-dem" {
-                    ui.label(tl!("Elevation model"));
+                    let input_label = ui.label(tl!("Elevation model"));
                     let shown = DEM_DATASETS.get(st.dem).map(|(l, _)| tl!(*l).to_string()).unwrap_or_default();
-                    egui::ComboBox::from_id_salt("od_dem").selected_text(shown).width(w).show_ui(ui, |ui| {
-                        for (i, (label, _)) in DEM_DATASETS.iter().enumerate() {
-                            ui.selectable_value(&mut st.dem, i, tl!(*label));
-                        }
-                    });
+                    egui::ComboBox::from_id_salt("od_dem")
+                        .selected_text(shown)
+                        .width(w)
+                        .show_ui(ui, |ui| {
+                            for (i, (label, _)) in DEM_DATASETS.iter().enumerate() {
+                                ui.selectable_value(&mut st.dem, i, tl!(*label));
+                            }
+                        })
+                        .response
+                        .labelled_by(input_label.id);
                     ui.end_row();
                 }
             }
@@ -766,26 +776,38 @@ fn card(
 
 /// The US portal picker: a set (department or state), then its portal.
 fn catalog_picker(ui: &mut egui::Ui, st: &mut State, sets: &'static [Set], w: f32) {
-    ui.label(tl!("Group"));
+    let input_label = ui.label(tl!("Group"));
     let shown = sets.get(st.set).map(|s| s.name).unwrap_or_default();
-    egui::ComboBox::from_id_salt("od_set").selected_text(shown).width(w).height(400.0).show_ui(ui, |ui| {
-        for (i, s) in sets.iter().enumerate() {
-            if ui.selectable_label(st.set == i, s.name).clicked() && st.set != i {
-                st.set = i;
-                st.catalog = 0;
+    egui::ComboBox::from_id_salt("od_set")
+        .selected_text(shown)
+        .width(w)
+        .height(400.0)
+        .show_ui(ui, |ui| {
+            for (i, s) in sets.iter().enumerate() {
+                if ui.selectable_label(st.set == i, s.name).clicked() && st.set != i {
+                    st.set = i;
+                    st.catalog = 0;
+                }
             }
-        }
-    });
+        })
+        .response
+        .labelled_by(input_label.id);
     ui.end_row();
     ui.label(tl!("Portal"));
     let catalogs = sets.get(st.set).map(|s| s.catalogs).unwrap_or_default();
     let shown = catalogs.get(st.catalog).map(|c| c.name).unwrap_or_default();
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("od_catalog").selected_text(shown).width(w - 44.0).height(400.0).show_ui(ui, |ui| {
-            for (i, c) in catalogs.iter().enumerate() {
-                ui.selectable_value(&mut st.catalog, i, c.name);
-            }
-        });
+        egui::ComboBox::from_id_salt("od_catalog")
+            .selected_text(shown)
+            .width(w - 44.0)
+            .height(400.0)
+            .show_ui(ui, |ui| {
+                for (i, c) in catalogs.iter().enumerate() {
+                    ui.selectable_value(&mut st.catalog, i, c.name);
+                }
+            })
+            .response
+            .on_hover_text(tl!("Catalog"));
         if let Some(c) = catalogs.get(st.catalog) {
             ui.hyperlink_to(tl!("Open"), c.url);
         }
