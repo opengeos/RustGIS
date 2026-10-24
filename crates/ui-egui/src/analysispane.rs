@@ -1186,7 +1186,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             if r.at > 0 {
                 let (_, time) = rustgis_engine::map::graphics::civil(r.at);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(format!("{time} UTC")).small().weak())
+                    ui.label(egui::RichText::new(crate::i18n::fmt("{time} UTC", &[("time", &time)])).small().weak())
                 });
             }
         });
