@@ -909,7 +909,13 @@ fn takes(session: &rustgis_engine::Session, id: &str, key: &str) -> bool {
 /// (`[related fields]`, `[names]`).
 fn field_type(session: &rustgis_engine::Session, id: &str, key: &str) -> Option<(bool, bool)> {
     let (_, text) = entries(&params_of(session, id)?).into_iter().find(|(keys, _)| keys.iter().any(|k| k == key))?;
-    let ty = text.split_once(':')?.1.trim_start();
+    entry_field_type(&text)
+}
+
+/// [`field_type`] read from a parameter's entry (`"fields"?: [numeric fields]`): its type, up to
+/// a note in parentheses (`field (metres)`), so a note's brackets aren't read as a list.
+fn entry_field_type(entry: &str) -> Option<(bool, bool)> {
+    let ty = entry.split_once(':')?.1.split('(').next()?.trim_start();
     let first = ty.trim_start_matches('[');
     let numeric = first.starts_with("numeric field");
     (numeric || first.starts_with("field")).then_some((numeric, ty.contains('[')))
@@ -2598,6 +2604,23 @@ mod tests {
         assert_eq!(super::item_icon(&app.session, Some(&super::Of::TableFields(table)), "street"), Some("field"));
         assert!(offer(&app, r#"layer.geocode {"table": "Nowhere", "address": ""#).is_none(), "a table that isn't there");
         assert!(offer(&app, r#"layer.geocode {"table": 7, "address": ""#).is_none(), "a table given as a number: not the layer's");
+    }
+
+    /// A parameter's type says whether it takes fields, only numeric ones, in a list; a note in
+    /// parentheses isn't part of it.
+    #[test]
+    fn an_entrys_type_says_whether_it_takes_fields() {
+        let ty = super::entry_field_type;
+        assert_eq!(ty(r#""field": field"#), Some((false, false)));
+        assert_eq!(ty(r#""sort"?: field|null"#), Some((false, false)));
+        assert_eq!(ty(r#""fields"?: [numeric fields]"#), Some((true, true)));
+        assert_eq!(ty(r#""address": field | [fields] (joined with commas)"#), Some((false, true)));
+        assert_eq!(ty(r#""fields"?: [fields searched] (default: text fields)"#), Some((false, true)));
+        assert_eq!(ty(r#""field"?: numeric field (metres)"#), Some((true, false)));
+        assert_eq!(ty(r#""name": field (the label [optional])"#), Some((false, false)), "a note's brackets");
+        assert_eq!(ty(r#""fields"?: [related fields]"#), None);
+        assert_eq!(ty(r#""fields"?: [names] (default: all)"#), None);
+        assert_eq!(ty(r#""layer"?"#), None, "no type");
     }
 
     /// Beside a layer, what it holds and its kind's icon, as the Layers pane shows it; beside a
