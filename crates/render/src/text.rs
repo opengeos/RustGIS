@@ -10,6 +10,8 @@ use crate::{PlacedLabel, View};
 use rustgis_map::Rgba;
 use rustgis_map::layout::TextAlign;
 
+mod widths;
+
 fn font(bold: bool) -> Option<&'static FontRef<'static>> {
     static R: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
     static B: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
@@ -202,7 +204,16 @@ pub fn line_count(text: &str) -> usize {
 }
 
 /// Text width in points at `size` (font px ≈ size × 1.33 for point sizes), drawn on one line.
+/// Repeated measurements share a bounded retention cache; fonts are discovered once per process.
+/// Long strings and non-finite sizes keep the uncached behavior, including its glyph limit.
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
+    static WIDTHS: OnceLock<widths::Cache> = OnceLock::new();
+    WIDTHS.get_or_init(widths::Cache::default).measure(text, size, bold, || measure_uncached(text, size, bold))
+}
+
+/// The original measurement, including em scaling, font fallbacks and the missing-font estimate.
+/// Cache misses call this outside the cache lock; no glyphs or font faces are retained by the cache.
+fn measure_uncached(text: &str, size: f32, bold: bool) -> f32 {
     let Some(f) = font(bold) else {
         return text.chars().count() as f32 * size * 0.6;
     };
