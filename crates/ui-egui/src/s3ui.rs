@@ -286,37 +286,43 @@ fn connection_form(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     let typed = st.source == "keys";
     egui::Grid::new("s3_conn").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Name"));
-        ui.add(egui::TextEdit::singleline(&mut st.name).hint_text("default").desired_width(300.0));
+        let input_label = ui.label(tl!("Name"));
+        ui.add(egui::TextEdit::singleline(&mut st.name).hint_text("default").desired_width(300.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Endpoint"));
-        ui.add(egui::TextEdit::singleline(&mut st.endpoint).hint_text(tl!("empty for AWS; https://… for others")).desired_width(300.0));
+        let input_label = ui.label(tl!("Endpoint"));
+        ui.add(egui::TextEdit::singleline(&mut st.endpoint).hint_text(tl!("empty for AWS; https://… for others")).desired_width(300.0))
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Region"));
-        ui.add(egui::TextEdit::singleline(&mut st.region).hint_text(s3::DEFAULT_REGION).desired_width(300.0));
+        let input_label = ui.label(tl!("Region"));
+        ui.add(egui::TextEdit::singleline(&mut st.region).hint_text(s3::DEFAULT_REGION).desired_width(300.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Keys from"));
+        let input_label = ui.label(tl!("Keys from"));
         let shown = SOURCES.iter().find(|(c, _)| *c == st.source).map(|(_, l)| tl!(*l).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("s3_source").selected_text(shown).width(300.0).show_ui(ui, |ui| {
-            for (code, label) in SOURCES {
-                // AWS profiles and the environment are the desktop's.
-                if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
-                    continue;
+        egui::ComboBox::from_id_salt("s3_source")
+            .selected_text(shown)
+            .width(300.0)
+            .show_ui(ui, |ui| {
+                for (code, label) in SOURCES {
+                    // AWS profiles and the environment are the desktop's.
+                    if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
+                        continue;
+                    }
+                    ui.selectable_value(&mut st.source, code.to_string(), tl!(label));
                 }
-                ui.selectable_value(&mut st.source, code.to_string(), tl!(label));
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         if st.source == "profile" {
-            ui.label(tl!("Profile"));
-            ui.add(egui::TextEdit::singleline(&mut st.profile).hint_text("default").desired_width(300.0));
+            let input_label = ui.label(tl!("Profile"));
+            ui.add(egui::TextEdit::singleline(&mut st.profile).hint_text("default").desired_width(300.0)).labelled_by(input_label.id);
             ui.end_row();
         }
-        ui.label(tl!("Access key ID"));
-        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.key).desired_width(300.0));
+        let input_label = ui.label(tl!("Access key ID"));
+        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.key).desired_width(300.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Secret access key"));
-        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.secret).password(true).desired_width(300.0));
+        let input_label = ui.label(tl!("Secret access key"));
+        ui.add_enabled(typed, egui::TextEdit::singleline(&mut st.secret).password(true).desired_width(300.0)).labelled_by(input_label.id);
         ui.end_row();
     });
     if ui.button(tl!("Connect")).clicked() {
@@ -349,13 +355,18 @@ fn browse(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let shown = if st.conn.is_empty() { tl!("AWS, anonymous").to_string() } else { st.conn.clone() };
     let mut go = false;
     ui.horizontal(|ui| {
-        ui.label(tl!("Browse with"));
-        egui::ComboBox::from_id_salt("s3_browse_conn").selected_text(shown).width(180.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.conn, String::new(), tl!("AWS, anonymous"));
-            for c in &conns {
-                ui.selectable_value(&mut st.conn, c.name.clone(), &c.name);
-            }
-        });
+        let input_label = ui.label(tl!("Browse with"));
+        egui::ComboBox::from_id_salt("s3_browse_conn")
+            .selected_text(shown)
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut st.conn, String::new(), tl!("AWS, anonymous"));
+                for c in &conns {
+                    ui.selectable_value(&mut st.conn, c.name.clone(), &c.name);
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         let signed = conns.iter().any(|c| c.name == st.conn && c.credentials.is_some());
         if ui.add_enabled(signed && st.buckets_job.is_none(), egui::Button::new(tl!("My Buckets"))).clicked()
             && let Some(c) = s3::connection(&st.conn)
@@ -376,8 +387,9 @@ fn browse(app: &mut RustGisApp, ui: &mut egui::Ui) {
         });
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Bucket"));
-        let r = ui.add(egui::TextEdit::singleline(&mut st.bucket).hint_text("sentinel-cogs").desired_width(260.0));
+        let input_label = ui.label(tl!("Bucket"));
+        let r =
+            ui.add(egui::TextEdit::singleline(&mut st.bucket).hint_text("sentinel-cogs").desired_width(260.0)).labelled_by(input_label.id);
         go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         go |= ui.add_enabled(st.listing_job.is_none(), egui::Button::new(tl!("List"))).clicked();
     });

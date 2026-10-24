@@ -190,17 +190,20 @@ fn provider(app: &mut RustGisApp, ui: &mut egui::Ui) {
         app.dialogs.mode = "nominatim";
     }
     egui::Grid::new("geocoder").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(tl!("Geocoder"));
+        let input_label = ui.label(tl!("Geocoder"));
         egui::ComboBox::from_id_salt("geocoder_kind")
             .selected_text(if app.dialogs.mode == "photon" { "Photon" } else { "Nominatim" })
             .width(200.0)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut app.dialogs.mode, "nominatim", "Nominatim");
                 ui.selectable_value(&mut app.dialogs.mode, "photon", "Photon");
-            });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Server"));
-        ui.add(egui::TextEdit::singleline(&mut app.dialogs.b).hint_text(tl!("OpenStreetMap's public server")).desired_width(280.0));
+        let input_label = ui.label(tl!("Server"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.b).hint_text(tl!("OpenStreetMap's public server")).desired_width(280.0))
+            .labelled_by(input_label.id);
         ui.end_row();
     });
 }
@@ -225,22 +228,28 @@ pub fn geocode(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         None => app.dialogs.layer.clone(),
     };
     egui::Grid::new("geocode").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(tl!("Table or layer"));
-        egui::ComboBox::from_id_salt("geocode_source").selected_text(shown).width(280.0).show_ui(ui, |ui| {
-            for (id, n) in &tables {
-                if ui.selectable_label(table == Some(*id), n).clicked() {
-                    (app.dialogs.layer, app.dialogs.flag) = (id.to_string(), true);
+        let input_label = ui.label(tl!("Table or layer"));
+        egui::ComboBox::from_id_salt("geocode_source")
+            .selected_text(shown)
+            .width(280.0)
+            .show_ui(ui, |ui| {
+                for (id, n) in &tables {
+                    if ui.selectable_label(table == Some(*id), n).clicked() {
+                        (app.dialogs.layer, app.dialogs.flag) = (id.to_string(), true);
+                    }
                 }
-            }
-            for n in &layers {
-                if ui.selectable_label(table.is_none() && app.dialogs.layer == *n, n).clicked() {
-                    (app.dialogs.layer, app.dialogs.flag) = (n.clone(), false);
+                for n in &layers {
+                    if ui.selectable_label(table.is_none() && app.dialogs.layer == *n, n).clicked() {
+                        (app.dialogs.layer, app.dialogs.flag) = (n.clone(), false);
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Address fields"));
-        ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text(tl!("street, city, country")).desired_width(280.0));
+        let input_label = ui.label(tl!("Address fields"));
+        ui.add(egui::TextEdit::singleline(&mut app.dialogs.a).hint_text(tl!("street, city, country")).desired_width(280.0))
+            .labelled_by(input_label.id);
         ui.end_row();
     });
     provider(app, ui);

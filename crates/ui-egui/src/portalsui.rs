@@ -135,24 +135,29 @@ pub fn osm(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let busy = app.ui.portals.waiting.is_some();
     egui::Grid::new("osm").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.portals;
-        ui.label(tl!("Preset"));
+        let input_label = ui.label(tl!("Preset"));
         let shown = overpass::PRESETS
             .iter()
             .find(|(id, _, _)| *id == st.preset)
             .map(|(_, l, _)| tl!(*l).to_string())
             .unwrap_or_else(|| tl!("None").to_string());
-        egui::ComboBox::from_id_salt("osm_preset").selected_text(shown).width(260.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.preset, String::new(), tl!("None"));
-            for (id, label, _) in overpass::PRESETS {
-                ui.selectable_value(&mut st.preset, (*id).to_string(), tl!(*label));
-            }
-        });
+        egui::ComboBox::from_id_salt("osm_preset")
+            .selected_text(shown)
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut st.preset, String::new(), tl!("None"));
+                for (id, label, _) in overpass::PRESETS {
+                    ui.selectable_value(&mut st.preset, (*id).to_string(), tl!(*label));
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Tags"));
-        ui.add(egui::TextEdit::singleline(&mut st.tags).hint_text("amenity=cafe, shop").desired_width(260.0));
+        let input_label = ui.label(tl!("Tags"));
+        ui.add(egui::TextEdit::singleline(&mut st.tags).hint_text("amenity=cafe, shop").desired_width(260.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Server"));
-        ui.add(egui::TextEdit::singleline(&mut st.server).hint_text(overpass::OVERPASS).desired_width(260.0));
+        let input_label = ui.label(tl!("Server"));
+        ui.add(egui::TextEdit::singleline(&mut st.server).hint_text(overpass::OVERPASS).desired_width(260.0)).labelled_by(input_label.id);
         ui.end_row();
     });
     if ui.add_enabled(!busy, egui::Button::new(tl!("Download"))).clicked() {
@@ -191,9 +196,9 @@ pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
     }
     egui::Grid::new("boundaries").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.portals;
-        ui.label(tl!("Country"));
+        let input_label = ui.label(tl!("Country"));
         if st.countries.is_empty() {
-            ui.add(egui::TextEdit::singleline(&mut st.country).hint_text("CHE").desired_width(260.0));
+            ui.add(egui::TextEdit::singleline(&mut st.country).hint_text("CHE").desired_width(260.0)).labelled_by(input_label.id);
         } else {
             let shown = st
                 .countries
@@ -201,26 +206,37 @@ pub fn boundaries(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 .find(|(iso, _)| *iso == st.country)
                 .map(|(iso, n)| format!("{n} ({iso})"))
                 .unwrap_or_else(|| tl!("Choose a country").to_string());
-            egui::ComboBox::from_id_salt("gb_country").selected_text(shown).width(260.0).height(360.0).show_ui(ui, |ui| {
-                for (iso, name) in &st.countries {
-                    ui.selectable_value(&mut st.country, iso.clone(), format!("{name} ({iso})"));
-                }
-            });
+            egui::ComboBox::from_id_salt("gb_country")
+                .selected_text(shown)
+                .width(260.0)
+                .height(360.0)
+                .show_ui(ui, |ui| {
+                    for (iso, name) in &st.countries {
+                        ui.selectable_value(&mut st.country, iso.clone(), format!("{name} ({iso})"));
+                    }
+                })
+                .response
+                .on_hover_text(tl!("Country"));
         }
         ui.end_row();
-        ui.label(tl!("Level"));
-        egui::ComboBox::from_id_salt("gb_level").selected_text(st.level.clone()).width(260.0).show_ui(ui, |ui| {
-            for (l, label) in [
-                ("ADM0", "ADM0 — the country"),
-                ("ADM1", "ADM1 — states, provinces"),
-                ("ADM2", "ADM2 — districts, counties"),
-                ("ADM3", "ADM3"),
-                ("ADM4", "ADM4"),
-                ("ADM5", "ADM5"),
-            ] {
-                ui.selectable_value(&mut st.level, l.to_string(), tl!(label));
-            }
-        });
+        let input_label = ui.label(tl!("Level"));
+        egui::ComboBox::from_id_salt("gb_level")
+            .selected_text(st.level.clone())
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for (l, label) in [
+                    ("ADM0", "ADM0 — the country"),
+                    ("ADM1", "ADM1 — states, provinces"),
+                    ("ADM2", "ADM2 — districts, counties"),
+                    ("ADM3", "ADM3"),
+                    ("ADM4", "ADM4"),
+                    ("ADM5", "ADM5"),
+                ] {
+                    ui.selectable_value(&mut st.level, l.to_string(), tl!(label));
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
     });
     if ui.add_enabled(!busy, egui::Button::new(tl!("Add"))).clicked() {

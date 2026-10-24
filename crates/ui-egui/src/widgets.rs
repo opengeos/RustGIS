@@ -372,13 +372,18 @@ pub fn ribbon_combo(ui: &mut Ui, id: &str, label: &str, current: &str, options: 
         if !label.is_empty() {
             ui.label(egui::RichText::new(tl!(label)).size(11.5));
         }
-        egui::ComboBox::from_id_salt(id).selected_text(current).width(width).show_ui(ui, |ui| {
-            for o in options {
-                if ui.selectable_label(o == current, o).clicked() {
-                    out = Some(o.clone());
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(current)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for o in options {
+                    if ui.selectable_label(o == current, o).clicked() {
+                        out = Some(o.clone());
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!(label));
     });
     out
 }
@@ -510,7 +515,6 @@ mod tests {
     /// Opens a colour button's picker and says whether it offers additive blending.
     fn offers_additive(button: fn(&mut egui::Ui, &mut egui::Color32)) -> bool {
         let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
             .build_ui_state(|ui, c: &mut egui::Color32| button(ui, c), egui::Color32::from_rgb(224, 105, 59));
         h.get_by_role(egui::accesskit::Role::ColorWell).click();
         h.run();
@@ -540,18 +544,18 @@ mod tests {
             whole: u64,
             settled: Vec<&'static str>,
         }
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
             |ui, s: &mut Saved| {
                 let mut real = s.real;
                 let drag = super::Dragged::lend(ui, egui::Id::unique("real"), &mut real);
-                let r = ui.add(egui::DragValue::new(&mut real).speed(0.1));
+                let r = ui.add(egui::DragValue::new(&mut real).speed(0.1)).on_hover_text("Real");
                 if drag.settled(ui, &r, &mut real) && real != s.real {
                     s.real = real;
                     s.settled.push("real");
                 }
                 let mut whole = s.whole;
                 let drag = super::Dragged::lend(ui, egui::Id::unique("whole"), &mut whole);
-                let r = ui.add(egui::DragValue::new(&mut whole).speed(0.1));
+                let r = ui.add(egui::DragValue::new(&mut whole).speed(0.1)).on_hover_text("Whole");
                 if drag.settled(ui, &r, &mut whole) && whole != s.whole {
                     s.whole = whole;
                     s.settled.push("whole");

@@ -63,14 +63,19 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let names: Vec<String> = app.session.project.reports.iter().map(|r| r.name.clone()).collect();
     let current = names.get(i).cloned().unwrap_or_default();
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("report_pick").selected_text(current.as_str()).width(ui.available_width() - 70.0).show_ui(ui, |ui| {
-            for (j, n) in names.iter().enumerate() {
-                if ui.selectable_label(j == i, n.as_str()).clicked() {
-                    let _ = app.run("report.activate", json!({"report": j}));
-                    app.reports.page = 0;
+        egui::ComboBox::from_id_salt("report_pick")
+            .selected_text(current.as_str())
+            .width(ui.available_width() - 70.0)
+            .show_ui(ui, |ui| {
+                for (j, n) in names.iter().enumerate() {
+                    if ui.selectable_label(j == i, n.as_str()).clicked() {
+                        let _ = app.run("report.activate", json!({"report": j}));
+                        app.reports.page = 0;
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!("Report"));
         if ui.small_button(tl!("Delete")).clicked() {
             run(app, "report.remove", json!({"report": i}));
             app.reports.page = 0;
@@ -92,8 +97,9 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         app.reports.where_clause = r.where_clause.clone();
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Title"));
-        let resp = ui.add(egui::TextEdit::singleline(&mut app.reports.title).desired_width(ui.available_width()));
+        let input_label = ui.label(tl!("Title"));
+        let resp =
+            ui.add(egui::TextEdit::singleline(&mut app.reports.title).desired_width(ui.available_width())).labelled_by(input_label.id);
         if resp.lost_focus() {
             if app.reports.title != r.title {
                 let title = app.reports.title.clone();
@@ -104,10 +110,14 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
     });
     ui.horizontal(|ui| {
-        ui.label(tl!("Where"));
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut app.reports.where_clause).hint_text("pop_max > 1000000").desired_width(ui.available_width()),
-        );
+        let input_label = ui.label(tl!("Where"));
+        let resp = ui
+            .add(
+                egui::TextEdit::singleline(&mut app.reports.where_clause)
+                    .hint_text("pop_max > 1000000")
+                    .desired_width(ui.available_width()),
+            )
+            .labelled_by(input_label.id);
         if resp.lost_focus() {
             if app.reports.where_clause != r.where_clause {
                 let w = app.reports.where_clause.clone();
@@ -136,9 +146,9 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             run(app, "report.autofill", json!({"report": i}));
         }
         let sort = r.sort.clone().unwrap_or_default();
-        egui::ComboBox::from_id_salt("report_sort").selected_text(crate::i18n::fmt("Sort: {field}", &[("field", &sort)])).show_ui(
-            ui,
-            |ui| {
+        egui::ComboBox::from_id_salt("report_sort")
+            .selected_text(crate::i18n::fmt("Sort: {field}", &[("field", &sort)]))
+            .show_ui(ui, |ui| {
                 if ui.selectable_label(r.sort.is_none(), tl!("None")).clicked() {
                     run(app, "report.update", json!({"report": i, "sort": null}));
                 }
@@ -147,8 +157,9 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         run(app, "report.update", json!({"report": i, "sort": f}));
                     }
                 }
-            },
-        );
+            })
+            .response
+            .on_hover_text(tl!("Sort"));
         let mut desc = r.descending;
         if ui.checkbox(&mut desc, tl!("Descending")).changed() {
             run(app, "report.update", json!({"report": i, "descending": desc}));
@@ -164,13 +175,17 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     }
-    egui::ComboBox::from_id_salt("report_group").selected_text(tl!("Add a group…")).show_ui(ui, |ui| {
-        for f in &fields {
-            if ui.selectable_label(false, f.as_str()).clicked() {
-                run(app, "report.group", json!({"report": i, "field": f}));
+    egui::ComboBox::from_id_salt("report_group")
+        .selected_text(tl!("Add a group…"))
+        .show_ui(ui, |ui| {
+            for f in &fields {
+                if ui.selectable_label(false, f.as_str()).clicked() {
+                    run(app, "report.group", json!({"report": i, "field": f}));
+                }
             }
-        }
-    });
+        })
+        .response
+        .on_hover_text(tl!("Add a group…"));
 
     heading(ui, "Statistics");
     for st in &r.stats {
@@ -186,16 +201,26 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if app.reports.stat_kind.is_empty() {
             app.reports.stat_kind = "sum".into();
         }
-        egui::ComboBox::from_id_salt("report_stat_kind").selected_text(app.reports.stat_kind.as_str()).width(70.0).show_ui(ui, |ui| {
-            for k in ["count", "sum", "mean", "min", "max"] {
-                ui.selectable_value(&mut app.reports.stat_kind, k.to_string(), k);
-            }
-        });
-        egui::ComboBox::from_id_salt("report_stat_field").selected_text(app.reports.stat_field.as_str()).width(120.0).show_ui(ui, |ui| {
-            for f in &fields {
-                ui.selectable_value(&mut app.reports.stat_field, f.clone(), f.as_str());
-            }
-        });
+        egui::ComboBox::from_id_salt("report_stat_kind")
+            .selected_text(app.reports.stat_kind.as_str())
+            .width(70.0)
+            .show_ui(ui, |ui| {
+                for k in ["count", "sum", "mean", "min", "max"] {
+                    ui.selectable_value(&mut app.reports.stat_kind, k.to_string(), k);
+                }
+            })
+            .response
+            .on_hover_text(tl!("Statistic"));
+        egui::ComboBox::from_id_salt("report_stat_field")
+            .selected_text(app.reports.stat_field.as_str())
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for f in &fields {
+                    ui.selectable_value(&mut app.reports.stat_field, f.clone(), f.as_str());
+                }
+            })
+            .response
+            .on_hover_text(tl!("Field"));
         if ui.small_button(tl!("Add")).clicked() {
             let (field, kind) = (app.reports.stat_field.clone(), app.reports.stat_kind.clone());
             run(app, "report.statistics", json!({"report": i, "field": field, "kind": kind}));
@@ -209,18 +234,22 @@ pub fn report(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ("Chart categories", "report.chart", r.chart.as_ref().map(|c| c.category.clone())),
     ] {
         ui.horizontal(|ui| {
-            ui.label(tl!(label));
+            let input_label = ui.label(tl!(label));
             let key = if id == "report.chart" { "category" } else { "field" };
-            egui::ComboBox::from_id_salt(id).selected_text(cur.clone().unwrap_or_else(|| tl!("None").to_string())).show_ui(ui, |ui| {
-                if ui.selectable_label(cur.is_none(), tl!("None")).clicked() {
-                    run(app, id, json!({"report": i, key: null}));
-                }
-                for f in &fields {
-                    if ui.selectable_label(cur.as_deref() == Some(f), f.as_str()).clicked() {
-                        run(app, id, json!({"report": i, key: f}));
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(cur.clone().unwrap_or_else(|| tl!("None").to_string()))
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(cur.is_none(), tl!("None")).clicked() {
+                        run(app, id, json!({"report": i, key: null}));
                     }
-                }
-            });
+                    for f in &fields {
+                        if ui.selectable_label(cur.as_deref() == Some(f), f.as_str()).clicked() {
+                            run(app, id, json!({"report": i, key: f}));
+                        }
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
         });
     }
 
