@@ -94,10 +94,14 @@ fn shown(c: &Class) -> String {
     }
 }
 
-/// Where the class chosen on a layer of this project is kept (another project may reuse the
-/// layer's id).
+/// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
+fn layer_key(app: &RustGisApp, l: &Layer) -> (u64, usize, u32) {
+    (app.session.opened, app.session.project.active_map, l.id)
+}
+
+/// Where the class chosen on a layer is kept.
 fn chosen_key(app: &RustGisApp, l: &Layer) -> egui::Id {
-    egui::Id::new(("label_pane_class", app.session.opened, l.id))
+    egui::Id::new(("label_pane_class", layer_key(app, l)))
 }
 
 /// The class chosen on `l`, by the name it has now; Default when none is, or when the one chosen
@@ -163,7 +167,7 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
 /// A class being renamed: the name typed so far, for the class it was started on.
 #[derive(Clone)]
 struct Renaming {
-    /// The project, layer and class it was started on.
+    /// The project, map, layer and class it was started on.
     owner: egui::Id,
     text: String,
     focused: bool,
@@ -173,7 +177,7 @@ struct Renaming {
 /// class. Default, last in the list, can be renamed or hidden, but not removed or moved.
 fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let rename_key = egui::Id::new("label_pane_rename");
-    let owner = egui::Id::new((app.session.opened, l.id, c.name));
+    let owner = egui::Id::new((layer_key(app, l), c.name));
     // A rename started on another class or layer (chosen since, or by an undo) is dropped.
     let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner);
     ui.data_mut(|d| d.remove::<Renaming>(rename_key));
@@ -327,9 +331,8 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
         let n = rows.iter().enumerate().filter(|(i, r)| **r && rustgis_engine::data::query::eval(&e, &l.dataset, *i)).count();
         Ok((n, of))
     };
-    // A draft belongs to this class of this layer of this project: another project may reuse the
-    // layer's id.
-    let owner = egui::Id::new((app.session.opened, l.id, c.name));
+    // A draft belongs to this class of this layer.
+    let owner = egui::Id::new((layer_key(app, l), c.name));
     // A count holds for this project state at this scale (display filters follow the scale).
     let version = egui::Id::new((app.session.revision, scale.to_bits())).value();
     let applied = match crate::sqlbox::show(ui, "label_sql", owner, version, c.it.where_.as_deref(), &l.dataset, count) {
@@ -1000,6 +1003,27 @@ mod tests {
         h.get_by_label("Bold").click();
         h.run();
         assert_ne!(labels(h.state()).default.bold, before, "the pane edits Default again");
+    }
+
+    /// The class chosen belongs to its map: a copy of the map has the same layer ids, and starts on
+    /// Default.
+    #[test]
+    fn the_chosen_class_stays_with_its_map() {
+        let mut app = with_cities();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        let map = app.session.map().name.clone();
+        let mut h = harness(app);
+        h.run();
+        pick_class(&mut h, "Default", "Big");
+        h.state_mut().run("map.duplicate", json!({})).unwrap();
+        h.run();
+        assert_ne!(h.state().session.map().name, map, "the copy is in view");
+        assert!(shown(&h, "Default"));
+        h.state_mut().run("map.activate", json!({"name": map})).unwrap();
+        let id = layer_id(h.state(), "Cities");
+        h.state_mut().run("layer.select", json!({"layer": id})).unwrap();
+        h.run();
+        assert!(shown(&h, "Big"), "back on its map");
     }
 
     /// New, Move Up, Rename and Remove each run their command once: one undo step each.
