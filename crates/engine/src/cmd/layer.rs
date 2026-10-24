@@ -431,6 +431,8 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
                 rustgis_map::symbology::MAX_DASH_STEP
             )
         };
+        // A pattern out of range is an error here, so a script learns of it; a project file's is
+        // brought into range instead (`de_dash`), so a hand-edited file still opens.
         let dash = match o.get("dash") {
             None | Some(Value::Null) => None,
             Some(Value::Array(a)) => {
