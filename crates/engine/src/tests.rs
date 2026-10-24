@@ -578,6 +578,34 @@ fn a_reference_scale_is_set_kept_and_undone() {
 }
 
 #[test]
+fn rivers_are_labelled_along_their_lines_in_italics() {
+    let mut s = world();
+    s.run("labels.field", &json!({"layer": "Rivers", "field": "name"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved"})).unwrap();
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": true})).unwrap();
+    let check = |s: &Session| {
+        let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
+        assert_eq!((c.placement, c.italic), (rustgis_map::LabelPlacement::Curved, true));
+    };
+    check(&s);
+    let dir = std::env::temp_dir().join(format!("rustgis-line-labels-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("labels.rgis");
+    s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
+    let mut t = Session::new(Project::default());
+    t.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
+    check(&t);
+    t.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "parallel"})).unwrap();
+    assert_eq!(s.map().layer_by_name("Rivers").unwrap().labels.default.placement, rustgis_map::LabelPlacement::Parallel);
+    // Not slanted unless asked: a project from before reads as upright.
+    s.run("labels.style", &json!({"layer": "Rivers", "italic": false})).unwrap();
+    let text = serde_json::to_string(&s.map().layer_by_name("Rivers").unwrap().labels).unwrap();
+    assert!(!text.contains("italic"), "{text}");
+}
+
+#[test]
 fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));

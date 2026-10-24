@@ -431,6 +431,22 @@ pub fn styled_at(pm: &mut Pixmap, text: &str, left: f32, cy: f32, px: f32, color
 /// Draws a placed label (logical coordinates) with its halo. A label turned with the map (one
 /// along a street) is drawn upright into a picture of its own, which is turned into place.
 pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
+    // Curved along a line: each character turned into its place.
+    if !l.glyphs.is_empty() {
+        for g in &l.glyphs {
+            let one = PlacedLabel {
+                text: g.text.clone(),
+                x: l.x + g.dx,
+                y: l.y + g.dy,
+                align: 0.0,
+                angle: None,
+                glyphs: Vec::new(),
+                ..l.clone()
+            };
+            draw_turned(pm, &one, g.angle, ppp);
+        }
+        return;
+    }
     match l.angle {
         Some(a) if a.is_finite() && a.abs() > 1e-3 => draw_turned(pm, l, a, ppp),
         _ => draw_upright(pm, l, ppp),
@@ -560,6 +576,7 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
         line_align: TextAlign::Left,
         angle: None,
         collide: Default::default(),
+        glyphs: Vec::new(),
     };
     draw(pm, &label, ppp);
 }

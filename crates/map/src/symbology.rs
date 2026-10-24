@@ -1150,6 +1150,9 @@ pub struct LabelClass {
     /// Where a label sits relative to its feature.
     #[serde(default)]
     pub placement: LabelPlacement,
+    /// Slanted (an italic face where the font has one).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
 }
 
 fn default_class_name() -> String {
@@ -1183,10 +1186,16 @@ pub enum LabelPlacement {
     AboveLeft,
     BelowRight,
     BelowLeft,
+    /// Along a line, straight, turned to its direction across the text, at its middle; points
+    /// and polygons are labelled as `Auto`.
+    Parallel,
+    /// Along a line, each character turned with it where it bends, at its middle; points and
+    /// polygons are labelled as `Auto`.
+    Curved,
 }
 
 impl LabelPlacement {
-    pub const ALL: [LabelPlacement; 10] = [
+    pub const ALL: [LabelPlacement; 12] = [
         LabelPlacement::Auto,
         LabelPlacement::Center,
         LabelPlacement::Above,
@@ -1197,6 +1206,8 @@ impl LabelPlacement {
         LabelPlacement::AboveLeft,
         LabelPlacement::BelowRight,
         LabelPlacement::BelowLeft,
+        LabelPlacement::Parallel,
+        LabelPlacement::Curved,
     ];
     pub fn code(self) -> &'static str {
         match self {
@@ -1210,6 +1221,8 @@ impl LabelPlacement {
             LabelPlacement::AboveLeft => "aboveLeft",
             LabelPlacement::BelowRight => "belowRight",
             LabelPlacement::BelowLeft => "belowLeft",
+            LabelPlacement::Parallel => "parallel",
+            LabelPlacement::Curved => "curved",
         }
     }
     pub fn label(self) -> &'static str {
@@ -1224,6 +1237,8 @@ impl LabelPlacement {
             LabelPlacement::AboveLeft => "Above Left",
             LabelPlacement::BelowRight => "Below Right",
             LabelPlacement::BelowLeft => "Below Left",
+            LabelPlacement::Parallel => "Parallel",
+            LabelPlacement::Curved => "Curved",
         }
     }
     pub fn from_code(s: &str) -> Option<LabelPlacement> {
@@ -1235,8 +1250,8 @@ impl LabelPlacement {
         let gap = marker / 2.0 + 2.0;
         let (dx, dy) = (w / 2.0 + gap, h / 2.0 + gap);
         match self {
-            LabelPlacement::Auto if is_point => (0.0, -(marker / 2.0 + h * 0.6)),
-            LabelPlacement::Auto | LabelPlacement::Center => (0.0, 0.0),
+            LabelPlacement::Auto | LabelPlacement::Parallel | LabelPlacement::Curved if is_point => (0.0, -(marker / 2.0 + h * 0.6)),
+            LabelPlacement::Auto | LabelPlacement::Center | LabelPlacement::Parallel | LabelPlacement::Curved => (0.0, 0.0),
             LabelPlacement::Above => (0.0, -dy),
             LabelPlacement::Below => (0.0, dy),
             LabelPlacement::Left => (-dx, 0.0),
@@ -1274,6 +1289,7 @@ impl LabelClass {
             closest: None,
             farthest: None,
             placement: LabelPlacement::Auto,
+            italic: false,
         }
     }
 

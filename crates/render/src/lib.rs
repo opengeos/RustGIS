@@ -10,6 +10,7 @@ mod effects;
 pub mod fonts;
 pub mod gpu_scene;
 pub mod layout;
+mod line_labels;
 pub mod logo;
 mod mesh;
 pub mod pdf;
@@ -109,7 +110,7 @@ use rustgis_data::{Dataset, Geometry, GeometryType};
 use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
 use rustgis_map::layout::TextAlign;
-use rustgis_map::{Camera, Globe, LineStroke, Map, Marker, Rgba, Symbol};
+use rustgis_map::{Camera, Globe, LabelPlacement, LineStroke, Map, Marker, Rgba, Symbol};
 /// The image type pages and maps are drawn into.
 pub use tiny_skia::Pixmap;
 use tiny_skia::{
@@ -194,6 +195,19 @@ pub struct PlacedLabel {
     pub angle: Option<f32>,
     /// How it collides with other labels (padding, optional text or icon, overlaps).
     pub collide: rustgis_tiles::Collide,
+    /// Curved along a line: its characters one by one, each placed and turned where the line
+    /// takes it (`text` is all of them). Empty for a label drawn as one block.
+    pub glyphs: Vec<LabelGlyph>,
+}
+
+/// One character of a label curved along a line: its text, and its centre and angle (radians,
+/// clockwise, kept upright) relative to the label's `x`, `y`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LabelGlyph {
+    pub text: String,
+    pub dx: f32,
+    pub dy: f32,
+    pub angle: f32,
 }
 
 impl PlacedLabel {
@@ -2932,6 +2946,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             line_align: rustgis_map::graphics::align(ds_ptr, row),
                             angle: None,
                             collide: Default::default(),
+                            glyphs: Vec::new(),
                         });
                     }
                 }
@@ -2958,6 +2973,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                     let Some((x, y)) = ctx.screen(c) else { continue };
                     let is_point = g.kind() == GeometryType::Point;
+                    // A line's longest part on the screen, for the classes placed along it: worked
+                    // out once, for the first that asks.
+                    let mut screen_line: Option<Option<Vec<(f32, f32)>>> = None;
                     let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                     // Bigger polygons get priority.
                     let area = match g {
@@ -2991,6 +3009,25 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             is_point,
                         );
                         let (dx, dy) = (dx * label_factor, dy * label_factor);
+                        let (mut lx, mut ly, mut angle, mut glyphs) = (x as f32 + dx, y as f32 + dy, None, Vec::new());
+                        if let (LabelPlacement::Parallel | LabelPlacement::Curved, Geometry::Line(parts)) = (class.placement, g) {
+                            let line = screen_line.get_or_insert_with(|| longest_on_screen(ctx, parts));
+                            let Some(line) = line.as_deref() else { continue };
+                            // It may run past the line's ends by about a letter, as QGIS's overrun.
+                            let overrun = size;
+                            if class.placement == LabelPlacement::Parallel {
+                                let width = text::block_width(&text, size, class.bold);
+                                let Some((cx, cy, a)) = line_labels::parallel(line, width, overrun) else { continue };
+                                (lx, ly, angle) = (cx, cy, Some(a));
+                            } else {
+                                let chars: Vec<String> = text.chars().map(String::from).collect();
+                                let advances: Vec<f32> = chars.iter().map(|c| text::measure(c, size, class.bold)).collect();
+                                let Some(((cx, cy), at)) = line_labels::curved(line, &advances, overrun) else { continue };
+                                (lx, ly) = (cx, cy);
+                                glyphs =
+                                    chars.into_iter().zip(at).map(|(text, (dx, dy, angle))| LabelGlyph { text, dx, dy, angle }).collect();
+                            }
+                        }
                         // Layers above first, then the classes listed first (#732), then bigger
                         // polygons: a class (ci ≤ MAX_LABEL_CLASSES, 1e9 each) never outweighs a
                         // layer (1e12), nor an area (≤ 1e8) a class.
@@ -2998,8 +3035,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         label_candidates.push((
                             PlacedLabel {
                                 text,
-                                x: x as f32 + dx,
-                                y: y as f32 + dy,
+                                x: lx,
+                                y: ly,
                                 size,
                                 color: class.color,
                                 halo: class.halo.then_some(halo_for(class.color)),
@@ -3007,11 +3044,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 icon: None,
                                 align: 0.0,
                                 framed: false,
-                                italic: false,
+                                italic: class.italic,
                                 spacing: 0.0,
                                 line_align: TextAlign::Left,
-                                angle: None,
+                                angle,
                                 collide: Default::default(),
+                                glyphs,
                             },
                             pri,
                             (lid, label_row(row), ci),
@@ -3654,6 +3692,20 @@ pub fn render_tilt_drape(map: &mut Map, view: &View, margin: f64, max_side: u32)
 /// Turns a label turned with the map (and its icon) as `at` moves it into another view (a
 /// turned or tilted one): its angle there is that of a short step along it, the text kept
 /// upright. Called before the label itself is moved.
+/// A line's longest part as it is on the screen, in points (`None` when no part has two points
+/// in sight): the one a label along the line follows.
+fn longest_on_screen(ctx: &Ctx<'_>, parts: &[Vec<Coord>]) -> Option<Vec<(f32, f32)>> {
+    let screen = |part: &Vec<Coord>| -> Vec<(f32, f32)> {
+        part.iter()
+            .filter_map(|c| ctx.screen(*c))
+            .map(|(x, y)| (x as f32, y as f32))
+            .filter(|p| p.0.is_finite() && p.1.is_finite())
+            .collect()
+    };
+    let length = |pts: &[(f32, f32)]| pts.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum::<f32>();
+    parts.iter().map(screen).filter(|pts| pts.len() >= 2).max_by(|a, b| length(a).total_cmp(&length(b)))
+}
+
 fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) {
     let turned = |x: f32, y: f32, a: f32| -> Option<f32> {
         let ((x0, y0), (x1, y1)) = (at(x, y)?, at(x + 4.0 * a.cos(), y + 4.0 * a.sin())?);
@@ -3663,6 +3715,27 @@ fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) 
     if let Some(a) = l.angle {
         let x = l.center_x();
         l.angle = Some(turned(x, l.y, a).map_or(a, rustgis_tiles::symbols::upright));
+    }
+    // A curved label's characters: each moved and turned, about where its centre goes.
+    if !l.glyphs.is_empty()
+        && let Some((cx, cy)) = at(l.x, l.y)
+    {
+        for g in &mut l.glyphs {
+            let (gx, gy) = (l.x + g.dx, l.y + g.dy);
+            if let Some((x, y)) = at(gx, gy) {
+                (g.dx, g.dy) = (x - cx, y - cy);
+            }
+            g.angle = turned(gx, gy, g.angle).unwrap_or(g.angle);
+        }
+        // Turned upside down (a map turned past a quarter): read from the other end.
+        let back = l.glyphs.iter().map(|g| g.angle.cos()).sum::<f32>() < 0.0;
+        if back {
+            let texts: Vec<String> = l.glyphs.iter().rev().map(|g| g.text.clone()).collect();
+            for (g, t) in l.glyphs.iter_mut().zip(texts) {
+                g.text = t;
+                g.angle += std::f32::consts::PI;
+            }
+        }
     }
     if let Some(i) = &mut l.icon
         && let Some(a) = i.angle
@@ -3759,6 +3832,15 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         let th = text::block_height(&l.text, l.size);
         let p = l.collide.text_padding.clamp(0.0, 100.0);
         let cx = l.center_x();
+        if !l.glyphs.is_empty() {
+            // A curved label: a square round each character, as tall as the text.
+            let r = th / 2.0 + p;
+            for g in l.glyphs.iter().take(500) {
+                let (x, y) = (l.x + g.dx, l.y + g.dy);
+                text.push([x - r, y - r, x + r, y + r]);
+            }
+            return (text, Vec::new());
+        }
         match l.angle.filter(|a| a.is_finite() && a.abs() > 1e-3) {
             Some(a) => {
                 // Squares as tall as the text, end to end along it.
@@ -3904,6 +3986,7 @@ pub(crate) fn draw_attribution(pm: &mut Pixmap, attribution: &[String], ppp: f32
         line_align: TextAlign::Left,
         angle: None,
         collide: Default::default(),
+        glyphs: Vec::new(),
     };
     text::draw(pm, &label, ppp);
 }
@@ -3928,6 +4011,7 @@ mod tests {
             line_align: TextAlign::Left,
             angle: None,
             collide: Default::default(),
+            glyphs: Vec::new(),
         }
     }
 
@@ -5517,6 +5601,75 @@ mod tests {
             m.layer_mut(id).unwrap().reference_scale = Some(reference);
             assert!((gpu_width(&mut m) - plain * k).abs() < 1e-3, "gpu at reference 1:{reference:.0}");
         }
+    }
+
+    #[test]
+    fn labels_run_along_lines_straight_or_curved() {
+        // A road rising to the right, labelled along it: straight and turned to it, or a
+        // character at a time; drawn either way, and a too sharp bend leaves a curved label out.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, -1.0), Coord::new(1.0, 1.0)]])), vec![Value::Text("Seestrasse".into())]);
+        // A right angle at its middle.
+        d.push(
+            Some(Geometry::Line(vec![vec![Coord::new(-1.0, -1.6), Coord::new(0.6, -1.6), Coord::new(0.6, 0.0)]])),
+            vec![Value::Text("Bahnhofstrasse".into())],
+        );
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.3)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: false };
+        let l = m.layer_mut(id).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.field = "name".into();
+        l.labels.default.size = 12.0;
+        l.labels.default.placement = rustgis_map::LabelPlacement::Parallel;
+        let r = render(&mut m, &view).unwrap();
+        let along = r.labels.iter().find(|l| l.text == "Seestrasse").expect("placed");
+        // Up and to the right on the screen: −45°, about the middle of the line.
+        assert!(along.angle.is_some_and(|a| (a + std::f32::consts::FRAC_PI_4).abs() < 0.02), "{:?}", along.angle);
+        assert!(along.glyphs.is_empty());
+        m.layer_mut(id).unwrap().labels.default.placement = rustgis_map::LabelPlacement::Curved;
+        let r = render(&mut m, &view).unwrap();
+        let curved = r.labels.iter().find(|l| l.text == "Seestrasse").expect("placed");
+        assert_eq!(curved.glyphs.iter().map(|g| g.text.as_str()).collect::<String>(), "Seestrasse");
+        assert!(curved.glyphs.windows(2).all(|w| w[1].dx > w[0].dx && w[1].dy < w[0].dy), "left to right, rising");
+        assert!(r.labels.iter().all(|l| l.text != "Bahnhofstrasse"), "the bend is too sharp to curve round");
+        // Drawn: dark text along the line, and a square to collide with per character.
+        let mut pm = Pixmap::new(400, 400).unwrap();
+        text::draw(&mut pm, curved, 1.0);
+        let dark = pm.pixels().iter().filter(|p| p.alpha() > 200 && p.red() < 120).count();
+        assert!(dark > 30, "{dark} text pixels");
+        assert_eq!(label_boxes(curved).0.len(), 10);
+    }
+
+    #[test]
+    fn a_curved_label_turned_upside_down_reads_from_its_other_end() {
+        // "AB" along a level line, then the map turned half round: the characters swap ends and
+        // stay upright.
+        let glyph = |text: &str, dx: f32| LabelGlyph { text: text.into(), dx, dy: 0.0, angle: 0.0 };
+        let mut l = PlacedLabel {
+            text: "AB".into(),
+            x: 100.0,
+            y: 100.0,
+            size: 10.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo: None,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed: false,
+            italic: false,
+            spacing: 0.0,
+            line_align: TextAlign::Left,
+            angle: None,
+            collide: Default::default(),
+            glyphs: vec![glyph("A", -5.0), glyph("B", 5.0)],
+        };
+        turn_with(&mut l, &|x, y| Some((200.0 - x, 200.0 - y)));
+        let order: Vec<(&str, f32)> = l.glyphs.iter().map(|g| (g.text.as_str(), g.dx)).collect();
+        assert_eq!(order, [("B", 5.0), ("A", -5.0)]);
+        assert!(l.glyphs.iter().all(|g| g.angle.cos() > 0.99), "upright");
     }
 
     #[test]

@@ -1197,6 +1197,14 @@ fn place_galley(anchor: Align2, at: Pos2, g: &egui::Galley) -> (Pos2, Rect) {
 }
 
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
+    // Curved along a line: each character turned into its place.
+    if !l.glyphs.is_empty() {
+        for g in &l.glyphs {
+            let one = PlacedLabel { text: g.text.clone(), angle: Some(g.angle), align: 0.0, glyphs: Vec::new(), ..l.clone() };
+            draw_label(p, &one, at + vec2(g.dx, g.dy));
+        }
+        return;
+    }
     let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
     let anchor = if l.align < -0.25 {
