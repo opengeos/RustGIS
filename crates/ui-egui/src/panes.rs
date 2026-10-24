@@ -25,22 +25,25 @@ use crate::{LayersView, LeftPane, RightPane, RustGisApp, icons};
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.pane).inner_margin(egui::Margin::ZERO);
+    app.ui.pane_rects = [None; 2];
     if let Some(left) = app.ui.left {
-        egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
-            left_header(app, ui, left, &t);
-            // The search box sits at the foot of every left pane, the app's lower-left corner.
-            crate::searchbox::show(app, ui, &t);
-            // As on the right: a row wider than the pane (a long folder path, a long favourite) is
-            // clipped at its edge, never reported to the panel, which would widen to fit it (#353).
-            let rect = ui.available_rect_before_wrap();
-            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
-            match left {
-                LeftPane::Contents => contents(app, &mut body, &t),
-                LeftPane::Catalog => catalog(app, &mut body, &t),
-                LeftPane::Sources => crate::sourcespane::show(app, &mut body, &t),
-            }
-            ui.advance_cursor_after_rect(rect);
-        });
+        let pane =
+            egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
+                left_header(app, ui, left, &t);
+                // The search box sits at the foot of every left pane, the app's lower-left corner.
+                crate::searchbox::show(app, ui, &t);
+                // As on the right: a row wider than the pane (a long folder path, a long favourite) is
+                // clipped at its edge, never reported to the panel, which would widen to fit it (#353).
+                let rect = ui.available_rect_before_wrap();
+                let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                match left {
+                    LeftPane::Contents => contents(app, &mut body, &t),
+                    LeftPane::Catalog => catalog(app, &mut body, &t),
+                    LeftPane::Sources => crate::sourcespane::show(app, &mut body, &t),
+                }
+                ui.advance_cursor_after_rect(rect);
+            });
+        app.ui.pane_rects[0] = Some(pane.response.rect);
     }
     // A point picked for the Time Series pane is taken only while that pane shows: with it
     // closed or another in view, the pick ends rather than waiting with a stale click.
@@ -68,7 +71,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(right) = app.ui.right {
         // The Web Data pane's searches and lists want room: it keeps its own width.
         let (id, width) = if right == RightPane::WebData { ("right_pane_web", 440.0) } else { ("right_pane", 320.0) };
-        egui::Panel::right(id).resizable(true).default_size(width).size_range(260.0..=640.0).frame(frame).show(ui, |ui| {
+        let pane = egui::Panel::right(id).resizable(true).default_size(width).size_range(260.0..=640.0).frame(frame).show(ui, |ui| {
             // The pane is as wide as the user made it. Content wider than that is clipped, never
             // reported to the panel: egui would keep the panel's edge where the content ends, off
             // the window, and give the map the room it no longer covers (#307).
@@ -77,6 +80,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             right_pane(app, &mut body, right, &t);
             ui.advance_cursor_after_rect(rect);
         });
+        app.ui.pane_rects[1] = Some(pane.response.rect);
     }
     // Here rather than in the Symbology and Labeling panes, so a drag still finishes if the pane
     // closes meanwhile; and after the panes, so a change the picker reports as the pointer is let
@@ -291,8 +295,8 @@ fn right_header(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens)
         let (_, cmd) = right_title(pane);
         let on = pane == right;
         let tr = Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height()));
-        let resp = ui.interact(tr, egui::Id::new(("right_pane_tab", pane as u8)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name));
+        let resp = ui.interact(tr, egui::Id::unique(("right_pane_tab", pane as u8)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
         let p = ui.painter();
         if resp.hovered() && !on {
             p.rect_filled(tr.shrink2(vec2(1.0, 5.0)), CornerRadius::same(4), t.hover);
@@ -304,9 +308,9 @@ fn right_header(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens)
         }
         // The tab's ✕ closes its pane, in view or not.
         let cr = Rect::from_center_size(pos2(tr.max.x - 5.0 - cross / 2.0, tr.center().y), vec2(cross, cross));
-        let x_resp = ui.interact(cr, egui::Id::new(("right_pane_close", pane as u8)), Sense::click());
+        let x_resp = ui.interact(cr, egui::Id::unique(("right_pane_close", pane as u8)), Sense::click());
         let tip = crate::i18n::fmt("Close {name}", &[("name", name)]);
-        x_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+        x_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tip));
         if x_resp.hovered() {
             ui.painter().rect_filled(cr, CornerRadius::same(3), t.hover);
         }
@@ -335,8 +339,8 @@ fn right_header(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens)
     }
     // The ✕ at the end closes them all.
     let all = Rect::from_center_size(pos2(r.max.x - 18.0, r.center().y), vec2(22.0, 22.0));
-    let all_resp = ui.interact(all, egui::Id::new("right_pane_close_all"), Sense::click());
-    all_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close all panes")));
+    let all_resp = ui.interact(all, egui::Id::unique("right_pane_close_all"), Sense::click());
+    all_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close all panes")));
     if all_resp.hovered() {
         ui.painter().rect_filled(all, CornerRadius::same(4), t.hover);
     }
@@ -348,9 +352,9 @@ fn right_header(app: &mut RustGisApp, ui: &mut Ui, right: RightPane, t: &Tokens)
     let hidden: Vec<RightPane> = (0..open.len()).filter(|i| !shown.contains(i)).filter_map(|i| open.get(i).copied()).collect();
     if !hidden.is_empty() {
         let mr = Rect::from_center_size(pos2(r.max.x - all_w - more_w / 2.0, r.center().y), vec2(more_w - 4.0, 22.0));
-        let more = ui.interact(mr, egui::Id::new("right_pane_more"), Sense::click());
+        let more = ui.interact(mr, egui::Id::unique("right_pane_more"), Sense::click());
         let tip = crate::i18n::fmt("{n} more panes", &[("n", &hidden.len().to_string())]);
-        more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+        more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tip));
         if more.hovered() {
             ui.painter().rect_filled(mr, CornerRadius::same(4), t.hover);
         }
@@ -386,7 +390,7 @@ fn header_strip(ui: &mut Ui, t: &Tokens) -> Rect {
 /// The ✕ at the right end of a pane header `r`, running `close`.
 fn close_button(app: &mut RustGisApp, ui: &mut Ui, r: Rect, close: &str, salt: &str, t: &Tokens) {
     let cr = Rect::from_center_size(pos2(r.max.x - 18.0, r.center().y), vec2(22.0, 22.0));
-    let resp = ui.interact(cr, egui::Id::new(("pane_close", salt)), Sense::click());
+    let resp = ui.interact(cr, egui::Id::unique(("pane_close", salt)), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(cr, CornerRadius::same(4), t.hover);
     }
@@ -420,9 +424,9 @@ fn left_header(app: &mut RustGisApp, ui: &mut Ui, left: LeftPane, t: &Tokens) {
         let w = if icons_only { 32.0 } else { width };
         let tr = Rect::from_min_size(pos2(x, r.min.y), vec2(w, r.height()));
         let on = *pane == left;
-        let mut resp = ui.interact(tr, egui::Id::new(("left_pane_tab", i)), Sense::click());
+        let mut resp = ui.interact(tr, egui::Id::unique(("left_pane_tab", i)), Sense::click());
         // Named and marked open for screen readers (and scripted clicks), icons or not.
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
         let p = ui.painter();
         if resp.hovered() && !on {
             p.rect_filled(tr.shrink2(vec2(1.0, 5.0)), CornerRadius::same(4), t.hover);
@@ -628,7 +632,7 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         // The map's row takes copied layers (#491), at the top: there is one even with no layers.
         // Across the pane, like the layer rows, not just its name.
         let row = Rect::from_min_max(header.rect.min, pos2(ui.max_rect().max.x, header.rect.max.y));
-        let header = ui.interact(row, egui::Id::new("layers_map_header"), Sense::click());
+        let header = ui.interact(row, egui::Id::unique("layers_map_header"), Sense::click());
         header.context_menu(|ui| {
             if paste_layers_button(app, ui) {
                 ui.close();
@@ -818,7 +822,7 @@ const LAYERS_VIEWS: [(LayersView, &str, &str); 3] = [
 /// A small icon button that picks a Layers view; `on` marks the view shown.
 fn view_button(ui: &mut Ui, icon: &str, hover: &str, on: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, hover));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, hover));
     if on {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.selection);
     } else if resp.hovered() {
@@ -1051,8 +1055,8 @@ fn selection_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     active_outline(ui, r, app.session.active_layer == Some(l.id), t);
     // Lined up with the other views' checkboxes and names.
     let cb = Rect::from_center_size(pos2(r.min.x + 33.0, cy), vec2(14.0, 14.0));
-    let cb_resp = ui.interact(hit(cb), egui::Id::new(("layer_selectable", l.id)), Sense::click());
-    cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, l.selectable, tl!("Selectable")));
+    let cb_resp = ui.interact(hit(cb), egui::Id::unique(("layer_selectable", l.id)), Sense::click());
+    cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, l.selectable, tl!("Selectable")));
     visibility_box(ui, cb, l.selectable, t);
     // Only the map's interactive selection reads it: the tools that name a layer (Select By
     // Attributes, Select Layer By Location, the attribute table) select in any layer.
@@ -1061,8 +1065,8 @@ fn selection_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     }
     if count > 0 {
         let cr = Rect::from_center_size(pos2(r.max.x - 8.0 - 11.0, cy), vec2(22.0, 22.0));
-        let clear = ui.interact(cr, egui::Id::new(("layer_selection_clear", l.id)), Sense::click());
-        clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Clear selection")));
+        let clear = ui.interact(cr, egui::Id::unique(("layer_selection_clear", l.id)), Sense::click());
+        clear.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear selection")));
         if clear.hovered() {
             ui.painter().rect_filled(cr, CornerRadius::same(5), t.hover);
         }
@@ -1113,7 +1117,7 @@ fn service_group_row(
         // in the same places.
         let name = row_name(ui, group.name.clone(), semibold(12.5), ui.available_width() - NAME_X - 8.0);
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &group.name));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &group.name));
         if resp.hovered() {
             ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
         }
@@ -1121,11 +1125,11 @@ fn service_group_row(
         let ar = Rect::from_center_size(pos2(r.min.x + 16.0, cy), vec2(14.0, 14.0));
         icons::paint(ui.painter(), ar, if group.expanded { "chevron_down" } else { "chevron_right" }, t.text_dim, t.accent);
         // `interact` takes the id as it is (not under the `push_id`): each group's own.
-        let arrow = ui.interact(hit(ar), egui::Id::new(("group_expand", group.id)), Sense::click());
+        let arrow = ui.interact(hit(ar), egui::Id::unique(("group_expand", group.id)), Sense::click());
         let visible = !children.is_empty() && children.iter().all(|l| l.visible);
         let cb = Rect::from_center_size(pos2(r.min.x + 33.0, cy), vec2(14.0, 14.0));
-        let cb_resp = ui.interact(hit(cb), egui::Id::new(("group_visible", group.id)), Sense::click());
-        cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, visible, tl!("Show or hide")));
+        let cb_resp = ui.interact(hit(cb), egui::Id::unique(("group_visible", group.id)), Sense::click());
+        cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, visible, tl!("Show or hide")));
         visibility_box(ui, cb, visible, t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 57.0, cy), vec2(18.0, 16.0)), "map", t.icon, t.accent);
         let elided = name.elided;
@@ -1184,7 +1188,7 @@ fn layer_group_row(
         let name = row_name(ui, group.name.clone(), semibold(12.5), ui.available_width() - NAME_X - 8.0);
         let sense = if reorder { Sense::click_and_drag() } else { Sense::click() };
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &group.name));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &group.name));
         if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
             egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(group.id));
         }
@@ -1196,10 +1200,10 @@ fn layer_group_row(
         let cy = r.min.y + 13.0;
         let ar = Rect::from_center_size(pos2(r.min.x + 16.0, cy), vec2(14.0, 14.0));
         icons::paint(ui.painter(), ar, if group.expanded { "chevron_down" } else { "chevron_right" }, t.text_dim, t.accent);
-        let arrow = ui.interact(hit(ar), egui::Id::new(("layer_group_expand", group.id)), Sense::click());
+        let arrow = ui.interact(hit(ar), egui::Id::unique(("layer_group_expand", group.id)), Sense::click());
         let cb = Rect::from_center_size(pos2(r.min.x + 33.0, cy), vec2(14.0, 14.0));
-        let cb_resp = ui.interact(hit(cb), egui::Id::new(("layer_group_visible", group.id)), Sense::click());
-        cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, group.visible, tl!("Show or hide")));
+        let cb_resp = ui.interact(hit(cb), egui::Id::unique(("layer_group_visible", group.id)), Sense::click());
+        cb_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, group.visible, tl!("Show or hide")));
         visibility_box(ui, cb, group.visible, t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 57.0, cy), vec2(18.0, 16.0)), "contents", t.icon, t.accent);
         let elided = name.elided;
@@ -1406,7 +1410,7 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
     let cy = r.min.y + 13.0;
     let mut x = r.min.x + 26.0;
     let cb = Rect::from_center_size(pos2(x + 7.0, cy), vec2(14.0, 14.0));
-    let cb_resp = ui.interact(hit(cb), egui::Id::new(("tile_vis", i)), Sense::click()).on_hover_text(tl!("Show or hide"));
+    let cb_resp = ui.interact(hit(cb), egui::Id::unique(("tile_vis", i)), Sense::click()).on_hover_text(tl!("Show or hide"));
     visibility_box(ui, cb, tile.visible, t);
     x += 22.0;
     icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 9.0, cy), vec2(18.0, 16.0)), "basemap", t.icon, t.accent);
@@ -1536,7 +1540,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), name.row_h), sense);
     // The icons and the badge line up with the name's first line.
     let cy = r.min.y + 13.0;
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &l.name));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &l.name));
     if reorder && resp.drag_started_by(egui::PointerButton::Primary) {
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(l.id));
     }
@@ -1567,11 +1571,11 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
     if has_legend {
         icons::paint(ui.painter(), ar, if l.expanded { "chevron_down" } else { "chevron_right" }, t.text_dim, t.accent);
     }
-    let ar_resp = ui.interact(hit(ar), egui::Id::new(("expand", l.id)), Sense::click());
+    let ar_resp = ui.interact(hit(ar), egui::Id::unique(("expand", l.id)), Sense::click());
     x += 16.0;
     // Visibility checkbox.
     let cb = Rect::from_center_size(pos2(x + 7.0, cy), vec2(14.0, 14.0));
-    let cb_resp = ui.interact(hit(cb), egui::Id::new(("vis", l.id)), Sense::click());
+    let cb_resp = ui.interact(hit(cb), egui::Id::unique(("vis", l.id)), Sense::click());
     visibility_box(ui, cb, l.visible, t);
     x += 22.0;
     // Symbol patch (single symbol) or layer-type icon.
@@ -1689,7 +1693,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
         });
         for e in vector_legend.iter().take(40) {
             let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &e.label));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &e.label));
             let pr = Rect::from_center_size(pos2(r.min.x + 84.0, r.center().y), vec2(18.0, 14.0));
             patch(ui.painter(), pr, &e.symbol, l.geometry_type());
             ui.painter().text(pos2(r.min.x + 100.0, r.center().y), Align2::LEFT_CENTER, &e.label, regular(11.5), t.text);
@@ -1802,18 +1806,38 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         let _ = app.run("ui.refreshService", json!({"layer":l.id}));
         ui.close();
     }
-    let login = l
-        .source
-        .as_ref()
-        .is_some_and(|s| s.login)
-        .then(|| app.session.connections.for_layer(l))
-        .flatten()
-        .map(|c| (c.id.clone(), c.name.clone()));
-    if let Some((id, name)) = login
-        && ui.button(crate::i18n::fmt("Log In to {name}…", &[("name", &name)])).clicked()
-    {
-        crate::connectionui::log_in(app, &id);
-        ui.close();
+    let login = l.source.as_ref().and_then(|s| {
+        let (kind, database) = rustgis_engine::connections::layer_database(s)?;
+        let connections: Vec<_> = app.session.connections.matching_database(kind, database).into_iter().cloned().collect();
+        let (_, key) = rustgis_engine::connections::database_key(database)?;
+        if !s.login && !app.session.database_logins.requests(app.session.opened).any(|r| r.kind == kind && r.key == key) {
+            return None;
+        }
+        Some((kind, key, connections))
+    });
+    if let Some((kind, key, connections)) = login {
+        if connections.len() == 1 {
+            let c = &connections[0];
+            if ui.button(crate::i18n::fmt("Log In to {name}…", &[("name", &c.name)])).clicked() {
+                crate::connectionui::log_in(app, &c.id);
+                ui.close();
+            }
+        } else if connections.len() > 1 && ui.button(tl!("Choose Connection…")).clicked() {
+            let opened = app.session.opened;
+            crate::connectionui::choose(
+                app,
+                rustgis_engine::connections::LoginRequest {
+                    reason: rustgis_engine::connections::LoginReason::Choose,
+                    kind,
+                    key,
+                    connections: connections.iter().map(|c| c.id.clone()).collect(),
+                    layers: vec![l.id],
+                    opened,
+                    prompted: true,
+                },
+            );
+            ui.close();
+        }
     }
     let items: &[(&str, &str)] = if l.is_raster() {
         &[("Zoom To Layer", "layer.zoomTo"), ("Symbology", "ui.pane.symbology")]
@@ -2767,7 +2791,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         };
         let row = |app: &mut RustGisApp, ui: &mut Ui, tool: &'static rustgis_engine::analysis::ToolSpec| {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(tool.name)));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(tool.name)));
             if resp.hovered() {
                 ui.painter().rect_filled(r, CornerRadius::same(6), t.hover);
             }
@@ -3313,14 +3337,14 @@ struct PendingSymbology {
 }
 
 fn clear_pending_symbology(ctx: &egui::Context) {
-    ctx.data_mut(|data| data.remove::<PendingSymbology>(egui::Id::new(PENDING_SYMBOLOGY)));
+    ctx.data_mut(|data| data.remove::<PendingSymbology>(egui::Id::unique(PENDING_SYMBOLOGY)));
 }
 
 /// The pending retry, unless another project, map or layer is in view or the layer's renderer
 /// changed since the switch failed (an edit from the pane, the ribbon, an agent or undo
 /// supersedes it); a stale one is dropped.
 fn pending_symbology(app: &RustGisApp, ctx: &egui::Context) -> Option<PendingSymbology> {
-    let pending = ctx.data(|data| data.get_temp::<PendingSymbology>(egui::Id::new(PENDING_SYMBOLOGY)))?;
+    let pending = ctx.data(|data| data.get_temp::<PendingSymbology>(egui::Id::unique(PENDING_SYMBOLOGY)))?;
     let current = pending.project == app.session.opened
         && pending.map == app.session.project.active_map
         && Some(pending.layer) == app.session.active_layer
@@ -3366,7 +3390,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             };
             let sel = cur_kind == *label;
             let (r, resp) = ui.allocate_exact_size(vec2(68.0, 56.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, sel, tl!(*label)));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, tl!(*label)));
             ui.painter().rect_filled(
                 r,
                 CornerRadius::same(6),
@@ -3404,7 +3428,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             error: error.into(),
                             renderer: std::sync::Arc::new(l.renderer.clone()),
                         };
-                        ui.data_mut(|data| data.insert_temp(egui::Id::new(PENDING_SYMBOLOGY), pending));
+                        ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
                     }
                     Ok(_) => clear_pending_symbology(ui.ctx()),
                 }
@@ -3433,7 +3457,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                                 Ok(_) => clear_pending_symbology(ui.ctx()),
                                 Err(error) => {
                                     let pending = PendingSymbology { error: error.into(), ..pending.clone() };
-                                    ui.data_mut(|data| data.insert_temp(egui::Id::new(PENDING_SYMBOLOGY), pending));
+                                    ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
                                 }
                             }
                         }
@@ -3662,7 +3686,7 @@ fn finish_class_color_drag(app: &mut RustGisApp, ui: &Ui) {
     if ui.input(|i| i.pointer.primary_down() && i.focused) {
         return;
     }
-    let key = egui::Id::new(CLASS_COLOR_DRAG);
+    let key = egui::Id::unique(CLASS_COLOR_DRAG);
     let Some(drag) = ui.data_mut(|d| {
         let drag = d.get_temp::<ClassColorDrag>(key);
         d.remove::<ClassColorDrag>(key);
@@ -3777,7 +3801,7 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     if let Some(color) = picked {
                         // Keep FF too: six-digit polygon colours deliberately preserve translucency.
                         let params = with("color", json!(color.hex8()));
-                        let key = egui::Id::new(CLASS_COLOR_DRAG);
+                        let key = egui::Id::unique(CLASS_COLOR_DRAG);
                         let mut dragging = ui.data(|d| d.get_temp::<ClassColorDrag>(key));
                         // One left pending on another layer (the pane switched layers mid-drag) is
                         // finished first rather than dropped with its preview in place.
@@ -3803,7 +3827,7 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     // The typing lives in the pane's state while the field has focus, under the
                     // class it names (not the row, which another class can take meanwhile). Enter or
                     // clicking away applies it; Escape drops it.
-                    let id = egui::Id::new(("class_label", l.id, l.renderer.field().unwrap_or_default(), class.to_string()));
+                    let id = egui::Id::unique(("class_label", l.id, l.renderer.field().unwrap_or_default(), class.to_string()));
                     let typing = id.with("typing");
                     let focused = ui.memory(|m| m.has_focus(id));
                     let mut buf = match focused {
@@ -3948,7 +3972,7 @@ fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
 /// layer with classes can stack strokes for one class of its own, picked at the top.
 fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer, t: &Tokens) {
     let classes = stroke_classes(&l.renderer);
-    let picked_id = egui::Id::new(("stroke_class", l.id));
+    let picked_id = egui::Id::unique(("stroke_class", l.id));
     // The class being edited, while the renderer still has it; `None` is the layer's own strokes.
     let picked: Option<ClassRef> =
         ui.data(|d| d.get_temp::<Option<ClassRef>>(picked_id)).flatten().filter(|c| classes.iter().any(|(k, ..)| k == c));
@@ -4449,7 +4473,7 @@ fn raster_details(ui: &mut Ui, rl: &rustgis_engine::map::RasterLayer, t: &Tokens
 /// pair is valid, so the layer's values don't snap back.
 fn rgb_stretch_bounds(app: &mut RustGisApp, ui: &mut Ui, layer: impl std::hash::Hash + std::fmt::Debug, t: &Tokens, shown: [[f64; 2]; 3]) {
     type Bounds = [[f64; 2]; 3];
-    let key = ui.id().with(("custom_stretch_rgb", layer));
+    let key = ui.scope_id().with(("custom_stretch_rgb", layer));
     let pending = ui.data(|d| d.get_temp::<(Bounds, Bounds)>(key)).filter(|(base, _)| *base == shown);
     let mut edit = pending.map_or(shown, |(_, e)| e);
     let (mut done, mut changed) = (false, false);
@@ -4627,7 +4651,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     ui.label(tl!(label));
                     let mut x = v;
                     // Kept across a drag until it is let go (#607).
-                    let drag = Dragged::lend(ui, egui::Id::new(("relief_drag", l.id, which)), &mut x);
+                    let drag = Dragged::lend(ui, egui::Id::unique(("relief_drag", l.id, which)), &mut x);
                     let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3));
                     if drag.settled(ui, &r, &mut x) && x != v {
                         let (a, b, c) = match which {
@@ -4674,11 +4698,11 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     let (mut lo, mut hi) = (low, high);
                     // Each kept across a drag until it is let go (#607); both are sent together.
                     ui.label(tl!("Min %"));
-                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "low")), &mut lo);
+                    let drag = Dragged::lend(ui, egui::Id::unique(("percent_clip_drag", l.id, "low")), &mut lo);
                     let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2));
                     let low_settled = drag.settled(ui, &a, &mut lo);
                     ui.label(tl!("Max %"));
-                    let drag = Dragged::lend(ui, egui::Id::new(("percent_clip_drag", l.id, "high")), &mut hi);
+                    let drag = Dragged::lend(ui, egui::Id::unique(("percent_clip_drag", l.id, "high")), &mut hi);
                     let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2));
                     let high_settled = drag.settled(ui, &b, &mut hi);
                     if (low_settled || high_settled) && (lo != low || hi != high) {
@@ -4701,7 +4725,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             Stretch::Custom { min, max, .. } => {
                 // Edits are kept here until both bounds are valid, so the layer's values don't snap back.
                 // They remember the layer's bounds they started from, and go stale when those change.
-                let key = ui.id().with(("custom_stretch", l.id));
+                let key = ui.scope_id().with(("custom_stretch", l.id));
                 let pending = ui.data(|d| d.get_temp::<([f64; 2], [f64; 2])>(key)).filter(|(base, _)| *base == [min, max]);
                 let [mut lo, mut hi] = pending.map_or([min, max], |(_, edit)| edit);
                 let speed = ((max - min).abs() / 200.0).clamp(1e-6, 1e6);
@@ -4727,7 +4751,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     let mut nn = n;
                     ui.label(tl!("Deviations"));
                     // Kept across a drag until it is let go (#607).
-                    let drag = Dragged::lend(ui, egui::Id::new(("deviations_drag", l.id)), &mut nn);
+                    let drag = Dragged::lend(ui, egui::Id::unique(("deviations_drag", l.id)), &mut nn);
                     let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2));
                     if drag.settled(ui, &a, &mut nn) && nn != n {
                         let _ = app.run("raster.stretch", json!({"type": "standardDeviation", "n": nn}));
@@ -4787,7 +4811,7 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
             // The values typed are kept here until they are applied, remembering the layer's
             // values they started from (they go stale when those change).
             let text: String = mask.values.iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(", ");
-            let key = ui.id().with(("mask_values", l.id));
+            let key = ui.scope_id().with(("mask_values", l.id));
             let pending = ui.data(|d| d.get_temp::<(String, String, bool)>(key)).filter(|(base, _, _)| *base == text);
             let (mut edit, bad) = pending.map_or((text.clone(), false), |(_, e, bad)| (e, bad));
             ui.label(tl!("Hide values (no data)"));
@@ -4842,7 +4866,7 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
             if ranged {
                 // As with a custom stretch: kept here until both bounds are valid.
                 let (min, max) = (mask.min.unwrap_or(f64::NEG_INFINITY), mask.max.unwrap_or(f64::INFINITY));
-                let key = ui.id().with(("mask_range", l.id));
+                let key = ui.scope_id().with(("mask_range", l.id));
                 let pending = ui.data(|d| d.get_temp::<([f64; 2], [f64; 2])>(key)).filter(|(base, _)| *base == [min, max]);
                 let [mut lo, mut hi] = pending.map_or([min, max], |(_, edit)| edit);
                 let span = if min.is_finite() && max.is_finite() { (max - min).abs() } else { 100.0 };
@@ -5011,20 +5035,24 @@ mod tests {
         app.session.project.folders.push(long.clone());
         let fav = rustgis_engine::sources::Source { kind: "file".into(), name: long.clone(), address: long, ..Default::default() };
         app.session.sources.favourites.push(fav);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         let width = |h: &mut egui_kittest::Harness<'_, RustGisApp>, pane: LeftPane| {
             h.state_mut().ui.left = Some(pane);
             for _ in 0..6 {
                 h.step();
             }
-            egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("left_pane")).map(|s| s.outer_rect.width())
+            h.state().ui.pane_rects[0].map(|r| r.width())
         };
         let start = width(&mut h, LeftPane::Contents);
         assert!(start.is_some_and(|w| w < 300.0), "the Layers pane starts at its default width: {start:?}");
@@ -5092,14 +5120,18 @@ mod tests {
         .unwrap();
         app.run("layer.definitionQuery", json!({"where": "c_valid < 30"})).unwrap();
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 900.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(6);
         h
     }
@@ -5257,14 +5289,18 @@ mod tests {
         let id = layer(&app, "Countries");
         app.session.active_layer = Some(id);
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1400.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 1400.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(6);
         let transparency = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).map(|l| l.transparency);
         let start = transparency(&h);
@@ -5302,14 +5338,18 @@ mod tests {
             app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
             app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": original.hex8()})).unwrap();
             let id = layer(&app, "Countries");
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
-                move |ui, app: &mut RustGisApp| {
-                    finish_class_color_drag(app, ui);
-                    let layer = app.session.map().layer(id).unwrap().clone();
-                    legend_list(app, ui, &layer, &Tokens::light());
-                },
-                app,
-            );
+            let mut h = egui_kittest::Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(vec2(600.0, 600.0))
+                .with_max_steps(64)
+                .build_ui_state(
+                    move |ui, app: &mut RustGisApp| {
+                        finish_class_color_drag(app, ui);
+                        let layer = app.session.map().layer(id).unwrap().clone();
+                        legend_list(app, ui, &layer, &Tokens::light());
+                    },
+                    app,
+                );
             h.run_steps(3);
             let fill =
                 |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
@@ -5355,14 +5395,18 @@ mod tests {
         app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
         app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": "#FF000000"})).unwrap();
         let id = layer(&app, "Countries");
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                finish_class_color_drag(app, ui);
-                let layer = app.session.map().layer(id).unwrap().clone();
-                legend_list(app, ui, &layer, &Tokens::light());
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(600.0, 600.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    finish_class_color_drag(app, ui);
+                    let layer = app.session.map().layer(id).unwrap().clone();
+                    legend_list(app, ui, &layer, &Tokens::light());
+                },
+                app,
+            );
         h.run_steps(3);
         let fill = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
         let inactive_theme = match h.ctx.theme() {
@@ -5412,7 +5456,9 @@ mod tests {
     fn an_open_layer_menu_leaves_the_map_alone() {
         let app = RustGisApp::with_sample();
         let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
-        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
         h.step();
         assert_eq!(h.state().session.active_layer, Some(layer.id));
         let rev = h.state().session.revision;

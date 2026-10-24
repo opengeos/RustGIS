@@ -60,6 +60,83 @@ pub enum DataError {
 
 pub type Result<T> = std::result::Result<T, DataError>;
 
+/// Replaces `secret` in `message` with asterisks; the text itself when it holds none.
+fn without_secret(message: String, secret: &str) -> String {
+    if message.contains(secret) { message.replace(secret, "********") } else { message }
+}
+
+/// Whether an I/O error's message holds `secret`. Only one carrying text from elsewhere (a
+/// driver's, a server's) can: the system's own errors are fixed text and are not even formatted,
+/// so the common case allocates nothing.
+fn io_mentions(e: &std::io::Error, secret: &str) -> bool {
+    e.get_ref().is_some() && e.to_string().contains(secret)
+}
+
+impl DataError {
+    /// The error with `secret` (a password the driver sent) taken out of its message, whatever a
+    /// server or driver echoes, keeping the kind: a refused login stays [`DataError::Login`].
+    /// An empty secret leaves the error as it is, and so does text without it (nothing is copied).
+    pub fn redact_secret(self, secret: &str) -> Self {
+        if secret.is_empty() {
+            return self;
+        }
+        match self {
+            DataError::Format(m) => DataError::Format(without_secret(m, secret)),
+            DataError::Login(m) => DataError::Login(without_secret(m, secret)),
+            DataError::Unsupported(m) => DataError::Unsupported(without_secret(m, secret)),
+            DataError::NoChunks(m) => DataError::NoChunks(without_secret(m, secret)),
+            DataError::Io(e) if io_mentions(&e, secret) => {
+                DataError::Io(std::io::Error::new(e.kind(), without_secret(e.to_string(), secret)))
+            }
+            DataError::Io(e) => DataError::Io(e),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod secret_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn remembered_database_redaction_preserves_classification_and_owned_text() {
+        let message = String::from("no credential here");
+        let pointer = message.as_ptr();
+        let DataError::Login(unchanged) = DataError::Login(message).redact_secret("sentinel") else { panic!("lost Login") };
+        assert_eq!(unchanged.as_ptr(), pointer);
+        let e = DataError::Login("server echoed sentinel twice sentinel".into()).redact_secret("sentinel");
+        assert!(matches!(e, DataError::Login(_)));
+        assert_eq!(e.to_string(), "server echoed ******** twice ********");
+        let e = DataError::Format("sentinel".into()).redact_secret("sentinel");
+        assert!(matches!(e, DataError::Format(_)));
+        assert_eq!(DataError::Login("unchanged".into()).redact_secret("").to_string(), "unchanged");
+    }
+
+    #[derive(Debug)]
+    struct Pieces;
+    impl std::fmt::Display for Pieces {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("error: se")?;
+            f.write_str("nti")?;
+            f.write_str("nel echoed")
+        }
+    }
+    impl std::error::Error for Pieces {}
+
+    #[test]
+    fn remembered_database_redaction_handles_fragmented_io_and_preserves_kind() {
+        let e = DataError::Io(std::io::Error::new(std::io::ErrorKind::PermissionDenied, Pieces)).redact_secret("sentinel");
+        let DataError::Io(e) = e else { panic!("lost Io") };
+        assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(e.to_string(), "error: ******** echoed");
+        let long = "x".repeat(300);
+        let e = DataError::Io(std::io::Error::other(format!("before {long} after"))).redact_secret(&long);
+        assert_eq!(e.to_string(), "i/o: before ******** after");
+        let e = DataError::Io(std::io::Error::other("unchanged")).redact_secret(&long);
+        assert_eq!(e.to_string(), "i/o: unchanged");
+    }
+}
+
 /// One row: an optional geometry and one value per field.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Feature {

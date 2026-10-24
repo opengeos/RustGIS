@@ -80,6 +80,7 @@ impl Dialogs {
             "addUrl" => "addUrl",
             "addService" => "addService",
             "addDatabase" => "addDatabase",
+            "chooseConnection" => "chooseConnection",
             "s3" => "s3",
             "zarr" => "zarr",
             "exportLayer" => "exportLayer",
@@ -178,6 +179,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "addDatabase" => "Add From Database",
         "newConnection" => "New Connection",
         "editConnection" => "Edit Connection",
+        "chooseConnection" => "Choose Connection",
         "s3" => "S3 Buckets",
         "zarr" => "Add Zarr Variable",
         "exportLayer" => "Export Features",
@@ -193,7 +195,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut close = false;
     // Opens centred and can be moved; each dialog remembers where it was put.
     egui::Window::new(tl!(title))
-        .id(egui::Id::new(("dialog", which)))
+        .id(egui::Id::unique(("dialog", which)))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -203,7 +205,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.set_width(match which {
             "coordinateSystem" | "zarr" => 660.0,
             "addTiles" | "addUrl" | "addService" | "s3" => 560.0,
-            "newConnection" | "editConnection" => 520.0,
+            "newConnection" | "editConnection" | "chooseConnection" => 520.0,
             _ => 440.0,
         });
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
@@ -234,7 +236,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 ui.label(tl!("Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file."));
                 ui.label(tl!("Source coordinate system"));
                 let response = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:2263").desired_width(f32::INFINITY));
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Source coordinate system")));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(tl!("In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP."));
                 close = buttons(app, ui, "Choose File…", |app| app.run("ui.importShapefile", json!({"crs": app.dialogs.text.trim()})).map(|_| ()));
             }
@@ -243,7 +245,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 ui.label(tl!("Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged."));
                 ui.label(tl!("Source coordinate system"));
                 let label = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:2263").desired_width(f32::INFINITY));
-                label.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Source coordinate system")));
+                label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(egui::RichText::new(tl!("Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.")).weak());
                 if ui.button(tl!("Import Original File…")).clicked() {
                     let crs = app.dialogs.text.clone();
@@ -301,6 +303,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             "addService" => close = add_service(app, ui),
             "addDatabase" => close = add_database(app, ui),
             "newConnection" | "editConnection" => close = crate::connectionui::dialog(app, ui),
+            "chooseConnection" => close = crate::connectionui::chooser(app, ui),
             "s3" => crate::s3ui::dialog(app, ui),
             "zarr" => close = crate::zarrui::dialog(app, ui),
             "exportLayer" => close = export_layer(app, ui),
@@ -1508,7 +1511,7 @@ mod tests {
         app.run("map.projection", json!({"type": "robinson"})).unwrap();
         app.run("ui.dialog", json!({"name": "coordinateSystem"})).unwrap();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);

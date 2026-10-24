@@ -392,6 +392,15 @@ impl Layer {
         let mut copy = src.clone();
         if !copy.is_open() {
             copy.open()?;
+            // A source by its web address may still be opening in the background (the view or the
+            // project started it): wait for it, as an export does, rather than read nothing.
+            copy.wait_open(std::time::Duration::from_secs(30));
+            if !copy.is_open() {
+                return Err(copy
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "the layer's source is still opening: try again once it has opened".into()));
+            }
         }
         let (mut ds, _) = copy.read_all()?;
         // A sample isn't all of them: refuse rather than run a tool on part of the data.

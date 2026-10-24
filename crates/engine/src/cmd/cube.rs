@@ -40,11 +40,13 @@ pub const MAX_VALUES: u64 = if cfg!(target_arch = "wasm32") { 16_000_000 } else 
 /// The most pairs of dates a trend compares in all (cells × dates² ⁄ 2), which bounds the time
 /// Sen's slope takes: far fewer in the browser, which works them out on one thread. At the cap a
 /// run can take minutes on the desktop, which the app runs on threads with progress and Cancel;
-/// `cube.trend` called directly (a script, the CLI) takes [`MAX_WAITED_PAIRS`].
+/// `cube.trend` called directly (a script, the assistant, an MCP client) takes
+/// [`MAX_WAITED_PAIRS`], but where only a shell waits on it (`rustgis-cli run`:
+/// [`Session::long_runs`](crate::Session::long_runs)) it takes this.
 pub const MAX_PAIRS: u64 = if cfg!(target_arch = "wasm32") { 50_000_000 } else { 20_000_000_000 };
 /// The most pairs a trend worked out where it's called compares (`cube.trend` without `ran`: a
-/// script, the CLI), which waits for it with no Cancel: a tenth of the app's on the desktop. The
-/// browser works every trend out where it's called, within its own lower cap.
+/// script, the assistant, an MCP client), which waits for it with no Cancel: a tenth of the app's
+/// on the desktop. The browser works every trend out where it's called, within its own lower cap.
 pub const MAX_WAITED_PAIRS: u64 = if cfg!(target_arch = "wasm32") { MAX_PAIRS } else { MAX_PAIRS / 10 };
 /// The most dates a cube is read at.
 pub const MAX_DATES: usize = 2_000;
@@ -930,11 +932,94 @@ fn trend_cmd(s: &mut Session, p: &Value) -> CmdResult {
         let (_, rasters, dates) = s.trend_results.remove(at);
         return add_outputs(s, rasters, dates);
     }
-    // Worked out here, waited for with no Cancel (a script, the CLI): a run of seconds, not minutes.
+    // Worked out here, waited for with no Cancel: in the app (a script, the assistant) and Python a
+    // run of seconds, not minutes; where only a shell waits on it (`rustgis-cli run`), the panes'
+    // bound, its progress told.
     let mut run = trend_start(s, p)?;
-    run.max_pairs = MAX_WAITED_PAIRS;
-    let rasters = run.run(&AtomicBool::new(false), &AtomicUsize::new(0))?;
-    add_outputs(s, rasters, run.steps.len())
+    run.max_pairs = if s.long_runs.is_some() { MAX_PAIRS } else { MAX_WAITED_PAIRS };
+    let dates = run.steps.len();
+    let rasters = run_here(s.long_runs, "cube.trend", run.total(), |cancel, done| run.run(cancel, done))?;
+    let added = add_outputs(s, rasters, dates);
+    told_end(s.long_runs, "cube.trend", added)
+}
+
+/// A run worked out where it's called: on a thread of its own telling its progress where only a
+/// shell waits on it ([`Session::long_runs`](crate::Session::long_runs)), here
+/// otherwise (and always in the browser, which has no threads). Its end is told by
+/// [`told_end`], once the command has added what it made.
+fn run_here<T: Send>(
+    long_runs: Option<fn(&str, f64)>,
+    what: &str,
+    total: usize,
+    work: impl FnOnce(&AtomicBool, &AtomicUsize) -> Result<T, String> + Send,
+) -> Result<T, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(tell) = long_runs {
+        return run_telling(what, total, tell, work);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (long_runs, what, total);
+    work(&AtomicBool::new(false), &AtomicUsize::new(0))
+}
+
+/// A long command's result, its end (a share of 1) told first when it succeeded: after its layers
+/// were added, so a failure to add them isn't told as done.
+fn told_end(long_runs: Option<fn(&str, f64)>, what: &str, r: CmdResult) -> CmdResult {
+    if r.is_ok()
+        && let Some(tell) = long_runs
+    {
+        tell(what, 1.0);
+    }
+    r
+}
+
+/// A long run on a thread of its own, its progress told every half second when it has moved by a
+/// percent, up to 99% (its outputs are still being made, and added, when every slice is read).
+#[cfg(not(target_arch = "wasm32"))]
+fn run_telling<T: Send>(
+    what: &str,
+    total: usize,
+    tell: fn(&str, f64),
+    work: impl FnOnce(&AtomicBool, &AtomicUsize) -> Result<T, String> + Send,
+) -> Result<T, String> {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    let (cancel, done) = (AtomicBool::new(false), AtomicUsize::new(0));
+    let total = total.max(1);
+    std::thread::scope(|scope| {
+        let (sent, ended) = channel();
+        let (c, d) = (&cancel, &done);
+        let worker = scope.spawn(move || {
+            let _ = sent.send(work(c, d));
+        });
+        let mut told = usize::MAX;
+        // Waited for, not polled, so a short run returns as soon as it ends.
+        let r = loop {
+            match ended.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(r) => break Some(r),
+                Err(RecvTimeoutError::Timeout) => {
+                    let percent = (done.load(Ordering::Relaxed).min(total) * 100 / total).min(99);
+                    if percent != told {
+                        told = percent;
+                        tell(what, percent as f64 / 100.0);
+                    }
+                }
+                // The worker panicked before it sent anything.
+                Err(RecvTimeoutError::Disconnected) => break None,
+            }
+        };
+        // Joined here, so its panic is taken and said, not raised again when the scope ends.
+        match (r, worker.join()) {
+            (Some(r), _) => r,
+            (None, Err(panic)) => {
+                let why = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned());
+                Err(match why {
+                    Some(why) => format!("{what} failed unexpectedly: {why}"),
+                    None => format!("{what} failed unexpectedly"),
+                })
+            }
+            (None, Ok(())) => Err(format!("{what} failed unexpectedly")),
+        }
+    })
 }
 
 /// Adds a trend's (or a summary's) layers, each as a GeoTIFF the project keeps.
@@ -1304,12 +1389,13 @@ pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
     Ok(ReduceRun { cube, steps, stat, min_share, group_of, groups })
 }
 
-/// `cube.reduce`: the summary computed here (blocking), its layers added, each kept in the project
-/// as a GeoTIFF.
+/// `cube.reduce`: the summary computed here (blocking), its progress told where only a shell waits
+/// on it (`rustgis-cli run`), its layers added, each kept in the project as a GeoTIFF.
 fn reduce_cmd(s: &mut Session, p: &Value) -> CmdResult {
     let run = reduce_start(s, p)?;
-    let rasters = run.run(&AtomicBool::new(false), &AtomicUsize::new(0))?;
-    add_outputs(s, rasters, run.dates())
+    let rasters = run_here(s.long_runs, "cube.reduce", run.total(), |cancel, done| run.run(cancel, done))?;
+    let added = add_outputs(s, rasters, run.dates());
+    told_end(s.long_runs, "cube.reduce", added)
 }
 
 #[cfg(test)]
@@ -1334,6 +1420,21 @@ mod tests {
         assert_eq!(super::date_in_text("NDVI 2015"), day("2015-01-01"));
         assert_eq!(super::date_in_text("ndvi_v2015"), None);
         assert_eq!(super::date_in_text("MOD13Q1.A2024153"), day("2024-06-01"));
+    }
+
+    /// A long run's thread that panics gives an error naming the command and the cause, and its
+    /// end is never told.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[allow(clippy::panic)]
+    fn a_long_run_that_panics_says_why() {
+        fn tell(_: &str, share: f64) {
+            assert!(share < 1.0, "a run that panicked is told as done");
+        }
+        let e = super::run_telling::<()>("cube.trend", 10, tell, |_, _| panic!("a band out of range")).unwrap_err();
+        assert_eq!(e, "cube.trend failed unexpectedly: a band out of range");
+        let e = super::run_telling::<()>("cube.reduce", 10, tell, |_, _| std::panic::panic_any(7u8)).unwrap_err();
+        assert_eq!(e, "cube.reduce failed unexpectedly");
     }
 
     /// Slices an ulp apart are one grid; half a pixel apart, another.

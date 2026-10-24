@@ -1,7 +1,7 @@
-//! Named endpoint definitions and session-only logins, with web probes fetched off the frame.
+//! Named endpoint definitions, optional remembered database passwords, and off-frame web probes.
 
 use egui::vec2;
-use rustgis_engine::connections::{Connection, DATABASE_KINDS};
+use rustgis_engine::connections::{Connection, DATABASE_KINDS, LoginReason, LoginRequest, database_key, database_label};
 use rustgis_engine::render::rustgis_tiles::{cache, s3};
 use rustgis_engine::sources::Source;
 use serde_json::{Value, json};
@@ -20,6 +20,10 @@ pub struct State {
     pub credentials: String,
     pub profile: String,
     pub password: String,
+    pub remember: bool,
+    /// The current project's login prompt, never a password.
+    pub request: Option<LoginRequest>,
+    pub selected: Option<String>,
     pub access_key: String,
     pub secret_key: String,
     pub session_token: String,
@@ -108,7 +112,7 @@ pub(crate) fn keep_button(ui: &mut egui::Ui) -> bool {
 
 fn stripped_notice(app: &mut RustGisApp, v: &Value) {
     if v["stripped"] == true {
-        app.session.notify(tl!("A password or token in the address was left out: connections never keep secrets.").to_string(), false);
+        app.session.notify(tl!("A password or token in the address was left out of the saved connection definition.").to_string(), false);
     }
 }
 
@@ -149,7 +153,13 @@ pub fn open_edit(app: &mut RustGisApp, id: &str) -> Result<(), String> {
 
 pub fn log_in(app: &mut RustGisApp, id: &str) {
     match app.run("ui.connection", json!({"id": id})) {
-        Ok(_) => app.dialogs.info = Some(tl!("Type the password or keys to log in for this session, then Save.").to_string()),
+        Ok(_) => {
+            app.dialogs.info = Some(if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
+                tl!("Type the password, then Save. Remember on this computer is optional.").to_string()
+            } else {
+                tl!("Type the keys to log in for this session, then Save.").to_string()
+            });
+        }
         Err(e) => app.session.notify(e, true),
     }
 }
@@ -218,7 +228,126 @@ pub fn start_test(app: &mut RustGisApp) {
     app.dialogs.info = Some(tl!("Testing…").into());
 }
 
+/// A request remains authorized only for its original project and exact saved definitions.
+fn candidates(app: &RustGisApp, request: &LoginRequest) -> Vec<Connection> {
+    if request.opened != app.session.opened {
+        return Vec::new();
+    }
+    request
+        .connections
+        .iter()
+        .filter_map(|id| {
+            let c = app.session.connections.find(id)?;
+            let (kind, key) = database_key(&c.address)?;
+            (kind == request.kind && key == request.key).then(|| c.clone())
+        })
+        .collect()
+}
+
+fn password_request(app: &RustGisApp, id: &str) -> Option<LoginRequest> {
+    app.session
+        .database_logins
+        .requests(app.session.opened)
+        .find(|r| r.reason == LoginReason::Password && r.connections.iter().any(|c| c == id))
+        .cloned()
+}
+
+fn password_prompt(app: &mut RustGisApp, id: &str, request: Option<LoginRequest>, error: Option<String>) {
+    match open_edit(app, id) {
+        Ok(()) => {
+            app.ui.connection.request = request;
+            app.dialogs.info = Some(tl!("The saved password could not be used. Type a password to try again; check Remember on this computer to replace the saved password.").into());
+            app.dialogs.error = error;
+        }
+        Err(e) => app.session.notify(e, true),
+    }
+}
+
+pub(crate) fn choose(app: &mut RustGisApp, request: LoginRequest) {
+    if candidates(app, &request).is_empty() {
+        return;
+    }
+    app.ui.connection = State { request: Some(request), ..Default::default() };
+    app.dialogs = crate::dialogs::Dialogs { open: Some("chooseConnection"), ..Default::default() };
+}
+
+pub(crate) fn chooser(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let Some(request) = app.ui.connection.request.clone() else { return true };
+    let list = candidates(app, &request);
+    if list.is_empty() {
+        return true;
+    }
+    ui.label(tl!("Choose which saved connection to use for this database. This choice lasts for this session."));
+    ui.label(database_label(request.kind, &request.key));
+    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        for c in &list {
+            ui.group(|ui| {
+                ui.selectable_value(&mut app.ui.connection.selected, Some(c.id.clone()), &c.name);
+                if !c.group.is_empty() {
+                    ui.label(egui::RichText::new(&c.group).weak());
+                }
+                ui.label(egui::RichText::new(&c.address).small().weak());
+            });
+        }
+    });
+    let selected = app.ui.connection.selected.clone().filter(|id| list.iter().any(|c| &c.id == id));
+    ui.horizontal(|ui| {
+        if ui.add_enabled(selected.is_some(), egui::Button::new(tl!("Use Connection"))).clicked()
+            && let Some(id) = selected
+        {
+            let result = app.run("connection.login", json!({"id":id}));
+            crate::connectiontree::refresh(app, Some(&id));
+            let refused = password_request(app, &id);
+            if result.is_err() || refused.is_some() {
+                password_prompt(app, &id, refused.or(Some(request)), result.err());
+                return false;
+            }
+            return true;
+        }
+        ui.button(tl!("Cancel")).clicked()
+    })
+    .inner
+}
+
+fn poll_requests(app: &mut RustGisApp) {
+    if let Some(request) = &app.ui.connection.request
+        && matches!(app.dialogs.open, Some("chooseConnection" | "editConnection"))
+        && (request.opened != app.session.opened || candidates(app, request).is_empty())
+    {
+        app.dialogs.open = None;
+        app.ui.connection = State::default();
+    }
+    // A pending request never displaces an unrelated dialog, including a form being edited.
+    if app.dialogs.open.is_some() {
+        return;
+    }
+    while let Some(request) = app.session.database_logins.next_unprompted(app.session.opened) {
+        if app.ui.connection.request.as_ref().is_some_and(|shown| {
+            shown.opened == request.opened
+                && shown.kind == request.kind
+                && shown.key == request.key
+                && shown.reason == request.reason
+                && shown.connections == request.connections
+        }) {
+            // A layer-menu prompt may have shown this request before automatic polling reached
+            // it. In particular, cancelling it must not immediately open it again.
+            continue;
+        }
+        let list = candidates(app, &request);
+        if list.is_empty() {
+            continue;
+        }
+        if request.reason == LoginReason::Choose || list.len() > 1 {
+            choose(app, request);
+        } else {
+            password_prompt(app, &list[0].id, Some(request), None);
+        }
+        break;
+    }
+}
+
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
+    poll_requests(app);
     if !matches!(app.dialogs.open, Some("newConnection" | "editConnection")) {
         app.ui.connection.test = None;
         return;
@@ -298,15 +427,34 @@ fn save(app: &mut RustGisApp) -> Result<(), String> {
     stripped_notice(app, &v);
     let mut login = json!({"id": v["id"]});
     secrets(&app.ui.connection, &mut login);
-    if login.as_object().is_some_and(|p| p.len() > 1)
-        && let Err(e) = app.run("connection.login", login)
-    {
-        app.ui.connection.id = v["id"].as_str().map(str::to_owned);
-        app.dialogs.open = Some("editConnection");
-        return Err(e);
+    if login.as_object().is_some_and(|p| p.len() > 1) {
+        if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
+            login["remember"] = json!(app.ui.connection.remember);
+        }
+        let id = v["id"].as_str().unwrap_or("").to_owned();
+        let result = app.run("connection.login", login);
+        crate::connectiontree::refresh(app, Some(&id));
+        let refused = password_request(app, &id);
+        if result.is_err() || refused.is_some() {
+            app.ui.connection.id = Some(id);
+            app.ui.connection.password.clear();
+            app.ui.connection.remember = false;
+            app.ui.connection.request = refused;
+            app.dialogs.open = Some("editConnection");
+            return Err(result.err().unwrap_or_else(|| tl!("The password was refused. Type a password to try again.").into()));
+        }
+        // The command says why a checked Remember didn't keep the password; nothing is claimed
+        // when it did.
+        if let Some(warning) = result.as_ref().ok().and_then(|v| v["warning"].as_str()) {
+            app.session.notify(warning.to_string(), true);
+        }
+    }
+    if let Some(id) = v["id"].as_str() {
+        crate::connectiontree::refresh(app, Some(id));
     }
     let st = &mut app.ui.connection;
     st.password.clear();
+    st.remember = false;
     st.access_key.clear();
     st.secret_key.clear();
     st.session_token.clear();
@@ -314,9 +462,14 @@ fn save(app: &mut RustGisApp) -> Result<(), String> {
 }
 
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
-    ui.label(
-        egui::RichText::new(tl!("A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.")).weak(),
-    );
+    let help = if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
+        tl!(
+            "A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store."
+        )
+    } else {
+        tl!("A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.")
+    };
+    ui.label(egui::RichText::new(help).weak());
     let st = &mut app.ui.connection;
     let database = DATABASE_KINDS.contains(&st.kind.as_str());
     let mut changed = false;
@@ -341,13 +494,11 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             ui.end_row();
             ui.label(tl!("Password"));
             changed |= ui
-                .add(
-                    egui::TextEdit::singleline(&mut st.password)
-                        .password(true)
-                        .hint_text(tl!("This session only (optional)"))
-                        .desired_width(360.0),
-                )
+                .add(egui::TextEdit::singleline(&mut st.password).password(true).hint_text(tl!("Optional")).desired_width(360.0))
                 .changed();
+            ui.end_row();
+            ui.label("");
+            changed |= ui.checkbox(&mut st.remember, tl!("Remember on this computer")).changed();
             ui.end_row();
         } else if st.kind == "s3" {
             for (label, field, hint) in [
@@ -433,6 +584,25 @@ pub fn open_connection(app: &mut RustGisApp, c: &Connection) -> Result<(), Strin
         "postgres" | "mysql" | "sqlserver" => {
             if cfg!(target_arch = "wasm32") {
                 return Err(tl!("Database connections are used by the desktop app").into());
+            }
+            if app.session.database_logins.has_session_password(&c.id) || c.remembered {
+                let result = app.run("connection.login", json!({"id":c.id}));
+                crate::connectiontree::refresh(app, Some(&c.id));
+                let refused = password_request(app, &c.id);
+                if result.is_err() || refused.is_some() {
+                    password_prompt(app, &c.id, refused, result.err());
+                    return Ok(());
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if !app.session.database_logins.has_session_password(&c.id)
+                && !c.remembered
+                && let Some((_, key)) = database_key(&c.address)
+            {
+                // Picking an ID without credentials must not inherit another ID's activation.
+                // An unowned, explicitly typed address password remains highest priority.
+                rustgis_engine::data::source::duckdb::set_connection_password(&key, &c.id, None);
+                app.session.database_logins.drop_activation(&key);
             }
             ("database", Value::Null)
         }

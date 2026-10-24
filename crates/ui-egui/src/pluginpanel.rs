@@ -195,7 +195,7 @@ fn button(
 /// A 26 px button with a chevron pointing left or right, found by `tip`.
 fn step_button(ui: &mut Ui, on: bool, left: bool, tip: &str, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), if on { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     if on && resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
     }
@@ -236,7 +236,7 @@ fn slider(app: &mut RustGisApp, ui: &mut Ui, pid: &str, item: &PanelItemDecl, st
         ui.spacing_mut().slider_width = (room - buttons - 4.0).max(60.0);
         let resp = ui.add_enabled(on, egui::Slider::new(&mut v, min..=max).show_value(false));
         let resp = if item.help.is_empty() { resp } else { resp.on_hover_text(tr(&item.help)) };
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, on, label_of(item, state, tr)));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Slider, on, label_of(item, state, tr)));
         if item.steps && step_button(ui, on && v < max, false, tl!("Step forward"), t).clicked() {
             stepped = Some(v + 1);
         }

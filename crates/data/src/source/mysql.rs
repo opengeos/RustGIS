@@ -270,7 +270,7 @@ impl Conn {
                     if broken(&e) {
                         *guard = None;
                     }
-                    return Err(err(e));
+                    return Err(err(e).redact_secret(self.password.as_deref().unwrap_or("")));
                 }
             }
         }
@@ -282,6 +282,10 @@ impl Conn {
 /// offers none, said in the second value), and sets the session read only with a statement
 /// timeout.
 fn open_client(config: &Config, password: Option<&str>) -> Result<((mysql::Conn, Server), bool)> {
+    connect_client(config, password).map_err(|e| e.redact_secret(password.unwrap_or("")))
+}
+
+fn connect_client(config: &Config, password: Option<&str>) -> Result<((mysql::Conn, Server), bool)> {
     super::tls_provider();
     let base = mysql::OptsBuilder::new()
         .ip_or_hostname(Some(config.host.clone()))

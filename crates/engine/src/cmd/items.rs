@@ -177,10 +177,19 @@ pub fn commands() -> Vec<C> {
         .params(r#"{"path": "*.rgistemplate", "name"?: template name}"#),
         C::new("project.fromTemplate", "Open Custom Template", "Home › Project", |s, p| {
             let text = read_text(p)?;
-            let mut proj = Project::from_import_json(&text).map_err(|e| e.replace("RustGIS project", "RustGIS template"))?;
+            super::connections::clear_active();
+            let mut proj = match Project::from_import_json(&text) {
+                Ok(proj) => proj,
+                Err(error) => {
+                    super::connections::restore_active(s);
+                    return Err(error.replace("RustGIS project", "RustGIS template"));
+                }
+            };
             proj.name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Untitled").chars().take(200).collect();
             super::project::reset_to(s, proj);
             s.path = None;
+            super::connections::resolve_project(s);
+            super::connections::note_waiting(s);
             Ok(Value::Null)
         })
         .view()
@@ -419,9 +428,16 @@ fn embedded_map(m: &Map, budget: &mut u64) -> Map {
 /// Adds maps from a map file, project or package.
 fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     let text = read_text(p)?;
+    super::connections::clear_active();
     let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {
         Ok(m) => vec![m],
-        Err(_) => Project::from_import_json(&text).map_err(|_| "not a RustGIS map file, project or package".to_string())?.maps,
+        Err(_) => match Project::from_import_json(&text) {
+            Ok(project) => project.maps,
+            Err(_) => {
+                super::connections::restore_active(s);
+                return Err("not a RustGIS map file, project or package".into());
+            }
+        },
     };
     let mut names = Vec::new();
     for mut m in maps.into_iter().take(100) {
@@ -436,6 +452,9 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     }
     // Repair what was read (rasters reopen, cameras clamp).
     s.project.normalize();
+    super::connections::restore_active(s);
+    super::connections::resolve_project(s);
+    super::connections::note_waiting(s);
     if let Some(n) = names.last()
         && let Some(i) = s.project.maps.iter().position(|m| &m.name == n)
     {
@@ -462,12 +481,11 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
     } else if let Ok(m) = serde_json::from_str::<Map>(&text) {
         m.layers
     } else {
-        Project::from_import_json(&text)
-            .map_err(|_| "not a RustGIS layer file, map file or project".to_string())?
-            .maps
-            .into_iter()
-            .flat_map(|m| m.layers)
-            .collect()
+        // A project parse opens sources even though this import only takes their styles.
+        super::connections::clear_active();
+        let project = Project::from_import_json(&text);
+        super::connections::restore_active(s);
+        project.map_err(|_| "not a RustGIS layer file, map file or project".to_string())?.maps.into_iter().flat_map(|m| m.layers).collect()
     };
     let mut n = 0;
     for l in layers.into_iter().filter(|l| !l.is_raster() && l.geometry_type() != GeometryType::None).take(1000) {

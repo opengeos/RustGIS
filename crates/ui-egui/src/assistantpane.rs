@@ -35,9 +35,18 @@ pub struct AssistantState {
     chunks: Option<(u64, Chunks)>,
     /// The settings form is open.
     pub settings: bool,
+    /// Startup layout waits for the initial key read unless the user chooses it first.
+    #[cfg(not(target_arch = "wasm32"))]
+    settings_pending: Option<String>,
     show_key: bool,
-    /// Keys are saved with the preferences only when the user says so.
+    /// Keys are remembered only when the user says so.
     remember_key: bool,
+    /// Desktop keychain operations and session keys, separate from preference storage.
+    #[cfg(not(target_arch = "wasm32"))]
+    keys: crate::assistantkeys::Keys,
+    /// Legacy migration is scheduled once after the platform preferences are available.
+    #[cfg(not(target_arch = "wasm32"))]
+    keys_migrated: bool,
     /// The AI provider section of the settings is folded away (kept in the preferences).
     provider_closed: bool,
     models: Vec<String>,
@@ -100,14 +109,17 @@ pub struct AssistantState {
 /// The settings fields typed into (saved when none has focus).
 const FIELDS: [&str; 3] = ["assistant_model", "assistant_url", "assistant_key"];
 
+/// Whether a provider settings field still owns the keyboard focus.
 fn typing(ctx: &egui::Context) -> bool {
-    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::new(f))))
+    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::unique(f))))
 }
 
+/// Reads a nonempty preference, including legacy keys awaiting migration.
 fn pref(app: &RustGisApp, key: &str) -> Option<String> {
     app.services.load_pref.as_ref().and_then(|l| l(key)).filter(|v| !v.is_empty())
 }
 
+/// Saves a preference through the platform hook.
 fn save_pref(app: &RustGisApp, key: &str, value: &str) {
     if let Some(s) = &app.services.save_pref {
         s(key, value);
@@ -115,7 +127,7 @@ fn save_pref(app: &RustGisApp, key: &str, value: &str) {
 }
 
 /// A provider's settings: its defaults and the environment, then what the user saved.
-fn load_config(app: &RustGisApp, provider: &str) -> Config {
+fn load_config(app: &mut RustGisApp, provider: &str, ctx: &egui::Context) -> Config {
     let mut c = Config::from_env(provider);
     if let Some(m) = pref(app, &format!("assistant_model_{provider}")) {
         c.model = m;
@@ -123,13 +135,25 @@ fn load_config(app: &RustGisApp, provider: &str) -> Config {
     if let Some(u) = pref(app, &format!("assistant_url_{provider}")).filter(|_| !c.login()) {
         c.base_url = u;
     }
-    if let Some(k) = pref(app, &format!("assistant_key_{provider}")).filter(|_| !c.login()) {
-        c.key = k;
+    if !c.login() {
+        let legacy = pref(app, &format!("assistant_key_{provider}"));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            c.key = app.assistant.keys.load(provider, &c.key, legacy, app.assistant.remember_key, app.services.secrets.clone(), ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = ctx;
+            if let Some(key) = legacy {
+                c.key = key;
+            }
+        }
     }
     c
 }
 
-fn ensure_loaded(app: &mut RustGisApp) {
+/// Initializes the selected provider once, without blocking on its keychain.
+fn ensure_loaded(app: &mut RustGisApp, ctx: &egui::Context) {
     if app.assistant.loaded {
         return;
     }
@@ -141,16 +165,26 @@ fn ensure_loaded(app: &mut RustGisApp) {
         // The first provider with a key in the environment (a ChatGPT sign-in is chosen, not assumed).
         .or_else(|| PRESETS.iter().find(|p| !p.login && !Config::from_env(p.id).key.is_empty()).map(|p| p.id.to_string()))
         .unwrap_or_else(|| "anthropic".into());
-    let mut cfg = load_config(app, &provider);
+    let mut cfg = load_config(app, &provider, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    migrate_keys(app, ctx);
     if let Ok(m) = std::env::var("RUSTGIS_ASSISTANT_MODEL")
         && !m.trim().is_empty()
         && pref(app, &format!("assistant_model_{provider}")).is_none()
     {
         cfg.model = m.trim().to_string();
     }
-    app.assistant.settings = cfg.missing().is_some();
-    // A provider still to be set up shows its fields.
-    app.assistant.provider_closed = cfg.missing().is_none() && pref(app, "assistant_provider_closed").as_deref() == Some("on");
+    #[cfg(not(target_arch = "wasm32"))]
+    let loading = app.assistant.keys.loading(&provider);
+    #[cfg(target_arch = "wasm32")]
+    let loading = false;
+    if !loading {
+        init_settings(app, &cfg);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if loading {
+        app.assistant.settings_pending = Some(provider);
+    }
     if cfg.login() && !cfg.key.is_empty() {
         app.assistant.account = signed_in_account();
     }
@@ -171,6 +205,39 @@ fn ensure_loaded(app: &mut RustGisApp) {
         agent.set_harnesses(rustgis_assistant::acp::installed().0.into_iter().map(|(spec, _)| spec).collect());
     }
     app.assistant.agent = Some(agent);
+}
+
+/// An unconfigured provider opens its fields; a configured one restores the saved fold state.
+fn init_settings(app: &mut RustGisApp, cfg: &Config) {
+    let missing = cfg.missing().is_some();
+    app.assistant.settings = missing;
+    app.assistant.provider_closed = !missing && pref(app, "assistant_provider_closed").as_deref() == Some("on");
+}
+
+/// An explicit settings choice takes precedence over startup's pending key read.
+fn toggle_settings(app: &mut RustGisApp) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.assistant.settings_pending = None;
+    }
+    app.assistant.settings = !app.assistant.settings;
+}
+
+/// Schedules all remembered legacy providers once, without opening the Assistant or making requests.
+#[cfg(not(target_arch = "wasm32"))]
+fn migrate_keys(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.assistant.keys_migrated {
+        return;
+    }
+    app.assistant.keys_migrated = true;
+    if pref(app, "assistant_remember_key").as_deref() != Some("on") {
+        return;
+    }
+    for p in PRESETS.iter().filter(|p| !p.login) {
+        if let Some(legacy) = pref(app, &format!("assistant_key_{}", p.id)) {
+            app.assistant.keys.load(p.id, "", Some(legacy), true, app.services.secrets.clone(), ctx);
+        }
+    }
 }
 
 /// Reads the skills again when they changed (`force`) or the plugins did.
@@ -201,14 +268,69 @@ fn signed_in_account() -> Option<chatgpt::Account> {
     }
 }
 
-fn save_config(app: &RustGisApp, c: &Config) {
+/// Persists ordinary settings; desktop secrets are queued for the keychain worker.
+fn save_config(app: &mut RustGisApp, c: &Config, ctx: &egui::Context) {
     save_pref(app, "assistant_provider", &c.provider);
     save_pref(app, &format!("assistant_model_{}", c.provider), c.model.trim());
     save_pref(app, &format!("assistant_url_{}", c.provider), c.base_url.trim());
     // A key from the environment stays there; a sign-in's tokens live in their own file.
     let from_env = Config::from_env(&c.provider).key;
-    let keep = app.assistant.remember_key && c.key.trim() != from_env && !c.login();
-    save_pref(app, &format!("assistant_key_{}", c.provider), if keep { c.key.trim() } else { "" });
+    if c.login() {
+        return;
+    }
+    let pref_key = format!("assistant_key_{}", c.provider);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if !app.assistant.keys.changed(&c.provider) {
+            return;
+        }
+        let key = crate::assistantkeys::remembered(&c.key, app.assistant.remember_key, &from_env);
+        let legacy = pref(app, &pref_key);
+        // Forgetting plaintext is immediate, even if the OS refuses to delete its copy.
+        if key.is_none() {
+            save_pref(app, &pref_key, "");
+        }
+        app.assistant.keys.save(&c.provider, key, legacy, app.services.secrets.clone(), ctx);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = ctx;
+        let keep = app.assistant.remember_key && c.key.trim() != from_env;
+        save_pref(app, &pref_key, if keep { c.key.trim() } else { "" });
+    }
+}
+
+/// Applies background replies without overwriting a later edit or another provider.
+#[cfg(not(target_arch = "wasm32"))]
+fn poll_keys(app: &mut RustGisApp, ctx: &egui::Context) {
+    migrate_keys(app, ctx);
+    let previous = app
+        .assistant
+        .agent
+        .as_ref()
+        .and_then(|a| app.assistant.keys.key(&a.config.provider).map(|key| (a.config.provider.clone(), key.to_string())));
+    for (provider, migrated) in app.assistant.keys.poll() {
+        let name = format!("assistant_key_{provider}");
+        if pref(app, &name).as_deref() == Some(migrated.expose()) {
+            save_pref(app, &name, "");
+        }
+    }
+    if let Some(agent) = app.assistant.agent.as_mut()
+        && !agent.config.login()
+        && previous.as_ref().is_some_and(|(provider, key)| *provider == agent.config.provider && *key == agent.config.key)
+        && let Some(key) = app.assistant.keys.key(&agent.config.provider)
+    {
+        agent.config.key = key.to_string();
+    }
+    if let Some(provider) = app.assistant.settings_pending.as_deref()
+        && !app.assistant.keys.loading(provider)
+    {
+        let cfg = app.assistant.agent.as_ref().filter(|a| a.config.provider == provider).map(|a| a.config.clone());
+        app.assistant.settings_pending = None;
+        if let Some(cfg) = cfg {
+            init_settings(app, &cfg);
+        }
+    }
 }
 
 /// Sends a request off the frame. A signed-in account's requests renew its tokens as needed.
@@ -269,11 +391,16 @@ fn dispatch(app: &mut RustGisApp, req: HttpRequest, login: Option<chatgpt::Bindi
 
 /// Asks the provider for its models.
 fn list_models(app: &mut RustGisApp, cfg: &Config, ctx: &egui::Context) {
+    if key_loading(app) {
+        app.assistant.catalog_pending = true;
+        return;
+    }
     app.assistant.catalog_pending = false;
     let req = provider::models_request(cfg);
     app.assistant.models_slot = Some(dispatch(app, req, cfg.login().then(|| cfg.binding()), None, ctx));
 }
 
+/// Replaces provider settings and stops work bound to a different provider or sign-in.
 fn apply_config(app: &mut RustGisApp, cfg: Config) {
     if let Some(agent) = app.assistant.agent.as_mut() {
         if agent.config.provider != cfg.provider
@@ -386,6 +513,8 @@ fn with_agent(app: &mut RustGisApp, f: impl FnOnce(&mut Agent, &mut rustgis_engi
 
 /// Per-frame: responses that arrived, a message queued by a command, and settings to save.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    poll_keys(app, ctx);
     if app.assistant.catalog_pending
         && let Some(cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone())
     {
@@ -395,11 +524,11 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         app.assistant.unsaved = false;
         save_pref(app, "assistant_remember_key", if app.assistant.remember_key { "on" } else { "off" });
         if let Some(cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) {
-            save_config(app, &cfg);
+            save_config(app, &cfg, ctx);
         }
     }
     if let Some(text) = app.assistant.queued.take() {
-        ensure_loaded(app);
+        ensure_loaded(app, ctx);
         if app.assistant.agent.as_ref().is_some_and(Agent::busy) {
             app.session.notify(tl!("The assistant is busy; stop it or wait for it to finish."), true);
         } else {
@@ -503,7 +632,12 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     }
 }
 
+/// Starts a user request with the selected provider's current session configuration.
 fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
+    if key_loading(app) {
+        app.assistant.queued = Some(text);
+        return;
+    }
     let text = text.trim().to_string();
     if text.is_empty() {
         return;
@@ -518,8 +652,22 @@ fn send(app: &mut RustGisApp, text: String, ctx: &egui::Context) {
     follow(app, step, ctx);
 }
 
+/// Only an initial keychain read delays requests; a known legacy key works during migration.
+fn key_loading(app: &RustGisApp) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.assistant.agent.as_ref().is_some_and(|a| app.assistant.keys.loading(&a.config.provider))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        false
+    }
+}
+
+/// Draws the Assistant pane, loading its provider on first use.
 pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
-    ensure_loaded(app);
+    ensure_loaded(app, ui.ctx());
     sync_skills(app, false);
     let ctx = ui.ctx().clone();
     if app.assistant.catalog_pending
@@ -551,11 +699,11 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()
             {
-                app.assistant.settings = !app.assistant.settings;
+                toggle_settings(app);
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if crate::widgets::icon_button(ui, "settings", tl!("Assistant settings")).clicked() {
-                    app.assistant.settings = !app.assistant.settings;
+                    toggle_settings(app);
                 }
                 let has_chat = app.assistant.agent.as_ref().is_some_and(|a| !a.transcript.is_empty());
                 if has_chat && crate::widgets::icon_button(ui, "delete", tl!("New conversation")).clicked() {
@@ -615,6 +763,7 @@ fn composer_panel(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx
         .show(ui, |ui| composer(app, ui, t, busy, ctx));
 }
 
+/// Edits provider settings and invalidates pending key reads as soon as a key changes.
 fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let Some(mut cfg) = app.assistant.agent.as_ref().map(|a| a.config.clone()) else { return };
     let before = (cfg.clone(), app.assistant.remember_key);
@@ -625,9 +774,15 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .show(ui, |ui| provider_settings(app, ui, t, &mut cfg));
     if section.header_response.clicked() {
         app.assistant.provider_closed = open;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            app.assistant.settings_pending = None;
+        }
         save_pref(app, "assistant_provider_closed", if open { "on" } else { "" });
     }
-    if let Some(why) = cfg.missing() {
+    if !key_loading(app)
+        && let Some(why) = cfg.missing()
+    {
         ui.label(RichText::new(tl!(why)).small().color(t.amber));
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -641,6 +796,25 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         provider::use_catalog(&mut cfg, &app.assistant.catalog, true);
     }
     if (cfg.clone(), app.assistant.remember_key) != before {
+        if app.assistant.remember_key != before.1 {
+            save_pref(app, "assistant_remember_key", if app.assistant.remember_key { "on" } else { "off" });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if !cfg.login() {
+            let key_changed = cfg.provider == before.0.provider && cfg.key != before.0.key;
+            let enabling = app.assistant.remember_key && !before.1;
+            let legacy = pref(app, &format!("assistant_key_{}", cfg.provider));
+            let reading =
+                enabling && !key_changed && app.assistant.keys.enable(&cfg.provider, legacy, app.services.secrets.clone(), ui.ctx());
+            if key_changed || (app.assistant.remember_key != before.1 && !reading) {
+                app.assistant.keys.edit(&cfg.provider, &cfg.key);
+                // Forget immediately on an explicit clear/opt-out, even while the key field has focus.
+                let opted_out = !app.assistant.remember_key && before.1;
+                if opted_out || (key_changed && cfg.key.trim().is_empty()) {
+                    save_config(app, &cfg, ui.ctx());
+                }
+            }
+        }
         app.assistant.unsaved = true;
         apply_config(app, cfg);
     }
@@ -650,33 +824,42 @@ fn settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
 /// notes on where they're kept and what is sent.
 fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Config) {
     egui::Grid::new("assistant_settings").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Provider"));
+        let provider_label = ui.label(tl!("Provider"));
         let current = provider::preset(&cfg.provider).map_or("", |p| p.label);
-        egui::ComboBox::from_id_salt("assistant_provider").selected_text(tl!(current)).width(180.0).show_ui(ui, |ui| {
-            for p in PRESETS {
-                // Signing in needs the browser and a server on this computer: the desktop app.
-                if p.login && cfg!(target_arch = "wasm32") {
-                    continue;
-                }
-                if ui.selectable_label(cfg.provider == p.id, tl!(p.label)).clicked() && cfg.provider != p.id {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        app.assistant.login = None;
+        egui::ComboBox::from_id_salt("assistant_provider")
+            .selected_text(tl!(current))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for p in PRESETS {
+                    // Signing in needs the browser and a server on this computer: the desktop app.
+                    if p.login && cfg!(target_arch = "wasm32") {
+                        continue;
                     }
-                    *cfg = load_config(app, p.id);
-                    app.assistant.models_slot = None;
-                    app.assistant.models.clear();
-                    app.assistant.catalog.clear();
-                    app.assistant.models_error = None;
-                    app.assistant.login_error = None;
-                    if cfg.login() && !cfg.key.is_empty() {
-                        app.assistant.account = signed_in_account();
-                        let ctx = ui.ctx().clone();
-                        list_models(app, cfg, &ctx);
+                    if ui.selectable_label(cfg.provider == p.id, tl!(p.label)).clicked() && cfg.provider != p.id {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            app.assistant.login = None;
+                        }
+                        // Switching providers is also a focus change: save the previous key first.
+                        if app.assistant.unsaved {
+                            save_config(app, cfg, ui.ctx());
+                        }
+                        *cfg = load_config(app, p.id, ui.ctx());
+                        app.assistant.models_slot = None;
+                        app.assistant.models.clear();
+                        app.assistant.catalog.clear();
+                        app.assistant.models_error = None;
+                        app.assistant.login_error = None;
+                        if cfg.login() && !cfg.key.is_empty() {
+                            app.assistant.account = signed_in_account();
+                            let ctx = ui.ctx().clone();
+                            list_models(app, cfg, &ctx);
+                        }
                     }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(provider_label.id);
         ui.end_row();
         if cfg.login() {
             ui.label(tl!("Account"));
@@ -692,7 +875,10 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
                     return;
                 }
                 ui.add(
-                    egui::TextEdit::singleline(&mut cfg.model).id(egui::Id::new(FIELDS[0])).desired_width(150.0).hint_text(tl!("model id")),
+                    egui::TextEdit::singleline(&mut cfg.model)
+                        .id(egui::Id::unique(FIELDS[0]))
+                        .desired_width(150.0)
+                        .hint_text(tl!("model id")),
                 );
                 if !app.assistant.models.is_empty() {
                     egui::ComboBox::from_id_salt("assistant_models").selected_text("").width(24.0).height(320.0).show_ui(ui, |ui| {
@@ -723,19 +909,21 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
         ui.end_row();
         let preset = provider::preset(&cfg.provider);
         if !cfg.login() {
-            ui.label(tl!("Address"));
-            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
+            let address_label = ui.label(tl!("Address"));
+            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::unique(FIELDS[1])).desired_width(200.0))
+                .labelled_by(address_label.id);
             ui.end_row();
-            ui.label(tl!("API key"));
+            let key_label = ui.label(tl!("API key"));
             ui.horizontal(|ui| {
                 let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
                 ui.add(
                     egui::TextEdit::singleline(&mut cfg.key)
-                        .id(egui::Id::new(FIELDS[2]))
+                        .id(egui::Id::unique(FIELDS[2]))
                         .password(!app.assistant.show_key)
                         .desired_width(150.0)
                         .hint_text(hint),
-                );
+                )
+                .labelled_by(key_label.id);
                 let eye = if app.assistant.show_key { tl!("Hide") } else { tl!("Show") };
                 if ui.small_button(eye).clicked() {
                     app.assistant.show_key = !app.assistant.show_key;
@@ -756,14 +944,7 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
         if let Some(p) = preset.filter(|p| !p.key_env.is_empty()) {
             notes.push(crate::i18n::fmt("On the desktop, the key can also come from {vars}.", &[("vars", &p.key_env.join(", "))]));
         }
-        notes.push(
-            if app.assistant.remember_key {
-                tl!("Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).")
-            } else {
-                tl!("The key is kept for this session only.")
-            }
-            .to_string(),
-        );
+        notes.push(key_storage_note(app, &cfg.provider));
     }
     notes.push(
         tl!("Requests send your message and the map's layer names, fields and the rows the assistant reads to the provider.").to_string(),
@@ -782,6 +963,51 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
     }
     if let Some(e) = &app.assistant.login_error {
         show_error(ui, e, t);
+    }
+}
+
+/// Describes actual storage, including a legacy key retained after a failed migration.
+fn key_storage_note(app: &RustGisApp, provider: &str) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = provider;
+        if app.assistant.remember_key {
+            tl!("Saved keys are kept unencrypted in the browser's storage.").to_string()
+        } else {
+            tl!("The key is kept for this session only.").to_string()
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use crate::assistantkeys::Status;
+        use rustgis_engine::data::secrets::SecretError;
+        let mut notes = Vec::new();
+        let plaintext = pref(app, &format!("assistant_key_{provider}")).is_some();
+        match app.assistant.keys.status(provider) {
+            Some(Status::Stored) if app.assistant.remember_key => notes.push(tl!("The key is saved in the system keychain.")),
+            Some(Status::Pending { .. }) => notes.push(tl!("Accessing the system keychain…")),
+            Some(Status::Failed { error, legacy, deleting, reading }) => {
+                notes.push(match error {
+                    SecretError::Denied => tl!("The system keychain is locked or access was refused."),
+                    SecretError::Unavailable(_) => tl!("The system keychain is unavailable."),
+                    _ => tl!("The system keychain could not complete the request."),
+                });
+                if *reading {
+                    notes.push(tl!("A saved key could not be read. A key entered now will be kept for this session only."));
+                } else if *deleting {
+                    notes.push(tl!("RustGIS could not confirm that any previously saved key was deleted from the system keychain."));
+                } else if !legacy || !plaintext {
+                    notes.push(tl!("The key is kept for this session only; it has not been remembered."));
+                }
+            }
+            _ => notes.push(tl!("The key is kept for this session only.")),
+        }
+        if plaintext {
+            notes.push(tl!(
+                "A previously saved key is still kept unencrypted in the app's preferences until it can be moved to the system keychain."
+            ));
+        }
+        notes.join("\n")
     }
 }
 
@@ -1159,7 +1385,7 @@ fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egu
     if app.assistant.agent.as_ref().is_some_and(|a| a.config.login() && !a.config.key.is_empty()) {
         plan_line(ui, t);
     }
-    let id = egui::Id::new("assistant_input");
+    let id = egui::Id::unique("assistant_input");
     // Enter sends; Shift+Enter starts a new line.
     let focused = ui.memory(|m| m.has_focus(id));
     let mut submit = false;
@@ -1441,6 +1667,401 @@ fn inline(ui: &Ui, text: &str, t: &Tokens, size: f32, heading: bool) -> egui::te
 mod tests {
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    type KeyPrefs = std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>;
+
+    /// An Assistant with isolated preferences and a fake keychain, never the OS store.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn keys_app(
+        legacy: Option<&str>,
+        store: Option<std::sync::Arc<dyn rustgis_engine::data::secrets::SecretStore>>,
+    ) -> (RustGisApp, KeyPrefs) {
+        keys_app_remember(legacy, store, true)
+    }
+
+    /// Builds either the opt-in or opt-out startup path with isolated preference storage.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn keys_app_remember(
+        legacy: Option<&str>,
+        store: Option<std::sync::Arc<dyn rustgis_engine::data::secrets::SecretStore>>,
+        remember: bool,
+    ) -> (RustGisApp, KeyPrefs) {
+        use std::{
+            collections::BTreeMap,
+            sync::{Arc, Mutex},
+        };
+        let prefs = Arc::new(Mutex::new(BTreeMap::from([
+            ("assistant_provider".into(), "custom".into()),
+            ("assistant_remember_key".into(), if remember { "on" } else { "off" }.into()),
+        ])));
+        if let Some(key) = legacy {
+            prefs.lock().unwrap().insert("assistant_key_custom".into(), key.into());
+        }
+        let mut app = RustGisApp::with_sample();
+        let read = prefs.clone();
+        app.services.load_pref = Some(Box::new(move |key| read.lock().unwrap().get(key).cloned()));
+        let write = prefs.clone();
+        app.services.save_pref = Some(Box::new(move |key, value| {
+            write.lock().unwrap().insert(key.into(), value.into());
+        }));
+        app.services.secrets = store;
+        ensure_loaded(&mut app, &egui::Context::default());
+        (app, prefs)
+    }
+
+    /// Waits for the fake keychain and applies its preference cleanup on the UI side.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn settle_keys(app: &mut RustGisApp) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            poll_keys(app, &egui::Context::default());
+            let provider = app.assistant.agent.as_ref().map_or("custom", |a| a.config.provider.as_str());
+            if !matches!(app.assistant.keys.status(provider), Some(crate::assistantkeys::Status::Pending { .. })) {
+                return;
+            }
+            assert!(std::time::Instant::now() < end, "fake keychain timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// Only successful migrations clear legacy preferences; failures keep them usable and visible.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_migrate_without_losing_a_legacy_key() {
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretError, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        let (mut app, prefs) = keys_app(Some("synthetic-legacy"), Some(store.clone()));
+        settle_keys(&mut app);
+        assert_eq!(store.load("assistant/custom").unwrap(), Some(Secret::new("synthetic-legacy")));
+        assert_eq!(prefs.lock().unwrap().get("assistant_key_custom").map(String::as_str), Some(""));
+        assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, "synthetic-legacy");
+        assert!(key_storage_note(&app, "custom").contains("system keychain"));
+        let (mut failed, prefs) =
+            keys_app(Some("synthetic-legacy"), Some(std::sync::Arc::new(MemorySecrets::failing(SecretError::Denied))));
+        settle_keys(&mut failed);
+        assert_eq!(prefs.lock().unwrap().get("assistant_key_custom").map(String::as_str), Some("synthetic-legacy"));
+        assert_eq!(failed.assistant.agent.as_ref().unwrap().config.key, "synthetic-legacy");
+        let note = key_storage_note(&failed, "custom");
+        assert!(note.contains("unencrypted") && note.contains("refused"));
+        assert!(!note.contains("synthetic-legacy"));
+    }
+
+    /// Desktop without a store never writes a new plaintext key; opting out also clears legacy plaintext.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_have_no_new_plaintext_fallback() {
+        let (mut app, prefs) = keys_app(None, None);
+        let mut cfg = app.assistant.agent.as_ref().unwrap().config.clone();
+        cfg.key = "synthetic-new".into();
+        app.assistant.keys.edit("custom", &cfg.key);
+        apply_config(&mut app, cfg.clone());
+        save_config(&mut app, &cfg, &egui::Context::default());
+        assert!(!prefs.lock().unwrap().contains_key("assistant_key_custom"));
+        let note = key_storage_note(&app, "custom");
+        assert!(note.contains("unavailable") && note.contains("session only"));
+        assert!(!note.contains("synthetic-new"));
+        let (mut legacy, prefs) = keys_app(Some("synthetic-legacy"), None);
+        legacy.assistant.remember_key = false;
+        let cfg = legacy.assistant.agent.as_ref().unwrap().config.clone();
+        legacy.assistant.keys.edit("custom", &cfg.key);
+        save_config(&mut legacy, &cfg, &egui::Context::default());
+        assert_eq!(prefs.lock().unwrap().get("assistant_key_custom").map(String::as_str), Some(""));
+    }
+
+    /// A failed new-key write leaves the key in the session and never echoes backend payloads.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_report_failed_writes_without_leaking_the_key() {
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretError};
+        for error in [SecretError::Denied, SecretError::Failed("synthetic-new".into())] {
+            let (mut app, prefs) = keys_app(None, Some(std::sync::Arc::new(MemorySecrets::failing(error))));
+            settle_keys(&mut app);
+            assert!(key_storage_note(&app, "custom").contains("could not be read"));
+            let mut cfg = app.assistant.agent.as_ref().unwrap().config.clone();
+            cfg.key = "synthetic-new".into();
+            app.assistant.keys.edit("custom", &cfg.key);
+            apply_config(&mut app, cfg.clone());
+            save_config(&mut app, &cfg, &egui::Context::default());
+            settle_keys(&mut app);
+            assert!(!prefs.lock().unwrap().contains_key("assistant_key_custom"));
+            assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, "synthetic-new");
+            let note = key_storage_note(&app, "custom");
+            assert!(note.contains("session only") && !note.contains("synthetic-new"));
+        }
+    }
+
+    /// A failed replacement is session-only even when a different legacy key still needs migration.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_distinguish_a_failed_replacement_from_legacy_migration() {
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretError, SecretStore};
+        let failing: std::sync::Arc<dyn SecretStore> =
+            std::sync::Arc::new(MemorySecrets::failing(SecretError::Failed("synthetic-backend-payload".into())));
+        for store in [None, Some(failing)] {
+            let (mut app, prefs) = keys_app(Some("synthetic-legacy"), store);
+            settle_keys(&mut app);
+            let mut cfg = app.assistant.agent.as_ref().unwrap().config.clone();
+            cfg.key = "synthetic-replacement".into();
+            app.assistant.keys.edit("custom", &cfg.key);
+            apply_config(&mut app, cfg.clone());
+            save_config(&mut app, &cfg, &egui::Context::default());
+            settle_keys(&mut app);
+            assert_eq!(prefs.lock().unwrap().get("assistant_key_custom").map(String::as_str), Some("synthetic-legacy"));
+            assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, "synthetic-replacement");
+            let note = key_storage_note(&app, "custom");
+            assert!(note.contains("session only; it has not been remembered") && note.contains("unencrypted"));
+            for secret in ["synthetic-legacy", "synthetic-replacement", "synthetic-backend-payload"] {
+                assert!(!note.contains(secret));
+            }
+        }
+    }
+
+    /// Requests wait for the saved key instead of sending with a temporary empty/environment value.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_wait_before_contacting_a_provider() {
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        store.save("assistant/custom", &Secret::new("synthetic-stored")).unwrap();
+        let (mut app, _) = keys_app(None, Some(store));
+        assert!(key_loading(&app));
+        let cfg = app.assistant.agent.as_ref().unwrap().config.clone();
+        let ctx = egui::Context::default();
+        list_models(&mut app, &cfg, &ctx);
+        send(&mut app, "hello".into(), &ctx);
+        assert!(app.assistant.catalog_pending && app.assistant.models_slot.is_none());
+        assert!(app.assistant.inflight.is_none());
+        assert_eq!(app.assistant.queued.as_deref(), Some("hello"));
+        settle_keys(&mut app);
+        assert!(!key_loading(&app));
+        assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, "synthetic-stored");
+    }
+
+    /// Startup waits for the saved key before opening settings or restoring a folded provider.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_settings_follow_the_initial_key_read() {
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretError, SecretStore};
+        for saved in [false, true] {
+            for collapsed in [false, true] {
+                let store = std::sync::Arc::new(MemorySecrets::new());
+                if saved {
+                    store.save("assistant/openai", &Secret::new("synthetic-stored")).unwrap();
+                }
+                let (mut app, prefs) = keys_app(None, None);
+                prefs.lock().unwrap().insert("assistant_provider".into(), "openai".into());
+                prefs.lock().unwrap().insert("assistant_provider_closed".into(), if collapsed { "on" } else { "" }.into());
+                app.assistant = AssistantState::default();
+                app.services.secrets = Some(store);
+                let ctx = egui::Context::default();
+                app.assistant.keys.load("openai", "", None, true, app.services.secrets.clone(), &ctx);
+                ensure_loaded(&mut app, &ctx);
+                assert!(key_loading(&app));
+                assert!(!app.assistant.settings);
+                settle_keys(&mut app);
+                assert_eq!(app.assistant.settings, !saved);
+                assert_eq!(app.assistant.provider_closed, saved && collapsed);
+            }
+        }
+        let (mut failed, _) = keys_app(None, Some(std::sync::Arc::new(MemorySecrets::failing(SecretError::Denied))));
+        failed.assistant.agent.as_mut().unwrap().config.model.clear();
+        settle_keys(&mut failed);
+        assert!(failed.assistant.settings && !failed.assistant.provider_closed);
+    }
+
+    /// A user's open or close choice wins even when it returns to the pending default.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_settings_keep_user_choices_during_the_initial_key_read() {
+        use rustgis_engine::data::secrets::MemorySecrets;
+        for open in [false, true] {
+            let (mut app, _) = keys_app(None, Some(std::sync::Arc::new(MemorySecrets::new())));
+            assert!(key_loading(&app));
+            app.assistant.agent.as_mut().unwrap().config.model = if open { "synthetic-model" } else { "" }.into();
+            toggle_settings(&mut app);
+            if !open {
+                toggle_settings(&mut app);
+            }
+            settle_keys(&mut app);
+            assert_eq!(app.assistant.settings, open);
+        }
+    }
+
+    /// Clearing or unticking Remember deletes the key while keeping an unticked key usable this session.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_are_deleted_when_cleared_or_not_remembered() {
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretStore};
+        for clear in [false, true] {
+            let store = std::sync::Arc::new(MemorySecrets::new());
+            let (mut app, _) = keys_app(Some("synthetic-legacy"), Some(store.clone()));
+            settle_keys(&mut app);
+            let mut cfg = app.assistant.agent.as_ref().unwrap().config.clone();
+            if clear {
+                cfg.key.clear();
+            } else {
+                app.assistant.remember_key = false;
+            }
+            app.assistant.keys.edit("custom", &cfg.key);
+            apply_config(&mut app, cfg.clone());
+            save_config(&mut app, &cfg, &egui::Context::default());
+            settle_keys(&mut app);
+            assert_eq!(store.load("assistant/custom").unwrap(), None);
+            assert_eq!(app.assistant.agent.as_ref().unwrap().config.key, if clear { "" } else { "synthetic-legacy" });
+        }
+    }
+
+    /// The shared settings harness installs the real fonts before drawing the form.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn keys_harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
+        let mut fonts = false;
+        egui_kittest::Harness::builder().with_size(vec2(700.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    ui.ctx().request_repaint();
+                    return;
+                }
+                let ctx = ui.ctx().clone();
+                poll(app, &ctx);
+                settings(app, ui, &Tokens::light());
+            },
+            app,
+        )
+    }
+
+    /// The actual Remember checkbox goes through the deferred save path and deletes the stored key.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_remember_checkbox_forgets_the_key() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        let (mut app, prefs) = keys_app(Some("synthetic-legacy"), Some(store.clone()));
+        settle_keys(&mut app);
+        let mut h = keys_harness(app);
+        h.run_steps(3);
+        h.get_by_label("Remember the key on this computer").click();
+        h.run_steps(4);
+        settle_keys(h.state_mut());
+        assert!(!h.state().assistant.remember_key);
+        assert_eq!(store.load("assistant/custom").unwrap(), None);
+        assert_eq!(prefs.lock().unwrap().get("assistant_remember_key").map(String::as_str), Some("off"));
+    }
+
+    /// Ticking Remember after an off startup loads the existing key instead of deleting it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_remember_checkbox_loads_an_unread_key() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        store.save("assistant/custom", &Secret::new("synthetic-stored")).unwrap();
+        let (app, prefs) = keys_app_remember(None, Some(store.clone()), false);
+        let mut h = keys_harness(app);
+        h.run_steps(3);
+        h.get_by_label("Remember the key on this computer").click();
+        h.run_steps(4);
+        settle_keys(h.state_mut());
+        assert!(h.state().assistant.remember_key);
+        assert_eq!(h.state().assistant.agent.as_ref().unwrap().config.key, "synthetic-stored");
+        assert_eq!(store.load("assistant/custom").unwrap(), Some(Secret::new("synthetic-stored")));
+        assert_eq!(prefs.lock().unwrap().get("assistant_remember_key").map(String::as_str), Some("on"));
+    }
+
+    /// Clearing the focused password field deletes its saved key before the field loses focus.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_clear_without_waiting_for_focus_loss() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretStore};
+        let store = std::sync::Arc::new(MemorySecrets::new());
+        let (mut app, _) = keys_app(Some("synthetic-legacy"), Some(store.clone()));
+        settle_keys(&mut app);
+        let mut h = keys_harness(app);
+        h.run_steps(3);
+        h.get_by_label("API key").focus();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(3);
+        assert!(h.get_by_label("API key").is_focused());
+        assert!(h.state().assistant.agent.as_ref().unwrap().config.key.is_empty());
+        settle_keys(h.state_mut());
+        assert_eq!(store.load("assistant/custom").unwrap(), None);
+    }
+
+    /// Session-only typing waits for focus loss instead of deleting a key on each keystroke.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_session_key_typing_defers_storage() {
+        use egui_kittest::kittest::Queryable;
+        use rustgis_engine::data::secrets::{MemorySecrets, SecretError};
+        let (app, prefs) = keys_app_remember(None, Some(std::sync::Arc::new(MemorySecrets::failing(SecretError::Denied))), false);
+        let mut h = keys_harness(app);
+        h.run_steps(3);
+        h.get_by_label("API key").focus();
+        h.run_steps(2);
+        prefs.lock().unwrap().remove("assistant_model_custom");
+        for text in ["synthetic", "-session"] {
+            h.get_by_label("API key").type_text(text);
+            h.run_steps(3);
+            assert!(h.get_by_label("API key").is_focused());
+            assert!(matches!(h.state().assistant.keys.status("custom"), Some(crate::assistantkeys::Status::Session)));
+            assert!(!prefs.lock().unwrap().contains_key("assistant_model_custom"));
+        }
+        assert_eq!(h.state().assistant.agent.as_ref().unwrap().config.key, "synthetic-session");
+        h.get_by_label("Remember the key on this computer").focus();
+        h.run_steps(3);
+        settle_keys(h.state_mut());
+        assert!(prefs.lock().unwrap().contains_key("assistant_model_custom"));
+        assert!(matches!(h.state().assistant.keys.status("custom"), Some(crate::assistantkeys::Status::Failed { deleting: true, .. })));
+    }
+
+    /// Startup migrates keys for unselected providers without opening the Assistant or contacting models.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn assistant_keys_migrate_all_legacy_providers_at_startup() {
+        use rustgis_engine::data::secrets::{MemorySecrets, Secret, SecretStore};
+        use std::{
+            collections::BTreeMap,
+            sync::{Arc, Mutex},
+        };
+        let prefs = Arc::new(Mutex::new(BTreeMap::from([
+            ("assistant_remember_key".to_string(), "on".to_string()),
+            ("assistant_key_custom".into(), "first".into()),
+            ("assistant_key_anthropic".into(), "second".into()),
+        ])));
+        let store = Arc::new(MemorySecrets::new());
+        let mut app = RustGisApp::with_sample();
+        let read = prefs.clone();
+        app.services.load_pref = Some(Box::new(move |key| read.lock().unwrap().get(key).cloned()));
+        let write = prefs.clone();
+        app.services.save_pref = Some(Box::new(move |key, value| {
+            write.lock().unwrap().insert(key.into(), value.into());
+        }));
+        app.services.secrets = Some(store.clone());
+        let ctx = egui::Context::default();
+        poll_keys(&mut app, &ctx);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while ["custom", "anthropic"]
+            .iter()
+            .any(|p| matches!(app.assistant.keys.status(p), Some(crate::assistantkeys::Status::Pending { .. })))
+        {
+            assert!(std::time::Instant::now() < end);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            poll_keys(&mut app, &ctx);
+        }
+        assert!(app.assistant.agent.is_none());
+        assert_eq!(store.load("assistant/custom").unwrap(), Some(Secret::new("first")));
+        assert_eq!(store.load("assistant/anthropic").unwrap(), Some(Secret::new("second")));
+        for p in ["custom", "anthropic"] {
+            assert_eq!(prefs.lock().unwrap().get(&format!("assistant_key_{p}")).map(String::as_str), Some(""));
+        }
+    }
+
+    /// A signed-out ChatGPT settings pane for tests that never contact a provider.
     fn plan_app() -> RustGisApp {
         let mut app = RustGisApp::with_sample();
         let mut cfg = Config::from_env("chatgpt");
@@ -1471,7 +2092,7 @@ mod tests {
         app.assistant.chunks = Some((generation, Chunks::default()));
         app.assistant.inflight = Some((generation, Slot::default()));
         // Render just the composer: no polling or network dispatch is needed to press Stop.
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 160.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(600.0, 160.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 let busy = app.assistant.agent.as_ref().is_some_and(Agent::busy);
@@ -1491,7 +2112,7 @@ mod tests {
     #[test]
     fn plan_settings_order_and_signed_out_model() {
         use egui_kittest::kittest::{NodeT, Queryable};
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1523,7 +2144,7 @@ mod tests {
         let saved = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let log = saved.clone();
         app.services.save_pref = Some(Box::new(move |k, v| log.lock().unwrap().push((k.to_string(), v.to_string()))));
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1549,7 +2170,7 @@ mod tests {
     fn waiting_controls_reopen_copy_and_cancel() {
         use egui_kittest::kittest::Queryable;
         let url = "https://auth.openai.com/synthetic-sign-in";
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(260.0, 220.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(260.0, 220.0)).build_ui_state(
             |ui, actions: &mut (bool, bool)| {
                 let (reopen, cancel) = waiting_for_browser(ui, &Tokens::light(), url);
                 actions.0 |= reopen;
@@ -1589,7 +2210,7 @@ mod tests {
                 app
             };
             app.assistant.login_error = Some(rustgis_assistant::Error::new(rustgis_assistant::Recovery::Auth, ""));
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, height)).build_ui_state(
+            let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(width, height)).build_ui_state(
                 |ui, app: &mut RustGisApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);
@@ -1664,7 +2285,7 @@ mod tests {
         .unwrap();
         let mut app = RustGisApp::with_sample();
         app.services.load_pref = Some(Box::new(|key| (key == "assistant_provider").then(|| "chatgpt".into())));
-        ensure_loaded(&mut app);
+        ensure_loaded(&mut app, &egui::Context::default());
         assert!(app.assistant.catalog_pending);
         let ctx = egui::Context::default();
         poll(&mut app, &ctx);
@@ -1675,7 +2296,7 @@ mod tests {
         // A fixed number of frames, not `run`: each catalog request ends on a thread that asks for a
         // repaint, which can land mid-run (it did on Windows) and run past `run`'s step limit.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(400.0, 600.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -1769,14 +2390,18 @@ mod tests {
         let mut app = plan_app();
         app.assistant.settings = false;
         app.assistant.agent.as_mut().unwrap().transcript.push(Entry::Error(error));
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run();
         assert!(h.query_by_label("Weekly usage").is_some());
         h.get_by_label("Weekly usage").click();
@@ -1846,19 +2471,23 @@ mod tests {
     }
 
     fn right_pane(h: &egui_kittest::Harness<'_, RustGisApp>) -> egui::Rect {
-        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().outer_rect
+        h.state().ui.pane_rects[1].unwrap()
     }
 
     /// The window with the assistant open and `entries` in the conversation.
     fn chat(entries: Vec<Entry>, model: &str) -> egui_kittest::Harness<'static, RustGisApp> {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            RustGisApp::with_sample(),
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                RustGisApp::with_sample(),
+            );
         h.state_mut().run("ui.pane.assistant", serde_json::Value::Null).unwrap();
         for _ in 0..4 {
             h.step();

@@ -217,6 +217,46 @@ fn connection_commands_require_fresh_approval_before_login_or_scripts() {
 }
 
 #[test]
+fn remembered_database_forget_requires_fresh_direct_and_script_approval() {
+    use rustgis_engine::data::secrets::{MemorySecrets, SecretStore};
+    use std::sync::Arc;
+    for scripted in [false, true] {
+        let store = Arc::new(MemorySecrets::new());
+        let mut s = Session::new(Project::default());
+        s.database_logins.set_store(Some(store.clone()));
+        s.run(
+            "connection.new",
+            &json!({"kind":"postgres","name":"Private database","address":"postgres:host=127.0.0.1 port=1 user=approval"}),
+        )
+        .unwrap();
+        s.run("connection.login", &json!({"id":"c1","password":"forgotten-sentinel","remember":true})).unwrap();
+        let args = if scripted {
+            json!({"script":"map.rename {\"name\":\"Approved map\"}\nconnection.forgetPassword {\"id\":\"c1\"}"})
+        } else {
+            json!({"command":"connection.forgetPassword","params":{"id":"c1"}})
+        };
+        let tool = if scripted { "run" } else { "run_command" };
+        let mut a = Agent::new(cfg("openai"), &s);
+        assert!(matches!(a.ask("forget this database's saved password", &s), Step::Send(_)));
+        let name = s.map().name.clone();
+        assert_eq!(a.receive(a.generation(), ok(call("forget", tool, args.clone())), &mut s), Step::Confirm);
+        assert!(!a.pending(&s).unwrap().2);
+        assert!(store.load("connection/c1").unwrap().is_some());
+        assert_eq!(s.map().name, name);
+        a.decide(false, false, &mut s);
+        assert!(store.load("connection/c1").unwrap().is_some());
+        assert_eq!(a.receive(a.generation(), ok(call("allow", tool, args.clone())), &mut s), Step::Confirm);
+        let sent = a.decide(true, true, &mut s);
+        assert!(matches!(sent, Step::Send(_)));
+        assert!(!format!("{sent:?}").contains("forgotten-sentinel"));
+        assert_eq!(store.load("connection/c1").unwrap(), None);
+        assert!(!s.connections.find("c1").unwrap().remembered);
+        assert!(s.database_logins.has_session_password("c1"));
+        assert_eq!(a.receive(a.generation(), ok(call("again", tool, args)), &mut s), Step::Confirm);
+    }
+}
+
+#[test]
 fn gate_rules() {
     let s = sample();
     let g = |name: &str, args: Value| tools::gate(&s, &ToolCall { id: "x".into(), name: name.into(), args });

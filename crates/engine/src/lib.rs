@@ -465,6 +465,10 @@ pub struct Session {
     pub sources: sources::Sources,
     /// Saved connections (`connection.*`): kept with the app's preferences, not the project; never a secret.
     pub connections: connections::Connections,
+    /// The database logins of this run: the system's secret store (desktop app only), passwords
+    /// given and read, which saved connection each database uses, and the logins to ask for. Never
+    /// saved; see [`connections::DatabaseLogins`].
+    pub database_logins: connections::DatabaseLogins,
     /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
     /// preferences, not the project).
     pub raster_defaults: rustgis_map::RasterDefaults,
@@ -598,6 +602,12 @@ pub struct Session {
     /// Trends the app worked out on a thread, waiting for `cube.trend {"ran"}`: the id, the
     /// layers and how many dates (see [`cmd::cube::land`]).
     pub(crate) trend_results: Vec<(u64, Vec<rustgis_data::raster::Raster>, usize)>,
+    /// Set where nothing waits on a command but a shell (`rustgis-cli run`): long runs a command
+    /// works out where it's called (a trend over a state from a data cube) take the app's larger
+    /// bounds, as its panes do on a thread, and tell their progress (a share, 0 to 1, and 1 when
+    /// one succeeds) through this. Python leaves it unset: a run there holds the interpreter's
+    /// lock and can't be interrupted, so it keeps the Script pane's bounds.
+    pub long_runs: Option<fn(&str, f64)>,
 }
 
 /// The most `layer.addUrl` requests kept for the front end at a time.
@@ -671,6 +681,7 @@ impl Session {
             dirty: false,
             sources: sources::Sources::default(),
             connections: connections::Connections::default(),
+            database_logins: connections::DatabaseLogins::default(),
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },
             revision: 1,
@@ -731,6 +742,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             sql_results: Vec::new(),
             trend_results: Vec::new(),
+            long_runs: None,
         }
     }
 

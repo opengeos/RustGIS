@@ -59,7 +59,7 @@ pub const LABEL_W: f32 = 96.0;
 /// The form, its fields told apart by `id` (an element, a dialog). `tokens` are the dynamic text
 /// lists the text expands where it is shown, each a section of the Dynamic Text menu.
 pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&[(&str, &str)]], f: Fields<'_>) -> Settled {
-    let id = egui::Id::new(id);
+    let id = egui::Id::unique(id);
     let mut out = Settled::default();
     let hint = tl!("Shift+Enter starts a new line.");
     let mut edit =
@@ -113,7 +113,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
             ui.label(tl!("Bold"));
             let r = ui.checkbox(b, "");
             let on = *b;
-            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, tl!("Bold")));
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, tl!("Bold")));
             out.bold = r.changed();
             ui.end_row();
         }
@@ -122,7 +122,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
             // Named for assistive technology, as its label sits in the other column.
             let r = ui.checkbox(it, "");
             let on = *it;
-            r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, tl!("Italic")));
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, tl!("Italic")));
             out.italic = r.changed();
             ui.end_row();
         }
@@ -164,7 +164,7 @@ pub fn show(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, tokens: &[&
                 }
             });
             // Named for assistive technology, as its label sits in the other column.
-            list.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, tl!("Font")));
+            list.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Font")));
             ui.end_row();
             // A serif asked for where none is installed is drawn in the sans: said here, so the
             // page never differs from what was asked unsaid.
@@ -199,7 +199,7 @@ mod tests {
     }
 
     fn harness(form: Form) -> egui_kittest::Harness<'static, Form> {
-        egui_kittest::Harness::builder().build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, f: &mut Form| {
                 // The numbers are lent saved and kept only once settled, as the pane's callers do.
                 let (mut size, mut spacing) = (f.size, f.letter_spacing);

@@ -329,7 +329,7 @@ fn body(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.end_row();
         }
     });
-    let id = egui::Id::new("sql_editor");
+    let id = egui::Id::unique("sql_editor");
     let out = egui::TextEdit::multiline(&mut app.ui.sql.text)
         .id(id)
         .code_editor()

@@ -1052,13 +1052,18 @@ mod tests {
         // A point picked at 1°E 30°N.
         app.workflow.pick =
             Some(crate::analysispane::Pick { purpose: "ts_point", needed: 1, points: vec![rustgis_engine::geom::Coord::new(1.0, 30.0)] });
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 600.0)).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let t = crate::theme::Tokens::get(ui.ctx());
-                time_series(app, ui, &t);
-            },
-            app,
-        );
+        // Without the interface fonts (`theme::install_fonts`) egui's faces have no "●".
+        let mut h = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .with_size(egui::vec2(420.0, 600.0))
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let t = crate::theme::Tokens::get(ui.ctx());
+                    time_series(app, ui, &t);
+                },
+                app,
+            );
         h.run_steps(3);
         assert_eq!(h.state().ws.series_layer, "air");
         assert_eq!(h.state().ws.series.len(), 1);

@@ -5,8 +5,8 @@ use std::sync::{Arc, OnceLock};
 
 use rustgis_engine::data::secrets::{SERVICE, Secret, SecretError, SecretStore, check_account};
 
-/// The OS credential store, opened on the first call: start-up never touches D-Bus and never
-/// triggers a prompt.
+/// The OS credential store, opened on the first call: constructing this hook never touches
+/// D-Bus or triggers a prompt. Callers such as Assistant key migration use a worker thread.
 #[derive(Default)]
 pub struct Keychain {
     store: OnceLock<Result<Arc<keyring_core::CredentialStore>, String>>,

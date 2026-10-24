@@ -163,17 +163,17 @@ type, and empty tables (such as the TIGER geocoder's) are left out. Features kee
 views: the table's integer primary key, else the row's place in the table (the rows of a view or
 a partitioned table without a key are numbered as read, so theirs can change between views).
 
-The password is kept until RustGIS closes and never written to the project, which names the
-connection without it. Without one, `PGPASSWORD` or libpq's password file (`~/.pgpass`, or
-`%APPDATA%\postgresql\pgpass.conf`) serve when you add a table. A project keeps a streamed
-table's connection and reads it again when it opens, sending only a password given in this
-session: a project file could name any host, and must never get your own credentials. When the
-server wants a password and the layer's database matches a saved connection, the project says
-which connection is waiting. Right-click that connection in **Data Sources › Connections**, or a
-waiting layer, and choose **Log In…**. Saving the password reopens every layer from that database.
-Without a matching connection, connect again with **Add Data › Database…** (the layer reads again
-when the project is next opened). A small table's features are kept in the project as they were
-when added.
+Passwords are never written to the project. By default, an entered password lasts until
+RustGIS closes. For a named desktop connection, **Remember on this computer** is an unchecked
+opt-in to the operating system's password store; see [Named connections](#named-connections)
+for reconnect, selection and forgetting rules. Opening a project can use a remembered password
+only for a unique, exact saved-address match, or an explicit session selection. Otherwise a
+waiting layer offers **Log In…**, or a chooser when several remembered connections match.
+Without a matching connection, connect again with **Add Data › Database…**.
+`PGPASSWORD` or libpq's password file (`~/.pgpass`, or
+`%APPDATA%\postgresql\pgpass.conf`) can serve when you explicitly add a table without a password;
+opening a project never newly authorizes these ambient credentials. A small table's features
+are kept in the project as they were when added.
 
 `layer.addSql` takes a connection as its `"database"` too, through DuckDB's `postgres` extension
 (installed the first time, like DuckDB Spatial), so a query names its tables plainly; the password
@@ -231,10 +231,11 @@ the column's SRID (MySQL's per-column SRID, MariaDB's `REF_SYSTEM_ID`) or else i
 becomes a layer per type. Features keep their ids between views from the table's integer primary
 key; a table without one has its rows numbered as read, so theirs can change between views.
 
-The password is kept until RustGIS closes and never written to the project; `MYSQL_PWD` serves
-when you add a table without one, and a project opening sends only a password given in this
-session, as for PostGIS. SQL queries (`layer.addSql`, the SQL pane) don't run on MySQL or MariaDB
-databases.
+Passwords are never written to the project and last for the session unless you opt in with
+**Remember on this computer** for a named desktop connection. The same exact-address reconnect,
+chooser and Forget rules in [Named connections](#named-connections) apply. `MYSQL_PWD` can serve when you explicitly
+add a table without a password, but opening a project never newly authorizes it.
+SQL queries (`layer.addSql`, the SQL pane) don't run on MySQL or MariaDB databases.
 
 ## SQL Server and Azure SQL
 
@@ -278,13 +279,15 @@ read or sample locally instead of sending a viewport polygon to the server. A sm
 therefore miss features in a large sampled table. `geometry` layers and higher compatibility
 levels retain server-side viewport filtering.
 
-The provider only reads data; edits are not written back to SQL Server. The password is kept
-until RustGIS closes, never in the project. Secret-named query values such as `pwd` and
-`access_token` are removed from saved connection addresses. `SQLCMDPASSWORD` serves only when adding a database,
-not when reopening a project. A streamed layer reopening sends only credentials given this
-session; Windows integrated sign-in also requires that same address to have been added this
-session. Reconnect with **Add Data › Database…** when needed. SQL queries (`layer.addSql`, the SQL
-pane) do not run on SQL Server connections.
+The provider only reads data; edits are not written back to SQL Server. Passwords are never
+written to the project and last for the session unless **Remember on this computer** is
+checked for a named desktop connection. The [named-connection rules](#named-connections) govern
+remembered reconnects and explicit selection. Secret-named query values such as `pwd` and
+`access_token` are removed from saved connection addresses. `SQLCMDPASSWORD` serves only when
+explicitly adding a database, not when opening a project. Windows integrated sign-in still
+requires that same address to have been added this session: opening a project does not
+authorize Windows identity. Reconnect with **Add Data › Database…** when needed. SQL queries
+(`layer.addSql`, the SQL pane) do not run on SQL Server connections.
 
 ## Web Data
 
@@ -457,29 +460,80 @@ names the command and parameters that add it (`service.add`, `layer.addDatabase`
 it left some out. Like `connection.test`, it reads the address itself on the desktop and the
 command line; with `probe: true` it returns the address to fetch, and the app passes what it
 fetched back as `answer` (and further `documents` when a service asks for them, as `next`).
-Browsing never changes the project or the saved connections.
+Browsing never changes the project. When a saved password turns out to be missing, or to have been
+saved for another address, the connection loses its **Saved password** marker; the stored entry
+itself is left for **Forget Saved Password**, an address edit or a removal to delete.
 
-Addresses are saved without passwords or tokens. `connection.login` remembers a database
-`password`, or S3 `accessKeyId`, `secretAccessKey` and optional `sessionToken`, for this session
-only, using the same credential stores as the existing add commands. With login parameters,
-`connection.test` logs in first; a failed listing does not undo that session login. A database
-login also reopens project layers that read the same password-free address and were refused for a
-missing or wrong password. `connection.list` gives such waiting layers as `waiting`, and
-`connection.login` gives `reopened` and `failed` when it tries any of them. A server that is down
-or a missing table is not reported as waiting for a login.
+Addresses are saved without passwords or tokens. Database passwords entered through
+`connection.login` are kept separately by connection ID for this session.
+On desktop, **Remember on this computer** in the new, edit and login forms is always unchecked
+initially. Checking it opts that submitted password into the operating system's password store;
+**Test** never saves it. The command equivalent is
+`connection.login {"id":"c1","password":"…","remember":true}`; `remember` defaults to false.
+If the store is missing, unavailable or denies access, the login remains usable for the
+session and a visible warning says it was not remembered (`passwordSaved:false` in the result).
+The browser and command line have no OS-store hook and remain session-only.
+
+The stored envelope is bound to the connection's ID, kind and cleaned address, including its
+username. Renaming or regrouping preserves it. Changing the address or username, or removing
+the connection, deletes the old stored password before committing the change; if deletion
+fails, the definition remains unchanged. Invalid edits do not delete a password.
+Duplicating a connection copies neither its stored password nor its session login.
+**Saved password** marks a remembered connection without reading the store just to display it.
+**Forget Saved Password** (`connection.forgetPassword {"id":"c1"}`) deletes the stored value,
+but leaves an explicitly entered session password and already-open layers alone. Forgetting an
+inactive connection never selects it or replaces another connection's active password.
+
+Projects remain address-only: they contain neither passwords nor saved connection IDs.
+On opening a project, one exact matching remembered connection may reconnect automatically.
+Matching strips passwords and outer wrappers/whitespace, but does not infer that URI and
+libpq forms, reordered parameters, host aliases or different usernames mean the same server.
+Several eligible remembered matches open a chooser with no default; cancel leaves the layers
+unavailable. Choose a connection explicitly, or use `connection.login {"id":"c2"}` to select
+its existing session or remembered password without exposing it. Selection lasts for this
+session, not in the project. `connection.list` reports secret-free `loginRequests` with the
+reason, database label, candidate IDs and affected-layer count; ambiguous layers are not
+attributed to the first saved row. `loggedIn` means this ID has a session password or an already
+loaded remembered password available; it does not certify successful server authentication.
+
+Explicit session input or selection takes precedence over a saved password; a saved password
+takes precedence over existing ambient fallbacks on explicitly initiated connections.
+Opening a project never newly authorizes environment/password-file credentials or Windows
+identity. A positively refused saved password is not retried for the rest of the session,
+and no other saved password is tried automatically. Its old OS-store value is retained.
+The fresh login form has an empty password and Remember unchecked: an unchecked replacement is
+session-only and does not overwrite or delete the old value; checking Remember and successfully
+saving replaces it. A password the server refuses is not kept as this session's, and is not sent
+to the database's other layers. A refused typed login restores the previous active password,
+selection and activation; with no previous password, the attempted value is removed.
+If a password reused from this ID's session cache is refused, that cached value, its owned
+driver entry and activation are cleared, and a password is requested. An identical saved value
+is also suppressed for this session; a different saved value is not marked refused by this
+attempt. The OS-store entry is retained in either case.
+A transport error or missing table is not a wrong-password prompt. Use Forget to delete a
+previously saved password.
+
+A database login reopens waiting layers at the same password-free address;
+`connection.list` reports them as `waiting`, and `connection.login` returns `reopened` and
+`failed` counts. Adding, editing or removing a saved connection, or adding a layer, resolves
+only the databases that change: an unrelated database that is down is not connected to again.
+`connection.test` never persists a password. For a named connection, if the
+server positively refuses a password typed for that Test, the previous per-ID session credential,
+selection and active address password are restored (or the attempted credential is removed if
+none existed).
+A failure after authentication, such as a table-listing error, keeps the new session login.
+S3 `accessKeyId`, `secretAccessKey` and optional `sessionToken` remain session-only.
 S3 profiles and environment credentials remain subject to the existing endpoint restrictions;
 editing an S3 name, endpoint or options disconnects its session login. S3 shares the name-based
 session registry used by the S3 dialog and `s3.connect`, so editing or removing a saved
 connection also affects a session entry of the same name created there.
-Renaming clears the runtime entries under both the old and new names, so the renamed
+Renaming clears runtime entries under both the old and new names, so the renamed
 connection cannot inherit an unrelated login at its destination name.
 Web-service logins are not supported. Plugins may list connections but cannot manage, log in
-to, test or browse them. The in-app assistant asks for approval each time for those operations;
-external assistants using MCP cannot run them. Even `probe: true` needs approval: connection
-operations cannot be approved for the whole conversation.
-Database passwords are shared by public DSN for the session, including existing layers and
-other named connections using that DSN. Editing or removing a named connection does not revoke
-that shared login; changing its address does not transfer the old password to the new address.
+to, forget passwords for, test or browse them. The in-app assistant asks for fresh approval
+each time for those operations, including Forget and scripted calls; external assistants
+using MCP cannot run them. Even `probe: true` needs approval: connection operations cannot be
+approved for the whole conversation.
 
 Desktop and web apps save connections with their preferences (`connections` in desktop
 `prefs.json`, `rustgis.connections` in web localStorage). The first load imports saved services,
