@@ -1015,6 +1015,20 @@ impl RustGisApp {
         }
     }
 
+    /// On the desktop, an installed symbol face as a last-resort fallback, so marks the interface
+    /// faces lack (Segoe UI has no "✓") don't draw as boxes. The bytes are borrowed from the font
+    /// cache, not copied.
+    fn add_symbol_fallback(&mut self) {
+        if self.extra_fonts.iter().any(|(n, _, _)| n == "symbol-fallback") {
+            return;
+        }
+        if let Some((bytes, index)) = rustgis_engine::render::fonts::symbol_font() {
+            let mut face = egui::FontData::from_static(bytes);
+            face.index = *index;
+            self.extra_fonts.push(("symbol-fallback".into(), std::sync::Arc::new(face), None));
+        }
+    }
+
     /// The script face the current language needs, if any.
     fn current_region(&self) -> Option<rustgis_engine::render::fonts::ScriptFont> {
         Self::script_region(self.chosen_lang().script())
@@ -3400,6 +3414,7 @@ impl RustGisApp {
         }
         if self.fonts_frames == 0 {
             self.add_cjk_fallback();
+            self.add_symbol_fallback();
             self.installed_region = self.current_region();
             theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
             self.fonts_pending = true;
