@@ -425,7 +425,6 @@ fn pick(app: &mut RustGisApp, row: Row) {
         }
         Row::Hit(i) => {
             let Some(hit) = st.results.hits.get(i).cloned() else { return };
-            let query = st.searched.clone();
             let result = if let Hit::Tile { index, identity, .. } = &hit {
                 let Some(at) = rustgis_engine::cmd::tiles::index_of_identity(&app.session, identity, *index) else {
                     app.session.notify(tl!("Tile layer has changed; search again"), true);
@@ -433,6 +432,9 @@ fn pick(app: &mut RustGisApp, row: Row) {
                 };
                 app.run("map.zoomToTiles", json!({"index": at}))
             } else {
+                // The query the list was found for (the box may have been typed in since), with the
+                // list's limit, so the index picked is the row picked.
+                let query = st.searched.clone();
                 app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": i}))
             };
             if let Err(e) = result {
