@@ -6,6 +6,7 @@
 //! only layers RustGIS can draw are listed (the rest are counted in a note).
 
 use roxmltree::{Node, ParsingOptions};
+use serde_json::value::RawValue;
 
 /// What a layer of a service becomes.
 #[derive(Clone, Debug, PartialEq)]
@@ -1803,7 +1804,9 @@ pub struct Pages {
     url: String,
     /// The first page, without its features.
     doc: serde_json::Value,
-    features: Vec<serde_json::Value>,
+    /// The features read, each its JSON text as the server wrote it: read into values, a
+    /// feature's every coordinate would be one, several times the text's size (#830).
+    features: Vec<Box<RawValue>>,
     max: usize,
     seen: std::collections::HashSet<String>,
     /// The address to fetch now, and the one it was found from.
@@ -1826,6 +1829,64 @@ enum Phase {
     Offsets { size: usize, order: Option<String>, start: Option<serde_json::Value>, first: Option<Vec<u8>> },
 }
 
+/// A feature collection page's members other than its features (an object), and its features
+/// as their JSON text; `None` when it is JSON but not a feature collection, an error when it can't
+/// be read (as when it nests deeper than [`MAX_DEPTH`]).
+fn split_page(bytes: &[u8]) -> Result<Option<(serde_json::Value, Vec<Box<RawValue>>)>, String> {
+    if too_deep(bytes) {
+        return Err("recursion limit exceeded".into());
+    }
+    let mut members: std::collections::BTreeMap<String, Box<RawValue>> = match serde_json::from_slice(bytes) {
+        Ok(members) => members,
+        // JSON that isn't an object is read, but isn't a collection.
+        Err(e) => return serde_json::from_slice::<serde::de::IgnoredAny>(bytes).map(|_| None).map_err(|_| e.to_string()),
+    };
+    let Some(features) = members.remove("features").and_then(|f| serde_json::from_str::<Vec<Box<RawValue>>>(f.get()).ok()) else {
+        return Ok(None);
+    };
+    let rest = members.into_iter().map(|(k, v)| Ok((k, serde_json::from_str(v.get())?))).collect::<serde_json::Result<_>>();
+    Ok(Some((serde_json::Value::Object(rest.map_err(|e| e.to_string())?), features)))
+}
+
+/// Most arrays and objects a page may nest, as reading it into values allows (serde_json's limit).
+const MAX_DEPTH: usize = 127;
+
+/// Whether JSON text nests arrays and objects deeper than [`MAX_DEPTH`]: kept as text, a feature
+/// isn't held to the limit reading it into values holds it to, and the joined collection would be
+/// unreadable as a whole.
+fn too_deep(text: &[u8]) -> bool {
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for &b in text {
+        if in_string {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match b {
+                b'"' => in_string = true,
+                b'[' | b'{' => {
+                    depth += 1;
+                    if depth > MAX_DEPTH {
+                        return true;
+                    }
+                }
+                b']' | b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// The first of a page's features as a value, to compare with another page's (the same feature
+/// may be spaced differently).
+fn first_value(features: &[Box<RawValue>]) -> Option<serde_json::Value> {
+    serde_json::from_str(features.first()?.get()).ok()
+}
+
 /// Starts reading a feature collection page by page from its first page (`first`, from `url`), up
 /// to `max` features. An OGC API or WFS page leads to the next by its `next` link. An ArcGIS
 /// query that stopped at the server's record limit (`exceededTransferLimit`) is read again in
@@ -1844,10 +1905,7 @@ pub fn read_pages(url: &str, first: Vec<u8>, max: usize) -> Step {
     if !(linked || limited) {
         return Step::Done(first, None);
     }
-    let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&first) else { return Step::Done(first, None) };
-    let Some(features) = doc.get_mut("features").and_then(|f| f.as_array_mut()).map(std::mem::take) else {
-        return Step::Done(first, None);
-    };
+    let Ok(Some((doc, features))) = split_page(&first) else { return Step::Done(first, None) };
     let (next, phase) = if linked && let Some(next) = next_page(url, &doc) {
         (next, Phase::Linked)
     } else if limited && exceeded(&doc) {
@@ -1908,21 +1966,19 @@ impl Pages {
             return self.advance();
         }
         let read = self.features.len();
-        let mut page = match answer.and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).map_err(|e| e.to_string())) {
-            Ok(page) => page,
+        let (page, more) = match answer.and_then(|b| split_page(&b)) {
+            Ok(Some(page)) => page,
+            Ok(None) => return self.stop(format!("the page after feature {read} isn't a feature collection; the rest aren't read")),
             Err(e) => return self.stop(format!("the page after feature {read} couldn't be read ({e}); the rest aren't read")),
-        };
-        let Some(more) = page.get_mut("features").and_then(|f| f.as_array_mut()).map(std::mem::take) else {
-            return self.stop(format!("the page after feature {read} isn't a feature collection; the rest aren't read"));
         };
         let following = match &mut self.phase {
             Phase::Offsets { size, order, start, first } => {
                 // A server that doesn't honour `resultOffset` sends its first page again.
-                if start.is_some() && more.first() == start.as_ref() {
+                if start.is_some() && first_value(&more) == *start {
                     return self.stop("the server sent its first features again instead of the next ones; the rest aren't read".into());
                 }
                 if start.is_none() && !more.is_empty() {
-                    *start = more.first().cloned();
+                    *start = first_value(&more);
                     *first = None;
                 }
                 exceeded(&page).then(|| arcgis_page_url(&self.url, read + more.len(), *size, order.as_deref()))
@@ -1979,10 +2035,25 @@ impl Pages {
             if let Some(p) = members.get_mut("properties").and_then(|p| p.as_object_mut()) {
                 p.remove("exceededTransferLimit");
             }
-            members.insert("features".into(), serde_json::Value::Array(self.features));
         }
-        // A JSON value always writes; an empty answer would be said as unreadable.
-        Step::Done(serde_json::to_vec(&self.doc).unwrap_or_default(), note)
+        // The other members written (an object, which always writes), then the features' text
+        // spliced in as it came.
+        let head = serde_json::to_vec(&self.doc).unwrap_or_default();
+        let Some(open) = head.strip_suffix(b"}") else { return Step::Done(Vec::new(), note) };
+        // `{` alone when the collection has no other members.
+        let key: &[u8] = if open.len() > 1 { b",\"features\":[" } else { b"\"features\":[" };
+        let size = self.features.iter().map(|f| f.get().len() + 1).sum::<usize>();
+        let mut out = Vec::with_capacity(open.len() + key.len() + size + 2);
+        out.extend_from_slice(open);
+        out.extend_from_slice(key);
+        for (i, f) in self.features.into_iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            out.extend_from_slice(f.get().as_bytes());
+        }
+        out.extend_from_slice(b"]}");
+        Step::Done(out, note)
     }
 }
 
@@ -2338,6 +2409,59 @@ mod tests {
         assert_eq!(join_pages(url, single.clone(), 100, unasked), (single, None));
         let html_only = br#"{"type":"FeatureCollection","features":[],"links":[{"rel":"next","type":"text/html","href":"p2"}]}"#;
         assert_eq!(join_pages(url, html_only.to_vec(), 100, unasked), (html_only.to_vec(), None));
+    }
+
+    /// The pages' features are joined as the server wrote them, not read into values and written
+    /// again (#830): a feature costs its text while the pages are read. Spacing, member order, a
+    /// trailing zero, an escaped letter and an integer past `u64` all come through; the first
+    /// page's other members stay, and a server's first page sent again, spaced differently, is
+    /// still recognised.
+    #[test]
+    fn pages_joined_as_written() {
+        let url = "https://api.example.org/collections/a/items";
+        let features = [
+            r#"{ "type": "Feature", "id": 1, "properties": { "area": 1.50, "parcel": 12345678901234567890123 }, "geometry": null }"#,
+            r#"{"properties":{"name":"Caf\u00e9 \"Z\""},"type":"Feature","id":2,"geometry":{"type":"Point","coordinates":[1.0,2e1]}}"#,
+            r#"{"type":"Feature","id":3,"properties":{},"geometry":null}"#,
+        ];
+        let first = format!(
+            r#"{{"type":"FeatureCollection","name":"Parcels","numberMatched":3,"features":[{},{}],"links":[{{"rel":"next","href":"items?page=1"}}]}}"#,
+            features[0], features[1]
+        );
+        let second = format!(r#"{{"type":"FeatureCollection","features":[ {} ]}}"#, features[2]);
+        let (joined, note) = join_pages(url, first.into_bytes(), 100, |_| Ok(second.clone().into_bytes()));
+        assert_eq!(note, None);
+        let text = String::from_utf8(joined).unwrap();
+        assert!(text.contains(&format!("[{}]", features.join(","))), "{text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(v["type"] == "FeatureCollection" && v["name"] == "Parcels" && v.get("links").is_none() && v.get("numberMatched").is_none());
+
+        // An ArcGIS server ignoring `resultOffset`, its first page sent again with other spacing.
+        let query = "https://x.org/arcgis/rest/services/P/FeatureServer/0/query?where=1%3D1&f=geojson";
+        let page = |sep: &str| {
+            format!(r#"{{"type":"FeatureCollection","features":[{{"id":0,{sep}"x":1}}],"properties":{{"exceededTransferLimit":true}}}}"#)
+        };
+        let layer = br#"{"objectIdField":"OBJECTID","maxRecordCount":1,"advancedQueryCapabilities":{"supportsPagination":true}}"#;
+        let mut sent = 0;
+        let (joined, note) = join_pages(query, page("").into_bytes(), 100, |u| {
+            if !u.contains("resultOffset") {
+                return Ok(layer.to_vec());
+            }
+            sent += 1;
+            Ok(page(if sent == 1 { "" } else { " " }).into_bytes())
+        });
+        assert!(note.is_some_and(|n| n.contains("first features again")));
+        assert_eq!(String::from_utf8(joined).unwrap().matches(r#""id":0"#).count(), 1);
+
+        // A page nested deeper than values may be stops the reading, as it did read into values;
+        // brackets in a string don't count.
+        let nested = |n: usize| format!(r#"{{"features":[{{"id":9,"g":{}1{}}}]}}"#, "[".repeat(n), "]".repeat(n));
+        let first = format!(r#"{{"features":[{{"id":1,"s":"{}"}}],"links":[{{"rel":"next","href":"p"}}]}}"#, "[".repeat(200));
+        for (n, read) in [(120, true), (130, false)] {
+            let (joined, note) = join_pages(url, first.clone().into_bytes(), 100, |_| Ok(nested(n).into_bytes()));
+            assert_eq!(String::from_utf8(joined).unwrap().contains(r#""id":9"#), read, "{n}");
+            assert_eq!(note.is_some_and(|n| n.contains("recursion limit")), !read, "{n}");
+        }
     }
 
     /// An ArcGIS layer past its record limit: read again from the start in pages of the layer's
