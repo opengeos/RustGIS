@@ -265,13 +265,18 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut go = None;
     egui::Grid::new("nldi").num_columns(2).spacing(egui::vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.nldi;
-        ui.label(tl!("Flowline"));
+        let input_label = ui.label(tl!("Flowline"));
         let shown = nldi::DIRECTIONS.iter().find(|(k, _)| *k == st.direction).map(|(_, l)| tl!(*l)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("nldi_dir").selected_text(shown).width(field).show_ui(ui, |ui| {
-            for (k, l) in nldi::DIRECTIONS {
-                ui.selectable_value(&mut st.direction, k, tl!(*l));
-            }
-        });
+        egui::ComboBox::from_id_salt("nldi_dir")
+            .selected_text(shown)
+            .width(field)
+            .show_ui(ui, |ui| {
+                for (k, l) in nldi::DIRECTIONS {
+                    ui.selectable_value(&mut st.direction, k, tl!(*l));
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         ui.label(tl!("Point"));
         ui.horizontal(|ui| {
@@ -326,26 +331,36 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut plot = false;
     egui::Grid::new("nldi_nav").num_columns(2).spacing(egui::vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.nldi;
-        ui.label(tl!("Navigation"));
+        let input_label = ui.label(tl!("Navigation"));
         let shown = nldi::MODES.iter().find(|(c, _, _)| *c == st.mode).map(|(_, _, l)| tl!(*l)).unwrap_or(tl!("Select a direction…"));
-        egui::ComboBox::from_id_salt("nldi_mode").selected_text(shown).width(field).show_ui(ui, |ui| {
-            for (code, _, label) in nldi::MODES {
-                ui.selectable_value(&mut st.mode, code, tl!(*label));
-            }
-        });
+        egui::ComboBox::from_id_salt("nldi_mode")
+            .selected_text(shown)
+            .width(field)
+            .show_ui(ui, |ui| {
+                for (code, _, label) in nldi::MODES {
+                    ui.selectable_value(&mut st.mode, code, tl!(*label));
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Distance (km)"));
-        ui.add(egui::DragValue::new(&mut st.distance).range(1.0..=nldi::MAX_DISTANCE).speed(5.0));
+        let input_label = ui.label(tl!("Distance (km)"));
+        ui.add(egui::DragValue::new(&mut st.distance).range(1.0..=nldi::MAX_DISTANCE).speed(5.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Source"));
+        let input_label = ui.label(tl!("Source"));
         let loaded = st.comid.is_some() && st.sources_for == st.comid.map(|c| (c, st.mode));
         if loaded {
             let shown = st.sources.iter().find(|s| s.id == st.source).map(|s| s.name.clone()).unwrap_or_else(|| st.source.clone());
-            egui::ComboBox::from_id_salt("nldi_src").selected_text(shown).width(field).show_ui(ui, |ui| {
-                for s in &st.sources {
-                    ui.selectable_value(&mut st.source, s.id.clone(), format!("{} ({})", s.name, s.id));
-                }
-            });
+            egui::ComboBox::from_id_salt("nldi_src")
+                .selected_text(shown)
+                .width(field)
+                .show_ui(ui, |ui| {
+                    for s in &st.sources {
+                        ui.selectable_value(&mut st.source, s.id.clone(), format!("{} ({})", s.name, s.id));
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
         } else {
             ui.label(egui::RichText::new(tl!("Press Load sources & plot first")).color(t.text_dim));
         }

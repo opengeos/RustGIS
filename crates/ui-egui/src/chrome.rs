@@ -1199,7 +1199,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
         app.run("labels.style", serde_json::json!({"layer": "Cities", "size": 20})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 shortcuts(app, &ctx);

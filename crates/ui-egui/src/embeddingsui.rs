@@ -357,9 +357,9 @@ fn restyle(app: &mut RustGisApp) {
 fn band_row(ui: &mut egui::Ui, bands: &mut [usize; 3], max: usize) {
     ui.horizontal(|ui| {
         for (b, label) in bands.iter_mut().zip(["R", "G", "B"]) {
-            ui.label(label);
+            let input_label = ui.label(label);
             let mut v = *b + 1;
-            if ui.add(egui::DragValue::new(&mut v).range(1..=max).speed(0.2)).changed() {
+            if ui.add(egui::DragValue::new(&mut v).range(1..=max).speed(0.2)).labelled_by(input_label.id).changed() {
                 *b = v.clamp(1, max) - 1;
             }
         }
@@ -380,28 +380,38 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut go = false;
     egui::Grid::new("embeddings").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.embeddings;
-        ui.label(tl!("Dataset"));
+        let input_label = ui.label(tl!("Dataset"));
         let shown = picked(st).name.split(" (").next().unwrap_or("").to_string();
-        egui::ComboBox::from_id_salt("emb_dataset").selected_text(shown).width(w).show_ui(ui, |ui| {
-            for d in emb::DATASETS.iter() {
-                let label = d.name.split(" (").next().unwrap_or(d.name);
-                if ui.selectable_label(st.dataset == d.id, label).clicked() {
-                    st.select(d);
+        egui::ComboBox::from_id_salt("emb_dataset")
+            .selected_text(shown)
+            .width(w)
+            .show_ui(ui, |ui| {
+                for d in emb::DATASETS.iter() {
+                    let label = d.name.split(" (").next().unwrap_or(d.name);
+                    if ui.selectable_label(st.dataset == d.id, label).clicked() {
+                        st.select(d);
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         let d = picked(st);
         if d.search
             && let Some((first, last)) = d.years
             && last > first
         {
-            ui.label(tl!("Year"));
-            egui::ComboBox::from_id_salt("emb_year").selected_text(st.year.to_string()).width(w).show_ui(ui, |ui| {
-                for y in (first..=last).rev() {
-                    ui.selectable_value(&mut st.year, y, y.to_string());
-                }
-            });
+            let input_label = ui.label(tl!("Year"));
+            egui::ComboBox::from_id_salt("emb_year")
+                .selected_text(st.year.to_string())
+                .width(w)
+                .show_ui(ui, |ui| {
+                    for y in (first..=last).rev() {
+                        ui.selectable_value(&mut st.year, y, y.to_string());
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
             ui.end_row();
         }
         match d.id {
@@ -409,8 +419,9 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 ui.label(tl!("Bands"));
                 band_row(ui, &mut st.aef_bands, 64);
                 ui.end_row();
-                ui.label(tl!("Stretch"));
+                let input_label = ui.label(tl!("Stretch"));
                 ui.add(egui::Slider::new(&mut st.stretch, 0.05..=1.0).step_by(0.05).text(tl!("±, dequantised")))
+                    .labelled_by(input_label.id)
                     .on_hover_text(tl!("Values from −stretch to +stretch are shown from black to full colour"));
                 ui.end_row();
             }

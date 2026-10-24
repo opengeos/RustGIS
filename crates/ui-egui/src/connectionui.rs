@@ -90,7 +90,9 @@ pub(crate) fn picker_combo(
                     picked = Some(c.clone());
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text(tl!("Saved connection"));
     picked
 }
 
@@ -477,20 +479,29 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         ui.label(tl!("Type"));
         ui.label(tl!(label(&st.kind)));
         ui.end_row();
-        ui.label(tl!("Name"));
-        changed |= ui.add(egui::TextEdit::singleline(&mut st.name).hint_text(tl!("From the address")).desired_width(360.0)).changed();
+        let input_label = ui.label(tl!("Name"));
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut st.name).hint_text(tl!("From the address")).desired_width(360.0))
+            .labelled_by(input_label.id)
+            .changed();
         ui.end_row();
-        ui.label(tl!("Group"));
-        changed |= ui.add(egui::TextEdit::singleline(&mut st.group).hint_text(tl!("None")).desired_width(360.0)).changed();
+        let input_label = ui.label(tl!("Group"));
+        changed |= ui
+            .add(egui::TextEdit::singleline(&mut st.group).hint_text(tl!("None")).desired_width(360.0))
+            .labelled_by(input_label.id)
+            .changed();
         ui.end_row();
         if database {
-            ui.label(tl!("Connection"));
+            let input_label = ui.label(tl!("Connection"));
             let hint = match st.kind.as_str() {
                 "mysql" => "mysql://user@host:3306/db",
                 "sqlserver" => "mssql://user@host:1433/db",
                 _ => "host=… dbname=… user=…",
             };
-            changed |= ui.add(egui::TextEdit::singleline(&mut st.address).hint_text(hint).desired_width(360.0)).changed();
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut st.address).hint_text(hint).desired_width(360.0))
+                .labelled_by(input_label.id)
+                .changed();
             ui.end_row();
             ui.label(tl!("Password"));
             changed |= ui
@@ -506,24 +517,30 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                 (tl!("Region"), &mut st.region, s3::DEFAULT_REGION),
                 (tl!("Buckets"), &mut st.buckets, tl!("Comma-separated (optional)")),
             ] {
-                ui.label(label);
-                changed |= ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(360.0)).changed();
+                let input_label = ui.label(label);
+                changed |=
+                    ui.add(egui::TextEdit::singleline(field).hint_text(hint).desired_width(360.0)).labelled_by(input_label.id).changed();
                 ui.end_row();
             }
-            ui.label(tl!("Keys from"));
+            let input_label = ui.label(tl!("Keys from"));
             let shown = crate::s3ui::SOURCES.iter().find(|(c, _)| *c == st.credentials).map(|(_, l)| tl!(*l)).unwrap_or_default();
-            egui::ComboBox::from_id_salt("connection_credentials").selected_text(shown).width(360.0).show_ui(ui, |ui| {
-                for (code, label) in crate::s3ui::SOURCES {
-                    if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
-                        continue;
+            egui::ComboBox::from_id_salt("connection_credentials")
+                .selected_text(shown)
+                .width(360.0)
+                .show_ui(ui, |ui| {
+                    for (code, label) in crate::s3ui::SOURCES {
+                        if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
+                            continue;
+                        }
+                        changed |= ui.selectable_value(&mut st.credentials, code.to_owned(), tl!(label)).changed();
                     }
-                    changed |= ui.selectable_value(&mut st.credentials, code.to_owned(), tl!(label)).changed();
-                }
-            });
+                })
+                .response
+                .labelled_by(input_label.id);
             ui.end_row();
             if st.credentials == "profile" {
-                ui.label(tl!("Profile"));
-                changed |= ui.add(egui::TextEdit::singleline(&mut st.profile).desired_width(360.0)).changed();
+                let input_label = ui.label(tl!("Profile"));
+                changed |= ui.add(egui::TextEdit::singleline(&mut st.profile).desired_width(360.0)).labelled_by(input_label.id).changed();
                 ui.end_row();
             }
             if st.credentials == "keys" {
@@ -532,20 +549,26 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                     (tl!("Secret access key"), &mut st.secret_key, true),
                     (tl!("Session token"), &mut st.session_token, true),
                 ] {
-                    ui.label(label);
-                    changed |= ui.add(egui::TextEdit::singleline(field).password(secret).desired_width(360.0)).changed();
+                    let input_label = ui.label(label);
+                    changed |= ui
+                        .add(egui::TextEdit::singleline(field).password(secret).desired_width(360.0))
+                        .labelled_by(input_label.id)
+                        .changed();
                     ui.end_row();
                 }
             }
         } else {
-            ui.label(tl!("Address"));
+            let input_label = ui.label(tl!("Address"));
             let hint = match st.kind.as_str() {
                 "stac" => "https://…/stac/v1",
                 "arcgis" => "https://…/rest/services",
                 "csw" => "https://…/csw",
                 _ => "https://…",
             };
-            changed |= ui.add(egui::TextEdit::singleline(&mut st.address).hint_text(hint).desired_width(360.0)).changed();
+            changed |= ui
+                .add(egui::TextEdit::singleline(&mut st.address).hint_text(hint).desired_width(360.0))
+                .labelled_by(input_label.id)
+                .changed();
             ui.end_row();
         }
     });

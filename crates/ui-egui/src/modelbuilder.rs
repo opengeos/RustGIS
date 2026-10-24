@@ -1268,9 +1268,11 @@ fn inspector_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model
         match n.kind {
             ModelNodeKind::Input => input_settings(app, ui, i, &n),
             ModelNodeKind::Output => {
-                ui.label(egui::RichText::new(tl!("Result name")).size(12.0));
+                let input_label = ui.label(egui::RichText::new(tl!("Result name")).size(12.0));
                 let mut name = n.name.clone().unwrap_or_default();
-                let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tl!("Model output")).desired_width(f32::INFINITY));
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut name).hint_text(tl!("Model output")).desired_width(f32::INFINITY))
+                    .labelled_by(input_label.id);
                 if r.gained_focus() {
                     app.mb.edit();
                 }
@@ -1291,19 +1293,24 @@ fn inspector_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model
 }
 
 fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
-    ui.label(egui::RichText::new(tl!("Layer")).size(12.0));
+    let input_label = ui.label(egui::RichText::new(tl!("Layer")).size(12.0));
     let mut names: Vec<String> = app.session.map().layers.iter().map(|l| l.name.clone()).collect();
     names.extend(app.session.project.tables.iter().map(|t| t.name.clone()));
     let cur = n.layer.clone().unwrap_or_default();
     let shown = if cur.is_empty() { tl!("Choose a layer…").to_string() } else { cur.clone() };
     let mut picked = None;
-    egui::ComboBox::from_id_salt(("mb_layer", &n.id)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(ui, |ui| {
-        for name in names {
-            if ui.selectable_label(name == cur, &name).clicked() {
-                picked = Some(name);
+    egui::ComboBox::from_id_salt(("mb_layer", &n.id))
+        .selected_text(shown)
+        .width(ui.available_width() - 4.0)
+        .show_ui(ui, |ui| {
+            for name in names {
+                if ui.selectable_label(name == cur, &name).clicked() {
+                    picked = Some(name);
+                }
             }
-        }
-    });
+        })
+        .response
+        .labelled_by(input_label.id);
     if let Some(p) = picked.filter(|p| *p != cur) {
         app.mb.edit();
         if let Some(m) = app.mb.graph.nodes.get_mut(i) {
@@ -1394,9 +1401,10 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 .map(|l| l.name.clone())
                 .collect();
             let shown = if text.is_empty() { tl!("Connect, or pick a layer").to_string() } else { text.clone() };
-            egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                ui,
-                |ui| {
+            egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                .selected_text(shown)
+                .width(ui.available_width() - 4.0)
+                .show_ui(ui, |ui| {
                     if ui.selectable_label(text.is_empty(), "—").clicked() {
                         set = Some((p.name, Value::Null));
                     }
@@ -1405,15 +1413,16 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                             set = Some((p.name, json!(name)));
                         }
                     }
-                },
-            );
+                })
+                .response
+                .on_hover_text(tl!(p.label));
             ui.add_space(4.0);
             continue;
         }
         match p.kind {
             ParamKind::Bool => {
                 let mut on = cur.as_bool().unwrap_or(text == "true" || (cur.is_null() && default == "true"));
-                if ui.checkbox(&mut on, "").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(tl!(p.label)).changed() {
                     set = Some((p.name, json!(on)));
                 }
             }
@@ -1423,23 +1432,26 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 } else {
                     tl!(&text).to_string()
                 };
-                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                    .selected_text(shown)
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
                         for o in c {
                             if ui.selectable_label(*o == text, tl!(o)).clicked() {
                                 set = Some((p.name, json!(o)));
                             }
                         }
-                    },
-                );
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
             }
             ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField if !fields.is_empty() => {
                 let numeric = p.kind == ParamKind::NumericField;
                 let shown = if text.is_empty() { "—".to_string() } else { text.clone() };
-                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt(("mb_p", &n.id, p.name))
+                    .selected_text(shown)
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
                         if !p.required && ui.selectable_label(text.is_empty(), "—").clicked() {
                             set = Some((p.name, Value::Null));
                         }
@@ -1448,8 +1460,9 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                                 set = Some((p.name, json!(f)));
                             }
                         }
-                    },
-                );
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
             }
             _ => {
                 let mut s = text.clone();
@@ -1459,7 +1472,7 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                     } else {
                         default.clone()
                     };
-                let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(hint).desired_width(f32::INFINITY));
+                let r = ui.add(egui::TextEdit::singleline(&mut s).hint_text(hint).desired_width(f32::INFINITY)).on_hover_text(tl!(p.label));
                 if r.gained_focus() {
                     focus = true;
                 }
@@ -1685,7 +1698,7 @@ mod tests {
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1300.0, 800.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_size(vec2(1300.0, 800.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);

@@ -673,12 +673,17 @@ fn browse_tab(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.add(egui::TextEdit::singleline(filter).hint_text(tl!("Search plugins")).desired_width(220.0));
         let all = tl!("All categories");
         let shown = if category.is_empty() { all.to_string() } else { category.clone() };
-        egui::ComboBox::from_id_salt("plugin-category").selected_text(shown).width(150.0).show_ui(ui, |ui| {
-            ui.selectable_value(category, String::new(), all);
-            for c in &browse.categories {
-                ui.selectable_value(category, c.clone(), c.as_str());
-            }
-        });
+        egui::ComboBox::from_id_salt("plugin-category")
+            .selected_text(shown)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(category, String::new(), all);
+                for c in &browse.categories {
+                    ui.selectable_value(category, c.clone(), c.as_str());
+                }
+            })
+            .response
+            .on_hover_text(tl!("Category"));
         if ui.button(tl!("Refresh")).clicked() {
             app.plugins.set_registry(None);
             refresh(app, ui.ctx());

@@ -70,7 +70,6 @@ fn harness() -> Option<egui_kittest::Harness<'static, RustGisApp>> {
     app.run("ui.map.gpu", json!({"on": true})).expect("gpu on");
     Some(
         egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
             .with_size(egui::vec2(900.0, 550.0))
             .with_pixels_per_point(1.0)
             .with_max_steps(10_000)

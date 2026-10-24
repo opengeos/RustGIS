@@ -320,13 +320,18 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
         change = ui.add_enabled(!busy, egui::Button::new(tl!("Change dataset"))).clicked();
     } else {
         let st = &mut app.ui.earthaccess;
-        egui::ComboBox::from_id_salt("ea_preset").selected_text(tl!("Popular datasets…")).width(w - 8.0).show_ui(ui, |ui| {
-            for (short, label) in earthdata::PRESETS {
-                if ui.selectable_label(false, format!("{label} ({short})")).clicked() {
-                    preset = Some((*short).to_string());
+        egui::ComboBox::from_id_salt("ea_preset")
+            .selected_text(tl!("Popular datasets…"))
+            .width(w - 8.0)
+            .show_ui(ui, |ui| {
+                for (short, label) in earthdata::PRESETS {
+                    if ui.selectable_label(false, format!("{label} ({short})")).clicked() {
+                        preset = Some((*short).to_string());
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!("Dataset"));
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut st.keyword).hint_text(tl!("Search datasets, e.g. GEDI biomass")).desired_width(w - 80.0),
@@ -382,11 +387,11 @@ pub fn pane(app: &mut RustGisApp, ui: &mut egui::Ui) {
         let mut search = false;
         egui::Grid::new("ea_dates").num_columns(2).spacing(egui::vec2(10.0, 6.0)).show(ui, |ui| {
             let st = &mut app.ui.earthaccess;
-            ui.label(tl!("Start date"));
-            ui.add(egui::TextEdit::singleline(&mut st.start).hint_text("YYYY-MM-DD").desired_width(120.0));
+            let input_label = ui.label(tl!("Start date"));
+            ui.add(egui::TextEdit::singleline(&mut st.start).hint_text("YYYY-MM-DD").desired_width(120.0)).labelled_by(input_label.id);
             ui.end_row();
-            ui.label(tl!("End date"));
-            ui.add(egui::TextEdit::singleline(&mut st.end).hint_text("YYYY-MM-DD").desired_width(120.0));
+            let input_label = ui.label(tl!("End date"));
+            ui.add(egui::TextEdit::singleline(&mut st.end).hint_text("YYYY-MM-DD").desired_width(120.0)).labelled_by(input_label.id);
             ui.end_row();
         });
         let label = if busy && app.ui.earthaccess.granules.is_empty() { tl!("Searching…") } else { tl!("Search this view") };

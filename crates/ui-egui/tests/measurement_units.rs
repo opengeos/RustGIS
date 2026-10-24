@@ -13,18 +13,14 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, R
     app.run("layer.template", json!({"template": "lines", "name": "Paths"})).unwrap();
     app.run("edit.addFeature", json!({"geometry": {"type": "LineString", "coordinates": [[0, 0], [0, 0.001]]}})).unwrap();
     app.run("select.rows", json!({"layer": "Paths", "rows": [0]})).unwrap();
-    egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1800.0, 1000.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        )
+    egui_kittest::Harness::builder().with_size(egui::vec2(1800.0, 1000.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    )
 }
 
 fn first_x_metres(h: &egui_kittest::Harness<'_, RustGisApp>) -> f64 {
