@@ -245,12 +245,15 @@ fn polygon_clip_defaults_to_selection_and_honors_opt_out() {
     h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(0);
     h.run_steps(4);
     assert_eq!(h.state().workflow.selected_only, None);
+    let total = h.state().session.map().layer_by_name("Countries").unwrap().dataset.features.len();
+    assert!(h.query_by_label(&format!("(1 of {total})")).is_some());
     h.get_by_label("Selected only").click();
     h.run_steps(3);
     assert_eq!(h.state().workflow.selected_only, Some(false));
     h.state_mut().session.map_mut().layers.iter_mut().find(|l| l.name == "Countries").unwrap().selection.push(1);
     h.run_steps(3);
     assert_eq!(h.state().workflow.selected_only, Some(false));
+    assert!(h.query_by_label(&format!("(2 of {total})")).is_some());
     h.get_by_label("Selected only").click();
     h.run_steps(3);
     assert_eq!(h.state().workflow.selected_only, Some(true));

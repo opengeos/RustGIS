@@ -701,15 +701,22 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 let sel_count = poly_layer.as_ref().map_or(0, |l| l.selection.len());
                 let total_features = poly_layer.as_ref().map_or(0, |l| l.dataset.features.len());
 
-                let selected_only = app.workflow.selected_only.get_or_insert(sel_count > 0);
+                let effective_selected_only = app.workflow.selected_only.unwrap_or(sel_count > 0);
+                let mut checked = effective_selected_only;
                 ui.horizontal(|ui| {
-                    ui.checkbox(selected_only, tl!("Selected only"));
+                    if ui.checkbox(&mut checked, tl!("Selected only")).changed() {
+                        app.workflow.selected_only = Some(checked);
+                    }
                     if sel_count > 0 {
-                        ui.label(egui::RichText::new(format!("({sel_count} of {total_features})")).small().weak());
+                        let text = crate::i18n::fmt(
+                            "({selected} of {total})",
+                            &[("selected", &sel_count.to_string()), ("total", &total_features.to_string())],
+                        );
+                        ui.label(egui::RichText::new(text).small().weak());
                     }
                 });
 
-                let sel_invalid = *selected_only && sel_count == 0;
+                let sel_invalid = effective_selected_only && sel_count == 0;
                 let can_clip_poly = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty() && !sel_invalid;
 
                 if sel_invalid {
@@ -717,12 +724,12 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
 
                 if ui.add_enabled(can_clip_poly, egui::Button::new(tl!("Clip To Polygon"))).clicked() {
-                    let p = json!({
+                    let mut p = json!({
                         "layer": app.workflow.layer,
                         "operation": "clip",
                         "polygon": app.workflow.layer2,
-                        "selectedOnly": *selected_only,
                     });
+                    p["selectedOnly"] = json!(app.workflow.selected_only);
                     run(app, "raster.process", p);
                 }
             } else {
