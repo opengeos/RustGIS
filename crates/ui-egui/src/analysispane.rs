@@ -33,6 +33,8 @@ pub struct Workflow {
     pub error: Option<String>,
     pub script: String,
     pub script_out: Vec<(String, bool)>,
+    /// The Script pane's last run, shown above its results.
+    pub script_last: Option<ScriptRun>,
     pub trend: TrendForm,
     pub zonal_stats: ZonalStatsForm,
     pub selected_only: bool,
@@ -44,6 +46,15 @@ pub struct ZonalStatsForm {
     pub bands: String,
     pub prefix: String,
     pub output: String,
+}
+
+/// A Script pane run, as the line above its results tells it: its number this session (so a run
+/// made again by mistake shows), how long it took and when it started (seconds since 1970; 0 for
+/// a clock that can't tell).
+pub struct ScriptRun {
+    pub n: u32,
+    pub secs: f64,
+    pub at: u64,
 }
 
 /// The Trend Analysis section's inputs (#579), and a run under way.
@@ -1176,12 +1187,14 @@ fn script_rows(ui: &Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Monospace) * SCRIPT_MIN_ROWS as f32
 }
 
-/// The height the Script pane needs below its box: the buttons, and a run's results (their own
-/// scroll, at most SCRIPT_OUT_ROWS lines) when there are any.
+/// The height the Script pane needs below its box: the buttons, the last run's line, and its
+/// results (their own scroll, at most SCRIPT_OUT_ROWS lines) when there are any.
 fn script_below(app: &RustGisApp, ui: &Ui) -> f32 {
     let gap = ui.spacing().item_spacing.y;
+    // A row: as tall as a button, whatever its text.
+    let last = if app.workflow.script_last.is_none() { 0.0 } else { ui.spacing().interact_size.y + gap };
     let results = if app.workflow.script_out.is_empty() { 0.0 } else { script_out_height(ui) + gap };
-    ui.spacing().interact_size.y + gap * 3.0 + results
+    ui.spacing().interact_size.y + gap * 3.0 + last + results
 }
 
 /// The most height a run's results take.
@@ -1206,6 +1219,26 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     // One id whether the pane scrolls as a whole or not, so resizing it across that keeps the
     // box's focus, cursor and selection.
     let box_id = egui::Id::new("script_text");
+    // Ctrl+Enter (⌘+Enter) runs the script (#773), taken before the box sees it, so it runs rather
+    // than breaking the line; once a press, not again for each repeat of a key held down. The box
+    // keeps the focus, so the list closes, as Escape closes it.
+    let ctrl_enter = ui.memory(|m| m.has_focus(box_id))
+        && ui.input_mut(|i| {
+            let mut run = false;
+            i.events.retain(|e| match e {
+                egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat, modifiers, .. }
+                    if modifiers.matches_logically(egui::Modifiers::COMMAND) =>
+                {
+                    run |= !repeat;
+                    false
+                }
+                _ => true,
+            });
+            run
+        });
+    if ctrl_enter {
+        crate::scriptcomplete::close(ui, box_id);
+    }
     // The suggestion list's keys (#662), taken before the box sees them.
     if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id, &app.workflow.script) {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item, &app.session);
@@ -1232,9 +1265,17 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
         crate::scriptcomplete::braces(ui, before, &out.inner, &mut app.workflow.script);
     }
     ui.horizontal(|ui| {
-        if ui.button(tl!("Run")).clicked() {
+        let shortcut = if cfg!(target_os = "macos") { "⌘+Enter" } else { "Ctrl+Enter" };
+        let run = ui.button(tl!("Run")).on_hover_text(crate::i18n::fmt("Run the script ({keys})", &[("keys", shortcut)])).clicked();
+        if run || ctrl_enter {
             let script = app.workflow.script.clone();
+            // When it started and how long it took: a tool run outside the app in the browser
+            // (`gp.finish`) ends later.
+            let at = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let started = web_time::Instant::now();
             let out = app.run("script.run", json!({"script": script}));
+            let n = app.workflow.script_last.as_ref().map_or(1, |r| r.n.saturating_add(1));
+            app.workflow.script_last = Some(ScriptRun { n, secs: started.elapsed().as_secs_f64(), at });
             app.workflow.script_out = match out {
                 Ok(v) => v["ran"]
                     .as_array()
@@ -1248,6 +1289,21 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             let _ = app.run("ui.commandSearch", Value::Null);
         }
     });
+    // Above the results' scroll, so it stays in view: its number and how long it took, and on
+    // the right when it started, as the Geoprocessing History tells it (UTC: the app has no time
+    // zone).
+    if let Some(r) = &app.workflow.script_last {
+        ui.horizontal(|ui| {
+            let text = crate::i18n::fmt("Run #{n} ({secs} s)", &[("n", &r.n.to_string()), ("secs", &format!("{:.2}", r.secs))]);
+            ui.label(egui::RichText::new(text).small().strong());
+            if r.at > 0 {
+                let (_, time) = rustgis_engine::map::graphics::civil(r.at);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(crate::i18n::fmt("{time} UTC", &[("time", &time)])).small().weak())
+                });
+            }
+        });
+    }
     // In a scroll of their own, so a long error (it wraps) can't push them out of the pane.
     egui::ScrollArea::vertical().id_salt("script_out").max_height(out_h).auto_shrink([false, true]).show(ui, |ui| {
         for (line, err) in &app.workflow.script_out {

@@ -270,8 +270,11 @@ the environment does not set their output grids. Raster Functions › Resample m
 raster's grid.
 
 The **Script** pane runs commands from text, one per line (`id {json}`); its box grows with the script down to the bottom of the pane,
-short of the buttons, and then scrolls, so **Run** stays in view. It colours them as you type, in
-both themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
+short of the buttons, and then scrolls, so **Run** stays in view; Ctrl+Enter (⌘+Enter on macOS)
+in the box runs the script too. Above a run's results, a line tells its number, how long it took
+and when it started (`Run #2 (0.84 s)`, and `14:04 UTC` on the right), so a run made again by
+mistake shows (Undo takes a whole run back). It colours the commands as you type, in both
+themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
 `true`/`false`/`null`; an id no command has, or one that can't run in a script (`ui.*`, `script.*`,
 `notebook.run`), and parameters that aren't valid JSON are red and underlined. A script is read to
 its 10,000th line; any further are dimmed, as Run doesn't read them. Typing a line's first word
