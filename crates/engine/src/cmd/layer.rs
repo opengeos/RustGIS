@@ -10,10 +10,11 @@ use serde_json::{Value, json};
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+/// Registers layer commands shared by the UI, CLI and command search.
 pub fn commands() -> Vec<C> {
     vec![
         C::new("layer.addData", "Add Data", "Home › Add", add_data)
-            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "as"?: "scan" (a TIFF, PNG or JPEG, even a photo or a GeoTIFF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for a CSV's coordinates, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
+            .params(r#"{"path": string, "name"?: string, "layer"?: "GeoPackage, GDAL, DuckDB or DXF layer", "paperSpace"?: "bool: a DXF's layout entities too", "stream"?: bool, "as"?: "scan" (a TIFF, PNG or JPEG, even a photo or a GeoTIFF, as a picture with no coordinates), "crs"?: "EPSG:… (or WKT) for Shapefile coordinates (overrides .prj), a CSV, or a GDAL or DuckDB file that doesn't say", "x"?: "CSV x/longitude column", "y"?: "CSV y/latitude column", "wkt"?: "CSV WKT geometry column", "delimiter"?: ","|";"|"\\t"|"|"}"#),
         C::new("layer.addPhotos", "Add Photos", "Home › Add", add_photos).params(
             r#"{"paths"?: [JPEG photo files], "folder"?: "a folder of photos (every JPEG in it)", "name"?: "the layer (default Photos; photos join it when it exists)"}"#,
         ),
@@ -32,6 +33,9 @@ pub fn commands() -> Vec<C> {
         C::new("info.databaseTables", "List Database Tables", "Home › Add › Add Data From Database", database_tables)
             .view()
             .params(r#"{"database": "as layer.addDatabase", "password"?: string}"#),
+        C::new("layer.defineProjection", "Define Projection", "Layers", define_projection)
+            .when(need_feature_layer)
+            .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add", add_url).params(
             r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
@@ -43,12 +47,13 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layer.addDataText", "Add Data (from text)", "Home › Add", add_data_text).params(r#"{"fileName": "name.geojson|.csv|.tsv", "text": string, "name"?: text, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"? (as layer.addData, for delimited text)}"#),
         C::new("layer.addSample", "Add Sample Data", "Home › Add › Add Data", add_sample).params(r#"{"name": "countries"|"cities"|"rivers"|"lakes"}"#),
-        C::new("layer.remove", "Remove", "Layers", remove).key("Delete").when(need_layer).params(r#"{"layer"?: name|id}"#),
-        C::new("layer.select", "Select Layer", "Layers", |s, p| {
-            s.active_layer = Some(s.layer_id(p)?);
-            Ok(Value::Null)
-        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
-        .view(),
+        C::new("layer.remove", "Remove", "Layers", remove)
+            .key("Delete")
+            .when(need_layer)
+            .params(r#"{"layer"?: name|id | [name|id] (default: the layer selection)}"#),
+        C::new("layer.select", "Select Layer", "Layers", select)
+            .params(r#"{"layer"?: name|id | [name|id] (default: the active layer; the last of a list becomes the active layer), "mode"?: "replace" (only these; the default) | "toggle" (each in or out of the layer selection; the last one out leaves no active layer) | "extend" (added to it)}"#)
+            .view(),
         C::new("layer.rename", "Rename", "Layers", |s, p| {
             let n = s_req(p, "name")?.trim().chars().take(200).collect::<String>();
             if n.is_empty() {
@@ -71,22 +76,35 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?, "name": string}"#)
         .when(need_layer),
         C::new("layer.visibility", "Visibility", "Layers", |s, p| {
-            let on = b(p, "visible");
-            with(s, p, |l| l.visible = on.unwrap_or(!l.visible))
-        }).params(r#"{"layer"?, "visible"?: bool (toggles when omitted)}"#)
+            let ids = layer_ids(s, p)?;
+            // Toggled together: every layer takes the opposite of the active layer's state (or the
+            // first one's), not each its own, which would swap shown and hidden ones.
+            let on = b(p, "visible").unwrap_or_else(|| {
+                let lead = s.active_layer.filter(|a| ids.contains(a)).or(ids.first().copied());
+                !lead.and_then(|id| s.map().layer(id)).is_some_and(|l| l.visible)
+            });
+            for id in ids {
+                if let Some(l) = s.map_mut().layer_mut(id) {
+                    l.visible = on;
+                }
+            }
+            Ok(Value::Null)
+        }).params(r#"{"layer"?: name|id | [name|id] (default: the layer selection), "visible"?: bool (toggles when omitted: all take the opposite of the active layer's state)}"#)
         .when(need_layer),
         C::new("layer.moveUp", "Move Up", "Layers", |s, p| move_layer(s, p, -1)).params(r#"{"layer"?: name|id (default: the active layer)}"#).when(need_layer),
         C::new("layer.moveDown", "Move Down", "Layers", |s, p| move_layer(s, p, 1)).params(r#"{"layer"?: name|id (default: the active layer)}"#).when(need_layer),
-        C::new("layer.move", "Move", "Layers", move_to).when(need_layer).params(r#"{"layer"?: name|id, "to": position (0 = top)}"#),
+        C::new("layer.move", "Move", "Layers", move_to)
+            .when(need_layer)
+            .params(r#"{"layer"?: name|id | [name|id] (default: the layer selection), "to": position (0 = top; past the end, the bottom). Several keep their order, the topmost landing at "to" as one layer would, and go only to the top or the bottom (one in a group, to its group's): with 4 layers and 2 of them, 2 or more is the bottom, 1 is refused}"#),
         C::new("layer.zoomTo", "Zoom To Layer", "Layers", |s, p| {
-            let id = s.layer_id(p)?;
-            let e = s.map().layer(id).map(|l| l.shown_extent()).unwrap_or_default();
+            let ids = layer_ids(s, p)?;
+            let e = ids.iter().filter_map(|id| s.map().layer(*id)).fold(rustgis_geom::Extent::EMPTY, |e, l| e.union(&l.shown_extent()));
             if e.is_empty() {
-                return Err("the layer has no features".into());
+                return Err(if ids.len() > 1 { "the layers have no features" } else { "the layer has no features" }.into());
             }
             s.zoom_to(&e);
             Ok(Value::Null)
-        }).params(r#"{"layer"?: name|id (default: the active layer)}"#)
+        }).params(r#"{"layer"?: name|id | [name|id] (default: the layer selection; zooms to all of them)}"#)
         .view()
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
@@ -117,8 +135,12 @@ pub fn commands() -> Vec<C> {
                 let g = l.geometry_type();
                 let fill = |sym: &rustgis_map::Symbol| {
                     let mut out = sym.with_fill(c, g);
-                    if explicit_alpha && g == GeometryType::Polygon {
-                        out.fill = c;
+                    if g == GeometryType::Polygon {
+                        // The outline is its own setting (`layer.outline`); only the fill changes.
+                        out.stroke = sym.stroke;
+                        if explicit_alpha {
+                            out.fill = c;
+                        }
                     }
                     out
                 };
@@ -130,7 +152,12 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA"}"##),
+        .params(r##"{"layer"?, "color": "#RRGGBB"|"#RRGGBBAA" (the fill; a polygon's outline is left as it is, set it with layer.outline)}"##),
+        C::new("layer.noFill", "No Fill", "Style › Drawing", |s, p| {
+            with(s, p, |l| l.renderer.map_symbols(|sym| sym.fill = sym.fill.with_alpha(0)))
+        })
+        .when(need_polygons)
+        .params(r#"{"layer"?: name|id (default: the active polygon layer; removes every symbol's fill, keeping its RGB and outline)}"#),
         C::new("layer.outline", "Outline", "Style › Drawing", |s, p| {
             let c = s.get_color(p, "color")?;
             let w = f(p, "width").map(|w| w.clamp(0.0, 20.0) as f32);
@@ -150,8 +177,20 @@ pub fn commands() -> Vec<C> {
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
             .when(need_lines)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel"}] (drawn bottom first; [] goes back to the single stroke)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
+        C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
+            let on = b(p, "on").ok_or("on is true or false")?;
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if l.geometry_type() != GeometryType::Polyline || l.graphics {
+                return Err("this works on line layers".into());
+            }
+            l.stroke_levels = on;
+            Ok(json!({"on": on}))
+        })
+        .when(need_lines)
+        .params(r#"{"layer"?, "on": bool (draw every feature's stacked strokes of one level before the next, so casings join under the cores)}"#),
         C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
@@ -184,10 +223,42 @@ pub fn commands() -> Vec<C> {
         })
         .when(need_layer)
         .params(r#"{"layer"?, "min"?: scale (out beyond), "max"?: scale (in beyond)}"#),
+        C::new("layer.referenceScale", "Reference Scale", "Style › Drawing", |s, p| {
+            let (lo, hi) = rustgis_map::REFERENCE_SCALES;
+            let scale = match p.get("scale") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(t)) if t.eq_ignore_ascii_case("current") => {
+                    let now = s.map().scale().round();
+                    if !now.is_finite() {
+                        return Err("the map has no scale here".into());
+                    }
+                    Some(now.clamp(lo, hi))
+                }
+                Some(_) => Some(f(p, "scale").filter(|v| (lo..=hi).contains(v)).ok_or("scale is a number from 1 to 1000000000, \"current\" or null")?),
+            };
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if l.is_raster() || l.graphics {
+                return Err("this works on feature layers".into());
+            }
+            l.reference_scale = scale;
+            Ok(json!({"scale": scale}))
+        })
+        .when(need_feature_layer)
+        .params(r#"{"layer"?, "scale": 1:N the symbols' and labels' sizes are set for (drawn at another scale they grow and shrink with the map)|"current" (the map's scale)|null (sizes stay as set on screen)}"#),
         C::new("layer.selectable", "Selectable", "Layers", |s, p| {
-            let on = b(p, "on");
-            with(s, p, |l| l.selectable = on.unwrap_or(!l.selectable))
-        }).params(r#"{"layer"?, "on"?: bool (toggles when omitted)}"#)
+            let ids = layer_ids(s, p)?;
+            let on = b(p, "on").unwrap_or_else(|| {
+                let lead = s.active_layer.filter(|a| ids.contains(a)).or(ids.first().copied());
+                !lead.and_then(|id| s.map().layer(id)).is_some_and(|l| l.selectable)
+            });
+            for id in ids {
+                if let Some(l) = s.map_mut().layer_mut(id).filter(|l| !l.is_raster()) {
+                    l.selectable = on;
+                }
+            }
+            Ok(Value::Null)
+        }).params(r#"{"layer"?: name|id | [name|id] (default: the layer selection), "on"?: bool (toggles when omitted: all take the opposite of the active layer's state)}"#)
         .when(need_feature_layer),
         C::new("layer.expand", "Expand Legend", "Layers", |s, p| {
             let on = b(p, "on");
@@ -288,6 +359,15 @@ impl Session {
     }
 }
 
+/// A polygon layer is active.
+fn need_polygons(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if !l.is_raster() && l.geometry_type() == GeometryType::Polygon && !l.graphics => None,
+        Some(_) => Some("this works on polygon layers"),
+        None => Some("select a polygon layer in the Layers pane first"),
+    }
+}
+
 /// A line layer is active.
 fn need_lines(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
@@ -297,8 +377,9 @@ fn need_lines(s: &Session) -> Option<&'static str> {
     }
 }
 
-/// `layer.lineStrokes`: sets a line layer's stacked strokes.
+/// `layer.lineStrokes`: sets a line layer's stacked strokes, or one class's own.
 fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
+    let class = class_ref(p)?;
     let list = p.get("strokes").and_then(Value::as_array).ok_or("strokes is a list of strokes ([] for the single stroke)")?;
     if list.len() > MAX_STROKES {
         return Err(format!("at most {MAX_STROKES} strokes"));
@@ -334,15 +415,27 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
             Some(Value::String(j)) => LineJoin::from_code(j).ok_or_else(|| format!("stroke {}: unknown join '{j}'", i + 1))?,
             Some(_) => return Err(format!("stroke {}: join is \"round\", \"miter\" or \"bevel\"", i + 1)),
         };
-        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join }.clamped());
+        let level = match o.get("level") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .and_then(|l| u8::try_from(l).ok())
+                    .ok_or_else(|| format!("stroke {}: level is a whole number from 0 to 255", i + 1))?,
+            ),
+        };
+        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level }.clamped());
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if l.geometry_type() != GeometryType::Polyline || l.graphics {
         return Err("this works on line layers".into());
     }
-    l.line_strokes = strokes;
-    Ok(json!({"strokes": l.line_strokes.len()}))
+    let n = strokes.len();
+    match class {
+        Some(c) => l.renderer.set_class_strokes(&c, strokes)?,
+        None => l.line_strokes = strokes,
+    }
+    Ok(json!({"strokes": n}))
 }
 
 pub(crate) fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {
@@ -533,6 +626,8 @@ fn add_geodatabase(s: &mut Session, p: &Value, path: &str) -> CmdResult {
     Ok(out)
 }
 
+/// Opens a file through its format's reader. A Shapefile CRS override is applied before any
+/// conversion in both whole-file and streamed paths; the source file is never rewritten.
 fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     let path = s_req(p, "path")?;
     let path = &*gdb_path(path);
@@ -584,6 +679,23 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             Err(rustgis_data::DataError::Unsupported(_)) => {}
             Err(e) => return Err(format!("{path}: {e}")),
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if path.to_ascii_lowercase().ends_with(".shp")
+        && let Some(crs) = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty())
+    {
+        let crs = rustgis_data::raster::Crs::parse(crs)?;
+        let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
+        let stream = b(p, "stream").unwrap_or_else(|| {
+            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
+        });
+        if stream {
+            let src = rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
+            return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)));
+        }
+        let mut read = rustgis_data::io::read_shapefile_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
+        read.0.source = Some(path.to_string());
+        return add_read(s, p, read);
     }
     // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
     #[cfg(not(target_arch = "wasm32"))]
@@ -685,6 +797,14 @@ pub(crate) fn add_layers(s: &mut Session, p: &Value, file_name: &str, bytes: &[u
     // A DXF drawing: its coordinate system (it never says) and one of its own layers.
     let dxf = rustgis_data::dxf::is_dxf_name(file_name);
     let mut reads = match crs.filter(|_| landxml) {
+        _ if lower.ends_with(".zip") && crs.is_some() => {
+            let crs = crs.map(rustgis_data::raster::Crs::parse).transpose()?;
+            rustgis_data::io::read_zip_in(file_name, bytes, crs)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|(dataset, report)| rustgis_data::io::LayerRead { dataset, report, styles: Vec::new() })
+                .collect()
+        }
         _ if dxf => {
             let opts = rustgis_data::dxf::Options {
                 crs: crs.map(rustgis_data::raster::Crs::parse).transpose()?,
@@ -888,6 +1008,8 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
         ramp: Default::default(),
         class_labels: Default::default(),
         other_label: None,
+        class_strokes: Default::default(),
+        other_strokes: Vec::new(),
     };
 }
 
@@ -1075,7 +1197,7 @@ fn add_source_with(
             _ => info.name.clone(),
         };
         if stream {
-            let layer = match &origin {
+            let mut layer = match &origin {
                 Origin::Path(path) => {
                     let full = std::path::absolute(path).map(|p| p.display().to_string()).unwrap_or_else(|_| path.to_string());
                     rustgis_map::source::SourceLayer::from_path(full, table.clone(), src)
@@ -1085,6 +1207,10 @@ fn add_source_with(
                 Origin::Mysql(o) => rustgis_map::source::SourceLayer::from_mysql((*o).clone(), src),
                 Origin::Sqlserver(o) => rustgis_map::source::SourceLayer::from_sqlserver((*o).clone(), src),
             };
+            if info.format == "Shapefile" {
+                layer.shapefile_crs =
+                    ps(p, "crs").map(str::trim).filter(|c| !c.is_empty()).map(rustgis_data::raster::Crs::parse).transpose()?;
+            }
             let unique = unique_name(s, &name);
             for n in &info.notes {
                 s.notify(format!("{unique}: {n}"), false);
@@ -1781,6 +1907,24 @@ fn need_streamed(s: &Session) -> Option<&'static str> {
     }
 }
 
+/// Reinterprets the layer's native coordinates in a replacement CRS. Validate the complete
+/// replacement before mutating the layer; undo then restores geometry, metadata and caches.
+fn define_projection(s: &mut Session, p: &Value) -> CmdResult {
+    let id = s.layer_id(p)?;
+    let crs = rustgis_data::raster::Crs::parse(s_req(p, "crs")?)?;
+    let l = s.map().layer(id).ok_or("no such layer")?;
+    if l.is_raster() || l.is_streamed() {
+        return Err(
+            "Define Projection needs a vector layer loaded into memory; import a Shapefile with a crs override for a streamed layer".into(),
+        );
+    }
+    let ds = rustgis_data::io::define_projection(&l.dataset, crs).map_err(|e| e.to_string())?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    l.dataset = ds;
+    l.touch_geometry();
+    Ok(json!({"layer": id, "crs": crs.label()}))
+}
+
 /// Loads a streamed layer's features into memory, so it can be edited like any other layer.
 fn load_all(s: &mut Session, p: &Value) -> CmdResult {
     let id = s.layer_id(p)?;
@@ -2342,15 +2486,91 @@ pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
 }
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
-    let id = s.layer_id(p)?;
+    let ids = layer_ids(s, p)?;
     let m = s.map_mut();
-    let i = m.layer_index(id).ok_or("no such layer")?;
-    let name = m.layers.remove(i).name;
-    m.set_group(id, None);
-    let next = m.layers.get(i.min(m.layers.len().saturating_sub(1))).map(|l| l.id);
-    s.active_layer = next;
+    // The layer that takes the place of the topmost one removed becomes the active layer.
+    let at = ids.iter().filter_map(|id| m.layer_index(*id)).min().ok_or("no such layer")?;
+    let mut names = Vec::new();
+    for id in ids {
+        if let Some(i) = m.layer_index(id) {
+            names.push(m.layers.remove(i).name);
+            m.set_group(id, None);
+        }
+    }
+    let next = m.layers.get(at.min(m.layers.len().saturating_sub(1))).map(|l| l.id);
+    s.set_layer_selection(next.into_iter().collect(), next);
     // A legend that left it out forgets it.
-    legends_follow_layer(s, &name, None);
+    for name in names {
+        legends_follow_layer(s, &name, None);
+    }
+    Ok(Value::Null)
+}
+
+/// The most layers one command takes in a list.
+const MAX_LAYER_LIST: usize = 10_000;
+
+/// The layers a command acts on: `layer` as a name or id, or a list of them; else the layer
+/// selection (the active layer alone when nothing else is picked).
+pub(crate) fn layer_ids(s: &Session, p: &Value) -> Result<Vec<u32>, String> {
+    match p.get("layer") {
+        Some(Value::Array(list)) => {
+            if list.is_empty() {
+                return Err("name at least one layer (\"layer\")".into());
+            }
+            if list.len() > MAX_LAYER_LIST {
+                return Err(format!("at most {MAX_LAYER_LIST} layers at a time"));
+            }
+            let mut ids = Vec::new();
+            for v in list {
+                if !(v.is_number() || v.is_string()) {
+                    return Err("each layer is a name or an id".into());
+                }
+                let id = s.layer_id(&json!({"layer": v}))?;
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            Ok(ids)
+        }
+        Some(_) => Ok(vec![s.layer_id(p)?]),
+        None => {
+            let ids = s.selected_layers();
+            if ids.is_empty() { Err("select a layer in the Layers pane first".into()) } else { Ok(ids) }
+        }
+    }
+}
+
+/// `layer.select`: the layers picked in the Layers pane, replaced, toggled or extended.
+fn select(s: &mut Session, p: &Value) -> CmdResult {
+    let ids = match p.get("layer") {
+        Some(Value::Array(_)) => layer_ids(s, p)?,
+        _ => vec![s.layer_id(p)?],
+    };
+    match ps(p, "mode").unwrap_or("replace") {
+        "replace" => s.set_layer_selection(ids, None),
+        "extend" => {
+            let mut picked = s.selected_layers();
+            picked.extend(ids.iter().copied());
+            s.set_layer_selection(picked, ids.last().copied());
+        }
+        "toggle" => {
+            let mut picked = s.selected_layers();
+            let mut active = s.active_layer;
+            for id in ids {
+                if let Some(at) = picked.iter().position(|x| *x == id) {
+                    picked.remove(at);
+                    if active == Some(id) {
+                        active = picked.last().copied();
+                    }
+                } else {
+                    picked.push(id);
+                    active = Some(id);
+                }
+            }
+            s.set_layer_selection(picked, active);
+        }
+        other => return Err(format!("unknown mode '{other}' (replace, toggle or extend)")),
+    }
     Ok(Value::Null)
 }
 
@@ -2369,8 +2589,56 @@ fn move_layer(s: &mut Session, p: &Value, d: i32) -> CmdResult {
 /// Moves a layer to a position in the drawing order: 0 is the top, anything past the end the
 /// bottom. One command (and one undo step) however far the layer travels.
 fn move_to(s: &mut Session, p: &Value) -> CmdResult {
-    let id = s.layer_id(p)?;
+    let ids = layer_ids(s, p)?;
     let to = uint(p, "to").ok_or("to is required: the position in the drawing order, 0 at the top")?;
+    if let [id] = ids[..] {
+        return move_one(s, id, to);
+    }
+    // Several: to the top or the bottom, keeping their order among themselves. A layer in a group
+    // stays in it, going to the top or the bottom of its group.
+    let m = s.map_mut();
+    let len = m.layers.len();
+    let to = usize::try_from(to).unwrap_or(usize::MAX);
+    let top = match to {
+        0 => true,
+        t if t >= len.saturating_sub(ids.len()) => false,
+        _ => return Err("several layers move only to the top (to 0) or the bottom".into()),
+    };
+    let mut ids = ids;
+    ids.sort_by_key(|id| m.layer_index(*id));
+    if !top {
+        ids.reverse();
+    }
+    // The layers out of groups first: moving those within a group shifts no other layer.
+    let (loose, grouped): (Vec<u32>, Vec<u32>) = ids.into_iter().partition(|id| m.group_of(*id).is_none());
+    for (k, id) in loose.iter().enumerate() {
+        let t = if top { k } else { len.saturating_sub(1 + k) };
+        move_to_index(m, *id, t)?;
+    }
+    let mut placed: Vec<(u32, usize)> = Vec::new();
+    for id in grouped {
+        let Some(g) = m.group_of(id).map(|g| g.id) else { continue };
+        let run: Vec<usize> =
+            m.layers.iter().enumerate().filter(|(_, l)| m.group_of(l.id).is_some_and(|x| x.id == g)).map(|(i, _)| i).collect();
+        let (Some(&lo), Some(&hi)) = (run.first(), run.last()) else { continue };
+        let k = placed.iter().filter(|(x, _)| *x == g).count();
+        placed.push((g, k));
+        let t = if top { lo + k } else { hi.saturating_sub(k) };
+        move_to_index(m, id, t)?;
+    }
+    Ok(Value::Null)
+}
+
+/// Moves a layer to index `t` of the drawing order, if it isn't there already.
+fn move_to_index(m: &mut rustgis_map::Map, id: u32, t: usize) -> Result<(), String> {
+    let i = m.layer_index(id).ok_or("no such layer")?;
+    if i != t {
+        m.move_layer(i, t)?;
+    }
+    Ok(())
+}
+
+fn move_one(s: &mut Session, id: u32, to: u64) -> CmdResult {
     let m = s.map_mut();
     let i = m.layer_index(id).ok_or("no such layer")?;
     let to = usize::try_from(to).unwrap_or(usize::MAX).min(m.layers.len().saturating_sub(1));
@@ -2405,15 +2673,24 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         base
     };
-    let field = || -> Result<String, String> {
+    let field = |numeric_only: bool| -> Result<String, String> {
         if let Some(x) = ps(p, "field") {
             return Ok(x.to_string());
         }
         l.renderer
             .field()
+            .filter(|name| {
+                !numeric_only || l.dataset.field_index(name).and_then(|i| l.dataset.fields.get(i)).is_some_and(|f| f.ty.is_numeric())
+            })
             .map(str::to_string)
-            .or_else(|| l.dataset.fields.iter().find(|f| f.ty.is_numeric()).map(|f| f.name.clone()))
-            .ok_or_else(|| "field is required".into())
+            .or_else(|| l.dataset.fields.iter().find(|f| !numeric_only || f.ty.is_numeric()).map(|f| f.name.clone()))
+            .ok_or_else(|| {
+                if numeric_only {
+                    "no numeric field is available for this symbology".into()
+                } else {
+                    "no field is available for this symbology".into()
+                }
+            })
     };
     // Classes and sizes describe the rows the definition query lets through, taken once: changing
     // the query later keeps them until the symbology is applied again.
@@ -2426,15 +2703,15 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     };
     let mut r = match kind.as_str() {
         "single" | "singlesymbol" => Renderer::Single(base),
-        "unique" | "uniquevalues" => Renderer::unique(&l.dataset, &rows()?, &field()?, ramp.unwrap_or(Ramp::Harbour), base)?,
+        "unique" | "uniquevalues" => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
         "graduated" | "graduatedcolors" => {
-            Renderer::graduated(&l.dataset, &rows()?, &field()?, classes, method, ramp.unwrap_or(Ramp::Ember), base)?
+            Renderer::graduated(&l.dataset, &rows()?, &field(true)?, classes, method, ramp.unwrap_or(Ramp::Ember), base)?
         }
         "proportional" | "proportionalsymbols" => {
             if g != GeometryType::Point {
                 return Err("Proportional Symbols needs a point layer".into());
             }
-            Renderer::proportional(&l.dataset, &rows()?, &field()?, base)?
+            Renderer::proportional(&l.dataset, &rows()?, &field(true)?, base)?
         }
         other => return Err(format!("unknown symbology '{other}'")),
     };
@@ -2444,14 +2721,16 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
     with(s, p, |l| l.renderer = r)
 }
 
-/// `layer.classStyle`: one class's colour, outline colour and legend label (#314).
-fn class_style(s: &mut Session, p: &Value) -> CmdResult {
+/// The class `value`, `index` or `other: true` name in a command's parameters, or `None` when
+/// none does.
+fn class_ref(p: &Value) -> Result<Option<ClassRef>, String> {
     let other = b(p, "other").unwrap_or(false);
     let index = match p.get("index") {
         Some(_) => Some(uint(p, "index").ok_or("index must be a whole number from 0")?),
         None => None,
     };
-    let class = match (p.get("value"), index, other) {
+    Ok(Some(match (p.get("value"), index, other) {
+        (None, None, false) => return Ok(None),
         (Some(v), None, false) => ClassRef::Value(match v {
             Value::String(t) => t.clone(),
             // As the data prints it (the classes' own keys): `1000.0` is the class "1000".
@@ -2465,7 +2744,12 @@ fn class_style(s: &mut Session, p: &Value) -> CmdResult {
         (None, Some(i), false) => ClassRef::Index(usize::try_from(i).map_err(|_| "index is too large")?),
         (None, None, true) => ClassRef::Other,
         _ => return Err("name one class: value (Unique Values), index (Graduated Colors) or other: true".into()),
-    };
+    }))
+}
+
+/// `layer.classStyle`: one class's colour, outline colour and legend label (#314).
+fn class_style(s: &mut Session, p: &Value) -> CmdResult {
+    let class = class_ref(p)?.ok_or("name one class: value (Unique Values), index (Graduated Colors) or other: true")?;
     let label = match p.get("label") {
         None => None,
         Some(Value::String(t)) => Some(t.clone()),

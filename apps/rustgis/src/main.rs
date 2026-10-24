@@ -12,6 +12,8 @@ use serde_json::json;
 #[cfg(target_os = "macos")]
 mod macos;
 
+mod keychain;
+
 /// The app, and this run's marker (see [`running`]), cleared when eframe closes it.
 struct App(RustGisApp, running::Shared);
 
@@ -52,6 +54,7 @@ mod prefs {
                     log::warn!("could not save preferences: {e}");
                 }
             })),
+            secrets: Some(std::sync::Arc::new(crate::keychain::Keychain::default())),
             ..Services::default()
         }
     }

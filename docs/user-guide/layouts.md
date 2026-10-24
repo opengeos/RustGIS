@@ -7,9 +7,10 @@
   <figcaption>A page layout with a map frame, title, legend, north arrow and scale bar.</figcaption>
 </figure>
 
-Home › New Layout adds a page layout (Letter to A0, landscape or portrait) with a map frame,
-title, legend, north arrow, scale bar and a dynamic credits line. Layouts open as tabs next to
-the maps; while one is open, its groups lead the Publish tab:
+Home › New Layout adds a page layout (Letter, Legal, Tabloid or A5 to A0, landscape or portrait)
+with a map frame, title, legend, north arrow, scale bar and a dynamic credits line. The command
+`layout.new` also accepts custom `width` and `height` in millimetres and `"template": "blank"`.
+Layouts open as tabs next to the maps; while one is open, its groups lead the Publish tab:
 
 - **Publication layouts**: Home › New Layout › **Publication Layout** builds a finished sheet or
   figure of the map view in one step, with `layout.publication` behind it:
@@ -17,25 +18,68 @@ the maps; while one is open, its groups lead the Publish tab:
     the map, and a footer of two boxed columns (sources, and the cartographic reference; one
     with nothing in it is left out, the other taking the width) with a note and the authorship
     under them. Text sizes follow the sheet: an A3's are 1.41 times an
-    A4's.
+    A4's. Given its size alone (`"a4"`, the default, `"a3"` or `"a2"`), a sheet is turned to
+    portrait or landscape, whichever the map comes out larger on: the area's extent east to west
+    against north to south, on the map's projection, with the room the style leaves the map. The
+    result names the profile chosen (`"profile": "a4-landscape"`); give it with its orientation
+    (`"a4-portrait"`) to have the other.
   - **Figures** for a journal (90, 140 or 190 mm wide, as tall as the map's shape asks) or a
     thesis (160 × 225 or 160 × 110 mm): the map edge to edge with a line of its projection and
     datum under it, at 7 pt. A figure's title and sources belong in its caption, so they are
     left out, and the result says so.
-  - **The map**: the `extent` given (or the view) fitted at a round scale, two significant
-    figures, rounded up so it still fits within the strips the graticule's labels take inside
-    the frame. A graticule has its step picked from the extent, at
-    most five lines across (2° for a state, 15′ for a city), and labels on every edge of a sheet.
-    The north arrow, the legend (sized to what it lists) and the scale bar with the numeric scale
-    under it sit in the frame's corners, on pale boxes, clear of the graticule's labels.
+  - **The map**: the `extent` given (or the view) fitted north-up, without tilt, at a round scale,
+    two significant figures, rounded up so it still fits within the strips the graticule's labels
+    take inside the frame. A graticule's step follows the extent (2° for a state, 15′ for a city),
+    with labels on every edge of a sheet.
+    The north arrow, the legend (sized to what it lists), the scale bar with the numeric scale
+    under it and the locator sit in the frame's corners, clear of the graticule's
+    labels. Each takes the corner where it covers the least of what the map draws (its layers and
+    labels, not the basemap), so a legend leaves a corner the data fills; when it makes no
+    difference they keep theirs: the locator at the top left, the arrow at the top right, the
+    legend at the bottom left and the scale at the bottom right. With more surrounds than free
+    corners, one warning names those left on the data, to move by hand if that matters (data
+    under every corner alike, such as a context layer filling the frame, isn't worth a warning);
+    two that overlap (a frame too small) are said too.
+    The top visible raster gets a colorbar beneath the vector legend if its renderer has a colour
+    scale; RGB and untinted hillshade do not. If the legend or colorbar cannot fit, the result
+    warns about clipping or resizing. A streamed layer still loading gets a fixed-size legend
+    to adjust by hand.
+  - **Decimal comma**: `"decimal": ","` prints the graticule, scale bar and colorbar numbers and
+    `{scale}` with a decimal comma and points between thousands (`0,05`, `1:6.300.000`).
+    `layout.page={"decimal": ","}` sets it on any layout; `"."` restores decimal points.
+    This changes generated numbers, not numbers typed into text.
   - **Texts**: the title, subtitle, footer lines and authorship are measured with the layout's
     font (the title and headings bold, as drawn) and wrapped to their box, so none runs past it,
     and each box grows to hold them. `{projection}`, `{datum}` and
     `{grid}` are filled from the map when the layout is made. `{date}` and the other dynamic text
     tokens stay live. The reference defaults to the projection, datum and graticule, and the
     authorship to "Made with RustGIS · {date}" (`"author": ""` leaves it out). `headings` renames the two columns.
-  - Every element is an ordinary one, to move or restyle afterwards. Running it again with
-    another `profile` makes another layout of the same map.
+  - **The locator** (at the frame's top left unless the data is there): `"locator": "globe"` (a
+    sheet's default) adds a separate globe map with simplified copies of the map's visible polygon
+    layers held in the project. Streamed layers, rasters, points, lines and labels are left out.
+    It uses the map's basemap, not its web tiles, in a round frame, the globe
+    nearly filling it and the area outlined in red; `"inset"` shows the surrounding region (about
+    four times the area across) on the map itself, outlined the same way; `"none"` (a figure's
+    default) leaves it out. The legend stops short of it; a frame with no room for a legend beside
+    it leaves the legend out, with a warning. Undo takes the globe's map away with the layout; a
+    globe map no layout shows any more (its layout deleted) is replaced by the next sheet's rather
+    than left beside it, which a warning says.
+  - **The style** (`"style"`, on any sheet, portrait or landscape): `"classic"` (the default) sets
+    the title over the map and the footer's boxes under it; `"banner"` puts the title and subtitle
+    in a band of the accent colour across the top, the title in white; `"panel"` sets the map at
+    the left and a pale panel at the right with the title, subtitle, locator and legend, and the
+    sources and reference at its foot, the note across the bottom; `"editorial"` sets the title
+    large in serif and a column at the right under a rule, with a heading (the third of
+    `headings`), the note, the locator and the legend; `"modular"` sets cards with rounded
+    corners on a light page: the map in one, the locator and the legend in one each beside it,
+    the sources and reference in tinted ones under them; `"poster"` colours the whole page, sets
+    the title and subtitle in light text across the top, the map in a light card and the footer
+    in darker blocks with amber headings. `"accent"` (`#RRGGBB`) colours the band, the panel's
+    tint, the headings and rules, and a poster's page (a deep brown, green or blue by default).
+    A figure leaves the style to its caption.
+  - Every element is an ordinary one, to move or restyle afterwards. The command returns element
+    IDs for `layout.update`, and `warnings`. Running it again with another `profile` makes
+    another layout of the same map.
 
   ```
   layout.publication={"profile": "a4-portrait", "extent": [-46.8, -11.6, -38.5, -2.2],
@@ -101,11 +145,13 @@ the maps; while one is open, its groups lead the Publish tab:
   renamed or removed (it is kept by name, like a table or chart frame's layer) until another is
   picked. From a command:
   `layout.addElement={"kind":"colorbar","layer":"DEM","title":"Elevation (m)","orientation":"vertical","ticks":3}`.
-- **Shapes**: **Rectangle**, **Circle**, **Ellipse** and **Line** (horizontal, vertical or
-  either diagonal) add a shape in the middle of the page, to frame, highlight or divide parts of
-  it. A circle is an ellipse in a square box. The properties set a shape's fill, outline and
-  outline width (0 for none; a fill with no opacity leaves only the outline), and a line's colour,
-  width, arrowheads and angle. From a command:
+- **Shapes**: **Rectangle**, **Circle**, **Ellipse** and **Line** add a shape in the middle of
+  the page, to frame, highlight or divide parts of it. The Line menu starts a horizontal, vertical
+  or diagonal line; turn it to any angle with its rotation handle or properties.
+  A circle is an ellipse in a square box. The properties set a shape's fill, outline and
+  outline width (0 for none; a fill with no opacity leaves only the outline), a rectangle's
+  rounded corners (`"radius"`, in mm), and a line's colour, width, arrowheads and angle. From a
+  command:
   `layout.addElement={"kind":"line","dir":"falling","color":"#C0392B","width":2}`.
 - **Arrows**: **Arrow** adds an arrow pointing right. Drag the round handle above a selected arrow
   or line to turn it about its centre: it snaps to level, upright and diagonal within 3°, and
@@ -147,16 +193,17 @@ the maps; while one is open, its groups lead the Publish tab:
   series still turns its pages. **Duplicate** makes an unlocked copy, and a map frame isn't
   deleted while one of its surrounds is locked. Scripts lock and unlock with `layout.update`
   `{"locked": true}` or `{"locked": false}`.
-- **Rulers and guides**: rulers along the top and left show millimetres from the page's corner.
+- **Rulers and guides**: rulers start on along the top and left and show millimetres from the page's corner.
   Drag out of a ruler to add a guide, drag a guide to move it, and drag it back onto a ruler to
   remove it. Guides are saved with the layout but never printed or exported. **Clear Guides**
   removes them all, and **Rulers** in the Page group hides the rulers.
-- **Snap**: a dragged or resized element snaps to the guides, the page's edges and centre, and
+- **Snap** starts on: a dragged or resized element snaps to the guides, the page's edges and centre, and
   the other elements' edges and centres, and the line it snapped to is highlighted. Hold Alt to
   place an element freely, or turn **Snap** off in the Page group.
-- **Export** writes PDF (every map series page) or PNG; **Print** opens the PDF in the system
-  viewer; **Save Layout File** and **Import Layout** move layouts between projects
-  (`.rgislayout`).
+- **Export** writes PDF (every map series page by default, up to 500) or PNG of the current page;
+  `layout.export` accepts `dpi` and `"allPages": false` for just the current PDF
+  page. **Print** opens the PDF in the system viewer on desktop; **Save Layout File** and
+  **Import Layout** move layouts between projects (`.rgislayout`).
 
 ## Reports
 
@@ -188,11 +235,14 @@ previews, edits and plays it.
   coloured page, an **Image** page a picture with a caption, and a **Video** page a video file or
   URL with an optional poster picture.
 - Each page has a title, speaker notes and a duration (for **Play**), and can move up or down.
-- **Publish › Presentation › Export Presentation** writes a self-contained HTML slideshow (arrow
+- **Publish › Output › Presentation › Export Presentation** writes an HTML slideshow (arrow
   keys, `N` for notes, `P` to play; videos play in place), a PDF, or the first page as PNG.
-  **Save As Presentation File** keeps it to import into other projects.
+  Video sources remain file paths or URLs, so keep them accessible beside the exported slideshow.
+  **Save As Presentation File** in the same menu keeps it to import into other projects (`.rgispres`).
 
 **Analyze › New Notebook** starts a notebook of text and command cells; **Add and Open** opens a
 RustGIS (`.rgisnb`) or Jupyter (`.ipynb`) notebook. A command cell runs one command per line
 (`id {json}`, as in scripts) and shows each command's result beneath it. Notebooks save in
 either format.
+The cells contain RustGIS commands, not Python, even in an `.ipynb` file. Notebooks opened from
+a file or an existing project cannot run commands that read or write files or run other scripts.

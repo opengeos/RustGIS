@@ -2,13 +2,18 @@
 //! as in a code editor. ↑/↓ move the highlight, Enter or Tab accept it, Escape closes the list, or
 //! a click accepts an item. What to offer at a cursor (`offer_at`) is worked out apart from the
 //! box and tested on its own: command ids (a line's first word), a command's parameter keys in
-//! its `{…}` (`key_at`), and in a `gp.run` line the tool ids for its `"tool"` (`value_at`) and,
-//! in its `"params": {…}`, the keys of the tool it runs (`tool_of`). Typing aids beside it: a command's parameters added on accept
-//! (`template`), and braces that close themselves (`brace`).
+//! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
+//! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
+//! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
+//! `"layer"`, the line's layer's fields for a `"field"`. Typing aids beside it: a command's
+//! parameters added on accept (`template`), and braces, brackets and quotes that close themselves
+//! (`brace`).
+//! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};
 use egui::widgets::text_edit::{TextEditOutput, TextEditState};
 use egui::{Id, Key, Modifiers, Ui};
+use rustgis_engine::Quotes;
 use rustgis_engine::cmd::workflows::refused_in_script;
 
 /// The most suggestions the list shows.
@@ -28,14 +33,28 @@ pub struct Offer {
     pub of: Option<Of>,
 }
 
-/// What an offer holds besides command ids: a command's parameter keys (by its id), a
-/// geoprocessing tool's (by its id) in a `gp.run` line's `"params"`, or the tool ids for a
-/// `gp.run` line's `"tool"`.
+/// What an offer holds besides the command ids that start a line: a command's parameter keys (by
+/// its id), the keys of the second-level object of a command's entry `key`, a geoprocessing
+/// tool's parameter keys (by its id) in a `gp.run` line's `"params"`, or the ids a value takes:
+/// the tools for a `gp.run` line's `"tool"`, the commands for a `task.addStep` line's
+/// `"command"`; or what the project holds for a value: the map's layers for a `"layer"`, the
+/// fields of a layer (by its id) for a `"field"`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Of {
     CommandKeys(String),
+    SubKeys { id: String, key: String },
     ToolKeys(String),
     ToolIds,
+    CommandIds,
+    Layers,
+    Fields(u32),
+}
+
+impl Of {
+    /// Whether its items are a value's (written as a JSON string's text), not keys.
+    fn is_value(&self) -> bool {
+        matches!(self, Of::ToolIds | Of::CommandIds | Of::Layers | Of::Fields(_))
+    }
 }
 
 /// The ids that complete the command id being typed at char `at` of `script`: the cursor at the
@@ -87,14 +106,14 @@ pub fn hint_at(script: &str, at: usize) -> Option<Hint> {
     let line = before.get(line_start..)?;
     let id = crate::scriptcolor::line_id(line)?;
     let brace = line.find('{')?;
-    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    let (mut depth, mut q) = (0usize, Quotes::default());
     for c in line.get(brace..)?.chars() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
+        if !q.read(c) {
+            continue;
+        }
         match c {
-            '"' if !was_escaped => quoted = !quoted,
-            '{' if !quoted => depth += 1,
-            '}' if !quoted => depth = depth.saturating_sub(1),
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
             _ => {}
         }
     }
@@ -105,8 +124,8 @@ pub fn hint_at(script: &str, at: usize) -> Option<Hint> {
 
 /// Where a popup of `size` (last frame's) goes by `cursor`: under it if it fits, else above if it
 /// fits, else on the side with more room, a line and a half clear of the cursor's line (the line
-/// next to it stays in view whole, with room around it); kept on screen sideways. Its corner, and the height its content may take (it
-/// scrolls beyond: a short window, a long help).
+/// next to it stays in view whole, with room around it); kept on screen sideways. Its corner,
+/// and the height its content may take (it scrolls beyond: a short window, a long help).
 fn place(cursor: egui::Rect, size: egui::Vec2, screen: egui::Rect, min: f32) -> (egui::Pos2, f32) {
     let cursor = cursor.expand2(egui::vec2(0.0, cursor.height() * 1.5));
     let (below, above) = (screen.bottom() - cursor.bottom(), cursor.top() - screen.top());
@@ -140,71 +159,95 @@ fn popup(ui: &Ui, id: Id, corner: egui::Pos2, room: f32, content: impl FnOnce(&m
 /// The ids in `ids` (the commands a script can run, `script_ids`) that complete `word`, typed
 /// from char `start` to `end`, case aside; the id typed whole isn't offered again.
 fn complete(start: usize, end: usize, word: &str, ids: &[String]) -> Option<Offer> {
-    let mut items: Vec<String> = ids
-        .iter()
-        .filter(|id| id.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)) && !id.eq_ignore_ascii_case(word))
-        .cloned()
-        .collect();
+    let mut items: Vec<String> = ids.iter().filter(|id| starts_with_ci(id, word) && !id.eq_ignore_ascii_case(word)).cloned().collect();
     items.sort();
     items.truncate(MAX_ITEMS);
     (!items.is_empty()).then_some(Offer { start, end, items, of: None })
 }
 
+/// Whether `text` starts with `word`, case aside (ASCII: ids and keys).
+fn starts_with_ci(text: &str, word: &str) -> bool {
+    text.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word))
+}
+
 /// Where a line's object leaves off at its end (`text`, from its `{`): where a quoted key being
 /// typed starts (after its quote, a char index of `text`; None when the end isn't in one), the
-/// `{` of the top-level `"params"` object the end is in (None outside it), where a top-level
-/// quoted value being typed starts, with its key, and the top-level quoted values read whole,
-/// each with its key, in order.
+/// second-level object the end is in (`nested`), where a top-level quoted value being typed
+/// starts, with its key, and the top-level quoted values read whole, each with its key, in order.
 struct Scan {
     start: Option<usize>,
-    params: Option<usize>,
+    nested: Option<Nested>,
     value: Option<(usize, String)>,
     values: Vec<(String, String)>,
 }
 
+/// A second-level object: the value of a top-level key (`"add": {…}`), or one of the objects in
+/// its array (`"filters": [{…}, {…}]`). Its `{` (a char index) and that key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nested {
+    pub brace: usize,
+    pub key: String,
+}
+
 /// Reads `text`, a line's object from its `{`, to its end: a key starts an entry right after a
-/// `{` or a `,`, at the top level or at the top of its `"params": {…}`; not in a value, nor in
-/// any other nested object. A top-level value follows its key and colon.
+/// `{` or a `,`, at the top level or at the top of a second-level object; not in a value, nor
+/// deeper. A top-level value follows its key and colon.
 fn scan(text: &str) -> Scan {
     let chars: Vec<char> = text.chars().collect();
-    let (mut depth, mut quoted, mut escaped, mut entry, mut start) = (0usize, false, false, false, None);
+    let (mut depth, mut q, mut entry, mut start) = (0usize, Quotes::default(), false, None);
     // The top-level key just read, the one whose colon was just read (its value comes next),
-    // where the key being read starts, the `{` of the `"params"` object the text is in, and the
-    // top-level value being read.
-    let (mut named, mut valued, mut from, mut params, mut value) = (None::<String>, None::<String>, None, None, None);
+    // where the key being read starts, and the top-level value being read.
+    let (mut named, mut valued, mut from, mut value) = (None::<String>, None::<String>, None, None);
+    // The key whose array the text is in (an array of objects), and the second-level object the
+    // text is in, with its depth: anywhere in it, deeper levels included.
+    let (mut array, mut nested) = (None::<String>, None::<(Nested, usize)>);
     let mut values = Vec::new();
     for (i, &c) in chars.iter().enumerate() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
-        if quoted {
-            if c == '"' && !was_escaped {
+        let was_quoted = q.quoted();
+        q.read(c);
+        if was_quoted {
+            // Its closing quote.
+            if !q.quoted() {
                 if let Some((v, key)) = value.take() {
                     values.push((key, chars.get(v..i).unwrap_or_default().iter().collect()));
                 }
-                (quoted, start) = (false, None);
+                start = None;
                 named = from.take().and_then(|f| chars.get(f..i)).map(|k| k.iter().collect());
             }
             continue;
         }
-        let top = depth == 1 || (depth == 2 && params.is_some());
+        let top = depth == 1 || nested.as_ref().is_some_and(|(_, d)| *d == depth);
         match c {
+            // An opening quote.
             '"' => {
-                (quoted, start) = (true, (top && entry).then_some(i + 1));
+                start = (top && entry).then_some(i + 1);
                 from = (depth == 1 && entry).then_some(i + 1);
                 value = valued.take().filter(|_| depth == 1).map(|k| (i + 1, k));
                 entry = false;
             }
             '{' | '[' | '(' => {
                 depth += 1;
-                if c == '{' && depth == 2 && valued.as_deref() == Some("params") {
-                    params = Some(i);
+                // A top-level key's object or array, or an object right in that array.
+                let key = match (c, depth) {
+                    ('{', 2) => valued.clone(),
+                    ('{', 3) => array.clone(),
+                    _ => None,
+                };
+                if c == '[' && depth == 2 {
+                    array = valued.clone();
                 }
-                entry = c == '{' && (depth == 1 || params.is_some_and(|p| p == i));
+                if let Some(key) = key {
+                    nested = Some((Nested { brace: i, key }, depth));
+                }
+                entry = c == '{' && (depth == 1 || nested.as_ref().is_some_and(|(n, _)| n.brace == i));
             }
             '}' | ']' | ')' => {
                 depth = depth.saturating_sub(1);
+                if nested.as_ref().is_some_and(|(_, d)| depth < *d) {
+                    nested = None;
+                }
                 if depth < 2 {
-                    params = None;
+                    array = None;
                 }
                 entry = false;
             }
@@ -223,7 +266,7 @@ fn scan(text: &str) -> Scan {
             }
         }
     }
-    Scan { start, params, value, values }
+    Scan { start, nested: nested.map(|(n, _)| n), value, values }
 }
 
 /// The line's object from its `{` up to the cursor at char `at` of `script`, read (`scan`), with
@@ -245,41 +288,59 @@ fn word_from(text: &str, start: usize) -> Option<String> {
     (!word.chars().any(|c| c.is_whitespace() || c == '\\')).then_some(word)
 }
 
+/// A key being typed (`key_at`): the command's line, where the word starts (after its quote, a
+/// char index of the script), the word, and the second-level object it's in (its `{` a char
+/// index of the script; None at the top level).
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyAt {
+    pub hint: Hint,
+    pub start: usize,
+    pub word: String,
+    pub nested: Option<Nested>,
+}
+
 /// The key being typed at char `at` of `script`: the cursor in a quoted word that starts an entry
-/// of its line's object, right after its `{` or a `,` (at the top level, or at the top of its
-/// `"params": {…}`: not a value, not another nested object's key). The command's line
-/// (`hint_at`), where the word starts (after its quote, a char index), the word, and the `{` of
-/// the `"params"` object it's in (a char index; None at the top level).
-pub fn key_at(script: &str, at: usize) -> Option<(Hint, usize, String, Option<usize>)> {
-    let (h, Scan { start, params, .. }, text) = scan_at(script, at)?;
+/// of its line's object, right after its `{` or a `,`, at the top level or at the top of a
+/// second-level object (not a value, not deeper).
+pub fn key_at(script: &str, at: usize) -> Option<KeyAt> {
+    let (hint, Scan { start, nested, .. }, text) = scan_at(script, at)?;
     let start = start?;
     let word = word_from(text, start)?;
-    let (start, params) = (h.brace + start, params.map(|p| h.brace + p));
-    Some((h, start, word, params))
+    let nested = nested.map(|n| Nested { brace: hint.brace + n.brace, key: n.key });
+    Some(KeyAt { start: hint.brace + start, word, nested, hint })
+}
+
+/// A top-level value being typed (`value_at`): the command's line, where the word starts (after
+/// its quote, a char index of the script), the word, and its key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValueAt {
+    pub hint: Hint,
+    pub start: usize,
+    pub word: String,
+    pub key: String,
 }
 
 /// The top-level value being typed at char `at` of `script`: the cursor in a quoted word right
-/// after a key and its colon. The command's line, where the word starts (after its quote, a char
-/// index), the word, and its key.
-pub fn value_at(script: &str, at: usize) -> Option<(Hint, usize, String, String)> {
-    let (h, Scan { value, .. }, text) = scan_at(script, at)?;
+/// after a key and its colon.
+pub fn value_at(script: &str, at: usize) -> Option<ValueAt> {
+    let (hint, Scan { value, .. }, text) = scan_at(script, at)?;
     let (start, key) = value?;
     let word = word_from(text, start)?;
-    let start = h.brace + start;
-    Some((h, start, word, key))
+    Some(ValueAt { start: hint.brace + start, word, key, hint })
 }
 
-/// Whether the cursor at char `at` of `script` is in the top-level `"params": {…}` of line `h`'s
-/// object (not deeper in it).
-fn in_params(script: &str, at: usize, h: &Hint) -> bool {
-    script.get(byte_at(script, h.brace).unwrap_or(0)..byte_at(script, at).unwrap_or(0)).is_some_and(|t| scan(t).params.is_some())
+/// The top-level key of the second-level object of line `h`'s object that the cursor at char
+/// `at` of `script` is in, anywhere in it (deeper levels included); None outside one.
+fn nested_at(script: &str, at: usize, h: &Hint) -> Option<String> {
+    scan(script.get(byte_at(script, h.brace)?..byte_at(script, at)?)?).nested.map(|n| n.key)
 }
 
-/// The top-level `"tool"` of a line's object (`line`, from its `{`): the tool a `gp.run` line runs,
-/// before or after its `"params"`; the last one given, as Run reads it. None without one, or when
-/// it isn't a plain string.
-pub fn tool_of(line: &str) -> Option<String> {
-    scan(line).values.into_iter().rev().find(|(key, _)| key == "tool").map(|(_, tool)| tool).filter(|t| !t.contains('\\'))
+/// The top-level `key` of a line's object (`line`, from its `{`), as a plain string: the tool a
+/// `gp.run` line runs, or the command a `task.addStep` line adds, before or after its
+/// `"params"`; the last one given, as Run reads it. None without one, or when it isn't a plain
+/// string.
+pub fn value_of(line: &str, key: &str) -> Option<String> {
+    scan(line).values.into_iter().rev().find(|(k, _)| k == key).map(|(_, v)| v).filter(|v| !v.contains('\\'))
 }
 
 /// Line `h`'s object, from its `{` to the line's end.
@@ -319,68 +380,218 @@ fn offer_keys(of: Of, entries: Vec<Vec<String>>, line: &str, start: usize, end: 
         .into_iter()
         .filter(|keys| !keys.iter().any(|k| given.contains(&k.as_str())))
         .flatten()
-        .filter(|k| k.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)))
+        .filter(|k| starts_with_ci(k, word))
         .collect();
     (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
 }
 
+/// What a command's naming key gives (`named`): a geoprocessing tool, or a command.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Named {
+    Tool,
+    Command,
+}
+
+/// The top-level key whose value names what command `id`'s `"params": {…}` hold the parameters
+/// of (`gp.run`'s `"tool"`, `task.addStep`'s `"command"`), and what it names; None for a command
+/// without one.
+fn named(id: &str) -> Option<(&'static str, Named)> {
+    match id {
+        "gp.run" => Some(("tool", Named::Tool)),
+        "task.addStep" => Some(("command", Named::Command)),
+        _ => None,
+    }
+}
+
+/// What line `h`'s `"params"` hold the parameters of: the tool or command its naming key gives
+/// (`named`), as written there.
+fn named_in(script: &str, h: &Hint) -> Option<(Named, String)> {
+    let (key, what) = named(&h.id)?;
+    Some((what, value_of(line_of(script, h)?, key)?))
+}
+
+/// The layer a line's object (`line`, from its `{`) acts on, as Run finds it: by its `"layer"`
+/// (a name, or an id written as text), the active layer without one. None for a layer that
+/// isn't there, or one given otherwise (a number, an escaped name): not the active layer then.
+fn line_layer<'a>(session: &'a rustgis_engine::Session, line: &str) -> Option<&'a rustgis_engine::map::Layer> {
+    let given = rustgis_engine::param_keys(line).is_some_and(|keys| keys.contains(&"layer"));
+    let p = match value_of(line, "layer") {
+        Some(name) => serde_json::json!({ "layer": name }),
+        None if given => return None,
+        None => serde_json::json!({}),
+    };
+    session.map().layer(session.layer_id(&p).ok()?)
+}
+
 /// What to offer at char `at` of `script`: the command ids for a line's first word, the keys of
-/// the line's command for a key being typed in its `{…}`; in a `gp.run` line, the tool ids for its
-/// `"tool"`, and in its `"params"` the keys of the tool it runs.
+/// the line's command for a key being typed in its `{…}`, and in its second-level objects the
+/// keys their entries describe; in a `gp.run` line the tool ids for its `"tool"` and the tool's
+/// keys in its `"params"`, in a `task.addStep` line the command ids for its `"command"` and that
+/// command's keys in its `"params"`.
 fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::Session) -> Option<Offer> {
     if let Some((start, word)) = word_at(script, at) {
         return complete(start, at, &word, ids);
     }
-    if let Some((h, start, word, key)) = value_at(script, at) {
-        // Other values come later (#662's third step).
-        return if h.id == "gp.run" && key == "tool" { tool_ids(start, at, &word) } else { None };
-    }
-    let (h, start, word, params) = key_at(script, at)?;
-    let after = script.get(byte_at(script, at)?..)?.split('\n').next()?;
-    let Some(params) = params else {
-        // The line from its `{`, the word being typed taken out.
-        let before = script.get(byte_at(script, h.brace)?..byte_at(script, start)?)?;
-        return complete_keys(&h.id, &params_of(session, &h.id)?, &format!("{before}{after}"), start, at, &word);
-    };
-    if h.id != "gp.run" {
-        return None;
-    }
-    let tool = rustgis_engine::analysis::tool(&tool_of(line_of(script, &h)?)?)?;
-    // The `"params"` object from its `{` (it ends with its `}`: the rest of the line isn't read),
-    // the word being typed taken out.
-    let before = script.get(byte_at(script, params)?..byte_at(script, start)?)?;
-    let entries = tool.params.iter().map(|p| vec![p.name.to_string()]).collect();
-    offer_keys(Of::ToolKeys(tool.id.to_string()), entries, &format!("{before}{after}"), start, at, &word)
-}
-
-/// The ids of the geoprocessing tools that complete `word`, typed from char `start` to `end`,
-/// case aside, in the order the tools are listed (a built-in tool first: an external one with
-/// the same id isn't the one Run finds).
-fn tool_ids(start: usize, end: usize, word: &str) -> Option<Offer> {
-    let mut seen = std::collections::HashSet::new();
-    let items: Vec<String> = rustgis_engine::analysis::tools()
-        .map(|t| t.id)
-        .filter(|id| id.get(..word.len()).is_some_and(|p| p.eq_ignore_ascii_case(word)) && seen.insert(*id))
-        .map(str::to_string)
-        .collect();
-    (!items.is_empty()).then_some(Offer { start, end, items, of: Some(Of::ToolIds) })
-}
-
-/// What the help beside a list of keys says about key `key` of `of`'s parameters: the line
-/// describing it (`"size"?: number`), and a longer help under it (a tool's; may be empty).
-fn key_help(session: &rustgis_engine::Session, of: &Of, key: &str) -> Option<(String, String)> {
-    match of {
-        Of::CommandKeys(id) => entries(&params_of(session, id)?)
-            .into_iter()
-            .find(|(keys, _)| keys.iter().any(|k| k == key))
-            .map(|(_, text)| (text, String::new())),
-        Of::ToolKeys(id) => {
-            let p = rustgis_engine::analysis::tool(id)?.params.iter().find(|p| p.name == key)?;
-            let help = if p.help.is_empty() { String::new() } else { tl!(p.help).to_string() };
-            Some((param_line(p), help))
+    if let Some(ValueAt { hint, start, word, key }) = value_at(script, at) {
+        if let Some((_, what)) = named(&hint.id).filter(|(names, _)| key == *names) {
+            return match what {
+                Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
+                // Those `task.addStep` takes, by its own rule (not a script's: it adds the step, it
+                // doesn't run it).
+                Named::Command => {
+                    let steps =
+                        session.registry.commands.iter().map(|c| c.id).filter(|id| rustgis_engine::cmd::items::can_be_step(session, id));
+                    value_ids(start, at, &word, steps, Of::CommandIds)
+                }
+            };
         }
-        Of::ToolIds => None,
+        // Only where the command takes that key: a value for one Run turns down is no help.
+        if !takes(session, &hint.id, &key) {
+            return None;
+        }
+        return match key.as_str() {
+            "layer" => {
+                // Those Run finds by their name (`Map::layer_by_name`): of two named alike, case
+                // aside, the first.
+                let map = session.map();
+                let names = map.layers.iter().filter(|l| map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id)).map(|l| l.name.as_str());
+                value_ids(start, at, &word, names, Of::Layers)
+            }
+            "field" => {
+                let l = line_layer(session, line_of(script, &hint)?)?;
+                value_ids(start, at, &word, l.dataset.fields.iter().map(|f| f.name.as_str()), Of::Fields(l.id))
+            }
+            _ => None,
+        };
     }
+    let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
+    let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+    // The object the key goes in, from its `{` to its `}`, the word being typed taken out.
+    let brace = nested.as_ref().map_or(h.brace, |n| n.brace);
+    let object = format!("{}{after}", script.get(byte_at(script, brace)?..byte_at(script, start)?)?);
+    let Some(nested) = nested else {
+        return complete_keys(&h.id, &params_of(session, &h.id)?, &object, start, at, &word);
+    };
+    if nested.key == "params" && named(&h.id).is_some() {
+        return match named_in(script, &h)? {
+            (Named::Tool, name) => {
+                let tool = rustgis_engine::analysis::tool(&name)?;
+                let entries = tool.params.iter().map(|p| vec![p.name.to_string()]).collect();
+                offer_keys(Of::ToolKeys(tool.id.to_string()), entries, &object, start, at, &word)
+            }
+            (Named::Command, name) => complete_keys(&name, &params_of(session, &name)?, &object, start, at, &word),
+        };
+    }
+    let entries = entries(&sub_desc(&params_of(session, &h.id)?, &nested.key)?).into_iter().map(|(keys, _)| keys).collect();
+    offer_keys(Of::SubKeys { id: h.id, key: nested.key }, entries, &object, start, at, &word)
+}
+
+/// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
+/// object, or all of it when nothing closes it: an object after it on the line (the next one in
+/// its array, a later key's) isn't read as holding its keys.
+fn object_rest(after: &str) -> &str {
+    // In the key's quotes, then one level in.
+    let (mut depth, mut q) = (1usize, Quotes::in_string());
+    for (i, c) in after.char_indices() {
+        if !q.read(c) {
+            continue;
+        }
+        match c {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return after.get(..i + c.len_utf8()).unwrap_or(after);
+                }
+            }
+            _ => {}
+        }
+    }
+    after
+}
+
+/// The description of the second-level object entry `key` of parameter description `desc` takes:
+/// its `{…}`, or the `{…}` in its `[…]` (`"filters": [{"name", "where"}]`). None for an entry
+/// that doesn't describe one.
+fn sub_desc(desc: &str, key: &str) -> Option<String> {
+    let (_, text) = entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == key))?;
+    let value = text.split_once(':')?.1.trim_start();
+    let value = value.strip_prefix('[').map_or(value, str::trim_start);
+    value.starts_with('{').then(|| value.to_string())
+}
+
+/// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
+/// once: the tools, commands, layers or fields a value takes (`of`), offered from its quote, so
+/// not cut to `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's first word offers
+/// them; the rest in their order: tools with the built-in ones first (an external one with the
+/// same id isn't the one Run finds), layers top first, fields as the layer's table has them.
+fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
+    let mut seen = std::collections::HashSet::new();
+    let mut items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
+    if of == Of::CommandIds {
+        items.sort();
+    }
+    (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
+}
+
+/// What the help beside a list says about item `item` of `of`: for a key, the line describing its
+/// parameter (`"size"?: number`) and a longer help under it (a tool's, when it has one); for a
+/// layer, what it holds; for a field, its type and its alias.
+fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(String, Option<String>)> {
+    let described = |desc: &str| entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == item)).map(|(_, text)| (text, None));
+    match of {
+        Of::CommandKeys(id) => described(&params_of(session, id)?),
+        Of::SubKeys { id, key: entry } => described(&sub_desc(&params_of(session, id)?, entry)?),
+        Of::ToolKeys(id) => {
+            let p = rustgis_engine::analysis::tool(id)?.params.iter().find(|p| p.name == item)?;
+            Some((param_line(p), (!p.help.is_empty()).then(|| tl!(p.help).to_string())))
+        }
+        Of::Layers => {
+            let l = session.map().layer_by_name(item)?;
+            if l.is_raster() {
+                return Some((tl!("Raster").to_string(), None));
+            }
+            let text = crate::i18n::fmt(
+                "{type} · {n} features · {fields} fields",
+                &[
+                    ("type", tl_raw!(l.geometry_type().label())),
+                    ("n", &l.dataset.features.len().to_string()),
+                    ("fields", &l.dataset.fields.len().to_string()),
+                ],
+            );
+            Some((text, None))
+        }
+        Of::Fields(id) => {
+            let f = session.map().layer(*id)?.dataset.fields.iter().find(|f| f.name == item)?;
+            Some((tl!(f.ty.label()).to_string(), f.alias.clone()))
+        }
+        Of::ToolIds | Of::CommandIds => None,
+    }
+}
+
+/// The icon beside item `item` of a list of `of`: a layer's kind, as the Layers pane shows it, or
+/// a field's; none for ids and keys.
+fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> Option<&'static str> {
+    use rustgis_engine::data::GeometryType;
+    match of? {
+        Of::Layers => {
+            let l = session.map().layer_by_name(item)?;
+            Some(match l.geometry_type() {
+                _ if l.is_raster() => "raster_layer",
+                GeometryType::Point => "point_layer",
+                GeometryType::Polyline => "line_layer",
+                _ => "polygon_layer",
+            })
+        }
+        Of::Fields(_) => Some("field"),
+        _ => None,
+    }
+}
+
+/// `text` as it goes between a JSON string's quotes (`Mi "capa"` as `Mi \"capa\"`).
+fn json_text(text: &str) -> String {
+    let quoted = serde_json::to_string(text).unwrap_or_default();
+    quoted.get(1..quoted.len().saturating_sub(1)).unwrap_or_default().to_string()
 }
 
 /// A tool's parameter as the help shows it, as a command's parameters are described: its key
@@ -433,11 +644,14 @@ fn tool_help(t: &rustgis_engine::analysis::ToolSpec) -> Help {
 }
 
 /// The help by the cursor at char `at` of `script`, in line `h`'s braces: in a `gp.run` line's
-/// `"params"`, the tool's it runs (when the line names one there is); elsewhere the command's.
+/// `"params"`, the tool's it runs, in a `task.addStep` line's, the command's it adds (when the
+/// line names one there is); elsewhere the line's command's.
 fn help_at(session: &rustgis_engine::Session, script: &str, at: usize, h: &Hint) -> Option<Help> {
-    let tool = || rustgis_engine::analysis::tool(&tool_of(line_of(script, h)?)?);
-    let tool = if h.id == "gp.run" && in_params(script, at, h) { tool() } else { None };
-    tool.map(tool_help).or_else(|| help(session, &h.id))
+    let inner = || match named_in(script, h).filter(|_| nested_at(script, at, h).as_deref() == Some("params"))? {
+        (Named::Tool, name) => rustgis_engine::analysis::tool(&name).map(tool_help),
+        (Named::Command, name) => help(session, &name),
+    };
+    inner().or_else(|| help(session, &h.id))
 }
 
 /// `script_ids`, kept until the loaded plugins or the session's commands change (the built-in
@@ -513,6 +727,11 @@ fn params_of(session: &rustgis_engine::Session, id: &str) -> Option<String> {
     }
 }
 
+/// Whether command `id`'s parameter description names top-level key `key`.
+fn takes(session: &rustgis_engine::Session, id: &str, key: &str) -> bool {
+    params_of(session, id).is_some_and(|desc| rustgis_engine::param_keys(&desc).is_some_and(|keys| keys.contains(&key)))
+}
+
 /// What accepting a command whose parameters `desc` describes puts after its id, and where the
 /// cursor goes in it (chars): its required keys, each with its value to type, the cursor at the
 /// first (` {"lon": |, "lat": }`); empty braces when every key may be left out (` {|}`); nothing
@@ -541,14 +760,14 @@ const FRAME: f32 = 24.0;
 
 /// Draws a key's parameter `text` beside the list, coloured as the script is, and its longer help
 /// (`about`, may be empty) under it.
-fn draw_key_help(ui: &mut Ui, text: &str, about: &str, width: f32) {
+fn draw_key_help(ui: &mut Ui, text: &str, about: Option<&str>, width: f32) {
     let palette = crate::scriptcolor::Palette::of(&crate::theme::Tokens::get(ui.ctx()));
     let mut job = crate::scriptcolor::help_job(None, text, palette, &egui::TextStyle::Monospace.resolve(ui.style()));
     job.wrap.max_width = width;
     ui.vertical(|ui| {
         ui.set_max_width(width);
         ui.label(job);
-        if !about.is_empty() {
+        if let Some(about) = about {
             ui.label(egui::RichText::new(about).small());
         }
     });
@@ -587,14 +806,15 @@ fn draw_help(ui: &mut Ui, help: &Help, width: f32) {
 #[derive(Clone, Default)]
 struct List {
     /// What was worked out to offer, and for which cursor, script (its hash: one replaced from
-    /// outside the box, as long as before, still tells) and plugins (their revision: a plugin
-    /// turned off mustn't stay on offer, to be accepted). While none changes (the cursor
+    /// outside the box, as long as before, still tells), plugins (their revision: a plugin
+    /// turned off mustn't stay on offer, to be accepted) and project (the session's revision and
+    /// active layer: the layers and fields offered). While none changes (the cursor
     /// blinking, the pointer moving) it isn't worked out again. Kept whether the list shows or not.
     /// The hash is taken each frame the box has focus: the length alone misses a script replaced by
     /// one as long, and a change made by code comes with no input event to wait for. It reads the
     /// text once, as egui's own layout already does each frame (the layouter's cache key, the
     /// galley cache), so it adds a constant, not a new order of cost.
-    worked: Option<Worked<u64, Option<Offer>>>,
+    worked: Option<Worked<(u64, u64, Option<u32>), Option<Offer>>>,
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(Offer, usize)>,
     /// The offer Escape closed: not shown again until what's typed changes.
@@ -615,8 +835,8 @@ struct List {
 }
 
 /// What was worked out at a cursor, and for which script (its hash) and `with` (what else it
-/// depends on: the plugins' revision for the list; the language and the plugins' revision for
-/// the help): worked out again only when one changes.
+/// depends on: the plugins' revision and the project for the list; the language and the
+/// plugins' revision for the help): worked out again only when one changes.
 #[derive(Clone)]
 struct Worked<W, T> {
     at: Option<usize>,
@@ -750,13 +970,14 @@ pub fn show(
     let offer = if out.response.response.has_focus() {
         // A cursor, not a selection: with text selected, Enter and Tab act on it as usual.
         let at = out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0);
-        let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
-        let kept = Worked::get(&list.worked, at, text, &plugins);
+        let text = egui::util::hash(script);
+        let with = (rustgis_engine::plugins::revision(), session.revision, session.active_layer);
+        let kept = Worked::get(&list.worked, at, text, &with);
         match kept {
             Some(offer) => offer,
             None => {
                 let offer = at.and_then(|at| offer_at(script, at, &script_ids_cached(ui, session), session));
-                list.worked = Some(Worked { at, text, with: plugins, value: offer.clone() });
+                list.worked = Some(Worked { at, text, with, value: offer.clone() });
                 offer
             }
         }
@@ -812,10 +1033,23 @@ pub fn show(
         ui.with_layout(layout, |ui| {
             // The help follows the item under the pointer, else the highlighted one.
             let mut hovered = None;
+            let t = crate::theme::Tokens::get(ui.ctx());
             ui.vertical(|ui| {
                 ui.set_min_width(MIN_WIDTH);
                 for (i, item) in offer.items.iter().enumerate() {
-                    let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                    let label = |ui: &mut Ui| ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                    // A layer's kind or a field, before its name, as the Layers pane shows it.
+                    let r = match item_icon(session, offer.of.as_ref(), item) {
+                        Some(icon) => {
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                                crate::icons::paint(ui.painter(), r, icon, t.icon, t.accent);
+                                label(ui)
+                            })
+                            .inner
+                        }
+                        None => label(ui),
+                    };
                     // Taken as the button goes down, as in a code editor: the press already
                     // takes the focus from the box, and a click (down, then up a frame or more
                     // later) could find the list gone by then. A click still counts
@@ -836,23 +1070,31 @@ pub fn show(
             // short description split. Kept, it would need the id and the language as its
             // key (the help is translated), for next to nothing saved.
             let shown = hovered.filter(|_| pointer_leads).unwrap_or(selected);
-            if offer.of == Some(Of::ToolIds) {
+            let item = offer.items.get(shown);
+            // A gap before it, not a separator: in a row, egui's separator takes all the height
+            // it can, and would stretch the list down to the bottom of the screen.
+            match &offer.of {
                 // A tool: its help, as a command's.
-                if let Some(t) = offer.items.get(shown).and_then(|id| rustgis_engine::analysis::tool(id)) {
-                    ui.add_space(GAP);
-                    draw_help(ui, &tool_help(t), help_width);
+                Some(Of::ToolIds) => {
+                    if let Some(t) = item.and_then(|id| rustgis_engine::analysis::tool(id)) {
+                        ui.add_space(GAP);
+                        draw_help(ui, &tool_help(t), help_width);
+                    }
                 }
-            } else if let Some(of) = &offer.of {
-                // A key: the line describing its parameter.
-                if let Some((text, about)) = offer.items.get(shown).and_then(|key| key_help(session, of, key)) {
-                    ui.add_space(GAP);
-                    draw_key_help(ui, &text, &about, help_width);
+                // A command, starting a line or for a value.
+                None | Some(Of::CommandIds) => {
+                    if let Some(help) = item.and_then(|id| help(session, id)) {
+                        ui.add_space(GAP);
+                        draw_help(ui, &help, help_width);
+                    }
                 }
-            } else if let Some(help) = offer.items.get(shown).and_then(|id| help(session, id)) {
-                // A gap, not a separator: in a row, egui's separator takes all the height it
-                // can, and would stretch the list down to the bottom of the screen.
-                ui.add_space(GAP);
-                draw_help(ui, &help, help_width);
+                // A key: the line describing its parameter; a layer or a field: what it holds.
+                Some(of) => {
+                    if let Some((text, about)) = item.and_then(|it| item_help(session, of, it)) {
+                        ui.add_space(GAP);
+                        draw_key_help(ui, &text, about.as_deref(), help_width);
+                    }
+                }
             }
         });
     });
@@ -929,26 +1171,31 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
 pub fn accept(ui: &Ui, box_id: Id, script: &mut String, offer: &Offer, item: &str, session: &rustgis_engine::Session) {
     let chars: Vec<char> = script.chars().collect();
     let (Some(before), Some(mut after)) = (chars.get(..offer.start), chars.get(offer.end..)) else { return };
-    let (tail, at) = if offer.of == Some(Of::ToolIds) {
-        // A tool id: closed, the cursor after its quote (one already there is kept).
-        if after.first() == Some(&'"') { (String::new(), 1) } else { ("\"".to_string(), 1) }
-    } else if offer.of.is_some() {
+    let value = offer.of.as_ref().is_some_and(Of::is_value);
+    // A value as a JSON string holds it (a layer named `Mi "capa"` as `Mi \"capa\"`).
+    let item = if value { json_text(item) } else { item.to_string() };
+    let (tail, at) = match &offer.of {
+        // A value: closed, the cursor after its quote (one already there is kept).
+        Some(_) if value => (if after.first() == Some(&'"') { String::new() } else { "\"".to_string() }, 1),
         // A key: closed, its colon and a space after it, ready for the value; a closing quote
         // already there is taken in, and a key that has its colon keeps it.
-        let quoted = after.first() == Some(&'"');
-        let colon = quoted && after.get(1..).is_some_and(|a| a.iter().find(|c| !c.is_whitespace()) == Some(&':'));
-        if quoted && !colon {
-            after = after.get(1..).unwrap_or_default();
+        Some(_) => {
+            let quoted = after.first() == Some(&'"');
+            let colon = quoted && after.get(1..).is_some_and(|a| a.iter().find(|c| !c.is_whitespace()) == Some(&':'));
+            if quoted && !colon {
+                after = after.get(1..).unwrap_or_default();
+            }
+            // With its colon, the cursor goes after the quote already there.
+            if colon { (String::new(), 1) } else { ("\": ".to_string(), 3) }
         }
-        // With its colon, the cursor goes after the quote already there.
-        if colon { (String::new(), 1) } else { ("\": ".to_string(), 3) }
-    } else if after.iter().take_while(|c| **c != '\n').all(|c| c.is_whitespace()) {
-        params_of(session, item).map(|d| template(&d)).unwrap_or_default()
-    } else {
-        Default::default()
+        // A command starting a line.
+        None if after.iter().take_while(|c| **c != '\n').all(|c| c.is_whitespace()) => {
+            params_of(session, &item).map(|d| template(&d)).unwrap_or_default()
+        }
+        None => Default::default(),
     };
     let mut new: String = before.iter().collect();
-    new.push_str(item);
+    new.push_str(&item);
     new.push_str(&tail);
     new.extend(after);
     let mut state = TextEditState::load(ui.ctx(), box_id).unwrap_or_default();
@@ -989,35 +1236,43 @@ fn char_at(script: &str, at: usize) -> Option<char> {
     script.get(byte_at(script, at)?..)?.chars().next()
 }
 
-/// Whether the end of `line` is inside a string (quotes after a backslash don't count).
+/// Whether the end of `line` is inside a string.
 fn in_string(line: &str) -> bool {
-    let (mut quoted, mut escaped) = (false, false);
+    let mut q = Quotes::default();
     for c in line.chars() {
-        let was_escaped = escaped;
-        escaped = c == '\\' && !was_escaped;
-        if c == '"' && !was_escaped {
-            quoted = !quoted;
-        }
+        q.read(c);
     }
-    quoted
+    q.quoted()
 }
 
-/// What this frame's input did to the box, as `brace` needs it: a brace typed, Backspace, or
-/// anything else (an undo or redo, a paste, a cut), which it leaves as it is.
+/// What this frame's input did to the box, as `brace` needs it: a brace, bracket or quote typed,
+/// Backspace, or anything else (an undo or redo, a paste, a cut), which it leaves as it is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Keyed {
-    Brace,
+    Pair,
     Backspace,
     Other,
 }
 
+/// The closing character of an opening brace, bracket or quote.
+fn closer(open: char) -> Option<char> {
+    match open {
+        '{' => Some('}'),
+        '[' => Some(']'),
+        '"' => Some('"'),
+        _ => None,
+    }
+}
+
 /// The script once the box's edit is followed through, the edit read from `script` as the box
-/// left it, what was there `before`, and the cursor `now` (a char index): a `{` typed closes
-/// itself (`{|}`) when nothing, a space or a closing `}`, `]` or `,` follows it; a `}` typed right
-/// before a `}` steps over it rather than add one; Backspace in an empty `{|}` deletes both. Not
-/// in a string or a comment line, and only for the keys that make those edits (`keyed`): an undo
-/// can bring a `{` back as typing one would. The cursor stays where the box put it in each case.
-/// None to leave the edit as it is.
+/// left it, what was there `before`, and the cursor `now` (a char index): a `{` or `[` typed
+/// closes itself (`{|}`, `[|]`) when nothing, a space or a closing `}`, `]` or `,` follows it; a
+/// `"` too (`"|"`), when it also comes where a string can start (a line's start, a space, `{`,
+/// `[`, `,` or `:`); a `}` or `]` typed right before the same one steps over it rather than add
+/// one, and so does a `"` that ends a string; Backspace in an empty `{|}`, `[|]` or `"|"` deletes
+/// both. Not in a string or a comment line, and only for the keys that make those edits
+/// (`keyed`): an undo can bring a `{` back as typing one would. The cursor stays where the box put
+/// it in each case. None to leave the edit as it is.
 fn brace(script: &str, before: Before, now: usize, keyed: Keyed) -> Option<String> {
     let Before { at, prev, len } = before;
     // Outside a comment line and a string, up to char `i`.
@@ -1026,33 +1281,41 @@ fn brace(script: &str, before: Before, now: usize, keyed: Keyed) -> Option<Strin
         line.is_some_and(|l| !l.trim_start().starts_with('#') && !in_string(l))
     };
     let (typed, next) = (char_at(script, at), char_at(script, now));
-    let one_typed = keyed == Keyed::Brace && script.len() == len + 1 && now == at + 1 && plain(at);
-    let one_deleted = keyed == Keyed::Backspace && script.len() + 1 == len && now + 1 == at && prev == Some('{') && plain(now);
+    let typed_one = keyed == Keyed::Pair && script.len() == len + 1 && now == at + 1;
+    let one_deleted = keyed == Keyed::Backspace && script.len() + 1 == len && now + 1 == at && plain(now);
     let cut = byte_at(script, if one_deleted { now } else { at })?;
     let (b, rest) = (script.get(..cut)?, script.get(cut..)?);
+    // What may follow an opener that closes itself, and what may come before a quote that does.
+    let closes = |c: char| c.is_whitespace() || matches!(c, '}' | ']' | ',');
+    let opens = |c: char| c.is_whitespace() || matches!(c, '{' | '[' | ',' | ':');
     match (typed, next) {
-        (Some('{'), next) if one_typed && next.is_none_or(|c| c.is_whitespace() || matches!(c, '}' | ']' | ',')) => {
-            Some(format!("{b}{{}}{}", rest.get(1..)?))
+        (Some(open @ ('{' | '[')), next) if typed_one && plain(at) && next.is_none_or(closes) => {
+            Some(format!("{b}{open}{}{}", closer(open)?, rest.get(1..)?))
         }
-        // The `}` typed goes: the cursor, after it, is after the one that was there.
-        (Some('}'), Some('}')) if one_typed => Some(format!("{b}{}", rest.get(1..)?)),
-        // The `}` that followed the deleted `{`, now at the cursor.
-        (_, Some('}')) if one_deleted => Some(format!("{b}{}", rest.get(1..)?)),
+        (Some('"'), next) if typed_one && plain(at) && next.is_none_or(closes) && prev.is_none_or(opens) => {
+            Some(format!("{b}\"\"{}", rest.get(1..)?))
+        }
+        // The `}` or `]` typed goes: the cursor, after it, is after the one that was there.
+        (Some(close @ ('}' | ']')), Some(next)) if typed_one && plain(at) && close == next => Some(format!("{b}{}", rest.get(1..)?)),
+        // So does a `"` that ends a string (in one before it, out of it after): not an escaped one.
+        (Some('"'), Some('"')) if typed_one && !plain(at) && plain(now) => Some(format!("{b}{}", rest.get(1..)?)),
+        // The closer that followed the deleted opener, now at the cursor.
+        (_, Some(next)) if one_deleted && prev.and_then(closer) == Some(next) => Some(format!("{b}{}", rest.get(1..)?)),
         _ => None,
     }
 }
 
 /// After the box: its edit followed through as `brace` says, from what was there `before` it
 /// took the keys. Read from what the box did rather than from the keys, so it holds whatever
-/// keyboard types the brace (Shift, AltGr, Option). The cursor stays where the box put it, and the
-/// box's undo takes the brace back with what was typed with it.
+/// keyboard types the brace, bracket or quote (Shift, AltGr, Option). The cursor stays where the
+/// box put it, and the box's undo takes the brace back with what was typed with it.
 pub fn braces(ui: &Ui, before: Option<Before>, out: &TextEditOutput, script: &mut String) {
     let (Some(before), Some(now)) = (before, out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0)) else { return };
     if !out.response.response.changed() {
         return;
     }
-    // One edit, made by one of those keys: the brace typed alone (Shift, AltGr or Option as it
-    // takes), or Backspace alone.
+    // One edit, made by one of those keys: the brace, bracket or quote typed alone (Shift, AltGr
+    // or Option as it takes), or Backspace alone.
     let keyed = ui.input(|i| {
         let edits: Vec<&egui::Event> = i
             .events
@@ -1068,7 +1331,7 @@ pub fn braces(ui: &Ui, before: Option<Before>, out: &TextEditOutput, script: &mu
             })
             .collect();
         match edits.as_slice() {
-            [egui::Event::Text(t)] if t == "{" || t == "}" => Keyed::Brace,
+            [egui::Event::Text(t)] if matches!(t.as_str(), "{" | "}" | "[" | "]" | "\"") => Keyed::Pair,
             [egui::Event::Key { key: Key::Backspace, modifiers, .. }] if modifiers.is_none() => Keyed::Backspace,
             _ => Keyed::Other,
         }
@@ -1541,7 +1804,7 @@ mod tests {
         let b = super::byte_at(old, at).unwrap();
         let script = format!("{}{ins}{}", &old[..b], &old[b..]);
         let before = super::Before { at, prev: at.checked_sub(1).and_then(|i| super::char_at(old, i)), len: old.len() };
-        super::brace(&script, before, at + ins.chars().count(), super::Keyed::Brace)
+        super::brace(&script, before, at + ins.chars().count(), super::Keyed::Pair)
     }
 
     /// What `brace` makes of Backspace at char `at` of `old`.
@@ -1566,6 +1829,7 @@ mod tests {
         assert_eq!(typed("x ab", 2, "{"), None, "before other text");
         assert_eq!(end(r#"x {"where": "a "#), None, "in a string");
         assert_eq!(end(r#"x {"where": "a \" "#), None, "an escaped quote doesn't end it");
+        assert_eq!(end(r#"x \"a "#), None, "a backslash outside a string escapes nothing (#741)");
         assert_eq!(end("  # x "), None, "in a comment line");
         assert_eq!(end("ñandú ").as_deref(), Some("ñandú {}"), "chars, not bytes");
         assert_eq!(typed("x ", 2, "{{"), None, "more than the brace typed");
@@ -1573,6 +1837,51 @@ mod tests {
         assert_eq!(super::brace("x {", before, 3, super::Keyed::Other), None, "a paste, an undo");
         let before = super::Before { at: 3, prev: Some('{'), len: 4 };
         assert_eq!(super::brace("x }", before, 2, super::Keyed::Other), None, "a cut, an undo");
+    }
+
+    /// `[` closes itself as `{` does; `]` steps over a `]`, not a `}` (nor `}` a `]`); Backspace
+    /// in an empty `[]` deletes both, not in `[}`.
+    #[test]
+    fn a_bracket_works_as_a_brace() {
+        assert_eq!(typed("x ", 2, "[").as_deref(), Some("x []"));
+        assert_eq!(typed(r#"x {"a": }"#, 8, "[").as_deref(), Some(r#"x {"a": []}"#), "before a closing brace");
+        assert_eq!(typed("x []", 3, "{").as_deref(), Some("x [{}]"), "a brace in a bracket");
+        assert_eq!(typed("x []", 3, "[").as_deref(), Some("x [[]]"), "before a closing bracket");
+        assert_eq!(typed("x ab", 2, "["), None, "before other text");
+        assert_eq!(typed(r#"x {"w": "a "#, 11, "["), None, "in a string");
+        assert_eq!(typed("x [1]", 4, "]").as_deref(), Some("x [1]"), "stepped over");
+        assert_eq!(typed("x [1}", 4, "]"), None, "not over a brace");
+        assert_eq!(typed("x {1]", 4, "}"), None, "a brace not over a bracket");
+        assert_eq!(backspace("x []", 3).as_deref(), Some("x "));
+        assert_eq!(backspace("x [}", 3), None, "not a pair");
+        assert_eq!(backspace("x {]", 3), None, "not a pair either");
+    }
+
+    /// `"` closes itself as `{` does, where a string can start: not after a word, a quote or a
+    /// closing brace; one typed before the quote that ends its string steps over it, not an
+    /// escaped one; Backspace in an empty `""` deletes both, not after a string's closing quote.
+    #[test]
+    fn a_quote_works_as_a_brace() {
+        assert_eq!(typed("x {}", 3, "\"").as_deref(), Some(r#"x {""}"#), "before a closing brace");
+        assert_eq!(typed(r#"x {"a": }"#, 8, "\"").as_deref(), Some(r#"x {"a": ""}"#), "a value");
+        assert_eq!(typed(r#"x {"a":}"#, 7, "\"").as_deref(), Some(r#"x {"a":""}"#), "right after a colon");
+        assert_eq!(typed("x [1, ]", 6, "\"").as_deref(), Some(r#"x [1, ""]"#), "before a closing bracket");
+        assert_eq!(typed("", 0, "\"").as_deref(), Some(r#""""#), "the script's start");
+        assert_eq!(typed("x\n", 2, "\"").as_deref(), Some("x\n\"\""), "a line's start");
+        assert_eq!(typed("ñ ", 2, "\"").as_deref(), Some(r#"ñ """#), "chars, not bytes");
+        assert_eq!(typed("x { : 1}", 4, "\""), None, "before a colon");
+        assert_eq!(typed("x ab", 2, "\""), None, "before other text");
+        assert_eq!(typed("x ab", 4, "\""), None, "after a word");
+        assert_eq!(typed(r#"x """#, 4, "\""), None, "after a quote");
+        assert_eq!(typed("x {}", 4, "\""), None, "after a closing brace");
+        assert_eq!(typed("# x ", 4, "\""), None, "in a comment line");
+        assert_eq!(typed(r#"x {"a"}"#, 5, "\"").as_deref(), Some(r#"x {"a"}"#), "stepped over");
+        assert_eq!(typed(r#"x {"a\"}"#, 6, "\""), None, "an escaped quote");
+        assert_eq!(typed(r#"x {"ab"#, 5, "\""), None, "in a string, before a letter");
+        assert_eq!(typed(r#"# "a""#, 4, "\""), None, "not stepped over in a comment line");
+        assert_eq!(backspace(r#"x """#, 3).as_deref(), Some("x "));
+        assert_eq!(backspace(r#"x {"a": ""}"#, 9).as_deref(), Some(r#"x {"a": }"#), "an empty value");
+        assert_eq!(backspace(r#"x "a"""#, 5), None, "a string's closing quote");
     }
 
     /// `}` typed right before a `}` steps over it; Backspace in an empty `{}` deletes both.
@@ -1614,24 +1923,65 @@ mod tests {
         h.event(egui::Event::Paste("labels.style {".into()));
         h.run();
         assert_eq!(h.state().workflow.script, "labels.style {", "a paste is left as it is");
+        let mut h = pane();
+        type_in(&mut h, r#"layer.displayFilters {"filters": "#);
+        type_in(&mut h, "[");
+        type_in(&mut h, "{");
+        assert_eq!(h.state().workflow.script, r#"layer.displayFilters {"filters": [{}]"#, "a bracket closes itself too");
+        type_in(&mut h, "}");
+        type_in(&mut h, "]");
+        type_in(&mut h, "!");
+        assert_eq!(h.state().workflow.script, r#"layer.displayFilters {"filters": [{}]!"#, "and is stepped over");
+    }
+
+    /// In the pane: a quote closes itself and the lists still open in it; accepting a key takes
+    /// in its closing quote, accepting a tool keeps it, and a quote typed before it steps over.
+    #[test]
+    fn quotes_in_the_box() {
+        let mut h = pane();
+        type_in(&mut h, "map.goToXY ");
+        for c in ["{", "\"", "l", "a"] {
+            type_in(&mut h, c);
+        }
+        assert_eq!(h.state().workflow.script, r#"map.goToXY {"la"}"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().workflow.script, r#"map.goToXY {"lat": }"#, "the key took in its quote");
+        let mut h = pane();
+        type_in(&mut h, "gp.run ");
+        for c in ["{", "\"", "tool", "\"", ": ", "\"", "buffe"] {
+            type_in(&mut h, c);
+        }
+        assert_eq!(h.state().workflow.script, r#"gp.run {"tool": "buffe"}"#, "the key's quote stepped over");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        type_in(&mut h, "!");
+        assert_eq!(h.state().workflow.script, r#"gp.run {"tool": "buffer"!}"#, "the tool kept its quote");
+        let mut h = pane();
+        type_in(&mut h, r#"labels.style {"layer": "#);
+        type_in(&mut h, "\"");
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert_eq!(h.state().workflow.script, r#"labels.style {"layer": "#, "an empty pair deleted");
     }
 
     /// A key is being typed in a quoted word that starts an entry of the line's object: right
-    /// after its `{` or a `,`, at the top level; not in a value, a nested object or a comment.
+    /// after its `{` or a `,`, at the top level (second-level objects: `key_at_finds_a_key_in_a_
+    /// second_level_object`); not in a value, deeper, or in a comment.
     #[test]
     fn key_at_finds_a_key_being_typed() {
-        let at = |s: &str| super::key_at(s, s.chars().count()).map(|(h, start, word, _)| (h.id, start, word));
+        let at = |s: &str| super::key_at(s, s.chars().count()).map(|k| (k.hint.id, k.start, k.word));
         assert_eq!(at(r#"labels.style {""#), Some(("labels.style".into(), 15, String::new())));
         assert_eq!(at(r#"labels.style {"layer": "Cities", "si"#).map(|k| k.2), Some("si".into()), "after a comma");
         assert_eq!(at(r#"x.y {"w": "a\"b", ""#).map(|k| k.2), Some(String::new()), "an escaped quote in a value");
         assert_eq!(at("# ñ\r\nlabels.style {\"la").map(|k| (k.1, k.2)), Some((20, "la".into())), "chars, CRLF");
         assert_eq!(at(r#"labels.style {"where": "po"#), None, "a value");
-        assert_eq!(at(r#"x.y {"a": {""#), None, "a nested object");
+        assert_eq!(at(r#"x.y {"a": {"b": {""#), None, "deeper than a second-level object");
         assert_eq!(at(r#"x.y {"a": "#), None, "no quote");
         assert_eq!(at(r#"x.y {"a" "#), None, "past the key");
         assert_eq!(at(r#"# x.y {""#), None, "a comment");
         let s = r#"labels.style {"layer"}"#;
-        assert_eq!(super::key_at(s, 20).map(|k| k.2), Some("layer".into()), "a closing quote after the cursor");
+        assert_eq!(super::key_at(s, 20).map(|k| k.word), Some("layer".into()), "a closing quote after the cursor");
         assert!(super::key_at(s, 18).is_none(), "a letter after the cursor");
     }
 
@@ -1760,29 +2110,35 @@ mod tests {
         assert!((h.get_by_label(&sig).rect().left() - first).abs() < 0.5, "it didn't move with the cursor");
     }
 
-    /// In a line's `"params": {…}`, a key starts an entry at its top, as at the line's top level;
-    /// not in another nested object, deeper in `params`, or once `params` is closed.
+    /// In a second-level object (a top-level key's `{…}`, or an object in its `[…]`), a key starts
+    /// an entry at its top, as at the line's top level; not deeper, in a value, or once the object
+    /// is closed.
     #[test]
-    fn key_at_finds_a_key_in_params() {
-        let at = |s: &str| super::key_at(s, s.chars().count()).map(|(_, start, word, params)| (start, word, params));
+    fn key_at_finds_a_key_in_a_second_level_object() {
+        let at = |s: &str| super::key_at(s, s.chars().count()).map(|k| (k.start, k.word, k.nested.map(|n| (n.brace, n.key))));
         let s = r#"gp.run {"tool": "buffer", "params": {"di"#;
-        assert_eq!(at(s), Some((38, "di".into(), Some(36))));
-        assert_eq!(at(r#"gp.run {"params" : {"input": "Cities", ""#).map(|k| k.2), Some(Some(19)), "after a comma, spaced colon");
+        assert_eq!(at(s), Some((38, "di".into(), Some((36, "params".into())))));
+        let nested = |s: &str| at(s).and_then(|k| k.2);
+        assert_eq!(nested(r#"gp.run {"params" : {"input": "Cities", ""#), Some((19, "params".into())), "after a comma, spaced colon");
+        assert_eq!(nested(r#"topology.rules {"add": {""#).map(|n| n.1), Some("add".into()), "any key's object");
+        let s = r#"layer.displayFilters {"filters": [{"name": "a"}, {""#;
+        assert_eq!(nested(s), Some((49, "filters".into())), "the array's second object");
         assert_eq!(at(r#"gp.run {"tool": "buffer", "#), None, "no quote");
         assert_eq!(at(r#"gp.run {"tool": "buffer", ""#).map(|k| k.2), Some(None), "the top level");
-        assert_eq!(at(r#"gp.run {"params": {"a": {""#), None, "deeper in params");
-        assert_eq!(at(r#"gp.run {"params": [{""#), None, "an array");
-        assert_eq!(at(r#"gp.run {"other": {""#), None, "another object");
+        assert_eq!(at(r#"gp.run {"params": {"a": {""#), None, "deeper");
+        assert_eq!(at(r#"x.y {"a": [[{""#), None, "an array's array");
+        assert_eq!(at(r#"x.y {"a": [{"b": [{""#), None, "an array in the array's object");
         assert_eq!(at(r#"gp.run {"params": {"a": "b"#), None, "a value");
-        assert_eq!(at(r#"gp.run {"params": {}, ""#).map(|k| k.2), Some(None), "params closed");
-        assert_eq!(at(r#"gp.run {"x": "params", "y": {""#), None, "\"params\" as a value");
+        assert_eq!(at(r#"gp.run {"params": {}, ""#).map(|k| k.2), Some(None), "closed");
+        assert_eq!(at(r#"x.y {"filters": [{}], ""#).map(|k| k.2), Some(None), "the array closed");
+        assert_eq!(at(r#"gp.run {"x": "params", "y" {""#), None, "no colon");
     }
 
-    /// The tool a line runs: its top-level `"tool"`, wherever it's given, the last one as Run
+    /// The tool a line runs (its top-level `"tool"`), wherever it's given, the last one as Run
     /// reads it; not a nested one, a value named "tool", or an escaped name.
     #[test]
-    fn tool_of_reads_the_lines_tool() {
-        use super::tool_of;
+    fn value_of_reads_the_lines_tool() {
+        let tool_of = |line: &str| super::value_of(line, "tool");
         assert_eq!(tool_of(r#"{"tool": "buffer", "params": {}}"#).as_deref(), Some("buffer"));
         assert_eq!(tool_of(r#"{"params": {"input": "a"}, "tool" : "clip"}"#).as_deref(), Some("clip"), "after params");
         assert_eq!(tool_of(r#"{"tool": "a", "tool": "b"}"#).as_deref(), Some("b"), "the last one");
@@ -1815,6 +2171,13 @@ mod tests {
         assert_eq!(o.of, Some(super::Of::ToolKeys("buffer".into())));
         let s = r#"gp.run {"tool": "buffer", "params": {"distance": 5, "distance"}}"#;
         assert!(keys(&s[..s.len() - 2]).is_empty(), "the same key given before in params");
+        let s = r#"gp.run {"params": {""#;
+        let o = super::offer_at(&format!(r#"{s}"}}, "output": 1, "tool": "buffer"}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert!(o.items.iter().any(|k| k == "output"), "a top-level key after params isn't given in it");
+        let o = super::offer_at(&format!(r#"{s}"}}, "x": {{"output": 1}}, "tool": "buffer"}}"#), s.chars().count(), &[], &app.session);
+        assert!(o.is_some_and(|o| o.items.iter().any(|k| k == "output")), "nor a key of a later object");
+        let o = super::offer_at(&format!("{s}\n\"tool\": \"buffer\"}}}}"), s.chars().count(), &[], &app.session);
+        assert!(o.is_none(), "a tool on another line: a command is one line");
     }
 
     /// A tool's parameter reads as a command's is described: its key, what it takes, its name, and
@@ -1858,7 +2221,7 @@ mod tests {
     /// colon; not a key, a nested value, an unquoted one, or one already closed.
     #[test]
     fn value_at_finds_a_value_being_typed() {
-        let at = |s: &str| super::value_at(s, s.chars().count()).map(|(h, start, word, key)| (h.id, start, word, key));
+        let at = |s: &str| super::value_at(s, s.chars().count()).map(|v| (v.hint.id, v.start, v.word, v.key));
         assert_eq!(at(r#"gp.run {"tool": "bu"#), Some(("gp.run".into(), 17, "bu".into(), "tool".into())));
         assert_eq!(at(r#"gp.run {"params": {}, "tool" : ""#).map(|v| (v.2, v.3)), Some((String::new(), "tool".into())), "after params");
         assert_eq!(at(r#"gp.run {"tool": "a", "x"#), None, "a key");
@@ -1867,7 +2230,7 @@ mod tests {
         assert_eq!(at(r#"gp.run {"tool" ""#), None, "no colon");
         assert_eq!(at(r#"gp.run {"tool": "a" "#), None, "closed");
         let s = r#"gp.run {"tool": "bu"}"#;
-        assert_eq!(super::value_at(s, 19).map(|v| v.2), Some("bu".into()), "a closing quote after the cursor");
+        assert_eq!(super::value_at(s, 19).map(|v| v.word), Some("bu".into()), "a closing quote after the cursor");
         assert!(super::value_at(s, 18).is_none(), "a letter after the cursor");
     }
 
@@ -1884,8 +2247,76 @@ mod tests {
         let ids: std::collections::HashSet<&str> = rustgis_engine::analysis::tools().map(|t| t.id).collect();
         assert_eq!(all.len(), ids.len(), "every tool, once");
         assert!(offer(r#"gp.run {"tool": "zzz"#).is_none());
-        assert!(offer(r#"labels.style {"layer": ""#).is_none(), "another key's value");
+        assert!(offer(r#"labels.style {"where": ""#).is_none(), "another key's value");
         assert!(offer(r#"task.addStep {"tool": ""#).is_none(), "another command");
+    }
+
+    /// A `"layer"` value offers the map's layers, top first, case aside; a `"field"` value the
+    /// fields of the line's layer (before or after it), or the active layer's without one, as Run
+    /// finds it. Only in a command that takes the key; nothing for a layer that isn't there or
+    /// isn't given by name, nor at the second level.
+    #[test]
+    fn layers_and_fields_are_offered_for_their_values() {
+        let mut app = crate::RustGisApp::with_sample();
+        let offer = |app: &crate::RustGisApp, s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let names: Vec<String> = app.session.map().layers.iter().map(|l| l.name.clone()).collect();
+        let o = offer(&app, r#"labels.style {"layer": ""#).unwrap();
+        assert_eq!((o.items, o.of), (names, Some(super::Of::Layers)));
+        assert_eq!(offer(&app, r#"labels.field {"layer": "ci"#).unwrap().items, ["Cities"], "case aside");
+        assert!(offer(&app, r#"map.goToXY {"layer": ""#).is_none(), "a command that doesn't take a layer");
+        assert!(offer(&app, r#"labels.style {"layer": "Cities", "field": ""#).is_none(), "nor a field");
+        assert!(offer(&app, r#"labels.field {"layer": "zz"#).is_none());
+        let cities = app.session.map().layer_by_name("Cities").unwrap();
+        let (id, fields): (u32, Vec<String>) = (cities.id, cities.dataset.fields.iter().map(|f| f.name.clone()).collect());
+        let o = offer(&app, r#"labels.field {"layer": "cities", "field": ""#).unwrap();
+        assert_eq!((o.items, o.of), (fields.clone(), Some(super::Of::Fields(id))));
+        let s = r#"labels.field {"field": ""#;
+        let o = super::offer_at(&format!(r#"{s}", "layer": "Cities"}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(o.items, fields, "the layer after the field");
+        assert!(offer(&app, r#"labels.field {"layer": "Nowhere", "field": ""#).is_none(), "a layer that isn't there");
+        assert!(offer(&app, r#"labels.field {"layer": 99, "field": ""#).is_none(), "a layer given as a number");
+        assert!(offer(&app, r#"labels.field {"layer": "a\"b", "field": ""#).is_none(), "an escaped name");
+        app.session.active_layer = Some(id);
+        assert_eq!(offer(&app, r#"labels.field {"field": ""#).unwrap().items, fields, "the active layer");
+        app.session.active_layer = None;
+        assert!(offer(&app, r#"labels.field {"field": ""#).is_none(), "no active layer");
+        assert!(offer(&app, r#"gp.run {"params": {"layer": ""#).is_none(), "a second-level value (#662's 3b)");
+        // Two layers named alike but for case: the first, the one Run finds by either name.
+        let other = app.session.map().layers.iter().position(|l| l.name != "Cities").unwrap();
+        app.session.map_mut().layers[other].name = "CITIES".into();
+        let cities = app.session.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case("cities")).count();
+        assert_eq!(cities, 2);
+        assert_eq!(offer(&app, r#"labels.style {"layer": "ci"#).unwrap().items.len(), 1, "once, case aside");
+    }
+
+    /// Beside a layer, what it holds and its kind's icon, as the Layers pane shows it; beside a
+    /// field, its type and the field icon; no icon for ids.
+    #[test]
+    fn layers_and_fields_have_help_and_icons() {
+        use super::{Of, item_help, item_icon};
+        let app = crate::RustGisApp::with_sample();
+        let s = &app.session;
+        let cities = s.map().layer_by_name("Cities").unwrap();
+        let (text, _) = item_help(s, &Of::Layers, "Cities").unwrap();
+        assert!(text.contains(&cities.dataset.features.len().to_string()), "{text}");
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Cities"), Some("point_layer"));
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Rivers"), Some("line_layer"));
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Countries"), Some("polygon_layer"));
+        let f = &cities.dataset.fields[0];
+        assert_eq!(item_help(s, &Of::Fields(cities.id), &f.name).map(|h| h.0), Some(f.ty.label().to_string()));
+        assert_eq!(item_icon(s, Some(&Of::Fields(cities.id)), &f.name), Some("field"));
+        assert_eq!(item_icon(s, Some(&Of::ToolIds), "buffer"), None);
+    }
+
+    /// In the pane: accepting a layer closes its name, written as a JSON string holds it.
+    #[test]
+    fn a_layer_is_accepted_as_json_writes_it() {
+        let mut h = pane();
+        h.state_mut().session.map_mut().layers[0].name = r#"Big "lakes""#.into();
+        type_in(&mut h, r#"labels.style {"layer": "Big"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().workflow.script, r#"labels.style {"layer": "Big \"lakes\"""#);
     }
 
     /// In the pane: a quote after `"tool": ` in a `gp.run` line offers the tools with the
@@ -1924,5 +2355,86 @@ mod tests {
         let cursor = cursor.translate(egui::vec2(0.0, 400.0));
         let (corner, _) = super::place(cursor, egui::vec2(200.0, 100.0), screen, 60.0);
         assert_eq!(corner.y + 100.0, 470.0, "above, clear of the line over it");
+    }
+
+    /// In a second-level object, the keys its entry describes (`"add": {…}`, each object of
+    /// `"filters": [{…}]`), less those that object has, with the key's line beside; none for an
+    /// entry that describes none.
+    #[test]
+    fn a_second_level_objects_keys_are_offered() {
+        let app = crate::RustGisApp::with_sample();
+        let offer = |s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let keys = |s: &str| offer(s).map(|o| o.items).unwrap_or_default();
+        assert_eq!(keys(r#"topology.rules {"add": {""#), ["rule", "layer", "by"]);
+        assert_eq!(keys(r#"topology.rules {"add": {"rule": "x", ""#), ["layer", "by"]);
+        assert_eq!(keys(r#"layer.displayFilters {"filters": [{"name": "a", ""#), ["minScale", "maxScale", "where"]);
+        let s = r#"layer.displayFilters {"filters": [{"name": "a"}, {""#;
+        assert_eq!(keys(s), ["name", "minScale", "maxScale", "where"], "another object: nothing given in it");
+        let s = r#"layer.displayFilters {"filters": [{"na"#;
+        let later = super::offer_at(&format!(r#"{s}"}}, {{"name": "b"}}]}}"#), s.chars().count(), &[], &app.session);
+        assert_eq!(later.map(|o| o.items), Some(vec!["name".to_string()]), "a later object of the array isn't this one");
+        assert!(keys(r#"topology.rules {"remove": {""#).is_empty(), "an entry that describes none");
+        assert!(keys(r#"topology.rules {"nope": {""#).is_empty(), "no such entry");
+        let of = offer(r#"topology.rules {"add": {""#).and_then(|o| o.of).unwrap();
+        assert_eq!(of, super::Of::SubKeys { id: "topology.rules".into(), key: "add".into() });
+        let (line, about) = super::item_help(&app.session, &of, "rule").unwrap();
+        assert!(line.starts_with(r#""rule": "mustNotOverlap""#), "{line}");
+        assert_eq!(about, None);
+    }
+
+    /// In a `task.addStep` line, `"command": "` offers the commands a script can run, its
+    /// `"params"` that command's keys (the command before or after them), and the help by the
+    /// cursor there is that command's.
+    #[test]
+    fn a_steps_command_and_its_keys_are_offered() {
+        let app = crate::RustGisApp::with_sample();
+        let ids = super::script_ids(&app.session);
+        let offer = |s: &str| super::offer_at(s, s.chars().count(), &ids, &app.session);
+        let o = offer(r#"task.addStep {"command": "LABELS.ST"#).unwrap();
+        assert_eq!((o.items, o.of), (vec!["labels.style".to_string()], Some(super::Of::CommandIds)));
+        assert!(offer(r#"task.addStep {"command": "ui."#).is_none(), "no interface command");
+        assert!(offer(r#"task.addStep {"command": "task."#).is_none(), "no task command: a step doesn't run a task");
+        let o = offer(r#"task.addStep {"command": "script."#).map(|o| o.items).unwrap_or_default();
+        assert!(o.iter().any(|id| id == "script.run"), "what task.addStep takes, not what a script runs: {o:?}");
+        let all = offer(r#"task.addStep {"command": ""#).map(|o| o.items).unwrap_or_default();
+        assert!(all.len() > super::MAX_ITEMS && all.is_sorted(), "every command, sorted as a line's first word offers them");
+        assert!(offer(r#"task.addStep {"title": "labels.st"#).is_none(), "another key's value");
+        let keys = |s: &str| offer(s).map(|o| o.items).unwrap_or_default();
+        assert_eq!(keys(r#"task.addStep {"command": "labels.style", "params": {"si"#), ["size"]);
+        let s = r#"task.addStep {"params": {"si"#;
+        let after = super::offer_at(&format!(r#"{s}"}}, "command": "labels.style"}}"#), s.chars().count(), &ids, &app.session);
+        assert_eq!(after.map(|o| o.items), Some(vec!["size".to_string()]), "the command after params");
+        assert!(keys(r#"task.addStep {"params": {""#).is_empty(), "no command");
+        assert!(keys(r#"task.addStep {"command": "nope", "params": {""#).is_empty(), "an unknown command");
+        let help = |s: &str| {
+            super::hint_at(s, s.chars().count()).and_then(|h| super::help_at(&app.session, s, s.chars().count(), &h)).map(|h| h.id)
+        };
+        assert_eq!(help(r#"task.addStep {"command": "labels.style", "params": {"#).as_deref(), Some("labels.style"));
+        assert_eq!(help(r#"task.addStep {"command": "labels.style", "#).as_deref(), Some("task.addStep"), "outside params");
+    }
+
+    /// In the pane: a step's command is offered and closed on accept, then its keys in `params`.
+    #[test]
+    fn a_steps_command_then_its_key_is_accepted() {
+        let mut h = pane();
+        type_in(&mut h, r#"task.addStep {"command": "labels.st"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        type_in(&mut h, r#", "params": {"si"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().workflow.script, r#"task.addStep {"command": "labels.style", "params": {"size": "#);
+    }
+
+    /// What follows a key's cursor, up to the end of its object: past the key's closing quote,
+    /// nested braces and strings with braces in them; all of it when nothing closes it.
+    #[test]
+    fn object_rest_stops_at_the_keys_object() {
+        use super::object_rest;
+        assert_eq!(object_rest(r#"me": "a"}, {"name": "b"}]}"#), r#"me": "a"}"#);
+        assert_eq!(object_rest(r#"": {"b": [1]}, "c": "}"}, "d": 1}"#), r#"": {"b": [1]}, "c": "}"}"#, "nested, and a brace in a string");
+        assert_eq!(object_rest(r#"a\"b": 1}"#), r#"a\"b": 1}"#, "an escaped quote in the key");
+        assert_eq!(object_rest(r#"": 1, "b""#), r#"": 1, "b""#, "not closed");
+        assert_eq!(object_rest(""), "");
     }
 }

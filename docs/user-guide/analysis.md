@@ -16,10 +16,10 @@ Features**, `select.layerFromSelection`).
 
 ++ctrl+t++ (or **Home › Selection › Attributes**) docks the active layer's table under the map.
 Click a column header to sort by it (a second click reverses the order, a third unsorts), click a row to select it (++ctrl++ or
-++shift++ adds it to the selection), and double-click a cell to change its value. **Selected only**
-keeps to the selected rows and **Filter rows…** to the rows with a value containing the words typed.
-The toolbar opens Select By Attributes and zooms to, switches, clears or deletes the selection,
-and adds or calculates a field.
+++shift++ toggles it without clearing the other rows), and double-click a cell to change its value. **Selected only**
+keeps to the selected rows and **Filter rows…** keeps rows where any value contains the text typed,
+ignoring letter case. The toolbar opens Select By Attributes and zooms to, switches, clears or
+deletes the selection, adds or calculates a field, and calculates geometry attributes.
 
 <figure markdown="span">
   ![The attribute table docked under the map: the 14 African countries of more than 30 million people, selected by attributes, highlighted on the map and in the table](https://assets.rustgis.app/images/attribute-table.webp)
@@ -43,12 +43,15 @@ gdp_md IS NULL
   <figcaption>The Analyze tab's tool gallery and the Tools pane running Buffer.</figcaption>
 </figure>
 
-Open a tool from the **Analyze** tab's gallery, **Analyze › Tools** (the Tools pane,
-which searches every tool) or Command Search. Fill in its parameters and click **Run**: the
-result is added to the map, and the run is listed under **Analyze › History**. From the command
-line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
+Open a tool from **Analyze › Portal › Feature Analysis** or **Raster Analysis**, **Analyze › Tools** (the Tools pane,
+which searches every tool) or Command Search. Fill in its parameters and click **Run**: new
+layers or tables are added to the project; selection tools select existing rows and Calculate
+Geometry Attributes updates the input layer. Each run is listed under **Analyze › History**.
+From the command line or a script (`gp.run`), a built-in tool's parameter with a list of choices, such as Buffer's
 units, takes one of them in any letter case (`"meters"` for `Meters`); any other value is an error
 that names the choices (Buffer's units no longer take the abbreviations `m`, `mi` or `metres`).
+Buffer and Select Layer By Location accept **Kilometers**, **Meters**, **Miles** and **Feet**. Feet are international feet
+(exactly 0.3048 metres): a 500-foot notification radius is 152.4 metres on the ground.
 
 The History pane lists each run with when it ran (in UTC). Its **⋯** menu, or a right-click on
 the tool's name, copies a run as code, with the parameters it ran with: **Copy as Python** (a
@@ -68,34 +71,70 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-The built-in tools:
+There are 20 built-in tools; GeoLibre and plugin tools join them when available.
+Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
-| Tool | Toolbox |
-| --- | --- |
-| Buffer | Analysis › Proximity |
-| Clip, Erase | Analysis › Extract / Overlay |
-| Dissolve | Data Management › Generalization |
-| Minimum Bounding Geometry, Feature To Point, XY Table To Point, Calculate Geometry Attributes | Data Management › Features |
-| Simplify | Cartography › Generalization |
-| Tissot's Indicatrix | Cartography › Projections |
-| A5 Grid, Aggregate Points to A5 | Analysis › DGGS |
-| Select Layer By Location / Attribute | Data Management › Layers and Table Views |
-| Summarize Within, Summary Statistics | Analysis › Summarize / Statistics |
-| Export Features | Conversion |
-| IDW Interpolation | Analysis › Interpolation |
+| Tool | Id | Toolbox |
+| --- | --- | --- |
+| Buffer | `buffer` | Analysis › Proximity |
+| Clip | `clip` | Analysis › Extract |
+| Erase | `erase` | Analysis › Overlay |
+| Spatial Join | `spatialJoin` | Analysis › Overlay |
+| Dissolve | `dissolve` | Data Management › Generalization |
+| Minimum Bounding Geometry | `convexHull` | Data Management › Features |
+| Feature To Point | `featureToPoint` | Data Management › Features |
+| XY Table To Point | `xyTableToPoint` | Data Management › Features |
+| Calculate Geometry Attributes | `calculateGeometry` | Data Management › Features |
+| Simplify | `simplify` | Cartography › Generalization |
+| Tissot's Indicatrix | `tissot` | Cartography › Projections |
+| A5 Grid | `a5Grid` | Analysis › DGGS |
+| Aggregate Points to A5 | `a5Aggregate` | Analysis › DGGS |
+| Select Layer By Location | `selectByLocation` | Data Management › Layers and Table Views |
+| Select Layer By Attribute | `selectByAttributes` | Data Management › Layers and Table Views |
+| Summarize Within | `countPoints` | Analysis › Summarize |
+| Summary Statistics | `summaryStatistics` | Analysis › Statistics |
+| Export Features | `exportFeatures` | Conversion |
+| IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
+| Ordinary Kriging | `kriging` | Analysis › Interpolation |
 
-Tools honour the current selection: with features selected, only those are processed.
+Most feature tools process only the selected rows when an input has a selection. Selection tools
+instead replace the input's selection; Select Layer By Location honours the selecting layer's
+selection. Summarize Within counts the selected points against **all** input polygons, and
+Calculate Geometry Attributes updates **all** rows. A built-in tool's `output` is a layer name in
+the project, never a file path.
 
-**Buffer** distances, and the distance of **Select Layer By Location**, are geodesic: every point
-of a buffer's edge is the given distance from the feature, measured on the Earth (a sphere of
-radius 6,371 km), wherever the feature is and however far it spans. Each feature is buffered in a
-projection centred on it, and a long line or a large polygon in stretches of a few hundred
-kilometres, so a 1000 km circle at 60°N reaches as far north as south.
+**Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
+(a sphere of radius 6,371 km), not in the map's display projection. Each feature is buffered in
+an azimuthal equidistant projection centred on it; long lines and large polygon outlines are
+buffered in stretches of a few hundred kilometres to limit projection error. Negative Buffer
+distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
 
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
 contribute their vertices. Leave the extent empty to use the input's, or give it as
-`xmin,ymin,xmax,ymax` in degrees. The result is a Float32 GeoTIFF layer.
+`xmin,ymin,xmax,ymax` in degrees. `pixelSize` sets the cell size in degrees; when omitted it
+starts at 300 cells across the extent and coarsens for large inputs. The result is a Float32
+GeoTIFF layer. The **Geostatistical Wizard** is a separate IDW workflow: it uses 12 nearest
+neighbours by default (`neighbors`), rather than every point.
+
+**Ordinary Kriging** (`kriging`) estimates both a value and its uncertainty. Set `input` and a
+numeric `field`, then choose a `model`: **Spherical** (default), **Exponential** or **Gaussian**.
+`neighbours` defaults to 12 (minimum 2, capped at 32). Optional `nugget`, `sill` and `range`
+override the defaults: zero nugget, the sample variance (1 for near-constant values), and a
+third of the extent's diagonal. Coordinates, `range`, `extent` and `pixelSize` are in degrees
+(WGS 84). Points at the same location are averaged; multipoints contribute their points, while
+lines and polygons contribute their bounding-box centres. At least two distinct locations with
+numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the prediction,
+named by `output`, and `<output>_variance`.
+
+**Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
+to `target` features in the same coordinate system. `match` is **Intersects** (default),
+**Contains** (target contains join) or **Within** (target lies within join).
+**Join one to one** (the default `operation`) copies the first matching feature's attributes,
+not their sum or mean; **Join one to many** makes a row for each match. Both add `join_count`,
+the total matches for that target, and prefix joined fields with `join_` (change `prefix` to
+override it). `keepAll` defaults to **Keep all**, leaving unmatched joined values null; choose
+**Keep only matching** to drop those targets. Selections in both layers are honoured.
 
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
@@ -143,18 +182,20 @@ layers.
 
 The suite is an optional download, so RustGIS itself stays small: the **GeoLibre runner**, a
 single `geolibre` program (about 20 MB to download). In the Tools pane, click
-**Install GeoLibre tools** under *GeoLibre tools*: RustGIS downloads the latest runner for your
+**Install Whitebox and GeoLibre tools** under *Whitebox and GeoLibre tools*: RustGIS downloads the latest runner for your
 platform from the [geolibre-rust releases](https://github.com/opengeos/geolibre-rust/releases/latest),
 checks it against its published SHA-256 checksum (which catches a corrupted download; the
 release itself is trusted as when you download it by hand) and installs it in its data folder
-(`~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
-on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). From the command line,
-`gp.installGeolibre` does the same.
+(by default `~/.local/share/rustgis/geolibre` on Linux, `~/Library/Application Support/RustGIS/geolibre`
+on macOS, `%LOCALAPPDATA%\RustGIS\geolibre` on Windows). `RUSTGIS_APP_DATA_DIR` overrides the
+data folder; Linux also honours `XDG_DATA_HOME`. From the command line, `gp.installGeolibre`
+does the same.
 
 To remove it, click **Uninstall** beside *GeoLibre* at the top of the Tools pane, then
-**Confirm uninstall** (`gp.uninstallGeolibre` from the command line): RustGIS deletes its
-`geolibre` data folder. A runner you located yourself, or one on your `PATH`, is not deleted;
-RustGIS goes on using it. You can install the tools again at any time. In the browser,
+**Confirm uninstall** (`gp.uninstallGeolibre` from the command line): RustGIS deletes the runner
+it installed and removes the `geolibre` folder only if it is empty. Other files there, a runner
+you located yourself, and one on your `PATH` are left alone; RustGIS looks for a runner again.
+You can install the tools again at any time. In the browser,
 **Remove** unloads the tools and stops loading them when RustGIS starts.
 
 To install it yourself instead, download the archive for your platform
@@ -170,14 +211,14 @@ then e.g. **GeoLibre › Terrain › Derivatives**). A runner too old to list su
 them by category only. Find Tools searches them.
 
 - Raster inputs are passed as their own files; vector layers (or their selection) are written
-  in the first raster input's coordinate system, or the UTM zone around the data, so distances
-  and areas are in metres. Data spanning more than 40° of longitude stays in degrees.
+  in the first raster input's coordinate system, or, with no raster input, the UTM zone around
+  the data. The latter uses metres; data spanning more than 40° of longitude stays in degrees.
 - Tools that take several layers (a composite's bands, a mosaic's tiles) list them in order:
   **Add** picks a layer, and ▲ ▼ change its place (the order of the bands, for a composite). From
   the command line, name them separated by `;`: `"inputs":"red;green;blue"`. In the desktop app
   a file not open as a layer can be added too: type its path below the list and press Enter.
-- Raster outputs are kept inside the project, so they save and reopen with it. Text and table
-  reports appear in the tool's messages.
+- Raster outputs are kept inside the project, so they save and reopen with it. Table outputs
+  become standalone tables; text reports appear in the tool's messages.
 - LiDAR and other inputs RustGIS doesn't open as layers take a file path, read like Add Data
   reads one. Outputs are written to a fresh scratch folder and loaded from there.
 - Each run is a separate `geolibre` process, so a tool that fails can't take RustGIS down.
@@ -185,7 +226,7 @@ them by category only. Find Tools searches them.
   `gp.tools` lists every tool's parameters, `gp.geolibre` shows the runner in use and
   `gp.setGeolibre={"path":"…"}` picks one.
 
-In the web app, click **Load GeoLibre tools** in the Tools pane instead. RustGIS
+In the web app, click **Load Whitebox and GeoLibre tools** in the Tools pane instead. RustGIS
 loads geolibre-rust's WebAssembly runner (the `geolibre-wasm` package, from jsDelivr, about
 25 MB the first time, then from the browser's cache) and the tools run in the page, in an
 in-memory folder: nothing is uploaded. The web app remembers this and loads them again on your
@@ -205,12 +246,12 @@ click them on the map:
 
 | Workflow | What it does |
 | --- | --- |
-| Raster Functions | Slope, aspect, hillshade, NDVI, band math (`(b4-b3)/(b4+b3)`), thresholds, resampling |
+| Raster Functions | Slope, aspect, hillshade, NDVI, band math (`(b4-b3)/(b4+b3)`), remapping, thresholds, resampling |
 | Function Editor | Chains raster functions, each on the previous output |
 | Suitability Modeler | Scores rasters 1–10 and adds them with weights |
 | Visibility Analysis | A viewshed from a point on an elevation raster |
 | Exploratory 3D Analysis | A line of sight between two points, split into seen and hidden parts |
-| Geostatistical Wizard | An IDW surface from point values |
+| Geostatistical Wizard | An IDW surface from feature values, using 12 nearest neighbours by default |
 | Network Analysis | The shortest (or cheapest, by a cost field) route over a line layer |
 | Neighborhood Explorer | What lies within a distance of a point, with sums of numeric fields |
 | Simulation | Random points in polygons (a fixed number, or from a field × rate) |
@@ -219,9 +260,16 @@ click them on the map:
 | Embeddings | The features most like the selected one, by their numeric attributes |
 | Data Interop | KML, GPX, CSV with WKT, GeoJSON or CSV |
 
-Rasters these make are kept in the project. **Environments** limit tools to the map view, the full
-extent or everywhere, and set the cell size of new rasters. The **Script** pane runs commands from
-text, one per line (`id {json}`); its box grows with the script down to the bottom of the pane,
+Rasters these make are kept in the project. **Environments** (`gp.env`) set an extent from the map
+view, full extent, a layer or a longitude/latitude box (or `null` to clear it). For tools that
+honour it, this restricts an unselected main feature input by bounding-box intersection, not by
+clipping its geometry; an existing selection takes precedence and overlay inputs stay whole.
+The Geostatistical Wizard uses the environment's extent and raster cell size (degrees).
+IDW Interpolation and Ordinary Kriging instead use their own `extent` and `pixelSize` parameters;
+the environment does not set their output grids. Raster Functions › Resample matches a target
+raster's grid.
+
+The **Script** pane runs commands from text, one per line (`id {json}`); its box grows with the script down to the bottom of the pane,
 short of the buttons, and then scrolls, so **Run** stays in view. It colours them as you type, in
 both themes: `#` comments in green italics, the command id, and the JSON's strings, numbers and
 `true`/`false`/`null`; an id no command has, or one that can't run in a script (`ui.*`, `script.*`,
@@ -236,12 +284,22 @@ when every key may be left out; a command with no parameters gets none, and a li
 parameters keeps them. While you type a command's parameters (the cursor inside its `{…}`), the same help stays by the cursor;
 Escape closes it. A quote that starts a key in a command's braces opens the list of its keys not
 given yet, beside the highlighted key's description; accepting one closes it with its colon
-(`"size": `). In a `gp.run` line, a quote after `"tool": ` opens the list of the tools, beside the
-highlighted tool's help; accepting one closes it. In its `"params": {…}`, the keys offered are those of the tool its
-`"tool"` names (by id or name, before or after `params`), beside the highlighted key's kind, name,
-default and help; there the help by the cursor is the tool's. A `{` typed closes itself, the cursor inside, unless text follows it or it's in a
-string or a comment; a `}` typed before a `}` steps over it, and Backspace in an empty `{}` deletes
-both. Pasting adds nothing.
+(`"size": `). The same goes in a key's own object, or in each object of its list, for the keys the
+command's description gives it (`topology.rules {"add": {"rule": …}}`). In a `gp.run` line, a
+quote after `"tool": ` opens the list of the tools, beside the highlighted tool's help; accepting
+one closes it. In its `"params": {…}`, the keys offered are those of the tool its `"tool"` names
+(by id or name, before or after `params`), beside the highlighted key's kind, name, default and
+help; there the help by the cursor is the tool's. A `task.addStep` line works the same way: its
+`"command": "` offers the commands, and its `"params"` that command's keys and help. For a
+command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
+icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
+(before or after it), or of the active layer when it names none, with each field's type beside it. Accepting one writes its name
+as the line's JSON needs it (`"Big \"lakes\""`). A `{` or `[`
+typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
+so does a `"` where a string can start (after a space, `{`, `[`, `,` or `:`). A `}` or `]` typed
+before the same one steps over it, as does a `"` typed before the quote that ends its string, and
+Backspace in an empty `{}`, `[]` or `""` deletes both. The lists open in a quote that closed
+itself, and accepting keeps that quote. Pasting adds nothing.
 
 ## ModelBuilder
 
@@ -401,6 +459,36 @@ and a **Mann–Kendall** test of whether the trend is significant.
 ```sh
 rustgis-cli run --cmd 'cube.trend={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"per":"decade"}'
 rustgis-cli run --cmd 'cube.trend={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-46,-10.95,-40.35,-2.7],"start":"2001","end":"2025","cellSize":1000,"test":"seasonal","seasons":23,"per":"decade"}' --save piaui.rgis
+```
+
+### Summarising a data cube over time
+
+**Summarise a Data Cube over Time** (`cube.reduce`) makes rasters of one statistic of each cell
+over the dates of any of the series Trend Analysis takes (layers, a raster's bands, a Zarr
+variable, a STAC collection's band): **mean**, **min**, **max**, **sum**, **std** (the population
+standard deviation), **count** of values, or **countAbove** a threshold (`"above"`), as Summarise
+over time does for a Zarr variable (see [Data](data.md)).
+
+- **Groups:** `"by": "all"` (the default) makes one layer of the whole period, `"year"` one for
+  each calendar year (an annual mean NDVI from 16-day composites), `"month"` one for each month of
+  the year across the years (a climatology). `"start"`, `"end"` and `"months"` pick the dates as for
+  a trend.
+- **Missing values:** no-data and missing values are skipped cell by cell. A cell keeps no value
+  where it had fewer values than `"minValid"` (a share of its group's dates, 0 by default: 0.5
+  wants half of a year's composites); with the default, **count** and **countAbove** give 0 where
+  a cell never had a value.
+- **Size:** the slices are folded into running totals as they are read, so a long period takes no
+  more memory than a short one; a STAC collection's area is read in pieces, as for a trend. The
+  outputs hold up to 32 million values (cells times groups; 8 million in the web app). A summary by
+  month keeps every month's totals while it reads, up to five times the outputs' memory for
+  **std** (three for mean, min, max, sum and countAbove), so a large area by month may need a
+  coarser cell size or a smaller area. The layers
+  are named after what they hold (`NDVI mean 2001`, `NDVI mean 2001–2025 month 03`, or the
+  `"name"` given and the group) and kept in the project as GeoTIFFs.
+
+```sh
+rustgis-cli run --cmd 'cube.reduce={"layers":["ndvi_2015","ndvi_2016","ndvi_2017","ndvi_2018"],"stat":"max"}'
+rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-44.8,-7.5,-44.3,-7.0],"start":"2001","end":"2025","cellSize":1000,"stat":"mean","by":"year","minValid":0.5,"name":"NDVI"}' --save urucui.rgis
 ```
 
 ## Deep learning and hosted imagery

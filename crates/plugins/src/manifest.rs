@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub const ABI: u32 = 1;
 
 /// Limits on what a manifest may declare.
-const MAX_COMMANDS: usize = 64;
+const MAX_COMMANDS: usize = 256;
 const MAX_TOOLS: usize = 64;
 const MAX_PARAMS: usize = 32;
 const MAX_CHOICES: usize = 64;

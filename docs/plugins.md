@@ -1,32 +1,39 @@
 # Plugins
 
-Plugins add commands and geoprocessing tools to RustGIS. A plugin is a WebAssembly module with
-a `plugin.json` manifest, packaged as a `.rgplugin` file. The same file runs in the desktop app,
-on the command line and in the web app.
+Plugins add commands, geoprocessing tools and assistant skills to RustGIS. A plugin has a
+`plugin.json` manifest and is packaged as a `.rgplugin` file. WebAssembly plugins run sandboxed
+in the desktop app, on the command line and in the web app. [Process plugins](#process-plugins)
+run a local program instead and need the desktop app or command line.
 
-Browse the registry at **[plugins.rustgis.app](https://plugins.rustgis.app)**. Plugin sources,
-the SDK and the registry live in
-[opengeos/rustgis-plugins](https://github.com/opengeos/rustgis-plugins).
+Browse the [plugin catalog](https://plugins.rustgis.app/catalog/).
+[opengeos/rustgis-plugins](https://github.com/opengeos/rustgis-plugins) holds the registry,
+blocklist and [`rustgis-plugin` SDK](https://github.com/opengeos/rustgis-plugins/tree/main/sdk),
+not plugin source. Plugin sources live in their own repositories; start one from the
+[Rust](https://github.com/opengeos/rustgis-plugin-template) or
+[Python](https://github.com/opengeos/rustgis-python-plugin-template) template.
 
 ## Using plugins
 
-Open **Plugins › Plugin Manager**:
+Open **Plugins › Plugin Manager**. The **Plugins** tab also has **Install From File** and
+**Browse Plugins** buttons.
 
-- **Browse** lists the plugins in the registry. **Install** downloads the plugin, checks it
-  against the SHA-256 the registry published, and shows what the plugin may do before it loads.
+- **Browse** lists the plugins in the registry, with search and a category filter. **Install**
+  downloads the plugin, checks its SHA-256 and id against the registry entry, and shows what
+  the plugin may do before it loads.
 - **Installed** lists your plugins: turn them on or off, update them, or uninstall them.
-- **Settings** installs a `.rgplugin` file. You can also drop the file on the window. It also
-  sets the registry address (empty means the RustGIS registry). On the desktop, it can load a
-  plugin from its folder while you develop it.
+- **Settings** has **Install From File…** for a `.rgplugin` file; you can also drop the file on
+  the window. It also sets the registry address (empty means the RustGIS registry). On the
+  desktop, **Add Plugin Folder…** loads an unpacked plugin while you develop it.
 
 A plugin's commands and tools appear on the **Plugins** tab, in a group named after the
 plugin, or on the plugin's own tab if it has one. Its commands are also in command search, and
 its tools are in the **Tools** pane under **Plugins ›**.
 
-The desktop app keeps installed packages in its data folder (`plugins/` beside the GeoLibre
-runner, or `$RUSTGIS_PLUGINS_DIR`) and loads them at startup. The web app remembers the
+The desktop app keeps installed packages in `plugins/` in its data folder (overridden by
+`$RUSTGIS_PLUGINS_DIR`) and loads them at startup. The web app remembers the
 plugins you installed from the registry and downloads them again on your next visit. Packages
-installed from files are kept too, if they are small enough for the browser's storage.
+installed from files are remembered when they are at most 1.5 MiB; larger ones last for the
+current session only.
 
 On the command line:
 
@@ -43,6 +50,9 @@ rustgis-cli run --sample \
 rustgis-cli run --plugin ./dev-plugin/ --sample --cmd 'plugin:my-plugin/hello'   # load for one run
 ```
 
+Use `--no-plugins` to skip loading installed plugins. `plugins browse` and `plugins get` accept
+`--registry https://…/registry.json` for another registry.
+
 ## Safety
 
 Plugins run in a sandbox: an interpreter (`wasmi`) with no access to files, the network, the
@@ -55,14 +65,17 @@ described below, and RustGIS checks each one:
   if the command fails.
 - With the **`files`** permission, it can run commands that read or write files the user names,
   and its tools can take a file the user picks (a [`file` parameter](#file-parameters)).
+  SQL, database and Zarr commands require both `files` and `network`, since they can reach
+  local files or remote servers.
 - With the **`network`** permission, it can reach the web: read a small document from a web
   address ([`host.fetch`](#fetching-a-document)) and run the commands that fetch (adding data
   or services by their address). With `edit` too, it can add web tile layers (`map.addTiles`).
   The addresses are the plugin's choice and can carry what it read from the project, so this is
   a permission of its own. A command that would bring in a tile layer some other way (importing
   a map file) has it taken out again without `network`.
-- No plugin may run the user's scripts, tasks or models, install or locate other software,
-  manage plugins, replace the project, or step through undo history.
+- No plugin may run the user's scripts, tasks or models, create or save models, install or
+  locate other software, manage plugins or connections and logins, replace the project, or
+  step through undo history. It cannot call another plugin's command directly.
 
 A [process plugin](#process-plugins) is the exception: it is a program on your computer, not
 sandboxed, and the install prompt says so.
@@ -72,8 +85,9 @@ loop is stopped. Memory is capped at 512 MB, and requests and replies are size-l
 that traps, panics or returns garbage produces an error message, never a crash.
 
 The registry is curated: plugins are reviewed before they are listed, and packages are
-hash-pinned. A `blocklist.json` beside the registry withdraws a plugin (every version, or one
-package) from every install. RustGIS checks it when you browse the registry and at startup.
+hash-pinned. A `blocklist.json` beside a registry withdraws a plugin (every version, or one
+package). RustGIS checks it when you browse that registry. Desktop and command-line startup
+apply the cached blocklist; the web app fetches it when restoring plugins.
 
 ## Writing a plugin
 
@@ -109,6 +123,7 @@ rustgis_plugin::export!(handle);
 ```
 
 ```sh
+rustup target add wasm32-unknown-unknown
 cargo build --release --target wasm32-unknown-unknown
 ```
 
@@ -143,16 +158,26 @@ cargo build --release --target wasm32-unknown-unknown
 }
 ```
 
-- `id`: lower-case letters, digits and hyphens. Commands and tools get ids
-  `plugin:<id>/<command>`, which the ribbon, command search, scripts and `rustgis-cli` use.
-- `version` and `minRustgisVersion` look like `1.2.3`. RustGIS refuses a plugin that needs a
-  newer RustGIS.
-- `permissions`: `edit`, `files` and `network` (see [Safety](#safety)). Ask only for what you use.
+- `id`: 1 to 64 lower-case letters, digits and hyphens, starting with a letter. Command and tool
+  ids follow the same rules. Their full ids are `plugin:<id>/<command-or-tool>`; run commands
+  directly and tools through `gp.run`.
+- `runtime`: `wasm` (the default), `process` or `skills`. For WebAssembly plugins, `entry`
+  defaults to `plugin.wasm` and must name a `.wasm` file relative to the manifest, using
+  forward slashes with no `.` or `..` path segments. `abi` defaults to `1` and must equal `1`.
+- `version` and optional `minRustgisVersion` are numeric versions such as `1.2.3` or `1.2`.
+  RustGIS compares their numeric components, ignoring prerelease and build suffixes, and
+  refuses a plugin that needs a newer RustGIS.
+- `permissions`: `edit`, `files` and `network` (see [Safety](#safety)); empty by default.
+  Ask only for what you use.
+- `commands[].params`: a string describing the command's parameters for scripts and agents,
+  not a JSON object or a form definition; it defaults to `"{}"`.
 - `commands[].icon`: the name of one of RustGIS's own icons (`stats`, `zoom_full`, `bookmark`,
   `buffer`…), or a puzzle piece when it isn't one.
 - Tool parameter `kind`s: `layer`, `vectorLayer`, `polygonLayer`, `pointLayer`, `field`,
-  `numericField`, `number`, `text`, `choice` (with `choices`), `bool` and `file` (see
-  [File parameters](#file-parameters)).
+  `numericField`, `number`, `text`, `choice` (with 1 to 64 `choices`), `bool` and `file` (see
+  [File parameters](#file-parameters)). Each has `name`, `label`, optional `help`, `required`
+  (default `false`) and an optional JSON `default`. Parameter names start with a lower-case
+  letter and may also contain upper-case letters and underscores after it.
 - `panel` (optional) gives the plugin a pane of its own, with widgets bound to its commands. See
   [A panel](#a-panel).
 - `i18n` translates the plugin's own text into the interface language, by language code (`de`,
@@ -160,8 +185,12 @@ cargo build --release --target wasm32-unknown-unknown
 - `skills` (optional) lists skills for the AI Assistant that the package carries. See
   [Skills](#skills).
 
-A package is a zip archive named `<id>-<version>.rgplugin`. It holds `plugin.json` and the module
-at its root, or inside one top-level folder. Packages are at most 64 MB, and modules at most 48 MB.
+A manifest can declare at most 256 commands, 64 tools and 32 parameters per tool.
+
+A package is a zip archive, conventionally named `<id>-<version>.rgplugin`. It holds
+`plugin.json` at its root or inside one top-level folder; `entry` is relative to that manifest.
+Packages are at most 64 MiB with at most 4,096 entries, modules at most 48 MiB, and the manifest
+at most 512 KiB.
 
 ### File parameters
 
@@ -172,8 +201,8 @@ The plugin needs the `files` permission:
 { "name": "model", "label": "Model output", "kind": "file", "required": true, "extensions": ["nc", "nc4"] }
 ```
 
-- The Tools pane shows a path box with a **Browse** button. `extensions` (without the dot; up
-  to 16) filters the file picker; leave it out for any file.
+- The Tools pane shows a path box with a **Browse** button. `extensions` filters the picker:
+  at most 16 extensions, each 1 to 16 letters or digits without the dot. Leave it out for any file.
 - On the desktop and the command line the value is a path, and RustGIS reads the file. In the
   web app, which has no paths, the user picks the file and its contents go with the run. A
   script can do the same with `{"name": "run.nc", "data": base64}`.
@@ -199,8 +228,9 @@ English strings and their translations, written exactly as they appear in `plugi
 - It covers the plugin's name and description, command labels and help, tool names, summaries
   and toolboxes, parameter labels and `choice` values, the tab, group and menu labels, and the
   panel's title, help and widget labels. A string with no translation shows in English.
-- RustGIS's interface languages are `de`, `es`, `fr`, `it`, `nl`, `pt`, `ru`, `tr`, `az`, `id`,
-  `vi`, `zh`, `ja` and `ko`. A code with a region matches its language: `zh-CN` serves `zh`.
+- Alongside English (`en`), RustGIS's interface languages are `de`, `es`, `fr`, `it`, `nl`,
+  `pt`, `ru`, `tr`, `az`, `id`, `vi`, `fa`, `zh`, `ja`, `ko` and `ka`. A code with a region
+  matches its language: `zh-CN` serves `zh`.
 - The registry copies the name and description translations into `registry.json`, so the
   Plugin Manager lists plugins in the interface language before they are installed.
 - Messages a plugin builds while it runs can follow the interface language too: every request
@@ -234,9 +264,10 @@ can hide it like any other. Declare it in `plugin.json`:
   Tools pane), `panel` (which opens the plugin's [panel](#a-panel)), or a dropdown `menu` whose
   `items` are any of those.
 - A tab has 1 to 8 groups, a group has 1 to 16 items, and a menu has 1 to 32 entries. Every
-  entry must name one of the plugin's own commands or tools.
-- The label can't be the name of one of RustGIS's tabs (Map, Insert, Analysis, Plugins…). The
-  `i18n` translations apply to the tab, group and menu labels too.
+  entry must name one of the plugin's own commands or tools, or its panel.
+- The label is one line of 1 to 32 characters and can't be the name of one of RustGIS's tabs
+  (Home, Data, Style, Analyze, Plugins…), including their older names. The `i18n` translations
+  apply to the tab, group and menu labels too.
 
 [Map Explorer](https://github.com/opengeos/rustgis-official-plugins/tree/main/plugins/map-explorer) is
 an example.
@@ -263,25 +294,27 @@ buttons bound to its commands. Declare it in `plugin.json`:
 }
 ```
 
-- `title` is the pane's tab and the label of the button that opens it, which RustGIS puts
-  first in the plugin's group on the **Plugins** tab. On a tab of its own, put `panel` among a
-  group's items. Command search lists the panel too. `icon` and `help` are for that button.
+- `title` is the pane's tab and the label of the button that opens it: one line of 1 to 48
+  characters. RustGIS puts the button first in the plugin's group on the **Plugins** tab.
+  On a tab of its own, put `panel` among a group's items. Command search lists the panel too.
+  `icon` and `help` are for that button.
 - `items` lists the widgets, top to bottom (1 to 32). Buttons that follow each other share a
   row. Each has an `id` (lower-case letters, digits and hyphens; a button's is its command's
   unless given), and `label` and `help` (on hover) where they apply:
     - `text`: a caption (`label`) over text the plugin sets (`text` is what it shows first).
     - `checkbox`: a box with a `label`, `default` `false` unless given.
-    - `slider`: whole numbers from `min` to `max` (`default` is `min` unless given), with a
-      caption, the value's label, and its two ends' labels. `steps: true` adds ‹ and › buttons
-      that move it by one.
+    - `slider`: whole numbers from `min` to `max`, both within ±1,000,000,000 (both default
+      to `0`; `default` is `min` unless given), with a caption, the value's label, and its two
+      ends' labels. `steps: true` adds ‹ and › buttons that move it by one.
     - `button`: runs its `command`; its `label` is the command's unless given.
 - A checkbox runs its `command` when it changes, and a slider when it is let go, or stepped:
   never while it is dragged, while the pane shows the label of the value it would take. Without
   a `command`, a widget's value just goes with the plugin's next request.
 - `state` (optional) is a command RustGIS runs each time the panel is opened, to answer its
   state.
-- Every command and widget must be one of the plugin's own commands. A plugin with a panel
-  can't have a command called `panel`.
+- Every `command` reference, including `state`, must name one of the plugin's own commands.
+  Widget ids are independent of command ids. A plugin with a panel can't have a command
+  called `panel`.
 
 A plugin keeps nothing between calls, so RustGIS keeps the panel's state. Every request of a
 plugin with a panel carries the widgets' values, whatever ran the command (the panel, a ribbon
@@ -344,14 +377,14 @@ Inside a request, `host::call(op, params)` sends one of these to RustGIS:
 
 | Request | Answer |
 |---|---|
-| `host.info` | RustGIS's version, the ABI, the plugin's id and permissions |
+| `host.info` | `{rustgis, abi, plugin, permissions}`: version, ABI, plugin id and permissions |
 | `host.layers` | `[{id, name, raster, visible, geometry, features, selected, active, fields: [{name, type}]}]` |
 | `host.features` `{layer, selected?, limit?}` | the layer's features as GeoJSON; each feature has its `row` |
 | `host.view` | `{center: [lon, lat], scale, projection}` |
 | `host.notify` `{text, error?}` | shows a message in the status bar |
 | `host.addLayer` `{name, geojson}` | adds a layer (`edit`) |
 | `host.fetch` `{url}` | `{url, text, json?}`: the document at a web address (`network`; see [Fetching a document](#fetching-a-document)) |
-| `map.addTiles` `{url, kind?, name?, attribution?, maxZoom?, overlay?, replace?, blend?}` | adds a web tile layer (`edit` and `network`) |
+| `map.addTiles` `{url, kind?, name?, attribution?, maxZoom?, overlay?, replace?, blend?, …}` | adds a tile layer (`edit` and `network`); accepts the built-in command's parameters |
 | any command id (`layer.zoomTo`, `select.byAttributes`, `layer.symbology`…) | what the command returns, within the plugin's permissions |
 
 In the web app a command can't wait for a download, so where `layer.addUrl` has to download a
@@ -395,13 +428,13 @@ document parsed when it is a JSON object or array.
   address taken from the one before, runs once per step, up to 64 times. The browser follows
   redirects itself, and the server must allow requests from web pages (CORS).
 
-The plugins SDK may offer this as a `host::fetch` helper; until then, use
-`host::call("host.fetch", json!({"url": url}))`.
+Use `host::call("host.fetch", json!({"url": url}))` in the Rust SDK.
 
 Tools work differently. A tool receives its layer parameters' features as GeoJSON (only the
-selected features when a layer has a selection), and its `file` parameters' files. It returns new layers, standalone tables or a
-selection, plus messages for the Geoprocessing history. RustGIS adds the results as it does for
-built-in tools, with undo. Tools can log, but they make no host requests.
+selected features when a layer has a selection), and its `file` parameters' files. It returns
+new layers and standalone tables, or a selection, plus messages for the Geoprocessing history.
+RustGIS adds the results as it does for built-in tools, with undo; returning these results
+does not require `edit`. Tools can log, but they make no host requests.
 
 In the desktop app a plugin tool runs in the background, so the map and the rest of the window
 stay usable: the Tools pane shows the line the tool last logged, or a process plugin's last
@@ -417,8 +450,10 @@ The module is `wasm32` with no imports except these three, in module `rustgis`:
 
 - `call(ptr: i32, len: i32) -> i32` runs the host request at `ptr`
   (`{"op": "...", "params": {...}}`). It returns the length of the reply, which is
-  `{"ok": value}` or `{"error": "text"}`, or `-1` when there is none.
-- `result(ptr: i32)` copies that reply to `ptr`. Allocate the length `call` returned first.
+  `{"ok": value}` or `{"error": "text"}`, or `-1` when there is none. A new call replaces any
+  reply not yet copied.
+- `result(ptr: i32)` copies that reply to `ptr` and consumes it. Allocate the length `call`
+  returned first.
 - `log(ptr: i32, len: i32)` logs a UTF-8 line.
 
 The module exports:
@@ -429,17 +464,27 @@ The module exports:
 - `rustgis_call(ptr: i32, len: i32) -> i64`, which handles the request and returns
   `reply_ptr << 32 | reply_len`. The reply is `{"ok": value}` or `{"error": "text"}`.
 
-Requests are `{"abi": 1, "kind": "command" | "tool", "id": "...", "params": {...}, "layers": {...}, "lang": "de"}`.
-`lang` is the interface language's code (`en` for English). Commands of a plugin with a
-[panel](#a-panel) also get `panel`, and may answer `panel` beside the rest of their `ok` value.
-Tools also get `layers`, which maps each layer's name to its FeatureCollection, and, when
-they have `file` parameters, `files`, which maps each one's name to `{"name", "data"}` with the
-file's contents in base64. A tool's `ok`
-value is `{"layers": [{"name", "geojson"}], "tables": [...], "selection": {"layer", "rows"},
-"messages": [...]}`.
+Command requests are `{"abi": 1, "kind": "command", "id": "...", "params": {...}, "lang": "de"}`.
+`id` is the local command id from the manifest, not its `plugin:…/…` id. `lang` is the interface
+language's code (`en` for English). Commands of a plugin with a [panel](#a-panel) also get
+`panel`, and may answer `panel` beside the rest of their `ok` value.
+
+Tools get `"kind": "tool"` and their local tool id, plus `layers`, which maps layer names
+(not parameter names) to FeatureCollections. When they have file inputs, `files` maps each
+parameter name to `{"name": "...", "data": "..."}`, with the contents in standard padded base64.
+A tool's `ok` value can contain:
+
+- `layers`: `[{"name": "...", "geojson": {...}}]`.
+- `tables`: the same shape, using FeatureCollections whose features have no geometry.
+- `selection`: `{"layer": "<layer name>", "rows": [0, 2, ...]}`. If present, it takes precedence
+  over `layers` and `tables`.
+- `messages`: an array of strings.
+
+RustGIS takes at most 64 layers, 64 tables and 200 messages, with at most 5,000,000 features
+in each output dataset.
 
 Each call gets a fresh instance, so a module keeps no state between calls and need not free
-memory. The fuel budget is about 2×10⁹ instructions for a command and 4×10¹⁰ for a tool.
+memory. Host requests and module replies are limited to 128 MiB.
 
 ## Process plugins
 
@@ -471,22 +516,24 @@ with no **Install** button.
 - `"runtime": "process"` and `run`: the program and its arguments, started in the plugin's
   folder. A bare name (`python3`) is looked up on `PATH`; a relative path (`bin/tool`) is in the
   plugin's folder. `run` can name a program per platform (`windows`, `macos`, `linux`, and
-  `default` for the rest). There is no `entry`.
+  `default` when the platform has no entry). Omit `entry`; process plugins use `run` instead.
+  Each argument list contains the program and at most 63 arguments.
 - Commands, tools, tabs, translations and permissions work as for WebAssembly plugins.
   Permissions still decide which host requests RustGIS answers, but they don't limit what the
   program itself can do.
 - A `.rgplugin` holds the plugin's files (the manifest, scripts, executables). Installing it
-  unpacks them to `unpacked/<id>/` in the plugins folder, keeping executables executable. A
-  plugin folder installed for development (Plugin Manager › Settings, or
-  `rustgis-cli plugins install ./folder`) runs where it is.
+  unpacks them to `unpacked/<id>/` in the plugins folder, keeping Unix execute bits and
+  rejecting unsafe paths or more than 1 GiB of unpacked files. A plugin folder installed for
+  development (Plugin Manager › Settings, or `rustgis-cli plugins install ./folder`) runs where
+  it is.
 
 ### The protocol
 
 Each command or tool call starts the program once. It speaks the [ABI](#the-abi-version-1)'s
 requests and replies over its standard input and output, one JSON object per line:
 
-1. RustGIS writes the request: `{"abi", "kind", "id", "params", "layers", "files", "lang"}`, as
-   a WebAssembly module gets it.
+1. RustGIS writes the [request](#the-abi-version-1) as one JSON line, including `panel` for a
+   command of a plugin with a panel, and `layers` and optional `files` for a tool.
 2. The program writes lines:
     - `{"call": {"op": "...", "params": {...}}}`: a [host request](#what-a-plugin-can-ask-for).
       RustGIS answers with one line, `{"ok": value}` or `{"error": "text"}`.
@@ -546,9 +593,11 @@ any package themselves:
 "run": ["python", "main.py"]
 ```
 
-- `python` in `run` is then that environment's interpreter, on every platform.
-- RustGIS makes the environment when the plugin is installed: in the background in the desktop
-  app (the Plugin Manager shows how it's going, and a **Prepare** button makes it again), and
+- `python`, `python3` or `python.exe` as the program in `run` becomes that environment's
+  interpreter, on every platform. The Python version defaults to `3.12`; omit `requirements`
+  for an environment with no extra packages.
+- RustGIS prepares the environment when the plugin is installed: in the background in the desktop
+  app (the Plugin Manager shows how it's going, with a **Prepare** button if it is not ready), and
   before the command returns in `rustgis-cli plugins install` and `get`.
   `rustgis-cli plugins prepare <id>` and the `plugin.prepare` command make it on demand.
 - It uses [uv](https://github.com/astral-sh/uv), which RustGIS downloads once (a pinned version,
@@ -580,8 +629,8 @@ to use it, then the instructions in Markdown (the
 plugin has at most 32 skills.
 
 A package of skills alone, with no code, says `"runtime": "skills"`. It has no module, commands,
-tools, tab or permissions. Nothing in it runs, and it installs and works like any other plugin,
-in the desktop app, on the command line and in the web app:
+tools, tab, panel or permissions, and must list at least one skill. Nothing in it runs, and it
+installs from a file in the desktop app, on the command line and in the web app:
 
 ```json
 {
@@ -595,21 +644,44 @@ in the desktop app, on the command line and in the web app:
 
 ## Publishing a plugin
 
-Open a pull request on
-[opengeos/rustgis-plugins](https://github.com/opengeos/rustgis-plugins) that adds
-`registry/<id>.json`:
+1. Write the plugin in your own repository, starting from the
+   [Rust](https://github.com/opengeos/rustgis-plugin-template) or
+   [Python](https://github.com/opengeos/rustgis-python-plugin-template) template. See
+   [Write a plugin](https://plugins.rustgis.app/develop/).
+2. Release it: the templates' **Release** workflow attaches the `.rgplugin` and its registry
+   entry to a GitHub release.
+3. Open a pull request on
+   [opengeos/rustgis-plugins](https://github.com/opengeos/rustgis-plugins) adding that entry as
+   `registry/<id>.json`:
 
-- For a plugin whose source is in that repository: `{"id": "...", "path": "plugins/<dir>", "categories": [...]}`.
-- For one you publish elsewhere: `{"id": "...", "source": {"url": "https://…/<id>-<version>.rgplugin", "sha256": "…"}, "categories": [...]}`.
+   ```json
+   {"id": "...", "source": {"url": "https://…/<id>-<version>.rgplugin", "sha256": "…"}, "categories": ["Analysis"]}
+   ```
 
-CI builds or downloads the package and checks its manifest and module. A maintainer then
-reviews it. Once merged, it is published at `plugins.rustgis.app` with its hash.
+   Every plugin is listed by `source`; the registry build refuses `path` entries.
+4. CI downloads the package, checks its hash, validates its manifest and module (or a process
+   plugin's files), and runs it in RustGIS. A maintainer reviews it before merging.
+5. Once merged, the registry lists the plugin and serves its package at
+   `https://packages.rustgis.app/<id>/<id>-<version>.rgplugin`. Published packages never change,
+   and every version stays available. To update, release a new version and submit a pull
+   request updating the entry's `source.url` and `source.sha256`.
 
-Each plugin's entry in the published `registry.json` comes from its manifest: `id`, `name`,
-`version`, `description`, `author`, `homepage`, `license`, `categories`, `permissions`,
-`minRustgisVersion` and `i18n` (its name and description translated), with `package` (an HTTPS
-address, or a path relative to `registry.json`), `sha256` and `size`. A process plugin's entry
-also has `"runtime": "process"` and, when it has a Python environment, `"python": "3.12"` (the
-version); a WebAssembly plugin's has neither, and a skills package's has `"runtime": "skills"`.
-RustGIS installs a package only if it runs the way its entry says. `rustgis-cli plugins browse`
-prints each entry with `runtime` filled in (`wasm` when the registry leaves it out).
+Pull requests get a preview with an **Open in RustGIS** link; process plugins must be tried
+in the desktop app instead. The nightly workflow runs every published plugin in the latest
+RustGIS. See the registry's [publishing instructions](https://plugins.rustgis.app/registry/)
+for details.
+
+The file you submit is only a pointer to the release. The registry build turns it into the
+published `registry.json` that RustGIS reads, whose entries carry `package` (the package's address) and
+`sha256` in place of `source`. A registry entry contains `id`, `name`, `version`, `description`, `author`, `homepage`,
+`license`, `permissions`, `minRustgisVersion`, `i18n` (the name and description translated),
+`categories`, `package`, lower-case hexadecimal `sha256`, and `size` in bytes.
+`package` is an HTTPS address or a path relative to `registry.json`;
+plain `http://localhost` and `http://127.0.0.1` addresses are accepted for local test
+registries. Entries without a valid id, name, version or SHA-256 are skipped. A process
+plugin's entry also has `"runtime": "process"` and, when it has a managed Python environment,
+`"python": "3.12"` (the version); a WebAssembly plugin can omit both. Registries can list
+skills packages with `"runtime": "skills"`. The Plugin Manager checks the package's hash
+and id before installing; `rustgis-cli plugins get` also checks its runtime.
+`rustgis-cli plugins browse` prints `runtime` for every entry (`wasm` when the registry leaves
+it out).

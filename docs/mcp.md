@@ -2,8 +2,9 @@
 
 `rustgis-cli mcp` runs RustGIS as a [Model Context Protocol](https://modelcontextprotocol.io)
 server, so an AI agent such as Claude Code, Claude Desktop, Cursor, VS Code or Codex can make
-maps with it. The agent opens data, runs any RustGIS command or geoprocessing tool, reads
-attribute tables, looks at the map as an image and looks things up in this documentation.
+maps with it. The agent opens data, runs RustGIS commands and geoprocessing tools within the
+access policy below, reads attribute tables, looks at the map as an image and searches this
+documentation. RustGIS needs no model API key in this mode: the MCP client supplies the model.
 
 ```sh
 rustgis-cli mcp --sample                # the World Atlas sample
@@ -15,6 +16,11 @@ rustgis-cli mcp --attach [--yes]        # the desktop app that is already open (
 The server talks over standard input and output, so you don't start it yourself: you tell your
 agent how to start it (below), and the agent runs it. Each agent gets its own project, held in
 memory until the agent saves it.
+`--sample`, `--project` and repeated `--data` options initialize a private project.
+They cannot be combined with `--attach`, which uses the desktop app's existing project.
+Use absolute paths for data, projects and executables in client configurations: clients may
+start the server in a different working directory.
+
 
 ## Adding it to an agent
 
@@ -31,7 +37,7 @@ codex mcp add rustgis -- rustgis-cli mcp --sample
 ```
 
 Claude Desktop (`claude_desktop_config.json`), Cursor (`~/.cursor/mcp.json`) and other clients
-that use an `mcpServers` list:
+that use an `mcpServers` object:
 
 ```json
 {
@@ -86,8 +92,9 @@ Under it, **Full access** (off unless you tick it, for this session only) lifts 
 agents attached with the relay's own token. They may then also run scripts, tasks and models, and
 install, remove and run plugins: what you could do yourself in RustGIS. It isn't remembered: it's
 off again at the next launch, and when agents are turned off. While it's on, the status bar reads
-`MCP relay · full access · n attached` in red. Agents the app starts itself keep their own grants'
-rules.
+`MCP relay · full access · n attached` in red. Full access also lifts the project-replacement
+and undo-ownership refusals described below; it is not just file and network access.
+Agents the app starts itself keep their own grants' rules.
 
 ```sh
 rustgis-cli mcp --attach                 # the open app on 127.0.0.1:8767
@@ -118,21 +125,26 @@ it behind: check that its `pid` is still running before trusting it.
 ```
 
 Attached calls run on the open app's session through the same tools and refusal policy as the
-private server. One more tool works only here: `snapshot` with `mode: "screen"` captures the map as
-the window shows it. The relay holds the request until the app has taken the picture, and runs
-nothing else meanwhile. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
-is ticked. The session is the project you have open, so an attached agent can't replace it:
+private server. `snapshot` additionally supports a real window capture with `mode: "screen"`.
+If the map is not on screen, it falls back to an offscreen render and explains why in `note`.
+The relay holds a screen request until the app has taken the picture, and runs nothing else
+meanwhile. File and network commands need `--yes`, unless **Let your Agents Control RustGIS**
+is ticked.
+
+Without **Full access**, an attached agent cannot replace the open project:
 `project.new`, `project.open`, `project.openText`, `project.sample` and `project.fromTemplate`
-are refused, with or without `--yes`. Each agent command is a step in your own undo history,
-named for the agent (`agent 1`, `agent 2`…, in the order they first call, with the relay run, so a
-relay started again doesn't take an earlier run's agent for its own). An agent's `edit.undo`
-and `edit.redo` work only on its own steps: when the step on top is yours (or another agent's),
-they're refused, and they run on their own (`run_command`), not inside a `run` script. You can
-still undo anything. Each agent also has its own active layer: when an
-agent selects a layer (`layer.select`, or a command that makes a layer active), your selection in
-the Layers pane stays as it was. Once the agent has chosen a layer (selected one, or run a command
-that made one active), its commands that name no layer act on that layer, whatever you select
-meanwhile; until then they act on the one you have selected.
+are refused, with or without `--yes`. Commands are recorded in your undo history as
+`agent 1`, `agent 2`… with the relay run's identity. An agent's `edit.undo` and `edit.redo`
+work only on its own steps: when the top step is yours or another agent's, they are refused.
+They run on their own through `run_command`, or as a one-line `run` script. You can still undo
+anything. Full access lifts both these restrictions for the relay's own token.
+
+Undo ownership and the active layer are scoped to a token, not a client connection.
+Ordinary `--attach` clients share the relay's token, so they share one agent identity and
+active layer; local agents with separate grants are kept apart. Selecting a layer through
+an agent (`layer.select`, or a command that makes a layer active) does not change your Layers
+pane selection. Once that token has chosen a layer, commands that omit `layer` use it while
+you select others; until then they use your current selection.
 
 Every tool call an attached agent makes is written to an audit log, one JSON line per call in a
 file per day (`2026-10-18.jsonl`) in the `mcp-audit` folder of the app-data folder
@@ -166,9 +178,10 @@ HTTP client. `--name` and `--port` change the registration's name and port. Eith
 leaves its file: `claude mcp add` takes it as an argument (other users of the computer can see a
 running program's arguments for the moment it runs), and the printed configuration shows it, so
 keep it out of shared logs. Whoever holds the token can do, while agents are on, what an attached agent can, files and the
-network included. Delete `mcp-http.token` to make a new one if it leaks; each registered
-client then needs registering again. On Windows the token file is protected by your user profile's
-permissions, not by a mode of its own.
+network included. If it leaks, stop the relay, delete `mcp-http.token`, and turn agents on again
+to create and load a new token; each registered client then needs registering again. Deleting
+the file alone does not revoke the token already loaded by a running listener. On Windows the
+token file is protected by your user profile's permissions, not by a mode of its own.
 
 An agent the app starts itself gets a run-scoped token instead of the relay's own:
 `rustgis-cli mcp --attach PORT --token-file FILE`. Each such grant carries its own file and network
@@ -189,7 +202,7 @@ couldn't start: agents then stay on, and the status bar says only the file bridg
    sure a half-written script never runs, write it to another file in the folder and rename it to
    `bridge-command.txt`.) It runs as one undo step, with
    the same rules as the `run` tool: a refused or failing line stops it, and nothing it did to the
-   project is kept.
+   project is kept. Files written by an earlier line stay written.
 3. The outcome is written to `bridge-result.json` in the same folder: `{success, result, lines,
    layersAdded, notices, error, duration_s, timestamp}`. The status bar says whether it worked.
 
@@ -199,8 +212,8 @@ isn't run. While the bridge is on, `bridge-ready.json` there holds its `pid`, th
 `started_at`, the app `version` and a `schema` number. The folder is readable by this user only,
 like the relay's token. Scripts run through the bridge are written to the audit log (`source:
 "file"`), and **Full access** applies to them as to agents attached with the relay's own token. The bridge is
-named `file bridge` in your undo history, so a script's `edit.undo` (alone on its line) takes back
-only the bridge's own steps. It also keeps its own active layer, as an agent does.
+named `file bridge` in your undo history. Without Full access, a script's `edit.undo`
+(alone on its line) takes back only the bridge's own steps. It also keeps its own active layer.
 
 ### Relay requirements
 
@@ -223,7 +236,8 @@ only the bridge's own steps. It also keeps its own active layer, as an agent doe
   **Let your Agents Control RustGIS** is ticked. This includes any process running as the same
   user that can read that token, not just agents launched by RustGIS. It is checked for every call.
   Turning the setting off stops the relay and disconnects its clients, including a relay started
-  manually. A failed launch clears the saved setting and reports the error in the app.
+  manually. If the relay fails but the file bridge starts, the saved setting stays on and the
+  app reports the relay error; if both fail, the setting is cleared.
 - **Grants.** `Relay::grant(access)` writes a run-scoped token to `{port}-{run}-{n}.token` in the
   same private folder (`run` is random per relay run). A grant asked for after the relay stopped is
   refused. A connection that attaches with it gets the grant's permission. Dropping the grant
@@ -238,7 +252,8 @@ only the bridge's own steps. It also keeps its own active layer, as an agent doe
   A reply write that takes longer than 10 seconds closes the connection.
 - **Connection caps.** At most 16 open connections, and at most 4 that have not attached. A
   connection beyond either cap is dropped without a reply.
-- **Queue cap.** At most 64 messages wait for the app's frame. A request beyond that gets error
+- **Queue cap.** Up to 64 ordinary messages wait for the app's frame; messages held for
+  local-agent approval have a separate cap of 64. A request beyond either cap gets error
   `-32001` (`the app is busy; try again`) if it expects a reply.
 - **Bounded request waits.** A request waits up to 60 seconds for the app to run it, or as long
   as the client's attach asks (`timeout_s`, 5 to 600 seconds; `--timeout` on the command line).
@@ -310,25 +325,30 @@ These behavioral tests in `crates/assistant/src/relay.rs` check the requirements
 | Tool | What it does |
 | --- | --- |
 | `list_layers` | The whole project in one call: path and unsaved changes, the view (centre, longitude/latitude extent, scale, projection), the active layer, layers in table-of-contents order (group, type, source, extent, feature count, selection, definition query, renderer, labels, fields, visibility), web tile layers, basemap, tables and layouts with their map frames. `name_filter` keeps the layers and tables whose name holds it; `include_fields: false` leaves fields out |
-| `view_map` | The map as a PNG image, at the current view |
-| `snapshot` | The map as a PNG with JSON metadata: `mode`, `width`, `height`, `extent` (longitude/latitude), `center`, `scale`, `projection` and `render_settled`. `mode: "screen"` is exactly what you see in the RustGIS window (through the relay only), taken once the map has finished drawing or after `wait_s` seconds (default 5, at most 30); `overlays: false` leaves out the map's controls, scale bar, north arrow and sketches. `mode: "render"` draws the same layers, view and styling offscreen at `max_width` (the height follows the view's shape), which works while the window is hidden. `mode: "auto"` (the default) takes the screen when the map is on it. `save_path` also writes the PNG to a file, which needs `--yes` |
+| `view_map` | The map as a PNG image at the current view; `width` and `height` default to 1024 × 640, each clamped to 64–2048 pixels |
+| `snapshot` | The map as a PNG with JSON metadata: `mode`, `width`, `height`, `extent` (longitude/latitude), `center`, `scale`, `projection`, `render_settled`, `saved` and `note`. `mode: "screen"` captures the RustGIS window through the relay, once the map has finished drawing or after `wait_s` seconds (default 5, clamped to 0–30); `overlays: false` leaves out the map's controls, scale bar, north arrow and sketches. `mode: "render"` draws offscreen at `max_width` (default 1024, clamped to 64–2048 pixels); height follows the view's shape, with each side capped at 2048. It works while the window is hidden. `mode: "auto"` (default) takes the screen when the map is on it. Unavailable screen captures fall back to render. `save_path` also writes the PNG to a file, which needs file access |
 | `search_commands` | Finds RustGIS commands by words: their ids, ribbon locations and parameters |
 | `run_command` | Runs a command by id with JSON parameters; each run is one undo step. The result names the layers it added (`layersAdded`) and what the command said beside it (`notices`), including any parameters it ignored (`layer.moveDown ignores 'steps' (it reads layer)`) |
 | `run` | Runs several commands in one call, as one undo step: a script in the `script.run` format (one `command-id {json}` per line, `#` comments). A failing line stops it, nothing it did to the project is kept, and the error names the line; files an earlier line wrote (an export) stay written. Answers `{success, result, lines, layersAdded, notices, error, duration_s}`, where `result` is the last command's. Each line follows `run_command`'s rules, checked before any line runs |
 | `search_tools` | Finds geoprocessing tools by words |
 | `describe_tool` | A geoprocessing tool's parameters |
 | `run_tool` | Runs a geoprocessing tool; its output is added to the map as a new layer (with `layersAdded` and `notices` as for `run_command`) |
-| `read_features` | A layer's attribute rows, optionally only those matching a where clause, sorted |
+| `read_features` | A vector layer's attribute rows: `layer` (name or id), optional `where`, `fields`, `order_by`, `descending` and `selected`; `limit` defaults to 20, capped at 200. Returns the matching count and rows with `_row`, `_lon` and `_lat` |
 | `search_docs` | Searches this documentation and returns the best matching sections |
 | `read_doc` | Reads a documentation page or section as Markdown; `offset` (1-based line) and `limit` (default 2000 lines) page through long results using `next_offset` |
 
-These are the [AI Assistant](user-guide/assistant.md)'s tools, plus `view_map`. Every page of this documentation is also a resource
-(`rustgis://docs/cli.md`, `rustgis://docs/user-guide/maps.md`…) that a client can attach to a
-conversation.
+MCP exposes these twelve tools: the nine shared [AI Assistant](user-guide/assistant.md) tools,
+plus `view_map`, `snapshot` and `run`. The assistant-only `delegate` and `load_skill` tools are
+not exposed through MCP. Instead, enabled [skills](user-guide/assistant.md#skills) are offered
+as MCP prompts (`prompts/list` and `prompts/get`). Every built-in documentation page is also a
+resource (`rustgis://docs/cli.md`, `rustgis://docs/user-guide/maps.md`…) that a client can attach
+to a conversation. Successful JSON tool results use the default
+[tool-output budget](user-guide/assistant.md#tool-output-limits): an estimated 10,000 tokens
+per result. Read large documentation results in sections or continue with `next_offset`.
 
 ## What the agent may do
 
-Your agent asks you before each tool call, and the server adds its own limits:
+Your MCP client's approval settings determine when it asks you. The server adds its own limits:
 
 - Commands that read or write files, connect to an address on the internet or run a plugin's
   command run only when the server was started with `--yes`, as does opening a project from
@@ -338,8 +358,10 @@ Your agent asks you before each tool call, and the server adds its own limits:
 - Plugin management, scripts, tasks, models and the GeoLibre runner are never run from here,
   unless you turned on **Full access** for agents in the desktop app. That applies only to agents
   attached to it with the relay's own token.
-- In private-server mode, opening, replacing and undoing in the project are allowed: the project
-  is the agent's own. With `--attach`, these operations affect the project open in the desktop app.
+- In private-server mode, replacing and undoing in the project are allowed: it is the agent's
+  own. With `--attach`, project replacement and undo ownership follow the desktop restrictions
+  above, unless Full access is enabled. `ui.*` commands that only open panes and dialogs are
+  unavailable to the tools.
 
 Installed [plugins](plugins.md) load first, as with the other subcommands (`--no-plugins` skips
 them). Notes such as "MCP server ready" go to standard error; standard output carries only the
@@ -352,8 +374,10 @@ Local agents launched by the assistant use `Relay::grant_reviewed(auto)`, not an
 run grant. With automatic approval off, gated tool calls wait in a RustGIS-side queue scoped to
 that grant and exact message, including all tool calls in a batch. `--yes` and the general relay
 checkbox do not bypass it. An approval cannot revive an expired request; revoking the grant or
-stopping the relay cancels pending work. Explicit automatic approval bypasses this extra queue
-for that run. Ordinary MCP clients retain the access policy described above.
+stopping the relay cancels pending work. The approval wait has a separate 15-minute bound;
+other clients' reads can still run while it waits. Explicit automatic approval bypasses this
+extra queue for that run, but not the reserved-command refusals. Ordinary MCP clients retain
+the access policy described above.
 
 Stopping the relay through its command or status-bar control also turns off its remembered
 agent-control choice. Copyable setup commands are labelled for POSIX shells or PowerShell and

@@ -47,13 +47,29 @@ pub(crate) fn kind_of(t: &str) -> &'static str {
 /// background as From URL… does, map layers are added now, and an OGC API layer or a WCS coverage
 /// waits on a document (a step the app moves along). `dialog` tells where the result is reported.
 pub(crate) fn add_layer(app: &mut RustGisApp, src: &ServiceSource, l: &Value, time: &str, dialog: bool) -> Result<&'static str, String> {
+    add_layer_from(app, src, l, time, dialog, None)
+}
+
+/// [`add_layer`] for a layer of the connection named `origin` (the Connections tree): once the
+/// layer is added, now or when its document or download lands, Recent shows its source under that
+/// name. An add that fails or is dropped is not renamed.
+pub(crate) fn add_layer_from(
+    app: &mut RustGisApp,
+    src: &ServiceSource,
+    l: &Value,
+    time: &str,
+    dialog: bool,
+    origin: Option<&str>,
+) -> Result<&'static str, String> {
     let name = l.get("name").and_then(Value::as_str).unwrap_or("").to_string();
     let title = l.get("title").and_then(Value::as_str).unwrap_or(&name).to_string();
     let offer = l.get("offer").cloned().unwrap_or_default();
     if offer.get("type").and_then(Value::as_str) == Some("features") {
         let items = offer.get("url").and_then(Value::as_str).unwrap_or("").to_string();
-        return app.run("ui.addUrl", json!({"url": items, "name": title, "service": true})).map(|_| tl!("Downloading…"));
+        return crate::connectiontree::run_add_url(app, json!({"url": items, "name": title, "service": true}), origin)
+            .map(|_| tl!("Downloading…"));
     }
+    let origin = origin.map(str::to_string);
     if offer.get("type").and_then(Value::as_str) == Some("coverage") {
         // A coverage: its description first, off the frame (a step asks for it).
         let describe = offer.get("describe").and_then(Value::as_str).unwrap_or("").to_string();
@@ -62,7 +78,7 @@ pub(crate) fn add_layer(app: &mut RustGisApp, src: &ServiceSource, l: &Value, ti
             p["type"] = json!(src.kind);
         }
         let slot = crate::fetch_into(&describe);
-        app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog });
+        app.ui.service_steps.push(crate::ServiceStep::Coverage { params: p, slot, dialog, origin });
         return Ok(tl!("Describing"));
     }
     let mut p = json!({"url": src.url, "layer": name, "text": src.text, "documents": src.documents, "source_url": l.get("source_url")});
@@ -81,10 +97,10 @@ pub(crate) fn add_layer(app: &mut RustGisApp, src: &ServiceSource, l: &Value, ti
             let vector = offer.get("type").and_then(Value::as_str) == Some("vectorTiles");
             let slot = crate::fetch_into(list);
             let resolve = crate::TilesResolve { params: p, list: list.to_string(), doc: list.to_string(), read: 0, vector, fallback, slot };
-            app.ui.service_steps.push(crate::ServiceStep::Tiles { resolve, dialog });
+            app.ui.service_steps.push(crate::ServiceStep::Tiles { resolve, dialog, origin });
             Ok(tl!("Reading the tileset of"))
         }
-        None => app.run("service.add", p).map(|_| tl!("Added")),
+        None => crate::connectiontree::run_named(app, "service.add", p, origin.as_deref()).map(|_| tl!("Added")),
     }
 }
 

@@ -26,8 +26,71 @@ pub struct State {
     /// The definition each connection's entries were made for: an edit makes them stale.
     seen: HashMap<String, Connection>,
     pub picks: Vec<Pick>,
-    /// Signed addresses of STAC assets waiting on a token: (token address, asset, name, answer).
-    tokens: Vec<(String, String, String, Slot<Result<Vec<u8>, String>>)>,
+    /// STAC assets waiting on a token.
+    tokens: Vec<Signing>,
+    /// The connection a `ui.addUrl` being run is for, handed to it out of band ([`run_add_url`]),
+    /// so it never shows in the command's parameters (recordings, the log).
+    origin: Option<String>,
+}
+
+/// A STAC asset waiting on its signing token: the token's address, the asset, the layer's name,
+/// the connection it was added from (named in Recent once it is added) and the token on its way.
+struct Signing {
+    token_url: String,
+    href: String,
+    name: String,
+    origin: Option<String>,
+    slot: Slot<Result<Vec<u8>, String>>,
+}
+
+/// The key a `ui.addUrl` still waiting on a probe or a download carries the connection's name
+/// under, in its parameters. Taken off before any command sees them.
+pub(crate) const ORIGIN: &str = "_origin";
+
+/// Runs `ui.addUrl` for a dataset of the connection named `origin` (none: for any other source):
+/// whichever way the download ends, the add is noted in Recent under that name.
+pub(crate) fn run_add_url(app: &mut RustGisApp, params: Value, origin: Option<&str>) -> Result<Value, String> {
+    app.ui.connection_tree.origin = origin.map(str::to_string);
+    let r = app.run("ui.addUrl", params);
+    app.ui.connection_tree.origin = None;
+    r
+}
+
+/// The connection `ui.addUrl` was run for ([`run_add_url`]).
+pub(crate) fn take_origin(app: &mut RustGisApp) -> Option<String> {
+    app.ui.connection_tree.origin.take()
+}
+
+/// The connection a pending `ui.addUrl`'s parameters carry ([`ORIGIN`]), taken off them.
+pub(crate) fn take_origin_key(params: &mut Value) -> Option<String> {
+    match params.as_object_mut()?.remove(ORIGIN)? {
+        Value::String(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// Runs a command that adds a dataset now, noting it in Recent under the connection's name.
+pub(crate) fn run_named(app: &mut RustGisApp, id: &str, params: Value, origin: Option<&str>) -> Result<Value, String> {
+    let before = app.session.sources.generation;
+    let r = app.run(id, params);
+    if r.is_ok() {
+        name_recent(app, before, origin);
+    }
+    r
+}
+
+/// Names the source the session noted since `before` (a [`Sources::generation`]) as Recent
+/// shows it, after the connection it came from. The kind, address and `extra` are the ones noted
+/// (cleaned and redacted), so reopening it targets the same dataset; a name is a snapshot, taken
+/// when added. Nothing noted (a failed add, one still on its way) leaves Recent as it was.
+pub(crate) fn name_recent(app: &mut RustGisApp, before: u64, origin: Option<&str>) {
+    let Some(origin) = origin else { return };
+    if app.session.sources.generation == before {
+        return;
+    }
+    let Some(mut added) = app.session.sources.recent.first().cloned() else { return };
+    added.name = origin.to_string();
+    app.session.sources.note(added);
 }
 
 pub enum Entry {
@@ -163,15 +226,16 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
         app.ui.connection_tree.entries.insert(key, entry);
     }
     // STAC assets that needed a token: signed and added when it lands.
-    for (token_url, href, name, slot) in std::mem::take(&mut app.ui.connection_tree.tokens) {
-        let Some(r) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
-            app.ui.connection_tree.tokens.push((token_url, href, name, slot));
+    for signing in std::mem::take(&mut app.ui.connection_tree.tokens) {
+        let Some(r) = signing.slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            app.ui.connection_tree.tokens.push(signing);
             continue;
         };
         match r.and_then(|b| stac::parse_sas(&b)) {
             Ok(token) => {
-                stac::remember_token(&token_url, &token);
-                if let Err(e) = app.run("ui.addUrl", json!({"url": stac::sign(&href, &token), "name": name, "zoom": true})) {
+                stac::remember_token(&signing.token_url, &token);
+                let p = json!({"url": stac::sign(&signing.href, &token), "name": signing.name, "zoom": true});
+                if let Err(e) = run_add_url(app, p, signing.origin.as_deref()) {
                     app.session.notify(e, true);
                 }
                 app.map.invalidate();
@@ -186,21 +250,23 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 /// Adds one dataset a listing offers. Each branch is one command, so each is one undo step.
-pub fn add(app: &mut RustGisApp, child: &Value, source: Option<&ServiceSource>) -> Result<(), String> {
+/// `origin` is the connection it is for: Recent then shows the dataset's source (as added, its
+/// address and options unchanged) under that name, once it is added.
+fn add_from(app: &mut RustGisApp, child: &Value, source: Option<&ServiceSource>, origin: Option<&str>) -> Result<(), String> {
     let add = child.get("add").filter(|a| a.is_object()).ok_or_else(|| tl!("Nothing to add here").to_string())?;
     let command = add["command"].as_str().unwrap_or("");
     let params = add["params"].clone();
     match (source, child.get("layer").filter(|l| l.is_object())) {
         (Some(source), Some(layer)) => {
-            serviceui::add_layer(app, source, layer, "", false)?;
+            serviceui::add_layer_from(app, source, layer, "", false, origin)?;
         }
         _ => match command {
             "layer.addUrl" => {
-                app.run("ui.addUrl", params)?;
+                run_add_url(app, params, origin)?;
             }
-            "stac.addAsset" => add_asset(app, child["href"].as_str().unwrap_or(""), params["name"].as_str().unwrap_or(""))?,
+            "stac.addAsset" => add_asset(app, child["href"].as_str().unwrap_or(""), params["name"].as_str().unwrap_or(""), origin)?,
             _ => {
-                app.run(command, params)?;
+                run_named(app, command, params, origin)?;
             }
         },
     }
@@ -210,17 +276,18 @@ pub fn add(app: &mut RustGisApp, child: &Value, source: Option<&ServiceSource>) 
 
 /// A STAC asset by its address, signed first when it needs a token (one in hand is used; one to
 /// fetch is fetched off the frame and the asset added when it lands).
-fn add_asset(app: &mut RustGisApp, href: &str, name: &str) -> Result<(), String> {
+fn add_asset(app: &mut RustGisApp, href: &str, name: &str, origin: Option<&str>) -> Result<(), String> {
     if !stac::needs_signing(href) {
-        app.run("ui.addUrl", json!({"url": href, "name": name, "zoom": true}))?;
+        run_add_url(app, json!({"url": href, "name": name, "zoom": true}), origin)?;
         return Ok(());
     }
     let token_url = stac::sas_token_url(href)?;
     if let Some(token) = stac::cached_token(&token_url) {
-        app.run("ui.addUrl", json!({"url": stac::sign(href, &token), "name": name, "zoom": true}))?;
+        run_add_url(app, json!({"url": stac::sign(href, &token), "name": name, "zoom": true}), origin)?;
     } else {
         let slot = crate::fetch_into(&token_url);
-        app.ui.connection_tree.tokens.push((token_url, href.to_string(), name.to_string(), slot));
+        let (href, name, origin) = (href.to_string(), name.to_string(), origin.map(str::to_string));
+        app.ui.connection_tree.tokens.push(Signing { token_url, href, name, origin, slot });
     }
     Ok(())
 }
@@ -336,7 +403,9 @@ pub fn prune(app: &mut RustGisApp) {
 fn add_picks(app: &mut RustGisApp) {
     prune(app);
     for pick in std::mem::take(&mut app.ui.connection_tree.picks) {
-        if let Err(e) = add(app, &pick.child, pick.source.as_deref()) {
+        // The name as it is now, for the whole add (pruned above: the connection is there).
+        let origin = app.session.connections.find(&pick.conn).map(|c| c.name.clone());
+        if let Err(e) = add_from(app, &pick.child, pick.source.as_deref(), origin.as_deref()) {
             app.session.notify(e, true);
         }
     }
@@ -380,12 +449,7 @@ fn level(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, node: &s
                 }
                 let keys = c.kind == "s3" && c.options.get("credentials").is_some_and(|v| v == "keys");
                 if (DATABASE_KINDS.contains(&c.kind.as_str()) || keys) && ui.small_button(tl!("Log In…")).clicked() {
-                    match app.run("ui.connection", json!({"id": c.id})) {
-                        Ok(_) => {
-                            app.dialogs.info = Some(tl!("Type the password or keys to log in for this session, then Save.").to_string())
-                        }
-                        Err(e) => app.session.notify(e, true),
-                    }
+                    crate::connectionui::log_in(app, &c.id);
                 }
             });
         }
@@ -526,11 +590,317 @@ fn dataset(app: &mut RustGisApp, ui: &mut Ui, c: &Connection, listing: &Listing,
     let result = if with_options {
         add_with_options(app, c, child, listing.source.as_deref())
     } else if add_now {
-        add(app, child, listing.source.as_deref())
+        add_from(app, child, listing.source.as_deref(), Some(c.name.as_str()))
     } else {
         Ok(())
     };
     if let Err(e) = result {
         app.session.notify(e, true);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use rustgis_engine::sources::{self, Source};
+    use std::io::{Read, Write};
+
+    type Harness = egui_kittest::Harness<'static, RustGisApp>;
+
+    fn harness() -> Harness {
+        egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).with_step_dt(0.05).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            RustGisApp::with_sample(),
+        )
+    }
+
+    /// Answers every request on a local port with `answer(request head)`: status and body.
+    fn serve(answer: impl Fn(&str) -> (u16, Vec<u8>) + Send + 'static) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let (status, body) = answer(&String::from_utf8_lossy(&buf[..n]));
+                let _ = write!(s, "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(&body);
+            }
+        });
+        base
+    }
+
+    fn until(h: &mut Harness, done: impl Fn(&RustGisApp) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(h.state()) {
+            assert!(std::time::Instant::now() < deadline, "timed out waiting");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Capabilities whose GetMap endpoint is loopback (port 9 refuses): no test reaches the network.
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink"><Service><Title>Local</Title></Service><Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="http://127.0.0.1:9/wms?"/></Get></HTTP></DCPType></GetMap></Request><Layer><CRS>EPSG:3857</CRS><Layer><Name>a</Name><Title>A</Title></Layer><Layer><Name>b</Name><Title>B</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+
+    fn wms(url: &str) -> ServiceSource {
+        ServiceSource { url: url.into(), kind: "wms", text: WMS.into(), documents: Vec::new() }
+    }
+
+    /// A listed WMS layer, as the tree adds it.
+    fn layer(name: &str) -> Value {
+        json!({"add": {"command": "service.add", "params": {}}, "layer": {"name": name, "title": name.to_uppercase()}})
+    }
+
+    /// The Recent entry a `service.add` of this layer gives, named `name`: what the session
+    /// notes (cleaned, redacted), with only the name replaced.
+    fn expected(url: &str, layer: &str, name: &str) -> Source {
+        let mut added = sources::added_by("service.add", &json!({"url": url, "layer": layer, "type": "wms"})).unwrap();
+        added.name = name.into();
+        sources::clean(added).unwrap()
+    }
+
+    #[test]
+    fn a_tree_add_is_recent_under_the_connection_name_with_its_own_source() {
+        let mut h = harness();
+        let app = h.state_mut();
+        let url = "http://127.0.0.1:9/wms";
+        let layers = app.session.map().tiles.len();
+        add_from(app, &layer("a"), Some(&wms(url)), Some("Local")).unwrap();
+        assert_eq!(app.session.map().tiles.len(), layers + 1);
+        assert_eq!(app.session.sources.recent.first(), Some(&expected(url, "a", "Local")));
+        assert_eq!(app.session.sources.recent[0].extra, json!({"layer": "a", "type": "wms"}));
+        // The layer keeps the name the service gave it.
+        assert_ne!(app.session.map().tiles.last().map(|t| t.name.as_str()), Some("Local"));
+
+        // A name is a snapshot: renaming the connection leaves it until something is added again.
+        let id = app.session.run("connection.new", &json!({"kind": "wms", "address": url, "name": "Local"})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        app.session.run("connection.edit", &json!({"id": id, "name": "Renamed"})).unwrap();
+        assert_eq!(app.session.sources.recent[0].name, "Local");
+        let name = app.session.connections.find(&id).unwrap().name.clone();
+        add_from(app, &layer("b"), Some(&wms(url)), Some(&name)).unwrap();
+        // One entry per kind and address: the re-add takes the current name and layer.
+        assert_eq!(app.session.sources.recent.iter().filter(|s| s.address == url).count(), 1);
+        assert_eq!(app.session.sources.recent.first(), Some(&expected(url, "b", "Renamed")));
+
+        // Another connection to the same address shares the entry.
+        add_from(app, &layer("a"), Some(&wms(url)), Some("Twin")).unwrap();
+        assert_eq!(app.session.sources.recent.iter().filter(|s| s.address == url).count(), 1);
+        assert_eq!(app.session.sources.recent.first(), Some(&expected(url, "a", "Twin")));
+
+        // An address with a secret is redacted exactly as a plain add redacts it.
+        let secret = "http://127.0.0.1:9/wms?token=SECRET&access_token=SECRET";
+        add_from(app, &layer("a"), Some(&wms(secret)), Some("Local")).unwrap();
+        let noted = app.session.sources.recent.first().unwrap();
+        assert!(!noted.address.contains("SECRET"), "{}", noted.address);
+        assert_eq!(noted.name, "Local");
+    }
+
+    #[test]
+    fn a_failed_add_is_not_renamed_or_recorded() {
+        let mut h = harness();
+        let app = h.state_mut();
+        let before = app.session.sources.recent.clone();
+        assert!(add_from(app, &layer("nope"), Some(&wms("http://127.0.0.1:9/wms")), Some("Local")).is_err());
+        let missing = json!({"add": {"command": "layer.addData", "params": {"path": "/no/such/file.geojson"}}});
+        assert!(add_from(app, &missing, None, Some("Local")).is_err());
+        assert_eq!(app.session.sources.recent, before);
+    }
+
+    #[test]
+    fn selected_datasets_are_each_named_after_their_own_connection() {
+        let mut h = harness();
+        let app = h.state_mut();
+        let (one, two) = ("http://127.0.0.1:9/one", "http://127.0.0.1:9/two");
+        let mut ids = Vec::new();
+        for (name, url) in [("One", one), ("Two", two)] {
+            ids.push(
+                app.session.run("connection.new", &json!({"kind": "wms", "address": url, "name": name})).unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        for (id, url) in ids.iter().zip([one, two]) {
+            let pick = Pick { conn: id.clone(), key: "a".into(), name: "A".into(), child: layer("a"), source: Some(Arc::new(wms(url))) };
+            app.ui.connection_tree.picks.push(pick);
+            app.ui.connection_tree.seen.insert(id.clone(), app.session.connections.find(id).unwrap().clone());
+        }
+        add_picks(app);
+        assert!(app.ui.connection_tree.picks.is_empty());
+        assert_eq!(app.session.sources.recent.first(), Some(&expected(two, "a", "Two")));
+        assert_eq!(app.session.sources.recent.get(1), Some(&expected(one, "a", "One")));
+    }
+
+    /// A download lands after the add returned: its entry is named for the connection it came
+    /// from, whatever happened to the connection meanwhile, and a download that fails has none.
+    #[test]
+    fn a_delayed_download_is_named_when_it_lands_and_a_failed_one_is_not() {
+        let mut h = harness();
+        let base = serve(|head| {
+            if head.contains("/missing") {
+                (404, b"no".to_vec())
+            } else {
+                (200, br#"{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}}"#.to_vec())
+            }
+        });
+        let (good, bad) = (format!("{base}/points.geojson"), format!("{base}/missing.geojson"));
+        let url_add = |address: &str| json!({"add": {"command": "layer.addUrl", "params": {"url": address, "name": "Points"}}});
+        let app = h.state_mut();
+        let id = app.session.run("connection.new", &json!({"kind": "wms", "address": "http://127.0.0.1:9/wms", "name": "Local"})).unwrap()
+            ["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let before = app.session.sources.recent.clone();
+        add_from(app, &url_add(&good), None, Some("Local")).unwrap();
+        add_from(app, &url_add(&bad), None, Some("Local")).unwrap();
+        assert_eq!(app.session.sources.recent, before, "nothing is recorded before the data lands");
+        // The connection is renamed and the selection changes before it lands.
+        app.session.run("connection.edit", &json!({"id": id, "name": "Renamed"})).unwrap();
+        app.ui.connection_tree.picks.clear();
+        until(&mut h, |app| {
+            app.session.sources.recent.iter().any(|s| s.address == good) && app.ui.downloads.is_empty() && app.ui.cog_probes.is_empty()
+        });
+        let recent = &h.state().session.sources.recent;
+        let landed = recent.iter().find(|s| s.address == good).unwrap();
+        assert_eq!((landed.kind.as_str(), landed.name.as_str()), ("url", "Local"));
+        assert!(recent.iter().all(|s| s.address != bad), "a failed download isn't recorded");
+    }
+
+    #[test]
+    fn a_tileset_step_names_its_layer_and_a_refused_one_is_not_recorded() {
+        let mut h = harness();
+        let api = "https://x.org/collections";
+        let tiled = r#"{"collections": [{"id": "relief", "links": [{"rel": "tilesets-map", "href": "https://x.org/relief/map/tiles"}]}]}"#;
+        let step = |fallback: &str, origin: Option<&str>| {
+            let slot = Slot::default();
+            *slot.lock().unwrap() = Some(Err("unreachable".to_string()));
+            let params = json!({"url": api, "layer": "relief (map tiles)", "text": tiled, "name": "Relief"});
+            let resolve =
+                crate::TilesResolve { params, list: "l".into(), doc: "l".into(), read: 0, vector: false, fallback: fallback.into(), slot };
+            crate::ServiceStep::Tiles { resolve, dialog: false, origin: origin.map(str::to_string) }
+        };
+        let before = h.state().session.sources.recent.clone();
+        h.state_mut().ui.service_steps.push(step("http://127.0.0.1/{z}/{x}/{y}", Some("Atlas")));
+        h.step();
+        assert_eq!(h.state().session.sources.recent, before, "a refused template adds nothing");
+        h.state_mut().ui.service_steps.push(step("https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png", Some("Atlas")));
+        h.step();
+        let noted = h.state().session.sources.recent.first().unwrap().clone();
+        assert_eq!((noted.kind.as_str(), noted.address.as_str(), noted.name.as_str()), ("service", api, "Atlas"));
+        assert_eq!(noted.extra["layer"], "relief (map tiles)");
+        // Added from a dialog, it keeps the name the address gives.
+        h.state_mut().ui.service_steps.push(step("https://x.org/relief/map/tiles/smerc/{z}/{y}/{x}.png", None));
+        h.step();
+        assert_eq!(h.state().session.sources.recent.first().unwrap().name, sources::default_name(api));
+    }
+
+    /// A WCS coverage through a local server: its description is read, then the GeoTIFF is
+    /// downloaded; Recent names the coverage's source after the connection once it lands.
+    #[test]
+    fn a_coverage_is_named_once_its_download_lands() {
+        use rustgis_engine::data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+        let r = Raster::new(
+            "soc",
+            8,
+            8,
+            vec![vec![3.0; 64]],
+            GeoTransform { origin_x: 5.0, origin_y: 50.0, pixel_width: 0.1, pixel_height: -0.1 },
+            Crs::LonLat,
+            None,
+            ColorHint::Gray,
+            "Float32",
+        )
+        .unwrap();
+        let tiff = geotiff::write(&r, 0).unwrap();
+        let caps = r#"<wcs:Capabilities version="2.0.1" xmlns:wcs="http://www.opengis.net/wcs/2.0" xmlns:ows="http://www.opengis.net/ows/2.0">
+        <ows:ServiceIdentification><ows:Title>Soils</ows:Title></ows:ServiceIdentification>
+        <wcs:Contents><wcs:CoverageSummary><wcs:CoverageId>soc</wcs:CoverageId><ows:Title>Soil carbon</ows:Title>
+          <ows:WGS84BoundingBox><ows:LowerCorner>5 49.2</ows:LowerCorner><ows:UpperCorner>5.8 50</ows:UpperCorner></ows:WGS84BoundingBox>
+        </wcs:CoverageSummary></wcs:Contents></wcs:Capabilities>"#;
+        let describe = r#"<CoverageDescriptions><CoverageDescription><Envelope srsName="http://www.opengis.net/def/crs/EPSG/0/4326" axisLabels="Lat Long">
+        <lowerCorner>49.2 5</lowerCorner><upperCorner>50 5.8</upperCorner></Envelope></CoverageDescription></CoverageDescriptions>"#;
+        let base = serve(move |head| {
+            if head.contains("GetCoverage") {
+                (200, tiff.clone())
+            } else if head.contains("DescribeCoverage") {
+                (200, describe.as_bytes().to_vec())
+            } else {
+                (200, caps.as_bytes().to_vec())
+            }
+        });
+        let url = format!("{base}/wcs");
+        let mut h = harness();
+        let app = h.state_mut();
+        app.run("map.zoomToExtent", json!({"extent": [5.0, 49.2, 5.8, 50.0]})).unwrap();
+        let listed = app.session.run("service.layers", &json!({"url": url, "text": caps})).unwrap();
+        let source = ServiceSource { url: url.clone(), kind: "wcs", text: caps.into(), documents: Vec::new() };
+        let child = json!({"add": {"command": "service.add", "params": {}}, "layer": listed["layers"][0].clone()});
+        let before = app.session.sources.recent.clone();
+        add_from(app, &child, Some(&source), Some("Soils")).unwrap();
+        assert_eq!(app.session.sources.recent, before, "nothing is recorded while the description is read");
+        until(&mut h, |app| {
+            app.ui.service_steps.is_empty()
+                && app.ui.downloads.is_empty()
+                && app.ui.cog_probes.is_empty()
+                && app.session.sources.recent.first().is_some_and(|s| s.name == "Soils")
+        });
+        let noted = h.state().session.sources.recent.first().unwrap();
+        assert_eq!(noted.kind, "url");
+        assert!(noted.address.starts_with(&url) && noted.address.contains("GetCoverage"), "{}", noted.address);
+    }
+
+    /// The whole path on screen: open a connection in the Data Sources pane and double-click a
+    /// layer. Recent then lists it under the connection's name with the source as added, and
+    /// clicking that entry opens the service browser on the same address.
+    #[test]
+    fn recent_in_the_pane_shows_the_connection_and_reopens_its_service() {
+        let base = serve(|_| (200, WMS.as_bytes().to_vec()));
+        let url = format!("{base}/wms");
+        let mut h = harness();
+        let id = h.state_mut().run("connection.new", json!({"kind": "wms", "address": url, "name": "Local"})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        h.state_mut().run("ui.pane.sources", json!({})).unwrap();
+        h.step();
+        h.get_by_label("Local").click();
+        until(&mut h, |app| matches!(app.ui.connection_tree.entries.get(&(id.clone(), String::new())), Some(Entry::Ready(_))));
+        // (egui counts clicks in a row: let the connection's click age out of its window first.)
+        for _ in 0..14 {
+            h.step();
+        }
+        let layers = h.state().session.map().tiles.len();
+        // A double-click adds it: the first click selects, the second adds.
+        h.get_by_label("A").click();
+        h.step();
+        h.get_by_label("A").click();
+        h.step();
+        h.step();
+        assert_eq!(h.state().session.map().tiles.len(), layers + 1);
+        let noted = h.state().session.sources.recent.first().unwrap().clone();
+        assert_eq!((noted.kind.as_str(), noted.address.as_str(), noted.name.as_str()), ("service", url.as_str(), "Local"));
+        assert_eq!(noted.extra, json!({"layer": "a", "type": "wms"}));
+
+        // A rename leaves the entry as it was.
+        h.state_mut().run("connection.edit", json!({"id": id, "name": "Renamed"})).unwrap();
+        h.step();
+        assert_eq!(h.state().session.sources.recent.first().map(|s| s.name.as_str()), Some("Local"));
+
+        // Recent is listed above Connections: its row is the first labelled "Local".
+        h.state_mut().ui.service = None;
+        h.query_all_by_label("Local").next().unwrap().click();
+        h.step();
+        assert_eq!(h.state().ui.service.as_ref().map(|c| c.url.as_str()), Some(url.as_str()));
     }
 }

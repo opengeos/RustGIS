@@ -4,15 +4,18 @@ This page lists the data formats RustGIS reads and writes, how to add each one, 
 limits. [Data](data.md) covers adding data, large files and rasters in more detail; [Maps and
 Basemaps](maps.md#basemaps) covers web tile layers.
 
-Most formats open in the desktop app and in the [web app](https://web.rustgis.app) alike. Those
-that need C libraries (GDAL, DuckDB) or files on disk are desktop-only, as the tables say. The
-web app reads GeoPackages without SQLite, with a small SQLite file reader written in Rust.
+Most native readers work in the desktop app and the [web app](https://web.rustgis.app).
+Formats read through external GDAL or DuckDB programs need the desktop app or `rustgis-cli`;
+they aren't available in the web app. Database connections and folder-based File Geodatabases
+are desktop-only too. Browser files are uploaded rather than opened by path; GeoPackages use a
+pure-Rust SQLite file reader there. Reprojection supports the coordinate systems RustGIS knows,
+not every EPSG code; azimuthal equidistant systems such as Equi7 need the desktop app.
 
 ## Vector and tabular files
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| GeoJSON | `.geojson`, `.json` | Home › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first member. On the desktop, a FeatureCollection larger than 32 MB is read in place, a view at a time, however large; otherwise files up to 256 MB load whole. |
+| GeoJSON | `.geojson`, `.json` | Home › Add Data, or drop the file | Features with typed attributes; a `GeometryCollection` keeps its first readable member. Desktop FeatureCollections larger than 32 MiB use an in-place reader; layers with more than 100,000 features stream a view at a time. Other GeoJSON files load whole, up to 256 MiB. |
 | Delimited text | `.csv`, `.tsv`, `.txt` | Add Data, or Add Data › Delimited Text… to choose the columns from the file's header | Comma, semicolon, tab or pipe separated (found from the header, or `"delimiter"`); `info.fileColumns` lists the columns and the ones found. Points from x/y columns (named like longitude/latitude or easting/northing, or chosen with `"x"` and `"y"`), or any geometry from a WKT/EWKT column (named like `wkt` or `geometry`, or `"wkt"`). Coordinates in another system are converted from `"crs"` (`EPSG:2263`, or WKT) or an EWKT `SRID=`; without either, coordinates outside longitude/latitude are pointed out. A file without coordinates opens as a standalone table. |
 | Shapefile | `.shp` with `.dbf` (and `.shx`), or zipped (`.zip`) | Add Data or drop the file; in the web app, pick or drop the `.shp` and `.dbf` together, with the `.shx` and `.prj` if there are (they open as one layer), or the zip | A zip may hold several Shapefiles, in folders, and other vector files (GeoJSON, CSV, GeoParquet, FlatGeobuf); each becomes a layer, at most 32 for the whole archive (Shapefiles first, so other files are left out when Shapefiles fill it). `.txt` files and macOS `__MACOSX` entries are passed over, and a member that can't be read is skipped and named in a notice. Converted to longitude/latitude from the coordinate system in its `.prj` (EPSG, Esri or OGC WKT, or WKT2 as PROJ and QGIS write it; Web Mercator, UTM, State Plane and other common projections); without a `.prj` it must be in longitude/latitude. On the desktop, one with more than 100,000 shapes (counted from its `.shx`) is read in place, a view at a time. |
 | KML / KMZ | `.kml`, `.kmz` | Add Data, drop the file, or upload it in the web app | A layer for each kind of geometry (points, lines, polygons), with each placemark's name, description, folder path and extended data. Styles are kept: the layer is drawn by unique values of its `style` field, with each KML style's line and fill colours, widths and icon colours (up to 64 styles). Multi-geometries and `gx:Track`s are read. Ground overlays (pictures on a `LatLonBox`, turned by its `rotation`) are raster layers kept in the project: the picture inside a KMZ, or a file beside a KML (not a web address, nor outside its folder); a `gx:LatLonQuad` isn't drawn. |
@@ -22,16 +25,16 @@ web app reads GeoPackages without SQLite, with a small SQLite file reader writte
 | LandXML | `.landxml`, or `.xml` | Add Data, drop the file, or upload | Coordinate geometry points, parcels (polygons), alignments (lines; curves as chords) and TIN surfaces (a triangle per face, with its mean elevation), converted from the file's `epsgCode` or `"crs"`. |
 | Encoded polylines | text | `layer.addEncodedPolyline` with `"polyline"` (one or a list) | Google's encoding, precision 5, or 6 (`"precision"`) as OSRM and Valhalla can give: a line layer. |
 | GML | `.gml` | Add Data, drop the file, or upload | Simple features in GML 2 and 3 (WFS answers, OGR's GML): a layer per feature type, its simple elements as fields. Converted from the `srsName` (EPSG codes, URNs and URLs; the URN and URL forms of geographic systems are latitude first). |
-| MapInfo Interchange | `.mif` with its `.mid` (or both zipped) | Add Data, drop the file, or upload the zip | Points, lines, polylines, regions (holes found by nesting), rectangles and ellipses; text and arcs are rows without geometry. Converted from the `CoordSys`: longitude/latitude, Transverse Mercator, Lambert Conformal Conic, Albers or Mercator. |
-| OpenStreetMap PBF | `.osm.pbf` | Add Data, drop the file, or upload | Points (tagged nodes), lines and multipolygons (closed ways that are areas, and multipolygon and boundary relations), with common tags as fields and the rest in `other_tags`, as GDAL gives them. Up to 40 million nodes (4 million in the web app); on the desktop, extracts over 256 MB open through GDAL when it is installed. |
-| TopoJSON | `.topojson`, or `.json` | Add Data, drop the file, or upload | A layer per object, its geometries rebuilt from the shared arcs (quantized or not). |
+| MapInfo Interchange | `.mif` with its `.mid` (or both zipped) | Add Data, drop the file, or upload the zip | Points, lines, polylines, regions (holes found by nesting), rectangles and ellipses; text and arcs are rows without geometry. Converted from the `CoordSys`: longitude/latitude, Transverse Mercator, Lambert Conformal Conic, Albers or Mercator. A loose `.mif` upload has no `.mid` attributes; zip both files to keep them in the web app. |
+| OpenStreetMap PBF | `.osm.pbf`, or `.pbf` containing OSM data | Add Data, drop the file, or upload | Points (tagged nodes), lines and multipolygons (closed ways that are areas, and multipolygon and boundary relations), with common tags as fields and the rest in `other_tags`, as GDAL gives them. Up to 40 million nodes (4 million in the web app); on the desktop, extracts over 256 MiB open through GDAL when it is installed. Vector-tile `.pbf` files use Add Tile Layer instead. |
+| TopoJSON | `.topojson`, or `.json` | Add Data, drop the file, or upload | Shared arcs (quantized or not) are rebuilt into geometries. A `.topojson` adds a layer per object, up to 64; a topology named `.json` adds its first object and names the others in a notice. Use `.topojson` to add them all. |
 | AutoCAD DXF | `.dxf` (ASCII) | Add Data, drop the file, or upload | Points, lines and polygons layers from the drawing's entities: POINT, LINE, LWPOLYLINE and POLYLINE (bulges drawn as arcs; closed ones stay lines; polyface meshes become polygons), CIRCLE, ARC, ELLIPSE, SPLINE, HELIX, LEADER, MLINE (its centre line), TEXT, MTEXT, ATTRIB and constant ATTDEF (points with their text, at the alignment point of justified text), HATCH boundaries (holes found by nesting), SOLID, TRACE and 3DFACE (polygons). Blocks (named in any case) are drawn where INSERTs place them (scaled, rotated, in arrays, nested up to 8 deep), and so are DIMENSIONs' blocks (a linear dimension without one draws its lines and measured text). Entities in an object's own coordinate system are turned into the drawing's. Fields: `layer`, `entity`, `color` (ACI, BYLAYER and BYBLOCK resolved), `linetype`, `text`, `height`, `rotation`, `block`, `elevation` and `paperspace`. The drawing's layouts (paper space: title blocks, viewport frames) are left out, with a notice, unless `"paperSpace": true`. A drawing never says its coordinate system: give `"crs"` (such as `EPSG:2263`), or its coordinates are kept as they are, with a notice. `"layer"` picks one of the drawing's own layers, and `info.fileLayers` lists them. Up to 2 million features (500,000 in the web app). Not read: binary DXF, MULTILEADER, WIPEOUT, IMAGE and ACIS solids (3DSOLID, REGION), named in a notice. |
 | Geotagged photos | `.jpg`, `.jpeg` | Add Data (several at once in the web app), drop them, upload, or `layer.addPhotos` with `"paths"` or a `"folder"` | JPEGs with a GPS position in their EXIF become points in the **Photos** layer (photos added one at a time join it): each with its `name`, `file`, `time` (when it was taken), `altitude`, `direction` (where the camera faced), `camera` and a `thumbnail` of at most 160 pixels, kept with the feature so the project needs no other file. Identify shows the thumbnail. Photos without a position are named in a notice and left out; a layer holds up to 2,000 photos. A JPEG is always read as a photo unless `layer.addData` or `layer.addDataBytes` is given `"as": "scan"` (a phone photo of a paper map, say: see [Scans with no coordinates](#rasters)). |
-| LiDAR point clouds | `.las`, `.laz` (COPC too) | Add Data, drop the file, upload, or From URL… | LAS 1.0–1.4 (point formats 0–10) and LAZ, on the desktop and in the web app: a point layer with each point's `z`, `intensity`, `classification`, `return` and colour (`red`, `green`, `blue`), coloured by ASPRS class (or by elevation when the cloud has one class). A cloud past 2 million points (500,000 in the web app) shows an evenly spread sample of them. Converted from the coordinate system its WKT or GeoTIFF-key record names (the horizontal part of a compound one); a file that names none keeps its coordinates, with a notice. Read in place, so a project keeps the file's path, not its points. |
-| GeoPackage | `.gpkg` | Add Data, or upload in the web app | Every feature table becomes a layer, up to 32 at once (the result counts the rest in `skippedCount` and names up to 100 of them in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them all. Read in place by its R-tree; any EPSG system is reprojected. The web app reads the file with its own SQLite reader (tables scanned, the envelope in each geometry header tested first; no R-tree); UTF-16 databases aren't read there. |
-| GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. Row groups are pruned by the bbox covering. Snappy, gzip, LZ4 and zstd compression are read, in the browser too; Brotli isn't. |
+| LiDAR point clouds | `.las`, `.laz` (COPC too) | Add Data, drop the file, upload, or From URL… | LAS 1.0–1.4 (point formats 0–10) and LAZ, on desktop and web: points with `z`, `intensity`, `classification`, `return` and colour (`red`, `green`, `blue`), coloured by ASPRS class or elevation. An evenly spread sample is read once, at most 2 million points (500,000 in the web app); views use that sample, not the COPC spatial index. LAZ decompression reads at most the first 400 million points (40 million on the web), with a notice when capped. Converted from the file's WKT or GeoTIFF-key record; without one, coordinates are kept with a notice. A local project keeps the path; uploads keep the file bytes. Remote files download whole. |
+| GeoPackage | `.gpkg` | Add Data, or upload in the web app | Local files and browser uploads add every feature table, up to 32 (with the rest counted in `skippedCount` and up to 100 named in `skipped`); `"layer"` picks one, and `info.fileLayers` lists them. Desktop byte uploads and downloads add the first table unless `"layer"` names another. Large local tables use their R-tree and reproject supported EPSG systems. Browser tables are scanned, testing each geometry header's envelope first; UTF-16 databases aren't read there. Raster tile tables aren't imported. |
+| GeoParquet | `.parquet`, `.geoparquet` | Add Data, or upload in the web app | WKB geometry, with the CRS from the file's `geo` metadata. A binary geometry column is required; plain non-spatial Parquet tables and GeoArrow-native geometry encodings aren't read by this importer. Row groups are pruned by the bbox covering. Snappy, gzip, LZ4 and zstd compression are read, in the browser too; Brotli isn't. |
 | FlatGeobuf | `.fgb` | Add Data, or upload | Read in place by its packed R-tree. |
-| Esri File Geodatabase | `.gdb` folder (desktop) | A file dialog can't pick a folder: in Add Data pick any `.gdbtable` file inside it; or double-click the `.gdb` in the Browser, or drop the folder on the window | Read without GDAL: every feature class becomes a layer and every table a standalone table, with their fields (dates as text) and coordinate system (by its code, EPSG or Esri; else its WKT). `"layer"` picks one, and `info.fileLayers` lists them. 3D multipatches (such as swissBUILDINGS3D's buildings) are drawn as their footprints, the union of their faces seen from above, with their lowest and highest Z in `z_min` and `z_max` and the difference in `height`, which an extrusion (Style › Extrusion) can stand them up by; one with no face seen from above (only walls) is drawn as the outline of its points. Curves are drawn as straight segments between their ends. Compressed tables, raster fields and some newer row indexes aren't read: with GDAL installed, such a geodatabase opens through GDAL instead (see below). Loaded whole, up to 2 GB a table. |
+| Esri File Geodatabase | `.gdb` folder (desktop) | In Add Data pick a `.gdbtable` file inside it; or double-click the `.gdb` in the Browser, or drop the folder | The native reader loads up to 512 feature classes and tables, up to 2 GiB per table. Feature classes become layers and non-spatial tables standalone tables; dates are text. Coordinates use the EPSG/Esri code, else WKT. `"layer"` picks one; `info.fileLayers` lists them. Multipatches become footprints with `z_min`, `z_max` and `height`; large or wall-only ones may use a convex hull. Curves become straight segments between their ends. Unreadable tables (compressed storage, raster fields or unsupported row indexes) are tried through GDAL when installed; otherwise they are named in a notice. |
 | Standalone tables | CSV, or any layer without geometry | Add Data | Listed under the map in Layers; join or relate them to layers. |
 
 Shapefile text uses the encoding in its `.cpg` sidecar first, then the language-driver code in
@@ -66,9 +69,12 @@ GDAL](data.md#formats-through-gdal).
 ## Files on the web
 
 **Home › Add Data › From URL…** (`layer.addUrl` with `"url"`) downloads a file by its `https://`
-(or `s3://`, see [S3 buckets](data.md#s3-buckets)) address and adds it like a file from this computer: GeoJSON, CSV, GeoParquet, FlatGeobuf,
-GeoPackage, zipped Shapefiles, KML/KMZ, GPX or GeoTIFF/COG, up to 512 MB on the desktop and 256 MB
-in the web app (where the server must allow requests from web pages, CORS). On the desktop, with
+(or `http://` or `s3://`, see [S3 buckets](data.md#s3-buckets)) address and adds it like an
+uploaded file. Native formats include GeoJSON, delimited text, GeoParquet, FlatGeobuf, GeoPackage,
+zipped Shapefiles, KML/KMZ, GPX, spreadsheets, GeoRSS, GML, DXF, TopoJSON, LiDAR and rasters.
+Downloads are limited to 512 MiB on desktop and 256 MiB on the web; individual readers may have
+lower limits (the whole-file vector readers use 256 MiB). In the web app the server must allow
+requests from web pages (CORS). On the desktop, with
 [GDAL](https://gdal.org) installed, a JPEG 2000 file (`.jp2`, `.j2k`: Sentinel-2's imagery on S3)
 is downloaded too, converted to a GeoTIFF that the project keeps, and added. Desktop byte uploads
 (`layer.addDataBytes`) of `.jp2` and `.j2k` use the same conversion. The web app rejects both JPEG
@@ -92,16 +98,16 @@ unresponsive. The original JPEG 2000 byte buffer is released once it has been st
 before GDAL runs or the GeoTIFF is read back. The converted GeoTIFF and decoded raster still
 occupy memory together; the 512 MiB file limit is not a limit on total process memory.
 
-A cloud-optimised GeoTIFF (a tiled `.tif` with overviews, as most published imagery is) is read
-in place rather than downloaded: its header first, then, by HTTP range requests, only the tiles of
-the overview each part of the view needs, so a Sentinel-2 scene of 300 MB draws in a couple of
-seconds and full detail comes as you zoom in. It is a tile layer (`map.addTiles` kind `cog`,
-saved in the project by its address), drawn under the map's own layers like other tile layers:
-RGB(A) 8-bit images as they are, other images in grey stretched between the 2nd and 98th
-percentiles of their coarsest overview. A GeoTIFF in strips, with bands stored apart, or without
-tiles is downloaded whole as a raster layer, as is any GeoTIFF added with `"whole": true` (for
-the raster tools and symbology). The web app needs the server to allow range requests from web
-pages (CORS with the `Range` header), as public buckets such as Sentinel-2's do.
+A tiled GeoTIFF is read in place rather than downloaded: its header first, then, by HTTP range
+requests, the tiles of the overview each part of the view needs. Overviews make zoomed-out reads
+smaller. It is a tile layer (`map.addTiles` kind `cog`, saved by its address), drawn under the map's
+own layers: RGB(A) 8-bit images in colour, other images stretched between the 2nd and 98th
+percentiles of their coarsest overview. Planar files (bands stored apart), signed-byte data and
+bottom-up images work too. `map.setTiles` selects one or three `"bands"` (from 1) and a fixed
+`"range"`; see [Satellite embeddings](web-data.md#satellite-embeddings).
+A GeoTIFF in strips, a rotated image or an unsupported tiled image downloads whole as a raster layer, as does a
+GeoTIFF added with `"whole": true` (for raster tools and symbology). The web app needs the server
+to allow range requests (CORS with the `Range` header).
 
 A GeoParquet or FlatGeobuf file by its address is read in place too, a view at a time, however
 large: the layer is streamed like a large local file, and the view's features are fetched in the
@@ -111,20 +117,18 @@ view. A GeoParquet's footer is read first, then the row groups the view meets, b
 box covering column (`bbox`) and its statistics: the covering of groups on the view's edge, then
 the geometry and attribute columns of the rows taken. A view holding more than a read takes (60,000
 features on the desktop, 30,000 in the web app) shows an evenly spread sample of it, in patches;
-zoom in for all of them. So a 12 GB FlatGeobuf of 11 million areas opens after 65 KB and
-draws a city in about a second from 9 MB, and a 525 MB Overture buildings file opens after 1 MB.
-The project keeps the address and reads it the same way when it opens. A FlatGeobuf without an
+zoom in for more detail. The project keeps the address and reads it the same way when it opens.
+A FlatGeobuf without an
 index, a GeoParquet without a covering column, or a server that doesn't answer range requests
 means the file is downloaded whole instead, as is any file added
 with `"whole": true`; Load All Features and the geoprocessing tools fetch the whole file on the
 desktop, while in the web app they need the file downloaded first.
 
-`layer.addUrl` waits for the download, up to a minute, which suits the command line, MCP and the
-desktop app's assistant; a larger file comes through the From URL… dialog, which downloads in the
-background. In the web app, where nothing may wait, it adds `.pmtiles` and GeoTIFF addresses only
-(a GeoTIFF read in place); other files, GeoParquet and FlatGeobuf read in place among them,
-come through the From URL… dialog (`ui.addUrl`) or a `?data=` link. GeoJSON, CSV, KML and GPX files are read up to
-256 MB; larger downloads (GeoParquet, FlatGeobuf, GeoPackage, GeoTIFF) up to the limits above.
+On desktop, `layer.addUrl` waits for downloads, up to a minute; the From URL… dialog (`ui.addUrl`)
+works in the background. In the web app the same dialog handles asynchronous downloads.
+`layer.addUrl` can add PMTiles and COG tile layers directly, but an ordinary download returns
+`{"pending": true, "url": "…"}` and is added later by the app. To open a remote GeoParquet or
+FlatGeobuf whose header hasn't been fetched yet, use the From URL… dialog or a `?data=` link.
 
 ## Map and feature services
 
@@ -247,12 +251,12 @@ databases](data.md#sql-queries-and-duckdb-databases).
 
 | Format | Extensions or source | How to add it | Notes |
 | --- | --- | --- | --- |
-| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband; Deflate, LZW, PackBits, JPEG or Zstandard compression. Any EPSG system, or the file's own projection from its GeoKeys (Albers, LCC, transverse Mercator…), reprojected as it draws. A rotated or skewed image (a transformation matrix with rotation terms) is resampled to a north-up grid as it's read. A large file opens from its overview, or one made as it is read when it has none. |
+| GeoTIFF / Cloud-optimised GeoTIFF | `.tif`, `.tiff` | Add Data, or upload | Regular or cloud-optimised, striped or tiled; grey, RGB(A), palette (with its colour table) or multiband; Deflate, LZW, PackBits, JPEG or Zstandard compression. Supported EPSG systems or the file's own GeoKey projection are reprojected as it draws. Rotated or skewed images are resampled north-up. Large files open from an overview, or one made while reading. Browser uploads over 256 MiB read only the parts needed for a fitting overview, provided those parts fit the upload limit; the project keeps those parts, not the full-resolution file. |
 | JPEG 2000 | `.jp2`, `.j2k` | Add Data, byte upload (`layer.addDataBytes`), or From URL… (desktop, with [GDAL](https://gdal.org) installed) | Converted through GDAL. Uploads and downloads keep the converted GeoTIFF in the project, so reopening it needs neither GDAL nor the original file or address; their output and workspace limits are described under [Files on the web](#files-on-the-web). The web app rejects JPEG 2000 uploads and downloads with an explicit GDAL limitation: use GeoTIFF instead. |
-| Scans with no coordinates | a `.tif` with no GeoTIFF tags, `.png`; any `.tif`, `.png` or `.jpg`/`.jpeg` with `"as": "scan"` | Add Data, or upload (`layer.addData`, `layer.addDataBytes`) | Keeps its pixel size and bands (grey, RGB(A); 8 or 16 bits). An untagged TIFF or a PNG opens as a scan by default; a JPEG only with `"as": "scan"` (otherwise it is a photo), which also drops the coordinates of a GeoTIFF. It has no coordinates, so it is drawn over the current view, the command's result says so (`georeferenced: false`), and the layer is marked not georeferenced until **Georeference** places it. Until then it can't be exported, and tools that would give a result a place on the ground (raster functions, pixel edits, clip, resample, mosaic) refuse it. A PNG or JPEG is decoded whole: up to four times the sample limit in decoded bytes is read at every second pixel, and anything larger is refused, so save it as a TIFF (read at a reduced size). A TIFF is reduced as a GeoTIFF is. |
-| ASCII grid | `.asc` (with an optional `.prj`) | Add Data, or upload | |
-| Zarr | a store's folder (`.zarr`) or web address, format 2 (consolidated) or 3 | Add Data › Zarr… (`layer.addZarr`), Add Data on the folder, or a `?zarr=` link | A variable's latitude/longitude (or y/x) map at the steps picked of its other dimensions (time, level), read chunk by chunk in pure Rust (blosc, zlib, gzip, zstd, LZ4; sharded arrays too), on the desktop and the web. See [Zarr stores](data.md#zarr-stores). |
-| Rasters GDAL reads | `.img`, `.hgt`, `.dem`, `.dt0`–`.dt2`, `.nc`, `.hdf`, `.h5`, `.bil`, `.grd`, `.sdat`, `.kea`, `.ers`, `.rst`, `.ntf`, `.ecw`, `.sid`… | Add Data (desktop, with [GDAL](https://gdal.org) installed: `gdal_translate`, `gdalinfo` and `gdalwarp`) | Converted once to a cloud-optimised GeoTIFF in the cache, then read as one. A NetCDF or HDF file's variables are its subdatasets: the first is added, the others are named in a notice, and `"layer"` picks one. A file that doesn't say its coordinate system is read as WGS 84 when its coordinates look like longitude/latitude (0–360° longitudes are moved to -180–180°); otherwise give `"crs"`. |
+| Scans with no coordinates | an untagged `.tif` or `.png`; any `.tif`, `.png` or `.jpg`/`.jpeg` with `"as": "scan"` | Add Data, or upload (`layer.addData`, `layer.addDataBytes`) | Grey or RGB(A), 8- or 16-bit pixels. An untagged TIFF or PNG opens as a scan by default; a JPEG needs `"as": "scan"` (otherwise it is a photo). This also discards a GeoTIFF's coordinates. The scan initially covers the current view and is marked not georeferenced (`georeferenced: false`) until **Georeference** places it. Export and tools needing ground coordinates refuse it until then. PNG/JPEG decoding is bounded and may reduce the image; large TIFFs can be read at reduced resolution. |
+| ASCII grid | `.asc` (with an optional `.prj` on desktop) | Add Data, or upload | A single numeric band. Desktop files use the neighbouring `.prj`; uploaded and downloaded grids have no sidecar and must have coordinates that fit WGS 84 longitude/latitude. |
+| Zarr | a store's folder (`.zarr`, desktop) or web address (desktop and browser), format 2 (consolidated) or 3 | Add Data › Zarr… (`layer.addZarr`), Add Data on a local folder, or a `?zarr=` link | A variable's latitude/longitude (or y/x) map at the steps picked of its other dimensions (time, level), read chunk by chunk in pure Rust (blosc, zlib, gzip, zstd, LZ4; sharded arrays too). See [Zarr stores](data.md#zarr-stores). |
+| Rasters GDAL reads | `.img`, `.hgt`, `.dem`, `.dt0`–`.dt2`, `.nc`, `.nc4`, `.hdf`, `.hdf5`, `.h5`, `.he5`, `.bil`, `.bsq`, `.bip`, `.envi`, `.grd`, `.rst`, `.sdat`, `.kea`, `.ers`, `.ntf`, `.nitf`, `.ecw`, `.sid`, `.gsb`, `.bt`, `.rsw` | Add Data (desktop, with [GDAL](https://gdal.org): `gdal_translate`, `gdalinfo` and `gdalwarp`; the installed build must include the driver) | Converted once to a cached cloud-optimised GeoTIFF. NetCDF/HDF variables are subdatasets: the first is added, the others named in a notice; `"layer"` picks one. Without a declared coordinate system, longitude/latitude-like coordinates use WGS 84 (0–360° longitudes are moved to −180–180°); otherwise give `"crs"`. JPEG 2000 is listed separately above. |
 
 ## Tiles and web services
 
@@ -260,34 +264,73 @@ databases](data.md#sql-queries-and-duckdb-databases).
 | --- | --- | --- | --- |
 | Raster tiles | XYZ/TMS template (`{z}/{x}/{y}`, `{-y}`, `{s}`, `{q}`), WMS (`{bbox-epsg-3857}`) | Home › Add › Basemap › Add Tile Layer | PNG, JPEG and WebP. |
 | Vector tiles | Mapbox Vector Tiles (`.pbf`, `.mvt`) template, or TileJSON | Add Tile Layer | Drawn in a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas. |
-| MapLibre styles | `style.json` | Add Tile Layer | The style's vector and raster sources, sprite, expressions and zoom functions. |
-| PMTiles | `.pmtiles`: a web address, or a file on the desktop | Add Tile Layer (or its **Tile Archive File…** button), Add Data, or drop the file | Raster or vector, as the archive says; uncompressed, gzip, Brotli or Zstandard. Read a tile at a time by byte ranges (the server must allow them, and CORS in the web app). The map moves to the archive's bounds when it is added (not for a world archive). A vector archive is drawn in the built-in style when it is a basemap, otherwise with each of its layers in its own colour. |
+| MapLibre styles | `style.json` | Add Tile Layer | A supported subset of vector and raster sources, sprites, expressions and zoom functions; see [Maps and Basemaps](maps.md#basemaps) for styling limits. |
+| PMTiles | `.pmtiles`: a web address, or a desktop file | Add Tile Layer (or **Tile Archive File…**), Add Data, or drop a local file on desktop | Version 3 archives only: PNG, JPEG or WebP rasters, or MVT vectors; uncompressed, gzip, Brotli or Zstandard. Read a tile at a time by byte ranges (CORS on the web). Browser local-file uploads aren't supported; use an archive's web address. The map moves to the archive's bounds, except a world archive. Vector archives use the built-in basemap style, or a colour per layer when added as an overlay. |
 | MBTiles | `.mbtiles`: a file | Add Data, drop the file, Add Tile Layer's **Tile Archive File…** button, or upload in the web app | Raster (PNG, JPEG, WebP) or vector tiles, as its metadata says, drawn as PMTiles archives are. The desktop reads the file in place, a tile at a time. The web app reads an upload into memory (the plain `tiles` table and the deduplicated layouts of mbutil, TileMill and Planetiler) and keeps it for the session: a project saved there asks for the file again. |
 
 ## Writing
 
 | Format | How to write it | Notes |
 | --- | --- | --- |
-| GeoJSON, CSV | Data › Export (`share.exportLayer`) | The Export Features dialog picks the format; the file is saved in it whatever extension is typed. In the web app it downloads (any format below but GeoPackage; a Shapefile as one zip). A streamed layer writes its whole source (as every format below does). |
-| GeoPackage | Data › Export to `.gpkg` (desktop) | One feature table (an attributes table for a layer without geometry) in the layer's coordinate system (see below), with an R-tree spatial index and the GeoPackage 1.4 triggers that keep it current when other software edits the file. Feature ids are kept. |
-| GeoParquet | Data › Export to `.parquet` | GeoParquet 1.1: WKB geometry in WGS 84, Snappy compression, row groups of 65,536 features and a `bbox` covering column so readers can skip rows by extent. |
+| GeoJSON (`.geojson`, `.json`), CSV | Data › Export (`share.exportLayer`) | The Export Features dialog picks the format; the chosen extension is appended when needed. In the web app it downloads any vector format below except GeoPackage (a Shapefile as one zip). Feature export loads a streamed layer's whole source; remote sources on the web must be downloaded first. |
+| GeoPackage | Data › Export to `.gpkg` (desktop) | One feature table (an attributes table for a layer without geometry) in the layer's coordinate system (see below), with an R-tree and GeoPackage 1.4 triggers to maintain it. Unique feature ids that fit signed 64-bit integers are kept; otherwise SQLite assigns new ids. |
+| GeoParquet (`.parquet`, `.geoparquet`) | Data › Export | GeoParquet 1.1: WKB geometry in WGS 84, Snappy compression, row groups of 65,536 features and a `bbox` covering column. A standalone table without geometry writes plain Parquet. |
 | Shapefile | Data › Export to `.shp` (or `.zip` for the files zipped) | Writes `.shp`, `.shx`, `.dbf`, `.prj` (the coordinate system, see below) and `.cpg` (UTF-8). Field names are cut to 10 characters (made unique), text to 254 bytes, and numbers too wide for a dBase field are left empty; features without geometry, and lines of a single point, are left out (and reported). |
 | FlatGeobuf | Data › Export to `.fgb` | In the layer's coordinate system (see below), with a spatial index; features without geometry are left out (and reported). |
 | KML, KMZ, GPX | Data › Export to `.kml`, `.kmz` or `.gpx` | Placemarks named by a `name` field, if there is one; features without geometry are left out. |
-| KML, GPX, CSV with WKT | Analyze › Workflows › Data Interop | |
-| GeoTIFF | Data › Export | |
-| PNG | Publish › Export Map (`share.exportMap`) | At any DPI, with labels, scale bar and tile credits. |
+| GeoJSON, KML, GPX, CSV, CSV with WKT | Analyze › Workflows › Data Interop (`data.convert`; `"format": "geojson"`, `"kml"`, `"gpx"`, `"csv"` or `"wkt"`) | Returns text when `"path"` is omitted; writes a file on desktop when it is given. |
+| GeoTIFF / Cloud-optimised GeoTIFF | Data › Export Raster (`share.exportRaster`) | Untiled GeoTIFF by default; `"cog": true` writes 512-pixel tiles, Deflate compression and overviews. Writes the loaded raster's resolution (an overview when that is what was opened), the selected band or its colour bands. The web app's Export Raster downloads an ordinary GeoTIFF. |
+| PNG | Publish › Export Map (`share.exportMap`) | Configurable DPI, with labels, scale bar and tile credits. |
 | PDF | Layouts, reports and presentations | |
 | Wavefront OBJ, glTF | Publish › Export To 3D, Share As › Web Scene | Polygons extruded by a field. |
 | Web map, OGC API Features, MapLibre style | Publish › Share As | Open-format files that need no server: see [Sharing](sharing.md). |
-| Raster tiles | Analyze › Create Hosted Imagery | |
+| Raster tiles | `imagery.hostedImagery` | A zip of `tiles/z/x/y.png` tiles, `tiles.json` and a viewer page; at most 5,000 tiles and 256 MiB of tile data. |
 
-GeoPackage, Shapefile and FlatGeobuf exports are written in the coordinate system the layer was
-read in: a Shapefile's `.prj`, a GeoPackage's or FlatGeobuf's own system, or the `crs` a CSV was
-added with (EPSG:25832 data goes back out as EPSG:25832). A layer read in longitude/latitude, or
-made in RustGIS, is written in WGS 84 (EPSG:4326). `share.exportLayer` takes `"crs"` to choose
+GeoPackage, Shapefile and FlatGeobuf exports default to the layer's original coordinate system
+when it has an EPSG code. Shapefiles can also retain a custom WKT system; GeoPackage and FlatGeobuf
+need an EPSG code and otherwise default to WGS 84. A layer made in RustGIS defaults to WGS 84.
+`share.exportLayer` takes `"crs"` to choose
 another, such as `{"layer": "Parcels", "path": "parcels.gpkg", "crs": "EPSG:4647"}`. GeoJSON, KML,
 GPX, GeoParquet and CSV are always written in WGS 84.
+
+## Define Projection
+
+When a Shapefile's `.prj` is missing or incorrect, right-click its layer and choose
+**Define Projection…** (also in Command Search). Enter the **source** coordinate system, such
+as `EPSG:2263` or a WKT/PROJ definition, then Apply. This reinterprets the native coordinate
+numbers: it changes the layer's position, preserves attributes and selection, and can be undone
+in one step. Use **Zoom To Layer** to see its corrected position. It does not modify the original
+file. Saving the project keeps the definition. Shapefile exports use it by default;
+GeoPackage and FlatGeobuf exports do so when the definition has an EPSG code. Custom
+definitions without an EPSG code can be exported in their native coordinates as Shapefiles.
+
+This differs from changing the map's coordinate system, which only changes the display, or
+exporting to another CRS, which converts coordinate numbers while preserving locations.
+RustGIS stores geometry in longitude/latitude, so Define Projection first reconstructs native
+numbers through the previous CRS; small floating-point rounding differences are possible.
+Edits already made to the layer are reinterpreted too. If the wrong CRS already discarded or
+clamped coordinates, import the original file again to recover them accurately.
+
+If the incorrect `.prj` prevented geometry from being read, Define Projection cannot restore
+it. Choose **Import Original File…** in the dialog, or search for **Import Shapefile with
+Projection…**. Enter the correct CRS before choosing the file. In the browser, pick the `.shp`
+and `.dbf` together, with any sidecars, or choose a ZIP. The override replaces the `.prj` before
+any conversion and applies to every Shapefile in a ZIP; other formats keep their own CRS.
+This adds a new layer, so existing layer edits and styles are not transferred.
+
+A streamed layer cannot be changed by Define Projection. Use **Load All Features** first (up
+to the read limit), or import again with the override; streamed Shapefiles remember that
+override when the project reopens. Layers whose import lost geometry must be imported again.
+
+The same operations are available to scripts and the CLI:
+
+```json
+{"cmd":"layer.defineProjection","params":{"layer":"Parcels","crs":"EPSG:2263"}}
+{"cmd":"layer.addData","params":{"path":"parcels.shp","crs":"EPSG:2263"}}
+```
+
+`layer.addDataBytes`, `layer.addUrl` and `layer.addDownload` also accept `crs` for zipped
+Shapefiles. The source files and their `.prj` sidecars are never rewritten by either operation.
 
 ## RustGIS files
 

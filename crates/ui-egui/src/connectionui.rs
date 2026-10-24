@@ -147,6 +147,13 @@ pub fn open_edit(app: &mut RustGisApp, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn log_in(app: &mut RustGisApp, id: &str) {
+    match app.run("ui.connection", json!({"id": id})) {
+        Ok(_) => app.dialogs.info = Some(tl!("Type the password or keys to log in for this session, then Save.").to_string()),
+        Err(e) => app.session.notify(e, true),
+    }
+}
+
 fn definition(st: &State) -> Value {
     let address = st.address.trim();
     let lower = address.to_ascii_lowercase();

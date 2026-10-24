@@ -331,6 +331,11 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
             }
         }
         if !unavailable {
+            let keys = c.kind == "s3" && c.options.get("credentials").is_some_and(|v| v == "keys");
+            if (DATABASE_KINDS.contains(&c.kind.as_str()) || keys) && ui.button(tl!("Log In…")).clicked() {
+                crate::connectionui::log_in(app, &c.id);
+                ui.close();
+            }
             if ui.button(tl!("Refresh")).clicked() {
                 crate::connectiontree::refresh(app, Some(&c.id));
                 ui.close();

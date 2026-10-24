@@ -9,6 +9,8 @@
 //!
 //! `cube.trend` reads the slices into one block, cell by date, and works out each cell's trend
 //! with [`rustgis_analysis::trend`]: Sen's slope and the modified Mann–Kendall test.
+//! `cube.reduce` folds the slices into running totals as they are read: a statistic over time,
+//! for the whole period or a year (or a month of the year) at a time.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -22,7 +24,10 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![C::new("cube.trend", "Trend Analysis", "Analyze › Image Analysis", trend_cmd).params(
-        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer (or "path" | "url", "variable", "index", "crs" as for zarr.reduce) or a raster of several bands, a date each (default: the active layer) | "collection": a STAC collection (desktop: "url"?: its API, "asset": a band, "bbox"?: [w, s, e, n] | "view", "start", "end", "maxCloud"? as for stac.addCube, "cellSize"?: in the files' units, the overview level nearest it is read, "resampling"?: "nearest" (default: that overview's pixels as stored) | "average" (each cell the mean of the full images' pixels in it, which reads them); a large area is read in pieces), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "start"?, "end"?: dates (a whole number from 1000 to 9999 is a year; an end given as a year or a month takes all of it), "months"?: [1–12] (one season across years), "test"?: "hamedRao" (default) | "yueWang" | "seasonal" | "original", "seasons"?: parts of a year for the seasonal test (default 12), "alpha"?: 0.05 (above 0, below 0.5), "minValid"?: dates a cell needs (default: half of them, at least 4; the seasonal test also needs 4 in seasons of two or more), "per"?: "year" (default) | "decade", "name"?: text, "ran"?: (internal: a trend the app has worked out)} → four raster layers: Sen's slope, the test's Z and p-value, and the slope where p < alpha"#,
+        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer (or "path" | "url", "variable", "index", "crs" as for zarr.reduce) or a raster of several bands, a date each (default: the active layer) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "url"?: the collection's STAC API (as for stac.addCube), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default: that overview's pixels as stored) | "average" (each cell the mean of the full images' pixels in it, which reads them), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "start"?, "end"?: dates (a whole number from 1000 to 9999 is a year; an end given as a year or a month takes all of it), "months"?: [1–12] (one season across years), "test"?: "hamedRao" (default) | "yueWang" | "seasonal" | "original", "seasons"?: parts of a year for the seasonal test (default 12), "alpha"?: 0.05 (above 0, below 0.5), "minValid"?: dates a cell needs (default: half of them, at least 4; the seasonal test also needs 4 in seasons of two or more), "per"?: "year" (default) | "decade", "name"?: text, "ran"?: (internal: a trend the app has worked out)} → four raster layers: Sen's slope, the test's Z and p-value, and the slope where p < alpha"#,
+    ),
+    C::new("cube.reduce", "Summarise a Data Cube over Time", "Analyze › Image Analysis", reduce_cmd).params(
+        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer or a raster of several bands, a date each (default: the active layer) | "path"?: a Zarr store's folder | "url"?: a Zarr store's address, or a STAC collection's API (as for stac.addCube) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "variable"?, "index"?, "crs"?: a Zarr variable's (as for zarr.reduce), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default) | "average" (as for cube.trend), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "stat": "mean"|"min"|"max"|"sum"|"std" (the population standard deviation, n)|"count"|"countAbove", "above"?: number (countAbove's threshold), "by"?: "all" (default: one layer) | "year" (a layer for each calendar year) | "month" (a layer for each month of the year, across years), "start"?, "end"?: dates (as for cube.trend), "months"?: [1–12] (a season across years), "minValid"?: 0–1 (a cell with a smaller share of its group's dates is left empty; default 0), "name"?: text} → raster layers of the statistic, one for each group"#,
     )]
 }
 
@@ -228,17 +233,33 @@ fn date_list(p: &Value) -> Result<Option<Vec<f64>>, String> {
     }
 }
 
+/// What a run asks of its cube, and its name in what it says: a trend needs a few dates and a
+/// Zarr axis in time order (the test's sign and count follow it); a summary takes two dates or more
+/// in any order (a raster of one band is no cube, and one date has nothing to summarise).
+#[derive(Clone, Copy, Debug)]
+pub struct Needs {
+    pub what: &'static str,
+    pub min_dates: usize,
+    pub ordered: bool,
+}
+
+/// What `cube.trend` asks of its cube.
+pub const TREND: Needs = Needs { what: "trend", min_dates: trend::MIN_VALUES, ordered: true };
+/// What `cube.reduce` asks of its cube.
+pub const SUMMARY: Needs = Needs { what: "summary", min_dates: 2, ordered: false };
+
 /// The cube a command's parameters name: a stack of layers, a Zarr variable, or a raster's bands.
-pub fn cube_from(s: &Session, p: &Value) -> Result<Box<dyn TimeCube>, String> {
+pub fn cube_from(s: &Session, p: &Value, needs: Needs) -> Result<Box<dyn TimeCube>, String> {
     let dates = date_list(p)?;
+    let what = needs.what;
     if let Some(list) = p.get("layers").filter(|v| !v.is_null()) {
         let list = list.as_array().ok_or("layers is a list of raster layers")?;
-        if list.len() < trend::MIN_VALUES {
-            return Err(format!("a stack needs {} layers or more, a date each", trend::MIN_VALUES));
+        if list.len() < needs.min_dates {
+            return Err(format!("a {what}'s stack needs {} layers or more, a date each", needs.min_dates));
         }
         // At most a run's dates, refused before each is looked up and checked against the others.
         if list.len() > MAX_DATES {
-            return Err(format!("{} layers; a trend takes {MAX_DATES} dates at most", list.len()));
+            return Err(format!("{} layers; a {what} takes {MAX_DATES} dates at most", list.len()));
         }
         if dates.as_ref().is_some_and(|d| d.len() != list.len()) {
             return Err("dates has a date for each layer, in their order".into());
@@ -286,7 +307,7 @@ pub fn cube_from(s: &Session, p: &Value) -> Result<Box<dyn TimeCube>, String> {
     // A STAC collection's band, read from its files over an area (#579): named by its collection.
     if given("collection") {
         #[cfg(target_arch = "wasm32")]
-        return Err("in the web app, a STAC collection's trend can't be worked out yet (the desktop app can)".into());
+        return Err(format!("in the web app, a STAC collection's {what} can't be worked out yet (the desktop app can)"));
         #[cfg(not(target_arch = "wasm32"))]
         return Ok(Box::new(super::stac::stac_cube(s, p)?));
     }
@@ -302,13 +323,13 @@ pub fn cube_from(s: &Session, p: &Value) -> Result<Box<dyn TimeCube>, String> {
     if given("path") || given("url") || zarr_layer {
         // The web app reads no Zarr store along its time axis yet: said, not taken for bands.
         #[cfg(target_arch = "wasm32")]
-        return Err("in the web app, a Zarr variable's trend can't be worked out yet (the desktop app can)".into());
+        return Err(format!("in the web app, a Zarr variable's {what} can't be worked out yet (the desktop app can)"));
         #[cfg(not(target_arch = "wasm32"))]
         {
             let cube = super::zarr::zarr_cube(s, p)?;
             // A trend takes the steps in time order: an axis out of order (descending) or with a
-            // date twice would turn the test's sign or count a date twice.
-            if !cube.zt.dates.windows(2).all(|w| w[0] < w[1]) {
+            // date twice would turn the test's sign or count a date twice. A summary doesn't mind.
+            if needs.ordered && !cube.zt.dates.windows(2).all(|w| w[0] < w[1]) {
                 return Err(format!(
                     "{}'s time axis isn't in increasing order without repeats, so a trend can't be read from it",
                     cube.zt.variable
@@ -320,12 +341,12 @@ pub fn cube_from(s: &Session, p: &Value) -> Result<Box<dyn TimeCube>, String> {
     let id = s.layer_id(p)?;
     let l = s.map().layer(id).ok_or("no such layer")?;
     let r = l.raster.as_ref().and_then(|r| r.data.clone()).ok_or_else(|| format!("{} isn't a raster", l.name))?;
-    if r.bands.len() < trend::MIN_VALUES {
+    if r.bands.len() < needs.min_dates {
         return Err(format!(
-            "{} has {} band(s): a cube is a raster of {} bands or more (a date each), a Zarr variable with a time dimension, or \"layers\"",
+            "{} has {} band(s): a {what}'s cube is a raster of {} bands or more (a date each), a Zarr variable with a time dimension, or \"layers\"",
             l.name,
             r.bands.len(),
-            trend::MIN_VALUES
+            needs.min_dates
         ));
     }
     if dates.as_ref().is_some_and(|d| d.len() != r.bands.len()) {
@@ -532,29 +553,13 @@ impl TrendRun {
             return Err(e);
         }
         let need = self.min_valid.unwrap_or((n / 2).max(trend::MIN_VALUES)).max(trend::MIN_VALUES);
-        let mut first_piece: Option<Arc<Raster>> = None;
-        let mut rows = 0usize;
+        let mut stitch = Stitch::default();
         // The four outputs, a band each, filled piece by piece (never held interleaved whole).
         let mut bands: [Vec<f32>; OUTPUTS] = Default::default();
         let mut cells_done = 0usize;
         for piece in 0..self.cube.pieces().max(1) {
             let (grid, block, cells) = self.read_piece(piece, cancel, done, whole.is_none().then_some(&too_long))?;
-            // Stitched under the first piece's georeferencing: every piece on its columns, pixel
-            // size and coordinate system (its rows follow on from the one above).
-            if let Some(f) = &first_piece {
-                let near = |a: f64, b: f64| (a - b).abs() <= f.transform.pixel_width.abs() * 1e-3;
-                let (a, b) = (&f.transform, &grid.transform);
-                // Its top on the row after the pieces above it.
-                let top = a.origin_y + rows as f64 * a.pixel_height;
-                if (f.width, f.crs) != (grid.width, grid.crs)
-                    || !near(a.origin_x, b.origin_x)
-                    || !near(top, b.origin_y)
-                    || !near(a.pixel_width, b.pixel_width)
-                    || !near(a.pixel_height, b.pixel_height)
-                {
-                    return Err("the cube's pieces aren't one grid".into());
-                }
-            }
+            stitch.check(&grid)?;
             // Progress through all the cells: a part of the bar every `tick` cells.
             let tick = whole.unwrap_or(cells).div_ceil(CELL_PARTS).max(1);
             let part = self.work_out(&block, cells, cells_done, tick, need, &times, &seasons, cancel, done)?;
@@ -571,10 +576,9 @@ impl TrendRun {
                 band.extend(part.chunks(OUTPUTS).map(|o| o.get(k).copied().unwrap_or(f32::NAN)));
             }
             cells_done += cells;
-            rows += grid.height as usize;
-            first_piece.get_or_insert(grid);
+            stitch.add(grid);
         }
-        let grid = first_piece.ok_or("no date to read")?;
+        let (grid, height) = stitch.whole()?;
         if let Some(e) = self.cube.nothing_read() {
             return Err(e);
         }
@@ -586,7 +590,6 @@ impl TrendRun {
             format!("{} p-value ({})", self.name, self.test.code()),
             format!("{} significant slope per {unit} (p < {})", self.name, self.alpha),
         ];
-        let height = u32::try_from(rows).map_err(|_| "too many rows")?;
         names
             .into_iter()
             .zip(bands)
@@ -635,17 +638,7 @@ impl TrendRun {
                     block = vec![f32::NAN; cells * n];
                     grid = Some(r.clone());
                 }
-                Some(g) if (g.width, g.height, g.crs) != (r.width, r.height, r.crs) || !same_grid(&g.transform, &r.transform) => {
-                    return Err(format!(
-                        "the slice at {} is {} × {} on another grid than the first ({} × {}): put them on one grid first (Raster Functions › Resample)",
-                        rustgis_data::time::format(self.cube.dates().get(i).copied().unwrap_or(f64::NAN), "YYYY-MM-DD"),
-                        r.width,
-                        r.height,
-                        g.width,
-                        g.height
-                    ));
-                }
-                Some(_) => {}
+                Some(g) => off_grid(self.cube.as_ref(), i, g, &r)?,
             }
             let nodata = r.nodata.map(|v| v as f32);
             for (c, v) in vals.iter().enumerate().take(cells) {
@@ -659,55 +652,7 @@ impl TrendRun {
             done.fetch_add(1, Ordering::Relaxed);
             Ok(())
         };
-        // One at a time in the browser, which has no threads to read on.
-        let readers = if cfg!(target_arch = "wasm32") { 1 } else { self.cube.readers().clamp(1, 16).min(n.max(1)) };
-        if readers == 1 {
-            for (k, &i) in self.steps.iter().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
-                    return Err("cancelled".into());
-                }
-                place(k, self.cube.slice_of(i, piece)?)?;
-            }
-        } else {
-            // Several dates read at once, placed here as they come; a few wait at most, so the
-            // slices held stay a handful. An error (or Cancel) drops the receiver, which stops the
-            // readers at their next date. A reader in a read when that happens finishes it first:
-            // on a stalled server the scope waits out its timeout (two minutes, `cog`'s blocking
-            // reads have no cancel hook), so Cancel can take that long to return.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let next = AtomicUsize::new(0);
-                std::thread::scope(|scope| -> Result<(), String> {
-                    type Read = Result<Option<(Arc<Raster>, usize)>, String>;
-                    let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, Read)>(readers);
-                    for _ in 0..readers {
-                        let (tx, next) = (tx.clone(), &next);
-                        scope.spawn(move || {
-                            loop {
-                                let k = next.fetch_add(1, Ordering::Relaxed);
-                                let Some(&i) = self.steps.get(k) else { break };
-                                if cancel.load(Ordering::Relaxed) || tx.send((k, self.cube.slice_of(i, piece))).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-                    }
-                    drop(tx);
-                    for (k, read) in rx {
-                        if cancel.load(Ordering::Relaxed) {
-                            return Err("cancelled".into());
-                        }
-                        place(k, read?)?;
-                    }
-                    Ok(())
-                })?;
-            }
-        }
-        // Cancel stops the readers, which ends their dates early without an error: the block is
-        // only partly read, so the run stops here rather than work out what it has.
-        if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
-        }
+        read_slices(self.cube.as_ref(), &self.steps, piece, cancel, &mut place)?;
         let grid = grid.ok_or("no date to read")?;
         Ok((grid, block, cells))
     }
@@ -790,6 +735,122 @@ impl TrendRun {
     }
 }
 
+/// Reads piece `piece` of each of `steps`' slices and hands it to `place` with its place among the
+/// steps: in their order when read one at a time, as they come when the cube's
+/// [`TimeCube::readers`] read several at once. `cancel` stops it between slices.
+fn read_slices(
+    cube: &dyn TimeCube,
+    steps: &[usize],
+    piece: usize,
+    cancel: &AtomicBool,
+    place: &mut dyn FnMut(usize, Option<(Arc<Raster>, usize)>) -> Result<(), String>,
+) -> Result<(), String> {
+    // One at a time in the browser, which has no threads to read on.
+    let readers = if cfg!(target_arch = "wasm32") { 1 } else { cube.readers().clamp(1, 16).min(steps.len().max(1)) };
+    if readers == 1 {
+        for (k, &i) in steps.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            place(k, cube.slice_of(i, piece)?)?;
+        }
+    } else {
+        // Several dates read at once, placed here as they come; a few wait at most, so the
+        // slices held stay a handful. An error (or Cancel) drops the receiver, which stops the
+        // readers at their next date. A reader in a read when that happens finishes it first:
+        // on a stalled server the scope waits out its timeout (two minutes, `cog`'s blocking
+        // reads have no cancel hook), so Cancel can take that long to return.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let next = AtomicUsize::new(0);
+            std::thread::scope(|scope| -> Result<(), String> {
+                type Read = Result<Option<(Arc<Raster>, usize)>, String>;
+                let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, Read)>(readers);
+                for _ in 0..readers {
+                    let (tx, next) = (tx.clone(), &next);
+                    scope.spawn(move || {
+                        loop {
+                            let k = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(&i) = steps.get(k) else { break };
+                            if cancel.load(Ordering::Relaxed) || tx.send((k, cube.slice_of(i, piece))).is_err() {
+                                break;
+                            }
+                        }
+                    });
+                }
+                drop(tx);
+                for (k, read) in rx {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("cancelled".into());
+                    }
+                    place(k, read?)?;
+                }
+                Ok(())
+            })?;
+        }
+    }
+    // Cancel stops the readers, which ends their dates early without an error: the slices are
+    // only partly read, so the run stops here rather than work out what it has.
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    Ok(())
+}
+
+/// Refuses slice `r`, at date `i`, when it isn't on the grid of the run's first slice `g`.
+fn off_grid(cube: &dyn TimeCube, i: usize, g: &Raster, r: &Raster) -> Result<(), String> {
+    if (g.width, g.height, g.crs) == (r.width, r.height, r.crs) && same_grid(&g.transform, &r.transform) {
+        return Ok(());
+    }
+    Err(format!(
+        "the slice at {} is {} × {} on another grid than the first ({} × {}): put them on one grid first (Raster Functions › Resample)",
+        rustgis_data::time::format(cube.dates().get(i).copied().unwrap_or(f64::NAN), "YYYY-MM-DD"),
+        r.width,
+        r.height,
+        g.width,
+        g.height
+    ))
+}
+
+/// A run's pieces put together row by row, under the first piece's georeferencing.
+#[derive(Default)]
+struct Stitch {
+    first: Option<Arc<Raster>>,
+    rows: usize,
+}
+
+impl Stitch {
+    /// Whether the next piece follows on from those above it: on the first's columns, pixel size
+    /// and coordinate system, its top on the row after theirs.
+    fn check(&self, grid: &Raster) -> Result<(), String> {
+        let Some(f) = &self.first else { return Ok(()) };
+        let near = |a: f64, b: f64| (a - b).abs() <= f.transform.pixel_width.abs() * 1e-3;
+        let (a, b) = (&f.transform, &grid.transform);
+        let top = a.origin_y + self.rows as f64 * a.pixel_height;
+        if (f.width, f.crs) != (grid.width, grid.crs)
+            || !near(a.origin_x, b.origin_x)
+            || !near(top, b.origin_y)
+            || !near(a.pixel_width, b.pixel_width)
+            || !near(a.pixel_height, b.pixel_height)
+        {
+            return Err("the cube's pieces aren't one grid".into());
+        }
+        Ok(())
+    }
+
+    /// The next piece, below the others.
+    fn add(&mut self, grid: Arc<Raster>) {
+        self.rows += grid.height as usize;
+        self.first.get_or_insert(grid);
+    }
+
+    /// The whole grid: the first piece's georeferencing, and the rows of them all.
+    fn whole(self) -> Result<(Arc<Raster>, u32), String> {
+        let grid = self.first.ok_or("no date to read")?;
+        Ok((grid, u32::try_from(self.rows).map_err(|_| "too many rows")?))
+    }
+}
+
 /// Prepares `cube.trend`: the cube, the dates, the test and its options checked.
 pub fn trend_start(s: &Session, p: &Value) -> Result<TrendRun, String> {
     // Read for the seasonal test only: another test leaves it alone, whatever it holds.
@@ -815,7 +876,7 @@ pub fn trend_start(s: &Session, p: &Value) -> Result<TrendRun, String> {
         Some("decade") => 10.0,
         Some(x) => return Err(format!("per is year or decade, not {x}")),
     };
-    let cube = cube_from(s, p)?;
+    let cube = cube_from(s, p, TREND)?;
     let period = cube.period();
     let steps = steps(cube.dates(), period, p)?;
     if steps.len() < trend::MIN_VALUES {
@@ -876,7 +937,7 @@ fn trend_cmd(s: &mut Session, p: &Value) -> CmdResult {
     add_outputs(s, rasters, run.steps.len())
 }
 
-/// Adds a trend's layers, each as a GeoTIFF the project keeps.
+/// Adds a trend's (or a summary's) layers, each as a GeoTIFF the project keeps.
 pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdResult {
     let mut layers = Vec::new();
     for r in rasters {
@@ -888,6 +949,367 @@ pub fn add_outputs(s: &mut Session, rasters: Vec<Raster>, dates: usize) -> CmdRe
         layers.push(out["layer"].clone());
     }
     Ok(json!({ "layers": layers, "dates": dates }))
+}
+
+// --- A summary over time of any cube -------------------------------------------------------------
+
+/// What a summary over time takes from each cell's values (`cube.reduce`, `zarr.reduce`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stat {
+    Mean,
+    Min,
+    Max,
+    Sum,
+    Std,
+    Count,
+    /// How many of the values are above the threshold.
+    CountAbove(f64),
+}
+
+impl Stat {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Stat::Mean => "mean",
+            Stat::Min => "min",
+            Stat::Max => "max",
+            Stat::Sum => "sum",
+            Stat::Std => "std",
+            Stat::Count => "count",
+            Stat::CountAbove(_) => "countAbove",
+        }
+    }
+
+    /// The statistic asked for: `stat`, and countAbove's threshold, `above`.
+    pub(crate) fn parse(p: &Value) -> Result<Stat, String> {
+        Ok(match ps(p, "stat").map(str::trim).ok_or("stat is required (mean, min, max, sum, std, count or countAbove)")? {
+            x if x.eq_ignore_ascii_case("mean") => Stat::Mean,
+            x if x.eq_ignore_ascii_case("min") || x.eq_ignore_ascii_case("minimum") => Stat::Min,
+            x if x.eq_ignore_ascii_case("max") || x.eq_ignore_ascii_case("maximum") => Stat::Max,
+            x if x.eq_ignore_ascii_case("sum") => Stat::Sum,
+            x if x.eq_ignore_ascii_case("std") => Stat::Std,
+            x if x.eq_ignore_ascii_case("count") => Stat::Count,
+            x if x.eq_ignore_ascii_case("countAbove") => {
+                Stat::CountAbove(super::f(p, "above").ok_or("countAbove takes \"above\", the threshold")?)
+            }
+            x => return Err(format!("unknown stat '{x}' (mean, min, max, sum, std, count or countAbove)")),
+        })
+    }
+}
+
+/// The share of its dates a cell needs for a summary's value (`minValid`, 0 to 1; 0 by default).
+pub(crate) fn min_share(p: &Value) -> Result<f64, String> {
+    match p.get("minValid").filter(|v| !v.is_null()) {
+        None => Ok(0.0),
+        Some(v) => v.as_f64().filter(|v| (0.0..=1.0).contains(v)).ok_or_else(|| "minValid is a share from 0 to 1".into()),
+    }
+}
+
+/// A summary's running totals over a run of cells, only those its statistic needs: each cell's
+/// count of values, one running value (the mean, the least, the most, the sum or the count above)
+/// and, for std, the squared deviations (Welford's method). 4 to 20 bytes a cell.
+pub(crate) struct Totals {
+    stat: Stat,
+    n: Vec<u32>,
+    acc: Vec<f64>,
+    m2: Vec<f64>,
+}
+
+impl Totals {
+    pub(crate) fn new(stat: Stat, cells: usize) -> Totals {
+        let acc = match stat {
+            Stat::Count => Vec::new(),
+            Stat::Min => vec![f64::INFINITY; cells],
+            Stat::Max => vec![f64::NEG_INFINITY; cells],
+            _ => vec![0.0; cells],
+        };
+        let m2 = if matches!(stat, Stat::Std) { vec![0.0; cells] } else { Vec::new() };
+        Totals { stat, n: vec![0; cells], acc, m2 }
+    }
+
+    /// How many cells it totals.
+    pub(crate) fn cells(&self) -> usize {
+        self.n.len()
+    }
+
+    /// Cell `c`'s next value, a finite one.
+    pub(crate) fn add(&mut self, c: usize, v: f64) {
+        let Some(k) = self.n.get_mut(c) else { return };
+        *k += 1;
+        let k = f64::from(*k);
+        let (Some(a), m) = (self.acc.get_mut(c), self.m2.get_mut(c)) else { return };
+        match self.stat {
+            Stat::Mean | Stat::Std => {
+                let d = v - *a;
+                *a += d / k;
+                if let Some(m) = m {
+                    *m += d * (v - *a);
+                }
+            }
+            Stat::Min => *a = a.min(v),
+            Stat::Max => *a = a.max(v),
+            Stat::Sum => *a += v,
+            Stat::CountAbove(t) if v > t => *a += 1.0,
+            Stat::CountAbove(_) | Stat::Count => {}
+        }
+    }
+
+    /// Each cell's statistic over `dates` dates: empty with fewer values than `min_share` of them,
+    /// except that with no share asked for a count is 0 where a cell never had a value.
+    pub(crate) fn finish(&self, min_share: f64, dates: usize) -> Vec<f32> {
+        let need = (min_share.clamp(0.0, 1.0) * dates as f64 - 1e-9).ceil().max(1.0) as u32;
+        let count = matches!(self.stat, Stat::Count | Stat::CountAbove(_));
+        self.n
+            .iter()
+            .enumerate()
+            .map(|(c, k)| {
+                if *k < need && !(count && min_share == 0.0) {
+                    return f32::NAN;
+                }
+                let a = self.acc.get(c).copied().unwrap_or(f64::NAN);
+                (match self.stat {
+                    Stat::Std => (self.m2.get(c).copied().unwrap_or(f64::NAN) / f64::from((*k).max(1))).sqrt(),
+                    Stat::Count => f64::from(*k),
+                    _ => a,
+                }) as f32
+            })
+            .collect()
+    }
+}
+
+/// The most values a summary's outputs hold (cells × outputs): 32 million on the desktop, 8
+/// million in the browser, checked before reading when the cube knows its size and as the pieces
+/// are read when it doesn't. Its running totals are a piece's at a time and only for the groups
+/// whose dates are being read: one year's in a summary by year read one date at a time (those of
+/// the dates in flight with several readers), but every month's in one by month. They take 4 bytes
+/// a cell for count, 12 for mean, min, max, sum and countAbove, and 20 for std, so a summary by
+/// month at the cap holds up to five times its outputs' 4 bytes a value: some 640 MB for std on the
+/// desktop. A STAC cube is read in pieces whose cells × dates stay within [`MAX_VALUES`], so a long
+/// series keeps each piece's totals small.
+pub const MAX_REDUCED: u64 = MAX_VALUES / 2;
+
+/// How a summary groups its dates: one output for them all, one for each calendar year, or one for
+/// each month of the year across the years (a climatology).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum By {
+    All,
+    Year,
+    Month,
+}
+
+/// A summary over time of any cube (#579), prepared on the session and computed anywhere with
+/// [`ReduceRun::run`]: the slices folded into running totals as they are read, so a long period
+/// takes no more memory than a short one.
+pub struct ReduceRun {
+    cube: Box<dyn TimeCube>,
+    steps: Vec<usize>,
+    stat: Stat,
+    min_share: f64,
+    /// Each step's group, an index into `groups`.
+    group_of: Vec<usize>,
+    /// Each group's output name and how many of the steps it has.
+    groups: Vec<(String, usize)>,
+}
+
+impl ReduceRun {
+    /// The work, for a progress bar: the slices read, every piece's.
+    pub fn total(&self) -> usize {
+        self.steps.len() * self.cube.pieces().max(1)
+    }
+
+    /// How many dates it reads.
+    pub fn dates(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Reads the slices piece by piece ([`TimeCube::pieces`]), each folded into its group's
+    /// running totals, and puts the pieces' outputs together row by row: a raster for each group.
+    /// `done` counts the slices read; `cancel` stops it between slices.
+    pub fn run(&self, cancel: &AtomicBool, done: &AtomicUsize) -> Result<Vec<Raster>, String> {
+        let outputs = self.groups.len();
+        let too_many = |cells: usize| {
+            let values = (cells as u64).saturating_mul(outputs as u64);
+            (values > MAX_REDUCED).then(|| {
+                format!("{cells} cells × {outputs} outputs is {values} values, more than {MAX_REDUCED}: take a smaller area, a coarser cell size or fewer outputs")
+            })
+        };
+        // A cube that knows its size is refused before it reads anything.
+        let whole = self.cube.size().map(|(w, h)| w.saturating_mul(h));
+        if let Some(e) = whole.and_then(too_many) {
+            return Err(e);
+        }
+        let mut stitch = Stitch::default();
+        let mut bands: Vec<Vec<f32>> = vec![Vec::new(); outputs];
+        // The cells of the pieces read so far, for a cube that didn't know its size.
+        let mut read_cells = 0usize;
+        for piece in 0..self.cube.pieces().max(1) {
+            let mut grid: Option<Arc<Raster>> = None;
+            // A group's totals are made at its first date read and turned into its output at its
+            // last. Dates are asked for in order: read one at a time they come in order, so a
+            // summary by year holds one year's totals at a time; with several readers (a STAC
+            // cube's) they come as read, and the groups open are those of the dates in flight, a
+            // couple of years' for 16-day composites. Totals are f64 and the outputs f32, so the
+            // order of arrival can move an output's last bit at most, and only then.
+            let mut totals: Vec<Option<Totals>> = (0..outputs).map(|_| None).collect();
+            let mut seen = vec![0usize; outputs];
+            let mut finished: Vec<Option<Vec<f32>>> = vec![None; outputs];
+            let mut place = |k: usize, slice: Option<(Arc<Raster>, usize)>| -> Result<(), String> {
+                let g = self.group_of.get(k).copied().filter(|g| *g < outputs).ok_or("a date in no group")?;
+                // A date with nothing written only lowers the counts.
+                if let Some((r, b)) = slice {
+                    let i = self.steps.get(k).copied().unwrap_or(0);
+                    let vals = &r.bands.get(b).ok_or("the slice has no such band")?.data;
+                    match &grid {
+                        None => {
+                            if let Some(e) = too_many(vals.len()) {
+                                return Err(e);
+                            }
+                            grid = Some(r.clone());
+                        }
+                        Some(first) => off_grid(self.cube.as_ref(), i, first, &r)?,
+                    }
+                    let t = totals.get_mut(g).ok_or("a date in no group")?.get_or_insert_with(|| Totals::new(self.stat, vals.len()));
+                    let nodata = r.nodata.map(|v| v as f32);
+                    for (c, v) in vals.iter().enumerate().take(t.cells()) {
+                        if v.is_finite() && Some(*v) != nodata {
+                            t.add(c, f64::from(*v));
+                        }
+                    }
+                }
+                let n = seen.get_mut(g).ok_or("a date in no group")?;
+                *n += 1;
+                let dates = self.groups.get(g).map_or(0, |(_, d)| *d);
+                if *n >= dates
+                    && let (Some(t), Some(out)) = (totals.get_mut(g).and_then(Option::take), finished.get_mut(g))
+                {
+                    *out = Some(t.finish(self.min_share, dates));
+                }
+                done.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            };
+            read_slices(self.cube.as_ref(), &self.steps, piece, cancel, &mut place)?;
+            let grid = grid.ok_or("none of the dates in the period has data written")?;
+            stitch.check(&grid)?;
+            // Their full length when the cube knows it, so they don't grow by doubling.
+            if let (0, Some(total)) = (piece, whole) {
+                for band in &mut bands {
+                    band.reserve_exact(total);
+                }
+            }
+            let cells = (grid.width as usize).saturating_mul(grid.height as usize);
+            read_cells = read_cells.saturating_add(cells);
+            if whole.is_none()
+                && let Some(e) = too_many(read_cells)
+            {
+                return Err(e);
+            }
+            for (g, band) in bands.iter_mut().enumerate() {
+                let dates = self.groups.get(g).map_or(0, |(_, d)| *d);
+                // A group with no data written in this piece: no values, as its totals would give.
+                let out = match (finished.get_mut(g).and_then(Option::take), totals.get_mut(g).and_then(Option::take)) {
+                    (Some(out), _) => out,
+                    (None, Some(t)) => t.finish(self.min_share, dates),
+                    (None, None) => Totals::new(self.stat, cells).finish(self.min_share, dates),
+                };
+                band.extend(out);
+            }
+            stitch.add(grid);
+        }
+        let (grid, height) = stitch.whole()?;
+        if let Some(e) = self.cube.nothing_read() {
+            return Err(e);
+        }
+        done.store(self.total(), Ordering::Relaxed);
+        self.groups
+            .iter()
+            .zip(bands)
+            .map(|((name, _), band)| {
+                Raster::new(
+                    name.clone(),
+                    grid.width,
+                    height,
+                    vec![band],
+                    grid.transform,
+                    grid.crs,
+                    None,
+                    raster::ColorHint::Gray,
+                    "Float32",
+                )
+                .map_err(|e| e.to_string())
+            })
+            .collect()
+    }
+}
+
+/// Prepares `cube.reduce`: the cube, the statistic, and the dates of the period (and months)
+/// asked for, in their groups.
+pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
+    let stat = Stat::parse(p)?;
+    let min_share = min_share(p)?;
+    let by = match ps(p, "by").map(str::trim) {
+        None | Some("") => By::All,
+        Some(x) if x.eq_ignore_ascii_case("all") => By::All,
+        Some(x) if x.eq_ignore_ascii_case("year") => By::Year,
+        Some(x) if x.eq_ignore_ascii_case("month") => By::Month,
+        Some(x) => return Err(format!("by is all, year or month, not {x}")),
+    };
+    let cube = cube_from(s, p, SUMMARY)?;
+    let steps = steps(cube.dates(), cube.period(), p)?;
+    let date = |i: usize| cube.dates().get(i).copied().unwrap_or(f64::NAN);
+    // A date that can't be read would go to no year or month: said, not put in a group of its own.
+    if let Some(&i) = steps.iter().find(|&&i| !date(i).is_finite()) {
+        return Err(format!("the cube's date {} can't be read: give the dates (\"dates\")", i + 1));
+    }
+    let part = |i: usize, f: &str| rustgis_data::time::format(date(i), f).parse::<u32>().unwrap_or(0);
+    // Each step's group: its calendar year, its month, or the one group.
+    let keys: Vec<u32> = steps
+        .iter()
+        .map(|&i| match by {
+            By::All => 0,
+            By::Year => part(i, "YYYY"),
+            By::Month => part(i, "MM"),
+        })
+        .collect();
+    let mut found: Vec<u32> = keys.clone();
+    found.sort_unstable();
+    found.dedup();
+    let group_of: Vec<usize> = keys.iter().map(|k| found.binary_search(k).unwrap_or(0)).collect();
+    // The outputs' names: the cube's label, the statistic and the period, or the name given.
+    let day = |i: usize| rustgis_data::time::format(date(i), "YYYY-MM-DD");
+    // The earliest and the latest date, which a Zarr axis out of order doesn't put first and last.
+    let earliest = steps.iter().copied().min_by(|x, y| date(*x).total_cmp(&date(*y)));
+    let latest = steps.iter().copied().max_by(|x, y| date(*x).total_cmp(&date(*y)));
+    let (a, z) = (earliest.unwrap_or(0), latest.unwrap_or(0));
+    let months = months(p)?;
+    let season = if months.is_empty() {
+        String::new()
+    } else {
+        format!(" (months {})", months.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
+    };
+    let given = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(|n| n.chars().take(200).collect::<String>());
+    let base = format!("{} {}", cube.label(), stat.code());
+    let groups = found
+        .iter()
+        .map(|&key| {
+            let name = match (by, &given) {
+                (By::All, Some(n)) => n.clone(),
+                (By::All, None) => format!("{base} {}–{}{season}", day(a), day(z)),
+                (By::Year, Some(n)) => format!("{n} {key}"),
+                (By::Year, None) => format!("{base} {key}{season}"),
+                (By::Month, Some(n)) => format!("{n} month {key:02}"),
+                (By::Month, None) => format!("{base} {}–{} month {key:02}", part(a, "YYYY"), part(z, "YYYY")),
+            };
+            (name, keys.iter().filter(|k| **k == key).count())
+        })
+        .collect();
+    Ok(ReduceRun { cube, steps, stat, min_share, group_of, groups })
+}
+
+/// `cube.reduce`: the summary computed here (blocking), its layers added, each kept in the project
+/// as a GeoTIFF.
+fn reduce_cmd(s: &mut Session, p: &Value) -> CmdResult {
+    let run = reduce_start(s, p)?;
+    let rasters = run.run(&AtomicBool::new(false), &AtomicUsize::new(0))?;
+    add_outputs(s, rasters, run.dates())
 }
 
 #[cfg(test)]

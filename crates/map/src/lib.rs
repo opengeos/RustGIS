@@ -29,7 +29,7 @@ pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{
-    ClassMethod, LabelClass, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
+    ClassMethod, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
 };
 pub use tiles::{TileKind, TileLayer};
 
@@ -144,6 +144,16 @@ pub struct Layer {
     /// the renderer's stroke alone).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "symbology::de_strokes")]
     pub line_strokes: Vec<symbology::LineStroke>,
+    /// Draws the stacked strokes in levels (symbol levels): every feature's strokes of one
+    /// [`LineStroke::level`] before any of the next, so road casings join under the cores
+    /// instead of cutting across them where lines meet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stroke_levels: bool,
+    /// The scale (1:N) its symbol and label sizes are set for: drawn at another scale they grow
+    /// and shrink with the map, as on paper (QGIS's reference scale). `None`: they keep their
+    /// size on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_reference_scale")]
+    pub reference_scale: Option<f64>,
     /// Layers with a higher priority draw above lower ones, whatever their order (the scene's
     /// depth priority).
     #[serde(default)]
@@ -188,6 +198,14 @@ fn yes() -> bool {
 }
 
 impl Layer {
+    /// The dataset, streamed, raster and time-following Zarr addresses used to read this layer
+    /// again, in that order. Local paths are included; database origins stay password-free.
+    pub fn addresses_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.dataset.source.iter_mut().chain(self.source.iter_mut().filter_map(|source| source.path.as_mut())).chain(
+            self.raster.iter_mut().flat_map(|raster| raster.path.iter_mut().chain(raster.time_zarr.iter_mut().map(|zarr| &mut zarr.store))),
+        )
+    }
+
     pub fn new(id: u32, dataset: Dataset) -> Self {
         let renderer = Renderer::Single(Symbol::default_for(dataset.geometry_type, id));
         Layer {
@@ -212,6 +230,8 @@ impl Layer {
             aggregation: None,
             extrusion: None,
             line_strokes: Vec::new(),
+            stroke_levels: false,
+            reference_scale: None,
             priority: 0,
             design: design::Design::default(),
             raster: None,
@@ -395,6 +415,45 @@ impl Layer {
     /// The symbol a row draws with.
     pub fn symbol(&self, row: usize) -> Symbol {
         if self.graphics { graphics::symbol(&self.dataset, row) } else { self.renderer.symbol_for(&self.dataset, row) }
+    }
+
+    /// The stacked strokes a line feature row is drawn with: its class's own
+    /// ([`Renderer::strokes_for`]), else the layer's `line_strokes`; none (the single stroke) for
+    /// a graphics layer.
+    pub fn strokes(&self, row: usize) -> &[LineStroke] {
+        if self.graphics {
+            return &[];
+        }
+        // Most layers have no class with strokes of its own: no need to class the feature.
+        if !self.renderer.has_class_strokes() {
+            return &self.line_strokes;
+        }
+        self.renderer.strokes_for(&self.dataset, row).unwrap_or(&self.line_strokes)
+    }
+
+    /// A row's symbol and stacked strokes ([`Layer::symbol`], [`Layer::strokes`]), the feature
+    /// classed once for both.
+    pub fn style(&self, row: usize) -> (Symbol, &[LineStroke]) {
+        if self.graphics || !self.renderer.has_class_strokes() {
+            return (self.symbol(row), self.strokes(row));
+        }
+        let (symbol, strokes) = self.renderer.style_for(&self.dataset, row);
+        (symbol, strokes.unwrap_or(&self.line_strokes))
+    }
+
+    /// How much its symbol and label sizes are multiplied by at the map scale 1:`scale`: its
+    /// reference scale over that ([`Layer::reference_scale`]), kept within [`SIZE_FACTORS`]; 1
+    /// without one.
+    pub fn size_factor(&self, scale: f64) -> f32 {
+        match self.reference_scale {
+            Some(r) if scale.is_finite() && scale > 0.0 => (r / scale).clamp(SIZE_FACTORS.0, SIZE_FACTORS.1) as f32,
+            _ => 1.0,
+        }
+    }
+
+    /// Whether some feature may be drawn with stacked strokes ([`Layer::strokes`]).
+    pub fn has_strokes(&self) -> bool {
+        !self.graphics && (!self.line_strokes.is_empty() || self.renderer.has_class_strokes())
     }
 
     pub fn is_raster(&self) -> bool {
@@ -753,10 +812,10 @@ pub struct Map {
     /// Map-wide label display switches.
     #[serde(default)]
     pub label_display: LabelDisplay,
-    /// The features labelled when labels were locked, as (layer id, row): only they are labelled
-    /// while the lock holds, wherever the map moves. Filled by the renderer.
+    /// The labels placed when labels were locked: only they are drawn while the lock holds,
+    /// wherever the map moves. Filled by the renderer.
     #[serde(skip)]
-    pub label_lock: Option<Vec<(u32, usize)>>,
+    pub label_lock: Option<Vec<LabelKey>>,
     /// Relationships, snapping, topology rules and edit settings.
     #[serde(default)]
     pub editing: design::MapEditing,
@@ -874,6 +933,35 @@ impl Map {
             body: earth(),
             next_layer_id: 1,
         }
+    }
+
+    /// Every address the map keeps to read its data again (service groups and their layers'
+    /// sources, tile layers and their dated addresses, terrain tiles, layers' dataset, streamed and
+    /// raster sources, time-following Zarr stores). Local paths come too: callers judge each one.
+    pub fn addresses_mut(&mut self) -> Vec<&mut String> {
+        let mut addresses = Vec::new();
+        for group in &mut self.service_groups {
+            addresses.push(&mut group.url);
+            for child in &mut group.children {
+                addresses.push(&mut child.source_url);
+            }
+        }
+        for tile in &mut self.tiles {
+            addresses.push(&mut tile.url);
+            if let Some(url) = &mut tile.time_url {
+                addresses.push(url);
+            }
+            for (_, url) in &mut tile.time_urls {
+                addresses.push(url);
+            }
+        }
+        if let Some(view::Terrain { source: view::TerrainSource::Tiles { url, .. }, .. }) = &mut self.view.terrain {
+            addresses.push(url);
+        }
+        for layer in &mut self.layers {
+            addresses.extend(layer.addresses_mut());
+        }
+        addresses
     }
 
     /// A nonzero id no layer, service group or layer group has: past the highest in use, or (when ids reach
@@ -1517,6 +1605,20 @@ impl Map {
     }
 }
 
+/// The reference scales a layer takes (1:N), as [`Layer::reference_scale`].
+pub const REFERENCE_SCALES: (f64, f64) = (1.0, 1e9);
+
+/// The most a reference scale shrinks or grows a layer's sizes ([`Layer::size_factor`]): zoomed
+/// far in, its lines would otherwise be drawn thousands of pixels wide.
+pub const SIZE_FACTORS: (f64, f64) = (0.01, 32.0);
+
+/// Reads a layer's reference scale as `layer.referenceScale` would leave it: one out of
+/// [`REFERENCE_SCALES`] (or not a number) is none. A project file is hostile input.
+fn de_reference_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    let v: Option<f64> = Option::deserialize(d)?;
+    Ok(v.filter(|r| (REFERENCE_SCALES.0..=REFERENCE_SCALES.1).contains(r)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1541,6 +1643,75 @@ mod tests {
         assert!(
             back.line_strokes.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == -symbology::MAX_STROKE_OFFSET)
         );
+    }
+
+    #[test]
+    fn a_reference_scale_scales_sizes_with_the_map_and_hostile_ones_are_dropped() {
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        assert_eq!(l.size_factor(10_000.0), 1.0, "none: sizes stay as set");
+        l.reference_scale = Some(25_000.0);
+        assert_eq!(l.size_factor(25_000.0), 1.0);
+        assert_eq!(l.size_factor(12_500.0), 2.0, "zoomed in twice: twice the size");
+        assert_eq!(l.size_factor(100_000.0), 0.25);
+        assert_eq!(l.size_factor(1.0), SIZE_FACTORS.1 as f32, "zoomed far in: kept in bounds");
+        assert_eq!(l.size_factor(1e12), SIZE_FACTORS.0 as f32);
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(l.size_factor(bad), 1.0, "scale {bad}");
+        }
+        // Saved and read back; a crafted project's out of range ones are none.
+        let text = serde_json::to_string(&l).unwrap();
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().reference_scale, Some(25_000.0));
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for bad in [serde_json::json!(0.0), serde_json::json!(-1.0), serde_json::json!(1e300), serde_json::Value::Null] {
+            v["reference_scale"] = bad.clone();
+            assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().reference_scale, None, "{bad}");
+        }
+        // Without a reference scale nothing is written.
+        l.reference_scale = None;
+        assert!(!serde_json::to_string(&l).unwrap().contains("reference_scale"));
+    }
+
+    #[test]
+    fn hostile_class_strokes_in_a_project_are_brought_into_range() {
+        // The same for a class's own strokes, Unique Values' (and <all other values>') and
+        // Graduated Colors'; a class listed with none is dropped.
+        let wild = vec![symbology::LineStroke { width: Some(f32::MAX), offset: 1e30, ..Default::default() }; 5000];
+        let tame = |v: &[symbology::LineStroke]| {
+            v.len() == symbology::MAX_STROKES
+                && v.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == symbology::MAX_STROKE_OFFSET)
+        };
+        let s = Symbol::default_for(GeometryType::Polyline, 0);
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        l.renderer = Renderer::Unique {
+            field: "k".into(),
+            classes: vec![("a".into(), s), ("b".into(), s)],
+            other: s,
+            ramp: Ramp::Ember,
+            class_labels: Default::default(),
+            other_label: None,
+            class_strokes: [("a".to_string(), wild.clone()), ("b".to_string(), Vec::new())].into_iter().collect(),
+            other_strokes: wild.clone(),
+        };
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        let Renderer::Unique { class_strokes, other_strokes, .. } = &back.renderer else { panic!("unique renderer expected") };
+        assert!(tame(&class_strokes["a"]) && !class_strokes.contains_key("b") && tame(other_strokes));
+        l.renderer = Renderer::Graduated {
+            field: "k".into(),
+            breaks: vec![1.0],
+            symbols: vec![s],
+            ramp: Ramp::Ember,
+            method: ClassMethod::NaturalBreaks,
+            min: 0.0,
+            class_labels: Default::default(),
+            class_strokes: [(0, wild)].into_iter().collect(),
+        };
+        let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        let Renderer::Graduated { class_strokes, .. } = &back.renderer else { panic!("graduated renderer expected") };
+        assert!(tame(&class_strokes[&0]));
+        // A project from before per-class strokes reads with none.
+        let old = r#"{"Unique":{"field":"k","classes":[],"other":{"fill":[0,0,0,255],"stroke":[0,0,0,255],"stroke_width":1,"size":0,"marker":"Circle"},"ramp":"Ember"}}"#;
+        let r: Renderer = serde_json::from_str(old).unwrap();
+        assert!(!r.has_class_strokes());
     }
 
     /// A layer of one long line along the equator with `n` vertices.
@@ -1749,6 +1920,8 @@ mod tests {
             ramp: Ramp::Ember,
             class_labels: Default::default(),
             other_label: None,
+            class_strokes: Default::default(),
+            other_strokes: Vec::new(),
         };
         let labels = |l: &Layer, scale| l.shown_legend(scale).map(|v| v.into_iter().map(|e| e.label).collect::<Vec<_>>());
         assert_eq!(labels(l, 1e6), Some(vec!["1".to_string(), "2".to_string()]), "no 9, no <all other values>");

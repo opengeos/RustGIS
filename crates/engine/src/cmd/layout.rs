@@ -29,7 +29,7 @@ pub fn commands() -> Vec<C> {
             r#"{"name"?: string, "page"?: "letter"|"legal"|"tabloid"|"a5"|"a4"|"a3"|"a2"|"a1"|"a0", "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "template"?: "map" (frame, title, legend, north arrow, scale bar; the default)|"blank"}"#,
         ),
         C::new("layout.publication", "New Publication Layout", "Publish › Layout", publication).params(
-            r#"{"profile"?: "a4-portrait" (the default)|"a4-landscape"|"a3-portrait"|"a3-landscape"|"a2-portrait"|"a2-landscape" (a sheet: frame, title, subtitle, the map, a boxed footer)|"figure-1col" (90 mm)|"figure-1.5col" (140 mm)|"figure-2col" (190 mm)|"thesis-full" (160 × 225 mm)|"thesis-half" (160 × 110 mm) (a figure: the map edge to edge, its title and sources left to the caption), "extent"?: [west, south, east, north] in degrees that must fit (default: the map view), "name"?: string, "title"?: text, "subtitle"?: text, "sources"?: text | [texts], "reference"?: text | [texts] (default: the projection, datum and graticule), "note"?: text, "author"?: text (default: "Made with RustGIS · {date}"; "" or [] for none), "headings"?: [the sources' heading, the reference's heading]} → a new layout of the active map at a round scale, its texts wrapped to their boxes; {projection}, {datum} and {grid} in the texts are filled from the map"#,
+            r#"{"profile"?: "a4" (the default) | "a3" | "a2" (a sheet turned to portrait or landscape, whichever the area's map comes out larger on: its extent east to west against north to south, on the map's projection) | "a4-portrait"|"a4-landscape"|"a3-portrait"|"a3-landscape"|"a2-portrait"|"a2-landscape" (a sheet: frame, title, subtitle, the map, a boxed footer)|"figure-1col" (90 mm)|"figure-1.5col" (140 mm)|"figure-2col" (190 mm)|"thesis-full" (160 × 225 mm)|"thesis-half" (160 × 110 mm) (a figure: the map edge to edge, its title and sources left to the caption), "extent"?: [west, south, east, north] in degrees that must fit (default: the map view), "name"?: string, "title"?: text, "subtitle"?: text, "sources"?: text | [texts], "reference"?: text | [texts] (default: the projection, datum and graticule), "note"?: text, "author"?: text (default: "Made with RustGIS · {date}"; "" or [] for none), "headings"?: [the sources' heading, the reference's heading, an editorial column's heading], "locator"?: "globe" (a globe with the area outlined; the default on sheets) | "inset" (the surrounding region, the area outlined) | "none" (the default on figures), "decimal"?: "." (the default) | "," (graticule, scale bar and colorbar numbers and {scale} with a decimal comma: 0,05 and 1:6.300.000), "style"?: "classic" (the default: the title over the map, the footer under it) | "banner" (the title and subtitle in a band of the accent colour across the top) | "panel" (the map at the left, a panel at the right with the title, locator, legend, sources and reference) | "editorial" (the title large in serif, a column at the right with the note, the locator and the legend) | "modular" (cards on a light page: the map, the locator and the legend each in one, the sources and reference in tinted ones) | "poster" (the page in the accent colour, the title in light text, the map in a light card, the footer in darker blocks) (a sheet's arrangement; figures leave it to the caption), "accent"?: a colour as #RRGGBB (the style's colour: its band, panel tint, headings and rules, a poster's page)} → a new layout of the active map at a round scale, its texts wrapped to their boxes; {projection}, {datum} and {grid} in the texts are filled from the map"#,
         ),
         C::new("layout.activate", "Open Layout", "Browser", |s, p| {
             let i = index(s, &by_name(p))?;
@@ -79,16 +79,16 @@ pub fn commands() -> Vec<C> {
         })
         .params(r#"{"name"?: string, "layout"?: name|index (instead of name; default: the open layout), "newName"?: string (default: "<layout> copy")}"#),
         C::new("layout.page", "Page Size", "Publish › Page Setup", page).params(
-            r#"{"layout"?, "page"?: page id, "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm}"#,
+            r#"{"layout"?, "page"?: page id, "orientation"?: "landscape"|"portrait", "width"?: mm, "height"?: mm, "decimal"?: "."|"," (the decimal mark of the numbers its surrounds print)}"#,
         ),
         C::new("layout.addFrame", "Map Frame", "Publish › Map Frames", add_frame).params(
             r#"{"layout"?, "shape"?: "rectangle"|"circle"|"ellipse"|"polygon"|"lasso", "points"?: [[u, v], …] (polygon/lasso, 0..1 across the frame), "map"?: name, "x"?, "y"?, "w"?, "h"?: mm}"#,
         ),
         C::new("layout.addElement", "Add Element", "Publish › Map Surrounds", add_element).params(
-            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle" (a neatline framing the page unless any of x, y, w, h is given)|"ellipse"|"circle"|"line"|"arrow"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50 (text, dynamicText), "font"?: "sans"|"serif" (text, dynamicText; an installed serif, else the sans with a warning; refused for other kinds), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "exclude"?: [layer names] (legend: layers it leaves out though the map draws them), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, ellipse, circle, northArrow), "width"?: outline width in points (rectangle, ellipse, circle; 0 for none) or line width in points (line, grid), "dir"?: "horizontal"|"vertical"|"falling"|"rising" (line), "head"?: "none"|"end"|"start"|"both" (line; default "end" for an arrow), "angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "length"?: mm (line, arrow), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
+            r##"{"layout"?, "kind": "northArrow"|"scaleBar"|"legend"|"colorbar"|"text"|"dynamicText"|"picture"|"table"|"chart"|"rectangle" (a neatline framing the page unless any of x, y, w, h is given)|"ellipse"|"circle"|"line"|"arrow"|"extentIndicator"|"grid", "frame"?: element id (default: the first map frame), "of"?: frame id (extentIndicator, which also takes "color" and "width" in points, default red and 2), "text"?, "size"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "bold"?: bool (text), "italic"?: bool, "align"?: "left"|"center"|"right", "letterSpacing"?: points, -5 to 50 (text, dynamicText), "font"?: "sans"|"serif" (text, dynamicText; an installed serif, else the sans with a warning; refused for other kinds), "title"?: legend title (default "Legend"), "allClasses"?: bool (legend: every class, not only those the frame draws), "hideOther"?: bool (legend: leave out <all other values>), "exclude"?: [layer names] (legend: layers it leaves out though the map draws them), "orientation"?: "horizontal"|"vertical" (colorbar), "ticks"?: 2..21 (colorbar: labelled values, ends included), "tickSide"?: "below"|"above"|"right"|"left" (colorbar), "reverse"?: bool (colorbar: high values first), "fill"?: "#RRGGBBAA" (rectangle, ellipse, circle, northArrow), "width"?: outline width in points (rectangle, ellipse, circle; 0 for none) or line width in points (line, grid), "radius"?: mm, 0 to 50 (rectangle: rounded corners), "dir"?: "horizontal"|"vertical"|"falling"|"rising" (line), "head"?: "none"|"end"|"start"|"both" (line; default "end" for an arrow), "angle"?: degrees anticlockwise from pointing right, centred on the page unless x or y is given (line, arrow; it sets the box and the direction, so w, h and dir are not used with it), "length"?: mm (line, arrow), "image"?: base64, "path"?: picture file, "layer"?: (table, chart; colorbar: a raster layer, default the top visible one), "field"?, "label"?, "rows"?, "step"?: degrees (0 picks one), "labels"?: bool, "style"?: "lines"|"ticks"|"linesAndTicks" (grid) or "classic"|"compass"|"triangle"|"star" (northArrow) or "alternating"|"stepped"|"line" (scaleBar), "tickLength"?: mm, "format"?: "decimal"|"dms", "hemisphere"?: bool (N/S/E/W rather than a sign), "edges"?: ["top","bottom","left","right"] (labelled edges), "labelOrientation"?: "horizontal"|"vertical", "off"?: bool (grid; options not given keep the grid's), "outline"?: "#RRGGBB" (northArrow), "units"?: "auto"|"kilometers"|"meters"|"miles"|"feet", "divisions"?: 1..10 (scaleBar), "x"?, "y"?, "w"?, "h"?: mm}"##,
         ),
         C::new("layout.update", "Element Properties", "Publish › Element", update).params(
-            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "locked"?: bool (a locked element takes no other change until unlocked; "locked": false unlocks it and may come with changes), "text"?, "size"?, "color"? (text, line), "bold"?, "italic"?, "align"?, "letterSpacing"?, "font"?: "sans"|"serif" (text; refused for other elements), "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "exclude"?: [layer names] (legend; [] lists every layer again), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse; for a rectangle or ellipse, color sets it when outline is not given), "width"?: points (rectangle, ellipse, line), "dir"?, "head"?, "angle"?, "length"? (line: turned or sized about its centre, then moved by any x or y; dir does not come with angle or length), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
+            r##"{"layout"?, "element": id, "x"?, "y"?, "w"?, "h"?: mm, "name"?, "visible"?, "locked"?: bool (a locked element takes no other change until unlocked; "locked": false unlocks it and may come with changes), "text"?, "size"?, "color"? (text, line), "bold"?, "italic"?, "align"?, "letterSpacing"?, "font"?: "sans"|"serif" (text; refused for other elements), "title"?, "allClasses"?: bool (legend), "hideOther"?: bool (legend), "exclude"?: [layer names] (legend; [] lists every layer again), "orientation"?, "ticks"?, "tickSide"?, "reverse"?: (colorbar), "style"?: (northArrow, scaleBar), "fill"?, "outline"? (northArrow, rectangle, ellipse; for a rectangle or ellipse, color sets it when outline is not given), "radius"?: mm (rectangle: rounded corners), "width"?: points (rectangle, ellipse, line), "dir"?, "head"?, "angle"?, "length"? (line: turned or sized about its centre, then moved by any x or y; dir does not come with angle or length), "units"?, "divisions"? (scaleBar), "map"?, "scale"?, "center"?: [lon, lat], "bearing"?: degrees clockwise from north, "pitch"?: degrees of tilt (0 to 85), "grid"?: {grid options as in layout.addElement} | false (map frame), "extentIndicator"?: {"color"?, "width"?: points} | false (map frame: its extent indicator's style, or removes it), "layer"?: (colorbar: "" for the top visible raster), "field"?, "rows"?}"##,
         ),
         C::new("layout.guides", "Guides", "Publish › Page Setup", guides).params(
             r#"{"layout"?, "x"?: [mm] (vertical guides, from the page's left edge), "y"?: [mm] (horizontal guides, from its top edge), "clear"?: bool (remove every guide first)}"#,
@@ -380,6 +380,12 @@ fn projection_and_datum(s: &Session) -> (String, String) {
     if let Some((datum, name)) = label.split_once(" / ") {
         return (name.trim().to_string(), datum.trim().to_string());
     }
+    // A UTM zone's EPSG code, named: its PROJ definition gives only an ellipsoid (SIRGAS 2000's
+    // zones have +ellps=GRS80), and its label only the code.
+    let code = label.strip_prefix("EPSG:").and_then(|n| n.parse::<u32>().ok());
+    if let Some((datum, zone, north)) = code.and_then(rustgis_data::raster::wkt::utm_of_code) {
+        return (format!("UTM zone {zone}{}", if north { "N" } else { "S" }), datum.to_string());
+    }
     let datum = rustgis_map::projection::lookup(&projection.code()).ok().and_then(|(def, _)| datum_of(&def));
     (label, datum.unwrap_or_else(|| "WGS 84".to_string()))
 }
@@ -455,12 +461,187 @@ pub(crate) fn capitals(t: &str) -> String {
 
 /// A text element in a publication layout's style: upright, sans, in `align`.
 fn pub_text(text: String, size: f64, color: Rgba, bold: bool, align: TextAlign) -> ElementKind {
-    ElementKind::Text { text, size, color, bold, italic: false, align, letter_spacing: 0.0, font: FontFamily::Sans }
+    pub_text_in(text, size, color, bold, align, FontFamily::Sans)
+}
+
+/// [`pub_text`] in `font`.
+fn pub_text_in(text: String, size: f64, color: Rgba, bold: bool, align: TextAlign, font: FontFamily) -> ElementKind {
+    ElementKind::Text { text, size, color, bold, italic: false, align, letter_spacing: 0.0, font }
+}
+
+/// How a publication sheet is arranged around its map.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Style {
+    /// The title over the map, the footer's boxes under it.
+    Classic,
+    /// The title and subtitle in a band of the accent colour across the top.
+    Banner,
+    /// The map at the left; a panel at the right with the title, the locator, the legend, the
+    /// sources and the reference.
+    Panel,
+    /// A magazine's page: the title large in serif, a column at the right with the note, the
+    /// locator and the legend.
+    Editorial,
+    /// Cards on a light page: the map in one, the locator and the legend in one each beside it,
+    /// the sources and the reference in tinted ones under them.
+    Modular,
+    /// The page in the accent colour: the title and subtitle in light text across the top, the
+    /// map in a light card, the footer in darker blocks.
+    Poster,
+}
+
+impl Style {
+    fn code(self) -> &'static str {
+        match self {
+            Style::Classic => "classic",
+            Style::Banner => "banner",
+            Style::Panel => "panel",
+            Style::Editorial => "editorial",
+            Style::Modular => "modular",
+            Style::Poster => "poster",
+        }
+    }
+
+    /// The accent colour when none is given: a deep blue, green or brown (a poster's page).
+    fn accent(self) -> Rgba {
+        match self {
+            Style::Classic => Rgba::rgb(0x2B, 0x26, 0x20),
+            Style::Banner => Rgba::rgb(0x4A, 0x34, 0x26),
+            Style::Panel => Rgba::rgb(0x2E, 0x5E, 0x3A),
+            Style::Editorial => Rgba::rgb(0x1F, 0x2D, 0x4D),
+            Style::Modular => Rgba::rgb(0x2F, 0x6B, 0x4F),
+            Style::Poster => Rgba::rgb(0x3A, 0x26, 0x18),
+        }
+    }
+
+    /// Whether its surrounds sit on cards with rounded corners.
+    fn cards(self) -> bool {
+        matches!(self, Style::Modular | Style::Poster)
+    }
+}
+
+/// How a style draws its footer: its boxes' fill, outline and corners, and its texts' colours.
+#[derive(Clone, Copy)]
+struct Look {
+    head: Rgba,
+    body: Rgba,
+    small: Rgba,
+    fill: Rgba,
+    outline: Rgba,
+    width: f64,
+    radius: f64,
+}
+
+/// Where a style sets the locator and the legend (under it) beside the map rather than over it:
+/// the room left for them there, in page millimetres.
+#[derive(Clone, Copy, Debug)]
+struct Column {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
 }
 
 /// A rectangle with no outline (`width` 0) or no fill (`fill` transparent).
 fn pub_box(fill: Rgba, outline: Rgba, width: f64) -> ElementKind {
-    ElementKind::Rectangle { fill, outline, width }
+    pub_card(fill, outline, width, 0.0)
+}
+
+/// [`pub_box`] with its corners rounded by `radius` millimetres.
+fn pub_card(fill: Rgba, outline: Rgba, width: f64, radius: f64) -> ElementKind {
+    ElementKind::Rectangle { fill, outline, width, radius }
+}
+
+/// The surrounds a publication layout places in the map frame's corners.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Surround {
+    Locator,
+    Arrow,
+    Legend,
+    Scale,
+}
+
+/// The least a publication layout's legend is cut to, each way, by the surrounds beside and above
+/// or below it, in mm.
+const MIN_LEGEND_MM: f64 = 10.0;
+
+/// A publication layout's legend, `w` × `h` in its corner, cut short of the surround beside it
+/// (`beside`: what it is and its width) and the one above or below it (`over`: what it is and its
+/// height), in a frame with `across` and `down` mm of room (its margins and the gap between
+/// surrounds taken off). Beside the arrow or the scale bar the legend keeps [`MIN_LEGEND_MM`] each
+/// way, as a layout without a locator always has; the locator leaving it less, `None`: left out,
+/// rather than drawn over the locator.
+pub(crate) fn legend_room(
+    w: f64,
+    h: f64,
+    across: f64,
+    down: f64,
+    beside: Option<(Surround, f64)>,
+    over: Option<(Surround, f64)>,
+) -> Option<(f64, f64)> {
+    let room = |other: Option<(Surround, f64)>, total: f64| other.map_or(f64::INFINITY, |(_, size)| total - size);
+    let (room_w, room_h) = (room(beside, across), room(over, down));
+    let locator_in_the_way =
+        |room: f64, other: Option<(Surround, f64)>| room < MIN_LEGEND_MM && other.is_some_and(|(kind, _)| kind == Surround::Locator);
+    if locator_in_the_way(room_w, beside) || locator_in_the_way(room_h, over) {
+        return None;
+    }
+    Some((w.min(room_w.max(MIN_LEGEND_MM)), h.min(room_h.max(MIN_LEGEND_MM))))
+}
+
+/// A publication layout's colorbar's height, in mm: its title, the bar and its labels.
+const COLORBAR_MM: f64 = 15.0;
+
+/// The share of what the map draws a surround may cover before the layout warns about it, when a
+/// corner freer by at least as much went to another surround.
+const OVER_DATA: f64 = 0.25;
+
+/// A `"decimal"` parameter: `","` for a decimal comma, `"."` for a point; `None` when not given.
+fn decimal_mark(p: &Value) -> Result<Option<bool>, String> {
+    match p.get("decimal").filter(|v| !v.is_null()) {
+        None => Ok(None),
+        Some(v) => match v.as_str().map(str::trim) {
+            Some(",") => Ok(Some(true)),
+            Some(".") => Ok(Some(false)),
+            _ => Err("decimal is \".\" or \",\"".into()),
+        },
+    }
+}
+
+/// What a publication layout locates its area on.
+#[derive(Clone, Copy, PartialEq)]
+enum Locator {
+    Globe,
+    Inset,
+    None,
+}
+
+/// The scale at which `map` on the globe, centred on `center`, draws a globe `d_mm` across in a
+/// frame: the globe's visible disc as the renderer lays it out for the frame's camera at a probe
+/// scale, its size going as one over the scale.
+fn globe_scale(map: &rustgis_map::Map, center: Coord, d_mm: f64) -> f64 {
+    const PROBE: f64 = 1e8;
+    let cam = rustgis_map::layout::frame_camera(map, center, PROBE, 0.0, 0.0);
+    let side = d_mm.max(1.0) * rustgis_map::layout::PT_PER_MM;
+    let radius = rustgis_map::globe::Globe::new(&cam, side, side).disc_radius();
+    if radius.is_finite() && radius > 0.0 { (PROBE * 2.0 * radius / side).clamp(100.0, 1e10) } else { PROBE }
+}
+
+/// Whether a sheet `short` × `long` mm suits an area `aspect` times as tall as it is wide better
+/// turned to landscape: the map comes out clearly wider there (by more than 3 %, portrait winning
+/// a near tie), as near as the sheet's texts can be told before they are laid out (a header and a
+/// footer of about 70 mm on A4 between them, a panel's title in its panel; a style with a column
+/// leaves the map two thirds of the width).
+fn landscape_suits(aspect: f64, short: f64, long: f64, style: Style) -> bool {
+    let k = short / 210.0;
+    let map_w = |w: f64, h: f64| {
+        let texts = if style == Style::Panel { 50.0 } else { 100.0 } * k;
+        let (iw, ih) = (w - 30.0 * k, h - texts);
+        let fw = if matches!(style, Style::Panel | Style::Editorial | Style::Modular) { 0.68 * iw } else { iw };
+        let (fw, fh) = (fw - 2.0 * LABEL_ROOM_SIDE, ih - 2.0 * LABEL_ROOM_END);
+        fw.min(fh / aspect.max(1e-6))
+    };
+    map_w(long, short) > 1.03 * map_w(short, long)
 }
 
 /// `layout.publication`: a finished sheet or figure of the active map, its extent fitted at a
@@ -469,12 +650,19 @@ fn pub_box(fill: Rgba, outline: Rgba, width: f64) -> ElementKind {
 /// authorship under them, each text wrapped to its box with the layout's own font.
 fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let id = match p.get("profile").filter(|v| !v.is_null()) {
-        None => "a4-portrait".to_string(),
+        None => "a4".to_string(),
         Some(v) => v.as_str().map(|t| t.trim().to_ascii_lowercase()).ok_or("profile is a profile's name, such as \"a4-portrait\"")?,
+    };
+    // A sheet's size alone ("a4", the default): its orientation chosen below, from the area's
+    // shape, portrait until then.
+    let auto = matches!(id.as_str(), "a4" | "a3" | "a2").then(|| id.clone());
+    let id = match &auto {
+        Some(size) => format!("{size}-portrait"),
+        None => id,
     };
     let profile = PUBLICATION_PROFILES.iter().find(|pr| pr.id == id).ok_or_else(|| {
         let names: Vec<&str> = PUBLICATION_PROFILES.iter().map(|pr| pr.id).collect();
-        format!("unknown profile '{id}': {}", names.join(", "))
+        format!("unknown profile '{id}': a4, a3 or a2 (turned to the area's shape), {}", names.join(", "))
     })?;
     let (sheet, page_w, page_h) = (profile.sheet, profile.width, profile.height);
     let extent = match p.get("extent").filter(|v| !v.is_null()) {
@@ -510,6 +698,54 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         Some(t) => Some(t.join(" ")).filter(|t| !t.trim().is_empty()),
     };
     let headings = texts_of(p, "headings")?.unwrap_or_default();
+    let comma = decimal_mark(p)?.unwrap_or(false);
+    let locator = match p.get("locator").filter(|v| !v.is_null()) {
+        None => {
+            if sheet {
+                Locator::Globe
+            } else {
+                Locator::None
+            }
+        }
+        Some(v) => match v.as_str().map(str::trim) {
+            Some("globe") => Locator::Globe,
+            Some("inset") => Locator::Inset,
+            Some("none") => Locator::None,
+            _ => return Err("locator is \"globe\", \"inset\" or \"none\"".into()),
+        },
+    };
+    // A style or an accent that isn't text is refused, as an unknown one is, rather than left out.
+    for k in ["style", "accent"] {
+        if p.get(k).is_some_and(|v| !v.is_null() && !v.is_string()) {
+            return Err(format!("{k} is text: {}", if k == "style" { "a style's name, such as \"panel\"" } else { "a colour as #RRGGBB" }));
+        }
+    }
+    let style = match ps(p, "style").map(str::trim) {
+        None | Some("classic") => Style::Classic,
+        Some("banner") => Style::Banner,
+        Some("panel") => Style::Panel,
+        Some("editorial") => Style::Editorial,
+        Some("modular") => Style::Modular,
+        Some("poster") => Style::Poster,
+        Some(x) => {
+            return Err(format!("style is \"classic\", \"banner\", \"panel\", \"editorial\", \"modular\" or \"poster\", not \"{x}\""));
+        }
+    };
+    let accent = color(p, "accent", style.accent())?;
+    // A translucent accent would leave a band, a poster's page or the headings faint or unseen.
+    if accent.a() != 255 {
+        return Err("accent is an opaque colour as #RRGGBB".into());
+    }
+    // No orientation asked: the one the area's map comes out larger on, from its extents east to
+    // west and north to south on the map's projection and the room the style leaves the map.
+    let profile = match &auto {
+        Some(size) if aspect(s, &extent).is_some_and(|a| landscape_suits(a, page_w.min(page_h), page_w.max(page_h), style)) => {
+            let id = format!("{size}-landscape");
+            PUBLICATION_PROFILES.iter().find(|pr| pr.id == id).unwrap_or(profile)
+        }
+        _ => profile,
+    };
+    let (page_w, page_h) = (profile.width, profile.height);
     let heading = |i: usize, or: &str| headings.get(i).cloned().unwrap_or_else(|| or.to_string());
     let (projection, datum) = projection_and_datum(s);
     let step = grid_step(&extent);
@@ -547,134 +783,535 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let mut warnings: Vec<String> = Vec::new();
     // Texts and boxes around the map, placed while its frame is worked out.
     let mut around: Vec<(String, (f64, f64, f64, f64), ElementKind)> = Vec::new();
+    // What a style draws under the map and its surrounds: a page's colour, a card or a panel.
+    let mut behind: Vec<(String, (f64, f64, f64, f64), ElementKind)> = Vec::new();
+    // What spans the whole page (a sheet's neatline, a poster's colour), laid on the full page
+    // whatever a pass below frees, so never moved: over the map (`true`) or under everything,
+    // each before the rest of its side.
+    let mut page_wide: Vec<(String, (f64, f64, f64, f64), ElementKind, bool)> = Vec::new();
     // A sheet's sizes follow its short side (A4's 210 mm is 1); a figure keeps its texts at their
     // printed size, whatever its width.
     let k = if sheet { page_w.min(page_h) / 210.0 } else { 1.0 };
-    let (w, h, (fx, fy, fw, fh)) = if sheet {
-        let (m, pad) = (10.0 * k, 5.0 * k);
-        let (x0, iw) = (m + pad, page_w - 2.0 * (m + pad));
-        let (title_pt, sub_pt, head_pt, body_pt, small_pt) = (18.0 * k, 10.5 * k, 7.5 * k, 7.0 * k, 6.5 * k);
-        around.push(("Frame".into(), (m, m, page_w - 2.0 * m, page_h - 2.0 * m), pub_box(clear, ink, 0.8)));
-        let mut top = m + pad;
-        if let Some(t) = &title {
-            let lines = wrap_as(t, iw, title_pt, true);
-            let th = lines.len() as f64 * pitch(title_pt) + 1.5 * k;
-            around.push(("Title".into(), (x0, top, iw, th), pub_text(lines.join("\n"), title_pt, ink, true, TextAlign::Center)));
-            top += th;
-        }
-        if let Some(t) = &subtitle {
-            let lines = wrap(t, iw, sub_pt);
-            let sh = lines.len() as f64 * pitch(sub_pt) + 1.0 * k;
-            around.push(("Subtitle".into(), (x0, top, iw, sh), pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Center)));
-            top += sh;
-        }
-        // The footer, from the bottom up: authorship, the note, then the two boxes side by side,
-        // as tall as the longer column.
-        let bottom = page_h - m - pad;
-        let author_lines = author.as_deref().map(|t| wrap(t, iw, small_pt)).unwrap_or_default();
-        let author_h = author_lines.len() as f64 * pitch(small_pt);
-        let author_y = bottom - author_h;
-        if !author_lines.is_empty() {
-            around.push((
-                "Author".into(),
-                (x0, author_y, iw, author_h),
-                pub_text(author_lines.join("\n"), small_pt, soft, false, TextAlign::Right),
-            ));
-        }
-        let note_lines = note.as_deref().map(|t| wrap(t, iw, body_pt)).unwrap_or_default();
-        let mut foot = author_y;
-        if !note_lines.is_empty() {
-            let nh = note_lines.len() as f64 * pitch(body_pt);
-            foot -= nh + 1.5 * k;
-            around.push(("Note".into(), (x0, foot, iw, nh), pub_text(note_lines.join("\n"), body_pt, soft, false, TextAlign::Left)));
-        }
-        // The columns with something in them, side by side (one alone takes the width). Each one's
-        // elements keep their names (`Sources`, `Reference`) whatever its heading reads, the heading
-        // filled and wrapped like the rest.
-        let (gap, inner) = (4.0 * k, 2.5 * k);
-        let given = [("Sources", heading(0, "Sources"), &sources), ("Reference", heading(1, "Cartographic reference"), &reference)];
-        let given: Vec<_> = given.into_iter().filter(|(.., texts)| !texts.is_empty()).collect();
-        let n = given.len().max(1) as f64;
-        let cw = (iw - gap * (n - 1.0)) / n;
-        let tw = cw - 2.0 * inner;
-        let columns: Vec<_> = given
-            .into_iter()
-            .map(|(name, head, texts)| {
-                // Filled first, so `{projection}` reads in capitals too; the live tokens left keep
-                // their case (wrap_as fills again, which then finds nothing).
-                let head = wrap_as(&capitals(&fill(&head)), tw, head_pt, true);
-                (name, head, texts.iter().flat_map(|t| wrap(t, tw, body_pt)).collect::<Vec<_>>())
-            })
-            .collect();
-        let heads = columns.iter().map(|(_, h, _)| h.len()).max().unwrap_or(1);
-        let rows = columns.iter().map(|(.., l)| l.len()).max().unwrap_or(0);
-        if rows > 0 {
-            let head_h = heads as f64 * pitch(head_pt);
-            let bh = 2.0 * inner + head_h + rows as f64 * pitch(body_pt);
-            foot -= bh + 2.0 * k;
-            for (i, (name, head, lines)) in columns.into_iter().enumerate() {
-                let bx = x0 + i as f64 * (cw + gap);
-                around.push((format!("{name} Box"), (bx, foot, cw, bh), pub_box(clear, Rgba::new(0x2B, 0x26, 0x20, 140), 0.5)));
-                let tx = bx + inner;
-                around.push((
-                    format!("{name} Heading"),
-                    (tx, foot + inner, tw, head.len() as f64 * pitch(head_pt)),
-                    pub_text(head.join("\n"), head_pt, ink, true, TextAlign::Left),
-                ));
-                if !lines.is_empty() {
-                    let body = (tx, foot + inner + head_h, tw, lines.len() as f64 * pitch(body_pt));
-                    around.push((name.to_string(), body, pub_text(lines.join("\n"), body_pt, soft, false, TextAlign::Left)));
+    // A panel's or an editorial page's map is as wide as its column: where the area is less tall
+    // than the frame the sheet leaves it, the sheet is laid out again with the frame the area's
+    // height (and a little room), and the whole put in the middle of the page, rather than the map
+    // showing more of its surroundings.
+    let page_full = page_h;
+    let mut freed = 0.0f64;
+    let (mut target, mut passes): (Option<f64>, u32) = (None, 0);
+    // A later pass failing where an earlier one held (its shorter page leaving the texts too
+    // little room) settles on the last that held: only the first pass's failure is the request's.
+    let (mut held, mut settled) = (0.0f64, false);
+    let warned = warnings.len();
+    let (w, h, (fx, fy, fw, fh), column) = loop {
+        around.clear();
+        behind.clear();
+        page_wide.clear();
+        warnings.truncate(warned);
+        let page_h = page_full - freed;
+        let attempt = (|| -> Result<_, String> {
+            Ok(if sheet {
+                let (m, pad) = (10.0 * k, 5.0 * k);
+                let (x0, iw) = (m + pad, page_w - 2.0 * (m + pad));
+                let (title_pt, sub_pt, head_pt, body_pt, small_pt) = (18.0 * k, 10.5 * k, 7.5 * k, 7.0 * k, 6.5 * k);
+                // A neatline round the sheet, but on a poster's coloured page or a page of cards.
+                if !style.cards() {
+                    page_wide.push(("Frame".into(), (m, m, page_w - 2.0 * m, page_full - 2.0 * m), pub_box(clear, ink, 0.8), true));
                 }
+                // The sources and the reference that have something in them, each its heading and lines
+                // `tw` wide. Each one's elements keep their names (`Sources`, `Reference`) whatever its
+                // heading reads, the heading filled and wrapped like the rest.
+                let sections = |tw: f64| -> Vec<(&'static str, Vec<String>, Vec<String>)> {
+                    [("Sources", heading(0, "Sources"), &sources), ("Reference", heading(1, "Cartographic reference"), &reference)]
+                        .into_iter()
+                        .filter(|(.., texts)| !texts.is_empty())
+                        .map(|(name, head, texts)| {
+                            // Filled first, so `{projection}` reads in capitals too; the live tokens left
+                            // keep their case (wrap_as fills again, which then finds nothing).
+                            let head = wrap_as(&capitals(&fill(&head)), tw, head_pt, true);
+                            (name, head, texts.iter().flat_map(|t| wrap(t, tw, body_pt)).collect::<Vec<_>>())
+                        })
+                        .collect()
+                };
+                // The footer, from the bottom up across the sheet: authorship, the note (unless the style
+                // sets it beside the map), then the sources and reference boxed side by side (unless it
+                // stacks them in its panel), as tall as the longer column. Its top.
+                type Around = Vec<(String, (f64, f64, f64, f64), ElementKind)>;
+                let footer = |around: &mut Around, look: &Look, note_here: bool, boxes_here: bool| -> f64 {
+                    let bottom = page_h - m - pad;
+                    let author_lines = author.as_deref().map(|t| wrap(t, iw, small_pt)).unwrap_or_default();
+                    let author_h = author_lines.len() as f64 * pitch(small_pt);
+                    let author_y = bottom - author_h;
+                    if !author_lines.is_empty() {
+                        around.push((
+                            "Author".into(),
+                            (x0, author_y, iw, author_h),
+                            pub_text(author_lines.join("\n"), small_pt, look.small, false, TextAlign::Right),
+                        ));
+                    }
+                    let mut foot = author_y;
+                    let note_lines = note.as_deref().filter(|_| note_here).map(|t| wrap(t, iw, body_pt)).unwrap_or_default();
+                    if !note_lines.is_empty() {
+                        let nh = note_lines.len() as f64 * pitch(body_pt);
+                        foot -= nh + 1.5 * k;
+                        around.push((
+                            "Note".into(),
+                            (x0, foot, iw, nh),
+                            pub_text(note_lines.join("\n"), body_pt, look.small, false, TextAlign::Left),
+                        ));
+                    }
+                    if !boxes_here {
+                        return foot;
+                    }
+                    // The columns side by side (one alone takes the width).
+                    let (gap, inner) = (4.0 * k, 2.5 * k);
+                    let n = [!sources.is_empty(), !reference.is_empty()].iter().filter(|x| **x).count().max(1) as f64;
+                    let cw = (iw - gap * (n - 1.0)) / n;
+                    let tw = cw - 2.0 * inner;
+                    let columns = sections(tw);
+                    let heads = columns.iter().map(|(_, h, _)| h.len()).max().unwrap_or(1);
+                    let rows = columns.iter().map(|(.., l)| l.len()).max().unwrap_or(0);
+                    if rows > 0 {
+                        let head_h = heads as f64 * pitch(head_pt);
+                        let bh = 2.0 * inner + head_h + rows as f64 * pitch(body_pt);
+                        foot -= bh + 2.0 * k;
+                        for (i, (name, head, lines)) in columns.into_iter().enumerate() {
+                            let bx = x0 + i as f64 * (cw + gap);
+                            around.push((
+                                format!("{name} Box"),
+                                (bx, foot, cw, bh),
+                                pub_card(look.fill, look.outline, look.width, look.radius),
+                            ));
+                            let tx = bx + inner;
+                            around.push((
+                                format!("{name} Heading"),
+                                (tx, foot + inner, tw, head.len() as f64 * pitch(head_pt)),
+                                pub_text(head.join("\n"), head_pt, look.head, true, TextAlign::Left),
+                            ));
+                            if !lines.is_empty() {
+                                let body = (tx, foot + inner + head_h, tw, lines.len() as f64 * pitch(body_pt));
+                                around.push((
+                                    name.to_string(),
+                                    body,
+                                    pub_text(lines.join("\n"), body_pt, look.body, false, TextAlign::Left),
+                                ));
+                            }
+                        }
+                    }
+                    foot
+                };
+                // The map's frame between `top` and `bottom`, at least 40 mm tall (on A4).
+                let room = |top: f64, bottom: f64| {
+                    if bottom - top < 40.0 * k {
+                        Err("the texts leave the map no room: shorten the footer, the note or the subtitle".to_string())
+                    } else {
+                        Ok(bottom - top)
+                    }
+                };
+                let white = Rgba::rgb(0xFF, 0xFF, 0xFF);
+                let plain = Look {
+                    head: ink,
+                    body: soft,
+                    small: soft,
+                    fill: clear,
+                    outline: Rgba::new(0x2B, 0x26, 0x20, 140),
+                    width: 0.5,
+                    radius: 0.0,
+                };
+                let (card_r, card_pad) = (3.0 * k, 2.5 * k);
+                let card_line = Rgba::new(0x2B, 0x26, 0x20, 60);
+                match style {
+                    Style::Classic => {
+                        let mut top = m + pad;
+                        if let Some(t) = &title {
+                            let lines = wrap_as(t, iw, title_pt, true);
+                            let th = lines.len() as f64 * pitch(title_pt) + 1.5 * k;
+                            around.push((
+                                "Title".into(),
+                                (x0, top, iw, th),
+                                pub_text(lines.join("\n"), title_pt, ink, true, TextAlign::Center),
+                            ));
+                            top += th;
+                        }
+                        if let Some(t) = &subtitle {
+                            let lines = wrap(t, iw, sub_pt);
+                            let sh = lines.len() as f64 * pitch(sub_pt) + 1.0 * k;
+                            around.push((
+                                "Subtitle".into(),
+                                (x0, top, iw, sh),
+                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Center),
+                            ));
+                            top += sh;
+                        }
+                        let foot = footer(&mut around, &plain, true, true);
+                        let (ft, fb) = (top + 3.0 * k, foot - 4.0 * k);
+                        (page_w, page_h, (x0, ft, iw, room(ft, fb)?), None)
+                    }
+                    Style::Banner | Style::Poster => {
+                        // A band in the accent colour across the top: the title at its left in white, the
+                        // subtitle beside it past a thin rule. With neither, no band. A poster's whole page
+                        // is that colour, its map in a light card and its footer in darker blocks.
+                        let poster = style == Style::Poster;
+                        if poster {
+                            page_wide.push(("Background".into(), (0.0, 0.0, page_w, page_full), pub_box(accent, clear, 0.0), false));
+                        }
+                        let mut top = m + pad;
+                        if title.is_some() || subtitle.is_some() {
+                            let big = title_pt * 1.2;
+                            let t_max = if subtitle.is_some() { 0.42 * iw } else { iw };
+                            let t_lines = title.as_deref().map(|t| wrap_as(t, t_max, big, true)).unwrap_or_default();
+                            let t_w = t_lines
+                                .iter()
+                                .map(|x| crate::render::report::width_mm(&drawn(x), big as f32, true))
+                                .fold(0.0, f64::max)
+                                .min(t_max)
+                                .ceil();
+                            let rule = if t_lines.is_empty() { 0.0 } else { 6.0 * k };
+                            let s_x = x0 + t_w + rule;
+                            let s_w = (x0 + iw - s_x).max(20.0 * k);
+                            let s_lines = subtitle.as_deref().map(|t| wrap(t, s_w, sub_pt)).unwrap_or_default();
+                            let (t_h, s_h) = (t_lines.len() as f64 * pitch(big), s_lines.len() as f64 * pitch(sub_pt));
+                            let band_h = t_h.max(s_h) + 2.0 * pad;
+                            let mid = m + band_h / 2.0;
+                            if !poster {
+                                around.push(("Banner".into(), (m, m, page_w - 2.0 * m, band_h), pub_box(accent, clear, 0.0)));
+                            }
+                            if !t_lines.is_empty() {
+                                around.push((
+                                    "Title".into(),
+                                    (x0, mid - t_h / 2.0, t_w, t_h),
+                                    pub_text(t_lines.join("\n"), big, white, true, TextAlign::Left),
+                                ));
+                            }
+                            if !t_lines.is_empty() && !s_lines.is_empty() {
+                                around.push((
+                                    "Banner Rule".into(),
+                                    (x0 + t_w + rule / 2.0 - 0.5, mid - t_h.max(s_h) / 2.0, 1.0, t_h.max(s_h)),
+                                    ElementKind::Line {
+                                        color: Rgba::new(0xFF, 0xFF, 0xFF, 170),
+                                        width: 0.75,
+                                        dir: LineDir::Vertical,
+                                        head: LineHead::None,
+                                    },
+                                ));
+                            }
+                            if !s_lines.is_empty() {
+                                around.push((
+                                    "Subtitle".into(),
+                                    (s_x, mid - s_h / 2.0, s_w, s_h),
+                                    pub_text(s_lines.join("\n"), sub_pt, Rgba::rgb(0xF2, 0xEE, 0xE6), false, TextAlign::Left),
+                                ));
+                            }
+                            top = m + band_h;
+                        }
+                        // A poster's footer: blocks a shade lighter than its page, amber headings, light text.
+                        let shade = |c: u8| c.saturating_add(((255 - u16::from(c)) / 8) as u8);
+                        let look = if poster {
+                            Look {
+                                head: Rgba::rgb(0xE8, 0xB0, 0x4B),
+                                body: Rgba::rgb(0xED, 0xE6, 0xDA),
+                                small: Rgba::rgb(0xCF, 0xC6, 0xB8),
+                                fill: Rgba::rgb(shade(accent.r()), shade(accent.g()), shade(accent.b())),
+                                outline: clear,
+                                width: 0.0,
+                                radius: card_r,
+                            }
+                        } else {
+                            plain
+                        };
+                        let foot = footer(&mut around, &look, true, true);
+                        let (ft, fb) = (top + 4.0 * k, foot - 4.0 * k);
+                        let h = room(ft, fb)?;
+                        if poster {
+                            behind.push(("Map Card".into(), (x0, ft, iw, h), pub_card(Rgba::rgb(0xF6, 0xF1, 0xE7), clear, 0.0, card_r)));
+                            (page_w, page_h, (x0 + card_pad, ft + card_pad, iw - 2.0 * card_pad, h - 2.0 * card_pad), None)
+                        } else {
+                            (page_w, page_h, (x0, ft, iw, h), None)
+                        }
+                    }
+                    Style::Modular => {
+                        // Cards on a light page: the title and subtitle at the top left over a short bar of
+                        // the accent colour; the map in a card at the left; at the right the locator and
+                        // the legend, each in a card; the sources and reference in tinted cards side by
+                        // side under them, the note and authorship under all.
+                        let mut y = m + pad;
+                        let tw = 0.75 * iw;
+                        if let Some(t) = &title {
+                            let big = title_pt * 1.3;
+                            let lines = wrap_as(t, tw, big, true);
+                            let th = lines.len() as f64 * pitch(big);
+                            around.push(("Title".into(), (x0, y, tw, th), pub_text(lines.join("\n"), big, ink, true, TextAlign::Left)));
+                            y += th;
+                        }
+                        if let Some(t) = &subtitle {
+                            let lines = wrap(t, tw, sub_pt);
+                            let sh = lines.len() as f64 * pitch(sub_pt);
+                            around.push((
+                                "Subtitle".into(),
+                                (x0, y, tw, sh),
+                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Left),
+                            ));
+                            y += sh;
+                        }
+                        if y > m + pad {
+                            around.push(("Title Rule".into(), (x0, y + 1.5 * k, 14.0 * k, 1.2 * k), pub_box(accent, clear, 0.0)));
+                            y += 5.0 * k;
+                        }
+                        let look = Look {
+                            head: accent,
+                            body: soft,
+                            small: soft,
+                            fill: Rgba::new(accent.r(), accent.g(), accent.b(), 0x1A),
+                            outline: clear,
+                            width: 0.0,
+                            radius: card_r,
+                        };
+                        let foot = footer(&mut around, &look, true, true);
+                        let bottom = foot - 4.0 * k;
+                        let h = room(y, bottom)?;
+                        let gap = 5.0 * k;
+                        let cw = (0.3 * iw).max(48.0 * k).min(0.45 * iw);
+                        let (mw, cx) = (iw - cw - gap, x0 + iw - cw);
+                        behind.push(("Map Card".into(), (x0, y, mw, h), pub_card(white, card_line, 0.4, card_r)));
+                        let frame = (x0 + card_pad, y + card_pad, mw - 2.0 * card_pad, h - 2.0 * card_pad);
+                        let column = Column { x: cx + card_pad, y: y + card_pad, w: cw - 2.0 * card_pad, h: h - 2.0 * card_pad };
+                        (page_w, page_h, frame, Some(column))
+                    }
+                    Style::Panel => {
+                        // The map at the left, as tall as the sheet allows; a pale panel at the right with
+                        // the title and subtitle, then the locator and the legend, and the sources and the
+                        // reference at its foot; the note and authorship across the bottom.
+                        let gap = 5.0 * k;
+                        let pw = (0.3 * iw).max(48.0 * k).min(0.45 * iw);
+                        let (mw, px) = (iw - pw - gap, x0 + iw - pw);
+                        let top = m + pad;
+                        // With its frame cut to the area, the sources and reference go under the map, in
+                        // the room the frame left, and the panel holds the title, locator and legend.
+                        let under = freed > 0.0;
+                        let foot = footer(&mut around, &plain, true, under);
+                        let panel_bottom = foot - 4.0 * k;
+                        let tint = Rgba::new(accent.r(), accent.g(), accent.b(), 0x18);
+                        behind.push(("Panel Box".into(), (px, top, pw, panel_bottom - top), pub_box(tint, clear, 0.0)));
+                        let ip = 3.0 * k;
+                        let (ix, tw) = (px + ip, pw - 2.0 * ip);
+                        let mut y = top + ip;
+                        if let Some(t) = &title {
+                            let lines = wrap_as(t, tw, title_pt, true);
+                            let th = lines.len() as f64 * pitch(title_pt);
+                            around.push((
+                                "Title".into(),
+                                (ix, y, tw, th),
+                                pub_text(lines.join("\n"), title_pt, ink, true, TextAlign::Left),
+                            ));
+                            y += th + 1.0 * k;
+                        }
+                        if let Some(t) = &subtitle {
+                            let lines = wrap(t, tw, sub_pt);
+                            let sh = lines.len() as f64 * pitch(sub_pt);
+                            around.push((
+                                "Subtitle".into(),
+                                (ix, y, tw, sh),
+                                pub_text(lines.join("\n"), sub_pt, soft, false, TextAlign::Left),
+                            ));
+                            y += sh;
+                        }
+                        if y > top + ip {
+                            around.push((
+                                "Panel Rule".into(),
+                                (ix, y + 1.5 * k, tw, 1.0),
+                                ElementKind::Line { color: accent, width: 1.0, dir: LineDir::Horizontal, head: LineHead::None },
+                            ));
+                            y += 4.0 * k;
+                        }
+                        // The sources and the reference, stacked up from the panel's foot.
+                        let mut yb = panel_bottom - ip;
+                        for (name, head, lines) in sections(tw).into_iter().rev().filter(|_| !under) {
+                            let (hh, bh) = (head.len() as f64 * pitch(head_pt), lines.len() as f64 * pitch(body_pt));
+                            yb -= hh + bh;
+                            around.push((
+                                format!("{name} Heading"),
+                                (ix, yb, tw, hh),
+                                pub_text(head.join("\n"), head_pt, accent, true, TextAlign::Left),
+                            ));
+                            if !lines.is_empty() {
+                                around.push((
+                                    name.to_string(),
+                                    (ix, yb + hh, tw, bh),
+                                    pub_text(lines.join("\n"), body_pt, soft, false, TextAlign::Left),
+                                ));
+                            }
+                            yb -= 3.0 * k;
+                        }
+                        if yb - y < 30.0 * k {
+                            return Err(
+                            "the panel's texts leave no room for the locator and the legend: shorten the title, the sources or the reference"
+                                .into(),
+                        );
+                        }
+                        (page_w, page_h, (x0, top, mw, room(top, panel_bottom)?), Some(Column { x: ix, y, w: tw, h: yb - y }))
+                    }
+                    Style::Editorial => {
+                        // A magazine's page: the title large in serif at the top left in the accent colour,
+                        // the subtitle under it, the map below; a column at the right, under a rule, with
+                        // its heading (the third of `headings`), the note (the map's story), the locator
+                        // and the legend; the sources and reference boxed under both.
+                        // Its title and subtitle are serif: with none installed, drawn in the sans, said.
+                        if (title.is_some() || subtitle.is_some())
+                            && let Some(w) = no_serif()
+                        {
+                            warnings.push(format!("the editorial title and subtitle: {w}"));
+                        }
+                        let gap = 6.0 * k;
+                        let cw = (0.3 * iw).max(45.0 * k).min(0.4 * iw);
+                        let (mw, cx) = (iw - cw - gap, x0 + iw - cw);
+                        let serif_wrap = |t: &str, w: f64, pt: f64, bold: bool| {
+                            crate::render::report::wrap_with(&fill(t), w.max(1.0), |x| {
+                                crate::render::report::serif_width_mm(&drawn(x), pt as f32, bold)
+                            })
+                        };
+                        let (big, sub) = (30.0 * k, 13.0 * k);
+                        let mut y = m + pad;
+                        if let Some(t) = &title {
+                            let lines = serif_wrap(t, mw, big, true);
+                            let th = lines.len() as f64 * pitch(big);
+                            around.push((
+                                "Title".into(),
+                                (x0, y, mw, th),
+                                pub_text_in(lines.join("\n"), big, accent, true, TextAlign::Left, FontFamily::Serif),
+                            ));
+                            y += th + 1.0 * k;
+                        }
+                        if let Some(t) = &subtitle {
+                            let lines = serif_wrap(t, mw, sub, false);
+                            let sh = lines.len() as f64 * pitch(sub);
+                            around.push((
+                                "Subtitle".into(),
+                                (x0, y, mw, sh),
+                                pub_text_in(lines.join("\n"), sub, soft, false, TextAlign::Left, FontFamily::Serif),
+                            ));
+                            y += sh;
+                        }
+                        let foot = footer(&mut around, &plain, false, true);
+                        let fb = foot - 4.0 * k;
+                        let mut cy = m + pad;
+                        around.push((
+                            "Column Rule".into(),
+                            (cx, cy, cw, 1.0),
+                            ElementKind::Line { color: accent, width: 1.5, dir: LineDir::Horizontal, head: LineHead::None },
+                        ));
+                        cy += 3.0 * k;
+                        if let Some(hd) = headings.get(2).filter(|h| !h.trim().is_empty()) {
+                            let pt = head_pt * 1.2;
+                            let lines = wrap_as(&capitals(&fill(hd)), cw, pt, true);
+                            let hh = lines.len() as f64 * pitch(pt);
+                            around.push((
+                                "Column Heading".into(),
+                                (cx, cy, cw, hh),
+                                pub_text(lines.join("\n"), pt, accent, true, TextAlign::Left),
+                            ));
+                            cy += hh + 2.0 * k;
+                        }
+                        if let Some(t) = &note {
+                            let pt = body_pt * 1.15;
+                            let lines = wrap(t, cw, pt);
+                            let nh = lines.len() as f64 * pitch(pt);
+                            around.push(("Note".into(), (cx, cy, cw, nh), pub_text(lines.join("\n"), pt, soft, false, TextAlign::Left)));
+                            cy += nh + 4.0 * k;
+                        }
+                        if fb - cy < 30.0 * k {
+                            warnings
+                                .push("the column's note leaves the locator and the legend little room under it: shorten the note".into());
+                        }
+                        let ft = y + 4.0 * k;
+                        (page_w, page_h, (x0, ft, mw, room(ft, fb)?), Some(Column { x: cx, y: cy, w: cw, h: (fb - cy).max(0.0) }))
+                    }
+                }
+            } else {
+                if style != Style::Classic {
+                    warnings.push(format!(
+                        "style \"{}\" arranges a sheet's texts, which a figure leaves to its caption: left out",
+                        style.code()
+                    ));
+                }
+                // A figure: the map edge to edge, a line of the projection and datum under it.
+                // Every text a figure leaves to its caption, given anyway, is said to be left out.
+                let asked = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+                for (field, given) in [
+                    ("title", title.is_some()),
+                    ("subtitle", subtitle.is_some()),
+                    ("sources", !sources.is_empty()),
+                    ("note", note.is_some()),
+                    // An empty author asks for none: nothing left out.
+                    ("author", asked("author") && author.is_some()),
+                    ("headings", !headings.is_empty()),
+                ] {
+                    if given {
+                        warnings.push(format!("{field} goes in the figure's caption, not on it: left out"));
+                    }
+                }
+                let line = reference.iter().map(|t| fill(t)).collect::<Vec<_>>().join(" · ");
+                // A millimetre in from the paper's edges, which a journal may trim.
+                let lines = wrap(&line, page_w - 2.0, FIGURE_PT);
+                if lines.len() > 1 {
+                    warnings.push("the reference is wider than the figure: it wraps under the map".into());
+                }
+                let note_h = lines.len() as f64 * pitch(FIGURE_PT) + 1.0;
+                let fh = if page_h > 0.0 {
+                    page_h - note_h
+                } else {
+                    let shape = aspect(s, &extent).unwrap_or_else(|| {
+                        warnings.push("the extent's shape on the map's projection isn't known: the figure is 4 wide by 3 tall".into());
+                        0.75
+                    });
+                    (page_w * shape).clamp(0.45 * page_w, 1.3 * page_w).round()
+                };
+                if fh < 40.0 {
+                    return Err("the reference leaves the map no room: shorten it".into());
+                }
+                let h = if page_h > 0.0 { page_h } else { (fh + note_h).ceil() };
+                around.push((
+                    "Reference".into(),
+                    (1.0, fh + 1.0, page_w - 2.0, note_h - 1.0),
+                    pub_text(lines.join("\n"), FIGURE_PT, ink, false, TextAlign::Left),
+                ));
+                (page_w, h, (0.0, 0.0, page_w, fh), None)
+            })
+        })();
+        let laid = match attempt {
+            Ok(laid) => laid,
+            Err(e) if passes == 0 || settled => return Err(e),
+            Err(_) => {
+                (freed, settled) = (held, true);
+                continue;
             }
-        }
-        let (frame_top, frame_bottom) = (top + 3.0 * k, foot - 4.0 * k);
-        if frame_bottom - frame_top < 40.0 * k {
-            return Err("the texts leave the map no room: shorten the footer, the note or the subtitle".into());
-        }
-        (page_w, page_h, (x0, frame_top, iw, frame_bottom - frame_top))
-    } else {
-        // A figure: the map edge to edge, a line of the projection and datum under it.
-        // Every text a figure leaves to its caption, given anyway, is said to be left out.
-        let asked = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
-        for (field, given) in [
-            ("title", title.is_some()),
-            ("subtitle", subtitle.is_some()),
-            ("sources", !sources.is_empty()),
-            ("note", note.is_some()),
-            // An empty author asks for none: nothing left out.
-            ("author", asked("author") && author.is_some()),
-            ("headings", !headings.is_empty()),
-        ] {
-            if given {
-                warnings.push(format!("{field} goes in the figure's caption, not on it: left out"));
-            }
-        }
-        let line = reference.iter().map(|t| fill(t)).collect::<Vec<_>>().join(" · ");
-        // A millimetre in from the paper's edges, which a journal may trim.
-        let lines = wrap(&line, page_w - 2.0, FIGURE_PT);
-        if lines.len() > 1 {
-            warnings.push("the reference is wider than the figure: it wraps under the map".into());
-        }
-        let note_h = lines.len() as f64 * pitch(FIGURE_PT) + 1.0;
-        let fh = if page_h > 0.0 {
-            page_h - note_h
-        } else {
-            let shape = aspect(s, &extent).unwrap_or_else(|| {
-                warnings.push("the extent's shape on the map's projection isn't known: the figure is 4 wide by 3 tall".into());
-                0.75
-            });
-            (page_w * shape).clamp(0.45 * page_w, 1.3 * page_w).round()
         };
-        if fh < 40.0 {
-            return Err("the reference leaves the map no room: shorten it".into());
+        let (_, _, (_, _, lw, lh), _) = laid;
+        // The frame's height for the area at its width, with a seventh more of its surroundings;
+        // worked out on the first pass (the width doesn't change), aimed at on the others, whose
+        // footer can grow (a panel's sources move under the map) and so need a pass or two more.
+        if passes == 0 {
+            target = (sheet && matches!(style, Style::Panel | Style::Editorial))
+                .then(|| aspect(s, &extent))
+                .flatten()
+                .map(|a| (((lw - 2.0 * LABEL_ROOM_SIDE).max(1.0) * a + 2.0 * LABEL_ROOM_END) * 1.15).max(40.0 * k))
+                // Only a frame clearly too tall is cut.
+                .filter(|n| *n < 0.97 * lh);
         }
-        let h = if page_h > 0.0 { page_h } else { (fh + note_h).ceil() };
-        around.push((
-            "Reference".into(),
-            (1.0, fh + 1.0, page_w - 2.0, note_h - 1.0),
-            pub_text(lines.join("\n"), FIGURE_PT, ink, false, TextAlign::Left),
-        ));
-        (page_w, h, (0.0, 0.0, page_w, fh))
+        passes += 1;
+        match target {
+            Some(n) if !settled && (lh - n).abs() > 0.5 && passes < 5 => (held, freed) = (freed, (freed + lh - n).max(0.0)),
+            _ => break laid,
+        }
+    };
+    // The content in the middle of the page: what the sheet laid out on its shorter page moves down
+    // by half of what it freed (what spans the whole page was laid on it, and stays).
+    for (_, r, _) in around.iter_mut().chain(behind.iter_mut()) {
+        r.1 += freed / 2.0;
+    }
+    let (fy, column, h) = if freed > 0.0 && sheet {
+        (fy + freed / 2.0, column.map(|c| Column { y: c.y + freed / 2.0, ..c }), page_full)
+    } else {
+        (fy, column, h)
     };
     // The extent fits within the graticule's label strips (drawn inside the frame along its
     // labelled edges), on both sides so it stays centred, and its labels cover none of it.
@@ -690,6 +1327,14 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     let grid = Grid { step, edges, ..Grid::default() };
     let name = unique_name(s, ps(p, "name").unwrap_or("Publication"));
     let mut l = Layout::new(name.clone(), w, h);
+    l.decimal_comma = comma;
+    let (over, under): (Vec<_>, Vec<_>) = page_wide.into_iter().partition(|e| e.3);
+    for (n, r, kind, _) in under {
+        l.add(&n, r, kind);
+    }
+    for (n, r, kind) in behind {
+        l.add(&n, r, kind);
+    }
     let frame = l.add(
         "Map Frame",
         (fx, fy, fw, fh),
@@ -706,10 +1351,12 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
             pitch: 0.0,
         },
     );
-    // Over the map, in its corners, clear of the graticule's labels (drawn inside the frame along
-    // its labelled edges): the north arrow at the top right, the legend at the bottom left sized
-    // to what it lists, the scale bar and the numeric scale under it at the bottom right, each on
-    // a pale box.
+    // Over the map, clear of the graticule's labels (drawn inside the frame along its labelled
+    // edges): the north arrow, the legend sized to what it lists, the scale bar with the numeric
+    // scale under it, and the locator, each on a pale box. Each takes the corner where it covers
+    // the least of what the map draws; by default (and when it makes no difference) the locator at
+    // the top left, the arrow at the top right, the legend at the bottom left and the scale at the
+    // bottom right.
     let paper = Rgba::new(0xFF, 0xFF, 0xFF, 225);
     let (e, small_pt) = if sheet { (4.0 * k, 6.5 * k) } else { (2.0, 6.0) };
     let room = |labelled: bool, side: bool| {
@@ -723,7 +1370,110 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     };
     let (left, right, top, bottom) = (room(edges.left, true), room(edges.right, true), room(edges.top, false), room(edges.bottom, false));
     let (aw, ah) = if sheet { (8.0 * k, 12.0 * k) } else { (5.0, 7.5) };
-    l.add("North Arrow", (fx + fw - right - aw, fy + top, aw, ah), ElementKind::north_arrow(frame));
+    // The locator: a globe (a copy of the map's polygon layers on the globe, its diameter nearly
+    // the frame's) or the surrounding region on the map itself, the area outlined on either by
+    // the map frame's extent indicator.
+    let side = match column {
+        // In a column, its width up to an A4 portrait column's (a landscape sheet's wider
+        // column doesn't make it larger), leaving the legend most of the height under it.
+        Some(c) => c.w.min(52.0 * k).min(0.45 * c.h).max(0.0),
+        None if sheet => (0.24 * fw.min(fh)).clamp(25.0 * k, 70.0 * k),
+        None => (0.3 * fw.min(fh)).clamp(18.0, 45.0),
+    };
+    let locator_map = match locator {
+        Locator::None => None,
+        Locator::Globe => {
+            let src = s.map();
+            let base = format!("{} Locator", src.name);
+            // A locator an earlier sheet made that no layout shows any more (its layout deleted)
+            // is replaced, so sheets made again and again don't leave a trail of them; one still
+            // shown is kept, and the new one numbered beside it.
+            let shown = |n: &str| {
+                s.project
+                    .layouts
+                    .iter()
+                    .flat_map(|l| &l.elements)
+                    .any(|e| matches!(&e.kind, ElementKind::MapFrame { map, .. } if map.eq_ignore_ascii_case(n)))
+            };
+            let ours = |n: &str| {
+                n.strip_prefix(base.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.strip_prefix(' ').is_some_and(|k| k.parse::<u32>().is_ok()))
+            };
+            // And made as this command makes them: no web tiles, only unlabelled polygon layers,
+            // so a globe map made by hand under that name is left alone.
+            let made_here = |x: &rustgis_map::Map| {
+                x.tiles.is_empty() && x.layers.iter().all(|l| l.geometry_type() == rustgis_data::GeometryType::Polygon && !l.labels.enabled)
+            };
+            let orphan = s
+                .project
+                .maps
+                .iter()
+                .position(|x| x.projection.is_globe() && ours(&x.name) && !shown(&x.name) && x.name != src.name && made_here(x));
+            let name = match orphan.and_then(|i| s.project.maps.get(i)) {
+                Some(x) => x.name.clone(),
+                None => numbered(&base, |n| s.project.maps.iter().any(|x| x.name.eq_ignore_ascii_case(n))),
+            };
+            // A new map of what the globe draws, not a clone of the whole map (every layer's
+            // features): its basemap (the land and borders around the area), graticule and body,
+            // and the map's own polygon layers that show, unlabelled: the land at a glance, no
+            // raster or streamed layer (read again) nor points and lines cluttering a small disc.
+            // Not its web tiles (fetched and drawn over the basemap on the disc), swipe, time
+            // slider, layer groups (their hidden layers left out here), bookmarks or animation.
+            let mut m = rustgis_map::Map::new(name);
+            m.basemap = src.basemap;
+            m.graticule = src.graticule;
+            m.body = src.body.clone();
+            m.set_projection(rustgis_map::Projection::Globe);
+            let globe = globe_scale(&m, center, side * 0.92);
+            // Each polygon simplified to a tenth of a millimetre on the disc (its scale in metres),
+            // so the project keeps a sketch of the layers for it, not a second full copy of them.
+            let tolerance_m = globe * 1e-4;
+            // A polygon too small for that (an island) would collapse to a ring of under four
+            // points: it keeps its own shape, already small.
+            let sketch = |g: &rustgis_data::Geometry| {
+                let simple = rustgis_analysis::simplify_geometry(g, tolerance_m);
+                match &simple {
+                    rustgis_data::Geometry::Polygon(polys) if polys.iter().flatten().all(|ring| ring.len() >= 4) => simple,
+                    _ => g.clone(),
+                }
+            };
+            m.layers = src
+                .layers
+                .iter()
+                .filter(|l| {
+                    src.shows(l) && !l.is_raster() && l.source.is_none() && l.geometry_type() == rustgis_data::GeometryType::Polygon
+                })
+                .map(|l| {
+                    // (Sharing the rows: `Features` is copy-on-write, replaced just below.)
+                    let mut layer = l.clone();
+                    layer.dataset.features = l
+                        .dataset
+                        .features
+                        .iter()
+                        .map(|f| {
+                            let mut f = f.clone();
+                            f.geometry = f.geometry.as_ref().map(sketch);
+                            f
+                        })
+                        .collect();
+                    layer.touch_geometry();
+                    layer.selection.clear();
+                    layer.labels.enabled = false;
+                    layer
+                })
+                .collect();
+            let name = m.name.clone();
+            match orphan.and_then(|i| s.project.maps.get_mut(i)) {
+                Some(old) => {
+                    *old = m;
+                    warnings.push(format!("the map '{name}', which no layout showed, is replaced by this sheet's globe"));
+                }
+                None => s.project.maps.push(m),
+            }
+            Some((name, globe, FrameShape::Circle))
+        }
+        Locator::Inset => Some((s.map().name.clone(), round_scale(scale * fw / side * 4.0), FrameShape::Rectangle)),
+    };
     // The legend lists what the frame draws: its map synced to the frame's view first, as an
     // export does, so a streamed layer has its features there. (This changes the session's map,
     // so it comes after the last refusal: nothing below fails.) While one is still reading, the
@@ -752,28 +1502,272 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
         (cw, ch) = (cw.max(fw * 0.3), ch.max(fh * 0.25));
         warnings.push("the legend's classes aren't known yet (a layer still reading): it has a fixed size to fit by hand".into());
     }
-    // The scale bar's box, at the bottom right: the legend stops short of it (and so of the north
-    // arrow above it, which is narrower), however narrow the frame.
     let (sw, sh, nh) = ((fw * 0.3).max(25.0), if sheet { 8.0 * k } else { 6.0 }, pitch(small_pt) + 0.5);
-    if ch > 0.0 {
-        let pad = 2.0;
-        let room_w = (fw - left - right - sw - 2.0).max(10.0);
-        let (lw, lh) = ((cw + 2.0 * pad).min(fw * 0.45).min(room_w), (ch + 2.0 * pad).min(fh * 0.6));
-        if cw + 2.0 * pad > lw || ch + 2.0 * pad > lh {
-            warnings.push("the legend lists more than fits its corner: its last rows or the ends of long labels are left out".into());
+    let pad = 2.0;
+    // What the map draws where, on a coarse grid of the frame (its basemap left out). The map
+    // itself is drawn for it, on purpose, as the screen draws it: a grid of 96 cells, a small part
+    // of what exporting the sheet draws; a streamed layer draws what it holds and starts reading
+    // the frame's area in the background (which the export reads anyway); web tiles aren't fetched.
+    let coverage = crate::render::layout::frame_coverage(s.map_mut(), center, scale, fw, fh, 96);
+    // The share of a rectangle (in page mm) over the frame's drawn cells.
+    let covered = |(x, y, w, h): (f64, f64, f64, f64)| -> f64 {
+        let Some((gw, gh, cells)) = &coverage else { return 0.0 };
+        let (gw, gh) = (f64::from(*gw), f64::from(*gh));
+        let col = |v: f64| (((v - fx) / fw * gw).floor().clamp(0.0, gw)) as usize;
+        let row = |v: f64| (((v - fy) / fh * gh).floor().clamp(0.0, gh)) as usize;
+        let (c0, c1, r0, r1) = (col(x), col(x + w).max(col(x) + 1), row(y), row(y + h).max(row(y) + 1));
+        let (mut n, mut drawn) = (0usize, 0usize);
+        for r in r0..r1.min(gh as usize) {
+            for c in c0..c1.min(gw as usize) {
+                n += 1;
+                if cells.get(r * gw as usize + c).copied().unwrap_or(false) {
+                    drawn += 1;
+                }
+            }
         }
-        let (lx, ly) = (fx + left, fy + fh - bottom - lh);
-        l.add("Legend Box", (lx, ly, lw, lh), pub_box(paper, clear, 0.0));
+        if n == 0 { 0.0 } else { drawn as f64 / n as f64 }
+    };
+    // The surrounds to place: what each is, its size and its corner by default (0 top left,
+    // 1 top right, 2 bottom left, 3 bottom right).
+    let mut surrounds: Vec<(Surround, f64, f64, usize)> = Vec::new();
+    if locator_map.is_some() && column.is_none() {
+        surrounds.push((Surround::Locator, side, side, 0));
+    }
+    surrounds.push((Surround::Arrow, aw, ah, 1));
+    // The topmost visible raster drawn on a ramp gets a colorbar, under the legend in its box (a
+    // map whose theme is a raster has its key there, which the legend's rows don't give).
+    let bar = rustgis_map::layout::colorbar_layer(s.map(), None)
+        .filter(|l| l.raster.as_ref().and_then(rustgis_map::layout::color_scale).is_some())
+        .map(|l| l.name.clone());
+    let (bar_w, bar_h) = (if sheet { 50.0 * k } else { 40.0 }, COLORBAR_MM);
+    let bar_part = if bar.is_some() { bar_h + if ch > 0.0 { 2.0 } else { 0.0 } } else { 0.0 };
+    let (content_w, content_h) = (if bar.is_some() { cw.max(bar_w) } else { cw }, ch + bar_part);
+    let legend_in_column = column.is_some();
+    if content_h > 0.0 && !legend_in_column {
+        surrounds.push((Surround::Legend, (content_w + 2.0 * pad).min(fw * 0.45), (content_h + 2.0 * pad).min(fh * 0.6), 2));
+    }
+    surrounds.push((Surround::Scale, sw, sh + nh, 3));
+    // A corner's rectangle for a surround `w` × `h`.
+    let at = |corner: usize, w: f64, h: f64| {
+        let x = if corner.is_multiple_of(2) { fx + left } else { fx + fw - right - w };
+        let y = if corner < 2 { fy + top } else { fy + fh - bottom - h };
+        (x, y, w, h)
+    };
+    // Every way of giving the surrounds a corner each, each tried once (a corner for each of
+    // them, the first one's changing slowest; two in one corner passed over): the one covering the
+    // least of the map's drawing (its area in mm²) with no surround over another, a surround off
+    // its own corner costing a hundredth of its area so that, all else equal, they stay where they
+    // belong. There are four surrounds at most (locator, arrow, legend, scale), so 4⁴ = 256 picks.
+    let n = surrounds.len();
+    let mut corners: Vec<usize> = surrounds.iter().map(|x| x.3).collect();
+    let mut best = f64::INFINITY;
+    for code in 0..4usize.pow(n as u32) {
+        let pick: Vec<usize> = (0..n).map(|i| code / 4usize.pow((n - 1 - i) as u32) % 4).collect();
+        if pick.iter().enumerate().any(|(i, c)| pick.iter().take(i).any(|d| d == c)) {
+            continue;
+        }
+        // Each as it will be laid out: the legend short of the surrounds beside and above or
+        // below it in this pick (down to 10 mm), so it isn't moved for an overlap its shortening
+        // avoids.
+        let other = |c: usize| surrounds.iter().zip(&pick).find(|(_, k)| **k == c).map(|(&(_, w, h, _), _)| (w, h));
+        let rects: Vec<(f64, f64, f64, f64)> = surrounds
+            .iter()
+            .zip(&pick)
+            .map(|(&(kind, w, h, _), &corner)| {
+                if kind != Surround::Legend {
+                    return at(corner, w, h);
+                }
+                let room_w = other(corner ^ 1).map_or(f64::INFINITY, |(ow, _)| fw - left - right - ow - 2.0);
+                let room_h = other(corner ^ 2).map_or(f64::INFINITY, |(_, oh)| fh - top - bottom - oh - e);
+                at(corner, w.min(room_w.max(MIN_LEGEND_MM)), h.min(room_h.max(MIN_LEGEND_MM)))
+            })
+            .collect();
+        let mut cost: f64 = surrounds
+            .iter()
+            .zip(&pick)
+            .zip(&rects)
+            .map(|((&(.., home), &corner), &r)| (covered(r) + if corner == home { 0.0 } else { 0.01 }) * r.2 * r.3)
+            .sum();
+        // Two surrounds over each other cost ten times their overlap, more than any data under
+        // them: in a frame too small for them all, the corners that keep them apart win.
+        for (i, a) in rects.iter().enumerate() {
+            for b in rects.iter().skip(i + 1) {
+                let (ow, oh) = ((a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0), (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1));
+                cost += 10.0 * ow.max(0.0) * oh.max(0.0);
+            }
+        }
+        // A cost that isn't a number never wins, so with no pick costing a number the surrounds keep
+        // their own corners: the layout without the search, never a pick made of NaNs.
+        if cost < best - 1e-9 {
+            (best, corners) = (cost, pick);
+        }
+    }
+    // Each surround in its corner; the legend stops short of the others beside and above it.
+    let corner_of =
+        |what: Surround| surrounds.iter().zip(&corners).find(|((kind, ..), _)| *kind == what).map(|(&(_, w, h, _), &c)| (c, w, h));
+    let mut placed: Vec<(&'static str, (f64, f64, f64, f64))> = Vec::new();
+    // In a column, at its top, centred across it; otherwise in its corner over the map.
+    let locator_rect = match column {
+        Some(c) => Some((c.x + (c.w - side) / 2.0, c.y, side, side)),
+        None => corner_of(Surround::Locator).map(|(corner, w, h)| {
+            let r = at(corner, w, h);
+            placed.push(("locator", r));
+            r
+        }),
+    };
+    // A page of cards gives the locator in its column a card of the column's width.
+    let card = style == Style::Modular && column.is_some();
+    let (card_r, card_pad) = (3.0 * k, 2.5 * k);
+    let surround_box = |fill: Rgba| if style.cards() { pub_card(fill, clear, 0.0, 2.0 * k) } else { pub_box(fill, clear, 0.0) };
+    if let (Some((map, locator_scale, shape)), Some(r)) = (&locator_map, locator_rect) {
+        if let (true, Some(c)) = (card, column) {
+            l.add(
+                "Locator Card",
+                (c.x - card_pad, r.1 - card_pad, c.w + 2.0 * card_pad, r.3 + 2.0 * card_pad),
+                pub_card(Rgba::rgb(0xFF, 0xFF, 0xFF), Rgba::new(0x2B, 0x26, 0x20, 60), 0.4, card_r),
+            );
+        }
         l.add(
-            "Legend",
-            (lx + pad, ly + pad, lw - 2.0 * pad, lh - 2.0 * pad),
-            ElementKind::Legend { frame, title: String::new(), all_classes: false, hide_other: false, exclude: Vec::new() },
+            "Locator",
+            r,
+            ElementKind::MapFrame {
+                map: map.clone(),
+                center,
+                scale: *locator_scale,
+                shape: shape.clone(),
+                grid: None,
+                extent_of: Some(frame),
+                extent_color: rustgis_map::layout::INDICATOR_COLOR,
+                extent_width: rustgis_map::layout::INDICATOR_WIDTH,
+                bearing: 0.0,
+                pitch: 0.0,
+            },
         );
     }
-    let (sx, sy) = (fx + fw - right - sw, fy + fh - bottom - sh - nh);
-    l.add("Scale Box", (sx, sy, sw, sh + nh), pub_box(paper, clear, 0.0));
-    l.add("Scale Bar", (sx, sy, sw, sh), ElementKind::scale_bar(frame));
-    l.add("Scale", (sx, sy + sh, sw, nh), pub_text("{scale}".into(), small_pt, ink, false, TextAlign::Center));
+    if let Some((corner, w, h)) = corner_of(Surround::Arrow) {
+        let r = at(corner, w, h);
+        placed.push(("north arrow", r));
+        l.add("North Arrow", r, ElementKind::north_arrow(frame));
+    }
+    // The legend's corner, short of the surrounds beside and above or below it: one the locator
+    // leaves too small for a legend leaves it out, said, rather than drawing it over the locator.
+    let legend_at = corner_of(Surround::Legend).and_then(|(corner, w, h)| {
+        let other = |c: usize| surrounds.iter().zip(&corners).find(|(_, k)| **k == c).map(|(&(kind, w, h, _), _)| (kind, w, h));
+        let beside = other(corner ^ 1).map(|(kind, ow, _)| (kind, ow));
+        let over = other(corner ^ 2).map(|(kind, _, oh)| (kind, oh));
+        let fit = legend_room(w, h, fw - left - right - 2.0, fh - top - bottom - e, beside, over);
+        if fit.is_none() {
+            warnings.push(
+                "the frame leaves the legend no room beside the locator, so it is left out: give the map more room, or set \"locator\": \"none\""
+                    .into(),
+            );
+        }
+        fit.map(|(lw, lh)| (corner, lw, lh))
+    });
+    // In a panel, the legend under the locator, as tall as it needs within what is left.
+    let legend_rect = match column {
+        Some(c) if content_h > 0.0 => {
+            let ly = c.y + if locator_map.is_some() { side + 3.0 * k + if card { 2.0 * card_pad } else { 0.0 } } else { 0.0 };
+            let room_h = c.y + c.h - ly;
+            if room_h < MIN_LEGEND_MM {
+                warnings.push("the side column leaves the legend no room under the locator, so it is left out: shorten its texts".into());
+                None
+            } else {
+                // On a page of cards, a card as wide as the locator's.
+                let (x, w) = if card { (c.x - card_pad, c.w + 2.0 * card_pad) } else { (c.x, c.w) };
+                Some((x, ly, w, (content_h + 2.0 * pad).min(room_h)))
+            }
+        }
+        Some(_) => None,
+        None => legend_at.map(|(corner, lw, lh)| {
+            let r = at(corner, lw, lh);
+            placed.push(("legend", r));
+            r
+        }),
+    };
+    if let Some(r) = legend_rect {
+        let (lw, lh) = (r.2, r.3);
+        l.add(
+            "Legend Box",
+            r,
+            if card { pub_card(Rgba::rgb(0xFF, 0xFF, 0xFF), Rgba::new(0x2B, 0x26, 0x20, 60), 0.4, card_r) } else { surround_box(paper) },
+        );
+        // The colorbar at the bottom of the box, as tall as the box allows; the legend's rows in
+        // what is left above it. Each says when it doesn't fit, rather than one blaming the other.
+        let (ix, iy, iw, ih) = (r.0 + pad, r.1 + pad, lw - 2.0 * pad, lh - 2.0 * pad);
+        let bar_fit = if bar.is_some() { bar_h.min(ih) } else { 0.0 };
+        let rows_h = (ih - bar_fit - if bar.is_some() { bar_part - bar_h } else { 0.0 }).max(0.0);
+        // A box sized to its content, less the padding again, can come out a rounding error
+        // short of it: that still fits.
+        const FIT_MM: f64 = 1e-6;
+        if ch > 0.0 && (cw > iw + FIT_MM || ch > rows_h + FIT_MM) {
+            warnings.push("the legend lists more than fits its corner: its last rows or the ends of long labels are left out".into());
+        }
+        // In a column the colorbar takes the column's width, as its rows do.
+        if bar.is_some() && ((bar_w > iw + FIT_MM && !legend_in_column) || bar_h > ih + FIT_MM) {
+            warnings.push("the legend's box is smaller than the colorbar: it is drawn narrower or shorter".into());
+        }
+        if ch > 0.0 && rows_h >= 1.0 {
+            l.add(
+                "Legend",
+                (ix, iy, iw, rows_h),
+                ElementKind::Legend { frame, title: String::new(), all_classes: false, hide_other: false, exclude: Vec::new() },
+            );
+        }
+        if let Some(layer) = &bar {
+            l.add(
+                "Colorbar",
+                (ix, iy + ih - bar_fit, iw, bar_fit),
+                ElementKind::Colorbar {
+                    frame,
+                    layer: Some(layer.clone()),
+                    title: layer.clone(),
+                    orientation: Orientation::Horizontal,
+                    ticks: 5,
+                    tick_side: TickSide::End,
+                    reverse: false,
+                },
+            );
+        }
+    }
+    if let Some((corner, w, h)) = corner_of(Surround::Scale) {
+        let (sx, sy, ..) = at(corner, w, h);
+        placed.push(("scale bar", (sx, sy, w, h)));
+        l.add("Scale Box", (sx, sy, sw, sh + nh), surround_box(paper));
+        l.add("Scale Bar", (sx, sy, sw, sh), ElementKind::scale_bar(frame));
+        l.add("Scale", (sx, sy + sh, sw, nh), pub_text("{scale}".into(), small_pt, ink, false, TextAlign::Center));
+    }
+    // What placing couldn't avoid: a surround over the map's drawing while a clearly freer corner
+    // went to another (more surrounds than free corners), or two overlapping (a frame too small
+    // for them all). Data under every corner alike (a context layer filling the frame) leaves
+    // nothing to move, so it isn't said. One warning names them all.
+    let crowded: Vec<&str> = placed
+        .iter()
+        .filter(|(_, r)| {
+            let share = covered(*r);
+            let freest = (0..4).map(|c| covered(at(c, r.2, r.3))).fold(f64::INFINITY, f64::min);
+            share > OVER_DATA && share - freest > OVER_DATA
+        })
+        .map(|(what, _)| *what)
+        .collect();
+    if let Some((last, rest)) = crowded.split_last() {
+        let (names, verb) = match rest {
+            [] => (format!("the {last}"), "sits"),
+            _ => (format!("the {} and the {last}", rest.join(", the ")), "sit"),
+        };
+        warnings
+            .push(format!("{names} {verb} on what the map shows, the freer corners having gone to the others: move by hand what matters"));
+    }
+    for (i, (a, ra)) in placed.iter().enumerate() {
+        for (b, rb) in placed.iter().skip(i + 1) {
+            if ra.0 < rb.0 + rb.2 && rb.0 < ra.0 + ra.2 && ra.1 < rb.1 + rb.3 && rb.1 < ra.1 + ra.3 {
+                warnings.push(format!("the {a} and the {b} overlap: the frame is too small for both"));
+            }
+        }
+    }
+    for (n, r, kind, _) in over {
+        l.add(&n, r, kind);
+    }
     for (n, r, kind) in around {
         l.add(&n, r, kind);
     }
@@ -782,17 +1776,24 @@ fn publication(s: &mut Session, p: &Value) -> CmdResult {
     s.project.layouts.push(l);
     let i = s.project.layouts.len() - 1;
     s.active_layout = Some(i);
-    Ok(json!({"layout": i, "name": name, "page": [w, h], "scale": scale, "grid": step, "elements": elements, "warnings": warnings}))
+    let locator = locator_map.map(|(map, ..)| map);
+    Ok(
+        json!({"layout": i, "name": name, "profile": profile.id, "page": [w, h], "scale": scale, "grid": step, "locator": locator, "style": style.code(), "elements": elements, "warnings": warnings}),
+    )
 }
 
 fn page(s: &mut Session, p: &Value) -> CmdResult {
     let i = index(s, p)?;
     let cur = s.project.layouts.get(i).map(|l| (l.width, l.height));
     let (w, h) = page_size(p, cur)?;
+    let comma = decimal_mark(p)?;
     let l = s.project.layouts.get_mut(i).ok_or("no layout")?;
     l.width = w;
     l.height = h;
-    Ok(json!({"width": w, "height": h}))
+    if let Some(comma) = comma {
+        l.decimal_comma = comma;
+    }
+    Ok(json!({"width": w, "height": h, "decimal": if l.decimal_comma { "," } else { "." }}))
 }
 
 /// Sets a layout's ruler guides: the lists given replace those there.
@@ -944,6 +1945,16 @@ fn frame_of(l: &Layout, p: &Value) -> Result<u32, String> {
     }
 }
 
+/// A rectangle's `radius`: its corners rounded by up to 50 mm; `d` when not given.
+fn corner_radius(p: &Value, d: f64) -> Result<f64, String> {
+    match p.get("radius").filter(|v| !v.is_null()) {
+        None => Ok(d),
+        Some(v) => {
+            v.as_f64().filter(|r| r.is_finite() && *r >= 0.0).map(|r| r.min(50.0)).ok_or_else(|| "radius is millimetres, 0 or more".into())
+        }
+    }
+}
+
 pub(crate) fn color(p: &Value, k: &str, d: Rgba) -> Result<Rgba, String> {
     match ps(p, k) {
         Some(c) => Rgba::from_hex(c).ok_or_else(|| format!("{k} must be #RRGGBB or #RRGGBBAA")),
@@ -960,6 +1971,9 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
     // doesn't take it as applied.
     if !matches!(kind, "text" | "dynamicText") && p.get("font").is_some_and(|v| !v.is_null()) {
         return Err(ONLY_TEXT_FONT.into());
+    }
+    if kind != "rectangle" && p.get("radius").is_some_and(|v| !v.is_null()) {
+        return Err(ONLY_RECTANGLE_RADIUS.into());
     }
     let i = index(s, p)?;
     let image = if kind == "picture" { Some(super::graphics::picture(p)?) } else { None };
@@ -1068,6 +2082,7 @@ fn add_element(s: &mut Session, p: &Value) -> CmdResult {
                 fill: color(p, "fill", Rgba::new(0, 0, 0, 0))?,
                 outline: color(p, "color", Rgba::rgb(0x22, 0x22, 0x22))?,
                 width: shape_width(p, 1.0)?.clamp(0.0, 50.0),
+                radius: corner_radius(p, 0.0)?,
             };
             // Without a box it frames the page, as a neatline does; with any part of one it's a shape.
             if ["x", "y", "w", "h"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null())) {
@@ -1314,6 +2329,10 @@ pub(crate) fn text_style(p: &Value, italic: bool, align: TextAlign, spacing: f64
 /// What a `font` given for an element that isn't a text is told.
 const ONLY_TEXT_FONT: &str = "only text elements take a font";
 
+/// Rounded corners are a rectangle's: refused elsewhere, as a family is, so a script doesn't take
+/// them as applied.
+const ONLY_RECTANGLE_RADIUS: &str = "only a rectangle rounds its corners";
+
 /// A text element's family from `font` in `p`, the current one when not given (#517).
 pub(crate) fn font_family(p: &Value, current: FontFamily) -> Result<FontFamily, String> {
     match ps(p, "font") {
@@ -1395,16 +2414,18 @@ fn restyle(kind: &ElementKind, p: &Value) -> Result<Option<ElementKind>, String>
             };
             Ok(Some(ElementKind::ScaleBar { frame: *frame, units, divisions, style }))
         }
-        ElementKind::Rectangle { fill, outline, width } | ElementKind::Ellipse { fill, outline, width } => {
-            if ["fill", "outline", "color", "width"].iter().all(|k| p.get(k).is_none()) {
+        ElementKind::Rectangle { fill, outline, width, .. } | ElementKind::Ellipse { fill, outline, width } => {
+            if ["fill", "outline", "color", "width", "radius"].iter().all(|k| p.get(k).is_none()) {
                 return Ok(None);
             }
             // The outline's colour is "outline", or "color" as when adding one.
             let (fill, outline) = (color(p, "fill", *fill)?, color(p, "outline", color(p, "color", *outline)?)?);
             let width = shape_width(p, *width)?.clamp(0.0, 50.0);
             Ok(Some(match kind {
-                ElementKind::Ellipse { .. } => ElementKind::Ellipse { fill, outline, width },
-                _ => ElementKind::Rectangle { fill, outline, width },
+                ElementKind::Rectangle { radius, .. } => {
+                    ElementKind::Rectangle { fill, outline, width, radius: corner_radius(p, *radius)? }
+                }
+                _ => ElementKind::Ellipse { fill, outline, width },
             }))
         }
         ElementKind::Line { color: c, width, dir, head } => {
@@ -1585,6 +2606,11 @@ fn update(s: &mut Session, p: &Value) -> CmdResult {
         _ if p.get("font").is_some_and(|v| !v.is_null()) => return Err(ONLY_TEXT_FONT.into()),
         _ => None,
     };
+    if p.get("radius").is_some_and(|v| !v.is_null())
+        && !matches!(s.project.layouts.get(li).and_then(|l| l.element(id)).map(|e| &e.kind), Some(ElementKind::Rectangle { .. }))
+    {
+        return Err(ONLY_RECTANGLE_RADIUS.into());
+    }
     // A legend's left-out layers, checked against its frame's map before anything changes.
     let new_exclude = {
         let l = s.project.layouts.get(li).ok_or("no layout")?;

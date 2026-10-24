@@ -829,7 +829,14 @@ pub enum ElementKind {
     },
     /// A rectangle drawn on the page (a neatline or a backdrop). `width` is the outline's, in
     /// points (0: none).
-    Rectangle { fill: Rgba, outline: Rgba, width: f64 },
+    Rectangle {
+        fill: Rgba,
+        outline: Rgba,
+        width: f64,
+        /// Its corners rounded by this much, in millimetres (0: square corners).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        radius: f64,
+    },
     /// An ellipse filling the element's box: a circle in a square one.
     Ellipse { fill: Rgba, outline: Rgba, width: f64 },
     /// A straight line across the element's box, `width` points wide.
@@ -995,13 +1002,27 @@ pub struct Layout {
     pub series: Option<MapSeries>,
     #[serde(default, skip_serializing_if = "Guides::is_empty")]
     pub guides: Guides,
+    /// Numbers its surrounds print (graticule, scale bar and colorbar labels, `{scale}`) take a
+    /// decimal comma and a point between thousands (`0,05`, `1:6.300.000`), as maps in Portuguese,
+    /// Spanish, French or German do; off, the other way round.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub decimal_comma: bool,
     #[serde(default)]
     next_id: u32,
 }
 
 impl Layout {
     pub fn new(name: impl Into<String>, width: f64, height: f64) -> Self {
-        Layout { name: name.into(), width, height, elements: Vec::new(), series: None, guides: Guides::default(), next_id: 1 }
+        Layout {
+            name: name.into(),
+            width,
+            height,
+            elements: Vec::new(),
+            series: None,
+            guides: Guides::default(),
+            decimal_comma: false,
+            next_id: 1,
+        }
     }
 
     /// Adds an element and returns its id.
@@ -1398,7 +1419,7 @@ mod tests {
         let a = big.add(
             "a",
             (0.0, 0.0, 1.0, 1.0),
-            ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 1.0 },
+            ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 1.0, radius: 0.0 },
         );
         assert!(a != big.elements[0].id && a <= MAX_ID + 1);
     }
@@ -1406,7 +1427,7 @@ mod tests {
     #[test]
     fn hairline_rectangles_keep_their_height() {
         let mut l = Layout::new("Layout", 210.0, 297.0);
-        let rule = ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 0.0 };
+        let rule = ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 0.0, radius: 0.0 };
         let id = l.add("Rule", (14.0, 33.0, 182.0, 0.15), rule.clone());
         assert_eq!(l.element(id).map(|e| e.h), Some(0.15));
         // A zero height becomes the thinnest element, not a 1 mm box.

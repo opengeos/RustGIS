@@ -2,8 +2,8 @@
 
 RustGIS is free and open-source software, released under the
 [Apache License 2.0](https://github.com/opengeos/RustGIS/blob/main/LICENSE) and developed in
-the open. There is no paid tier, no seat licence and no telemetry in the app: everything on this
-site is available to everyone, for good.
+the open. There is no paid tier or seat licence. The desktop app and command line collect no
+analytics or usage telemetry; the hosted websites use analytics, as described in [Privacy](privacy.md).
 
 That model only works if the work behind it is sustainable. If RustGIS saves you or your team
 time, sponsorship is the most direct way to keep it moving.
@@ -28,7 +28,8 @@ Both go to [Qiusheng Wu](https://github.com/giswqs), the maintainer of RustGIS a
   up with fast-moving dependencies such as egui, wgpu and the GeoLibre tool suite.
 - **Shipping to every platform**: the Apple developer account, code signing and notarization
   behind the macOS app, the Microsoft Store listing, and building the Windows and Linux
-  [packages](installation.md), which the project pays for whether or not anyone sponsors it.
+  [packages](installation.md) and the [Python package](python.md), which the project pays for
+  whether or not anyone sponsors it.
 - **Hosting**: [rustgis.app](https://rustgis.app), the [web app](https://web.rustgis.app), the
   [plugin registry](https://plugins.rustgis.app), the
   [download mirror](https://downloads.rustgis.app) and the sample data and fonts at
@@ -53,7 +54,7 @@ Sponsorship is not the only currency, and none of these cost anything:
   worth a great deal.
 - **Contribute code or plugins**: see [Contributing](contributing.md) and
   [Plugins](plugins.md#writing-a-plugin).
-- **Translate the interface**: RustGIS ships in 16 languages; see [Languages](i18n.md) to add or
+- **Translate the interface**: RustGIS ships in 17 languages; see [Languages](i18n.md) to add or
   improve one.
 
 ## Thank you

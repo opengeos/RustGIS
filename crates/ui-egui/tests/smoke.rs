@@ -4,6 +4,7 @@ use egui_kittest::kittest::Queryable;
 use rustgis_ui_egui::RustGisApp;
 use serde_json::json;
 
+/// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
@@ -15,6 +16,7 @@ fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     )
 }
 
+/// Runs a layer command through Command Search and checks that the search closes.
 fn search_layer_command(h: &mut egui_kittest::Harness<'_, RustGisApp>, command: &str) {
     h.state_mut().ui.command_search = Some(command.into());
     for _ in 0..3 {
@@ -25,6 +27,38 @@ fn search_layer_command(h: &mut egui_kittest::Harness<'_, RustGisApp>, command: 
         h.step();
     }
     assert!(h.state().ui.command_search.is_none());
+}
+
+/// Both No Fill controls preserve unique-value styling and undo, and stay hidden for points.
+#[test]
+fn polygon_no_fill_is_reachable_from_the_pane_and_the_ribbon() {
+    for pane in [true, false] {
+        let mut h = harness();
+        h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "continent"})).unwrap();
+        h.state_mut().run("layer.outline", json!({"color": "#2E6B4F", "width": 2})).unwrap();
+        let symbol =
+            |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer_by_name("Countries").unwrap().renderer.base_symbol();
+        let before = symbol(&h);
+        if pane {
+            h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+        } else {
+            h.state_mut().ui.tab = "Style".into();
+        }
+        h.run_steps(6);
+        h.get_by_label("No Fill").click();
+        h.run_steps(3);
+        let after = symbol(&h);
+        assert_eq!(after.fill.a(), 0);
+        assert_eq!(after.stroke, before.stroke);
+        assert_eq!(after.stroke_width, before.stroke_width);
+        assert_eq!(h.state().session.map().layer_by_name("Countries").unwrap().renderer.kind_label(), "Unique Values");
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        assert_eq!(symbol(&h), before);
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label("No Fill").is_none(), "points must keep their fill");
+    }
 }
 
 #[test]
@@ -1679,6 +1713,98 @@ fn add_database_picks_and_keeps_connections() {
     assert!(h.query_by_label("Save as Connection").is_none(), "an unlisted endpoint cannot be kept");
 }
 
+/// A blank name connects as "default"; once that endpoint is kept, the form shows it as the
+/// selected saved connection instead of offering to keep it again.
+#[test]
+fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
+    let mut h = harness();
+    h.state_mut().run("ui.dialog", json!({"name":"s3"})).unwrap();
+    h.step();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Connect").click();
+    h.step();
+    h.get_by_label("Save as Connection").click();
+    h.step();
+    h.step();
+    assert_eq!(h.state().session.connections.connections.len(), 1);
+    assert!(h.query_by_label("Save as Connection").is_none());
+    assert!(h.query_by_label("Rename it to save it: a connection has this name").is_none());
+    assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("default")));
+}
+
+/// A table list and the table chosen belong to the address they were listed for: editing the
+/// address by hand drops them, so Add never reads a table name against another database.
+#[test]
+fn add_database_drops_stale_tables_when_the_address_is_edited() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    let address = "postgres:host=db.example dbname=gis user=me";
+    h.state_mut().run("ui.dialog", json!({"name":"addDatabase"})).unwrap();
+    h.state_mut().dialogs.a = address.into();
+    h.state_mut().dialogs.list = vec!["public.parcels".into()];
+    h.state_mut().dialogs.c = "public.parcels".into();
+    h.state_mut().dialogs.listed = Some(address.into());
+    h.step();
+    h.step();
+    assert_eq!(h.state().dialogs.c, "public.parcels", "an unchanged address keeps its tables");
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some(address)).unwrap().focus();
+    h.step();
+    h.key_press(egui::Key::End);
+    h.event(egui::Event::Text("x".into()));
+    h.step();
+    h.step();
+    assert_eq!(h.state().dialogs.a, format!("{address}x"));
+    assert!(h.state().dialogs.list.is_empty());
+    assert!(h.state().dialogs.c.is_empty());
+    assert_eq!(h.state().dialogs.listed, None);
+}
+
+/// A failed re-list can't leave the old tables behind: they would no longer be tied to an address
+/// the stale-listing check can see, and the table chosen could be sent to another database.
+#[test]
+fn add_database_failed_relist_drops_the_old_tables() {
+    let mut h = harness();
+    // Nothing listens on port 9 of the loopback address: listing is refused at once.
+    let address = "postgres:host=127.0.0.1 port=9 dbname=gis user=me";
+    h.state_mut().run("ui.dialog", json!({"name":"addDatabase"})).unwrap();
+    h.state_mut().dialogs.a = address.into();
+    h.state_mut().dialogs.list = vec!["public.parcels".into()];
+    h.state_mut().dialogs.c = "public.parcels".into();
+    h.state_mut().dialogs.listed = Some(address.into());
+    h.step();
+    h.step();
+    h.get_by_label("List Tables").click();
+    h.step();
+    h.step();
+    assert!(h.state().dialogs.error.is_some(), "the listing must have failed");
+    assert_eq!(h.state().dialogs.listed, None);
+    assert!(h.state().dialogs.list.is_empty());
+    assert!(h.state().dialogs.c.is_empty());
+}
+
+/// Collections belong to the API they were listed from: typing another address drops them.
+#[test]
+fn stac_dialog_drops_stale_collections_when_the_address_is_edited() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    let api = "https://one.example/stac/v1";
+    h.state_mut().run("ui.dialog", json!({"name":"stac"})).unwrap();
+    h.state_mut().ui.stac.api = api.into();
+    h.state_mut().ui.stac.collections = vec![("old-collection".into(), "Old".into())];
+    h.state_mut().ui.stac.collection = "old-collection".into();
+    h.step();
+    h.step();
+    h.query_all_by_role(Role::TextInput).find(|n| n.value().as_deref() == Some(api)).unwrap().focus();
+    h.step();
+    h.key_press(egui::Key::End);
+    h.event(egui::Event::Text("2".into()));
+    h.step();
+    h.step();
+    assert_eq!(h.state().ui.stac.api, format!("{api}2"));
+    assert!(h.state().ui.stac.collections.is_empty());
+    assert!(h.state().ui.stac.collection.is_empty(), "the collection picked belongs to the old API");
+}
+
 #[test]
 fn stac_dialog_keeps_and_picks_connections() {
     use std::io::{Read, Write};
@@ -1941,7 +2067,8 @@ fn connections_tree_browses_and_adds() {
     assert!(h.state().ui.connection_tree.picks.is_empty());
     h.state_mut().run("edit.undo", json!(null)).unwrap();
     assert_eq!(h.state().session.map().tiles.len(), before);
-    h.get_by_label("Local").click_secondary();
+    // Recent now lists the added layer under "Local" too, above the connection's own row.
+    h.query_all_by_label("Local").last().unwrap().click_secondary();
     h.step();
     h.get_by_label("Refresh").click();
     h.step();
@@ -2859,4 +2986,39 @@ fn map_and_layout_tabs_rename_from_their_menus() {
     let p = &h.state().session.project;
     assert_eq!(p.maps[0].name, "Renamed Map");
     assert_eq!(p.layouts.last().map(|l| l.name.as_str()), Some("Renamed Layout"));
+}
+
+#[test]
+fn line_strokes_editor_edits_one_class() {
+    use rustgis_engine::map::symbology::ClassRef;
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run("layer.select", json!({"layer": "Rivers"})).unwrap();
+    app.run("layer.symbology", json!({"layer": "Rivers", "type": "unique", "field": "scalerank"})).unwrap();
+    let pair = json!([{"color": "#000000", "width": 6}, {"color": "#FFFFFF", "width": 2}]);
+    app.run("layer.lineStrokes", json!({"layer": "Rivers", "value": "1", "strokes": pair})).unwrap();
+    app.run("ui.pane.symbology", json!({})).unwrap();
+    h.step();
+    h.step();
+    let class_strokes = |h: &egui_kittest::Harness<'_, RustGisApp>, c: &ClassRef| {
+        h.state().session.map().layer_by_name("Rivers").unwrap().renderer.class_strokes(c).unwrap().len()
+    };
+    // The layer's strokes first; class 1 is marked as having its own.
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("All classes")).unwrap().click();
+    h.step();
+    h.get_by_label("1 •").click_accesskit();
+    h.step();
+    h.step();
+    assert!(h.query_by_label("Stroke 2").is_some(), "class 1's two strokes are listed");
+    // Back to the layer's strokes: the class borrows them, and Add Stroke gives it its own again.
+    h.get_by_label("Use the Layer's Strokes").click_accesskit();
+    h.step();
+    h.step();
+    assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 0);
+    assert!(h.query_by_label_contains("drawn with the layer's strokes").is_some());
+    h.get_by_label("Add Stroke").click_accesskit();
+    h.step();
+    h.step();
+    assert_eq!(class_strokes(&h, &ClassRef::Value("1".into())), 1);
+    assert!(h.state().session.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty(), "the layer's own are untouched");
 }

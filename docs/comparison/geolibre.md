@@ -25,14 +25,14 @@ collaboration) and the Python and R ecosystems (a Jupyter widget and an R packag
 **RustGIS is the narrower, native one.** It is a single program written entirely in Rust that
 draws its own interface on the GPU, with no browser engine or JavaScript runtime inside, and the
 same program compiled to WebAssembly for the browser. Its interface is a ribbon laid out in the
-order of the work, every button is a command you can run from the command line, Python or an AI
-agent, its plugins run sandboxed, and it goes further in the classic desktop GIS jobs of data
-design, reports and print layouts.
+order of the work, its engine commands run from the command line, Python or an AI
+agent, and its WebAssembly plugins run sandboxed. It also supports native process plugins
+and goes further in the classic desktop GIS jobs of data design, reports and print layouts.
 
-They are complementary rather than competing. Both run the same 1,000+ GeoLibre and Whitebox
-geoprocessing tools, both keep your data on your device, and both read and write the same open
-formats. Choose GeoLibre for reach, choose RustGIS for a compact, scriptable desktop GIS, or use
-both.
+They are complementary rather than competing. Both can run the 1,000+ GeoLibre/Whitebox
+geoprocessing suite; RustGIS loads it through an optional desktop runner or WebAssembly.
+Both read and write common open formats. Choose GeoLibre for reach, choose RustGIS for a
+compact, scriptable desktop GIS, or use both.
 
 ## Where GeoLibre is stronger
 
@@ -44,16 +44,20 @@ both.
   DWG, MapInfo TAB, NetCDF-4/HDF5, Kerchunk and Icechunk, ICESat-2 and GEDI. It connects to
   SQL Server and Apache Iceberg as well as PostGIS and DuckDB, and its plugins browse dozens of
   catalogs and portals, from NASA Earthdata and Planet to Hugging Face and about 150 US local
-  agencies. RustGIS reads a focused set natively and the rest through GDAL's programs when they
-  are installed (see [Data formats](../user-guide/data-formats.md)).
+  agencies. RustGIS reads a focused set natively, including 2D File Geodatabase feature
+  classes and tables, GeoRSS and LandXML. It also has NASA Earthdata discovery and live
+  SQL Server/Azure SQL connections. Other formats and File Geodatabase tables the native
+  reader cannot read need GDAL (see [Data formats](../user-guide/data-formats.md)).
 - **SQL in the browser.** GeoLibre runs DuckDB Spatial, PGlite/PostGIS and Apache Sedona inside
   the browser. RustGIS's SQL pane uses DuckDB on the desktop; its web app has no SQL engine yet.
 - **Cartography depth.** GeoLibre has rule-based and expression renderers, heat maps,
   clustering, diagrams, blend modes, layer groups, a data-defined label engine, and style
   interchange with SLD, QGIS QML and Mapbox GL JSON. RustGIS covers the common renderers and
-  collision-free labels, without that depth.
+  SQL-filtered label classes, stacked line symbols, symbol levels, blend modes and layer groups,
+  but not rule-based renderers or general data-defined styling.
 - **3D.** GeoLibre has a Cesium globe with terrain, 3D Tiles, I3S, Gaussian splats, CZML and
-  Google Photorealistic 3D Tiles. RustGIS has a globe, 2.5D extrusion and LiDAR point layers.
+  Google Photorealistic 3D Tiles. RustGIS has a globe, terrain-draped tilted views, 2.5D
+  extrusion and LiDAR point layers.
 - **AI and imagery models.** Besides an AI assistant, GeoLibre has SAM segmentation, in-browser
   ONNX/YOLO object detection and an object-based image analysis workbench. RustGIS has pixel
   classification (k-means, minimum distance and a trainable neural network).
@@ -69,42 +73,48 @@ both.
 - **Opening other projects.** GeoLibre imports QGIS (`.qgs`/`.qgz`) and ArcGIS Pro
   (`.aprx`/`.mapx`) projects. RustGIS opens neither.
 - **Editing.** GeoLibre edits vertices and writes edits back to their sources (GeoPackage,
-  PostGIS, ArcGIS feature services). RustGIS cannot yet edit the vertices of existing features,
-  and edits stay in the project until exported.
+  PostGIS, ArcGIS feature services). RustGIS moves, inserts and deletes vertices, but
+  edits stay in the project until exported rather than being written back to those sources.
 - **Languages.** GeoLibre's interface comes in 21 languages, including right-to-left Arabic,
-  Hebrew and Persian. RustGIS has [16](../i18n.md), none right-to-left.
+  Hebrew and Persian. RustGIS has [17](../i18n.md), including Persian text support;
+  its widget layout is not right-to-left.
 
 ## Where RustGIS is stronger
 
 - **A native program, not a web view.** RustGIS is memory-safe Rust compiled to one native
-  program (18–30 MB installers) with no browser engine, JavaScript or Python inside. Large
-  GeoPackage, GeoParquet, FlatGeobuf and Shapefile files are streamed a view at a time rather
-  than loaded into a browser tab's memory, and nothing depends on a web view's limits.
-- **Everything is a command.** Every ribbon button, shortcut and pane action is a command with an
-  id and JSON parameters, and the same ids run from [`rustgis-cli`](../cli.md), the
+  program with no browser engine, JavaScript or Python inside the core app. Large
+  GeoPackage, GeoParquet, FlatGeobuf and Shapefile files are read a view at a time rather
+  than loaded whole; the cloud-native readers also work in the browser.
+- **A shared command engine.** Ribbon actions dispatch commands with ids and JSON parameters.
+  Engine commands run from [`rustgis-cli`](../cli.md), the
   [`rustgis` Python package](../python.md), notebooks, models, the Script pane, the
-  [MCP server](../mcp.md) and the AI Assistant. A batch of maps can be rendered in CI with one
+  [MCP server](../mcp.md) and the AI Assistant. UI-only pane/dialog commands stay in the app.
+  A batch of maps can be rendered in CI with one
   command line. GeoLibre is driven through its interface, its Python and R packages and its MCP
   server; it has no general command-line tool.
-- **Sandboxed plugins.** RustGIS [plugins](../plugins.md) are WebAssembly modules that can do
-  only what their declared permissions allow, and the same file runs on the desktop, in
-  `rustgis-cli` and in the browser. GeoLibre's TypeScript plugins can do much more inside the
-  app (panels, map tools, custom layers), but its plugin API states that they "run as trusted
-  code in the app window" and that its policy "is not a security boundary".
+- **Sandboxed WebAssembly plugins.** These RustGIS [plugins](../plugins.md) use declared,
+  approved permissions and run on desktop, in `rustgis-cli` and in the browser.
+  Plugins can add commands, tools, ribbon tabs, panels and assistant skills. Native process
+  plugins, including Python environments managed by RustGIS, are also supported on desktop
+  and CLI, but are not sandboxed. GeoLibre's TypeScript plugin API states that its plugins
+  "run as trusted code in the app window" and that its policy "is not a security boundary".
 - **Data design.** RustGIS defines domains, subtypes, attribute rules, contingent values,
   relationship classes, archiving, topology rules and traverse/COGO in the project itself, the
   geodatabase design work of ArcGIS Pro. GeoLibre has attribute forms with constraints and
   honours the domains and subtypes of the ArcGIS feature services it edits, but doesn't define
   its own.
 - **Reports and layouts.** RustGIS builds grouped reports with statistics, charts and
-  subreports, and layouts with map frames, grids, extent indicators and map series. GeoLibre's
+  subreports, and layouts with publication presets, shaped map frames, legends, colorbars,
+  grids, tables, charts, extent indicators and map series, exported to PDF or PNG. GeoLibre's
   print layout and atlas cover the common cases, and it has no report builder.
 - **A ribbon interface.** Tabs follow the order of the work (Home, Data, Style, Edit, Analyze,
   View, Publish), with Command Search (++ctrl+k++) to find any command or tool by name. People
   coming from ArcGIS Pro often find it familiar. GeoLibre uses menus and panels, with a command
   palette and beginner, intermediate and advanced interface levels.
-- **Self-contained.** Everything RustGIS does with local data runs inside the program, with no
-  network, server or helper process, and offline areas sync edited features back. GeoLibre works
+- **Offline local workflows.** RustGIS's local-file readers, built-in tools and rendering work
+  without a network or server (remote and cloud sources need the network); offline areas sync edits back to the corresponding map in the project,
+  not to the underlying source data or a remote database. GeoLibre tools, GDAL, DuckDB and process plugins use separate programs.
+  GeoLibre works
   offline too, but some features need a remote host (GDAL export, ONNX detection and story map
   HTML export among them), and on the desktop its raster tools and some vector tools use an
   optional Python sidecar.
@@ -120,27 +130,28 @@ both.
 | **Interface** | Ribbon with Command Search | Menus and panels with a command palette and interface levels |
 | **Map engines** | One native renderer (2D map and globe) | MapLibre, Mapbox GL JS, CesiumJS or the ArcGIS Maps SDK |
 | **Formats** | A focused set read natively; more through GDAL when installed | A wide set in the app, some desktop only (File Geodatabase, MBTiles) |
-| **Databases** | PostgreSQL/PostGIS, MySQL and MariaDB, read live, and DuckDB through DuckDB, on the desktop | DuckDB, PostGIS, SQL Server, Iceberg; PGlite and Sedona in the browser |
-| **Geoprocessing** | 1,000+ (GeoLibre and Whitebox) plus built-in vector tools | 1,000+ (GeoLibre and Whitebox) plus the GeoLibre Toolbox |
-| **Editing** | Create, move, rotate, scale, split, merge, snapping; no vertex editing yet | Vertex editing and write-back to sources |
+| **Databases** | PostgreSQL/PostGIS, MySQL/MariaDB and SQL Server/Azure SQL read live (read only); DuckDB through DuckDB; desktop only | DuckDB, PostGIS, SQL Server, Iceberg; PGlite and Sedona in the browser |
+| **Geoprocessing** | Built-in tools plus optional 1,000+ GeoLibre/Whitebox suite; list depends on the runner | 1,000+ (GeoLibre and Whitebox) plus the GeoLibre Toolbox |
+| **Editing** | Create, move, rotate, scale, split, merge, vertex move/insert/delete, snapping; export edits | Vertex editing and write-back to sources |
 | **Data design** | Domains, subtypes, attribute rules, relationships, topology | Attribute forms; ArcGIS services' domains and subtypes |
 | **Output** | Layouts, map series, reports, presentations, web map pages | Print layouts with atlas, story maps, dashboards, offline HTML |
-| **Scripting** | Every action a command: CLI, Python package, notebooks, Script pane, MCP | Python and R packages, Jupyter widget, notebooks, MCP |
-| **Plugins** | Sandboxed WebAssembly, small registry | TypeScript, trusted, small registry |
-| **AI** | Assistant acting through undoable commands; MCP server | Assistant with undoable operations and voice; SAM, ONNX; MCP server |
+| **Scripting** | Engine commands: CLI, Python package, notebooks, Script pane, MCP; UI-only commands stay in the app | Python and R packages, Jupyter widget, notebooks, MCP |
+| **Plugins** | Sandboxed WebAssembly; unsandboxed desktop/CLI process and Python plugins; registry | TypeScript, trusted, small registry |
+| **AI** | Assistant using engine commands and project undo; MCP server; pixel classification | Assistant with undoable operations and voice; SAM, ONNX; MCP server |
 | **Collaboration** | — | Share links, review comments, real-time (experimental) |
-| **Languages** | 16 | 21, including right-to-left |
+| **Languages** | 17, including Persian text; no right-to-left widget layout | 21, including right-to-left |
 | **Project file** | `.rgis` (open JSON) | `.geolibre` (open, documented JSON) |
 
 ## Using them together
 
 The two read and write the same open formats, so data moves between them without conversion:
 GeoPackage, GeoParquet, FlatGeobuf, Shapefile, GeoJSON, KML/KMZ, GPX, CSV and cloud-optimised
-GeoTIFF. Neither opens the other's project file yet; move the data across and restyle it.
+GeoTIFF (GeoPackage export is desktop only in RustGIS). Neither opens the other's project
+file yet; move the data across and restyle it.
 
-They also share their geoprocessing. RustGIS's **Analyze › Tools** runs the GeoLibre and
-Whitebox suite (natively through the `geolibre` program on the desktop, and on WebAssembly in the
-browser), so a tool learned in one works the same way in the other. See
+They also share their geoprocessing. RustGIS's **Analyze › Tools** offers the GeoLibre and
+Whitebox suite through the optional `geolibre` program on desktop and an on-demand WebAssembly
+runner in the browser. The available tools come from that runner's manifests. See
 [Analysis](../user-guide/analysis.md).
 
 A common split is to explore, share and collaborate in GeoLibre, especially from a browser,
@@ -153,22 +164,22 @@ or reports and map series printed to PDF.
 **Why are there two?**
 They are built on different foundations for different jobs. GeoLibre uses the web platform to
 reach as many places and data sources as possible. RustGIS explores what a desktop GIS looks like
-as one native Rust program in which every action is a command. Each project borrows ideas from
-the other.
+as one native Rust program with a shared command engine. Each project borrows ideas from the other.
 
 **Which one should I start with?**
 If you want to open a dataset in a browser tab or on a phone right now, or work in Jupyter or R,
-start with GeoLibre. If you want a desktop GIS with a ribbon, a command line that can do
-everything the interface can, or reports and data design, start with RustGIS.
+start with GeoLibre. If you want a desktop GIS with a ribbon, scriptable engine commands,
+or reports and data design, start with RustGIS.
 
 **Do they run the same geoprocessing tools?**
-Yes: the GeoLibre and Whitebox suite of over 1,000 tools, built from
-[geolibre-rust](https://github.com/opengeos/geolibre-rust). RustGIS adds its own built-in vector
-tools and guided workflows; GeoLibre adds its Toolbox (routing, H3 grids, spatial statistics).
+RustGIS can load the GeoLibre/Whitebox suite of over 1,000 tools from
+[geolibre-rust](https://github.com/opengeos/geolibre-rust), with the available list depending
+on the runner. RustGIS also has built-in vector tools, A5 grids, interpolation and guided
+workflows; GeoLibre adds its Toolbox (routing, H3 grids, spatial statistics).
 
 **Can a GeoLibre plugin run in RustGIS, or the other way round?**
-No. GeoLibre plugins are TypeScript modules for its web interface; RustGIS plugins are sandboxed
-WebAssembly modules that add commands and tools.
+No. GeoLibre plugins are TypeScript modules for its web interface. RustGIS has its own
+WebAssembly and native process-plugin interfaces, including Python process plugins.
 
 **Can I open a GeoLibre project in RustGIS?**
 Not yet. Export the layers (GeoPackage or GeoParquet keep the most) and add them to RustGIS.

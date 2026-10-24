@@ -14,8 +14,13 @@ pub(crate) enum DbfEncoding {
 }
 
 impl DbfEncoding {
+    /// Create a per-read decoder, preserving leading U+FEFF and replacing malformed
+    /// bytes for UTF-8 field names and values regardless of the metadata source.
     pub(crate) fn decoder(&self) -> DynEncoding {
         match self {
+            // DBF fields are not standalone files: preserve a leading U+FEFF as
+            // content instead of letting EncodingRs strip it as a UTF-8 signature.
+            Self::Standard(encoding) if *encoding == rs::UTF_8 => UnicodeLossy.into(),
             Self::Standard(encoding) => shapefile::dbase::encoding::EncodingRs::from(*encoding).into(),
             Self::Oem(mark) => mark.to_encoding().unwrap_or_else(|| UnicodeLossy.into()),
             Self::Utf8 => UnicodeLossy.into(),

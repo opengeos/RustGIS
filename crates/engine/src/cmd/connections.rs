@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
         C::new("connection.duplicate", "Duplicate Connection", "Home › Add › Data Sources", duplicate).view().params(r#"{"id": "a connection's id or name", "name"?: text}"#),
         C::new("connection.remove", "Remove Connection", "Home › Add › Data Sources", remove).view().params(r#"{"id": "a connection's id or name"}"#),
         C::new("connection.login", "Log In to Connection", "Home › Add › Data Sources", login_command).view().params(
-            r#"{"id": "a connection's id or name", "password"?: "a database connection's, kept for this session only", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "an S3 connection's keys (credentials: keys), kept for this session only"}"#,
+            r#"{"id": "a connection's id or name", "password"?: "a database connection's, kept for this session only; the project's layers that read its database and couldn't be read open again", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "an S3 connection's keys (credentials: keys), kept for this session only"}"#,
         ),
         C::new("connection.test", "Test Connection", "Home › Add › Data Sources", test).view().params(
             r#"{"id"?: "a connection's id or name", "kind"?: "postgres"|"mysql"|"sqlserver"|"service"|"wms"|"wmts"|"wfs"|"wcs"|"ogcapi"|"arcgis"|"csw"|"stac"|"s3", "name"?: text, "group"?: text, "address"?: text, "options"?: "an unsaved connection, as connection.new (when no id)", "password"?: text, "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "as connection.login (logs in first)", "probe"?: "true: only the address the test reads, {fetch} (null for databases, which their driver tests)", "answer"?: "non-database kinds only: what that address returned, when the app fetched it (no network request then); databases ignore answer and test through their driver"}"#,
@@ -83,6 +83,34 @@ fn options(p: &Value) -> Result<BTreeMap<String, String>, String> {
         .collect()
 }
 
+/// Saved database connections, in list order, with how many project layers wait for their login.
+pub(crate) fn waiting(s: &Session) -> Vec<(Connection, usize)> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut counts = BTreeMap::<String, usize>::new();
+        for layer in s.project.maps.iter().flat_map(|m| &m.layers) {
+            let Some(src) = layer.source.as_ref().filter(|src| src.login) else { continue };
+            let Some((kind, database)) = crate::connections::layer_database(src) else { continue };
+            if let Some(c) = s.connections.for_database(kind, database) {
+                *counts.entry(c.id.clone()).or_default() += 1;
+            }
+        }
+        s.connections.connections.iter().filter_map(|c| counts.get(&c.id).map(|&n| (c.clone(), n))).collect()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = s;
+        Vec::new()
+    }
+}
+
+/// Says, once per connection, which layers wait for its login (a project just opened).
+pub(crate) fn note_waiting(s: &mut Session) {
+    for (c, n) in waiting(s) {
+        s.notify(format!("{n} layer(s) read the database of the connection '{}' and need its password: right-click the connection in Data Sources › Connections, or one of the layers, and choose Log In…", c.name), false);
+    }
+}
+
 fn list(s: &mut Session, p: &Value) -> CmdResult {
     let kind = ps(p, "kind");
     if let Some(k) = kind
@@ -91,9 +119,16 @@ fn list(s: &mut Session, p: &Value) -> CmdResult {
         return Err(format!("unknown kind '{k}' ({})", KINDS.join(", ")));
     }
     let group = ps(p, "group");
+    let waiting: BTreeMap<_, _> = waiting(s).into_iter().map(|(c, n)| (c.id, n)).collect();
     Ok(json!({"connections": s.connections.connections.iter()
         .filter(|c| kind.is_none_or(|k| c.kind == k) && group.is_none_or(|g| c.group.chars().flat_map(char::to_lowercase).eq(g.chars().flat_map(char::to_lowercase))))
-        .map(shown).collect::<Vec<_>>() }))
+        .map(|c| {
+            let mut out = shown(c);
+            if let Some(&n) = waiting.get(&c.id) {
+                out["waiting"] = json!(n);
+            }
+            out
+        }).collect::<Vec<_>>() }))
 }
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {
@@ -164,7 +199,53 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"removed": c.id}))
 }
 
-fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<(), String> {
+#[derive(Default)]
+struct Reopened {
+    opened: usize,
+    failed: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn reopen(s: &mut Session, c: &Connection, password: &str) -> Reopened {
+    let Some(key) = crate::connections::database_key(&c.address) else { return Reopened::default() };
+    let mut result = Reopened::default();
+    let mut first_error = None;
+    for layer in s.project.maps.iter_mut().flat_map(|m| m.layers.iter_mut()) {
+        let Some(src) = layer.source.as_mut().filter(|src| src.login) else { continue };
+        let Some((kind, database)) = crate::connections::layer_database(src) else { continue };
+        if kind != key.0 || crate::connections::database_key(&crate::sources::redact(database)).as_ref() != Some(&key) {
+            continue;
+        }
+        if let Some(password_key) = crate::connections::database_key(database) {
+            rustgis_data::source::duckdb::remember_password(&password_key.1, password);
+        }
+        src.error = None;
+        match src.open() {
+            Ok(()) => result.opened += 1,
+            Err(e) => {
+                result.failed += 1;
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    if result.opened > 0 {
+        s.notify(format!("{} layer(s) from the connection '{}' opened again", result.opened, c.name), false);
+    }
+    if result.failed > 0 {
+        s.notify(
+            format!(
+                "{} layer(s) from the connection '{}' still can't be read: {}",
+                result.failed,
+                c.name,
+                first_error.as_deref().unwrap_or("")
+            ),
+            true,
+        );
+    }
+    result
+}
+
+fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String> {
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -174,7 +255,7 @@ fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<(), String> {
         {
             let pw = ps(p, "password").filter(|t| !t.is_empty()).ok_or("password is required")?;
             super::layer::database_param(&json!({"database": c.address, "password": pw}));
-            return Ok(());
+            return Ok(reopen(s, c, pw));
         }
     }
     if c.kind != "s3" {
@@ -205,13 +286,18 @@ fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<(), String> {
         _ => q["anonymous"] = json!(true),
     }
     super::s3::connect(s, &q)?;
-    Ok(())
+    Ok(Reopened::default())
 }
 
 fn login_command(s: &mut Session, p: &Value) -> CmdResult {
     let c = found(s, p)?.clone();
-    login(s, &c, p)?;
-    Ok(shown(&c))
+    let result = login(s, &c, p)?;
+    let mut out = shown(&c);
+    if result.opened + result.failed > 0 {
+        out["reopened"] = json!(result.opened);
+        out["failed"] = json!(result.failed);
+    }
+    Ok(out)
 }
 
 fn tested(s: &Session, p: &Value) -> Result<Connection, String> {

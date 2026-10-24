@@ -10,14 +10,21 @@
 Select a layer in Layers and open **Style › Symbology** (or the Symbology pane):
 
 - **Single Symbol**: one fill, outline and marker for every feature.
-- **Unique Values**: one colour per distinct value of a field. The Layers pane and layout legends
-  list only the classes that drawn features use (after the definition query and display filters);
+- **Unique Values**: one colour per distinct value of a field. If no field is chosen, the current
+  renderer's field is kept when available; otherwise the first available field is used, including
+  text fields. The Layers pane and layout legends list only the
+  classes that drawn features use (after the definition query and display filters);
   `<all other values>` appears only when a drawn feature falls outside the classes and its symbol
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval or quantile.
-- **Proportional Symbols**: point size grows with a numeric field.
+  interval or quantile. If no field is chosen, the current renderer's field is kept when it is
+  numeric; otherwise the first numeric field is used. If the layer has no numeric field, or the
+  switch fails for another reason, the pane shows why and keeps the current renderer. When numeric
+  fields exist, a field picker lets you try another one; the error stays visible if a retry fails.
+  A problem no field can fix, such as a definition query that keeps no features, needs fixing
+  first. Closing the pane or selecting another layer drops the retry.
+- **Proportional Symbols**: point size grows with a numeric field, chosen as for Graduated Colors.
 
 Pick a colour scheme from the pane's swatches, listed in groups: **Perceptually Uniform** (Viridis,
 Plasma, Inferno, Magma, Cividis, Batlow and Aurora: even steps in lightness, so they read in
@@ -33,6 +40,21 @@ sizes from those features when you apply them (apply the symbology again after c
 and **Full Extent** zooms to them. A layer with [subtypes](editing.md#data-design) can be symbolized
 by them. **Style › Styles** saves symbology as styles to reuse on other layers and in other
 projects.
+
+For polygons, **No Fill** in the Symbology pane or **Style › Drawing** draws only the outlines.
+It keeps each symbol's outline colour and width, including in Unique Values and Graduated Colors,
+without changing the classes. Change the outline with **Outline color** and **Outline width** in
+the Single Symbol editor, or `layer.outline` for all classes. Undo restores the previous fills;
+the colour picker's opacity control can also make a fill visible again. By command:
+
+```text
+layer.noFill={"layer":"Countries"}
+```
+
+The ribbon's **Color** control changes Unique Values or Graduated Colors back to Single Symbol.
+To keep the classification, edit a class's colour in the Symbology pane instead. A polygon's
+fill and outline are independent: changing its fill leaves its outline intact.
+For raster renderers and band stretches, see [Rasters](data.md#rasters).
 
 ### Edit a class
 
@@ -72,7 +94,7 @@ Layer/group transparency still applies on top of the symbol's opacity in maps an
 ### Line strokes
 
 A line layer draws one stroke by default. The **Strokes** section of the Symbology pane stacks
-several in one symbol, for road casings, parallel lines and offsets: **Add Stroke** puts one on
+up to 16 in one symbol, for road casings, parallel lines and offsets: **Add Stroke** puts one on
 top, and each stroke has its own **Color**, **Width**, **Offset**, **Cap** (round, flat or square)
 and **Join** (round, miter or bevel), with buttons to move it up or down or remove it. The list
 shows the top stroke first, and the preview above it shows the symbol along a line drawn left to
@@ -90,6 +112,52 @@ layer.lineStrokes={"layer":"Rivers","strokes":[{"color":"#000000","width":11.5,"
 ```
 
 A stroke without `color` or `width` takes the renderer's.
+
+A Unique Values or Graduated Colors class can stack strokes of its own, so a motorway gets a
+casing and a centre line while a path stays a single thin line on the same layer. Pick the class
+under **Strokes for** at the top of the Strokes section (**All classes** edits the layer's
+strokes); a class with strokes of its own is marked with •. A class without its own is drawn with
+the layer's strokes, and changing them while it is picked gives it its own copy. **Use the
+Layer's Strokes** gives the class back to the layer's. A class keeps its strokes when the same
+symbology is applied again on the same field (a Graduated Colors class, while its range stays the
+same). By command, name the class as `layer.classStyle` does, with `value`, `index` or
+`"other": true`:
+
+```text
+layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A1E","width":7},{"color":"#F28C28","width":5},{"color":"#FFFFFF","width":0.6}]}
+```
+
+By default, each feature draws its whole stack in turn, so where two roads meet, the second one's
+casing cuts across the first one's core. **Draw strokes in levels** (symbol levels) draws all
+stacked strokes at a lower level before those at a higher one, so the casings join underneath
+and the cores run through. A stroke's level is its place in the stack (the bottom one 0) unless
+it is given one: a **Level** row shows on each stroke while levels are on; turn off **Auto** to
+set it from 0 to 255. Strokes of different classes that share a level go down together, such as
+the casings of all road classes before any core. A layer read in place from its file draws
+its levels a batch of features at a time. By command (`"level"` on a stroke, `null` for its
+place in the stack):
+
+```text
+layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A1E","width":7,"level":0},{"color":"#F28C28","width":5,"level":1}]}
+layer.strokeLevels={"layer":"Roads","on":true}
+```
+
+### Reference scale
+
+Symbol and label sizes are set in points, and normally keep that size on screen at every scale.
+A layer with a **Reference scale** (Symbology pane, under **Layer**) has its sizes set for that scale
+instead, as on a printed map: zoomed in to half of it, its lines, markers and labels are drawn
+twice as large; zoomed out to twice it, half as large (within 1/100 and 32 times). Pick a scale,
+**Current scale** to keep the sizes as they are now, or **None**. A topographic map designed for
+1:25,000 then keeps its proportions as you zoom. By command (a scale, `"current"` or `null`):
+
+```text
+layer.referenceScale={"layer":"Roads","scale":25000}
+```
+
+Scales in RustGIS take a screen pixel to be 0.28 mm (the OGC standard pixel). Programs that take
+96 pixels to the inch (0.2646 mm) call the same view a larger scale; to match their sizes,
+multiply their reference scale by 0.2646 / 0.28 (about 0.945).
 
 ### Custom color ramps
 
@@ -150,22 +218,24 @@ it unchanged.
 
 ## Labeling
 
-The **Labeling pane** has every setting below in one place, for the selected layer: right-click a
-feature layer in the Layers pane › **Labeling Properties…**, or View › Windows › **Labeling**, or
-Style › Labels › **Properties**. It runs the same commands as the ribbon, so each change undoes on
-its own (a dragged size or a colour pick is one step).
+The **Labeling pane** brings together the Default label class's field, SQL clause, text symbol,
+placement and visibility limits, plus the map-wide label display controls. Open it for a
+feature layer with Layers › right-click › **Labeling Properties…**, **View › Windows › Labeling**,
+or **Style › Labels › Properties**. It runs the same commands as the ribbon, so each setting
+change undoes on its own (a dragged size or a colour pick is one step). Additional label classes
+are managed with commands, as described below.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Label field and text**: the field the labels show
-  (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size, colour, halo
-  and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+  (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
+  colour, halo and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says
   whether it reads and how many of the features the layer draws at the map's scale match
   (after its definition query, display filters and time window), and **Apply** sets it in one
-  undo step; **Clear** labels every remaining feature again
+  undo step; **Clear** removes the Default class's clause, leaving other classes unchanged
   (`labels.class.update={"layer": "Cities", "where": "pop_max > 5000000"}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
@@ -176,21 +246,31 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
-- **Label classes** label different features differently, such as capitals larger than other
-  cities. Each class has a SQL clause (the language of definition queries) choosing its
-  features, and its own field, text symbol, placement and visibility range. A feature is
-  labelled by the first class whose clause it matches; the **Default** class, checked last,
-  labels the rest (or, given a clause of its own, those of the rest it matches). A class that
-  is hidden, or out of its visibility range, leaves its features unlabelled: they don't go on
-  to the next class. For now, classes are made with commands: `labels.class.add={"layer":
-  "Cities", "name": "Capitals", "where": "pop_max > 5000000"}`, then `labels.class.rename`,
-  `labels.class.update` (its `where` or `visible`), `labels.class.move`, `labels.class.remove`
-  and `labels.class.clear` (every class but Default; no error when there are none, so a script
-  can start with it). The other label commands take a `class` (`labels.style={"layer":
-  "Cities", "class": "Capitals", "size": 14}`), and change Default without one (a renamed
-  Default is named by its new name, or left out). Convert keeps the classes, with a `CLASS`
-  field saying which labelled each point; a web style (Share › Web Style) labels with Default
-  only, and has no labels when Default is hidden.
+- **Label classes** label different features differently, such as large cities in larger text.
+  Each class has a SQL clause choosing its features, and its own field, text symbol, placement
+  and visibility range. Each class labels every feature its clause matches, the **Default**
+  class too (with no clause, every feature). A feature matched by two classes produces a label
+  candidate for each; collision rules still determine which labels fit. To avoid duplicate
+  labels, use clauses that do not overlap: `pop_max > 5000000` for Large cities and
+  `pop_max <= 5000000` for Default. Classes are placed in list order, Default last; a hidden
+  class or one outside its visibility range labels nothing without excluding features from
+  other classes. There can be up to 64 classes besides Default. Make them with
+  `labels.class.add` (a new class copies Default's field, text symbol, placement and range, or
+  those of the class named by `from`), then `labels.class.rename`, `labels.class.update` (`where` or `visible`),
+  `labels.class.move` (`to`: 0 first), `labels.class.remove` and `labels.class.clear` (removes
+  every class but Default, even when it has been renamed; no error when there are none).
+  Field, text symbol, placement and range commands take a `class`; without one they change
+  Default, whatever its name. For example:
+
+  ```text
+  labels.class.add={"layer":"Cities","name":"Large cities","where":"pop_max > 5000000"}
+  labels.class.update={"layer":"Cities","where":"pop_max <= 5000000"}
+  labels.style={"layer":"Cities","class":"Large cities","size":14,"bold":true}
+  ```
+
+  Convert keeps the classes, with a point for each matching class and a `CLASS` field identifying
+  it. Web Style and Web Layer exports (**Publish › Share As**) use Default only, and have no labels
+  when Default is hidden.
 
 <figure markdown="span">
   ![Europe with the Countries and Cities labelled; the city names sit above and to the right of their points](https://assets.rustgis.app/images/labels.webp)
@@ -199,22 +279,26 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 ## Layer effects
 
-These draw on top of the symbology. On the Style tab: **Masking** shows a layer only inside another layer's polygons;
+On the **Style** tab, **Masking** shows a layer only inside another layer's polygons;
 **Display Filters** show different features at different scales (a SQL condition per scale
-range); **Aggregation** draws points as hexagon or square bins coloured by count; **Extrusion**
-raises polygons by a height or a numeric field in an oblique 2.5D view, with **Face Culling**,
-**Lighting** (walls shaded by the way they face the light) and **Cast Shadow**. On the Raster
-Layer tab: **Layer Blend** (multiply, screen, overlay, darken, lighten, difference), **Swipe**
-(the layer shows only left of a divider you slide, to compare it with what's beneath),
-**Masking** and **Rotation**.
+range); **Aggregation** draws points as hexagon or square bins coloured by count.
+**Extrusion** raises polygons by a constant height or numeric field (in metres), multiplied by
+**Factor**, with **Face Culling**, **Lighting** and **Cast Shadow** controls. It draws in an
+oblique view on an untilted flat map and in perspective on a tilted map; the globe draws the
+polygons flat. See [Rotating and tilting the map](maps.md#navigating).
+
+For a raster layer, the **Style** tab also has **Layer Blend** (multiply, screen, overlay,
+darken, lighten, difference), **Swipe** (the layer shows only left of a divider you slide, to
+compare it with what's beneath), **Masking** and **Rotation**.
 
 ## Graphics
 
-Edit › Graphics draws shapes in a graphics layer (Home › Add Data › Graphics Layer, or one is
-made with the first graphic). Point, Line, Curve and Polygon are clicked vertex by vertex
-(double-click to finish); Freehand, Lasso, Rectangle, Circle and Ellipse are dragged. Text places
-a text where you click, as a layout's text is placed: it says "Text", is selected, and opens in
-the **Format** pane (beside the other right-hand panes) with its text selected, so you type over
+**Edit › Graphics** draws shapes in a graphics layer (**Home › Add › Add Data › Graphics Layer**, or
+one is made with the first graphic). Click once for a Point. Line, Curve and Polygon are clicked
+vertex by vertex (double-click to finish); Freehand, Lasso, Rectangle, Circle and Ellipse are
+dragged. **Edit › Graphics and Text › Text** places a text where you click, as a layout's text
+is placed: it says "Text", is selected, and opens in the **Format** pane (beside the other
+right-hand panes) with its text selected, so you type over
 it. Shift+Enter starts a new line, and Enter ends the text. Dynamic Text is a menu of values that
 update as the map changes (map name, scale, date, time, coordinate system, number of layers, map
 centre): pick one, then click the map, and the text starts with its token (`{map}`, `{scale}`,
