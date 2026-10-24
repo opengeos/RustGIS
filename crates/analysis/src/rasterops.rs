@@ -523,29 +523,6 @@ pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Option<
     (n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n))
 }
 
-/// Transforms one polygon part, keeping its exterior and holes together.
-/// A failed coordinate or degenerate ring (< 3 points) rejects the entire polygon part.
-pub fn transform_polygon(rings: &[Vec<Coord>], mut transform: impl FnMut(Coord) -> Option<Coord>) -> Option<Vec<Vec<Coord>>> {
-    if rings.first()?.len() < 3 {
-        return None;
-    }
-    let mut out = Vec::new();
-    for ring in rings {
-        if ring.len() < 3 {
-            return None;
-        }
-        let transformed: Option<Vec<Coord>> = ring
-            .iter()
-            .map(|&c| {
-                let p = transform(c)?;
-                (p.x.is_finite() && p.y.is_finite()).then_some(p)
-            })
-            .collect();
-        out.push(transformed?);
-    }
-    Some(out)
-}
-
 /// An error encountered while validating or transforming a polygon geometry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolygonTransformError {
@@ -643,6 +620,24 @@ pub fn transform_feature_polygons_to_lonlat(
     Ok(out)
 }
 
+/// Validates a 1-based band number and returns its 0-based index.
+pub(crate) fn band_from_f64(value: f64, total_bands: usize) -> Result<usize, String> {
+    if !value.is_finite() {
+        return Err("band number must be a finite number".into());
+    }
+    if value <= 0.0 {
+        return Err("band numbers must be positive (1-based)".into());
+    }
+    if value.fract() != 0.0 {
+        return Err("band numbers must be integers, not decimals".into());
+    }
+    // Check before casting, including on wasm32, where huge values would saturate.
+    if value > total_bands as f64 || value >= usize::MAX as f64 {
+        return Err(format!("band index {value} is invalid: raster has bands 1 to {total_bands}"));
+    }
+    Ok(value as usize - 1)
+}
+
 /// Parses a band specification string into 0-based band indices.
 ///
 /// Supported inputs:
@@ -691,20 +686,7 @@ pub fn parse_bands_str(s: &str, total_bands: usize) -> Result<Vec<usize>, String
                 continue;
             }
             let f: f64 = subpart.parse().map_err(|_| format!("invalid band number '{subpart}'"))?;
-            if !f.is_finite() {
-                return Err("band number must be a finite number".into());
-            }
-            if f <= 0.0 {
-                return Err("band numbers must be positive (1-based)".into());
-            }
-            if f.fract() != 0.0 {
-                return Err("band numbers must be integers, not decimals".into());
-            }
-            let b = f as usize;
-            if b > total_bands {
-                return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-            }
-            let b_idx = b - 1;
+            let b_idx = band_from_f64(f, total_bands)?;
             if !out.contains(&b_idx) {
                 out.push(b_idx);
             }
@@ -716,53 +698,37 @@ pub fn parse_bands_str(s: &str, total_bands: usize) -> Result<Vec<usize>, String
     Ok(out)
 }
 
+/// Projects a complete ring to the raster grid without dropping failed vertices.
+fn project_ring(r: &Raster, ring: &[Coord]) -> Option<Vec<(f64, f64)>> {
+    if ring.len() < 3 {
+        return None;
+    }
+    let tr = r.transformer();
+    ring.iter()
+        .map(|&c| {
+            if !c.is_finite() {
+                return None;
+            }
+            let pt = r.transform.to_pixel(tr.from_lonlat(c)?);
+            (pt.0.is_finite() && pt.1.is_finite()).then_some(pt)
+        })
+        .collect()
+}
+
 /// The cells of `r` whose centres fall inside any of `polygons` (each an exterior ring and its
 /// holes, in longitude/latitude): the column and row window around the polygons, clamped to the
 /// raster, and a row-major mask over it. `None` when no cell centre falls inside.
 ///
 /// The rings are projected onto the raster's own grid once and filled by scanline, so a large
 /// raster costs a pass over the polygon edges per row rather than a point test per cell.
+/// A malformed ring or a failed projection rejects the entire polygon part, including its holes.
 pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u32>, Range<u32>, Vec<bool>)> {
-    let tr = r.transformer();
     let projected: Vec<Vec<Vec<(f64, f64)>>> = polygons
         .iter()
         .filter_map(|rings| {
-            let exterior = rings.first()?;
-            let mut ext_pts = Vec::with_capacity(exterior.len());
-            for c in exterior {
-                if !c.is_finite() {
-                    return None;
-                }
-                let w = tr.from_lonlat(*c)?;
-                let pt = r.transform.to_pixel(w);
-                if !pt.0.is_finite() || !pt.1.is_finite() {
-                    return None;
-                }
-                ext_pts.push(pt);
-            }
-            if ext_pts.len() < 3 {
-                return None;
-            }
-            let mut valid_rings = vec![ext_pts];
-            for hole in rings.iter().skip(1) {
-                let mut hole_pts = Vec::with_capacity(hole.len());
-                for c in hole {
-                    if !c.is_finite() {
-                        return None;
-                    }
-                    let w = tr.from_lonlat(*c)?;
-                    let pt = r.transform.to_pixel(w);
-                    if !pt.0.is_finite() || !pt.1.is_finite() {
-                        return None;
-                    }
-                    hole_pts.push(pt);
-                }
-                if hole_pts.len() < 3 {
-                    return None;
-                }
-                valid_rings.push(hole_pts);
-            }
-            Some(valid_rings)
+            // Reject a complete part if any ring fails, so a lost hole cannot enlarge it.
+            rings.first()?;
+            rings.iter().map(|ring| project_ring(r, ring)).collect::<Option<Vec<_>>>()
         })
         .collect();
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);

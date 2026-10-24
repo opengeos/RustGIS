@@ -1577,7 +1577,7 @@ impl RustGisApp {
         let active = self.session.active_layer.take();
         let needs = (spec.enabled)(&self.session).is_some();
         self.session.active_layer = active;
-        if !defaults && !(needs && (spec.enabled)(&self.session).is_none()) {
+        if !(defaults || needs && (spec.enabled)(&self.session).is_none()) {
             return None;
         }
         let map = self.session.map();

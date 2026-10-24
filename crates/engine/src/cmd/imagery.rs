@@ -536,10 +536,10 @@ fn index(s: &mut Session, p: &Value) -> CmdResult {
 ///   - Polygons are combined into a composite scanline mask over the raster. Holes cut out cells using the
 ///     even-odd rule within each polygon. Where multiple polygons overlap, their coverage is combined
 ///     (union: any cell falling inside at least one polygon is retained).
-///   - The raster is cropped to the tight bounding box of all selected polygons, and cells outside the
+///   - The raster is cropped to the tight bounding box of valid selected polygons, and cells outside the
 ///     polygons receive NoData.
 /// - **Partial Failure Reporting**:
-///   - Features with invalid geometry or unprojectable coordinates are skipped and logged with a warning.
+///   - Features with invalid geometry or unprojectable coordinates are skipped and reported in the result messages.
 ///   - If all features fail, the operation fails and reports the specific failure cause of the first feature.
 fn process(s: &mut Session, p: &Value) -> CmdResult {
     let r = raster(s, p)?;
@@ -609,7 +609,14 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
             let (cols, rows, mask) =
                 rasterops::polygon_mask(&r, &polygons).ok_or_else(|| format!("no cell of {} falls inside {pl}", r.name))?;
             let out = clip_window(&r, cols, rows, Some(&mask), name(p, format!("{}_clip", r.name)))?;
-            add(s, out, false)
+            let mut result = add(s, out, false)?;
+            if !failed_features.is_empty() {
+                result["messages"] = json!([format!(
+                    "{pl}: skipped {} feature(s) with invalid polygon geometry or failed coordinate transformation",
+                    failed_features.len()
+                )]);
+            }
+            Ok(result)
         }
         "clip" => {
             // Before the extent is placed on the raster's coordinates.
