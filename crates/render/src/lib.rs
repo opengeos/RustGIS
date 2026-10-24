@@ -3108,9 +3108,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             };
             if label_fields.iter().any(Option::is_some) {
                 let label_factor = layer.size_factor(label_scale);
-                // Each class's font, where it is installed (the fonts are indexed the first time
-                // a class names one).
-                let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(families::find)).collect();
+                // Each class's font, where it is installed (and indexed: see `find_ready`).
+                let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(families::find_ready)).collect();
                 let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
                 let lid = layer.id;
                 // Whether a class labels lines along them: those take the stretch of a line in

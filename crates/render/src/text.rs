@@ -97,11 +97,18 @@ fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static Fo
     let (installed, slanted) = crate::families::pick(fam, face.bold, face.italic)?;
     let heavier = crate::families::heavier(installed, face.bold);
     let key = (installed.path.clone(), installed.index, heavier);
-    let mut parsed = PARSED.get_or_init(Default::default).lock().ok()?;
+    let lock = PARSED.get_or_init(Default::default);
+    if let Some(f) = lock.lock().ok()?.get(&key) {
+        return f.map(|f| (f, slanted));
+    }
+    // Read and parsed with the lock let go: a file can be 48 MB, and other text is drawn meanwhile.
+    let read = crate::families::bytes(installed).and_then(|b| FontRef::try_from_slice_and_index(b, installed.index).ok());
+    let mut parsed = lock.lock().ok()?;
+    // Another thread parsed it meanwhile: its face is the one kept.
     if let Some(f) = parsed.get(&key) {
         return f.map(|f| (f, slanted));
     }
-    let f = crate::families::bytes(installed).and_then(|b| FontRef::try_from_slice_and_index(b, installed.index).ok()).map(|mut f| {
+    let f = read.map(|mut f| {
         if heavier {
             f.set_variation(b"wght", crate::families::BOLD_WEIGHT);
         }
@@ -252,10 +259,16 @@ pub fn measure_in(text: &str, size: f32, face: Face) -> f32 {
     if face.family.is_none() && !face.serif {
         return measure(text, size, face.bold);
     }
-    let Some((f, _)) = face_font(face) else {
-        return text.chars().count() as f32 * size * 0.6;
-    };
-    shape(text, size * 1.33, f, sans_beside(f, face)).1
+    // Labels in a named family are measured as often as those in the label font (every feature,
+    // every frame), so they share its retention, keyed by the whole face.
+    static WIDTHS: OnceLock<widths::Cache<(bool, bool, bool, Option<u16>)>> = OnceLock::new();
+    let key = (face.bold, face.italic, face.serif, face.family);
+    WIDTHS.get_or_init(widths::Cache::default).measure(text, size, key, || {
+        let Some((f, _)) = face_font(face) else {
+            return text.chars().count() as f32 * size * 0.6;
+        };
+        shape(text, size * 1.33, f, sans_beside(f, face)).1
+    })
 }
 
 /// How wide `text` is on one line at `size` with `spacing` points between letters, in points.

@@ -211,6 +211,10 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     });
 }
 
+/// The most installed families the font list shows at once (a machine can have thousands); the
+/// rest are found by typing part of a name.
+const MAX_FONTS_SHOWN: usize = 200;
+
 /// The installed family the labels are drawn in: the label font, or one picked from the
 /// installed families (found by typing part of the name). A family this machine lacks, from a
 /// project made on another, is shown as missing and drawn in the label font.
@@ -243,11 +247,16 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 run(app, "labels.style", json!({"font": ""}));
             }
             let search = search.to_lowercase();
-            for f in installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search))) {
+            let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
+            for f in matching.by_ref().take(MAX_FONTS_SHOWN) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
                 if ui.selectable_label(on, &f.name).clicked() && !on {
                     run(app, "labels.style", json!({"font": f.name}));
                 }
+            }
+            let more = matching.count();
+            if more > 0 {
+                ui.weak(crate::i18n::fmt("{count} more: type part of a name", &[("count", &more.to_string())]));
             }
         })
         .response

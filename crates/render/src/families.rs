@@ -57,6 +57,8 @@ pub fn heavier(face: &InstalledFace, bold: bool) -> bool {
 }
 
 static FAMILIES: OnceLock<Vec<Family>> = OnceLock::new();
+/// Whether [`warm_up`] has started indexing them.
+static WARMING: AtomicBool = AtomicBool::new(false);
 
 /// The installed families, indexed once, by name (in any case). The first call walks the font
 /// folders; the UI starts that early with [`warm_up`] and reads [`installed_now`].
@@ -73,8 +75,7 @@ pub fn installed_now() -> Option<&'static [Family]> {
 /// Indexes the installed families on a thread of their own (once), so the UI never waits for
 /// the folder walk; in the browser, where there are none, at once.
 pub fn warm_up() {
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::Relaxed) {
+    if WARMING.swap(true, Ordering::Relaxed) {
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -93,6 +94,14 @@ pub fn warm_up() {
 /// The installed family named `name` (in any case, spaces trimmed): its place in [`installed`].
 pub fn find(name: &str) -> Option<u16> {
     find_in(installed(), name)
+}
+
+/// [`find`] for drawing. Where [`warm_up`] is indexing the families (the app, which draws the
+/// map on its UI thread), `None` until the index is done rather than waiting for it, so a label
+/// draws in the label font for a moment; elsewhere (a script, the command line, which never warm
+/// up) the families are indexed now, so an export draws in the named family.
+pub fn find_ready(name: &str) -> Option<u16> {
+    if WARMING.load(Ordering::Relaxed) { find_in(installed_now()?, name) } else { find(name) }
 }
 
 fn find_in(families: &[Family], name: &str) -> Option<u16> {
@@ -128,34 +137,38 @@ pub fn pick(family: &Family, bold: bool, italic: bool) -> Option<(&InstalledFace
 }
 
 /// The bytes of `face`'s file, read once and kept for the rest of the run (faces are drawn from
-/// borrowed bytes); `None` when it can't be read, is too large, or isn't a font.
+/// borrowed bytes); `None` when it can't be read, is too large, or `face` isn't a font in it. A
+/// collection's file is kept by its path and each face checked on its own, so one damaged face
+/// doesn't hide its siblings.
 pub fn bytes(face: &InstalledFace) -> Option<&'static [u8]> {
     static LOADED: OnceLock<Mutex<(HashMap<PathBuf, Option<&'static [u8]>>, usize)>> = OnceLock::new();
+    let parses = |b: &[u8], index: u32| ab_glyph::FontRef::try_from_slice_and_index(b, index).is_ok();
     let lock = LOADED.get_or_init(|| Mutex::new((HashMap::new(), 0)));
     let room = {
         let Ok(loaded) = lock.lock() else { return None };
         if let Some(b) = loaded.0.get(&face.path) {
-            return *b;
+            return b.filter(|b| parses(b, face.index));
         }
         MAX_LOADED.saturating_sub(loaded.1)
     };
     // Read with the lock let go: a large file takes a while, and other threads' faces are kept.
+    // Kept when this face or the file's first one is a font (a collection's other faces may be).
     let read = std::fs::metadata(&face.path)
         .ok()
         .filter(|m| m.len() <= MAX_FONT && m.len() as usize <= room)
         .and_then(|_| std::fs::read(&face.path).ok())
-        .filter(|b| ab_glyph::FontRef::try_from_slice_and_index(b, face.index).is_ok());
+        .filter(|b| parses(b, face.index) || parses(b, 0));
     let Ok(mut loaded) = lock.lock() else { return None };
     // Another thread read it meanwhile: its copy is the one kept.
     if let Some(b) = loaded.0.get(&face.path) {
-        return *b;
+        return b.filter(|b| parses(b, face.index));
     }
     let kept: Option<&'static [u8]> = read.filter(|b| loaded.1 + b.len() <= MAX_LOADED).map(|b| {
         loaded.1 += b.len();
         &*Box::leak(b.into_boxed_slice())
     });
     loaded.0.insert(face.path.clone(), kept);
-    kept
+    kept.filter(|b| parses(b, face.index))
 }
 
 /// The folders fonts are installed in on this system, the user's own included.
@@ -354,11 +367,14 @@ mod tests {
 
     #[test]
     fn the_installed_families_are_read_without_waiting_once_indexed() {
-        warm_up();
-        warm_up();
-        // The UI reads them without waiting: none until the index is done, then the index.
+        // No warm-up here (it would make every test in this process draw without waiting), so
+        // drawing finds a family as a command does: the families are indexed at once.
         let all = installed();
         assert_eq!(installed_now().map(<[Family]>::len), Some(all.len()));
+        if let Some(f) = all.iter().find(|f| f.listed) {
+            assert_eq!(find_ready(&f.name), find(&f.name));
+        }
+        assert!(find_ready("No Such Family").is_none());
     }
 
     #[test]
@@ -385,6 +401,9 @@ mod tests {
         // A light face standing in for bold is drawn heavier, by the same rule everywhere.
         assert!(heavier(face, true) && !heavier(face, false));
         assert!(!heavier(&InstalledFace { weight: 700, ..face.clone() }, true));
+        // A face the file hasn't (a damaged face of a collection) is none, and doesn't hide the
+        // file's good one.
+        assert!(bytes(&InstalledFace { index: 5, ..face.clone() }).is_none());
         let b = bytes(face).unwrap();
         assert!(std::ptr::eq(b, bytes(face).unwrap()), "kept, not read again");
         assert!(find_in(&fams, "No Such Family").is_none() && find_in(&fams, "  ").is_none());
