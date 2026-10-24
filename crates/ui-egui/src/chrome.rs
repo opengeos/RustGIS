@@ -160,7 +160,8 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 // Command search on the right: full width when there is room, a round icon button
                 // otherwise. It never reaches into the toolbar.
                 let label = tl!("Command Search");
-                let hint = if cfg!(target_os = "macos") { "⌘K" } else { "Ctrl+K" };
+                // As egui reads the keys: ⌘ on a Mac, the browser's too (from its user agent).
+                let hint = if ui.ctx().os().is_mac() { "⌘K" } else { "Ctrl+K" };
                 let right = full.max.x;
                 let room = right - qat_end;
                 let full_w = (text_w(ui, label, regular(12.0)) + text_w(ui, hint, regular(11.0)) + 70.0).clamp(200.0, 260.0);
@@ -933,7 +934,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 let on = why.is_none();
                 let mut b = egui::Button::new(egui::RichText::new(label).size(13.0)).frame(false).min_size(vec2(row_w, 26.0));
                 // The command's shortcut after its location.
-                let keys = if id.contains(':') { String::new() } else { crate::keymap::shortcut_text(app, id, &Value::Null) };
+                let keys = if id.contains(':') { String::new() } else { crate::keymap::shortcut_text(ui.ctx(), app, id, &Value::Null) };
                 let right = match (show_loc, keys.is_empty()) {
                     (true, false) => format!("{loc}   {keys}"),
                     (true, true) => loc.clone(),
@@ -1066,6 +1067,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
             .pivot(Align2::CENTER_CENTER)
             .default_pos(ctx.content_rect().center())
             .show(ctx, |ui| {
+                let mac = ctx.os().is_mac();
                 egui::Grid::new("keys").striped(true).spacing(vec2(24.0, 6.0)).show(ui, |ui| {
                     // The keys that run now, from the keymap.
                     let rows: Vec<(String, String)> = app
@@ -1074,7 +1076,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                         .grouped()
                         .into_iter()
                         .map(|(command, params, keys)| {
-                            let keys: Vec<String> = keys.into_iter().map(crate::keymap::Chord::text).collect();
+                            let keys: Vec<String> = keys.into_iter().map(|c| c.text(mac)).collect();
                             (keys.join(" / "), crate::keymap::label(app, command, params))
                         })
                         .collect();
@@ -1087,7 +1089,7 @@ pub fn about(app: &mut RustGisApp, ctx: &egui::Context) {
                     let clipboard: Vec<String> = crate::keymap::CLIPBOARD
                         .iter()
                         .filter_map(|(keys, _)| crate::keymap::Chord::parse(keys))
-                        .map(|c| c.text())
+                        .map(|c| c.text(mac))
                         .collect();
                     let clipboard = clipboard.join(" / ");
                     for (k, d) in [
@@ -1197,7 +1199,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
         app.run("labels.style", serde_json::json!({"layer": "Cities", "size": 20})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 shortcuts(app, &ctx);

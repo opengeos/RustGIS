@@ -1697,11 +1697,11 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                     Some(tr) => polys.iter().filter_map(|rings| crate::rasterops::transform_polygon(rings, |c| tr.to_lonlat(c))).collect(),
                     None => polys.iter().filter_map(|rings| crate::rasterops::transform_polygon(rings, Some)).collect(),
                 };
-                if polys_lonlat.is_empty() {
+                if polys_lonlat.is_empty() || polys_lonlat.len() != polys.len() {
                     (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
                 } else {
                     let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
-                    (st, polys_lonlat.len() == polys.len())
+                    (st, true)
                 }
             }
             _ => (vec![crate::rasterops::ZoneStats::default(); bands.len()], false),
@@ -2637,11 +2637,15 @@ mod tests {
             rasters: HashMap::from([("elev".to_string(), &raster)]),
         };
         let partial_result =
-            crate::run("zonalStats", &multipart, &serde_json::json!({"raster":"elev", "polygons":"zones", "stats":"count"})).unwrap();
+            crate::run("zonalStats", &multipart, &serde_json::json!({"raster":"elev", "polygons":"zones", "stats":"all"})).unwrap();
         assert!(partial_result.messages.iter().any(|m| m.starts_with("1 feature(s) had missing geometry")));
         let partial_out = layer(partial_result);
         let count = partial_out.field_index("elev_count").unwrap();
-        assert_eq!(partial_out.value(0, count), &Value::Int(4));
+        assert_eq!(partial_out.value(0, count), &Value::Int(0));
+        for stat in ["mean_2", "min", "max", "sum", "stddev"] {
+            let field = partial_out.field_index(&format!("elev_{stat}")).unwrap();
+            assert_eq!(partial_out.value(0, field), &Value::Null);
+        }
 
         let res = crate::run(
             "zonalStats",

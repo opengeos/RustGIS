@@ -37,7 +37,7 @@ pub struct Workflow {
     pub script_last: Option<ScriptRun>,
     pub trend: TrendForm,
     pub zonal_stats: ZonalStatsForm,
-    pub selected_only: bool,
+    pub selected_only: Option<bool>,
 }
 
 /// The Zonal Statistics section's inputs.
@@ -98,12 +98,17 @@ fn heading(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-fn combo(ui: &mut Ui, id: &str, value: &mut String, options: &[String]) {
-    egui::ComboBox::from_id_salt(id).selected_text(value.as_str()).width(180.0).show_ui(ui, |ui| {
-        for o in options {
-            ui.selectable_value(value, o.clone(), o.as_str());
-        }
-    });
+fn combo(ui: &mut Ui, id: &str, name: &str, value: &mut String, options: &[String]) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(value.as_str())
+        .width(180.0)
+        .show_ui(ui, |ui| {
+            for o in options {
+                ui.selectable_value(value, o.clone(), o.as_str());
+            }
+        })
+        .response
+        .on_hover_text(tl!(name));
 }
 
 fn run(app: &mut RustGisApp, id: &str, p: Value) {
@@ -188,7 +193,9 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     app.workflow.pick = None;
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text(tl!("Workflow"));
     let map = app.session.map();
     let rasters: Vec<String> = map.layers.iter().filter(|l| l.is_raster()).map(|l| l.name.clone()).collect();
     let features: Vec<String> = map.layers.iter().filter(|l| !l.is_raster() && !l.graphics).map(|l| l.name.clone()).collect();
@@ -228,14 +235,14 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     match app.workflow.section {
         "rasterFunctions" | "functionEditor" => {
             heading(ui, if app.workflow.section == "rasterFunctions" { "Apply a function to a raster" } else { "Chain functions" });
-            combo(ui, "wf_r", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_r", "Layer", &mut app.workflow.layer, &rasters);
             let funcs: Vec<String> =
                 ["slope", "aspect", "hillshade", "ndvi", "bandMath", "threshold"].iter().map(|s| s.to_string()).collect();
             if app.workflow.function.is_empty() {
                 app.workflow.function = "hillshade".into();
             }
             ui.horizontal(|ui| {
-                combo(ui, "wf_f", &mut app.workflow.function, &funcs);
+                combo(ui, "wf_f", "Function", &mut app.workflow.function, &funcs);
                 match app.workflow.function.as_str() {
                     "bandMath" => {
                         ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("(b4-b3)/(b4+b3)").desired_width(120.0));
@@ -275,22 +282,25 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         "zonalStats" => {
             heading(ui, "Calculate raster statistics per polygon");
             ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
-            combo(ui, "wf_zs_raster", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_zs_raster", "Raster layer", &mut app.workflow.layer, &rasters);
             ui.label(egui::RichText::new(tl!("Polygon layer")).small().weak());
-            combo(ui, "wf_zs_poly", &mut app.workflow.layer2, &polygons);
+            combo(ui, "wf_zs_poly", "Polygon layer", &mut app.workflow.layer2, &polygons);
             ui.horizontal(|ui| {
-                ui.label(tl!("Band"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0));
-                ui.label(tl!("Prefix"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.prefix).hint_text("elev").desired_width(70.0));
+                let band_label = ui.label(tl!("Band"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0))
+                    .labelled_by(band_label.id);
+                let prefix_label = ui.label(tl!("Prefix"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.prefix).hint_text("elev").desired_width(70.0))
+                    .labelled_by(prefix_label.id);
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Output"));
+                let output_label = ui.label(tl!("Output"));
                 ui.add(
                     egui::TextEdit::singleline(&mut app.workflow.zonal_stats.output)
                         .hint_text(tl!("output layer name"))
                         .desired_width(120.0),
-                );
+                )
+                .labelled_by(output_label.id);
             });
             let band_str = app.workflow.zonal_stats.bands.trim();
             let total_bands = app
@@ -328,12 +338,13 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         "suitability" => {
             heading(ui, "Score two rasters 1–10 and weight them");
             ui.label(egui::RichText::new(tl!("High values of the first raster and low values of the second score best.")).small().weak());
-            combo(ui, "wf_s1", &mut app.workflow.layer, &rasters);
-            combo(ui, "wf_s2", &mut app.workflow.layer2, &rasters);
+            combo(ui, "wf_s1", "First raster", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_s2", "Second raster", &mut app.workflow.layer2, &rasters);
             ui.horizontal(|ui| {
-                ui.label(tl!("Weights"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text("1").desired_width(40.0));
+                let input_label = ui.label(tl!("Weights"));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0)).labelled_by(input_label.id);
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text("1").desired_width(40.0))
+                    .labelled_by(input_label.id);
             });
             if ui.button(tl!("Run")).clicked() {
                 let crit = |app: &RustGisApp, n: &str, high: bool, w: f64| -> Value {
@@ -363,7 +374,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "visibility" => {
             heading(ui, "Viewshed from a point");
-            combo(ui, "wf_v", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_v", "Layer", &mut app.workflow.layer, &rasters);
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("observer height m")).desired_width(110.0));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("radius m")).desired_width(80.0));
@@ -379,7 +390,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "lineOfSight" => {
             heading(ui, "Line of sight between two points");
-            combo(ui, "wf_l", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_l", "Layer", &mut app.workflow.layer, &rasters);
             pick_button(app, ui, "los", 2, "Click the observer, then the target");
             if let Some(p) = picked(app, "los")
                 && let (Some(a), Some(b)) = (p.first(), p.get(1))
@@ -389,8 +400,8 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "interpolate" => {
             heading(ui, "Interpolate a surface from points (IDW)");
-            combo(ui, "wf_i", &mut app.workflow.layer, &points);
-            combo(ui, "wf_if", &mut app.workflow.field, &numeric);
+            combo(ui, "wf_i", "Layer", &mut app.workflow.layer, &points);
+            combo(ui, "wf_if", "Field", &mut app.workflow.field, &numeric);
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("cell size °")).desired_width(80.0));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("power 2")).desired_width(60.0));
@@ -405,13 +416,13 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "network" => {
             heading(ui, "Shortest route over a line network");
-            combo(ui, "wf_n", &mut app.workflow.layer, &lines);
+            combo(ui, "wf_n", "Layer", &mut app.workflow.layer, &lines);
             let cost_fields = fields_of(&app.workflow.layer, true);
             ui.horizontal(|ui| {
                 ui.label(tl!("Cost"));
                 let mut options = vec![String::new()];
                 options.extend(cost_fields);
-                combo(ui, "wf_nc", &mut app.workflow.field, &options);
+                combo(ui, "wf_nc", "Cost", &mut app.workflow.field, &options);
             });
             pick_button(app, ui, "route", 2, "Click the start, then the end");
             if let Some(p) = picked(app, "route")
@@ -438,7 +449,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "simulation" => {
             heading(ui, "Random points in polygons");
-            combo(ui, "wf_sim", &mut app.workflow.layer, &polygons);
+            combo(ui, "wf_sim", "Layer", &mut app.workflow.layer, &polygons);
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("points each")).desired_width(80.0));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("seed")).desired_width(60.0));
@@ -453,7 +464,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "profile" | "explore" => {
             heading(ui, if app.workflow.section == "profile" { "Profile every field" } else { "Histograms and correlations" });
-            combo(ui, "wf_p", &mut app.workflow.layer, &features);
+            combo(ui, "wf_p", "Layer", &mut app.workflow.layer, &features);
             let cmd = if app.workflow.section == "profile" { "data.profile" } else { "data.explore" };
             if ui.button(tl!("Run")).clicked() {
                 run(app, cmd, json!({"layer": app.workflow.layer}));
@@ -461,19 +472,19 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "similar" => {
             heading(ui, "Features most like the selected one");
-            combo(ui, "wf_e", &mut app.workflow.layer, &features);
+            combo(ui, "wf_e", "Layer", &mut app.workflow.layer, &features);
             if ui.button(tl!("Find Similar")).clicked() {
                 run(app, "data.similar", json!({"layer": app.workflow.layer, "count": 10}));
             }
         }
         "interop" => {
             heading(ui, "Convert a layer to another format");
-            combo(ui, "wf_x", &mut app.workflow.layer, &features);
+            combo(ui, "wf_x", "Layer", &mut app.workflow.layer, &features);
             let formats: Vec<String> = ["kml", "gpx", "wkt", "geojson", "csv"].iter().map(|s| s.to_string()).collect();
             if app.workflow.format.is_empty() {
                 app.workflow.format = "kml".into();
             }
-            combo(ui, "wf_xf", &mut app.workflow.format, &formats);
+            combo(ui, "wf_xf", "Format", &mut app.workflow.format, &formats);
             if ui.button(tl!("Convert…")).clicked() {
                 match app.session.run("data.convert", &json!({"layer": app.workflow.layer, "format": app.workflow.format})) {
                     Ok(v) => {
@@ -516,7 +527,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "georeference" => {
             heading(ui, "Place a raster on the map");
-            combo(ui, "wf_g", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_g", "Layer", &mut app.workflow.layer, &rasters);
             ui.label(
                 egui::RichText::new(tl!("Stretch it over the map view, or give control points (one per line: column row lon lat)."))
                     .small()
@@ -564,13 +575,13 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "change" => {
             heading(ui, "Compare two rasters");
-            combo(ui, "wf_c1", &mut app.workflow.layer, &rasters);
-            combo(ui, "wf_c2", &mut app.workflow.layer2, &rasters);
+            combo(ui, "wf_c1", "Before", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_c2", "After", &mut app.workflow.layer2, &rasters);
             let methods: Vec<String> = ["difference", "ratio", "percent"].iter().map(|s| s.to_string()).collect();
             if app.workflow.format.is_empty() || !methods.contains(&app.workflow.format) {
                 app.workflow.format = "difference".into();
             }
-            combo(ui, "wf_cm", &mut app.workflow.format, &methods);
+            combo(ui, "wf_cm", "Method", &mut app.workflow.format, &methods);
             if ui.button(tl!("Run")).clicked() {
                 run(
                     app,
@@ -582,7 +593,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         "trend" => trend(app, ui, &rasters),
         "spectral" => {
             heading(ui, "Band values at a point");
-            combo(ui, "wf_sp", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_sp", "Layer", &mut app.workflow.layer, &rasters);
             pick_button(app, ui, "spectral", 1, "Click a pixel on the map");
             if let Some(p) = picked(app, "spectral").and_then(|v| v.first().copied()) {
                 run(app, "raster.spectral", json!({"layer": app.workflow.layer, "lon": p.x, "lat": p.y}));
@@ -590,7 +601,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "classify" => {
             heading(ui, "Unsupervised classes (k-means)");
-            combo(ui, "wf_k", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_k", "Layer", &mut app.workflow.layer, &rasters);
             ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("classes")).desired_width(60.0));
             if ui.button(tl!("Classify")).clicked() {
                 run(app, "raster.classify", json!({"layer": app.workflow.layer, "classes": num(&app.workflow.number, 5.0).round() as u64}));
@@ -598,10 +609,10 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "supervised" => {
             heading(ui, "Classify from training polygons");
-            combo(ui, "wf_su", &mut app.workflow.layer, &rasters);
-            combo(ui, "wf_st", &mut app.workflow.layer2, &polygons);
+            combo(ui, "wf_su", "Raster", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_st", "Training polygons", &mut app.workflow.layer2, &polygons);
             let fields = fields_of(&app.workflow.layer2, false);
-            combo(ui, "wf_sf", &mut app.workflow.field, &fields);
+            combo(ui, "wf_sf", "Field", &mut app.workflow.field, &fields);
             if ui.button(tl!("Classify")).clicked() {
                 run(
                     app,
@@ -612,10 +623,10 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "deepLearning" => {
             heading(ui, "Train a neural network on training polygons");
-            combo(ui, "wf_dl", &mut app.workflow.layer, &rasters);
-            combo(ui, "wf_dt", &mut app.workflow.layer2, &polygons);
+            combo(ui, "wf_dl", "Raster", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_dt", "Training polygons", &mut app.workflow.layer2, &polygons);
             let fields = fields_of(&app.workflow.layer2, false);
-            combo(ui, "wf_df", &mut app.workflow.field, &fields);
+            combo(ui, "wf_df", "Field", &mut app.workflow.field, &fields);
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("epochs")).desired_width(60.0));
                 if ui.button(tl!("Train And Classify")).clicked() {
@@ -648,16 +659,17 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "hosted" => {
             heading(ui, "Cut a raster into web map tiles");
-            combo(ui, "wf_ho", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_ho", "Layer", &mut app.workflow.layer, &rasters);
             if ui.button(tl!("Create Hosted Imagery…")).clicked() {
                 let _ = app.run("ui.saveItem", json!({"kind": "hostedImagery", "layer": app.workflow.layer}));
             }
         }
         "indices" => {
             heading(ui, "Spectral indices");
-            combo(ui, "wf_ix", &mut app.workflow.layer, &rasters);
-            ui.label(egui::RichText::new(tl!("Bands: blue green red NIR SWIR")).small().weak());
-            ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("1 2 3 4 5").desired_width(120.0));
+            combo(ui, "wf_ix", "Layer", &mut app.workflow.layer, &rasters);
+            let input_label = ui.label(egui::RichText::new(tl!("Bands: blue green red NIR SWIR")).small().weak());
+            ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("1 2 3 4 5").desired_width(120.0))
+                .labelled_by(input_label.id);
             ui.horizontal_wrapped(|ui| {
                 for idx in ["ndvi", "ndwi", "savi", "nbr", "ndbi", "evi"] {
                     if ui.button(idx.to_uppercase()).clicked() {
@@ -671,25 +683,35 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         "process" => {
             heading(ui, "Clip or resample");
             ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
-            combo(ui, "wf_pr", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_pr", "Raster layer", &mut app.workflow.layer, &rasters);
 
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("Clip to polygon layer")).small().weak());
             let has_polys = !polygons.is_empty();
             if has_polys {
-                combo(ui, "wf_pr_poly", &mut app.workflow.layer2, &polygons);
+                combo(ui, "wf_pr_poly", "Clip to polygon layer", &mut app.workflow.layer2, &polygons);
                 let poly_layer = app.session.map().layer_by_name(&app.workflow.layer2);
                 let sel_count = poly_layer.as_ref().map_or(0, |l| l.selection.len());
                 let total_features = poly_layer.as_ref().map_or(0, |l| l.dataset.features.len());
 
+                let mut selected_only = app.workflow.selected_only.unwrap_or(sel_count > 0);
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut app.workflow.selected_only, tl!("Selected only"));
+                    if ui.checkbox(&mut selected_only, tl!("Selected only")).changed() {
+                        app.workflow.selected_only = Some(selected_only);
+                    }
                     if sel_count > 0 {
-                        ui.label(egui::RichText::new(format!("({sel_count} of {total_features})")).small().weak());
+                        ui.label(
+                            egui::RichText::new(crate::i18n::fmt(
+                                "({selected} of {total})",
+                                &[("selected", &sel_count.to_string()), ("total", &total_features.to_string())],
+                            ))
+                            .small()
+                            .weak(),
+                        );
                     }
                 });
 
-                let sel_invalid = app.workflow.selected_only && sel_count == 0;
+                let sel_invalid = selected_only && sel_count == 0;
                 let can_clip_poly = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty() && !sel_invalid;
 
                 if sel_invalid {
@@ -702,7 +724,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "operation": "clip",
                         "polygon": app.workflow.layer2,
                     });
-                    p["selectedOnly"] = json!(app.workflow.selected_only);
+                    p["selectedOnly"] = json!(selected_only);
                     run(app, "raster.process", p);
                 }
             } else {
@@ -730,7 +752,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "pixels" => {
             heading(ui, "Set the pixels inside a polygon");
-            combo(ui, "wf_px", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_px", "Layer", &mut app.workflow.layer, &rasters);
             ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("value (empty: no-data)")).desired_width(140.0));
             pick_button(app, ui, "pixels", 100, "Click the polygon's corners");
             let n = app.workflow.pick.as_ref().filter(|p| p.purpose == "pixels").map_or(0, |p| p.points.len());
@@ -746,7 +768,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "mensuration" => {
             heading(ui, "Measure with an elevation raster");
-            combo(ui, "wf_me", &mut app.workflow.layer, &rasters);
+            combo(ui, "wf_me", "Layer", &mut app.workflow.layer, &rasters);
             ui.horizontal_wrapped(|ui| {
                 pick_button(app, ui, "m_distance", 2, "Distance");
                 pick_button(app, ui, "m_height", 2, "Height");
@@ -807,7 +829,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 }
             });
             if kind == "reality" {
-                combo(ui, "wf_mesh", &mut app.workflow.layer, &rasters);
+                combo(ui, "wf_mesh", "Layer", &mut app.workflow.layer, &rasters);
                 if ui.button(tl!("Export Mesh (OBJ)…")).clicked() {
                     match app.session.run("imagery.mesh", &json!({"layer": app.workflow.layer})) {
                         Ok(v) => {
@@ -924,11 +946,11 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
             }
         });
     } else {
-        combo(ui, "wf_tr_layer", &mut app.workflow.layer, rasters);
+        combo(ui, "wf_tr_layer", "Layer", &mut app.workflow.layer, rasters);
     }
     let f = &mut app.workflow.trend;
     egui::Grid::new("trend_grid").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Test"));
+        let input_label = ui.label(tl!("Test"));
         let tests = [
             ("hamedRao", "Modified Mann–Kendall (Hamed & Rao)"),
             ("yueWang", "Modified Mann–Kendall (Yue & Wang)"),
@@ -936,19 +958,24 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
             ("original", "Mann–Kendall"),
         ];
         let shown = tests.iter().find(|t| t.0 == f.test).map_or("", |t| t.1);
-        egui::ComboBox::from_id_salt("trend_test").selected_text(tl!(shown)).width(240.0).show_ui(ui, |ui| {
-            for (code, label) in tests {
-                ui.selectable_value(&mut f.test, code.to_string(), tl!(label));
-            }
-        });
+        egui::ComboBox::from_id_salt("trend_test")
+            .selected_text(tl!(shown))
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                for (code, label) in tests {
+                    ui.selectable_value(&mut f.test, code.to_string(), tl!(label));
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         if f.test == "seasonal" {
-            ui.label(tl!("Seasons a year"));
-            ui.add(egui::DragValue::new(&mut f.seasons).range(2..=366));
+            let input_label = ui.label(tl!("Seasons a year"));
+            ui.add(egui::DragValue::new(&mut f.seasons).range(2..=366)).labelled_by(input_label.id);
             ui.end_row();
         }
-        ui.label(tl!("Significance level"));
-        ui.add(egui::TextEdit::singleline(&mut f.alpha).desired_width(60.0));
+        let input_label = ui.label(tl!("Significance level"));
+        ui.add(egui::TextEdit::singleline(&mut f.alpha).desired_width(60.0)).labelled_by(input_label.id);
         ui.end_row();
         ui.label(tl!("Slope per"));
         ui.horizontal(|ui| {
@@ -956,17 +983,17 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
             ui.radio_value(&mut f.decade, true, tl!("decade"));
         });
         ui.end_row();
-        ui.label(tl!("From"));
-        ui.add(egui::TextEdit::singleline(&mut f.start).hint_text("2000-01-01").desired_width(110.0));
+        let input_label = ui.label(tl!("From"));
+        ui.add(egui::TextEdit::singleline(&mut f.start).hint_text("2000-01-01").desired_width(110.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("To"));
-        ui.add(egui::TextEdit::singleline(&mut f.end).hint_text("2024-12-31").desired_width(110.0));
+        let input_label = ui.label(tl!("To"));
+        ui.add(egui::TextEdit::singleline(&mut f.end).hint_text("2024-12-31").desired_width(110.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Months"));
-        ui.add(egui::TextEdit::singleline(&mut f.months).hint_text("12, 1, 2").desired_width(110.0));
+        let input_label = ui.label(tl!("Months"));
+        ui.add(egui::TextEdit::singleline(&mut f.months).hint_text("12, 1, 2").desired_width(110.0)).labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Dates a cell needs"));
-        ui.add(egui::TextEdit::singleline(&mut f.min_valid).hint_text(tl!("half")).desired_width(60.0));
+        let input_label = ui.label(tl!("Dates a cell needs"));
+        ui.add(egui::TextEdit::singleline(&mut f.min_valid).hint_text(tl!("half")).desired_width(60.0)).labelled_by(input_label.id);
         ui.end_row();
     });
     ui.label(
@@ -1263,7 +1290,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
         crate::scriptcomplete::braces(ui, before, &out.inner, &mut app.workflow.script);
     }
     ui.horizontal(|ui| {
-        let shortcut = if cfg!(target_os = "macos") { "⌘+Enter" } else { "Ctrl+Enter" };
+        // As egui reads the keys: ⌘ on a Mac, the browser's too (from its user agent).
+        let shortcut = if ui.ctx().os().is_mac() { "⌘+Enter" } else { "Ctrl+Enter" };
         let run = ui.button(tl!("Run")).on_hover_text(crate::i18n::fmt("Run the script ({keys})", &[("keys", shortcut)])).clicked();
         if run || ctrl_enter {
             let script = app.workflow.script.clone();
@@ -1309,4 +1337,38 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// Every workflow has named inputs, including both weights sharing a row (#790).
+    #[test]
+    fn every_workflow_names_its_inputs() {
+        for &(section, _) in SECTIONS {
+            let mut app = RustGisApp::with_sample();
+            app.workflow.section = section;
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 1200.0)).build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    workflows(app, ui, &Tokens::light());
+                },
+                app,
+            );
+            h.run();
+            if section == "suitability" {
+                assert_eq!(h.query_all_by_role_and_label(egui::accesskit::Role::TextInput, "Weights").count(), 2);
+                for label in ["First raster", "Second raster"] {
+                    assert!(h.query_by_role_and_label(egui::accesskit::Role::ComboBox, label).is_some());
+                }
+            }
+        }
+    }
 }

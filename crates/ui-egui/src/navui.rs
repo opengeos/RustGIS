@@ -743,11 +743,16 @@ fn actions(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         }
                         sim.playing = !sim.playing;
                     }
-                    egui::ComboBox::from_id_salt("nav_speed").selected_text(format!("{}×", sim.speed)).width(56.0).show_ui(ui, |ui| {
-                        for s in SPEEDS {
-                            ui.selectable_value(&mut sim.speed, s, format!("{s}×"));
-                        }
-                    });
+                    egui::ComboBox::from_id_salt("nav_speed")
+                        .selected_text(format!("{}×", sim.speed))
+                        .width(56.0)
+                        .show_ui(ui, |ui| {
+                            for s in SPEEDS {
+                                ui.selectable_value(&mut sim.speed, s, format!("{s}×"));
+                            }
+                        })
+                        .response
+                        .on_hover_text(tl!("Speed"));
                     end = ui.button(tl!("End")).clicked();
                 });
             }

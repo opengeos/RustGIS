@@ -392,6 +392,15 @@ impl Layer {
         let mut copy = src.clone();
         if !copy.is_open() {
             copy.open()?;
+            // A source by its web address may still be opening in the background (the view or the
+            // project started it): wait for it, as an export does, rather than read nothing.
+            copy.wait_open(std::time::Duration::from_secs(30));
+            if !copy.is_open() {
+                return Err(copy
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "the layer's source is still opening: try again once it has opened".into()));
+            }
         }
         let (mut ds, _) = copy.read_all()?;
         // A sample isn't all of them: refuse rather than run a tool on part of the data.
@@ -1643,6 +1652,40 @@ mod tests {
         assert!(
             back.line_strokes.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == -symbology::MAX_STROKE_OFFSET)
         );
+    }
+
+    #[test]
+    fn dash_patterns_are_kept_and_hostile_ones_brought_into_range() {
+        use symbology::{Dash, MAX_DASH_STEP, MAX_DASH_STEPS};
+        // Built: in range, not all 0, at most MAX_DASH_STEPS.
+        assert_eq!(Dash::new(&[4.0, 2.0]).map(|d| d.steps().to_vec()), Some(vec![4.0, 2.0]));
+        assert_eq!(Dash::new(&[3.0]).map(|d| (d.even_steps(), d.period())), Some((vec![3.0, 3.0], 6.0)), "odd: twice over");
+        for bad in [&[][..], &[0.0, 0.0], &[-1.0, 2.0], &[f32::NAN, 1.0], &[MAX_DASH_STEP + 1.0], &[1.0; MAX_DASH_STEPS + 1]] {
+            assert!(Dash::new(bad).is_none(), "{bad:?}");
+        }
+        // Saved as a plain list and read back.
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        l.line_strokes = vec![symbology::LineStroke { dash: Dash::new(&[4.0, 2.0, 1.0, 2.0]), ..Default::default() }];
+        let text = serde_json::to_string(&l).unwrap();
+        assert!(text.contains(r#""dash":[4.0,2.0,1.0,2.0]"#), "{text}");
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().line_strokes, l.line_strokes);
+        // A crafted project's: steps clamped, too many cut, and one without length solid.
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let read = |v: &serde_json::Value| serde_json::from_value::<Layer>(v.clone()).unwrap().line_strokes[0].dash;
+        v["line_strokes"][0]["dash"] = serde_json::json!([1e30, -5, 2]);
+        assert_eq!(read(&v).map(|d| d.steps().to_vec()), Some(vec![MAX_DASH_STEP, 0.0, 2.0]));
+        // Too large for an f32 (infinite once read): the longest step, as a large one is.
+        v["line_strokes"][0]["dash"] = serde_json::json!([1e40, 2]);
+        assert_eq!(read(&v).map(|d| d.steps().to_vec()), Some(vec![MAX_DASH_STEP, 2.0]));
+        v["line_strokes"][0]["dash"] = serde_json::json!(vec![1.0; 5000]);
+        assert_eq!(read(&v).map(|d| d.steps().len()), Some(MAX_DASH_STEPS));
+        for solid in [serde_json::json!([0, 0]), serde_json::json!([]), serde_json::json!([-3])] {
+            v["line_strokes"][0]["dash"] = solid.clone();
+            assert_eq!(read(&v), None, "{solid}");
+            // Read as a stroke alone too, so no empty pattern is ever made.
+            let st = serde_json::from_value::<symbology::LineStroke>(v["line_strokes"][0].clone()).unwrap();
+            assert_eq!(st.dash, None, "{solid}");
+        }
     }
 
     #[test]

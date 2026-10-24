@@ -17,18 +17,14 @@ fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     }
     s.run("layer.select", &json!({"layer": "Parcels"})).unwrap();
     let app = RustGisApp::new(s);
-    let mut h = egui_kittest::Harness::builder()
-        .with_accessibility_check(false)
-        .with_size(egui::vec2(1400.0, 1000.0))
-        .with_max_steps(64)
-        .build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut RustGisApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
     h.state_mut().ui.command_search = Some("layer.defineProjection".into());
     h.run_steps(3);
     h.key_press(egui::Key::Enter);

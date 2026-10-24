@@ -177,7 +177,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
             .when(need_lines)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
@@ -423,7 +423,26 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
                     .ok_or_else(|| format!("stroke {}: level is a whole number from 0 to 255", i + 1))?,
             ),
         };
-        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level }.clamped());
+        let bad_dash = || {
+            format!(
+                "stroke {}: dash is a list of 1 to {} lengths in points (dash, gap, …), each 0 to {}, not all 0",
+                i + 1,
+                rustgis_map::symbology::MAX_DASH_STEPS,
+                rustgis_map::symbology::MAX_DASH_STEP
+            )
+        };
+        // A pattern out of range is an error here, so a script learns of it; a project file's is
+        // brought into range instead (`de_dash`), so a hand-edited file still opens.
+        let dash = match o.get("dash") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(a)) => {
+                let steps: Vec<f32> =
+                    a.iter().map(|v| v.as_f64().map(|x| x.clamp(-1e6, 1e6) as f32)).collect::<Option<_>>().ok_or_else(bad_dash)?;
+                Some(rustgis_map::symbology::Dash::new(&steps).ok_or_else(bad_dash)?)
+            }
+            Some(_) => return Err(bad_dash()),
+        };
+        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level, dash }.clamped());
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
@@ -1406,15 +1425,6 @@ pub(super) fn database_tables(_s: &mut Session, p: &Value) -> CmdResult {
     }
 }
 
-/// The geometry tables of a live database server, with the schema, name, column and type of
-/// each (`connection.browse` groups them by schema).
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) fn database_table_details(p: &Value) -> Result<Vec<Value>, String> {
-    let db = database_param(p).ok_or("database is required")?;
-    let live = LiveDb::connect(&db).ok_or("not a database server")?.map_err(|e| format!("{}: {e}", db.short()))?;
-    Ok(live.tables().map_err(|e| format!("{}: {e}", db.short()))?.iter().map(LiveTable::detail).collect())
-}
-
 /// Adds the tables of a database (a PostgreSQL connection or a DuckDB file) that have a geometry
 /// column, or the one `layer` names.
 fn add_database(s: &mut Session, p: &Value) -> CmdResult {
@@ -1533,16 +1543,6 @@ impl LiveTable {
             LiveTable::Mysql(t) => t.label(),
             LiveTable::Sqlserver(t) => t.label(),
         }
-    }
-
-    /// The table as a browser lists it: its label for `layer.addDatabase`, and what it is made of.
-    fn detail(&self) -> Value {
-        let (schema, name, column, kind) = match self {
-            LiveTable::Postgis(t) => (&t.schema, &t.name, &t.column, &t.kind),
-            LiveTable::Mysql(t) => (&t.schema, &t.name, &t.column, &t.kind),
-            LiveTable::Sqlserver(t) => (&t.schema, &t.name, &t.column, &t.kind),
-        };
-        json!({"label": self.label(), "schema": schema, "name": name, "column": column, "kind": kind})
     }
 }
 
@@ -1961,7 +1961,13 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
         layer.name = format!("{base} ({i})");
     }
     let id = s.map_mut().add_layer(layer);
+    super::connections::clear_active();
     s.project.normalize();
+    super::connections::restore_active(s);
+    // Only the database the added layer reads can change here.
+    let keys: Vec<_> = s.map().layer(id).and_then(|l| l.source.as_ref()).map(super::connections::layer_keys).unwrap_or_default();
+    super::connections::resolve_keys(s, &keys);
+    super::connections::note_waiting(s);
     s.active_layer = Some(id);
     Ok(json!({"layer": id}))
 }

@@ -252,8 +252,9 @@ pub fn nasa_earthdata(app: &mut RustGisApp, ui: &mut egui::Ui) {
     ui.label(RichText::new(tl!("NASA's Global Imagery Browse Services (GIBS): over a thousand layers of satellite imagery and science data, most of them daily.")).weak());
     let words = search_box(app, ui, "gibs", tl!("Search layers (e.g. temperature)"));
     ui.horizontal(|ui| {
-        ui.label(tl!("Date"));
-        ui.add(egui::TextEdit::singleline(&mut app.ui.web_services.date).hint_text(tl!("latest")).desired_width(110.0));
+        let input_label = ui.label(tl!("Date"));
+        ui.add(egui::TextEdit::singleline(&mut app.ui.web_services.date).hint_text(tl!("latest")).desired_width(110.0))
+            .labelled_by(input_label.id);
         ui.label(RichText::new(tl!("YYYY-MM-DD, for time layers")).small().weak());
     });
     let look = listing(app, NASA_GIBS, "wmts");
@@ -689,16 +690,20 @@ pub fn fields_of_the_world(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let year = *app.ui.web_services.year.get_or_insert(*years.end());
     let mut picked = year;
     ui.horizontal(|ui| {
-        ui.label(tl!("Year"));
-        egui::ComboBox::from_id_salt("ftw_year").selected_text(picked.to_string()).show_ui(ui, |ui| {
-            for y in years.clone().rev() {
-                ui.selectable_value(&mut picked, y, y.to_string());
-            }
-        });
+        let input_label = ui.label(tl!("Year"));
+        egui::ComboBox::from_id_salt("ftw_year")
+            .selected_text(picked.to_string())
+            .show_ui(ui, |ui| {
+                for y in years.clone().rev() {
+                    ui.selectable_value(&mut picked, y, y.to_string());
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
     });
     app.ui.web_services.year = Some(picked);
-    ui.label(tl!("Score threshold"));
-    ui.add(egui::Slider::new(&mut app.ui.web_services.min_score, 0.0..=100.0).step_by(1.0));
+    let input_label = ui.label(tl!("Score threshold"));
+    ui.add(egui::Slider::new(&mut app.ui.web_services.min_score, 0.0..=100.0).step_by(1.0)).labelled_by(input_label.id);
     ui.label(RichText::new(tl!("Hides fields scoring below this. The score is the model's mean field probability × 100, a ranking rather than a calibrated probability.")).small().weak());
     // The score's colours, as the fields are drawn.
     ui.horizontal_wrapped(|ui| {

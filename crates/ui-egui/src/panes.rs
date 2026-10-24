@@ -9,7 +9,7 @@ use rustgis_engine::analysis::{ParamKind, tools};
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::{Normalizer, RasterLegend, RasterStyle};
 use rustgis_engine::map::symbology::{
-    ClassRef, ClassStyle, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
+    ClassRef, ClassStyle, Dash, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
     OTHER_VALUES, normalize_label,
 };
 use rustgis_engine::map::tiles::{TileKind, TileLayer};
@@ -1228,8 +1228,8 @@ fn layer_group_row(
             }
             let mut tr = group.transparency;
             ui.horizontal(|ui| {
-                ui.label(tl!("Transparency"));
-                let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
+                let input_label = ui.label(tl!("Transparency"));
+                let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer()).labelled_by(input_label.id);
                 if r.drag_stopped() || (r.changed() && !r.dragged()) {
                     let _ = app.run("group.set", json!({"group": group.id, "transparency": tr}));
                 }
@@ -1435,9 +1435,9 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
             ui.separator();
         }
         ui.horizontal(|ui| {
-            ui.label(tl!("Opacity"));
+            let input_label = ui.label(tl!("Opacity"));
             let mut o = tile.opacity * 100.0;
-            let slider = ui.add(egui::Slider::new(&mut o, 0.0..=100.0).suffix("%"));
+            let slider = ui.add(egui::Slider::new(&mut o, 0.0..=100.0).suffix("%")).labelled_by(input_label.id);
             if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
                 action = Some(("map.setTiles", json!({"index": i, "opacity": o / 100.0})));
             }
@@ -1806,18 +1806,38 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         let _ = app.run("ui.refreshService", json!({"layer":l.id}));
         ui.close();
     }
-    let login = l
-        .source
-        .as_ref()
-        .is_some_and(|s| s.login)
-        .then(|| app.session.connections.for_layer(l))
-        .flatten()
-        .map(|c| (c.id.clone(), c.name.clone()));
-    if let Some((id, name)) = login
-        && ui.button(crate::i18n::fmt("Log In to {name}…", &[("name", &name)])).clicked()
-    {
-        crate::connectionui::log_in(app, &id);
-        ui.close();
+    let login = l.source.as_ref().and_then(|s| {
+        let (kind, database) = rustgis_engine::connections::layer_database(s)?;
+        let connections: Vec<_> = app.session.connections.matching_database(kind, database).into_iter().cloned().collect();
+        let (_, key) = rustgis_engine::connections::database_key(database)?;
+        if !s.login && !app.session.database_logins.requests(app.session.opened).any(|r| r.kind == kind && r.key == key) {
+            return None;
+        }
+        Some((kind, key, connections))
+    });
+    if let Some((kind, key, connections)) = login {
+        if connections.len() == 1 {
+            let c = &connections[0];
+            if ui.button(crate::i18n::fmt("Log In to {name}…", &[("name", &c.name)])).clicked() {
+                crate::connectionui::log_in(app, &c.id);
+                ui.close();
+            }
+        } else if connections.len() > 1 && ui.button(tl!("Choose Connection…")).clicked() {
+            let opened = app.session.opened;
+            crate::connectionui::choose(
+                app,
+                rustgis_engine::connections::LoginRequest {
+                    reason: rustgis_engine::connections::LoginReason::Choose,
+                    kind,
+                    key,
+                    connections: connections.iter().map(|c| c.id.clone()).collect(),
+                    layers: vec![l.id],
+                    opened,
+                    prompted: true,
+                },
+            );
+            ui.close();
+        }
     }
     let items: &[(&str, &str)] = if l.is_raster() {
         &[("Zoom To Layer", "layer.zoomTo"), ("Symbology", "ui.pane.symbology")]
@@ -2464,14 +2484,19 @@ fn layer_list(form: &mut GpForm, ui: &mut Ui, param: &'static str, cur: &str, of
     // A name holding the separator would come back as two entries: not offered.
     let left: Vec<String> = offered.into_iter().filter(|o| !o.contains(';') && !names.contains(o)).collect();
     ui.add_enabled_ui(!left.is_empty(), |ui| {
-        egui::ComboBox::from_id_salt(("gp_list", param)).selected_text(tl!("Add")).width(ui.available_width() - 4.0).show_ui(ui, |ui| {
-            for o in left {
-                if ui.selectable_label(false, &o).clicked() {
-                    names.push(o);
-                    changed = true;
+        egui::ComboBox::from_id_salt(("gp_list", param))
+            .selected_text(tl!("Add"))
+            .width(ui.available_width() - 4.0)
+            .show_ui(ui, |ui| {
+                for o in left {
+                    if ui.selectable_label(false, &o).clicked() {
+                        names.push(o);
+                        changed = true;
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!("Add"));
     });
     // A file not opened as a layer, typed in (the runner reads paths on disk).
     #[cfg(not(target_arch = "wasm32"))]
@@ -2964,20 +2989,25 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ParamKind::Layer => {
                 let picked = app.gp.tables.get(p.name).copied();
                 let shown = if cur.is_empty() { "—" } else { cur.as_str() };
-                egui::ComboBox::from_id_salt(("gp", p.name)).selected_text(shown).width(ui.available_width() - 4.0).show_ui(ui, |ui| {
-                    for name in layer_names(None) {
-                        if ui.selectable_label(picked.is_none() && name == cur, &name).clicked() {
-                            app.gp.values.insert(p.name, name);
-                            app.gp.tables.remove(p.name);
+                egui::ComboBox::from_id_salt(("gp", p.name))
+                    .selected_text(shown)
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
+                        for name in layer_names(None) {
+                            if ui.selectable_label(picked.is_none() && name == cur, &name).clicked() {
+                                app.gp.values.insert(p.name, name);
+                                app.gp.tables.remove(p.name);
+                            }
                         }
-                    }
-                    for (id, name) in &tables {
-                        if ui.selectable_label(picked == Some(*id), name).clicked() {
-                            app.gp.values.insert(p.name, name.clone());
-                            app.gp.tables.insert(p.name, *id);
+                        for (id, name) in &tables {
+                            if ui.selectable_label(picked == Some(*id), name).clicked() {
+                                app.gp.values.insert(p.name, name.clone());
+                                app.gp.tables.insert(p.name, *id);
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
                 ui.add_space(4.0);
                 continue;
             }
@@ -3048,7 +3078,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             ParamKind::Bool => {
                 let mut on = cur == "true";
-                if ui.checkbox(&mut on, "").changed() {
+                if ui.checkbox(&mut on, "").on_hover_text(tl!(p.label)).changed() {
                     app.gp.values.insert(p.name, on.to_string());
                 }
                 ui.add_space(4.0);
@@ -3068,16 +3098,18 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         v.to_string()
                     }
                 };
-                egui::ComboBox::from_id_salt(("gp", p.name)).selected_text(shown(&cur)).width(ui.available_width() - 4.0).show_ui(
-                    ui,
-                    |ui| {
+                egui::ComboBox::from_id_salt(("gp", p.name))
+                    .selected_text(shown(&cur))
+                    .width(ui.available_width() - 4.0)
+                    .show_ui(ui, |ui| {
                         for o in opts {
                             if ui.selectable_label(o == cur, shown(&o)).clicked() {
                                 app.gp.values.insert(p.name, o);
                             }
                         }
-                    },
-                );
+                    })
+                    .response
+                    .on_hover_text(tl!(p.label));
             }
             None => {
                 let mut v = cur;
@@ -3095,11 +3127,15 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
                     ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         browse = ui.button(tl!("Browse")).clicked();
-                        ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                        ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY))
+                            .on_hover_text(tl!(p.label))
+                            .changed()
                     })
                     .inner
                 } else {
-                    ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY)).changed()
+                    ui.add(egui::TextEdit::singleline(&mut v).hint_text(hint).desired_width(f32::INFINITY))
+                        .on_hover_text(tl!(p.label))
+                        .changed()
                 };
                 if changed {
                     // A path typed in replaces a file picked in the browser.
@@ -3429,20 +3465,24 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         let fields = if pending.kind == "unique" { &all } else { &numeric };
         if !fields.is_empty() {
             ui.horizontal(|ui| {
-                ui.label(tl!("Choose a field to apply this renderer:"));
-                egui::ComboBox::from_id_salt("symbology_pending_field_choice").selected_text(tl!("Select a field")).show_ui(ui, |ui| {
-                    for field in fields {
-                        if ui.selectable_label(false, field).clicked() {
-                            match app.run("layer.symbology", json!({"type": pending.kind, "field": field})) {
-                                Ok(_) => clear_pending_symbology(ui.ctx()),
-                                Err(error) => {
-                                    let pending = PendingSymbology { error: error.into(), ..pending.clone() };
-                                    ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
+                let input_label = ui.label(tl!("Choose a field to apply this renderer:"));
+                egui::ComboBox::from_id_salt("symbology_pending_field_choice")
+                    .selected_text(tl!("Select a field"))
+                    .show_ui(ui, |ui| {
+                        for field in fields {
+                            if ui.selectable_label(false, field).clicked() {
+                                match app.run("layer.symbology", json!({"type": pending.kind, "field": field})) {
+                                    Ok(_) => clear_pending_symbology(ui.ctx()),
+                                    Err(error) => {
+                                        let pending = PendingSymbology { error: error.into(), ..pending.clone() };
+                                        ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
             });
         }
         ui.add_space(6.0);
@@ -3461,19 +3501,19 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         Renderer::Graduated { field, breaks, ramp, method, .. } => {
             field_combo(app, ui, "Field", field, &numeric, "graduated");
             ui.horizontal(|ui| {
-                ui.label(tl!("Method"));
+                let input_label = ui.label(tl!("Method"));
                 egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
                     for m in ClassMethod::ALL {
                         if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
                             let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": ramp.name()}));
                         }
                     }
-                });
+                }).response.labelled_by(input_label.id);
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Classes"));
+                let input_label = ui.label(tl!("Classes"));
                 let mut k = breaks.len();
-                if ui.add(egui::DragValue::new(&mut k).range(1..=12)).changed() {
+                if ui.add(egui::DragValue::new(&mut k).range(1..=12)).labelled_by(input_label.id).changed() {
                     let _ = app.run(
                         "layer.symbology",
                         json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": ramp.name()}),
@@ -3499,9 +3539,9 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
     let mut tr = l.transparency;
     ui.horizontal(|ui| {
-        ui.label(tl!("Transparency"));
+        let input_label = ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
-        let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
+        let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer()).labelled_by(input_label.id);
         transparency_drag(app, ui, &r, &l, tr);
     });
     if !l.graphics {
@@ -3520,9 +3560,10 @@ fn reference_scale_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
         ui.label(tl!("Reference scale")).on_hover_text(tl!(
             "The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper."
         ));
-        egui::ComboBox::from_id_salt("reference_scale").selected_text(crate::ribbon::scale_label(l.reference_scale)).width(130.0).show_ui(
-            ui,
-            |ui| {
+        egui::ComboBox::from_id_salt("reference_scale")
+            .selected_text(crate::ribbon::scale_label(l.reference_scale))
+            .width(130.0)
+            .show_ui(ui, |ui| {
                 let mut pick = |ui: &mut Ui, label: String, scale: Value, on: bool| {
                     if ui.selectable_label(on, label).clicked() {
                         let _ = app.run("layer.referenceScale", json!({"scale": scale}));
@@ -3534,8 +3575,9 @@ fn reference_scale_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 }
                 let label = crate::i18n::fmt("Current scale ({scale})", &[("scale", &crate::ribbon::scale_label(Some(current)))]);
                 pick(ui, label, json!("current"), l.reference_scale == Some(current) && !REFERENCE_SCALE_CHOICES.contains(&current));
-            },
-        );
+            })
+            .response
+            .on_hover_text(tl!("Reference scale"));
     });
 }
 
@@ -3562,14 +3604,19 @@ fn transparency_drag(app: &mut RustGisApp, ui: &Ui, r: &egui::Response, l: &Laye
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
     ui.horizontal(|ui| {
-        ui.label(tl!(label));
-        egui::ComboBox::from_id_salt(("sym_field", kind)).selected_text(cur).width(200.0).show_ui(ui, |ui| {
-            for f in fields {
-                if ui.selectable_label(f == cur, f).clicked() {
-                    let _ = app.run("layer.symbology", json!({"type": kind, "field": f}));
+        let input_label = ui.label(tl!(label));
+        egui::ComboBox::from_id_salt(("sym_field", kind))
+            .selected_text(cur)
+            .width(200.0)
+            .show_ui(ui, |ui| {
+                for f in fields {
+                    if ui.selectable_label(f == cur, f).clicked() {
+                        let _ = app.run("layer.symbology", json!({"type": kind, "field": f}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
     });
 }
 
@@ -3871,31 +3918,78 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
                 let _ = app.run(key, json!({"color": rgba(c).hex()}));
             }
             ui.end_row();
-            ui.label(tl!(if g == GeometryType::Polyline { "Line width" } else { "Outline width" }));
+            let input_label = ui.label(tl!(if g == GeometryType::Polyline { "Line width" } else { "Outline width" }));
             let mut w = s.stroke_width;
-            if ui.add(egui::DragValue::new(&mut w).range(0.0..=12.0).speed(0.05).suffix(" pt")).changed() {
+            if ui.add(egui::DragValue::new(&mut w).range(0.0..=12.0).speed(0.05).suffix(" pt")).labelled_by(input_label.id).changed() {
                 let _ = app.run("layer.outline", json!({"width": w}));
             }
             ui.end_row();
             if g == GeometryType::Point {
-                ui.label(tl!("Size"));
+                let input_label = ui.label(tl!("Size"));
                 let mut sz = s.size;
-                if ui.add(egui::DragValue::new(&mut sz).range(1.0..=60.0).speed(0.1).suffix(" pt")).changed() {
+                if ui.add(egui::DragValue::new(&mut sz).range(1.0..=60.0).speed(0.1).suffix(" pt")).labelled_by(input_label.id).changed() {
                     let _ = app.run("layer.marker", json!({"size": sz}));
                 }
                 ui.end_row();
-                ui.label(tl!("Shape"));
-                egui::ComboBox::from_id_salt("marker_shape").selected_text(tl!(s.marker.label())).show_ui(ui, |ui| {
-                    for m in Marker::ALL {
-                        if ui.selectable_label(m == s.marker, tl!(m.label())).clicked() {
-                            let _ = app.run("layer.marker", json!({"shape": m.label()}));
+                let input_label = ui.label(tl!("Shape"));
+                egui::ComboBox::from_id_salt("marker_shape")
+                    .selected_text(tl!(s.marker.label()))
+                    .show_ui(ui, |ui| {
+                        for m in Marker::ALL {
+                            if ui.selectable_label(m == s.marker, tl!(m.label())).clicked() {
+                                let _ = app.run("layer.marker", json!({"shape": m.label()}));
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
                 ui.end_row();
             }
         });
     });
+}
+
+/// The dash patterns the stroke editor offers, in stroke widths (dash, gap, …).
+const DASH_PRESETS: [(&str, Option<&[f32]>); 5] = [
+    ("Solid", None),
+    ("Dashed", Some(&[4.0, 2.0])),
+    ("Dotted", Some(&[1.0, 2.0])),
+    ("Dash-dot", Some(&[4.0, 2.0, 1.0, 2.0])),
+    ("Long dash", Some(&[8.0, 3.0])),
+];
+
+/// A dash pattern being typed in the stroke editor: the layer, the class (`None` for the layer's
+/// own strokes) and the text.
+type DashDraft = (u32, Option<ClassRef>, String);
+
+/// The text of `draft` if it was typed for `owner`'s stroke, else `None` (the stroke's own pattern
+/// shows).
+fn draft_for(draft: Option<DashDraft>, owner: &(u32, Option<ClassRef>)) -> Option<String> {
+    draft.filter(|(layer, class, _)| *layer == owner.0 && *class == owner.1).map(|(.., text)| text)
+}
+
+/// A dash pattern as the stroke editor shows it: `4 2`. Each length is written as it is kept, so
+/// the text reads back as the same pattern.
+fn dash_text(d: &Dash) -> String {
+    d.steps().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// The pattern the dash box sets when it loses focus: `None` unless the text was typed (focusing
+/// and leaving the box is no change), Escape wasn't what ended it, and it is a pattern other than
+/// `current`.
+fn dash_commit(typed: bool, escaped: bool, text: &str, current: Option<Dash>) -> Option<Option<Dash>> {
+    parse_dash(text).filter(|d| typed && !escaped && *d != current)
+}
+
+/// A dash pattern typed in the stroke editor: `Some(None)` for none (solid), `None` when it isn't
+/// one ([`Dash::new`]). Lengths are separated by spaces, commas or semicolons.
+fn parse_dash(text: &str) -> Option<Option<Dash>> {
+    let parts: Vec<&str> = text.split([' ', ',', ';']).filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return Some(None);
+    }
+    let steps: Vec<f32> = parts.iter().map(|p| p.parse::<f32>().ok()).collect::<Option<_>>()?;
+    Dash::new(&steps).map(Some)
 }
 
 /// A stroke as `layer.lineStrokes` takes it.
@@ -3907,6 +4001,7 @@ fn stroke_json(st: &LineStroke) -> Value {
         "cap": st.cap.code(),
         "join": st.join.code(),
         "level": st.level,
+        "dash": st.dash.map(|d| d.steps().to_vec()),
     })
 }
 
@@ -3982,24 +4077,28 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         });
         if !classes.is_empty() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Strokes for")).size(11.5).color(t.text_dim));
+                let input_label = ui.label(egui::RichText::new(tl!("Strokes for")).size(11.5).color(t.text_dim));
                 let name = |c: Option<&ClassRef>| match c.and_then(|c| classes.iter().find(|(k, ..)| k == c)) {
                     Some((_, label, _)) => label.clone(),
                     None => tl!("All classes").to_string(),
                 };
-                egui::ComboBox::from_id_salt(("stroke_class_pick", l.id)).selected_text(name(class)).show_ui(ui, |ui| {
-                    if ui.selectable_label(class.is_none(), tl!("All classes")).on_hover_text(tl!("The layer's strokes")).clicked() {
-                        ui.data_mut(|d| d.insert_temp::<Option<ClassRef>>(picked_id, None));
-                    }
-                    for (k, label, _) in &classes {
-                        // A class with strokes of its own is marked.
-                        let has_own = l.renderer.class_strokes(k).is_ok_and(|s| !s.is_empty());
-                        let text = if has_own { format!("{label} •") } else { label.clone() };
-                        if ui.selectable_label(class == Some(k), text).clicked() {
-                            ui.data_mut(|d| d.insert_temp(picked_id, Some(k.clone())));
+                egui::ComboBox::from_id_salt(("stroke_class_pick", l.id))
+                    .selected_text(name(class))
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(class.is_none(), tl!("All classes")).on_hover_text(tl!("The layer's strokes")).clicked() {
+                            ui.data_mut(|d| d.insert_temp::<Option<ClassRef>>(picked_id, None));
                         }
-                    }
-                });
+                        for (k, label, _) in &classes {
+                            // A class with strokes of its own is marked.
+                            let has_own = l.renderer.class_strokes(k).is_ok_and(|s| !s.is_empty());
+                            let text = if has_own { format!("{label} •") } else { label.clone() };
+                            if ui.selectable_label(class == Some(k), text).clicked() {
+                                ui.data_mut(|d| d.insert_temp(picked_id, Some(k.clone())));
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(input_label.id);
             });
         }
         if l.has_strokes() {
@@ -4028,12 +4127,33 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             let w = (w * k).max(0.5);
             let y = r.center().y + st.offset * k;
             let pad = cap_pad(st, w);
-            if st.cap == LineCap::Round {
-                ui.painter().circle_filled(pos2(x0, y), w / 2.0, c32(c));
-                ui.painter().circle_filled(pos2(x1, y), w / 2.0, c32(c));
+            // The dashes along the preview, scaled as the strokes are. Solid when the map draws the
+            // pattern solid: under a pixel a round on this screen, at the pattern's own size.
+            let steps: Vec<f32> = st.dash.map(|d| d.even_steps().iter().map(|v| v * k).collect()).unwrap_or_default();
+            let mut runs = Vec::new();
+            if st.dash.is_some_and(|d| d.period() * ui.ctx().pixels_per_point() >= 1.0) && steps.iter().sum::<f32>() > 0.0 {
+                let (mut x, mut on) = (x0, true);
+                for step in steps.iter().cycle().take(4096) {
+                    if x >= x1 {
+                        break;
+                    }
+                    let end = (x + step).min(x1);
+                    if on {
+                        runs.push((x, end));
+                    }
+                    (x, on) = (end, !on);
+                }
+            } else {
+                runs.push((x0, x1));
             }
-            let (a, b) = if st.cap == LineCap::Square { (x0 - pad, x1 + pad) } else { (x0, x1) };
-            ui.painter().line_segment([pos2(a, y), pos2(b, y)], Stroke::new(w, c32(c)));
+            for (from, to) in runs {
+                if st.cap == LineCap::Round {
+                    ui.painter().circle_filled(pos2(from, y), w / 2.0, c32(c));
+                    ui.painter().circle_filled(pos2(to, y), w / 2.0, c32(c));
+                }
+                let (a, b) = if st.cap == LineCap::Square { (from - pad, to + pad) } else { (from, to) };
+                ui.painter().line_segment([pos2(a, y), pos2(b, y)], Stroke::new(w, c32(c)));
+            }
         }
         // The line's direction.
         let (ay, ax) = (r.max.y - 6.0, r.max.x - 8.0);
@@ -4106,7 +4226,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                 ui.horizontal(|ui| {
                     let mut ww = w;
                     let drag = egui::DragValue::new(&mut ww).range(0.0..=MAX_STROKE_WIDTH).speed(0.05).suffix(" pt");
-                    if ui.add_enabled(st.width.is_some(), drag).changed() {
+                    if ui.add_enabled(st.width.is_some(), drag).on_hover_text(tl!("Width")).changed() {
                         set(app, LineStroke { width: Some(ww), ..st });
                     }
                     let mut from_symbol = st.width.is_none();
@@ -4126,29 +4246,85 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     set(app, LineStroke { offset: off, ..st });
                 }
                 ui.end_row();
-                ui.label(tl!("Cap"));
-                egui::ComboBox::from_id_salt(("stroke_cap", i)).selected_text(tl!(st.cap.label())).show_ui(ui, |ui| {
-                    for c in LineCap::ALL {
-                        if ui.selectable_label(c == st.cap, tl!(c.label())).clicked() {
-                            set(app, LineStroke { cap: c, ..st });
+                let input_label = ui.label(tl!("Cap"));
+                egui::ComboBox::from_id_salt(("stroke_cap", i))
+                    .selected_text(tl!(st.cap.label()))
+                    .show_ui(ui, |ui| {
+                        for c in LineCap::ALL {
+                            if ui.selectable_label(c == st.cap, tl!(c.label())).clicked() {
+                                set(app, LineStroke { cap: c, ..st });
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
                 ui.end_row();
-                ui.label(tl!("Join"));
-                egui::ComboBox::from_id_salt(("stroke_join", i)).selected_text(tl!(st.join.label())).show_ui(ui, |ui| {
-                    for j in LineJoin::ALL {
-                        if ui.selectable_label(j == st.join, tl!(j.label())).clicked() {
-                            set(app, LineStroke { join: j, ..st });
+                let input_label = ui.label(tl!("Join"));
+                egui::ComboBox::from_id_salt(("stroke_join", i))
+                    .selected_text(tl!(st.join.label()))
+                    .show_ui(ui, |ui| {
+                        for j in LineJoin::ALL {
+                            if ui.selectable_label(j == st.join, tl!(j.label())).clicked() {
+                                set(app, LineStroke { join: j, ..st });
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(input_label.id);
+                ui.end_row();
+                ui.label(tl!("Dash"));
+                ui.horizontal(|ui| {
+                    // The pattern as typed, kept while the box has focus; set when it loses it. The
+                    // draft remembers whose stroke it is, so it never shows or lands on another
+                    // layer's or class's stroke at the same place.
+                    let id = ui.scope_id().with(("stroke_dash", i));
+                    let owner = (l.id, class.cloned());
+                    let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
+                    let draft = draft_for(ui.data_mut(|m| m.get_temp::<DashDraft>(id)), &owner);
+                    let typed = draft.is_some();
+                    let mut text = draft.unwrap_or(shown);
+                    let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
+                    let r =
+                        ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
+                    if r.changed() {
+                        ui.data_mut(|m| m.insert_temp::<DashDraft>(id, (owner.0, owner.1.clone(), text.clone())));
+                    }
+                    // Text that isn't a pattern is outlined: it won't be kept when the box loses focus.
+                    if parse_dash(&text).is_none() {
+                        ui.painter().rect_stroke(r.rect, CornerRadius::same(2), egui::Stroke::new(1.5, t.red), egui::StrokeKind::Outside);
+                    }
+                    if r.lost_focus() {
+                        ui.data_mut(|m| m.remove::<DashDraft>(id));
+                        // As the class label box does, Escape drops what was typed.
+                        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        if let Some(dash) = dash_commit(typed || r.changed(), escaped, &text, st.dash) {
+                            set(app, LineStroke { dash, ..st });
                         }
                     }
+                    let preset = egui::ComboBox::from_id_salt(("stroke_dash_preset", i)).selected_text("").width(24.0);
+                    preset
+                        .show_ui(ui, |ui| {
+                            for (label, steps) in DASH_PRESETS {
+                                // Scaled by the stroke's width, so a thick line's dashes stay in proportion.
+                                let dash = steps.and_then(|s| Dash::new(&s.iter().map(|v| v * w.max(1.0)).collect::<Vec<_>>()));
+                                if ui.selectable_label(dash == st.dash, tl!(label)).clicked() {
+                                    set(app, LineStroke { dash, ..st });
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text(tl!("Dash"));
                 });
                 ui.end_row();
                 if l.stroke_levels {
                     ui.label(tl!("Level"));
                     ui.horizontal(|ui| {
                         let mut lv = st.level_at(i);
-                        if ui.add_enabled(st.level.is_some(), egui::DragValue::new(&mut lv).range(0..=255).speed(0.1)).changed() {
+                        if ui
+                            .add_enabled(st.level.is_some(), egui::DragValue::new(&mut lv).range(0..=255).speed(0.1))
+                            .on_hover_text(tl!("Level"))
+                            .changed()
+                        {
                             set(app, LineStroke { level: Some(lv), ..st });
                         }
                         let mut auto = st.level.is_none();
@@ -4462,10 +4638,10 @@ fn rgb_stretch_bounds(app: &mut RustGisApp, ui: &mut Ui, layer: impl std::hash::
         let speed = ((hi - lo).abs() / 200.0).clamp(1e-6, 1e6);
         ui.horizontal(|ui| {
             ui.add_sized([44.0, 18.0], egui::Label::new(name));
-            ui.label(tl!("Min"));
-            let a = ui.add(egui::DragValue::new(&mut lo).speed(speed));
-            ui.label(tl!("Max"));
-            let b = ui.add(egui::DragValue::new(&mut hi).speed(speed));
+            let input_label = ui.label(tl!("Min"));
+            let a = ui.add(egui::DragValue::new(&mut lo).speed(speed)).labelled_by(input_label.id);
+            let input_label = ui.label(tl!("Max"));
+            let b = ui.add(egui::DragValue::new(&mut hi).speed(speed)).labelled_by(input_label.id);
             done |= a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged());
             changed |= a.changed() || b.changed();
         });
@@ -4548,7 +4724,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     let bands: Vec<String> = d.bands.iter().map(|b| b.name.clone()).collect();
     let band_combo = |app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: usize, run: &dyn Fn(usize) -> (String, Value)| {
         ui.horizontal(|ui| {
-            ui.label(tl!(label));
+            let input_label = ui.label(tl!(label));
             egui::ComboBox::from_id_salt(("raster_band", label))
                 .selected_text(band_name(bands.get(cur).map(String::as_str).unwrap_or("")))
                 .width(170.0)
@@ -4559,7 +4735,9 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                             let _ = app.run(&id, p);
                         }
                     }
-                });
+                })
+                .response
+                .labelled_by(input_label.id);
         });
     };
     match &style.renderer {
@@ -4584,20 +4762,27 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 ("raster.symbology".into(), json!({"type": "classify", "band": i + 1, "classes": k, "method": format!("{m:?}")}))
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Method"));
-                egui::ComboBox::from_id_salt("raster_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
-                    for mm in ClassMethod::ALL {
-                        if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
-                            let _ = app
-                                .run("raster.symbology", json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": r}));
+                let input_label = ui.label(tl!("Method"));
+                egui::ComboBox::from_id_salt("raster_method")
+                    .selected_text(tl!(method.label()))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for mm in ClassMethod::ALL {
+                            if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
+                                let _ = app.run(
+                                    "raster.symbology",
+                                    json!({"type": "classify", "method": format!("{mm:?}"), "classes": k, "ramp": r}),
+                                );
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
             });
             ui.horizontal(|ui| {
-                ui.label(tl!("Classes"));
+                let input_label = ui.label(tl!("Classes"));
                 let mut kk = k;
-                if ui.add(egui::DragValue::new(&mut kk).range(1..=32)).changed() {
+                if ui.add(egui::DragValue::new(&mut kk).range(1..=32)).labelled_by(input_label.id).changed() {
                     let _ = app.run("raster.symbology", json!({"type": "classify", "method": format!("{m:?}"), "classes": kk, "ramp": r}));
                 }
             });
@@ -4628,11 +4813,11 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 for (label, v, range, speed, which) in
                     [("Azimuth", az, 0.0..=360.0, 1.0, 0), ("Altitude", alt, 0.0..=90.0, 0.5, 1), ("Z factor", zf, 0.001..=1000.0, 0.01, 2)]
                 {
-                    ui.label(tl!(label));
+                    let input_label = ui.label(tl!(label));
                     let mut x = v;
                     // Kept across a drag until it is let go (#607).
                     let drag = Dragged::lend(ui, egui::Id::unique(("relief_drag", l.id, which)), &mut x);
-                    let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3));
+                    let r = ui.add(egui::DragValue::new(&mut x).range(range).speed(speed).max_decimals(3)).labelled_by(input_label.id);
                     if drag.settled(ui, &r, &mut x) && x != v {
                         let (a, b, c) = match which {
                             0 => (x, alt, zf),
@@ -4663,27 +4848,32 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     if !matches!(style.renderer, RasterRenderer::Colormap | RasterRenderer::UniqueValues { .. } | RasterRenderer::Classify { .. }) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(tl!("Stretch type"));
-            egui::ComboBox::from_id_salt("raster_stretch").selected_text(tl!(style.stretch.label())).width(170.0).show_ui(ui, |ui| {
-                for (code, label) in Stretch::KINDS {
-                    if ui.selectable_label(style.stretch.code() == code, tl!(label)).clicked() {
-                        let _ = app.run("raster.stretch", json!({"type": code}));
+            let input_label = ui.label(tl!("Stretch type"));
+            egui::ComboBox::from_id_salt("raster_stretch")
+                .selected_text(tl!(style.stretch.label()))
+                .width(170.0)
+                .show_ui(ui, |ui| {
+                    for (code, label) in Stretch::KINDS {
+                        if ui.selectable_label(style.stretch.code() == code, tl!(label)).clicked() {
+                            let _ = app.run("raster.stretch", json!({"type": code}));
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .labelled_by(input_label.id);
         });
         match style.stretch {
             Stretch::PercentClip { low, high } => {
                 ui.horizontal(|ui| {
                     let (mut lo, mut hi) = (low, high);
                     // Each kept across a drag until it is let go (#607); both are sent together.
-                    ui.label(tl!("Min %"));
+                    let input_label = ui.label(tl!("Min %"));
                     let drag = Dragged::lend(ui, egui::Id::unique(("percent_clip_drag", l.id, "low")), &mut lo);
-                    let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    let a = ui.add(egui::DragValue::new(&mut lo).range(0.0..=49.0).speed(0.1).max_decimals(2)).labelled_by(input_label.id);
                     let low_settled = drag.settled(ui, &a, &mut lo);
-                    ui.label(tl!("Max %"));
+                    let input_label = ui.label(tl!("Max %"));
                     let drag = Dragged::lend(ui, egui::Id::unique(("percent_clip_drag", l.id, "high")), &mut hi);
-                    let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2));
+                    let b = ui.add(egui::DragValue::new(&mut hi).range(0.0..=49.0).speed(0.1).max_decimals(2)).labelled_by(input_label.id);
                     let high_settled = drag.settled(ui, &b, &mut hi);
                     if (low_settled || high_settled) && (lo != low || hi != high) {
                         let _ = app.run("raster.stretch", json!({"type": "percentClip", "low": lo, "high": hi}));
@@ -4710,10 +4900,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                 let [mut lo, mut hi] = pending.map_or([min, max], |(_, edit)| edit);
                 let speed = ((max - min).abs() / 200.0).clamp(1e-6, 1e6);
                 ui.horizontal(|ui| {
-                    ui.label(tl!("Min"));
-                    let a = ui.add(egui::DragValue::new(&mut lo).speed(speed));
-                    ui.label(tl!("Max"));
-                    let b = ui.add(egui::DragValue::new(&mut hi).speed(speed));
+                    let input_label = ui.label(tl!("Min"));
+                    let a = ui.add(egui::DragValue::new(&mut lo).speed(speed)).labelled_by(input_label.id);
+                    let input_label = ui.label(tl!("Max"));
+                    let b = ui.add(egui::DragValue::new(&mut hi).speed(speed)).labelled_by(input_label.id);
                     let done = a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged());
                     if lo.is_finite() && hi.is_finite() && lo < hi && done {
                         ui.data_mut(|d| d.remove::<([f64; 2], [f64; 2])>(key));
@@ -4729,10 +4919,10 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             Stretch::StandardDeviation { n } => {
                 ui.horizontal(|ui| {
                     let mut nn = n;
-                    ui.label(tl!("Deviations"));
+                    let input_label = ui.label(tl!("Deviations"));
                     // Kept across a drag until it is let go (#607).
                     let drag = Dragged::lend(ui, egui::Id::unique(("deviations_drag", l.id)), &mut nn);
-                    let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2));
+                    let a = ui.add(egui::DragValue::new(&mut nn).range(0.1..=10.0).speed(0.05).max_decimals(2)).labelled_by(input_label.id);
                     if drag.settled(ui, &a, &mut nn) && nn != n {
                         let _ = app.run("raster.stretch", json!({"type": "standardDeviation", "n": nn}));
                     }
@@ -4746,14 +4936,19 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         }
     }
     ui.horizontal(|ui| {
-        ui.label(tl!("Resampling"));
-        egui::ComboBox::from_id_salt("raster_resampling").selected_text(tl!(style.resampling.label())).width(170.0).show_ui(ui, |ui| {
-            for r in Resampling::ALL {
-                if ui.selectable_label(r == style.resampling, tl!(r.label())).clicked() {
-                    let _ = app.run("raster.resampling", json!({"type": format!("{r:?}")}));
+        let input_label = ui.label(tl!("Resampling"));
+        egui::ComboBox::from_id_salt("raster_resampling")
+            .selected_text(tl!(style.resampling.label()))
+            .width(170.0)
+            .show_ui(ui, |ui| {
+                for r in Resampling::ALL {
+                    if ui.selectable_label(r == style.resampling, tl!(r.label())).clicked() {
+                        let _ = app.run("raster.resampling", json!({"type": format!("{r:?}")}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
     });
     if matches!(style.renderer, RasterRenderer::Stretch { .. }) {
         raster_default_buttons(app, ui, &style);
@@ -4772,9 +4967,9 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
     let mut tr = l.transparency;
     ui.horizontal(|ui| {
-        ui.label(tl!("Transparency"));
+        let input_label = ui.label(tl!("Transparency"));
         ui.spacing_mut().slider_width = 150.0;
-        let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer());
+        let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix(" %").integer()).labelled_by(input_label.id);
         transparency_drag(app, ui, &r, l, tr);
     });
 }
@@ -4823,25 +5018,30 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
                 1
             };
             ui.horizontal(|ui| {
-                ui.label(tl!("Range"));
+                let input_label = ui.label(tl!("Range"));
                 let shown = modes.iter().find(|(m, _)| *m == cur).map(|(_, label)| label.to_string()).unwrap_or_default();
-                egui::ComboBox::from_id_salt(("raster_mask_range", l.id)).selected_text(shown).width(190.0).show_ui(ui, |ui| {
-                    for (m, label) in modes {
-                        if ui.selectable_label(m == cur, label).clicked() && m != cur {
-                            let p = match m {
-                                0 => json!({"min": null, "max": null, "inside": false}),
-                                // Starting from the values of the band drawn.
-                                _ if !ranged => {
-                                    let band = style.renderer.bands().first().copied().unwrap_or(0);
-                                    let (lo, hi) = d.bands.get(band).map_or((0.0, 1.0), |b| (b.stats.min, b.stats.max));
-                                    json!({"min": lo, "max": hi, "inside": m == 2})
-                                }
-                                _ => json!({"inside": m == 2}),
-                            };
-                            let _ = app.run("raster.mask", p);
+                egui::ComboBox::from_id_salt(("raster_mask_range", l.id))
+                    .selected_text(shown)
+                    .width(190.0)
+                    .show_ui(ui, |ui| {
+                        for (m, label) in modes {
+                            if ui.selectable_label(m == cur, label).clicked() && m != cur {
+                                let p = match m {
+                                    0 => json!({"min": null, "max": null, "inside": false}),
+                                    // Starting from the values of the band drawn.
+                                    _ if !ranged => {
+                                        let band = style.renderer.bands().first().copied().unwrap_or(0);
+                                        let (lo, hi) = d.bands.get(band).map_or((0.0, 1.0), |b| (b.stats.min, b.stats.max));
+                                        json!({"min": lo, "max": hi, "inside": m == 2})
+                                    }
+                                    _ => json!({"inside": m == 2}),
+                                };
+                                let _ = app.run("raster.mask", p);
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .labelled_by(input_label.id);
             });
             if ranged {
                 // As with a custom stretch: kept here until both bounds are valid.
@@ -4852,10 +5052,10 @@ fn raster_masking(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, d: &rustgis_engi
                 let span = if min.is_finite() && max.is_finite() { (max - min).abs() } else { 100.0 };
                 let speed = (span / 200.0).clamp(1e-6, 1e6);
                 ui.horizontal(|ui| {
-                    ui.label(tl!("Min"));
-                    let a = ui.add(egui::DragValue::new(&mut lo).speed(speed));
-                    ui.label(tl!("Max"));
-                    let b = ui.add(egui::DragValue::new(&mut hi).speed(speed));
+                    let input_label = ui.label(tl!("Min"));
+                    let a = ui.add(egui::DragValue::new(&mut lo).speed(speed)).labelled_by(input_label.id);
+                    let input_label = ui.label(tl!("Max"));
+                    let b = ui.add(egui::DragValue::new(&mut hi).speed(speed)).labelled_by(input_label.id);
                     let done = a.drag_stopped() || b.drag_stopped() || ((a.changed() || b.changed()) && !a.dragged() && !b.dragged());
                     if lo <= hi && done {
                         ui.data_mut(|d| d.remove::<([f64; 2], [f64; 2])>(key));
@@ -4943,6 +5143,35 @@ mod tests {
         assert_eq!(f.values.get("output").map(String::as_str), Some("kept"), "not given");
     }
 
+    /// A dash being typed shows only on the stroke of the layer and class it was typed for.
+    #[test]
+    fn a_dash_draft_stays_with_its_layer_and_class() {
+        let draft = || Some((3, Some(ClassRef::Index(1)), "4 2".to_string()));
+        assert_eq!(draft_for(draft(), &(3, Some(ClassRef::Index(1)))).as_deref(), Some("4 2"));
+        // Another layer, another class, or the layer's own strokes show their own pattern.
+        assert_eq!(draft_for(draft(), &(4, Some(ClassRef::Index(1)))), None);
+        assert_eq!(draft_for(draft(), &(3, Some(ClassRef::Index(2)))), None);
+        assert_eq!(draft_for(draft(), &(3, None)), None);
+        assert_eq!(draft_for(None, &(3, None)), None);
+    }
+
+    /// The dash box shows a pattern as kept, and sets one only when it was typed and not escaped:
+    /// focusing and leaving it never rounds the stroke's pattern.
+    #[test]
+    fn the_dash_box_sets_only_a_typed_pattern() {
+        let kept = Dash::new(&[5.332, 2.666]);
+        let text = dash_text(&kept.unwrap());
+        assert_eq!(text, "5.332 2.666");
+        assert_eq!(parse_dash(&text), Some(kept), "the shown text reads back as the same pattern");
+        assert_eq!(dash_commit(false, false, &text, kept), None, "focused and left");
+        assert_eq!(dash_commit(false, false, "4 2", kept), None, "not typed");
+        assert_eq!(dash_commit(true, true, "4 2", kept), None, "Escape drops it");
+        assert_eq!(dash_commit(true, false, "4 2", kept), Some(Dash::new(&[4.0, 2.0])));
+        assert_eq!(dash_commit(true, false, "", kept), Some(None), "emptied: solid");
+        assert_eq!(dash_commit(true, false, "4 x", kept), None, "not a pattern");
+        assert_eq!(dash_commit(true, false, "5.332 2.666", kept), None, "typed back as it was");
+    }
+
     /// The Strokes for picker lists a value listed twice once, for its first class (the one its
     /// features draw with), then `<all other values>`.
     #[test]
@@ -5015,18 +5244,14 @@ mod tests {
         app.session.project.folders.push(long.clone());
         let fav = rustgis_engine::sources::Source { kind: "file".into(), name: long.clone(), address: long, ..Default::default() };
         app.session.sources.favourites.push(fav);
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(1400.0, 860.0))
-            .with_max_steps(64)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
         let width = |h: &mut egui_kittest::Harness<'_, RustGisApp>, pane: LeftPane| {
             h.state_mut().ui.left = Some(pane);
             for _ in 0..6 {
@@ -5100,18 +5325,14 @@ mod tests {
         .unwrap();
         app.run("layer.definitionQuery", json!({"where": "c_valid < 30"})).unwrap();
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(1400.0, 900.0))
-            .with_max_steps(64)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
         h.run_steps(6);
         h
     }
@@ -5269,18 +5490,14 @@ mod tests {
         let id = layer(&app, "Countries");
         app.session.active_layer = Some(id);
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(1400.0, 1400.0))
-            .with_max_steps(64)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1400.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
         h.run_steps(6);
         let transparency = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).map(|l| l.transparency);
         let start = transparency(&h);
@@ -5318,18 +5535,14 @@ mod tests {
             app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
             app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": original.hex8()})).unwrap();
             let id = layer(&app, "Countries");
-            let mut h = egui_kittest::Harness::builder()
-                .with_accessibility_check(false)
-                .with_size(vec2(600.0, 600.0))
-                .with_max_steps(64)
-                .build_ui_state(
-                    move |ui, app: &mut RustGisApp| {
-                        finish_class_color_drag(app, ui);
-                        let layer = app.session.map().layer(id).unwrap().clone();
-                        legend_list(app, ui, &layer, &Tokens::light());
-                    },
-                    app,
-                );
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    finish_class_color_drag(app, ui);
+                    let layer = app.session.map().layer(id).unwrap().clone();
+                    legend_list(app, ui, &layer, &Tokens::light());
+                },
+                app,
+            );
             h.run_steps(3);
             let fill =
                 |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
@@ -5375,18 +5588,14 @@ mod tests {
         app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
         app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": "#FF000000"})).unwrap();
         let id = layer(&app, "Countries");
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(600.0, 600.0))
-            .with_max_steps(64)
-            .build_ui_state(
-                move |ui, app: &mut RustGisApp| {
-                    finish_class_color_drag(app, ui);
-                    let layer = app.session.map().layer(id).unwrap().clone();
-                    legend_list(app, ui, &layer, &Tokens::light());
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                finish_class_color_drag(app, ui);
+                let layer = app.session.map().layer(id).unwrap().clone();
+                legend_list(app, ui, &layer, &Tokens::light());
+            },
+            app,
+        );
         h.run_steps(3);
         let fill = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
         let inactive_theme = match h.ctx.theme() {
@@ -5436,9 +5645,7 @@ mod tests {
     fn an_open_layer_menu_leaves_the_map_alone() {
         let app = RustGisApp::with_sample();
         let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
         h.step();
         assert_eq!(h.state().session.active_layer, Some(layer.id));
         let rev = h.state().session.revision;

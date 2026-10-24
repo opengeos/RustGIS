@@ -162,6 +162,66 @@ pub const MAX_STROKES: usize = 16;
 /// The widest stroke and the farthest offset, in points.
 pub const MAX_STROKE_WIDTH: f32 = 50.0;
 pub const MAX_STROKE_OFFSET: f32 = 100.0;
+/// The most steps a dash pattern has, and the longest step, in points.
+pub const MAX_DASH_STEPS: usize = 8;
+pub const MAX_DASH_STEP: f32 = 500.0;
+
+/// A stroke's dash pattern: lengths in points, dash and gap in turn, starting with a dash (as
+/// SVG's `stroke-dasharray`: an odd number of steps is repeated to make it even). Written to a
+/// project as that list, `[4, 2]`. Built only through [`Dash::new`], so its steps are always
+/// in range and add up to more than nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(into = "Vec<f32>")]
+pub struct Dash {
+    steps: [f32; MAX_DASH_STEPS],
+    len: u8,
+}
+
+impl Dash {
+    /// The pattern of `steps` (at most [`MAX_DASH_STEPS`], each 0 to [`MAX_DASH_STEP`]), or
+    /// `None` for none: no steps, a step that isn't a number from 0 to [`MAX_DASH_STEP`], too
+    /// many, or all of them 0.
+    pub fn new(steps: &[f32]) -> Option<Dash> {
+        let ok = |v: &f32| v.is_finite() && (0.0..=MAX_DASH_STEP).contains(v);
+        if steps.is_empty() || steps.len() > MAX_DASH_STEPS || !steps.iter().all(ok) || steps.iter().sum::<f32>() <= 0.0 {
+            return None;
+        }
+        let mut d = Dash { steps: [0.0; MAX_DASH_STEPS], len: u8::try_from(steps.len()).ok()? };
+        d.steps.get_mut(..steps.len())?.copy_from_slice(steps);
+        Some(d)
+    }
+
+    /// Its steps, as given.
+    pub fn steps(&self) -> &[f32] {
+        self.steps.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+
+    /// Its steps made even (an odd number twice over), as a renderer takes them.
+    pub fn even_steps(&self) -> Vec<f32> {
+        let s = self.steps();
+        if s.len().is_multiple_of(2) { s.to_vec() } else { s.iter().chain(s).copied().collect() }
+    }
+
+    /// One round of the pattern, in points.
+    pub fn period(&self) -> f32 {
+        self.even_steps().iter().sum()
+    }
+}
+
+/// Reads a stroke's pattern from a project, brought into range: at most [`MAX_DASH_STEPS`] steps,
+/// each clamped to 0 to [`MAX_DASH_STEP`] (one too large for a number, infinite, the longest);
+/// one left without length is `None`, solid (a project file is hostile input).
+fn de_dash<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Dash>, D::Error> {
+    let Some(v) = Option::<Vec<f32>>::deserialize(d)? else { return Ok(None) };
+    let steps: Vec<f32> = v.iter().take(MAX_DASH_STEPS).map(|x| if x.is_nan() { 0.0 } else { x.clamp(0.0, MAX_DASH_STEP) }).collect();
+    Ok(Dash::new(&steps))
+}
+
+impl From<Dash> for Vec<f32> {
+    fn from(d: Dash) -> Vec<f32> {
+        d.steps().to_vec()
+    }
+}
 
 /// One stroke of a line layer's stacked symbol (`Layer::line_strokes`). Widths and offsets are
 /// in points, so they keep their size on screen at every scale; the geometry is left as it is.
@@ -188,11 +248,14 @@ pub struct LineStroke {
     /// join under the cores. `None` is its place in the stack, the bottom one 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<u8>,
+    /// Dashed: the pattern along the line, in points; `None` is a solid line.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_dash")]
+    pub dash: Option<Dash>,
 }
 
 impl Default for LineStroke {
     fn default() -> Self {
-        LineStroke { color: None, width: None, offset: 0.0, cap: LineCap::Round, join: LineJoin::Round, level: None }
+        LineStroke { color: None, width: None, offset: 0.0, cap: LineCap::Round, join: LineJoin::Round, level: None, dash: None }
     }
 }
 

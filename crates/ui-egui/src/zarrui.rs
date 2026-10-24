@@ -292,14 +292,20 @@ pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
         t
     };
     egui::Grid::new("zarr").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(crate::tl!("Variable"));
-        egui::ComboBox::from_id_salt("zarr_var").selected_text(title(&vars[st.variable])).width(wide).truncate().show_ui(ui, |ui| {
-            for (i, v) in vars.iter().enumerate() {
-                if ui.selectable_value(&mut st.variable, i, title(v)).changed() {
-                    st.steps.clear();
+        let input_label = ui.label(crate::tl!("Variable"));
+        egui::ComboBox::from_id_salt("zarr_var")
+            .selected_text(title(&vars[st.variable]))
+            .width(wide)
+            .truncate()
+            .show_ui(ui, |ui| {
+                for (i, v) in vars.iter().enumerate() {
+                    if ui.selectable_value(&mut st.variable, i, title(v)).changed() {
+                        st.steps.clear();
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         let var = &vars[st.variable];
         for d in var["dims"].as_array().into_iter().flatten().filter(|d| d["map"] != json!(true)) {
@@ -320,8 +326,9 @@ pub fn picker(app: &mut RustGisApp, ui: &mut egui::Ui) {
             });
             ui.end_row();
         }
-        ui.label(crate::tl!("Coordinate system"));
-        ui.add(egui::TextEdit::singleline(&mut st.crs).hint_text(crate::tl!("for a store that doesn't say")).desired_width(200.0));
+        let input_label = ui.label(crate::tl!("Coordinate system"));
+        ui.add(egui::TextEdit::singleline(&mut st.crs).hint_text(crate::tl!("for a store that doesn't say")).desired_width(200.0))
+            .labelled_by(input_label.id);
         ui.end_row();
     });
     if !vars[st.variable]["readable"].as_bool().unwrap_or(true) {

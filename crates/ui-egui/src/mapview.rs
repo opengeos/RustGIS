@@ -2777,7 +2777,7 @@ pub fn confirm_delete(app: &mut RustGisApp, ctx: &egui::Context) {
         Deletion::Map(n) => crate::i18n::fmt("Delete the map {name}?", &[("name", n)]),
         Deletion::Layout(n) => crate::i18n::fmt("Delete the layout {name}?", &[("name", n)]),
     };
-    let undo = crate::widgets::shortcut_text(app, "edit.undo");
+    let undo = crate::widgets::shortcut_text(ctx, app, "edit.undo");
     let mut decision = None;
     egui::Modal::new(egui::Id::unique("confirm_delete")).show(ctx, |ui| {
         ui.set_width(360.0);
@@ -2970,18 +2970,14 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         app.run("map.body", json!({"name": "moon", "basemap": false})).expect("Moon");
         app.run("map.projection", json!({"type": "globe"})).expect("globe");
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(900.0, 550.0))
-            .with_max_steps(10_000)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_max_steps(10_000).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while h.state().map.key.is_none() || h.state().map.drawing() {
             assert!(std::time::Instant::now() < end, "exact globe frame did not arrive");
@@ -2999,12 +2995,8 @@ mod tests {
     /// the map is drawn once at it.
     #[test]
     fn a_pane_drag_draws_the_map_once_it_stops() {
-        let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(vec2(1200.0, 700.0))
-            .with_step_dt(1.0 / 60.0)
-            .with_max_steps(10_000)
-            .build_ui_state(
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(1200.0, 700.0)).with_step_dt(1.0 / 60.0).with_max_steps(10_000).build_ui_state(
                 |ui, app: &mut RustGisApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);

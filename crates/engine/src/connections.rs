@@ -2,7 +2,9 @@
 //! secret: addresses are stripped of passwords, tokens and signatures before they are kept.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
+use rustgis_data::secrets::{Secret, SecretError, SecretStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -28,6 +30,11 @@ pub struct Connection {
     pub address: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub options: BTreeMap<String, String>,
+    /// A database connection's password was saved in the system's secret store (never the
+    /// password itself, which is `DatabaseLogins`' to read). Set only by a login that asked to
+    /// remember it, and cleared when the saved password is forgotten or no longer fits.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remembered: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -84,6 +91,11 @@ pub fn layer_database(src: &rustgis_map::source::SourceLayer) -> Option<(&'stati
     }
 }
 
+/// The password-free label for a driver's exact database key.
+pub fn database_label(kind: &str, key: &str) -> String {
+    if kind == "postgres" && !key.contains("://") { format!("postgres:{key}") } else { key.to_string() }
+}
+
 fn same_name(a: &str, b: &str) -> bool {
     a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
 }
@@ -121,6 +133,8 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         c.name = if c.kind == "s3" && c.address.is_empty() { "AWS S3".into() } else { sources::default_name(&c.address) };
     }
     c.group = name_text(&c.group);
+    // Only a database connection has a password to remember.
+    c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str());
     if c.kind != "s3" && !c.options.is_empty() {
         return Err(format!("{} connections take no options", c.kind));
     }
@@ -157,13 +171,35 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
 }
 
 impl Connections {
-    /// The first saved connection, in list order, of a database's kind whose address names it.
-    pub fn for_database(&self, kind: &str, database: &str) -> Option<&Connection> {
-        let key = database_key(&sources::redact(database)).filter(|k| k.0 == kind)?;
-        self.connections.iter().find(|c| c.kind == kind && database_key(&c.address).as_ref() == Some(&key))
+    /// Every saved connection of a database's kind whose address names the database, in list order.
+    /// Only the wrapper, surrounding whitespace and password the address may carry are set aside:
+    /// the driver addresses are compared as text, so another form of the same server (a URI for a
+    /// connection string, reordered options, another name for the host) is another database.
+    pub fn matching_database(&self, kind: &str, database: &str) -> Vec<&Connection> {
+        match database_key(&sources::redact(database)) {
+            Some((k, key)) if k == kind => self.matching_key(kind, &key),
+            _ => Vec::new(),
+        }
     }
 
-    /// The saved connection a layer that reads a database comes from.
+    /// Every saved connection of a kind with this driver address (see [`database_key`]).
+    pub fn matching_key(&self, kind: &str, key: &str) -> Vec<&Connection> {
+        self.connections
+            .iter()
+            .filter(|c| c.kind == kind && database_key(&c.address).is_some_and(|(k, address)| k == kind && address == key))
+            .collect()
+    }
+
+    /// The saved connection a database comes from, when exactly one names it. Two that do leave
+    /// it to the user's choice (see [`Connections::matching_database`]): none is first.
+    pub fn for_database(&self, kind: &str, database: &str) -> Option<&Connection> {
+        match self.matching_database(kind, database).as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// The saved connection a layer that reads a database comes from, when exactly one does.
     pub fn for_layer(&self, l: &rustgis_map::Layer) -> Option<&Connection> {
         let (kind, database) = layer_database(l.source.as_ref()?)?;
         self.for_database(kind, database)
@@ -305,6 +341,8 @@ impl Connections {
         }
         self.next = next.checked_add(1).ok_or("connection ids exhausted")?;
         c.id = format!("c{next}");
+        // A new connection, a copy or an import has no saved password: it is saved by a login.
+        c.remembered = false;
         self.connections.push(c.clone());
         self.version = 1;
         self.generation = self.generation.wrapping_add(1);
@@ -328,6 +366,9 @@ impl Connections {
         c.name = name;
         let slot = self.connections.iter_mut().find(|c| c.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
         c.id = id.into();
+        // The saved password belongs to the saved definition: an edit of the server or the user
+        // leaves it behind (the command deletes it first), and no edit claims one.
+        c.remembered = slot.remembered && slot.kind == c.kind && slot.address == c.address;
         *slot = c.clone();
         self.generation = self.generation.wrapping_add(1);
         Ok((c, stripped))
@@ -338,6 +379,332 @@ impl Connections {
         let c = self.connections.remove(index);
         self.generation = self.generation.wrapping_add(1);
         Some(c)
+    }
+
+    /// Says whether a database connection's password is saved; whether that changed the row.
+    pub fn set_remembered(&mut self, id: &str, on: bool) -> bool {
+        let Some(c) = self.connections.iter_mut().find(|c| c.id == id && DATABASE_KINDS.contains(&c.kind.as_str())) else {
+            return false;
+        };
+        if c.remembered == on {
+            return false;
+        }
+        c.remembered = on;
+        self.generation = self.generation.wrapping_add(1);
+        true
+    }
+}
+
+/// What a saved database password's lookup found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SavedPassword {
+    /// The password saved for this definition.
+    Found(Secret),
+    /// None: no account, or one saved for another server or user (or damaged). The connection's
+    /// marker should be cleared.
+    Absent,
+    /// The store couldn't be asked (none here, or locked, denied, unavailable): the marker says
+    /// what it said.
+    Unusable,
+}
+
+/// Why a database's layers wait for the user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginReason {
+    /// More than one saved connection with a saved password names the database: the user picks
+    /// which one this session uses.
+    Choose,
+    /// No password is usable (the saved one was refused): the user types one.
+    Password,
+}
+
+impl LoginReason {
+    pub fn name(self) -> &'static str {
+        match self {
+            LoginReason::Choose => "choose",
+            LoginReason::Password => "password",
+        }
+    }
+}
+
+/// A database's layers waiting for a login the app should ask the user for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginRequest {
+    pub reason: LoginReason,
+    pub kind: &'static str,
+    /// The database as its driver names it, without a password.
+    pub key: String,
+    /// The saved connections it may be, by id.
+    pub connections: Vec<String>,
+    /// The layers that wait, by id.
+    pub layers: Vec<u32>,
+    /// [`crate::Session::opened`] when it was made: a project opened since has other layers.
+    pub opened: u64,
+    /// The app has asked the user.
+    pub prompted: bool,
+}
+
+/// The account a saved connection's password lives under in the system's secret store.
+pub fn account(id: &str) -> String {
+    format!("connection/{id}")
+}
+
+/// What the store keeps for a saved password: the definition it was saved for beside it, so an id
+/// reused by another server (ids are sequential) never gets this one's password.
+fn envelope(c: &Connection, password: &str) -> Secret {
+    Secret::new(json!({"kind": c.kind, "address": c.address, "password": password}).to_string())
+}
+
+/// The password in a stored envelope, if it was saved for exactly this definition.
+fn password_in(c: &Connection, secret: &Secret) -> Option<Secret> {
+    let v: Value = serde_json::from_str(secret.expose()).ok()?;
+    let o = v.as_object()?;
+    if o.len() != 3 || o.get("kind")?.as_str()? != c.kind || o.get("address")?.as_str()? != c.address {
+        return None;
+    }
+    o.get("password")?.as_str().filter(|p| !p.is_empty()).map(Secret::new)
+}
+
+/// The database logins of this run: the system's secret store, the passwords given or loaded, which
+/// connection was chosen for each database, and the logins the app should ask for. Never saved
+/// with the project or the preferences, and never shown (its `Debug` counts, it doesn't print).
+#[derive(Default)]
+pub struct DatabaseLogins {
+    store: Option<Arc<dyn SecretStore>>,
+    /// Passwords given to `connection.login`, by connection id, for this session.
+    session: BTreeMap<String, Secret>,
+    /// Saved passwords read from the store, by connection id.
+    saved: BTreeMap<String, Secret>,
+    unavailable: BTreeSet<String>,
+    /// The connection chosen for each database (kind and driver address) by a login.
+    selected: BTreeMap<(&'static str, String), String>,
+    /// Connections whose saved password the server refused this session.
+    rejected: BTreeSet<String>,
+    /// The connection whose password the driver uses for each database address (driver key),
+    /// as set by a login or the project's resolution: what is set again when the driver's
+    /// passwords were cleared around reading a project's text.
+    activations: BTreeMap<String, String>,
+    requests: Vec<LoginRequest>,
+}
+
+impl std::fmt::Debug for DatabaseLogins {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseLogins")
+            .field("store", &self.store.is_some())
+            .field("session", &self.session.len())
+            .field("saved", &self.saved.len())
+            .field("selected", &self.selected.len())
+            .field("rejected", &self.rejected.len())
+            .field("requests", &self.requests.len())
+            .finish()
+    }
+}
+
+impl DatabaseLogins {
+    /// Gives the system's secret store to use (the desktop app's; `None` in the browser, on the
+    /// command line and in scripts, where a password lasts for the session).
+    pub fn set_store(&mut self, store: Option<Arc<dyn SecretStore>>) {
+        self.store = store;
+        self.saved.clear();
+        self.unavailable.clear();
+    }
+
+    pub fn has_store(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Whether `id` has a password given this session.
+    pub fn has_session_password(&self, id: &str) -> bool {
+        self.session.contains_key(id)
+    }
+
+    pub fn session_password(&self, id: &str) -> Option<&Secret> {
+        self.session.get(id)
+    }
+
+    pub fn set_session_password(&mut self, id: &str, password: &str) {
+        self.session.insert(id.to_string(), Secret::new(password));
+    }
+
+    /// Drops a refused session credential and suppresses an equivalent saved value for this run.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reject_session_password(&mut self, c: &Connection) {
+        let Some(refused) = self.session.remove(&c.id) else { return };
+        if !c.remembered || self.is_rejected(&c.id) {
+            return;
+        }
+        let same = match self.saved.get(&c.id) {
+            Some(saved) => saved == &refused,
+            // Explicit login/Refresh may have invalidated the lazy cache. Validate the bound
+            // account through the existing lookup before deciding whether it is the same value.
+            None => matches!(self.load(c), SavedPassword::Found(saved) if saved == refused),
+        };
+        if same {
+            self.reject(&c.id);
+        }
+    }
+
+    /// Reads the password saved for a definition (once: later calls use what was read).
+    pub fn load(&mut self, c: &Connection) -> SavedPassword {
+        if let Some(p) = self.saved.get(&c.id) {
+            return SavedPassword::Found(p.clone());
+        }
+        if self.unavailable.contains(&c.id) {
+            return SavedPassword::Unusable;
+        }
+        let Some(store) = &self.store else {
+            self.unavailable.insert(c.id.clone());
+            return SavedPassword::Unusable;
+        };
+        match store.load(&account(&c.id)) {
+            Ok(Some(secret)) => match password_in(c, &secret) {
+                Some(p) => {
+                    self.saved.insert(c.id.clone(), p.clone());
+                    SavedPassword::Found(p)
+                }
+                None => SavedPassword::Absent,
+            },
+            Ok(None) => SavedPassword::Absent,
+            Err(_) => {
+                self.unavailable.insert(c.id.clone());
+                SavedPassword::Unusable
+            }
+        }
+    }
+
+    /// Saves a definition's password; whether it was saved. A saved password replaces an older
+    /// one and is trusted again if the server had refused the older one this session.
+    pub fn save(&mut self, c: &Connection, password: &str) -> bool {
+        let Some(store) = &self.store else { return false };
+        if store.save(&account(&c.id), &envelope(c, password)).is_err() {
+            return false;
+        }
+        self.saved.insert(c.id.clone(), Secret::new(password));
+        self.unavailable.remove(&c.id);
+        self.rejected.remove(&c.id);
+        true
+    }
+
+    /// Deletes the account of a saved password (none to delete is success). Without a store the
+    /// error says so.
+    pub fn delete(&mut self, id: &str) -> Result<(), SecretError> {
+        let store = self.store.as_ref().ok_or_else(|| SecretError::Unavailable("no secret store".into()))?;
+        store.delete(&account(id))?;
+        self.saved.remove(id);
+        self.unavailable.remove(id);
+        self.rejected.remove(id);
+        Ok(())
+    }
+
+    /// Says the server refused the saved password of `id`: it is dropped from memory (the store
+    /// keeps it) and not tried again this session.
+    pub fn reject(&mut self, id: &str) {
+        self.saved.remove(id);
+        self.rejected.insert(id.to_string());
+    }
+
+    pub fn is_rejected(&self, id: &str) -> bool {
+        self.rejected.contains(id)
+    }
+
+    /// The connection a login chose for a database, if any.
+    pub fn selection(&self, kind: &str, key: &str) -> Option<&str> {
+        self.selected.iter().find(|((k, d), _)| *k == kind && d == key).map(|(_, id)| id.as_str())
+    }
+
+    pub fn select(&mut self, kind: &'static str, key: &str, id: &str) {
+        self.selected.insert((kind, key.to_string()), id.to_string());
+    }
+
+    /// Forgets everything held for a connection that is going away or changing server: the
+    /// passwords given and read, the choice, the refusal, and the requests naming it.
+    pub fn forget_connection(&mut self, id: &str) {
+        self.session.remove(id);
+        self.saved.remove(id);
+        self.unavailable.remove(id);
+        self.rejected.remove(id);
+        self.selected.retain(|_, chosen| chosen != id);
+        self.activations.retain(|_, active| active != id);
+        self.requests.retain(|r| !r.connections.iter().any(|c| c == id));
+    }
+
+    /// Forgets the choice made for a database.
+    pub fn drop_selection(&mut self, kind: &str, key: &str) {
+        self.selected.retain(|(k, d), _| !(*k == kind && d == key));
+    }
+
+    /// The password a connection logs in with where it is known here: the one given this session,
+    /// else the saved one read (never reading the store).
+    pub fn known_password(&self, id: &str) -> Option<&Secret> {
+        self.session.get(id).or_else(|| self.saved.get(id))
+    }
+
+    /// Retries a lazy lookup on explicit login or Refresh, without retrying a refused password.
+    pub fn retry_saved(&mut self, id: &str) {
+        self.saved.remove(id);
+        self.unavailable.remove(id);
+    }
+
+    /// Notes that `id`'s password is the one in use for a database address.
+    pub fn note_activation(&mut self, key: &str, id: &str) {
+        self.activations.insert(key.to_string(), id.to_string());
+    }
+
+    /// Notes that no connection's password is in use for a database address.
+    pub fn drop_activation(&mut self, key: &str) {
+        self.activations.remove(key);
+    }
+
+    /// The database addresses with the connection whose password is in use for each.
+    pub fn activations(&self) -> Vec<(String, String)> {
+        self.activations.iter().map(|(k, id)| (k.clone(), id.clone())).collect()
+    }
+
+    pub fn clear_activations(&mut self) {
+        self.activations.clear();
+    }
+
+    /// Forgets only the saved password of a connection, as the user asked to (a password given this
+    /// session stays).
+    pub fn forget_saved(&mut self, id: &str) {
+        self.saved.remove(id);
+        self.rejected.remove(id);
+        if !self.session.contains_key(id) {
+            self.activations.retain(|_, active| active != id);
+        }
+    }
+
+    /// Adds a request, replacing the one for the same database. The app is asked again only when
+    /// what it would ask has changed, within the same project (another project has other layers).
+    pub fn request(&mut self, mut request: LoginRequest) {
+        if let Some(old) = self.requests.iter().find(|r| (r.kind, &r.key) == (request.kind, &request.key)) {
+            request.prompted =
+                old.opened == request.opened && old.prompted && old.reason == request.reason && old.connections == request.connections;
+        }
+        self.requests.retain(|r| (r.kind, &r.key) != (request.kind, &request.key));
+        self.requests.push(request);
+    }
+
+    /// Drops the requests for a database (it logged in, or its layers went).
+    pub fn clear_requests_for(&mut self, kind: &str, key: &str) {
+        self.requests.retain(|r| (r.kind, r.key.as_str()) != (kind, key));
+    }
+
+    /// Drops every request: the project they came from is gone, or the saved connections changed.
+    pub fn clear_requests(&mut self) {
+        self.requests.clear();
+    }
+
+    /// The requests of the project opened as `opened`.
+    pub fn requests(&self, opened: u64) -> impl Iterator<Item = &LoginRequest> {
+        self.requests.iter().filter(move |r| r.opened == opened)
+    }
+
+    /// The next request the app hasn't asked the user about, marked as asked.
+    pub fn next_unprompted(&mut self, opened: u64) -> Option<LoginRequest> {
+        let r = self.requests.iter_mut().find(|r| r.opened == opened && !r.prompted)?;
+        r.prompted = true;
+        Some(r.clone())
     }
 }
 

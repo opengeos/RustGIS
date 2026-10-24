@@ -191,7 +191,7 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
         return Ok(out);
     }
     let found = match &level {
-        Level::Database => database(&c)?,
+        Level::Database => database(s, &c)?,
         Level::Service { url, kind } => service(s, p, &mut out, url, kind.as_deref())?,
         Level::S3Root if url.is_none() => {
             buckets(c.options.get("buckets").map(String::as_str).unwrap_or("").split(',').map(str::to_string))
@@ -227,38 +227,30 @@ pub(super) fn browse(s: &mut Session, p: &Value) -> CmdResult {
 }
 
 /// A live database's geometry tables, under their schemas.
-fn database(c: &Connection) -> Result<Found, String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = c;
-        Err(DESKTOP_ONLY.into())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::collections::BTreeMap;
+fn database(s: &mut Session, c: &Connection) -> Result<Found, String> {
+    use std::collections::BTreeMap;
 
-        let tables = super::super::layer::database_table_details(&json!({"database": c.address}))?;
-        let text = |t: &Value, k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let mut schemas: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        let truncated = tables.len() > MAX_CHILDREN;
-        for t in tables.iter().take(MAX_CHILDREN) {
-            let (label, name) = (text(t, "label"), text(t, "name"));
-            let shown = if label.contains(':') { format!("{name}:{}", text(t, "column")) } else { name };
-            schemas.entry(text(t, "schema")).or_default().push(json!({
-                "key": label,
-                "name": shown,
-                "what": "table",
-                "detail": text(t, "kind"),
-                "add": {"command": "layer.addDatabase", "params": {"database": c.address, "layer": label}},
-                "options": true,
-            }));
-        }
-        let children = schemas
-            .into_iter()
-            .map(|(s, tables)| json!({"key": format!("schema:{s}"), "name": s, "what": "schema", "children": tables}))
-            .collect();
-        Ok(Found { children, truncated, matched: None })
+    let tables = super::connection_use::tables(s, c, None)?;
+    let text = |t: &Value, k: &str| t.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut schemas: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let truncated = tables.len() > MAX_CHILDREN;
+    for t in tables.iter().take(MAX_CHILDREN) {
+        let (label, name) = (text(t, "label"), text(t, "name"));
+        let shown = if label.contains(':') { format!("{name}:{}", text(t, "column")) } else { name };
+        schemas.entry(text(t, "schema")).or_default().push(json!({
+            "key": label,
+            "name": shown,
+            "what": "table",
+            "detail": text(t, "kind"),
+            "add": {"command": "layer.addDatabase", "params": {"database": c.address, "layer": label}},
+            "options": true,
+        }));
     }
+    let children = schemas
+        .into_iter()
+        .map(|(s, tables)| json!({"key": format!("schema:{s}"), "name": s, "what": "schema", "children": tables}))
+        .collect();
+    Ok(Found { children, truncated, matched: None })
 }
 
 /// A service's layers (capabilities read here, or the app's `answer` and `documents`).

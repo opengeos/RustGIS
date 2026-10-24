@@ -53,10 +53,10 @@ pub fn text_w(ui: &Ui, s: &str, font: egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|f| f.layout_no_wrap(s.to_string(), font, egui::Color32::WHITE).size().x)
 }
 
-/// The shortcut of a command run without parameters (`⌘S` on macOS, `Ctrl+S` elsewhere), or
-/// empty for none.
-pub fn shortcut_text(app: &RustGisApp, id: &str) -> String {
-    crate::keymap::shortcut_text(app, id, &Value::Null)
+/// The shortcut of a command run without parameters (`⌘S` on a Mac, as egui reads the keys,
+/// `Ctrl+S` elsewhere), or empty for none.
+pub fn shortcut_text(ctx: &egui::Context, app: &RustGisApp, id: &str) -> String {
+    crate::keymap::shortcut_text(ctx, app, id, &Value::Null)
 }
 
 /// Whether a command exists and is enabled now.
@@ -74,7 +74,7 @@ pub fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
 /// A rich tooltip: title (with the shortcut of `id` with `params`), description and why it's
 /// disabled.
 pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &str, params: &Value) -> Response {
-    let sc = crate::keymap::shortcut_text(app, id, params);
+    let sc = crate::keymap::shortcut_text(&resp.ctx, app, id, params);
     let why = why_disabled(app, id);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
@@ -267,7 +267,7 @@ const MENU_ICON_W: f32 = 22.0;
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
     let on = enabled(app, id);
-    let shortcut = crate::keymap::shortcut_text(app, id, &params);
+    let shortcut = crate::keymap::shortcut_text(ui.ctx(), app, id, &params);
     if menu_row(ui, icon, tl!(label), &shortcut, on).clicked() {
         let _ = app.run(id, params);
         ui.close();
@@ -372,13 +372,18 @@ pub fn ribbon_combo(ui: &mut Ui, id: &str, label: &str, current: &str, options: 
         if !label.is_empty() {
             ui.label(egui::RichText::new(tl!(label)).size(11.5));
         }
-        egui::ComboBox::from_id_salt(id).selected_text(current).width(width).show_ui(ui, |ui| {
-            for o in options {
-                if ui.selectable_label(o == current, o).clicked() {
-                    out = Some(o.clone());
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(current)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for o in options {
+                    if ui.selectable_label(o == current, o).clicked() {
+                        out = Some(o.clone());
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .on_hover_text(tl!(label));
     });
     out
 }
@@ -510,7 +515,6 @@ mod tests {
     /// Opens a colour button's picker and says whether it offers additive blending.
     fn offers_additive(button: fn(&mut egui::Ui, &mut egui::Color32)) -> bool {
         let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
             .build_ui_state(|ui, c: &mut egui::Color32| button(ui, c), egui::Color32::from_rgb(224, 105, 59));
         h.get_by_role(egui::accesskit::Role::ColorWell).click();
         h.run();
@@ -540,18 +544,18 @@ mod tests {
             whole: u64,
             settled: Vec<&'static str>,
         }
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
             |ui, s: &mut Saved| {
                 let mut real = s.real;
                 let drag = super::Dragged::lend(ui, egui::Id::unique("real"), &mut real);
-                let r = ui.add(egui::DragValue::new(&mut real).speed(0.1));
+                let r = ui.add(egui::DragValue::new(&mut real).speed(0.1)).on_hover_text("Real");
                 if drag.settled(ui, &r, &mut real) && real != s.real {
                     s.real = real;
                     s.settled.push("real");
                 }
                 let mut whole = s.whole;
                 let drag = super::Dragged::lend(ui, egui::Id::unique("whole"), &mut whole);
-                let r = ui.add(egui::DragValue::new(&mut whole).speed(0.1));
+                let r = ui.add(egui::DragValue::new(&mut whole).speed(0.1)).on_hover_text("Whole");
                 if drag.settled(ui, &r, &mut whole) && whole != s.whole {
                     s.whole = whole;
                     s.settled.push("whole");

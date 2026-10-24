@@ -240,23 +240,33 @@ pub fn overture(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let busy = app.ui.catalogs.waiting.is_some() || app.ui.catalogs.opening.is_some();
     egui::Grid::new("overture").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         let st = &mut app.ui.catalogs;
-        ui.label(tl!("Theme"));
-        egui::ComboBox::from_id_salt("ov_theme").selected_text(st.theme.clone()).width(260.0).show_ui(ui, |ui| {
-            for (theme, types) in overture::THEMES {
-                if ui.selectable_label(st.theme == *theme, *theme).clicked() {
-                    st.theme = (*theme).to_string();
-                    st.ty = types.first().copied().unwrap_or_default().to_string();
+        let input_label = ui.label(tl!("Theme"));
+        egui::ComboBox::from_id_salt("ov_theme")
+            .selected_text(st.theme.clone())
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for (theme, types) in overture::THEMES {
+                    if ui.selectable_label(st.theme == *theme, *theme).clicked() {
+                        st.theme = (*theme).to_string();
+                        st.ty = types.first().copied().unwrap_or_default().to_string();
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
-        ui.label(tl!("Type"));
+        let input_label = ui.label(tl!("Type"));
         let types = overture::THEMES.iter().find(|(t, _)| *t == st.theme).map(|(_, y)| *y).unwrap_or(&[]);
-        egui::ComboBox::from_id_salt("ov_type").selected_text(st.ty.clone()).width(260.0).show_ui(ui, |ui| {
-            for ty in types {
-                ui.selectable_value(&mut st.ty, (*ty).to_string(), *ty);
-            }
-        });
+        egui::ComboBox::from_id_salt("ov_type")
+            .selected_text(st.ty.clone())
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for ty in types {
+                    ui.selectable_value(&mut st.ty, (*ty).to_string(), *ty);
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
         ui.end_row();
         ui.label(tl!("Add"));
         ui.vertical(|ui| {
@@ -366,8 +376,9 @@ pub fn sourcecoop(app: &mut RustGisApp, ui: &mut egui::Ui) {
     let mut ask = None;
     if !locked {
         ui.horizontal(|ui| {
-            ui.label(tl!("Account"));
-            ui.add(egui::TextEdit::singleline(&mut app.ui.catalogs.account).hint_text(tl!("featured products")).desired_width(220.0));
+            let input_label = ui.label(tl!("Account"));
+            ui.add(egui::TextEdit::singleline(&mut app.ui.catalogs.account).hint_text(tl!("featured products")).desired_width(220.0))
+                .labelled_by(input_label.id);
             if ui.add_enabled(!busy, egui::Button::new(tl!("List Products"))).clicked() {
                 let a = app.ui.catalogs.account.trim().to_string();
                 ask = Some(if a.is_empty() { Ok(sourcecoop::featured_url()) } else { sourcecoop::account_url(&a) });

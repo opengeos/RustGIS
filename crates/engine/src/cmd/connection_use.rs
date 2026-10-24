@@ -1,0 +1,126 @@
+//! User-initiated database reads use the requested saved ID, never a same-address row's login.
+
+use serde_json::Value;
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::json;
+
+use crate::Session;
+use crate::connections::Connection;
+
+/// Geometry-table details shared by saved-ID Browse and Test. An explicitly typed Test password
+/// replaces session state only if authentication wasn't refused; a later listing failure keeps it.
+/// Call only after the probe return: a probe must neither read secrets nor connect.
+pub(super) fn tables(s: &mut Session, c: &Connection, typed: Option<&str>) -> Result<Vec<Value>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, c, typed);
+        Err(crate::connections::DESKTOP_ONLY.into())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rustgis_data::DataError;
+        use rustgis_data::source::duckdb::{self, Database};
+
+        let database = Database::parse(&c.address);
+        let (kind, key) = match &database {
+            Database::Postgres(key) => ("postgres", key),
+            Database::Mysql(key) => ("mysql", key),
+            Database::Sqlserver(key) => ("sqlserver", key),
+            Database::File(_) => return Err("not a database server".into()),
+        };
+        let credential = if typed.is_some() {
+            // Keep session, selection and activation bookkeeping unchanged during the attempt.
+            None
+        } else {
+            // Another saved ID's activation is not authority to read this connection.
+            // Passwords explicitly typed for the address remain intact.
+            duckdb::set_connection_password(key, &c.id, None);
+            s.database_logins.drop_activation(key);
+            if !s.database_logins.has_session_password(&c.id) && duckdb::has_explicit_password(key) {
+                None
+            } else {
+                super::credential(s, c)?
+            }
+        };
+        if typed.is_none() && credential.is_none() && s.database_logins.is_rejected(&c.id) && !duckdb::has_explicit_password(key) {
+            super::request_password(s, c);
+            return Err("password is required".into());
+        }
+        let saved = credential.as_ref().is_some_and(|(_, saved)| *saved);
+        let session = credential.as_ref().is_some_and(|(_, saved)| !*saved);
+        if typed.is_none()
+            && let Some((password, _)) = &credential
+        {
+            super::activate(s, c, password.expose());
+            s.database_logins.select(kind, key, &c.id);
+        }
+        let result = if let Some(pw) = typed {
+            duckdb::try_connection_password(key, &c.id, pw, || read_tables(&database), |result| matches!(result, Err(DataError::Login(_))))
+        } else {
+            read_tables(&database)
+        };
+        if let Some(pw) = typed
+            && !matches!(&result, Err(DataError::Login(_)))
+        {
+            s.database_logins.set_session_password(&c.id, pw);
+            s.database_logins.select(kind, key, &c.id);
+            s.database_logins.note_activation(key, &c.id);
+        }
+
+        match result {
+            Ok(tables) => {
+                s.database_logins.clear_requests_for(kind, key);
+                Ok(tables)
+            }
+            Err(error) => {
+                let password = typed.or_else(|| credential.as_ref().map(|(pw, _)| pw.expose())).unwrap_or("");
+                let error = error.redact_secret(password);
+                if matches!(&error, DataError::Login(_)) {
+                    if saved {
+                        s.database_logins.reject(&c.id);
+                    } else if session {
+                        s.database_logins.reject_session_password(c);
+                    }
+                    if saved || session {
+                        duckdb::forget_connection_password(&c.id);
+                        s.database_logins.drop_activation(key);
+                    }
+                    super::request_password(s, c);
+                }
+                Err(format!("{}: {error}", database.short()))
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_tables(database: &rustgis_data::source::duckdb::Database) -> rustgis_data::Result<Vec<Value>> {
+    use rustgis_data::source::{duckdb::Database, mysql, postgis, sqlserver};
+
+    // Keep DataError intact through both connect and table listing so only an authentication
+    // refusal suppresses a saved credential. A transport or query error must not do that.
+    match database {
+        Database::Postgres(address) => {
+            let connection = postgis::connect(address, true)?;
+            Ok(postgis::tables(&connection)?
+                .into_iter()
+                .map(|t| json!({"label": t.label(), "schema": t.schema, "name": t.name, "column": t.column, "kind": t.kind}))
+                .collect())
+        }
+        Database::Mysql(address) => {
+            let connection = mysql::connect(address, true)?;
+            Ok(mysql::tables(&connection)?
+                .into_iter()
+                .map(|t| json!({"label": t.label(), "schema": t.schema, "name": t.name, "column": t.column, "kind": t.kind}))
+                .collect())
+        }
+        Database::Sqlserver(address) => {
+            let connection = sqlserver::connect(address, true)?;
+            Ok(sqlserver::tables(&connection)?
+                .into_iter()
+                .map(|t| json!({"label": t.label(), "schema": t.schema, "name": t.name, "column": t.column, "kind": t.kind}))
+                .collect())
+        }
+        Database::File(_) => Err(rustgis_data::DataError::Format("not a database server".into())),
+    }
+}

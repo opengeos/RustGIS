@@ -358,6 +358,9 @@ fn paint(c: Rgba, opacity: f32) -> Paint<'static> {
     p
 }
 
+/// The most dashes a dashed stroke is cut into along one path (`Ctx::dash`).
+const MAX_DASHES: f32 = 100_000.0;
+
 struct Ctx<'a> {
     view: &'a View,
     ppp: f32,
@@ -499,6 +502,12 @@ impl Ctx<'_> {
     }
 
     fn ring_path(&self, pb: &mut PathBuilder, ring: &[Coord], close: bool) {
+        self.ring_path_at(pb, ring, close, &mut DashStarts::default());
+    }
+
+    /// [`Self::ring_path`], noting in `starts` how far along its line each piece it adds begins,
+    /// so a dash pattern can carry on across a cut.
+    fn ring_path_at(&self, pb: &mut PathBuilder, ring: &[Coord], close: bool, starts: &mut DashStarts) {
         if let Some(g) = &self.globe {
             if close {
                 self.globe_ring(g, pb, ring)
@@ -528,16 +537,19 @@ impl Ctx<'_> {
             }
             if clip.contains(Coord::new(b.min_x, b.min_y)) && clip.contains(Coord::new(b.max_x, b.max_y)) {
                 emit_run(pb, run.iter().map(dev), close);
+                starts.push(0.0);
             } else if close {
                 // Zoomed in on a big polygon: its far vertices would be millions of pixels away,
                 // which the rasteriser can't take (and needn't walk). Clipping each ring to a box
                 // well beyond the image keeps the even-odd fill the same inside it.
                 let pts: Vec<(f64, f64)> = run.iter().map(dev).collect();
                 emit_run(pb, clip_ring(&pts, &clip).into_iter(), true);
+                starts.push(0.0);
             } else {
                 let pts: Vec<(f64, f64)> = run.iter().map(dev).collect();
-                for part in clip_line(&pts, &clip) {
+                for (start, part) in clip_line(&pts, &clip) {
                     emit_run(pb, part.into_iter(), false);
+                    starts.push(start as f32);
                 }
             }
         }
@@ -584,15 +596,34 @@ impl Ctx<'_> {
     /// A line drawn as its stacked strokes (`Layer::strokes`), bottom first, each
     /// shifted sideways by its offset.
     fn stacked_line(&self, pm: &mut Pixmap, parts: &[Vec<Coord>], s: &Symbol, strokes: &[LineStroke]) {
-        let mut pb = PathBuilder::new();
+        let (mut pb, mut starts) = (PathBuilder::new(), DashStarts::default());
         for part in parts {
-            self.ring_path(&mut pb, part, false);
+            self.ring_path_at(&mut pb, part, false, &mut starts);
         }
         let Some(path) = pb.finish() else { return };
-        self.stacked_path(pm, &path, s, strokes);
+        self.stacked_path(pm, &path, s, strokes, &starts);
     }
 
-    fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke]) {
+    /// A stroke's dash pattern in pixels for `path`, or `None` to draw it solid: a pattern under a
+    /// pixel a round, or one that would cut the path into more than [`MAX_DASHES`] dashes (each
+    /// is a path of its own), would only cost time. The whole path counts, on screen or not: the
+    /// dashing doesn't skip what's off screen.
+    fn dash(&self, d: &rustgis_map::symbology::Dash, path: &tiny_skia::Path) -> Option<Vec<f32>> {
+        let steps: Vec<f32> = d.even_steps().iter().map(|v| v * self.ppp).collect();
+        let period: f32 = steps.iter().sum();
+        // Each round of the pattern draws one dash per pair of steps.
+        let dashes = path_length(path) / period * (steps.len() / 2) as f32;
+        if !(period >= 1.0 && dashes <= MAX_DASHES) {
+            return None;
+        }
+        Some(steps)
+    }
+
+    /// `starts`: where along its line each of `path`'s pieces begins ([`Self::ring_path_at`]), so a
+    /// line cut at the clip box keeps its dashes where they'd be uncut. An offset stroke takes the
+    /// same starts: exact on a straight line, a little off after bends, where the shifted line is
+    /// longer or shorter than the line.
+    fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke], starts: &DashStarts) {
         // Shifted once per offset: a casing and its core usually share one.
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
         for st in strokes {
@@ -622,7 +653,29 @@ impl Ctx<'_> {
                 },
                 ..Stroke::default()
             };
-            pm.stroke_path(drawn, &paint(c, 1.0), &stroke, Transform::identity(), None);
+            let steps = st.dash.and_then(|d| self.dash(&d, drawn));
+            let period: f32 = steps.iter().flatten().sum();
+            // A dashed line cut into pieces: each piece starts its pattern where its line is. Only
+            // while every piece has its start: one off would shift every later piece's dashes.
+            let pieces: Vec<(tiny_skia::Path, f32)> = match (&steps, starts.of(drawn)) {
+                (Some(_), Some(at)) => {
+                    let c = contours(drawn);
+                    if c.len() == at.len() { c.into_iter().zip(at.iter().copied()).collect() } else { Vec::new() }
+                }
+                _ => Vec::new(),
+            };
+            match steps {
+                Some(steps) if !pieces.is_empty() => {
+                    for (piece, at) in &pieces {
+                        let dash = tiny_skia::StrokeDash::new(steps.clone(), at.rem_euclid(period));
+                        pm.stroke_path(piece, &paint(c, 1.0), &Stroke { dash, ..stroke.clone() }, Transform::identity(), None);
+                    }
+                }
+                steps => {
+                    let dash = steps.and_then(|steps| tiny_skia::StrokeDash::new(steps, 0.0));
+                    pm.stroke_path(drawn, &paint(c, 1.0), &Stroke { dash, ..stroke }, Transform::identity(), None);
+                }
+            }
         }
     }
 
@@ -756,6 +809,35 @@ impl Ctx<'_> {
             Geometry::Polygon(polys) => self.polygon(pm, polys, Some(paint(SELECTION.with_alpha(40), 1.0)), Some((cyan, 2.0))),
         }
     }
+}
+
+/// The length of `path` in pixels, at most a little over: a curve counts as its control polygon,
+/// which is never shorter than the curve.
+fn path_length(path: &tiny_skia::Path) -> f32 {
+    let (mut len, mut last, mut start) = (0.0, None, None);
+    for seg in path.segments() {
+        let pts = match seg {
+            tiny_skia::PathSegment::MoveTo(p) => {
+                (last, start) = (Some(p), Some(p));
+                continue;
+            }
+            tiny_skia::PathSegment::LineTo(p) => [p, p, p],
+            tiny_skia::PathSegment::QuadTo(a, p) => [a, p, p],
+            tiny_skia::PathSegment::CubicTo(a, b, p) => [a, b, p],
+            tiny_skia::PathSegment::Close => match start {
+                Some(p) => [p, p, p],
+                None => continue,
+            },
+        };
+        if let Some(mut q) = last {
+            for p in pts {
+                len += q.distance(p);
+                q = p;
+            }
+        }
+        last = Some(pts[2]);
+    }
+    len
 }
 
 /// `path`'s polylines shifted `d` pixels to the right of their direction (screen y down).
@@ -899,13 +981,19 @@ fn clip_ring(pts: &[(f64, f64)], b: &Extent) -> Vec<(f64, f64)> {
     if cur.len() < 3 { Vec::new() } else { cur }
 }
 
-/// The parts of a line inside a box (each segment clipped by Liang–Barsky).
-fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<Vec<(f64, f64)>> {
-    let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
+/// The parts of a line inside a box (each segment clipped by Liang–Barsky), each with how far
+/// along the line it starts.
+fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<(f64, Vec<(f64, f64)>)> {
+    let mut parts: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
     let mut cur: Vec<(f64, f64)> = Vec::new();
+    // Length of the line before this segment, and where the part being built starts.
+    let (mut along, mut start) = (0.0f64, 0.0f64);
     for w in pts.windows(2) {
         let (Some(&p), Some(&q)) = (w.first(), w.get(1)) else { continue };
         let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let len = dx.hypot(dy);
+        let before = along;
+        along += len;
         let (mut t0, mut t1) = (0.0f64, 1.0f64);
         let mut keep = true;
         for (num, den) in [(p.0 - b.min_x, -dx), (b.max_x - p.0, dx), (p.1 - b.min_y, -dy), (b.max_y - p.1, dy)] {
@@ -925,7 +1013,7 @@ fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<Vec<(f64, f64)>> {
         }
         if !keep || t0 > t1 {
             if cur.len() > 1 {
-                parts.push(std::mem::take(&mut cur));
+                parts.push((start, std::mem::take(&mut cur)));
             }
             cur.clear();
             continue;
@@ -934,19 +1022,73 @@ fn clip_line(pts: &[(f64, f64)], b: &Extent) -> Vec<Vec<(f64, f64)>> {
         let z = (p.0 + dx * t1, p.1 + dy * t1);
         if cur.is_empty() || t0 > 0.0 {
             if cur.len() > 1 {
-                parts.push(std::mem::take(&mut cur));
+                parts.push((start, std::mem::take(&mut cur)));
             }
             cur = vec![a];
+            start = before + len * t0;
         }
         cur.push(z);
         if t1 < 1.0 {
-            parts.push(std::mem::take(&mut cur));
+            parts.push((start, std::mem::take(&mut cur)));
         }
     }
     if cur.len() > 1 {
-        parts.push(cur);
+        parts.push((start, cur));
     }
     parts
+}
+
+/// Where along its line each piece of a path begins, in device pixels, as [`Ctx::ring_path_at`]
+/// adds them. Nothing is kept while every piece begins at its line's start (nothing was cut):
+/// pieces starting at 0, 0 keep `at` empty; a third starting at 41 makes it [0, 0, 41]. `pieces`
+/// counts every piece pushed, so the zeros before the first cut can be filled in then.
+#[derive(Default)]
+pub(crate) struct DashStarts {
+    pieces: usize,
+    at: Vec<f32>,
+}
+
+impl DashStarts {
+    fn push(&mut self, at: f32) {
+        if self.at.is_empty() && at != 0.0 {
+            self.at.resize(self.pieces, 0.0);
+        }
+        if !self.at.is_empty() || at != 0.0 {
+            self.at.push(at);
+        }
+        self.pieces += 1;
+    }
+
+    /// The starts for `path`'s pieces, when some piece doesn't begin at its line's start and they
+    /// match the path's pieces one to one.
+    fn of(&self, path: &tiny_skia::Path) -> Option<&[f32]> {
+        let n = path.segments().filter(|s| matches!(s, tiny_skia::PathSegment::MoveTo(_))).count();
+        (!self.at.is_empty() && self.at.len() == n).then_some(self.at.as_slice())
+    }
+}
+
+/// A path's pieces (from each move-to), each a path of its own.
+fn contours(path: &tiny_skia::Path) -> Vec<tiny_skia::Path> {
+    let mut out = Vec::new();
+    let mut pb = PathBuilder::new();
+    for seg in path.segments() {
+        match seg {
+            tiny_skia::PathSegment::MoveTo(p) => {
+                if let Some(done) = std::mem::replace(&mut pb, PathBuilder::new()).finish() {
+                    out.push(done);
+                }
+                pb.move_to(p.x, p.y);
+            }
+            tiny_skia::PathSegment::LineTo(p) => pb.line_to(p.x, p.y),
+            tiny_skia::PathSegment::QuadTo(a, p) => pb.quad_to(a.x, a.y, p.x, p.y),
+            tiny_skia::PathSegment::CubicTo(a, b, p) => pb.cubic_to(a.x, a.y, b.x, b.y, p.x, p.y),
+            tiny_skia::PathSegment::Close => pb.close(),
+        }
+    }
+    if let Some(done) = pb.finish() {
+        out.push(done);
+    }
+    out
 }
 
 /// Blends `color` at `coverage` (in pixels, spread bilinearly) around (`cx`, `cy`) device pixels.
@@ -4894,7 +5036,7 @@ mod tests {
         assert_eq!(clip_ring(&inside, &b), inside.to_vec());
         // A line in and out of the box comes back as its two parts inside.
         let parts = clip_line(&[(-5.0, 2.0), (5.0, 2.0), (5.0, 20.0), (8.0, 20.0), (8.0, 5.0), (15.0, 5.0)], &b);
-        assert_eq!(parts, vec![vec![(0.0, 2.0), (5.0, 2.0), (5.0, 10.0)], vec![(8.0, 10.0), (8.0, 5.0), (10.0, 5.0)]]);
+        assert_eq!(parts, vec![(5.0, vec![(0.0, 2.0), (5.0, 2.0), (5.0, 10.0)]), (41.0, vec![(8.0, 10.0), (8.0, 5.0), (10.0, 5.0)])]);
         assert!(clip_line(&[(-5.0, -5.0), (-1.0, 20.0)], &b).is_empty());
     }
 
@@ -5473,6 +5615,119 @@ mod tests {
         l.line_strokes[1].level = Some(0);
         let r = render(&mut m, &view).unwrap();
         assert_eq!(colour(&r, 60), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_line_cut_at_the_clip_box_keeps_its_dashes_where_they_were() {
+        // A dashed line from far left of the image (beyond the clip box, where it's cut) across it:
+        // drawn cut, its dashes lie where the whole line, drawn uncut, has them. So do an offset
+        // stroke's, shifted beside it (straight, so the shifted line is as long as the line).
+        let camera = Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 100.0, height: 20.0, pixels_per_point: 1.0, camera, sky: false };
+        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        // 1,003.5 px of line before the image, not a whole number of the pattern's 7 px rounds.
+        let line = [Coord::new(-1053.5, 0.0), Coord::new(60.0, 0.0)];
+        let (mut pb, mut starts) = (PathBuilder::new(), DashStarts::default());
+        ctx.ring_path_at(&mut pb, &line, false, &mut starts);
+        let cut = pb.finish().unwrap();
+        assert!(cut.bounds().left() > -200.0, "cut at the clip box: {:?}", cut.bounds());
+        for offset in [0.0, 3.0] {
+            let stroke = LineStroke {
+                color: Some(Rgba::rgb(0, 0, 0)),
+                width: Some(2.0),
+                offset,
+                cap: rustgis_map::LineCap::Butt,
+                dash: rustgis_map::symbology::Dash::new(&[4.0, 3.0]),
+                ..Default::default()
+            };
+            let s = Symbol::default_for(GeometryType::Polyline, 0);
+            let mut drawn = Pixmap::new(100, 20).unwrap();
+            ctx.stacked_path(&mut drawn, &cut, &s, &[stroke], &starts);
+            let mut whole = Pixmap::new(100, 20).unwrap();
+            let mut pb = PathBuilder::new();
+            let (x0, y) = view.to_screen(line[0]);
+            let (x1, _) = view.to_screen(line[1]);
+            // Right of the line's direction: left to right, that's down the screen.
+            let y = y as f32 + offset;
+            pb.move_to(x0 as f32, y);
+            pb.line_to(x1 as f32, y);
+            let st =
+                Stroke { width: 2.0, line_cap: LineCap::Butt, dash: tiny_skia::StrokeDash::new(vec![4.0, 3.0], 0.0), ..Stroke::default() };
+            whole.stroke_path(&pb.finish().unwrap(), &paint(Rgba::rgb(0, 0, 0), 1.0), &st, Transform::identity(), None);
+            let row = |pm: &Pixmap| (0..100).map(|x| pm.pixel(x, (y as u32).min(19)).unwrap().alpha() > 128).collect::<Vec<bool>>();
+            assert!(row(&whole).iter().any(|d| *d) && row(&whole).iter().any(|d| !*d), "dashed");
+            let differ = row(&drawn).iter().zip(row(&whole)).filter(|(a, b)| **a != *b).count();
+            assert!(differ <= 2, "offset {offset}: {differ} pixels differ:\n{:?}\n{:?}", row(&drawn), row(&whole));
+        }
+    }
+
+    #[test]
+    fn a_winding_path_counts_its_length_against_the_dash_limit() {
+        // A zigzag inside a 10-pixel square, 20,000 times across it: 200,000 pixels of line in
+        // bounds whose span is 40.
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        for i in 0..20_000 {
+            pb.line_to(if i % 2 == 0 { 10.0 } else { 0.0 }, 0.0);
+        }
+        let zigzag = pb.finish().unwrap();
+        assert!((path_length(&zigzag) - 200_000.0).abs() < 1.0);
+        let mut pb = PathBuilder::new();
+        pb.move_to(0.0, 0.0);
+        pb.line_to(30.0, 0.0);
+        pb.line_to(30.0, 40.0);
+        pb.close();
+        assert!((path_length(&pb.finish().unwrap()) - 120.0).abs() < 1e-3);
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        // A 1-pixel period would cut it into 200,000 dashes: drawn solid. A 4-pixel one is fine.
+        assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[0.5, 0.5]).unwrap(), &zigzag).is_none());
+        assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[2.0, 2.0]).unwrap(), &zigzag).is_some());
+        // Dashes count, not rounds of the pattern: four dashes a 4-pixel round is 200,000 too.
+        let four = rustgis_map::symbology::Dash::new(&[0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]).unwrap();
+        assert!(ctx.dash(&four, &zigzag).is_none());
+    }
+
+    #[test]
+    fn a_dashed_stroke_leaves_gaps() {
+        // A line across the view, one 4-point black stroke: solid it covers the middle of the row;
+        // dashed 10 on, 10 off (flat caps), about half of it, in runs about 10 pixels long.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("road", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let stroke = rustgis_map::LineStroke {
+            color: Some(Rgba::rgb(0, 0, 0)),
+            width: Some(4.0),
+            cap: rustgis_map::LineCap::Butt,
+            ..Default::default()
+        };
+        let dark = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            (40..160).map(|x| r.pixmap.pixel(x, 100).unwrap().red() < 128).collect::<Vec<bool>>()
+        };
+        m.layer_mut(id).unwrap().line_strokes = vec![stroke];
+        assert!(dark(&mut m).iter().all(|d| *d), "solid");
+        let dash = rustgis_map::symbology::Dash::new(&[10.0, 10.0]);
+        m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
+        let row = dark(&mut m);
+        let on = row.iter().filter(|d| **d).count();
+        assert!((50..=70).contains(&on), "{on} of 120 pixels dark");
+        let runs = row.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!((10..=13).contains(&runs), "{runs} changes along the row");
+        // A pattern under a pixel a round draws solid rather than cut into slivers.
+        let dash = rustgis_map::symbology::Dash::new(&[0.2, 0.2]);
+        m.layer_mut(id).unwrap().line_strokes = vec![rustgis_map::LineStroke { dash, ..stroke }];
+        assert!(dark(&mut m).iter().all(|d| *d), "too fine: solid");
     }
 
     #[test]

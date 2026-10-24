@@ -260,7 +260,7 @@ fn open_on(rt: &tokio::runtime::Runtime, config: &Config, password: Option<&str>
         .await
     })
     .map_err(|_| DataError::Format(format!("couldn't connect within {} s", config.connect_timeout.as_secs())))?
-    .map_err(err)
+    .map_err(|e| err(e).redact_secret(password.unwrap_or("")))
 }
 
 fn connect_blocking(config: &Config, password: Option<&str>) -> Result<(tokio::runtime::Runtime, Client, u32, String, u32)> {
@@ -300,7 +300,7 @@ impl Conn {
                     if broken(&e) {
                         *guard = None;
                     }
-                    return Err(err(e));
+                    return Err(err(e).redact_secret(self.password.as_deref().unwrap_or("")));
                 }
             }
         }

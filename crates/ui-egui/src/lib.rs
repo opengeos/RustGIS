@@ -11,6 +11,8 @@ pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 mod agentthreads;
 mod analysispane;
+#[cfg(not(target_arch = "wasm32"))]
+mod assistantkeys;
 mod assistantpane;
 mod backstage;
 mod bookmarkpane;
@@ -910,6 +912,9 @@ impl RustGisApp {
     pub fn with_services(mut self, services: Services) -> Self {
         self.services = services;
         sourcespane::load_connections(&mut self);
+        // Saved database passwords live in the system's store, which the engine reaches through
+        // the session so the assistant and scripts see the same logins as the interface.
+        self.session.database_logins.set_store(self.services.secrets.clone());
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
@@ -996,7 +1001,8 @@ impl RustGisApp {
     fn can_draw(&self, lang: i18n::Lang) -> bool {
         let Some(region) = Self::script_region(lang.script()) else { return true };
         let have = self.extra_fonts.iter().any(|(_, _, r)| *r == Some(region));
-        (have || self.services.fetch_font.is_none()) && !self.fonts_pending && self.installed_region == Some(region)
+        let can_fetch = self.services.fetch_font.is_some() && rustgis_engine::render::fonts::script_font_url(region).is_some();
+        (have || !can_fetch) && !self.fonts_pending && self.installed_region == Some(region)
     }
 
     /// On the desktop, an installed CJK face as a last-resort fallback, so CJK text (language names
@@ -1042,6 +1048,7 @@ impl RustGisApp {
             i18n::Script::Cjk(i18n::CjkFont::Japanese) => Some(ScriptFont::Cjk(CjkRegion::Japanese)),
             i18n::Script::Cjk(i18n::CjkFont::Korean) => Some(ScriptFont::Cjk(CjkRegion::Korean)),
             i18n::Script::Arabic => Some(ScriptFont::Arabic),
+            i18n::Script::Bengali => Some(ScriptFont::Bengali),
             i18n::Script::Alphabetic => None,
         }
     }
@@ -1066,8 +1073,8 @@ impl RustGisApp {
             face.index = *index;
             self.extra_fonts.push((name, std::sync::Arc::new(face), Some(region)));
             self.fonts_dirty = true;
-        } else if let Some(fetch) = &self.services.fetch_font {
-            fetch(script_font_url(region));
+        } else if let (Some(fetch), Some(url)) = (&self.services.fetch_font, script_font_url(region)) {
+            fetch(url);
         } else {
             log::warn!("no {region:?} font installed; text in that script may not display");
         }
@@ -3350,8 +3357,8 @@ impl RustGisApp {
             let region = [CjkRegion::SimplifiedChinese, CjkRegion::Japanese, CjkRegion::Korean]
                 .map(ScriptFont::Cjk)
                 .into_iter()
-                .chain([ScriptFont::Arabic])
-                .find(|r| script_font_url(*r) == url);
+                .chain([ScriptFont::Arabic, ScriptFont::Bengali])
+                .find(|r| script_font_url(*r) == Some(url.as_str()));
             if bytes.is_empty() || !valid_font(&bytes, 0) {
                 // A failed download: say so; picking the language again retries.
                 log::error!("{url}: no usable font downloaded");
