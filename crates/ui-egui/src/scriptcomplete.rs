@@ -4,8 +4,10 @@
 //! box and tested on its own: command ids (a line's first word), a command's parameter keys in
 //! its `{…}` and in its second-level objects (`key_at`), and the ids some values take: tools for
 //! a `gp.run` line's `"tool"`, commands for a `task.addStep` line's `"command"` (`value_at`),
-//! whose own keys then go in its `"params": {…}`. Typing aids beside it: a command's parameters
-//! added on accept (`template`), and braces, brackets and quotes that close themselves (`brace`).
+//! whose own keys then go in its `"params": {…}`, and what the project holds: layers for a
+//! `"layer"`, the line's layer's fields for a `"field"`. Typing aids beside it: a command's
+//! parameters added on accept (`template`), and braces, brackets and quotes that close themselves
+//! (`brace`).
 //! Quoted text is read by one rule everywhere (`rustgis_engine::Quotes`), the one the colours use.
 
 use egui::text::{CCursor, CCursorRange};
@@ -35,7 +37,8 @@ pub struct Offer {
 /// its id), the keys of the second-level object of a command's entry `key`, a geoprocessing
 /// tool's parameter keys (by its id) in a `gp.run` line's `"params"`, or the ids a value takes:
 /// the tools for a `gp.run` line's `"tool"`, the commands for a `task.addStep` line's
-/// `"command"`.
+/// `"command"`; or what the project holds for a value: the map's layers for a `"layer"`, the
+/// fields of a layer (by its id) for a `"field"`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Of {
     CommandKeys(String),
@@ -43,6 +46,15 @@ pub enum Of {
     ToolKeys(String),
     ToolIds,
     CommandIds,
+    Layers,
+    Fields(u32),
+}
+
+impl Of {
+    /// Whether its items are a value's (written as a JSON string's text), not keys.
+    fn is_value(&self) -> bool {
+        matches!(self, Of::ToolIds | Of::CommandIds | Of::Layers | Of::Fields(_))
+    }
 }
 
 /// The ids that complete the command id being typed at char `at` of `script`: the cursor at the
@@ -398,6 +410,19 @@ fn named_in(script: &str, h: &Hint) -> Option<(Named, String)> {
     Some((what, value_of(line_of(script, h)?, key)?))
 }
 
+/// The layer a line's object (`line`, from its `{`) acts on, as Run finds it: by its `"layer"`
+/// (a name, or an id written as text), the active layer without one. None for a layer that
+/// isn't there, or one given otherwise (a number, an escaped name): not the active layer then.
+fn line_layer<'a>(session: &'a rustgis_engine::Session, line: &str) -> Option<&'a rustgis_engine::map::Layer> {
+    let given = rustgis_engine::param_keys(line).is_some_and(|keys| keys.contains(&"layer"));
+    let p = match value_of(line, "layer") {
+        Some(name) => serde_json::json!({ "layer": name }),
+        None if given => return None,
+        None => serde_json::json!({}),
+    };
+    session.map().layer(session.layer_id(&p).ok()?)
+}
+
 /// What to offer at char `at` of `script`: the command ids for a line's first word, the keys of
 /// the line's command for a key being typed in its `{…}`, and in its second-level objects the
 /// keys their entries describe; in a `gp.run` line the tool ids for its `"tool"` and the tool's
@@ -408,17 +433,35 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
         return complete(start, at, &word, ids);
     }
     if let Some(ValueAt { hint, start, word, key }) = value_at(script, at) {
-        // The values `named` lists; the project's layers and fields come later (#662's third step).
-        let (_, what) = named(&hint.id).filter(|(names, _)| key == *names)?;
-        return match what {
-            Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
-            // Those `task.addStep` takes, by its own rule (not a script's: it adds the step, it
-            // doesn't run it).
-            Named::Command => {
-                let steps =
-                    session.registry.commands.iter().map(|c| c.id).filter(|id| rustgis_engine::cmd::items::can_be_step(session, id));
-                value_ids(start, at, &word, steps, Of::CommandIds)
+        if let Some((_, what)) = named(&hint.id).filter(|(names, _)| key == *names) {
+            return match what {
+                Named::Tool => value_ids(start, at, &word, rustgis_engine::analysis::tools().map(|t| t.id), Of::ToolIds),
+                // Those `task.addStep` takes, by its own rule (not a script's: it adds the step, it
+                // doesn't run it).
+                Named::Command => {
+                    let steps =
+                        session.registry.commands.iter().map(|c| c.id).filter(|id| rustgis_engine::cmd::items::can_be_step(session, id));
+                    value_ids(start, at, &word, steps, Of::CommandIds)
+                }
+            };
+        }
+        // Only where the command takes that key: a value for one Run turns down is no help.
+        if !takes(session, &hint.id, &key) {
+            return None;
+        }
+        return match key.as_str() {
+            "layer" => {
+                // Those Run finds by their name (`Map::layer_by_name`): of two named alike, case
+                // aside, the first.
+                let map = session.map();
+                let names = map.layers.iter().filter(|l| map.layer_by_name(&l.name).is_some_and(|f| f.id == l.id)).map(|l| l.name.as_str());
+                value_ids(start, at, &word, names, Of::Layers)
             }
+            "field" => {
+                let l = line_layer(session, line_of(script, &hint)?)?;
+                value_ids(start, at, &word, l.dataset.fields.iter().map(|f| f.name.as_str()), Of::Fields(l.id))
+            }
+            _ => None,
         };
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
@@ -478,10 +521,10 @@ fn sub_desc(desc: &str, key: &str) -> Option<String> {
 }
 
 /// The ids of `ids` that complete `word`, typed from char `start` to `end`, case aside, each
-/// once: the tools or commands a value takes (`of`), offered from its quote, so not cut to
-/// `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's first word offers them; tools
-/// in their order, the built-in ones first (an external one with the same id isn't the one Run
-/// finds).
+/// once: the tools, commands, layers or fields a value takes (`of`), offered from its quote, so
+/// not cut to `MAX_ITEMS` (the list scrolls). Commands sorted, as a line's first word offers
+/// them; the rest in their order: tools with the built-in ones first (an external one with the
+/// same id isn't the one Run finds), layers top first, fields as the layer's table has them.
 fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item = &'a str>, of: Of) -> Option<Offer> {
     let mut seen = std::collections::HashSet::new();
     let mut items: Vec<String> = ids.filter(|id| starts_with_ci(id, word) && seen.insert(*id)).map(str::to_string).collect();
@@ -491,19 +534,64 @@ fn value_ids<'a>(start: usize, end: usize, word: &str, ids: impl Iterator<Item =
     (!items.is_empty()).then_some(Offer { start, end, items, of: Some(of) })
 }
 
-/// What the help beside a list of keys says about key `key` of `of`'s parameters: the line
-/// describing it (`"size"?: number`), and a longer help under it (a tool's, when it has one).
-fn key_help(session: &rustgis_engine::Session, of: &Of, key: &str) -> Option<(String, Option<String>)> {
-    let described = |desc: &str| entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == key)).map(|(_, text)| (text, None));
+/// What the help beside a list says about item `item` of `of`: for a key, the line describing its
+/// parameter (`"size"?: number`) and a longer help under it (a tool's, when it has one); for a
+/// layer, what it holds; for a field, its type and its alias.
+fn item_help(session: &rustgis_engine::Session, of: &Of, item: &str) -> Option<(String, Option<String>)> {
+    let described = |desc: &str| entries(desc).into_iter().find(|(keys, _)| keys.iter().any(|k| k == item)).map(|(_, text)| (text, None));
     match of {
         Of::CommandKeys(id) => described(&params_of(session, id)?),
         Of::SubKeys { id, key: entry } => described(&sub_desc(&params_of(session, id)?, entry)?),
         Of::ToolKeys(id) => {
-            let p = rustgis_engine::analysis::tool(id)?.params.iter().find(|p| p.name == key)?;
+            let p = rustgis_engine::analysis::tool(id)?.params.iter().find(|p| p.name == item)?;
             Some((param_line(p), (!p.help.is_empty()).then(|| tl!(p.help).to_string())))
+        }
+        Of::Layers => {
+            let l = session.map().layer_by_name(item)?;
+            if l.is_raster() {
+                return Some((tl!("Raster").to_string(), None));
+            }
+            let text = crate::i18n::fmt(
+                "{type} · {n} features · {fields} fields",
+                &[
+                    ("type", tl_raw!(l.geometry_type().label())),
+                    ("n", &l.dataset.features.len().to_string()),
+                    ("fields", &l.dataset.fields.len().to_string()),
+                ],
+            );
+            Some((text, None))
+        }
+        Of::Fields(id) => {
+            let f = session.map().layer(*id)?.dataset.fields.iter().find(|f| f.name == item)?;
+            Some((tl!(f.ty.label()).to_string(), f.alias.clone()))
         }
         Of::ToolIds | Of::CommandIds => None,
     }
+}
+
+/// The icon beside item `item` of a list of `of`: a layer's kind, as the Layers pane shows it, or
+/// a field's; none for ids and keys.
+fn item_icon(session: &rustgis_engine::Session, of: Option<&Of>, item: &str) -> Option<&'static str> {
+    use rustgis_engine::data::GeometryType;
+    match of? {
+        Of::Layers => {
+            let l = session.map().layer_by_name(item)?;
+            Some(match l.geometry_type() {
+                _ if l.is_raster() => "raster_layer",
+                GeometryType::Point => "point_layer",
+                GeometryType::Polyline => "line_layer",
+                _ => "polygon_layer",
+            })
+        }
+        Of::Fields(_) => Some("field"),
+        _ => None,
+    }
+}
+
+/// `text` as it goes between a JSON string's quotes (`Mi "capa"` as `Mi \"capa\"`).
+fn json_text(text: &str) -> String {
+    let quoted = serde_json::to_string(text).unwrap_or_default();
+    quoted.get(1..quoted.len().saturating_sub(1)).unwrap_or_default().to_string()
 }
 
 /// A tool's parameter as the help shows it, as a command's parameters are described: its key
@@ -639,6 +727,11 @@ fn params_of(session: &rustgis_engine::Session, id: &str) -> Option<String> {
     }
 }
 
+/// Whether command `id`'s parameter description names top-level key `key`.
+fn takes(session: &rustgis_engine::Session, id: &str, key: &str) -> bool {
+    params_of(session, id).is_some_and(|desc| rustgis_engine::param_keys(&desc).is_some_and(|keys| keys.contains(&key)))
+}
+
 /// What accepting a command whose parameters `desc` describes puts after its id, and where the
 /// cursor goes in it (chars): its required keys, each with its value to type, the cursor at the
 /// first (` {"lon": |, "lat": }`); empty braces when every key may be left out (` {|}`); nothing
@@ -713,14 +806,15 @@ fn draw_help(ui: &mut Ui, help: &Help, width: f32) {
 #[derive(Clone, Default)]
 struct List {
     /// What was worked out to offer, and for which cursor, script (its hash: one replaced from
-    /// outside the box, as long as before, still tells) and plugins (their revision: a plugin
-    /// turned off mustn't stay on offer, to be accepted). While none changes (the cursor
+    /// outside the box, as long as before, still tells), plugins (their revision: a plugin
+    /// turned off mustn't stay on offer, to be accepted) and project (the session's revision and
+    /// active layer: the layers and fields offered). While none changes (the cursor
     /// blinking, the pointer moving) it isn't worked out again. Kept whether the list shows or not.
     /// The hash is taken each frame the box has focus: the length alone misses a script replaced by
     /// one as long, and a change made by code comes with no input event to wait for. It reads the
     /// text once, as egui's own layout already does each frame (the layouter's cache key, the
     /// galley cache), so it adds a constant, not a new order of cost.
-    worked: Option<Worked<u64, Option<Offer>>>,
+    worked: Option<Worked<(u64, u64, Option<u32>), Option<Offer>>>,
     /// The list shown, and its highlighted item: what the keys act on.
     open: Option<(Offer, usize)>,
     /// The offer Escape closed: not shown again until what's typed changes.
@@ -741,8 +835,8 @@ struct List {
 }
 
 /// What was worked out at a cursor, and for which script (its hash) and `with` (what else it
-/// depends on: the plugins' revision for the list; the language and the plugins' revision for
-/// the help): worked out again only when one changes.
+/// depends on: the plugins' revision and the project for the list; the language and the
+/// plugins' revision for the help): worked out again only when one changes.
 #[derive(Clone)]
 struct Worked<W, T> {
     at: Option<usize>,
@@ -876,13 +970,14 @@ pub fn show(
     let offer = if out.response.response.has_focus() {
         // A cursor, not a selection: with text selected, Enter and Tab act on it as usual.
         let at = out.cursor_range.filter(|r| r.is_empty()).map(|r| r.primary.index.0);
-        let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
-        let kept = Worked::get(&list.worked, at, text, &plugins);
+        let text = egui::util::hash(script);
+        let with = (rustgis_engine::plugins::revision(), session.revision, session.active_layer);
+        let kept = Worked::get(&list.worked, at, text, &with);
         match kept {
             Some(offer) => offer,
             None => {
                 let offer = at.and_then(|at| offer_at(script, at, &script_ids_cached(ui, session), session));
-                list.worked = Some(Worked { at, text, with: plugins, value: offer.clone() });
+                list.worked = Some(Worked { at, text, with, value: offer.clone() });
                 offer
             }
         }
@@ -938,10 +1033,23 @@ pub fn show(
         ui.with_layout(layout, |ui| {
             // The help follows the item under the pointer, else the highlighted one.
             let mut hovered = None;
+            let t = crate::theme::Tokens::get(ui.ctx());
             ui.vertical(|ui| {
                 ui.set_min_width(MIN_WIDTH);
                 for (i, item) in offer.items.iter().enumerate() {
-                    let r = ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                    let label = |ui: &mut Ui| ui.selectable_label(i == selected, egui::RichText::new(item).monospace());
+                    // A layer's kind or a field, before its name, as the Layers pane shows it.
+                    let r = match item_icon(session, offer.of.as_ref(), item) {
+                        Some(icon) => {
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                                crate::icons::paint(ui.painter(), r, icon, t.icon, t.accent);
+                                label(ui)
+                            })
+                            .inner
+                        }
+                        None => label(ui),
+                    };
                     // Taken as the button goes down, as in a code editor: the press already
                     // takes the focus from the box, and a click (down, then up a frame or more
                     // later) could find the list gone by then. A click still counts
@@ -980,9 +1088,9 @@ pub fn show(
                         draw_help(ui, &help, help_width);
                     }
                 }
-                // A key: the line describing its parameter.
+                // A key: the line describing its parameter; a layer or a field: what it holds.
                 Some(of) => {
-                    if let Some((text, about)) = item.and_then(|key| key_help(session, of, key)) {
+                    if let Some((text, about)) = item.and_then(|it| item_help(session, of, it)) {
                         ui.add_space(GAP);
                         draw_key_help(ui, &text, about.as_deref(), help_width);
                     }
@@ -1063,9 +1171,12 @@ pub fn hint(ui: &Ui, box_id: Id, out: &TextEditOutput, visible: egui::Rect, scri
 pub fn accept(ui: &Ui, box_id: Id, script: &mut String, offer: &Offer, item: &str, session: &rustgis_engine::Session) {
     let chars: Vec<char> = script.chars().collect();
     let (Some(before), Some(mut after)) = (chars.get(..offer.start), chars.get(offer.end..)) else { return };
+    let value = offer.of.as_ref().is_some_and(Of::is_value);
+    // A value as a JSON string holds it (a layer named `Mi "capa"` as `Mi \"capa\"`).
+    let item = if value { json_text(item) } else { item.to_string() };
     let (tail, at) = match &offer.of {
-        // An id for a value: closed, the cursor after its quote (one already there is kept).
-        Some(Of::ToolIds | Of::CommandIds) => (if after.first() == Some(&'"') { String::new() } else { "\"".to_string() }, 1),
+        // A value: closed, the cursor after its quote (one already there is kept).
+        Some(_) if value => (if after.first() == Some(&'"') { String::new() } else { "\"".to_string() }, 1),
         // A key: closed, its colon and a space after it, ready for the value; a closing quote
         // already there is taken in, and a key that has its colon keeps it.
         Some(_) => {
@@ -1079,12 +1190,12 @@ pub fn accept(ui: &Ui, box_id: Id, script: &mut String, offer: &Offer, item: &st
         }
         // A command starting a line.
         None if after.iter().take_while(|c| **c != '\n').all(|c| c.is_whitespace()) => {
-            params_of(session, item).map(|d| template(&d)).unwrap_or_default()
+            params_of(session, &item).map(|d| template(&d)).unwrap_or_default()
         }
         None => Default::default(),
     };
     let mut new: String = before.iter().collect();
-    new.push_str(item);
+    new.push_str(&item);
     new.push_str(&tail);
     new.extend(after);
     let mut state = TextEditState::load(ui.ctx(), box_id).unwrap_or_default();
@@ -2136,8 +2247,76 @@ mod tests {
         let ids: std::collections::HashSet<&str> = rustgis_engine::analysis::tools().map(|t| t.id).collect();
         assert_eq!(all.len(), ids.len(), "every tool, once");
         assert!(offer(r#"gp.run {"tool": "zzz"#).is_none());
-        assert!(offer(r#"labels.style {"layer": ""#).is_none(), "another key's value");
+        assert!(offer(r#"labels.style {"where": ""#).is_none(), "another key's value");
         assert!(offer(r#"task.addStep {"tool": ""#).is_none(), "another command");
+    }
+
+    /// A `"layer"` value offers the map's layers, top first, case aside; a `"field"` value the
+    /// fields of the line's layer (before or after it), or the active layer's without one, as Run
+    /// finds it. Only in a command that takes the key; nothing for a layer that isn't there or
+    /// isn't given by name, nor at the second level.
+    #[test]
+    fn layers_and_fields_are_offered_for_their_values() {
+        let mut app = crate::RustGisApp::with_sample();
+        let offer = |app: &crate::RustGisApp, s: &str| super::offer_at(s, s.chars().count(), &[], &app.session);
+        let names: Vec<String> = app.session.map().layers.iter().map(|l| l.name.clone()).collect();
+        let o = offer(&app, r#"labels.style {"layer": ""#).unwrap();
+        assert_eq!((o.items, o.of), (names, Some(super::Of::Layers)));
+        assert_eq!(offer(&app, r#"labels.field {"layer": "ci"#).unwrap().items, ["Cities"], "case aside");
+        assert!(offer(&app, r#"map.goToXY {"layer": ""#).is_none(), "a command that doesn't take a layer");
+        assert!(offer(&app, r#"labels.style {"layer": "Cities", "field": ""#).is_none(), "nor a field");
+        assert!(offer(&app, r#"labels.field {"layer": "zz"#).is_none());
+        let cities = app.session.map().layer_by_name("Cities").unwrap();
+        let (id, fields): (u32, Vec<String>) = (cities.id, cities.dataset.fields.iter().map(|f| f.name.clone()).collect());
+        let o = offer(&app, r#"labels.field {"layer": "cities", "field": ""#).unwrap();
+        assert_eq!((o.items, o.of), (fields.clone(), Some(super::Of::Fields(id))));
+        let s = r#"labels.field {"field": ""#;
+        let o = super::offer_at(&format!(r#"{s}", "layer": "Cities"}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(o.items, fields, "the layer after the field");
+        assert!(offer(&app, r#"labels.field {"layer": "Nowhere", "field": ""#).is_none(), "a layer that isn't there");
+        assert!(offer(&app, r#"labels.field {"layer": 99, "field": ""#).is_none(), "a layer given as a number");
+        assert!(offer(&app, r#"labels.field {"layer": "a\"b", "field": ""#).is_none(), "an escaped name");
+        app.session.active_layer = Some(id);
+        assert_eq!(offer(&app, r#"labels.field {"field": ""#).unwrap().items, fields, "the active layer");
+        app.session.active_layer = None;
+        assert!(offer(&app, r#"labels.field {"field": ""#).is_none(), "no active layer");
+        assert!(offer(&app, r#"gp.run {"params": {"layer": ""#).is_none(), "a second-level value (#662's 3b)");
+        // Two layers named alike but for case: the first, the one Run finds by either name.
+        let other = app.session.map().layers.iter().position(|l| l.name != "Cities").unwrap();
+        app.session.map_mut().layers[other].name = "CITIES".into();
+        let cities = app.session.map().layers.iter().filter(|l| l.name.eq_ignore_ascii_case("cities")).count();
+        assert_eq!(cities, 2);
+        assert_eq!(offer(&app, r#"labels.style {"layer": "ci"#).unwrap().items.len(), 1, "once, case aside");
+    }
+
+    /// Beside a layer, what it holds and its kind's icon, as the Layers pane shows it; beside a
+    /// field, its type and the field icon; no icon for ids.
+    #[test]
+    fn layers_and_fields_have_help_and_icons() {
+        use super::{Of, item_help, item_icon};
+        let app = crate::RustGisApp::with_sample();
+        let s = &app.session;
+        let cities = s.map().layer_by_name("Cities").unwrap();
+        let (text, _) = item_help(s, &Of::Layers, "Cities").unwrap();
+        assert!(text.contains(&cities.dataset.features.len().to_string()), "{text}");
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Cities"), Some("point_layer"));
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Rivers"), Some("line_layer"));
+        assert_eq!(item_icon(s, Some(&Of::Layers), "Countries"), Some("polygon_layer"));
+        let f = &cities.dataset.fields[0];
+        assert_eq!(item_help(s, &Of::Fields(cities.id), &f.name).map(|h| h.0), Some(f.ty.label().to_string()));
+        assert_eq!(item_icon(s, Some(&Of::Fields(cities.id)), &f.name), Some("field"));
+        assert_eq!(item_icon(s, Some(&Of::ToolIds), "buffer"), None);
+    }
+
+    /// In the pane: accepting a layer closes its name, written as a JSON string holds it.
+    #[test]
+    fn a_layer_is_accepted_as_json_writes_it() {
+        let mut h = pane();
+        h.state_mut().session.map_mut().layers[0].name = r#"Big "lakes""#.into();
+        type_in(&mut h, r#"labels.style {"layer": "Big"#);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().workflow.script, r#"labels.style {"layer": "Big \"lakes\"""#);
     }
 
     /// In the pane: a quote after `"tool": ` in a `gp.run` line offers the tools with the
@@ -2198,7 +2377,7 @@ mod tests {
         assert!(keys(r#"topology.rules {"nope": {""#).is_empty(), "no such entry");
         let of = offer(r#"topology.rules {"add": {""#).and_then(|o| o.of).unwrap();
         assert_eq!(of, super::Of::SubKeys { id: "topology.rules".into(), key: "add".into() });
-        let (line, about) = super::key_help(&app.session, &of, "rule").unwrap();
+        let (line, about) = super::item_help(&app.session, &of, "rule").unwrap();
         assert!(line.starts_with(r#""rule": "mustNotOverlap""#), "{line}");
         assert_eq!(about, None);
     }
