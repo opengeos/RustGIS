@@ -4,9 +4,10 @@
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb)
 
 The `rustgis` package runs the RustGIS engine inside Python, headless. It opens data and
-projects, runs any command and geoprocessing tool, styles layers, renders maps and saves projects
-that the desktop app opens as they are. There is no app to install and no server to run: the
-engine is a native module built for Windows, macOS and Linux, for Python 3.12 and later.
+projects, runs engine commands and geoprocessing tools, styles layers, renders maps and saves
+projects that the desktop app opens as they are. There is no app to install and no server to run:
+the engine is a native module for Python 3.12 and later. Release wheels cover Windows x64,
+macOS Intel and Apple Silicon, and Linux x64 and arm64 (glibc 2.28 or later).
 
 ```sh
 pip install rustgis               # pip install "rustgis[geopandas]" for GeoDataFrames
@@ -21,7 +22,7 @@ through what follows; [open it in Colab](https://colab.research.google.com/githu
 import rustgis
 
 s = rustgis.Session(sample=True)                    # the World Atlas sample
-s.layer_names()                                     # ['Cities', 'Rivers', 'Countries', …]
+s.layer_names()                                     # ['Cities', 'Rivers', 'Lakes', 'Countries']
 buffers = s.run_tool("buffer", input=s["Cities"], distance=100)
 s["Countries"].style("graduated", field="pop_est")
 s.zoom_to(buffers)
@@ -49,8 +50,10 @@ cities.visible = False
 cities.set_transparency(30)
 cities.filter("pop_max > 1000000")                  # a definition query; None clears it
 cities.rename("Towns")
+s.undo()                                            # restore the name "Cities"
 cities.zoom_to()
-cities.remove()                                     # s.undo() brings it back
+cities.remove()
+s.undo()                                            # restore the removed layer
 ```
 
 Selections work by SQL where clause:
@@ -58,7 +61,7 @@ Selections work by SQL where clause:
 ```python
 n = cities.select("pop_max > 10000000")            # mode="add", "remove" or "subset"
 cities.to_geojson(selected=True)                    # only the selected features
-cities.clear_selection()
+cities.clear_selection()                            # clears selections in every layer
 ```
 
 ## The app in a notebook
@@ -73,7 +76,7 @@ pip install "rustgis[jupyter]"
 ```
 
 ```python
-m = rustgis.Map(sample=True)                         # height="800px" by default
+m = rustgis.Map(sample=True)                         # height="800px"; lang="de" sets the language
 m                                                   # the app, in the cell
 
 m.add_geojson("sites.geojson", name="Sites")        # appears in the app
@@ -86,13 +89,16 @@ m.save("sites.rgis")                                # with what was done in the 
 m.run_in_app("ui.language", code="de")              # a command only the app has
 ```
 
-`Map` has the `Session` methods (`run`, `run_tool`, `add_data`, `m["Sites"]`, `to_png`, ...),
-and what they change, its layers' changes too, shows in the app; `m.session` is the session
-itself. Files of up to 2 MB travel with the project, so the app shows them; a larger
-file is read from its path, which only Python can see, so it draws in `to_png` but not in the app.
-The whole project goes across after each change, so changes made on both sides at once don't
-merge: the later one wins. A change made in the app replaces Python's project, so `m.undo()`
-undoes only what Python did since.
+`Map` shares the command, data and view methods of `Session` (`run`, `run_tool`, `add_data`,
+`m["Sites"]`, `to_png`, ...); its layers' changes also appear in the app. `m.session` is the
+underlying session; `Map(session=s)` displays an existing one. Make changes through `m`, rather
+than directly through `m.session`, to send them to the app.
+
+Supported files up to 2 MiB added through `Map` travel with the project. Larger files and formats
+that cannot be embedded are read from a path only Python can see: they draw in `to_png` but not
+in the app. Use a zip for a Shapefile. The whole project goes across after each change, so
+simultaneous changes do not merge: the later one wins. A change made in the app replaces Python's
+project, so `m.undo()` undoes only what Python did since.
 
 The app is the [web app](installation.md), loaded from https://web.rustgis.app, so the
 notebook needs to be online. `Map(url=...)` or the `RUSTGIS_WEB_URL` environment variable points
@@ -106,10 +112,12 @@ address your data stays on your machine. Point `url=` only at a copy of the app 
 
 ## Commands
 
-Every action in RustGIS is a command with an id and JSON parameters: the same ids the ribbon,
-the [command line](cli.md) and the [AI Assistant](user-guide/assistant.md) use.
-`Session.run(id, ...)` runs any of them, with the parameters as keyword arguments, a dict, or
-both. It returns the command's result and raises `rustgis.RustGISError` when the command fails.
+Engine actions are commands with an id and JSON parameters: the same ids the ribbon, the
+[command line](cli.md) and the [AI Assistant](user-guide/assistant.md) use.
+`Session.run(id, ...)` runs them, with parameters as keyword arguments, a positional dict, or
+both (keyword arguments win). It returns the decoded command result and raises
+`rustgis.RustGISError` when the command fails. UI-only commands (`ui.*`) need
+`Map.run_in_app`, as in the notebook example above.
 
 ```python
 s.commands()                                        # every command, with its parameters
@@ -117,12 +125,15 @@ s.tools()                                           # the geoprocessing tools
 s.describe("layer.symbology")                       # one command's (or tool's) parameters
 s.run("labels.field", layer="Cities", field="name")
 s.run("map.goToXY", {"lon": 114.1, "lat": 22.4, "scale": 2_000_000})
-s.notices()                                         # what the last commands reported
+s.notices()                                         # drains (text, is_error) pairs since last call
 s.undo()
+s.redo()
 ```
 
-`run_tool` runs a geoprocessing tool and returns the layer it made (a list when it made several);
-layers can be given as `Layer` objects or by name:
+`run_tool` runs a geoprocessing tool and returns the layer it made (a list when it made several),
+or the tool's own result for one that selects or makes a table. Layers can be given as `Layer`
+objects or by name; tools take layers by name, so of two layers with the same name the upper one
+is used:
 
 ```python
 s.describe("buffer")["params"]                      # input, distance, units, dissolve, output
@@ -147,9 +158,13 @@ The GeoLibre and Whitebox tools run as they do in the app, through the `geolibre
 ## Data in and out
 
 ```python
-s = rustgis.Session(data=["parcels.gpkg", "roads.fgb"])
-roads = s.add_data("roads.fgb", name="Roads")      # each add_* returns its Layer
-sites = s.add_geojson({"type": "FeatureCollection", "features": [...]}, name="Sites")
+s = rustgis.Session(sample=True, data=["parcels.gpkg"])
+roads = s.add_data("roads.fgb", name="Roads")
+sites = s.add_geojson({
+    "type": "FeatureCollection",
+    "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [10, 50]},
+                  "properties": {"name": "Site A"}}],
+}, name="Sites")
 
 gdf = s["Cities"].to_geopandas()                    # a GeoDataFrame in EPSG:4326
 big = s.add_geopandas(gdf[gdf.pop_max > 5_000_000], name="Big cities")
@@ -158,6 +173,10 @@ big.to_file("big-cities.gpkg", crs="EPSG:3857")     # GeoJSON, CSV, FlatGeobuf, 
 ```
 
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
+`add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for
+multiple layers, or the command result for standalone tables. For example, a CSV without
+geometry is a table. Extra `add_data` keyword arguments go to `layer.addData`, such as `layer=`
+to choose a GeoPackage table, or `x=` and `y=` to choose coordinate columns.
 
 Every format the app reads works here: GeoJSON, CSV, Shapefile, GeoPackage, GeoParquet,
 FlatGeobuf, KML/KMZ, GPX, GeoTIFF and the rest of [Supported Data
@@ -165,13 +184,28 @@ Formats](user-guide/data-formats.md). A large file read in place keeps only the 
 last view in memory; run `layer.loadAll` on it before `to_geojson` or `to_geopandas` to get all
 of them.
 
+Open an existing project with `Session(project="atlas.rgis")` or `s.open("atlas.rgis")`.
+`s.project_json()` returns its JSON text; `s.run("project.openText", text=...)` opens project
+JSON without an intermediate file. `to_png()` returns PNG bytes even when it also writes a
+file; omit the path to keep the image in memory.
+
 ## From source
 
-The package lives in `apps/rustgis-python`, built with [maturin](https://www.maturin.rs):
+The package lives in `apps/rustgis-python`, built with [maturin](https://www.maturin.rs).
+Install the [source-build prerequisites](installation.md#from-source) and use a Python 3.12+
+virtual environment. From the repository root:
 
 ```sh
-pip install ./apps/rustgis-python                   # or: cd apps/rustgis-python && maturin develop
+python -m pip install "./apps/rustgis-python[test]"
 python -m pytest apps/rustgis-python/tests
+```
+
+For an editable development install, activate the virtual environment, then:
+
+```sh
+python -m pip install "maturin>=1.9.3,<2"
+cd apps/rustgis-python
+maturin develop --release
 ```
 
 Its version is the RustGIS version, and each release publishes wheels to PyPI.

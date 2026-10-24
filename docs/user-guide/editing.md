@@ -3,13 +3,19 @@
 ## Creating features
 
 **Edit › Create** draws new points, lines and polygons into the layer selected in Layers:
-click each vertex and double-click to finish (++esc++ cancels). **Delete** (++delete++) removes
-the selected features. Edit attributes in the attribute table (++ctrl+t++): double-click a cell
+click once for a point, or click each vertex and double-click to finish a line or polygon
+(++esc++ cancels). **Delete** (++delete++) removes the selected features across the map's layers.
+Edit attributes in the attribute table (++ctrl+t++): double-click a cell
 to change it. **Data › Data Design** (and **Data › Fields**) adds and deletes fields and calculates a
 field from an expression; **Calculate Geometry** (in the attribute table's toolbar) fills a new or
 existing numeric field with each feature's area, perimeter, length or X/Y coordinate, in the units
 you choose, for all features or the selected ones. Length and perimeter include feet and miles;
 area includes square feet (`ft2`), acres (`ac`) and square miles (`mi2`). Every edit is one undo step.
+
+Undo (++ctrl+z++) and Redo (++ctrl+y++ or ++ctrl+shift+z++) restore project changes, not just
+feature edits; use ++cmd++ instead of ++ctrl++ on macOS. While typing in a text field, those
+shortcuts undo or redo the typing instead. Saving keeps the undo history; opening or creating
+a project clears it. Undo does not reverse files already written by an export.
 
 ## Modifying features
 
@@ -18,8 +24,9 @@ area includes square feet (`ft2`), acres (`ac`) and square miles (`mi2`). Every 
   <figcaption>Edit Vertices: drag a square handle to move a vertex, a round one to add a vertex.</figcaption>
 </figure>
 
-The Edit tab's **Edit** button turns editing on or off for the map; with it off, the map is
-read-only. The Editing pane (Settings, Templates, Status, Modify) holds the rest. Its **Distance units**
+The Edit tab's **Edit** button turns feature editing on or off for the map; with it off,
+feature creation, geometry changes and attribute edits are disabled. The Editing pane
+(Settings, Templates, Status, Modify) holds the rest. Its **Distance units**
 selector sets the units used for Move and constant elevation. The choice is remembered independently
 of the live map's measurement units. The entered numbers are interpreted in the selected units when
 you click **Move**, **Constant** or **Apply elevation**. The current elevation stays in effect while
@@ -41,13 +48,17 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
 - **Feature templates**: named default values for new features, made from a selected feature;
   the Create tool uses the chosen template.
 - **Snapping** (**Edit › Snapping**): new and dragged vertices snap to nearby vertices, edges and
-  line ends (magenta marker). Each of the three can be turned off, and the tolerance is how near,
-  in screen pixels, a vertex must come to snap (10 by default, 1 to 100):
-  `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}` (without `"on"` it turns
-  snapping on or off).
+  line ends of visible feature layers at the current scale (magenta marker; graphics and rasters
+  are not targets). Vertices and ends take priority over edges within the tolerance. Snapping
+  starts off; its vertex, edge and end options start on. The tolerance is how near, in screen
+  pixels, a vertex must come to snap (10 by default, 1 to 100):
+  `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}` (without `"on"` it toggles
+  snapping, even when other options are supplied). `edit.snap={"lon":12.5,"lat":41.9}` queries
+  the current snap target without editing a feature.
 - **Settings**: **Show Vertices** marks the vertices of the selected features even when Edit
   Vertices isn't on (`edit.settings={"showVertices": true}`).
-- **Elevation**: new features get a `z` value, constant or sampled from a raster surface.
+- **Elevation**: new features get a `z` attribute, constant or sampled from a raster surface at
+  the feature's label point; this is not a change to its geometry's coordinates.
 - **Ground to grid**: a scale factor and rotation applied to entered distances and directions
   (Move, and `edit.traverse`, which draws a line or polygon from distances and bearings).
 - **Topology**: rules (must not overlap, must not have gaps, must not self-intersect, must not
@@ -82,11 +93,17 @@ attribute edits, Calculate Field):
 
 ## Clipboard and pop-ups
 
-Copy (++ctrl+c++) and Cut (++ctrl+x++) take the selected features. Paste (++ctrl+v++) adds them to
-the layer selected in Layers, matching fields by name; Paste Special adds them as a new layer.
-Copied features also go on the system clipboard as GeoJSON, so they can be pasted into another
-RustGIS window or a text editor, and GeoJSON copied elsewhere pastes into RustGIS. Copy Path copies
-the selected layer's data source path.
+Copy (++ctrl+c++) and Cut (++ctrl+x++) take selected features from one layer: the active layer
+if it has a selection, otherwise the first layer with selected features. Paste (++ctrl+v++)
+adds them to the layer selected in Layers, matching fields by name and converting values to the
+destination field types; unmatched fields stay empty. Geometry types must match. **Paste Special**
+adds them as a new layer instead. Copied features also go on the system clipboard as GeoJSON, so
+they can be pasted into another RustGIS window or a text editor, and GeoJSON copied elsewhere
+pastes into RustGIS. **Copy Path** copies the selected layer's data source path.
+
+Whole-layer copying is separate: use **Copy Layer** or **Copy Group** and **Paste Layer** in the
+Layers pane's context menus to preserve symbology and other layer settings, including when
+moving layers between maps.
 
 Pop-ups (Home › Navigate) choose which layers a click with Explore identifies: the topmost layer
 under the click, every visible layer, only selectable layers, only the layer selected in Layers, or

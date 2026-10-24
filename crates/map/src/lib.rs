@@ -149,6 +149,11 @@ pub struct Layer {
     /// instead of cutting across them where lines meet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stroke_levels: bool,
+    /// The scale (1:N) its symbol and label sizes are set for: drawn at another scale they grow
+    /// and shrink with the map, as on paper (QGIS's reference scale). `None`: they keep their
+    /// size on screen.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_reference_scale")]
+    pub reference_scale: Option<f64>,
     /// Layers with a higher priority draw above lower ones, whatever their order (the scene's
     /// depth priority).
     #[serde(default)]
@@ -226,6 +231,7 @@ impl Layer {
             extrusion: None,
             line_strokes: Vec::new(),
             stroke_levels: false,
+            reference_scale: None,
             priority: 0,
             design: design::Design::default(),
             raster: None,
@@ -433,6 +439,16 @@ impl Layer {
         }
         let (symbol, strokes) = self.renderer.style_for(&self.dataset, row);
         (symbol, strokes.unwrap_or(&self.line_strokes))
+    }
+
+    /// How much its symbol and label sizes are multiplied by at the map scale 1:`scale`: its
+    /// reference scale over that ([`Layer::reference_scale`]), kept within [`SIZE_FACTORS`]; 1
+    /// without one.
+    pub fn size_factor(&self, scale: f64) -> f32 {
+        match self.reference_scale {
+            Some(r) if scale.is_finite() && scale > 0.0 => (r / scale).clamp(SIZE_FACTORS.0, SIZE_FACTORS.1) as f32,
+            _ => 1.0,
+        }
     }
 
     /// Whether some feature may be drawn with stacked strokes ([`Layer::strokes`]).
@@ -1589,6 +1605,20 @@ impl Map {
     }
 }
 
+/// The reference scales a layer takes (1:N), as [`Layer::reference_scale`].
+pub const REFERENCE_SCALES: (f64, f64) = (1.0, 1e9);
+
+/// The most a reference scale shrinks or grows a layer's sizes ([`Layer::size_factor`]): zoomed
+/// far in, its lines would otherwise be drawn thousands of pixels wide.
+pub const SIZE_FACTORS: (f64, f64) = (0.01, 32.0);
+
+/// Reads a layer's reference scale as `layer.referenceScale` would leave it: one out of
+/// [`REFERENCE_SCALES`] (or not a number) is none. A project file is hostile input.
+fn de_reference_scale<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
+    let v: Option<f64> = Option::deserialize(d)?;
+    Ok(v.filter(|r| (REFERENCE_SCALES.0..=REFERENCE_SCALES.1).contains(r)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1613,6 +1643,32 @@ mod tests {
         assert!(
             back.line_strokes.iter().all(|st| st.width == Some(symbology::MAX_STROKE_WIDTH) && st.offset == -symbology::MAX_STROKE_OFFSET)
         );
+    }
+
+    #[test]
+    fn a_reference_scale_scales_sizes_with_the_map_and_hostile_ones_are_dropped() {
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        assert_eq!(l.size_factor(10_000.0), 1.0, "none: sizes stay as set");
+        l.reference_scale = Some(25_000.0);
+        assert_eq!(l.size_factor(25_000.0), 1.0);
+        assert_eq!(l.size_factor(12_500.0), 2.0, "zoomed in twice: twice the size");
+        assert_eq!(l.size_factor(100_000.0), 0.25);
+        assert_eq!(l.size_factor(1.0), SIZE_FACTORS.1 as f32, "zoomed far in: kept in bounds");
+        assert_eq!(l.size_factor(1e12), SIZE_FACTORS.0 as f32);
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(l.size_factor(bad), 1.0, "scale {bad}");
+        }
+        // Saved and read back; a crafted project's out of range ones are none.
+        let text = serde_json::to_string(&l).unwrap();
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().reference_scale, Some(25_000.0));
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for bad in [serde_json::json!(0.0), serde_json::json!(-1.0), serde_json::json!(1e300), serde_json::Value::Null] {
+            v["reference_scale"] = bad.clone();
+            assert_eq!(serde_json::from_value::<Layer>(v.clone()).unwrap().reference_scale, None, "{bad}");
+        }
+        // Without a reference scale nothing is written.
+        l.reference_scale = None;
+        assert!(!serde_json::to_string(&l).unwrap().contains("reference_scale"));
     }
 
     #[test]

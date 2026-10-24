@@ -8,9 +8,9 @@ Formats](data-formats.md).
 | Format | Read | Write |
 | --- | --- | --- |
 | GeoJSON (`.geojson`, `.json`) | Yes | Yes |
-| Delimited text (`.csv`, `.tsv`, `.txt`) with x/y columns in any coordinate system, or WKT geometry | Yes | Yes |
-| Shapefile (`.shp` + `.dbf`, or zipped in a `.zip`) | Yes (the web app opens zips) | Yes (`share.exportLayer`) |
-| GeoPackage (`.gpkg`, every feature table) | Yes | Yes (desktop) |
+| Delimited text (`.csv`, `.tsv`, `.txt`) with x/y columns in a supported coordinate system, or WKT geometry | Yes | Yes |
+| Shapefile (`.shp` + `.dbf`, or zipped in a `.zip`) | Yes (the web app also accepts sidecar files picked or dropped together) | Yes (`share.exportLayer`) |
+| GeoPackage (`.gpkg`, feature tables) | Yes | Yes (desktop) |
 | GeoParquet (`.parquet`, `.geoparquet`, WKB geometry) | Yes | Yes |
 | FlatGeobuf (`.fgb`) | Yes | Yes (`share.exportLayer`) |
 | KML/KMZ (with their styles), GPX | Yes | Yes |
@@ -22,10 +22,11 @@ Formats](data-formats.md).
 | Through GDAL: AutoCAD DWG, MapInfo TAB, OpenStreetMap XML, File Geodatabases RustGIS can't read itself… | Yes (desktop, when GDAL is installed) | No |
 | PostgreSQL/PostGIS databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | MySQL and MariaDB databases, read live (large tables a view at a time) | Yes (desktop) | No |
+| SQL Server and Azure SQL databases, read live (large tables a view at a time) | Yes (desktop) | No |
 | DuckDB databases (`.duckdb`, `.ddb`) and SQL queries | Yes (desktop, when DuckDB is installed) | No |
-| KML, GPX, CSV with WKT geometry | No | Yes (Analyze › Workflows › Data Interop) |
 | GeoTIFF and cloud-optimised GeoTIFF (`.tif`, `.tiff`) | Yes | Yes |
 | ASCII grid (`.asc`, with an optional `.prj`) | Yes | No |
+| Unreferenced TIFF and PNG scans; JPEG with `"as": "scan"` | Yes | GeoTIFF after georeferencing |
 | Through GDAL: JPEG 2000, ERDAS Imagine, SRTM HGT, DTED, NetCDF, HDF, ENVI, SAGA… | Yes (desktop, when GDAL is installed) | No |
 | Web tiles: XYZ/TMS/WMS rasters, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives | Yes | Yes (Analyze › Create Hosted Imagery) |
 | RustGIS project (`.rgis`; older `.rgisx` files open too) | Yes | Yes |
@@ -50,11 +51,30 @@ the project, from two fields of coordinates and their coordinate system. In a te
 **Home › Add Data › Graphics Layer** adds a layer for [drawn graphics](cartography.md#graphics),
 and **Data › Layer Templates** adds empty layers with ready-made schemas to draw into.
 
-Vector coordinates are WGS 84 longitude/latitude and are displayed in Web Mercator. GeoPackage,
-GeoParquet and FlatGeobuf files in another coordinate system (any EPSG code) are converted as they
-are read. Rasters keep
-their own coordinate system (any EPSG code, such as UTM zones or national grids) and are
-reprojected on the fly as they draw.
+Vector geometry is stored as WGS 84 longitude/latitude. Data in another supported coordinate
+system is converted as it is read; Shapefiles use their `.prj`, and formats such as GeoPackage,
+GeoParquet and FlatGeobuf carry their coordinate system in the file. Rasters keep their own
+coordinate system and are reprojected as they draw. The map uses Web Mercator by default, but
+**View › Projection** can change it; see [Maps](maps.md).
+
+Shapefile text uses a supported `.cpg` encoding, otherwise the `.dbf` code page, with UTF-8 as
+the fallback. Keep the sidecar files together.
+
+## Attribute tables and fields
+
+Open a feature layer's table with ++ctrl+t++ (++cmd+t++ on macOS), **Home › Selection › Attributes**
+or **Attribute Table** on a feature layer's **Data** tab (`table.open`). Rows and map selections stay in sync.
+Standalone tables open from their right-click menu; their cells are read only. See [The attribute table](analysis.md#the-attribute-table) for
+sorting, filtering, selection and the SQL `WHERE` clause syntax used by **Select By Attributes**
+and **Definition Query**. These clauses filter a layer; they are not DuckDB queries.
+
+For an editable feature layer, double-click a cell to change it. The table's toolbar also adds
+fields, calculates field expressions and opens **Calculate Geometry** (`edit.calculateGeometry`).
+The geometry calculator fills a new double field or an existing numeric field with area,
+perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
+degrees or a supported projected EPSG system's units. See [Editing](editing.md) for field
+calculations and data-design rules. Streamed layers must first be loaded with **Load All
+Features**.
 
 ## Formats through GDAL
 
@@ -116,12 +136,14 @@ column becomes a layer (`"layer"` picks one).
 
 ### PostgreSQL and PostGIS
 
-**Home › Add Data › Database…** (`layer.addDatabase`) connects to a PostgreSQL database with
-PostGIS and reads its tables live. RustGIS talks to the server itself (nothing else to install;
-TLS as libpq does it). `sslmode=prefer` (the default) and `require` encrypt the connection but
-don't check the server's certificate, so they don't protect against a server in the middle:
-use `verify-full` (or `verify-ca`, which here checks the host name too) on networks you don't
-trust. The certificate is checked against `sslrootcert` (a private authority's PEM file) or the
+**Home › Add Data › Database…** (`layer.addDatabase`, desktop) connects to a PostgreSQL database with
+PostGIS and reads its tables live. The dialog takes a saved connection or a typed one, a password,
+a table (**List Tables**, or all tables with geometry) and a coordinate system for geometry that
+doesn't say its own. RustGIS talks to the server itself (nothing else to install;
+TLS as libpq does it). `sslmode=prefer` (the default) uses TLS only when the server offers it, and otherwise connects
+without encryption, so a server in the middle can force a plaintext connection. `require` always
+uses TLS but doesn't check the server's certificate. On networks you don't trust, use
+`verify-full` or `verify-ca`; both check the host name here. The certificate is checked against `sslrootcert` (a private authority's PEM file) or the
 web's roots. `disable` turns TLS off. The connection is a libpq connection string
 (`host=localhost port=5432 dbname=gis user=postgres`) or a `postgresql://user@host/dbname`
 address; what it leaves out comes from `PGHOST`, `PGPORT`, `PGUSER` and `PGDATABASE`, as with
@@ -272,8 +294,8 @@ page of their own: [Web Data](web-data.md).
 
 ## Geocoding addresses
 
-**Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a table's addresses into points:
-a CSV of addresses without coordinates is added as a standalone table, then each row's address
+**Home › Add Data › Geocode Addresses…** (`layer.geocode`) turns a standalone table's or a
+layer's addresses into points: a CSV of addresses without coordinates is added as a standalone table, then each row's address
 fields (`"address"`: a field, or several such as street, city and country, joined with commas)
 are looked up, each distinct address once. The result is a new point layer holding every field
 plus `geocoded`, what the geocoder called the place; rows that weren't found stay in its table
@@ -331,8 +353,8 @@ before it connects or lists; plugins can't connect, and need the network permiss
 
 ## Data Sources
 
-The **Data Sources** pane (**View › Windows › Data Sources**, `ui.pane.sources`) gathers the
-places data comes from:
+The **Data Sources** pane (**View › Windows › Data Sources**, `ui.pane.sources`; **Home › Add
+Data › Connections…** also opens it) gathers the places data comes from:
 
 - **Favourites**: any source, right-clicked and added.
 - **Recent**: the last 20 sources added (files, web addresses, tile layers, services, database
@@ -370,16 +392,17 @@ database is kept without its password. The commands `sources.list`, `sources.sav
 
 ### Named connections
 
-In the pane, **New Connection** and **Edit…** let you set the name, group and address.
-Leave a new connection's name blank to derive it from the address. **Test** checks the form
-without saving it: web-service, catalogue, STAC and S3 requests run in the background on both
-desktop and web; database tests run synchronously on desktop. Database rows remain visible
-but cannot be opened or tested in the web app. Earth Search and Planetary Computer remain
-available under **Library**.
+In the pane, **New Connection ▾** and **Edit…** let you set the name, group and address;
+**Home › Add Data › New Connection** opens the same form for a chosen kind. Leave a new
+connection's name blank to derive it from the address. **Test** checks the form without saving
+it: web-service, catalogue, STAC and S3 requests run in the background on both desktop and web;
+database tests run synchronously on desktop. The web app doesn't offer database kinds for new
+connections; saved database rows remain visible but cannot be opened or tested there. Earth
+Search and Planetary Computer remain available under **Library**.
 
-**From Service…** (including **Catalogue search (CSW)**), **From Database…**, **STAC Search**
-and **S3…** can use saved connections directly. Service, database and S3 dialogs offer a
-**Saved connection** picker; STAC includes saved connections in its existing API/catalog list.
+**From Service…** (including **Catalogue search (CSW)**), **Database…**, **STAC Search…** and
+**S3…** can use saved connections directly. Service, database and S3 dialogs offer a **Saved
+connection** picker; STAC includes saved connections in its existing API/catalog list.
 Picking one keeps its identity, not just its address: two connections can point to the same
 server with different names or users.
 
@@ -474,8 +497,9 @@ features are read in place rather than loaded whole, avoiding an in-memory copy 
 dataset. The layer reads features in view in the background as the map moves, using spatial
 indexes: the GeoPackage R-tree, the FlatGeobuf packed R-tree, GeoParquet row-group bounding
 boxes, or a cached Shapefile R-tree built from the shapes' bounding boxes. When a
-view holds more than 250,000 features (100,000 in the web app), the layer draws an evenly spread
-sample of them and its tooltip in Layers says so: zoom in to see them all. Smaller files load
+local file's view holds more than 250,000 features (100,000 in the web app), the layer draws an
+evenly spread sample of them and its tooltip in Layers says so: zoom in to see them all. Remote files have lower limits (see
+[Data formats](data-formats.md)). Smaller files load
 whole; `layer.addData` with `"stream": true` or `false` overrides the choice.
 
 On the desktop, opening a large Shapefile for the first time scans its record headers to build
@@ -505,8 +529,10 @@ file over 256 MB through a buffer, so it is never held whole), and each view par
 features it shows. A single feature, a bare geometry or TopoJSON is loaded whole.
 
 A streamed layer works like any other for symbology, labels, pop-ups, selection and the
-attribute table (which lists the features read for the view). Geoprocessing tools read the whole
-file. Edits are refused, since the features are read again as the view moves: right-click the
+attribute table (which lists the features read for the view). Geoprocessing tools, exports and
+**Load All Features** read the whole source, up to 2 million features (500,000 in the web app);
+a larger source is refused rather than processed as a sample. A tool given a streamed layer with
+a selection uses the selected features read for the view. Edits are refused, since the features are read again as the view moves: right-click the
 layer in Layers and choose **Load All Features** (`layer.loadAll`) to load it into memory and
 edit it. Projects save the layer's file path, not its features, and read the file again when they
 open; a browser upload is kept in the project.
@@ -549,8 +575,10 @@ serialization continue to use the original source data and existing read limits.
 </figure>
 
 Add a GeoTIFF or an ASCII grid with **Add Data**, by dropping it on the window, or in the web app
-by picking it. An ASCII grid takes its coordinate system from a `.prj` file next to it (as a Shapefile does);
-otherwise, and always in the web app, which only sees the one file, it must be in
+by picking it. Local ASCII grids can be up to 1 GiB; ASCII-grid uploads are limited to 256 MiB in the web app.
+A TIFF or PNG without coordinates opens as a scan to place with **Georeference**; see
+[Supported Data Formats](data-formats.md). An ASCII grid takes its coordinate system from a `.prj`
+file next to it (as a Shapefile does); otherwise, and always for uploads, it must be in
 longitude/latitude degrees. On the desktop, a GDAL `.aux.xml` file next to a raster (`dem.tif.aux.xml`
 or `dem.aux.xml`) names its bands from their descriptions, gives the no-data value when the file
 has none, and supplies the band statistics when only an overview of the raster is read.
@@ -568,9 +596,11 @@ might not. Exported to a file it is written tile by tile, never held whole in me
 builds it in memory to download it).
 GeoTIFFs may be regular or cloud-optimised: grey, RGB(A), palette (coloured by the file's colour
 table, as land cover such as the NLCD is) or multiband, of any pixel type, tiled or striped, and
-compressed with Deflate, LZW, PackBits, JPEG or Zstandard. The coordinate system is an EPSG code,
+compressed with Deflate, LZW, PackBits, JPEG or Zstandard. JPEG-compressed YCbCr images are shown
+as RGB; other YCbCr and CMYK images aren't read. A rotated or skewed image is resampled to a
+north-up grid as it is read. The coordinate system is an EPSG code,
 or the file's own projection described in its GeoKeys (Albers, Lambert conformal conic, transverse
-Mercator, Mercator, Lambert azimuthal, stereographic, equirectangular and others), which an
+Mercator, Mercator, Lambert azimuthal, stereographic, equirectangular, sinusoidal and others), which an
 exported GeoTIFF keeps. A raster too large to hold in memory (more than 120 million samples, 32
 million in the web app) opens from its largest overview that fits; one without overviews opens as
 an overview made as it is read, a strip or tile at a time (every second, fourth… pixel each way),
@@ -709,14 +739,17 @@ RustGIS saves pieces of a project as files you can share and reuse:
 | Styles (saved symbology) | `.rgisstyle` | Style › Styles › New Style, then Publish › Save As › Style Items | Style › Styles › Add Style File |
 | [Color ramps](cartography.md#custom-color-ramps) | `.rgisramp` (also reads QGIS `.xml`/`.qml`, GDAL color `.txt` and GMT `.cpt`) | Publish › Save As › Color Ramps, or by hand | Style › Styles › Add Color Ramp File |
 | Project template (the setup without features) | `.rgistemplate` | Home › Templates, or Publish › Save As | Home › Templates › Open Custom Template |
-| Project package (everything, rasters included) | `.rgispkg` | Publish › Package › Project | Project › Open, or drop it on the window |
+| Project package (the project, with linked raster files embedded while they fit) | `.rgispkg` | Publish › Package › Project | Project › Open, or drop it on the window |
 | Map package / mobile map package | `.rgismpk` | Publish › Package › Map or Mobile Map | Home › Import |
 | Results package (geoprocessing history and outputs) | `.rgisgpk` | Publish › Package › Results | any zip tool |
 | Task (guided command steps) | `.rgistask` | Analyze › Task, Publish › Save As › Task Item | Analyze › Task › Import Task |
 | Bookmarks (as longitude, latitude and scale) | `.rgisbookmarks` | Home › Navigate › Bookmarks › Export Bookmarks | Home › Navigate › Bookmarks › Import Bookmarks |
 | Layout | `.rgislayout` | Publish › Save Layout File | Home › New Layout › Import Layout |
 
-Packages are zip files. A mobile map package keeps only the visible layers and simplifies their
+Packages are zip files. Project and map packages can newly embed a combined 512 MiB of linked
+raster files on the desktop (128 MiB in the web app); a raster that doesn't fit stays linked.
+Already embedded uploads are retained. Local streamed vector files, databases and web layers
+stay linked to their sources. A mobile map package keeps only the visible layers and simplifies their
 geometry, for phones and tablets. Styles can also be imported from the layers of a layer file,
 map file or project. Data › Layer Templates adds empty layers with ready-made schemas (places,
 routes, areas, observations…) to draw into. Add Folder connects a folder to the Browser, which

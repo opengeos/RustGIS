@@ -1,7 +1,10 @@
 # Maps and Basemaps
 
-A project holds one or more maps (**Home › New Map**), each with its own layers, basemap,
-projection, bookmarks and view settings. Maps open as tabs above the map view.
+A project holds one or more maps (**Home › Project › New Map**), each with its own layers, basemap,
+projection, bookmarks and view settings. Maps open as tabs above the map view. In the Browser,
+right-click a map to rename, duplicate or delete it; the project always keeps at least one map.
+For selecting, grouping, reordering and copying layers between maps, see
+[The window](index.md#the-window).
 
 ## Navigating
 
@@ -12,8 +15,8 @@ latitude. **New Bookmark…** saves the current view under a name, with an optio
 the place. The Bookmarks menu removes a bookmark with the button beside it, and exports or imports
 them as a `.rgisbookmarks` file. Imported bookmarks show the same place on a map in another
 projection; places that projection can't show are skipped. Type a scale in the status bar to jump
-to it. More navigation tools are under [View
-effects](#view-effects) below.
+to it. Beside it are the zoom level, bearing and pitch; click them to face north and look straight
+down again. More navigation tools are under [View effects](#view-effects) below.
 
 **Measurement units.** In **Home › Inspect › Measure**, choose **Metric** or **Imperial**.
 The choice is remembered and updates existing distance and area measurements, the live
@@ -92,7 +95,8 @@ at its scale and **Pan To** centres it at the current scale; a bookmark of anoth
 in view to the same place. **Update** saves the current view into it (only on its own map, in
 view), and **Delete** removes it. The chevron shows its description: click it to write or edit it.
 Double-click a name to rename it, and right-click it to rename, describe, update, move it up or
-down, or delete it. Everything the pane does is a `bookmark.*` command and undoes with ++ctrl+z++.
+down, or delete it. Bookmark edits run `bookmark.*` commands and undo with ++ctrl+z++;
+**Zoom To** and **Pan To** change the view without adding an undo step.
 
 **Find Place** (`map.findPlace`) looks up a place or an address by name with OpenStreetMap's
 [Nominatim](https://nominatim.org) (or a [Photon](https://photon.komoot.io) server, or a
@@ -155,6 +159,9 @@ apart; coordinates to FOSSGIS's Valhalla), so the AI Assistant asks before runni
 rustgis-cli run --sample --cmd 'map.route={"from":"Brandenburg Gate, Berlin","to":"Alexanderplatz, Berlin","mode":"bike"}'
 ```
 
+On the web, plan routes in the Directions pane; `map.route` cannot fetch a route or look up
+place names there. On the desktop, its optional `url` selects another Valhalla server.
+
 ## Basemaps
 
 <figure markdown="span">
@@ -172,9 +179,10 @@ Ocean, Atlas, Blank), which need no network, and web tile layers over them:
   a built-in style that knows the OpenMapTiles, Protomaps and Shortbread schemas.
 - **PMTiles archives** (`.pmtiles`) of raster or vector tiles: a web address, read a tile at a
   time by byte ranges (the server must allow range requests, and CORS for the web app), or on the
-  desktop a file (**Tile Archive File…**, Add Data, or drop it on the window). Uncompressed,
-  gzip, Brotli and Zstandard archives are read. The map moves to what the archive covers once its
-  header is read, unless it covers the whole world, and right-clicking its row in Contents gives
+  desktop a file (**Tile Archive File…**, Add Data, or drop it on the window). Version 3
+  archives are read, uncompressed or with gzip, Brotli or Zstandard. The map moves to what the
+  archive covers once its header is read, unless it covers the whole world, and right-clicking
+  its row in Layers gives
   **Zoom To Layer**. A vector archive that is a basemap is drawn in the built-in style; any other
   is drawn with each of its layers in a colour of its own.
 - **MBTiles files** (`.mbtiles`) of raster or vector tiles, drawn as PMTiles archives are: on
@@ -212,6 +220,13 @@ the tile layers and basemap beneath it: stack imagery over a hillshade and set i
 let the terrain show through. Overlays (labels, roads) stay on top of the basemaps; choosing a built-in basemap
 removes the web basemaps but keeps the overlays. Tile layers are saved with the project, and
 their credits are shown in the corner of the map and drawn on exports.
+
+Use Explore to click features in vector PMTiles, MBTiles or MVT layers added as data and see
+their source-layer names and attributes in a pop-up. This works with **Topmost Layer** or
+**Visible Layers** pop-up mode, not with catalog basemaps or MapLibre styles. Tiles are not
+selectable or editable; a tile not yet loaded may need another click once it arrives.
+**Reload** in the Basemap gallery (`map.reloadWebLayers`) clears cached tiles and styles and
+fetches them again.
 
 Tiles load in the background and the map fills in as they arrive, with coarser tiles standing in
 meanwhile; exports and `rustgis-cli` wait for them. On the globe and in other projections the
@@ -274,9 +289,9 @@ System** dialog, which also takes a projected EPSG code (such as `3035`, `32633`
 `ESRI:102033` for South America Albers Equal Area Conic, or `ESRI:54030` for World Robinson). A
 code whose projection method or datum grid RustGIS can't use (Polyconic such as `5880`, Cassini,
 oblique Mercator, or a NAD27 code that needs a grid) is refused with the reason, rather than drawn
-in another projection. Of Esri's projected systems, RustGIS knows the 1,986 it draws within a
-metre of PROJ; the rest, such as World Miller (`ESRI:54003`), are refused as unknown codes. The
-presets:
+in another projection. RustGIS supports a subset of Esri's projected systems, checked against
+PROJ at representative points; unsupported codes such as World Miller (`ESRI:54003`) are refused
+as unknown codes. The presets:
 
 | Preset | Kind |
 | --- | --- |
@@ -286,6 +301,7 @@ presets:
 | North / South Polar Stereographic | Polar |
 | Europe Equal Area (ETRS89 LAEA), USA Contiguous Albers Equal Area | Regional, equal-area |
 | Albers Equal Area Conic, Lambert Conformal Conic | Conic, for a mid-latitude region |
+| VN-2000 / TM-3 (Vietnam), VN-2000 / UTM zones 48N and 49N | Vietnam, transverse Mercator |
 
 The world and polar presets take a central meridian, and the two conics also their standard
 parallels: pick the preset in the **Coordinate System** dialog and set **Central meridian** (and
@@ -299,6 +315,14 @@ Parallels that average within 0.5° of the equator (mirrored, such as -30° and 
 to it) make no cone and are refused, as is a value a preset doesn't take. The two regional grids
 keep their standard definitions. A conic's area of use runs 35° beyond its parallels and 90°
 either side of its meridian.
+
+For Vietnam, **VN-2000 / TM-3** takes a central meridian (105°E by default), with province
+shortcut buttons in the Coordinate System dialog. A province alias such as `vn2000:hanoi`
+sets its meridian; scripts can use
+`map.projection={"type":"vn2000tm3","lon_0":105.75}`. The UTM presets use fixed zones:
+`vn2000Utm48` (`EPSG:3405`) and `vn2000Utm49` (`EPSG:3406`). These systems include the
+seven-parameter datum shift to WGS 84. A bare `VN-2000` is ambiguous and is refused: name TM-3
+or a UTM zone.
 
 Layers are projected on the fly. A feature that crosses the edge of a world projection (the
 meridian opposite its central one, such as 90°E in Equal Earth Americas) is cut there and drawn on
@@ -353,29 +377,23 @@ Graticule** (`map.graticule`) draws latitude and longitude lines over the basema
 
 **Global** shows a globe; **Local** a flat view centred where you are (azimuthal equidistant;
 not in the web app, which doesn't include that projection).
-**Wireframe** draws polygons as outlines, **Depth Priority** lifts a layer above others whatever
-its order, **View Clipping** hides features beyond a distance from the centre, and **Speed
-Display** draws without antialiasing. The **Navigator** adds a compass, zoom buttons and a pan
+**Wireframe** draws polygons as outlines; **Raise Priority** and **Lower Priority** change a
+layer's drawing priority independently of its order. **View Clipping** hides features beyond a
+distance from the centre, and **Speed Display** draws without antialiasing.
+The **Navigator** adds a compass, zoom buttons and a pan
 pad; **Camera** shows and sets the position and scale; the **Magnifier** shows twice the map under
 the pointer. On the Home tab, **First-Person** navigation walks with W A S D and flies up and down
 with Q and E. The interface follows the system's light or dark setting; **View › Display › Dark
 Mode** switches it by hand.
 
-**View › Display › GPU Rendering** (beta) draws the flat map on the GPU instead of the CPU: vector
-layers are tessellated once and re-projected per frame, so panning and zooming stay smooth on
-large datasets. Raster tile layers (XYZ, TMS and WMS tiles, and raster PMTiles, MBTiles and
-styles) are placed again for every frame the map shows, from textures uploaded once and kept in
-a fixed pool, as MapLibre draws its tiles: panning and zooming never redraw the map for them, the
-tiles of each zoom are placed as the zoom passes, and parents and cached children stand in until
-they arrive (the view's tiles a few levels up are fetched too, so a coarse picture is always at
-hand). Vector tile styles and blended tile layers are still drawn as a picture of the
-view, shifted and scaled while the map moves. GPU Rendering is off by default, and the setting is
-remembered across sessions (`ui.map.gpu` is the command; `RUSTGIS_GPU=1` forces it on for
-development). The globe, view effects and the colour-vision simulator always render on the CPU,
-and exports are unaffected — the choice only changes the on-screen flat map. A turned or tilted
-map is drawn on the GPU too, in perspective with its fog and sky, when everything it shows is
-drawn there: no tiles, rasters, see-through, masked, swiped or blended layers, aggregations,
-graphics, stacked line strokes, labels with icons, view effects or colour-vision simulation, and
-extrusions only on a tilted map; otherwise it stays on the CPU. Extruded layers stand up on a
-tilted GPU map with a depth buffer, as MapLibre's fill extrusions do, so features that interlock
-or overlap are drawn right.
+**View › Display › GPU Rendering** (beta) draws supported parts of the flat map on the GPU
+for smoother navigation on large datasets. Unsupported geometry and layer effects fall back
+to the CPU. Raster tiles and opaque vector tile styles can be drawn directly on the GPU on a
+north-up Web Mercator map; translucent or blended tiles use cached pictures during navigation.
+
+GPU Rendering is off by default and remembered across sessions (`ui.map.gpu` is the command;
+`RUSTGIS_GPU=1` forces it on for development). The globe, view effects and colour-vision
+simulation stay on the CPU, and exports are unaffected. A rotated or tilted map uses the GPU
+only when every visible layer can be drawn there: tiles, rasters, terrain, transparency,
+masking, swipe, blending, aggregation, graphics, stacked strokes or labels with icons keep it
+on the CPU. Extrusions use the GPU only on a tilted map.

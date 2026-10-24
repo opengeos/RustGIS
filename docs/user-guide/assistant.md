@@ -14,13 +14,20 @@ RustGIS commands and geoprocessing tools for you:
 - "Buffer the cities by 200 km and colour the result by population."
 - "Switch to a dark basemap and hide the rivers."
 
-Each step it takes shows in the conversation (click one to see its parameters and result), and
-each change is one undo step, so Ctrl+Z takes back anything you don't want. It never says it
-changed the map unless a command succeeded. Commands that would read or write files, connect to
-an address on the internet, run a plugin, script or task, or replace the project wait for you:
-**Allow** or **Decline**. File and network access can be allowed for the rest of the
-conversation, for that exact command and file or address only. Enter sends, Shift+Enter
-starts a new line, Up and Down recall earlier messages, and **Stop** ends a run.
+Each step it takes shows in the conversation (click one to see its parameters and result).
+Project edits use the usual undo history, so Ctrl+Z takes them back; undo does not remove
+exported files or reverse actions outside the project. Check the tool results and map rather
+than relying only on the model's reply. Commands that would read or write files, connect to
+an address on the internet, run a plugin, script, task or model, or replace the project wait
+for you: **Allow** or **Decline**. SQL queries also ask, because SQL can access files and the
+network. **Allow such actions for this conversation** remembers the exact command and all
+its parameters, not general access to a file or server. Plugin commands, user automation and
+project replacement ask every time.
+
+Enter sends, Shift+Enter starts a new line, and Up and Down recall earlier messages when the
+message box is empty or showing a recalled message. Drag the grip above it to resize it.
+**Stop** ends the current assistant run; background local-agent threads have their own Stop
+controls.
 
 From the command line, `rustgis-cli ask` sends one request (see
 [Command Line](../cli.md#asking-the-ai-assistant)).
@@ -37,13 +44,16 @@ Click the model name or the gear to open the settings. The assistant works with:
 | Google Gemini | `gemini-3.8-flash` | [aistudio.google.com](https://aistudio.google.com/apikey), or `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
 | OpenRouter | `openrouter/auto` | [openrouter.ai](https://openrouter.ai/keys), or `OPENROUTER_API_KEY` |
 | Ollama (local) | `qwen3` | none; the server from `OLLAMA_BASE_URL` (default `http://localhost:11434`) |
-| OpenAI-compatible | — | LM Studio, vLLM, llama.cpp…: the address from `OPENAI_COMPATIBLE_BASE_URL`, an optional `OPENAI_COMPATIBLE_API_KEY` |
+| OpenAI-compatible | — | LM Studio, vLLM, llama.cpp…: `OPENAI_COMPATIBLE_BASE_URL` (default `http://localhost:1234/v1`), with an optional `OPENAI_COMPATIBLE_API_KEY` |
 
 The ↻ button lists the provider's models. The provider and model you last chose in the settings
 are used at start. Until you choose one, `RUSTGIS_ASSISTANT_PROVIDER` and
 `RUSTGIS_ASSISTANT_MODEL` pick them, and otherwise the desktop uses the first provider with a key
-in the environment. Saved settings win over the environment. Models that call tools well give the best results; small local models may stop early or
-skip steps.
+in the environment, falling back to Anthropic when none has a key. ChatGPT sign-in is used
+only when you choose that provider. Saved settings win over the environment. The **Address**
+field changes the endpoint for providers other than ChatGPT; use the OpenAI-compatible API
+path (usually `/v1`) for local servers. Models that call tools well give the best results;
+small local models may stop early or skip steps.
 
 ### Signing in with ChatGPT
 
@@ -81,9 +91,8 @@ Signing in needs the desktop app or the command line (it runs a short-lived serv
 
 Live testing of this integration was limited to a **ChatGPT Pro account on Windows 11**.
 Plus, Team/Business, Enterprise and Edu accounts, macOS and Linux have not been live-verified.
-Plus has a five-hour usage limit shared across apps using the plan. Team/Business, Enterprise
-and Edu workspace policy may block plan usage. Eligibility and model catalogs depend on the
-selected account and workspace.
+Plan usage limits and model catalogs depend on the selected account and workspace.
+Team/Business, Enterprise and Edu workspace policy may block plan usage.
 
 Weekly usage opens ChatGPT's settings page. RustGIS does not show a live percentage: there is
 no documented usage endpoint, and the tested live responses supplied no rate-limit headers.
@@ -131,8 +140,8 @@ complete instructions do not fit. RustGIS comes with these:
 | `add-data` | Adding files, web addresses, DuckDB SQL queries, STAC catalogs and Overture Maps |
 | `share-web-map` | Sharing the map or a layer as files that work without a server: a web map, a web layer, a style, an image |
 
-The settings' **Skills** list shows every skill and where it comes from, with a switch to turn
-each one on or off:
+On the desktop, the settings' **Skills** list shows every skill and where it comes from,
+with a switch to turn each one on or off:
 
 - **Built in**: the skills above.
 - **Plugins**: skills a plugin carries, named `<plugin>:<skill>`, while the plugin is enabled
@@ -150,7 +159,8 @@ approval (files, the network, plugins) still ask.
 
 A skill is a folder holding `SKILL.md` in the [Agent Skills](https://agentskills.io) format: front
 matter giving its `name` (lower-case letters, digits and hyphens) and a `description` that says
-when to use it, then the instructions in Markdown. The assistant reads only `SKILL.md`.
+when to use it, then the instructions in Markdown. Each `SKILL.md` is at most 64 KiB; the
+assistant reads only that file, and importing a folder or ZIP does not copy its other files.
 Descriptions can be single-line values or indented blocks introduced by `>` or `|`.
 For a description spanning several lines, use a block; plain multiline YAML values are not supported.
 
@@ -199,6 +209,15 @@ An archive with `SKILL.md` at its root represents that one outermost skill: nest
 files belong to its examples/references and are not installed separately. To import several
 skills, put each in a sibling folder and omit a root `SKILL.md`. A failure during the final
 rename phase can leave earlier skills installed; the error names those completed installs.
+
+## Subagents
+
+For a self-contained task, the assistant can use `delegate` to start a fresh conversation
+with the same provider and model, acting on the same project. The subagent receives the task,
+not the whole conversation, and returns a short report. Its tool calls appear in the main
+transcript, and file, network and other gated actions still need approval. It inherits the
+conversation's exact-command approvals. This works without installing a local coding agent;
+it is distinct from the background threads below.
 
 ## Agents on this computer
 
@@ -251,9 +270,10 @@ fetch the USGS stream gauges in Texas and add them to the map."
 
 ## Privacy
 
-Requests go from RustGIS straight to the provider you chose, with your key. They carry your
-messages, the map's layer names, fields and extent, and any rows the assistant reads to answer
-you; nothing goes anywhere else. A key typed in the settings is used for the session only unless
+Assistant requests go directly to the provider and address you chose, using your API key or
+ChatGPT sign-in. They carry your messages, the map's layer names, fields and extent, and tool
+results such as rows the assistant reads. Local agents use their own providers and tools,
+with their own data handling. A key typed in the settings is used for the session only unless
 you tick **Remember the key on this computer**, which saves it unencrypted in the app's
 preferences (in the browser's storage on the web); keys from the environment are never saved.
 A ChatGPT sign-in is kept in `chatgpt-auth.json` in the app's settings folder (owner-only on
@@ -268,6 +288,15 @@ OpenRouter accept that; a local Ollama server must allow the page's origin
 (`OLLAMA_ORIGINS=https://web.rustgis.app ollama serve`).
 
 ## Retries and long conversations
+
+The assistant stops after 16 rounds of tool use per message, shared with subagents. Provider
+retries and conversation summaries are separate. Reply "continue" to go on.
+
+RustGIS first trims older tool results and reasoning when the conversation grows too large.
+If that is not enough, or the provider rejects the context length, it asks the same model to
+summarize earlier turns. **Compact** requests this explicitly while the assistant is idle;
+**New conversation** clears the chat and its remembered approvals and ends local-agent
+threads, without resetting the map.
 
 Live streaming text is available on the desktop. The browser currently buffers the complete
 response (up to the response limit, 64 MiB for SSE) before displaying it; it has no live streaming

@@ -234,7 +234,9 @@ fn planet_layer_toggles_show_in_the_next_frame_and_stale_jobs_do_not_restore_the
             let image = h.render().expect("settled frame");
             let center = h.state().map.view_rect.expect("map").0.center();
             let p = image.get_pixel(center.x.round() as u32, center.y.round() as u32);
-            assert!(p[0] > p[1], "an old worker restored a hidden overlay: {p:?}");
+            // The overlay's green, as above: a tile still to come shows the body's plain grey,
+            // which is no overlay either (macOS CI drew one such frame).
+            assert!(u16::from(p[1]) <= u16::from(p[0]) * 2, "{projection} GPU={gpu}: an old worker restored a hidden overlay: {p:?}");
         }
     }
 }

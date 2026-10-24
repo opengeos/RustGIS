@@ -2,12 +2,57 @@
 
 Tools for working across maps and views, and for setting up the app the way you like it.
 
-- **Side by Side** shows a second map beside the active one; **Link Views** keeps maps at the same
-  place and scale, and **Link Cursors** marks the pointer's place on the other map.
+## Projects
+
+**Project › New**, **Open**, **Save** and **Save As** manage `.rgis` project files; older
+`.rgisx` projects still open. A project keeps its maps, layers, styles, layouts, tables, tasks,
+models and other project items together. In-memory feature data is saved in the project;
+streamed layers reopen their sources, and file-backed rasters reopen their files. Keep those
+sources accessible when moving a project. See [Project items](data.md#project-items) for
+templates, packages and files for individual items.
+
+**Open** also accepts a project package (`.rgispkg`), as do drag-and-drop and the desktop
+command line. A package opens as a new, unsaved project; Save writes a plain `.rgis` file.
+Opening or creating a project clears undo history; saving does not.
+
+Saved layer addresses omit passwords, access keys, tokens and signatures. The open session
+keeps them, but after restarting RustGIS a protected source may need you to sign in to its
+connection again or add it again with credentials.
+
+## Panes and command search
+
+The left pane has tabs for **Layers**, **Browser** and **Data Sources**. Right-hand panes
+such as **Tools**, **Symbology**, **Labeling**, **Format** and **AI Assistant** remain open as
+tabs: select a tab to bring it forward, or its × to close it. Right-click a tab to close it,
+the other panes or all panes; an overflow menu lists tabs that do not fit.
+
+Right-click a map or layout tab (or its entry in Browser) to **Rename**, **Duplicate** or
+**Delete** it. Deletion asks for confirmation; a project must keep at least one map.
+
+Click **Command Search** at the right of the title bar or on the Help tab, or press ++ctrl+k++
+(++cmd+k++ on macOS). Search by command name, ID or ribbon location; analysis tools, workflow
+names, plugin commands and plugin panels are searchable too. Click a result, or press Enter to
+choose the first available one. Commands that need inputs open their dialog, pane or workflow when one
+is available; unavailable commands stay visible but disabled, with the reason on hover.
+Use scripts or the assistant for parameterized commands without an interactive entry point.
+
+## Keyboard shortcuts
+
+See the [keyboard shortcut reference](index.md#keyboard-shortcuts) for project, map and editing
+shortcuts, macOS bindings and text-field undo behavior. **Help › Shortcuts** lists the active
+bindings in the app. Feature editing is described in [Editing](editing.md); layout deletion,
+duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
+
+## Views and tools
+
+- **Side by Side** shows a second project map beside the active one (add another map first);
+  **Link Views** keeps maps at the same place and scale, and **Link Cursors** marks the
+  pointer's place on the other map.
 - **Browser View** shows the project's maps, layouts, tables, styles, tasks, models, folders and
   offline areas as cards (double-click to open); **Item Pop-ups** add hover details.
-- **Pane Sets** save the panes you have open and bring them back. The **Workflow Manager** tracks
-  jobs (new, in progress, on hold, done) with the area each covers.
+- **Pane Sets** (View › Workspace) save the left pane, open right-hand pane tabs, active pane
+  and ribbon tab and bring them back. The **Workflow Manager** tracks jobs (new, in progress,
+  on hold, done) with the area each covers.
 - **Connections** (Home › Add Data › **Connections…**) opens the Data Sources pane on its saved
   connections; it only ever opens the pane, so it is safe to choose when the pane is already open
   (**View › Windows › Data Sources** still shows or hides it). **Add Data › New Connection** lists
@@ -47,7 +92,8 @@ Tools for working across maps and views, and for setting up the app the way you 
       as writing files, so write `Buffer 1500 m` rather than `Buffer 1.5 km`. GeoLibre and plugin
       tools' outputs are refused.
 - **Thumbnails** for the project and for each map, from the view or an image.
-- **Animation**: add keyframes (views), play them, and export the moves as PNG frames.
+- **Animation**: add keyframes (views), play them, and export the moves as a zip of PNG frames
+  on desktop.
 - **Time Slider** (View › Time) shows data through time, in a timeline docked under the map.
 
     <figure markdown="span">
@@ -77,7 +123,7 @@ Tools for working across maps and views, and for setting up the app the way you 
       `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes
       back), `time.fields` (a layer's date fields) and `time.unbind`:
       `rustgis-cli run --cmd 'layer.addData={"path":"quakes.csv"}' --cmd 'time.bind={"layer":"quakes","unit":"year","show":"cumulative"}' --cmd 'time.goTo={"date":"2018"}'`.
-    - **Export** writes the steps as an animated GIF (`time.export` also writes a zip of PNG
+    - **Export** on desktop writes the steps as an animated GIF (`time.export` also writes a zip of PNG
       frames). The slider, its window and the bindings are saved with the project; the off button
       turns it off and every feature shows again.
 - **Time Series**: a Zarr variable's values through time at points clicked on the map, as lines on
@@ -88,12 +134,13 @@ Tools for working across maps and views, and for setting up the app the way you 
 - **Offline**: Download Map takes the data in view into an offline area; open it to edit, then
   Sync sends changed, new and deleted features back and refreshes it. **Feature Cache** prepares
   every layer's geometry for the current projection (Fill, Empty, Cancel, Auto Cache).
-- **Help**: choose the ribbon's tabs and the Quick Access Toolbar's buttons, open the user guide,
-  and watch the **Diagnostic Monitor** (frame rate, draw time, data size).
+- **Settings › Customize** chooses the ribbon's tabs and the Quick Access Toolbar's extra
+  buttons. Settings and Help always remain visible. **Help** opens the user guide and the
+  **Diagnostic Monitor** (frame rate, draw time, data size).
 - **Plugins**: **Plugins › Plugin Manager** installs, updates and removes [plugins](../plugins.md)
   from the registry at [plugins.rustgis.app](https://plugins.rustgis.app) or from a file.
 - **Language**: **Settings › Language** switches the interface among
-  [16 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
+  [17 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
   borders.
 - **Start-up**: **Settings › Start-up** sets what RustGIS opens with: **Start With** the World Atlas
   sample or a blank map, or, in the desktop app, **Last Project** (the `.rgis` project last opened
