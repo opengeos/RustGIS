@@ -1218,7 +1218,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     let out_h = script_out_height(ui);
     // One id whether the pane scrolls as a whole or not, so resizing it across that keeps the
     // box's focus, cursor and selection.
-    let box_id = egui::Id::new("script_text");
+    let box_id = egui::Id::unique("script_text");
     // Ctrl+Enter (⌘+Enter) runs the script (#773), taken before the box sees it, so it runs rather
     // than breaking the line; once a press, not again for each repeat of a key held down. The box
     // keeps the focus, so the list closes, as Escape closes it.

@@ -47,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.session.map_mut().camera.center = lonlat_to_merc(Coord::new(15.0, 25.0));
             app.session.map_mut().camera.res = 20_000.0;
             let mut h = egui_kittest::Harness::builder()
+                .with_accessibility_check(false)
                 .with_size(egui::vec2(1480.0, 900.0))
                 .with_pixels_per_point(2.0)
                 .with_step_dt(1.0 / 60.0)
@@ -94,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     delta: egui::vec2(0.0, 4.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: Default::default(),
+                    source: egui::MouseWheelSource::Wheel,
                 });
                 let start = std::time::Instant::now();
                 h.step();

@@ -51,7 +51,7 @@ pub fn show(
     ds: &Dataset,
     count: impl FnOnce(&str) -> Result<(usize, usize), String>,
 ) -> Option<Apply> {
-    let key = egui::Id::new(("sqlbox_draft", slot));
+    let key = egui::Id::unique(("sqlbox_draft", slot));
     let t = &Tokens::get(ui.ctx());
     let stored = stored.map(str::trim).filter(|w| !w.is_empty());
     let fresh = || Draft {

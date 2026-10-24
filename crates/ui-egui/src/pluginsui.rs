@@ -896,7 +896,7 @@ fn confirm(app: &mut RustGisApp, ctx: &egui::Context, t: &Tokens) {
     let Some(c) = &app.plugins.confirm else { return };
     let m = c.manifest.clone();
     let mut decision = None;
-    egui::Modal::new(egui::Id::new("plugin_confirm")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("plugin_confirm")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.label(
             egui::RichText::new(crate::i18n::fmt("Install {name} {version}?", &[("name", &m.name), ("version", &m.version)]))
@@ -993,7 +993,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut open = true;
     let screen = ctx.content_rect();
     egui::Window::new(tl!("Plugin Manager"))
-        .id(egui::Id::new("plugin_manager"))
+        .id(egui::Id::unique("plugin_manager"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)

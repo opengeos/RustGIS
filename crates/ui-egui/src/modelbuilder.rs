@@ -730,7 +730,7 @@ fn palette_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, canvas: Rect) {
                     for tool in tools {
                         let resp = {
                             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(tool.name)));
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(tool.name)));
                             if resp.hovered() {
                                 ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
                             }
@@ -776,7 +776,7 @@ fn drag_source(ui: &Ui, resp: &egui::Response, what: &Add, label: &str) {
         && let Some(p) = ui.ctx().pointer_latest_pos()
     {
         let t = Tokens::get(ui.ctx());
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("mb_drag")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("mb_drag")));
         let galley = painter.layout_no_wrap(label.to_string(), semibold(12.0), t.text);
         let r = Rect::from_min_size(p + vec2(12.0, 8.0), galley.size() + vec2(16.0, 10.0));
         painter.rect(r, CornerRadius::same(6), t.pane, Stroke::new(1.5, kind_color(ModelNodeKind::Tool, &t)), egui::StrokeKind::Inside);
@@ -831,7 +831,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         app.mb.fit = false;
         fit(&mut app.mb, rect);
     }
-    let bg = ui.interact(rect, egui::Id::new("mb_canvas"), Sense::click_and_drag());
+    let bg = ui.interact(rect, egui::Id::unique("mb_canvas"), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, t.canvas);
     // Zoom (Ctrl+wheel, pinch) about the pointer; the wheel pans.
@@ -930,7 +930,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         if !r.intersects(rect.expand(50.0)) {
             continue;
         }
-        let resp = ui.interact(r.intersect(rect), egui::Id::new(("mb_node", &n.id)), Sense::click_and_drag());
+        let resp = ui.interact(r.intersect(rect), egui::Id::unique(("mb_node", &n.id)), Sense::click_and_drag());
         if resp.drag_started() {
             drag_started = true;
             clicked_node = Some(n.id.clone());
@@ -1020,7 +1020,7 @@ fn canvas_ui(app: &mut RustGisApp, ui: &mut Ui, rect: Rect, t: &Tokens, problems
         }
         let p = view.to_screen(out_port_pos(&n));
         let pr = Rect::from_center_size(p, Vec2::splat(18.0 * z.max(0.7)));
-        let resp = ui.interact(pr, egui::Id::new(("mb_out", &n.id)), Sense::drag()).on_hover_text(tl!("Drag to an input to connect"));
+        let resp = ui.interact(pr, egui::Id::unique(("mb_out", &n.id)), Sense::drag()).on_hover_text(tl!("Drag to an input to connect"));
         if resp.drag_started() {
             app.mb.wiring = Some(n.id.clone());
         }
@@ -1628,7 +1628,7 @@ fn log_ui(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, problems: &[model::Prob
 fn confirm(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(p) = app.mb.confirm.clone() else { return };
     let mut answer = None;
-    egui::Modal::new(egui::Id::new("mb_confirm")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::unique("mb_confirm")).show(ctx, |ui| {
         ui.set_width(320.0);
         ui.label(egui::RichText::new(tl!("Discard unsaved changes to the current model?")).strong());
         ui.add_space(8.0);
@@ -1685,7 +1685,7 @@ mod tests {
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_size(vec2(1300.0, 800.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1300.0, 800.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);

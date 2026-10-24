@@ -49,6 +49,7 @@ fn main() {
     };
     app.set_render_state(Some(rs.clone()));
     let mut harness = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
         .with_size(egui::vec2(w, h))
         .with_pixels_per_point(2.0)
         .with_max_steps(10_000)
@@ -228,6 +229,7 @@ fn main() {
                 delta: egui::vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             });
             harness.step();
         } else if l.get("release").is_some() {

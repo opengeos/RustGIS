@@ -488,6 +488,8 @@ pub struct UiState {
     /// The keyboard shortcuts.
     pub keymap: keymap::Keymap,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// Where the left and right panes were drawn on the last frame, while they show.
+    pub pane_rects: [Option<egui::Rect>; 2],
     /// Tabs hidden from the ribbon (Settings › Customize › Ribbon).
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
@@ -667,6 +669,7 @@ impl Default for UiState {
             shortcuts: false,
             keymap: keymap::Keymap::default(),
             tab_strip_rect: None,
+            pane_rects: [None; 2],
             copy_out: None,
             open_url: None,
             copy_image: None,
@@ -771,6 +774,9 @@ pub struct RustGisApp {
     /// A screen snapshot an agent attached through the relay asked for, while it is captured.
     #[cfg(not(target_arch = "wasm32"))]
     relay_shot: Option<relayshot::Shot>,
+    /// Where the relay snapshot's window screenshot lands.
+    #[cfg(not(target_arch = "wasm32"))]
+    relay_arrived: relayshot::Arrived,
     /// The frame's `egui::Context`, kept so `ui.mcpRelay` can hand the relay its wake callback:
     /// a queued message asks for a repaint, or it waits for the user to move the mouse.
     #[cfg(not(target_arch = "wasm32"))]
@@ -882,6 +888,8 @@ impl RustGisApp {
             file_bridge: None,
             #[cfg(not(target_arch = "wasm32"))]
             relay_shot: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            relay_arrived: relayshot::Arrived::default(),
             #[cfg(not(target_arch = "wasm32"))]
             connect: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

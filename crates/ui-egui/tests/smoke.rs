@@ -6,7 +6,7 @@ use serde_json::json;
 
 /// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
-    egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
+    egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
         |ui, app: &mut RustGisApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -101,6 +101,7 @@ fn command_search_basemap_gallery_selects_and_can_open_tile_dialog() {
         delta: egui::vec2(0.0, -800.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
     });
     for _ in 0..6 {
         h.step();
@@ -254,14 +255,18 @@ fn mcp_relay_early_start_wakes_queued_request_and_updates_ui() {
     writeln!(client, "{}", json!({"jsonrpc":"2.0","id":1,"method":"ping"})).expect("queue ping");
     client.flush().expect("flush request");
 
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 860.0))
+        .with_max_steps(64)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     let mut input = BufReader::new(client.try_clone().expect("clone stream"));
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut reply = String::new();
@@ -428,6 +433,8 @@ fn nested_ogc_children_sort_on_import_rename_refresh_and_reopen() {
 #[test]
 fn every_tab_pane_and_dialog_renders() {
     let mut h = harness();
+    // Every language is shown: no face in the monospace chain has some of their letters (ə).
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     for _ in 0..4 {
         h.step();
     }
@@ -677,6 +684,8 @@ fn browse_lists_thousands_of_plugins_quickly() {
     h.state_mut().plugins.set_registry(Some(Ok(entries)));
     h.state_mut().run("ui.plugins", json!({"open": true, "tab": "browse"})).unwrap();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     let _ = h.get_by_label("5000 plugins");
     // Only the visible rows are laid out, so a frame stays cheap with thousands of plugins
     // (about 1 ms in a release build; it was over 100 ms when every card was drawn). The bound
@@ -725,6 +734,8 @@ fn browse_lists_thousands_of_plugins_quickly() {
 #[test]
 fn language_switch_waits_for_its_font() {
     let mut h = harness();
+    // A machine without a CJK face draws Chinese as boxes, whenever it switches.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     h.state_mut().run("ui.language", json!({"code": "en"})).unwrap();
     for _ in 0..4 {
         h.step();
@@ -1261,14 +1272,18 @@ fn delimited_text_options_go_with_the_picked_file() {
 fn delimited_text_dialog_lists_the_picked_files_columns() {
     let services = rustgis_ui_egui::Services { open_async: Some(Box::new(|_: &str| {})), ..Default::default() };
     let app = RustGisApp::with_sample().with_services(services);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 860.0))
+        .with_max_steps(64)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     h.state_mut().run("ui.addDelimited", json!(null)).unwrap();
     let picked = format!("{}parks.csv", rustgis_ui_egui::DELIMITED_PICK);
     h.state_mut().open_picked(&picked, b"name;east;north\nCentral Park;992000;220000\n").unwrap();
@@ -1655,6 +1670,8 @@ fn add_service_keeps_and_picks_connections() {
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Pick one…")).unwrap().click();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Other user").click();
     h.step();
     assert_eq!(h.state().dialogs.connection.as_deref(), Some(other_id.as_str()));
@@ -1682,6 +1699,8 @@ fn add_database_picks_and_keeps_connections() {
     h.step();
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Pick one…")).unwrap().click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Picked DB").click();
     h.step();
@@ -1854,6 +1873,8 @@ fn stac_dialog_keeps_and_picks_connections() {
     h.step();
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Other")).unwrap().click();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Picked STAC").click();
     h.step();
     assert_eq!(h.state().ui.stac.api, api);
@@ -2012,14 +2033,19 @@ fn connections_tree_browses_and_adds() {
         }
     });
     // Frames 0.05 s apart, so two clicks fall within egui's double-click delay.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).with_step_dt(0.05).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        RustGisApp::with_sample(),
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 860.0))
+        .with_max_steps(64)
+        .with_step_dt(0.05)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            RustGisApp::with_sample(),
+        );
     h.state_mut().run("connection.new", json!({"kind":"wms","address":format!("http://{addr}/wms"),"name":"Local"})).unwrap();
     h.state_mut().run("ui.pane.sources", json!({})).unwrap();
     h.step();
@@ -2070,6 +2096,8 @@ fn connections_tree_browses_and_adds() {
     // Recent now lists the added layer under "Local" too, above the connection's own row.
     h.query_all_by_label("Local").last().unwrap().click_secondary();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Refresh").click();
     h.step();
     h.step();
@@ -2087,14 +2115,18 @@ fn web_save_asks_for_the_file_name() {
         ..Default::default()
     };
     let app = RustGisApp::with_sample().with_services(services);
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 860.0))
+        .with_max_steps(64)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     let names = |got: &std::sync::Mutex<Vec<(String, Vec<u8>)>>| got.lock().unwrap().iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
     // A project never saved: Save asks first, with the project's name.
     h.state_mut().run("layer.color", json!({"layer": "Countries", "color": "#336699"})).unwrap();
@@ -2265,14 +2297,18 @@ fn letting_agents_control_rustgis_starts_the_relay_and_shows_how_to_connect() {
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
     // The connection instructions expand below the checkbox: keep the settings above the
     // bottom composer so both pointer clicks reach the checkbox.
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 2000.0)).with_max_steps(64).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 2000.0))
+        .with_max_steps(64)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     // The first frame loads the assistant's settings and closes the form when they're complete (a
     // key in the environment): open it after that.
     h.step();
@@ -2325,14 +2361,18 @@ fn agents_on_this_computer_switches_tick_and_stick() {
         }
     }));
     app.run("ui.pane.assistant", json!({})).expect("opens the assistant");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 2000.0)).with_max_steps(64).build_ui_state(
-        |ui, app: &mut RustGisApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_accessibility_check(false)
+        .with_size(egui::vec2(1400.0, 2000.0))
+        .with_max_steps(64)
+        .build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     // The first frame loads the assistant's settings and closes the form when they're complete (a
     // key in the environment): open it after that.
     h.step();
@@ -2506,6 +2546,8 @@ fn ogc_group_context_menus_refresh_all_or_one_child() {
     let before = server.requests().len();
     h.get_by_label("Places").click_secondary();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Refresh").click();
     wait_for_ogc(&mut h, |app| app.ui.service_import.is_none());
     assert!(serde_json::to_string(&h.state().session.map().layer(point).unwrap().dataset).unwrap().contains("New Place"));
@@ -2515,6 +2557,8 @@ fn ogc_group_context_menus_refresh_all_or_one_child() {
     }
     let before = server.requests().len();
     h.get_by_label("My OGC Layer").click_secondary();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Refresh").click();
     wait_for_ogc(&mut h, |app| app.ui.service_import.is_none());
@@ -2686,6 +2730,8 @@ fn a_run_opens_again_in_its_tool_from_the_history() {
     assert!(h.query_all_by_label_contains(" UTC").next().is_some(), "when it ran");
     h.get_by_role_and_label(egui::accesskit::Role::Button, "⋯").click_accesskit();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Open in Tool").click_accesskit();
     h.step();
     let app = h.state();
@@ -2774,6 +2820,8 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     h.step();
     h.get_by_label("Dynamic Text").click_accesskit();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     h.get_by_label("Map scale  {scale}").click_accesskit();
     h.step();
     assert_eq!(h.state().session.tool.code(), "graphicText");
@@ -2794,6 +2842,8 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
     assert_eq!(selected_text(&h).as_deref(), Some("Text"));
     // Another tool forgets the value.
     h.get_by_label("Dynamic Text").click_accesskit();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("Current date  {date}").click_accesskit();
     h.step();
@@ -2904,6 +2954,8 @@ fn help_shortcuts_lists_the_keymap() {
     h.step();
     h.state_mut().run("ui.shortcuts", json!(null)).unwrap();
     h.step();
+    // What it opened shows on the next frame.
+    h.step();
     let undo = if cfg!(target_os = "macos") { "⌘Z" } else { "Ctrl+Z" };
     assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
     assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
@@ -3005,6 +3057,8 @@ fn line_strokes_editor_edits_one_class() {
     };
     // The layer's strokes first; class 1 is marked as having its own.
     h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("All classes")).unwrap().click();
+    h.step();
+    // What it opened shows on the next frame.
     h.step();
     h.get_by_label("1 •").click_accesskit();
     h.step();

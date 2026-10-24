@@ -77,7 +77,7 @@ fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             ui.label(tl!("Class"));
             ui.label(RichText::new(name).color(t.text_dim));
         });
-        let key = egui::Id::new("label_pane_class_tab");
+        let key = egui::Id::unique("label_pane_class_tab");
         let mut tab = ui.data(|d| d.get_temp::<ClassTab>(key)).unwrap_or(ClassTab::Field);
         ui.horizontal(|ui| {
             for (label, it) in [(tl!("Field"), ClassTab::Field), (tl!("SQL"), ClassTab::Sql)] {
@@ -144,9 +144,9 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
         Ok((n, of))
     };
     // A draft belongs to this layer of this project: another project may reuse the layer's id.
-    let owner = egui::Id::new((app.session.opened, l.id));
+    let owner = egui::Id::unique((app.session.opened, l.id));
     // A count holds for this project state at this scale (display filters follow the scale).
-    let version = egui::Id::new((app.session.revision, scale.to_bits())).value();
+    let version = egui::Id::unique((app.session.revision, scale.to_bits())).value();
     match crate::sqlbox::show(ui, "label_sql", owner, version, labels.default.where_.as_deref(), &l.dataset, count) {
         Some(crate::sqlbox::Apply::Clause(w)) => run(app, "labels.class.update", json!({"where": w})),
         Some(crate::sqlbox::Apply::Clear) => run(app, "labels.class.update", json!({"where": null})),
@@ -302,7 +302,7 @@ struct ColorDrag {
 
 /// Previews a colour pick on its layer until `finish_color_drag` commits the completed gesture.
 pub(crate) fn color_drag(app: &mut RustGisApp, ui: &Ui, l: &Layer, color: Rgba) {
-    let key = egui::Id::new(COLOR_DRAG);
+    let key = egui::Id::unique(COLOR_DRAG);
     let mut pending = ui.data(|d| d.get_temp::<ColorDrag>(key));
     // One left pending on another layer (the selection changed mid-pick, from the Assistant or a
     // shortcut) is finished first rather than dropped with its preview in place.
@@ -329,7 +329,7 @@ pub(crate) fn finish_color_drag(app: &mut RustGisApp, ui: &Ui) {
     if ui.input(|i| i.pointer.primary_down() && i.focused) {
         return;
     }
-    let key = egui::Id::new(COLOR_DRAG);
+    let key = egui::Id::unique(COLOR_DRAG);
     let Some(drag) = ui.data_mut(|d| {
         let drag = d.get_temp::<ColorDrag>(key);
         d.remove::<ColorDrag>(key);
@@ -379,7 +379,7 @@ mod tests {
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         // The pane's fonts (its semibold heading) are installed on the first frame, as the app does.
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_size(egui::vec2(360.0, 900.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(360.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -476,7 +476,7 @@ mod tests {
         let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.color;
         let (cities_before, countries_before) = (color(&app, cities), color(&app, countries));
         let steps = app.session.undo_depth();
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
@@ -530,7 +530,7 @@ mod tests {
         let before = app.session.map().layer(id).unwrap().labels.default.color;
         let steps = app.session.undo_depth();
         // The picker's colour each frame, if it reports one, as `text_symbol` hands it on.
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();

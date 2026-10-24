@@ -129,7 +129,7 @@ pub fn big(
     let w = (lw + 14.0).max(50.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H - 2.0), Sense::click());
     let on = enabled(app, id) || menu;
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, label.replace('\n', " ")));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, label.replace('\n', " ")));
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 21.0), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
@@ -163,7 +163,7 @@ pub fn small(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, desc: &
     let tw = if label.is_empty() { 0.0 } else { text_w(ui, label, regular(11.5)) + 8.0 };
     let (r, resp) = ui.allocate_exact_size(vec2(26.0 + tw, 22.0), Sense::click());
     let on = enabled(app, id);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, if label.is_empty() { desc } else { label }));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, if label.is_empty() { desc } else { label }));
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(18.0, 18.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
@@ -236,7 +236,7 @@ fn small_menu_with(
     let t = Tokens::get(ui.ctx());
     let tw = text_w(ui, label, regular(11.5)) + 20.0;
     let (r, resp) = ui.allocate_exact_size(vec2(26.0 + tw, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), if label.is_empty() { desc } else { label }));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), if label.is_empty() { desc } else { label }));
     bg(ui, r, &resp, false, &t);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 13.0, r.center().y), vec2(18.0, 18.0)), icon, t.icon, t.accent);
     ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, label, regular(11.5), t.text);
@@ -291,7 +291,7 @@ pub fn menu_row(ui: &mut Ui, icon: &str, label: &str, shortcut: &str, on: bool) 
 pub fn submenu_row(ui: &mut Ui, icon: &str, label: &str, add: impl FnOnce(&mut Ui)) {
     let button = egui::Button::new(menu_text(ui, icon, label))
         .min_size(vec2(0.0, 24.0))
-        .right_text(egui::containers::menu::SubMenuButton::RIGHT_ARROW);
+        .right_text(egui::containers::menu::SubMenuButton::arrow_atom(None));
     let (resp, _) = egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add);
     menu_icon(ui, &resp, icon);
 }
@@ -391,7 +391,7 @@ pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool, min_size: egui::V
     let size = vec2(min_size.x.max(text_w(ui, label, font.clone()) + 28.0), min_size.y.max(28.0));
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
     // Screen readers (and UI tests) find it by its label.
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let fill = if !enabled {
         t.green.gamma_multiply(0.45)
     } else if resp.is_pointer_button_down_on() {
@@ -412,7 +412,7 @@ pub fn dialog_button(ui: &mut Ui, label: &str, fill: Option<egui::Color32>, min_
     let font = if fill.is_some() { semibold(12.5) } else { regular(12.5) };
     let size = vec2(min_size.x.max(text_w(ui, label, font.clone()) + 24.0), min_size.y);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let v = *ui.style().interact(&resp);
     let (bg, text) = match fill {
         Some(c) if resp.is_pointer_button_down_on() => (c.gamma_multiply(0.8), egui::Color32::WHITE),
@@ -480,7 +480,7 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
         }
         if clear {
             let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Clear")));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear")));
             if resp.hovered() {
                 ui.painter().rect_filled(r, CornerRadius::same(5), t.hover);
             }
@@ -510,6 +510,7 @@ mod tests {
     /// Opens a colour button's picker and says whether it offers additive blending.
     fn offers_additive(button: fn(&mut egui::Ui, &mut egui::Color32)) -> bool {
         let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
             .build_ui_state(|ui, c: &mut egui::Color32| button(ui, c), egui::Color32::from_rgb(224, 105, 59));
         h.get_by_role(egui::accesskit::Role::ColorWell).click();
         h.run();
@@ -539,17 +540,17 @@ mod tests {
             whole: u64,
             settled: Vec<&'static str>,
         }
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, s: &mut Saved| {
                 let mut real = s.real;
-                let drag = super::Dragged::lend(ui, egui::Id::new("real"), &mut real);
+                let drag = super::Dragged::lend(ui, egui::Id::unique("real"), &mut real);
                 let r = ui.add(egui::DragValue::new(&mut real).speed(0.1));
                 if drag.settled(ui, &r, &mut real) && real != s.real {
                     s.real = real;
                     s.settled.push("real");
                 }
                 let mut whole = s.whole;
-                let drag = super::Dragged::lend(ui, egui::Id::new("whole"), &mut whole);
+                let drag = super::Dragged::lend(ui, egui::Id::unique("whole"), &mut whole);
                 let r = ui.add(egui::DragValue::new(&mut whole).speed(0.1));
                 if drag.settled(ui, &r, &mut whole) && whole != s.whole {
                     s.whole = whole;

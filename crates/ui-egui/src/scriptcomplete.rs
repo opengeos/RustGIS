@@ -658,7 +658,7 @@ fn help_at(session: &rustgis_engine::Session, script: &str, at: usize, h: &Hint)
 /// commands don't while the app runs; their count tells another session's registry apart).
 fn script_ids_cached(ui: &Ui, session: &rustgis_engine::Session) -> std::sync::Arc<Vec<String>> {
     type Kept = ((u64, usize), std::sync::Arc<Vec<String>>);
-    let key = Id::new("script_complete_ids");
+    let key = Id::unique("script_complete_ids");
     let now = (rustgis_engine::plugins::revision(), session.registry.commands.len());
     if let Some((was, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
         && was == now
@@ -1410,10 +1410,15 @@ mod tests {
     /// The pane with an empty script, its box focused.
     fn pane() -> egui_kittest::Harness<'static, crate::RustGisApp> {
         use egui_kittest::kittest::Queryable;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
-            |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
-            crate::RustGisApp::with_sample(),
-        );
+        // Without the interface fonts (`theme::install_fonts`) egui's faces have no "→".
+        let mut h = egui_kittest::Harness::builder()
+            .allow_missing_glyphs()
+            .with_accessibility_check(false)
+            .with_size(egui::vec2(500.0, 700.0))
+            .build_ui_state(
+                |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
+                crate::RustGisApp::with_sample(),
+            );
         h.run();
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
         h.run();
@@ -1483,7 +1488,7 @@ mod tests {
         let out = &h.state().workflow.script_out;
         assert!(out.iter().any(|(line, err)| !err && line.starts_with("map.zoomFull")), "{out:?}");
         assert_eq!(h.state().workflow.script, "map.zoomFull", "no line break");
-        assert!(h.ctx.memory(|m| m.has_focus(egui::Id::new("script_text"))));
+        assert!(h.ctx.memory(|m| m.has_focus(egui::Id::unique("script_text"))));
         h.get_by_label_contains("Run #1 (");
         h.get_by_label_contains(" UTC");
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
@@ -1533,7 +1538,7 @@ mod tests {
     fn ctrl_enter_elsewhere_runs_nothing() {
         let mut h = pane();
         type_in(&mut h, "map.zoomFull");
-        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("script_text")));
+        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("script_text")));
         h.run();
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
         h.run();
@@ -1573,7 +1578,7 @@ mod tests {
         type_in(&mut h, "labels.sty");
         h.key_press(egui::Key::Enter);
         h.run();
-        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::new("script_text")).unwrap();
+        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::unique("script_text")).unwrap();
         let now = (state.cursor.char_range().unwrap(), h.state().workflow.script.clone());
         let mut undoer = state.undoer();
         let back = undoer.undo(&now).map(|(_, text)| text.clone());
@@ -1668,6 +1673,7 @@ mod tests {
             delta: egui::vec2(0.0, 100_000.0),
             modifiers: egui::Modifiers::NONE,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
         });
         // egui eases a wheel's scroll over frames, asking for a repaint until it's done.
         h.run_steps(60);
@@ -1818,7 +1824,7 @@ mod tests {
     fn a_narrow_window_puts_the_help_under_the_list() {
         use egui_kittest::kittest::Queryable;
         let width = 380.0;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -1840,7 +1846,7 @@ mod tests {
     fn a_short_window_scrolls_the_list() {
         use egui_kittest::kittest::Queryable;
         let (width, height) = (380.0, 300.0);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, height)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -1872,7 +1878,7 @@ mod tests {
         }
         let items = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
         assert!(items.len() > 3, "a longer list: {items:?}");
-        let list = h.ctx.data(|d| d.get_temp::<super::List>(egui::Id::new("script_text").with("complete"))).unwrap();
+        let list = h.ctx.data(|d| d.get_temp::<super::List>(egui::Id::unique("script_text").with("complete"))).unwrap();
         let (shown, _) = list.drawn.unwrap();
         let last = h.get_by_role_and_label(egui::accesskit::Role::Button, items.last().unwrap()).rect();
         assert!(last.max.y <= shown.max.y, "every item in view, no scroll: {last:?} in {shown:?}");
@@ -1994,7 +2000,7 @@ mod tests {
         h.run();
         assert_eq!(h.state().workflow.script, "labels.style ");
         type_in(&mut h, "{");
-        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::new("script_text")).unwrap();
+        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::unique("script_text")).unwrap();
         let now = (state.cursor.char_range().unwrap(), h.state().workflow.script.clone());
         let back = state.undoer().undo(&now).map(|(_, text)| text.clone());
         assert!(back.is_some_and(|t| !t.contains('{')), "no lone brace left by undo");

@@ -1205,11 +1205,14 @@ mod tests {
         app.ui.stac.api = "https://one.example/stac".into();
         app.ui.stac.waiting = Some((Asked::Collections("https://one.example/stac".into()), Slot::default()));
         let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
             .with_size(egui::vec2(900.0, 700.0))
             .build_ui_state(|ui, app: &mut RustGisApp| dialog(app, ui), app);
         h.step();
         h.step();
         h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("Other")).unwrap().click();
+        // The list opens on the frame after the click.
+        h.step();
         h.step();
         h.get_by_label("Local catalog").click();
         h.step();

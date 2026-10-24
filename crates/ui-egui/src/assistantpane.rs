@@ -101,7 +101,7 @@ pub struct AssistantState {
 const FIELDS: [&str; 3] = ["assistant_model", "assistant_url", "assistant_key"];
 
 fn typing(ctx: &egui::Context) -> bool {
-    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::new(f))))
+    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::unique(f))))
 }
 
 fn pref(app: &RustGisApp, key: &str) -> Option<String> {
@@ -692,7 +692,10 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
                     return;
                 }
                 ui.add(
-                    egui::TextEdit::singleline(&mut cfg.model).id(egui::Id::new(FIELDS[0])).desired_width(150.0).hint_text(tl!("model id")),
+                    egui::TextEdit::singleline(&mut cfg.model)
+                        .id(egui::Id::unique(FIELDS[0]))
+                        .desired_width(150.0)
+                        .hint_text(tl!("model id")),
                 );
                 if !app.assistant.models.is_empty() {
                     egui::ComboBox::from_id_salt("assistant_models").selected_text("").width(24.0).height(320.0).show_ui(ui, |ui| {
@@ -724,14 +727,14 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
         let preset = provider::preset(&cfg.provider);
         if !cfg.login() {
             ui.label(tl!("Address"));
-            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
+            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::unique(FIELDS[1])).desired_width(200.0));
             ui.end_row();
             ui.label(tl!("API key"));
             ui.horizontal(|ui| {
                 let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
                 ui.add(
                     egui::TextEdit::singleline(&mut cfg.key)
-                        .id(egui::Id::new(FIELDS[2]))
+                        .id(egui::Id::unique(FIELDS[2]))
                         .password(!app.assistant.show_key)
                         .desired_width(150.0)
                         .hint_text(hint),
@@ -1159,7 +1162,7 @@ fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egu
     if app.assistant.agent.as_ref().is_some_and(|a| a.config.login() && !a.config.key.is_empty()) {
         plan_line(ui, t);
     }
-    let id = egui::Id::new("assistant_input");
+    let id = egui::Id::unique("assistant_input");
     // Enter sends; Shift+Enter starts a new line.
     let focused = ui.memory(|m| m.has_focus(id));
     let mut submit = false;
@@ -1471,7 +1474,7 @@ mod tests {
         app.assistant.chunks = Some((generation, Chunks::default()));
         app.assistant.inflight = Some((generation, Slot::default()));
         // Render just the composer: no polling or network dispatch is needed to press Stop.
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 160.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(600.0, 160.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 let busy = app.assistant.agent.as_ref().is_some_and(Agent::busy);
@@ -1491,7 +1494,7 @@ mod tests {
     #[test]
     fn plan_settings_order_and_signed_out_model() {
         use egui_kittest::kittest::{NodeT, Queryable};
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1523,7 +1526,7 @@ mod tests {
         let saved = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let log = saved.clone();
         app.services.save_pref = Some(Box::new(move |k, v| log.lock().unwrap().push((k.to_string(), v.to_string()))));
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(800.0, 600.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1549,7 +1552,7 @@ mod tests {
     fn waiting_controls_reopen_copy_and_cancel() {
         use egui_kittest::kittest::Queryable;
         let url = "https://auth.openai.com/synthetic-sign-in";
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(260.0, 220.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(260.0, 220.0)).build_ui_state(
             |ui, actions: &mut (bool, bool)| {
                 let (reopen, cancel) = waiting_for_browser(ui, &Tokens::light(), url);
                 actions.0 |= reopen;
@@ -1589,7 +1592,7 @@ mod tests {
                 app
             };
             app.assistant.login_error = Some(rustgis_assistant::Error::new(rustgis_assistant::Recovery::Auth, ""));
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, height)).build_ui_state(
+            let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(width, height)).build_ui_state(
                 |ui, app: &mut RustGisApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);
@@ -1675,7 +1678,7 @@ mod tests {
         // A fixed number of frames, not `run`: each catalog request ends on a thread that asks for a
         // repaint, which can land mid-run (it did on Windows) and run past `run`'s step limit.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(400.0, 600.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -1769,14 +1772,18 @@ mod tests {
         let mut app = plan_app();
         app.assistant.settings = false;
         app.assistant.agent.as_mut().unwrap().transcript.push(Entry::Error(error));
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run();
         assert!(h.query_by_label("Weekly usage").is_some());
         h.get_by_label("Weekly usage").click();
@@ -1846,19 +1853,23 @@ mod tests {
     }
 
     fn right_pane(h: &egui_kittest::Harness<'_, RustGisApp>) -> egui::Rect {
-        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().outer_rect
+        h.state().ui.pane_rects[1].unwrap()
     }
 
     /// The window with the assistant open and `entries` in the conversation.
     fn chat(entries: Vec<Entry>, model: &str) -> egui_kittest::Harness<'static, RustGisApp> {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            RustGisApp::with_sample(),
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                RustGisApp::with_sample(),
+            );
         h.state_mut().run("ui.pane.assistant", serde_json::Value::Null).unwrap();
         for _ in 0..4 {
             h.step();
