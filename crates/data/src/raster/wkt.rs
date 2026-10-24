@@ -405,6 +405,14 @@ fn lookup<'a, T>(n: &Node, table: &'a [T], key: impl Fn(&T) -> (u32, &str)) -> O
     code.and_then(|c| table.iter().find(|r| key(r).0 == c)).or_else(|| table.iter().find(|r| key(r).1 == name))
 }
 
+/// Axes whose signs differ from the East/North convention used by the WKT reader.
+/// Polar axes follow their own meridians and are handled by the projection itself.
+fn reversed_axes(p: &Node) -> bool {
+    p.nodes()
+        .filter(|a| a.name.eq_ignore_ascii_case("AXIS") && a.child("MERIDIAN").is_none())
+        .any(|a| a.items.iter().any(|i| matches!(i, Item::Word(w) if w.eq_ignore_ascii_case("west") || w.eq_ignore_ascii_case("south"))))
+}
+
 /// A WKT2 projected system as a `PROJCS`, its parameters in degrees and the system's linear unit.
 fn projected2(p: &Node) -> Result<Node, String> {
     // Axes pointing west or south (South Africa's Lo grids) would be read with the wrong sign, as
@@ -412,10 +420,7 @@ fn projected2(p: &Node) -> Result<Node, String> {
     // their axes to a meridian, which is how WKT1 reads them.)
     // Axis order isn't read: as with WKT1, coordinates are easting then northing (GIS order),
     // whatever order the system declares.
-    let flipped = p
-        .nodes()
-        .filter(|a| a.name.eq_ignore_ascii_case("AXIS") && a.child("MERIDIAN").is_none())
-        .any(|a| a.items.iter().any(|i| matches!(i, Item::Word(w) if w.eq_ignore_ascii_case("west") || w.eq_ignore_ascii_case("south"))));
+    let flipped = reversed_axes(p);
     if flipped && epsg_id(p).and_then(Crs::from_epsg).is_none() {
         return Err("axes pointing west or south aren't supported".into());
     }
@@ -629,6 +634,9 @@ pub fn utm_of_code(code: u32) -> Option<(&'static str, u32, bool)> {
 
 /// A projection's PROJ definition built from its WKT parameters.
 fn custom(p: &Node, method: &str) -> Result<Crs, String> {
+    if method == "KROVAK" && reversed_axes(p) {
+        return Err("axes pointing west or south aren't supported".into());
+    }
     let params: Vec<(String, f64)> = p
         .items
         .iter()
@@ -653,7 +661,9 @@ fn custom(p: &Node, method: &str) -> Result<Crs, String> {
         "TRANSVERSE_MERCATOR" | "GAUSS_KRUGER" => format!("+proj=tmerc +lat_0={lat0} +k_0={k0} {at}"),
         // proj4rs supports the Swiss special case, not arbitrary Hotine projections.
         "HOTINE_OBLIQUE_MERCATOR_AZIMUTH_CENTER"
-            if get(&["AZIMUTH"]).is_some_and(|v| (v - 90.0).abs() < 1e-10)
+            if national_datum(p.child("GEOGCS").and_then(|g| g.child("DATUM")))
+                .is_some_and(|d| Some(d) == epsg_proj4(4149) || Some(d) == epsg_proj4(4150))
+                && get(&["AZIMUTH"]).is_some_and(|v| (v - 90.0).abs() < 1e-10)
                 && get(&["RECTIFIED_GRID_ANGLE"]).is_none_or(|v| (v - 90.0).abs() < 1e-10) =>
         {
             format!("+proj=somerc +lat_0={lat0} +k_0={k0} {at}")
@@ -752,6 +762,7 @@ fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
         | "IGM_1995"
         | "IGM95"
         | "ISTITUTO_GEOGRAFICO_MILITARE_1995"
+        // Legacy spelling in crs-definitions 0.6's EPSG:3064 and EPSG:4670 WKT.
         | "ISTITUTO_GEOGRAFICO_MILITAIRE_1995"
         | "SISTEMA_DE_REFERENCIA_GEOCENTRICO_PARA_LAS_AMERICAS_2000" => Some("+ellps=GRS80 +towgs84=0,0,0"),
         _ => None,
@@ -827,6 +838,8 @@ fn earth(geog: Option<&Node>) -> String {
                 .join(" ")
         })
     });
+    // A national datum yields to any explicit TOWGS84, including a zero shift.
+    // WGS 84-like datums can keep their equivalent named definition for a zero shift.
     let mut out = match known.filter(|_| towgs84(datum).is_none() || (wgs84_like(datum).is_some() && !shifted(datum))) {
         Some(d) => d.to_string(),
         None => {
@@ -1301,6 +1314,27 @@ mod tests {
             let changed = row.split('\t').nth(5).unwrap().replace(from, to);
             assert!(crs_from_wkt(&changed).is_err(), "{changed}");
         }
+    }
+
+    #[test]
+    fn swiss_projection_requires_a_swiss_datum() {
+        let row = include_str!("esri_datum_corpus.tsv").lines().find(|l| l.starts_with("21781\t")).unwrap();
+        let wkt = row.split('\t').nth(5).unwrap();
+        for datum in ["D_Local", "D_OSGB_1936"] {
+            assert!(crs_from_wkt(&wkt.replace("D_CH1903", datum)).is_err());
+        }
+        for datum in ["Istituto_Geografico_Militare_1995", "Istituto_Geografico_Militaire_1995"] {
+            assert_eq!(read_wkt(&GEOG_4326.replace("D_WGS_1984", datum)), Ok((Crs::LonLat, None)));
+        }
+    }
+
+    #[test]
+    fn krovak_south_west_axes_are_refused() {
+        let row = include_str!("esri_datum_corpus.tsv").lines().find(|l| l.starts_with("5514\t")).unwrap();
+        let wkt = row.split('\t').nth(5).unwrap();
+        let changed = wkt.replace(r#",PARAMETER["X_Scale",-1.0],PARAMETER["Y_Scale",1.0],PARAMETER["XY_Plane_Rotation",90.0]"#, "");
+        let changed = format!(r#"{},AXIS["Southing",SOUTH],AXIS["Westing",WEST]]"#, changed.strip_suffix(']').unwrap());
+        assert_eq!(crs_from_wkt(&changed), Err("axes pointing west or south aren't supported".into()));
     }
 
     #[test]
