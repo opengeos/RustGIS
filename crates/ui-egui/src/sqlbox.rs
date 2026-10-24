@@ -44,7 +44,7 @@ const MAX_CHIPS: usize = 40;
 /// and then says it isn't applied.
 pub fn show(
     ui: &mut Ui,
-    slot: &str,
+    slot: impl std::hash::Hash + std::fmt::Debug,
     owner: egui::Id,
     version: u64,
     stored: Option<&str>,
