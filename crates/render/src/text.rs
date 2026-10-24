@@ -88,10 +88,6 @@ fn face_font(face: Face) -> Option<(&'static FontRef<'static>, bool)> {
     named.and_then(|fam| family_font(fam, face)).or_else(|| face_in(face, serif()))
 }
 
-/// The weight bold text is drawn at in a variable face whose default is lighter (a variable
-/// Noto Sans is one file for every weight); a static face ignores it.
-const FAMILY_BOLD_WEIGHT: f32 = 700.0;
-
 /// The face of an installed family that draws `face`'s weight and slope, parsed once and kept,
 /// and whether it is slanted by hand (the family has no italic face): see
 /// [`crate::families::pick`]. `None` when its file can't be read.
@@ -99,7 +95,7 @@ fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static Fo
     type Parsed = std::collections::HashMap<(std::path::PathBuf, u32, bool), Option<&'static FontRef<'static>>>;
     static PARSED: OnceLock<std::sync::Mutex<Parsed>> = OnceLock::new();
     let (installed, slanted) = crate::families::pick(fam, face.bold, face.italic)?;
-    let heavier = face.bold && installed.weight < 600;
+    let heavier = crate::families::heavier(installed, face.bold);
     let key = (installed.path.clone(), installed.index, heavier);
     let mut parsed = PARSED.get_or_init(Default::default).lock().ok()?;
     if let Some(f) = parsed.get(&key) {
@@ -107,7 +103,7 @@ fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static Fo
     }
     let f = crate::families::bytes(installed).and_then(|b| FontRef::try_from_slice_and_index(b, installed.index).ok()).map(|mut f| {
         if heavier {
-            f.set_variation(b"wght", FAMILY_BOLD_WEIGHT);
+            f.set_variation(b"wght", crate::families::BOLD_WEIGHT);
         }
         &*Box::leak(Box::new(f))
     });

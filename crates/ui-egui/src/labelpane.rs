@@ -216,6 +216,13 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
 /// project made on another, is shown as missing and drawn in the label font.
 fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     let input_label = ui.label(tl!("Font"));
+    // The installed fonts are indexed on a thread of their own; until then there's none to pick.
+    let Some(installed) = families::installed_now() else {
+        families::warm_up();
+        ui.add_enabled(false, egui::Button::new(tl!("Reading the installed fonts…"))).labelled_by(input_label.id);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    };
     let cur = l.labels.default.font.as_deref();
     let shown = match cur {
         None => tl!("Label font").to_string(),
@@ -236,7 +243,7 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 run(app, "labels.style", json!({"font": ""}));
             }
             let search = search.to_lowercase();
-            for f in families::installed().iter().filter(|f| f.listed && f.name.to_lowercase().contains(&search)) {
+            for f in installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search))) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
                 if ui.selectable_label(on, &f.name).clicked() && !on {
                     run(app, "labels.style", json!({"font": f.name}));

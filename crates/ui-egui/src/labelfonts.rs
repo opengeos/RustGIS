@@ -19,16 +19,13 @@ struct Requests(HashMap<String, Option<u64>>);
 #[derive(Clone, Default)]
 struct Pending(Vec<(String, &'static [u8], u32, bool)>);
 
-/// The weight bold labels are drawn at in a variable face, as the renderer draws them.
-const BOLD_WEIGHT: f32 = 700.0;
-
 /// The egui family a label in installed family `font` draws in, `bold` and `italic`, and whether
 /// egui slants it (the family has no italic face). `None` for the interface font: no family, one
 /// not installed, or one not loaded yet (asked for here, so a later frame has it).
 pub(crate) fn family(ctx: &egui::Context, font: Option<u16>, bold: bool, italic: bool) -> Option<(FontFamily, bool)> {
-    let fam = families::installed().get(usize::from(font?))?;
+    let fam = families::installed_now()?.get(usize::from(font?))?;
     let (face, slanted) = families::pick(fam, bold, italic)?;
-    let heavier = bold && face.weight < 600;
+    let heavier = families::heavier(face, bold);
     let key = format!("label-font:{}#{}{}", face.path.display(), face.index, if heavier { ":bold" } else { "" });
     let family = FontFamily::Name(key.as_str().into());
     if ctx.fonts(|f| f.definitions().families.contains_key(&family)) {
@@ -72,7 +69,7 @@ pub(crate) fn install_pending(ctx: &egui::Context) {
         let mut data = FontData::from_static(bytes);
         data.index = index;
         if heavier {
-            let weight = egui::epaint::text::VariationCoords::new([(b"wght", BOLD_WEIGHT)]);
+            let weight = egui::epaint::text::VariationCoords::new([(b"wght", families::BOLD_WEIGHT)]);
             data = data.tweak(egui::FontTweak { coords: weight, ..Default::default() });
         }
         defs.font_data.insert(key.clone(), Arc::new(data));

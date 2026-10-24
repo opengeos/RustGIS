@@ -855,6 +855,8 @@ impl RustGisApp {
     }
 
     pub fn new(session: Session) -> Self {
+        // The installed fonts a label can be drawn in, indexed while the app starts.
+        rustgis_engine::render::families::warm_up();
         let mut s = session;
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
@@ -3393,8 +3395,13 @@ impl RustGisApp {
             self.map.invalidate();
         }
         // The label fonts the last frame's labels asked for (after the interface fonts, which
-        // would replace them).
-        labelfonts::install_pending(ctx);
+        // would replace them). Not in a frame that set the interface fonts: those take effect on
+        // the next, and setting fonts now, from the definitions in effect, would undo them.
+        if self.fonts_pending {
+            ctx.request_repaint();
+        } else {
+            labelfonts::install_pending(ctx);
+        }
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
             Some(inbox) => std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner())),

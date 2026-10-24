@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// One face of an installed family: its file, its index in a collection, its weight (100–900)
@@ -39,14 +40,54 @@ const MAX_COLLECTION: u32 = 64;
 /// Most tables a face's directory lists, and the most of its `name` table read.
 const MAX_TABLES: u16 = 512;
 const MAX_NAME_TABLE: u32 = 1 << 20;
-/// Largest font file read, and the most face bytes kept in all (a few families' worth).
+/// Largest font file read, and the most face bytes kept in all: a few families' worth, or two or
+/// three CJK collections (30–48 MB each). Kept bytes are never freed.
 const MAX_FONT: u64 = 48 << 20;
-const MAX_LOADED: usize = 512 << 20;
+const MAX_LOADED: usize = 128 << 20;
 
-/// The installed families, indexed once, by name (in any case).
+/// The weight bold text is drawn at in a variable face whose default is lighter (a variable
+/// Noto Sans is one file for every weight); a static face ignores it.
+pub const BOLD_WEIGHT: f32 = 700.0;
+
+/// Whether bold text in `face` is drawn heavier than the face is, at [`BOLD_WEIGHT`]: the face
+/// standing in for the bold one is lighter than semibold (a variable face, or a family with no
+/// bold). The map view and the export must agree on this, so both ask here.
+pub fn heavier(face: &InstalledFace, bold: bool) -> bool {
+    bold && face.weight < 600
+}
+
+static FAMILIES: OnceLock<Vec<Family>> = OnceLock::new();
+
+/// The installed families, indexed once, by name (in any case). The first call walks the font
+/// folders; the UI starts that early with [`warm_up`] and reads [`installed_now`].
 pub fn installed() -> &'static [Family] {
-    static F: OnceLock<Vec<Family>> = OnceLock::new();
-    F.get_or_init(|| if std::env::var_os("RUSTGIS_BUILTIN_FONTS").is_some() { Vec::new() } else { index(&font_dirs()) })
+    FAMILIES.get_or_init(|| if std::env::var_os("RUSTGIS_BUILTIN_FONTS").is_some() { Vec::new() } else { index(&font_dirs()) })
+}
+
+/// The installed families if they are indexed, without waiting: `None` while [`warm_up`]'s
+/// indexing runs (a machine can have tens of thousands of font files).
+pub fn installed_now() -> Option<&'static [Family]> {
+    FAMILIES.get().map(Vec::as_slice)
+}
+
+/// Indexes the installed families on a thread of their own (once), so the UI never waits for
+/// the folder walk; in the browser, where there are none, at once.
+pub fn warm_up() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::thread::Builder::new()
+        .name("font-index".into())
+        .spawn(|| {
+            installed();
+        })
+        .is_ok()
+    {
+        return;
+    }
+    installed();
 }
 
 /// The installed family named `name` (in any case, spaces trimmed): its place in [`installed`].
@@ -91,16 +132,25 @@ pub fn pick(family: &Family, bold: bool, italic: bool) -> Option<(&InstalledFace
 pub fn bytes(face: &InstalledFace) -> Option<&'static [u8]> {
     static LOADED: OnceLock<Mutex<(HashMap<PathBuf, Option<&'static [u8]>>, usize)>> = OnceLock::new();
     let lock = LOADED.get_or_init(|| Mutex::new((HashMap::new(), 0)));
+    let room = {
+        let Ok(loaded) = lock.lock() else { return None };
+        if let Some(b) = loaded.0.get(&face.path) {
+            return *b;
+        }
+        MAX_LOADED.saturating_sub(loaded.1)
+    };
+    // Read with the lock let go: a large file takes a while, and other threads' faces are kept.
+    let read = std::fs::metadata(&face.path)
+        .ok()
+        .filter(|m| m.len() <= MAX_FONT && m.len() as usize <= room)
+        .and_then(|_| std::fs::read(&face.path).ok())
+        .filter(|b| ab_glyph::FontRef::try_from_slice_and_index(b, face.index).is_ok());
     let Ok(mut loaded) = lock.lock() else { return None };
+    // Another thread read it meanwhile: its copy is the one kept.
     if let Some(b) = loaded.0.get(&face.path) {
         return *b;
     }
-    let read = std::fs::metadata(&face.path)
-        .ok()
-        .filter(|m| m.len() <= MAX_FONT && loaded.1 + m.len() as usize <= MAX_LOADED)
-        .and_then(|_| std::fs::read(&face.path).ok())
-        .filter(|b| ab_glyph::FontRef::try_from_slice_and_index(b, face.index).is_ok());
-    let kept: Option<&'static [u8]> = read.map(|b| {
+    let kept: Option<&'static [u8]> = read.filter(|b| loaded.1 + b.len() <= MAX_LOADED).map(|b| {
         loaded.1 += b.len();
         &*Box::leak(b.into_boxed_slice())
     });
@@ -303,6 +353,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_installed_families_are_read_without_waiting_once_indexed() {
+        warm_up();
+        warm_up();
+        // The UI reads them without waiting: none until the index is done, then the index.
+        let all = installed();
+        assert_eq!(installed_now().map(<[Family]>::len), Some(all.len()));
+    }
+
+    #[test]
     fn a_font_file_is_indexed_by_its_family_names_weight_and_slope() {
         // egui's own faces, written into a folder as installed fonts would be.
         let dir = tempfile::tempdir().unwrap();
@@ -323,6 +382,9 @@ mod tests {
         let fam = &fams[i as usize];
         let (face, slanted) = pick(fam, false, true).unwrap();
         assert!(slanted, "no italic face: slanted by hand");
+        // A light face standing in for bold is drawn heavier, by the same rule everywhere.
+        assert!(heavier(face, true) && !heavier(face, false));
+        assert!(!heavier(&InstalledFace { weight: 700, ..face.clone() }, true));
         let b = bytes(face).unwrap();
         assert!(std::ptr::eq(b, bytes(face).unwrap()), "kept, not read again");
         assert!(find_in(&fams, "No Such Family").is_none() && find_in(&fams, "  ").is_none());
