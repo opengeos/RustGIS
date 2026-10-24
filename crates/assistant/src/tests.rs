@@ -264,6 +264,9 @@ fn gate_rules() {
     assert!(g("run_command", json!({"command": "edit.undo"})).is_none());
     assert!(g("run_command", json!({"command": "layer.addData", "params": {"path": "/etc/passwd"}})).is_some());
     assert!(g("run_command", json!({"command": "project.new"})).is_some());
+    // A QGIS project given as text names its files and addresses inside: asked, as with a path.
+    let qgis = g("run_command", json!({"command": "project.importQgis", "params": {"text": "<qgis/>"}}));
+    assert!(qgis.as_deref().is_some_and(|w| w.contains("QGIS project")), "{qgis:?}");
     assert!(g("run_command", json!({"command": "script.run", "params": {"script": "map.zoomFull {}"}})).is_some());
     assert!(g("run_command", json!({"command": "plugin.install", "params": {"path": "x.rgplugin"}})).is_some());
     assert!(g("run_command", json!({"command": "map.addTiles", "params": {"url": "https://tile.example/{z}/{x}/{y}.png"}})).is_some());

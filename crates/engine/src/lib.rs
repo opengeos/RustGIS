@@ -835,6 +835,18 @@ impl Session {
         cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
     }
 
+    /// Runs command `id` as a part of the one running now (a command made of others): its
+    /// changes are in that command's one undo step, not a step of their own. A part that fails
+    /// (or panics) is undone by its own `run`, which restores what it started from; the parts
+    /// before it stay until the command made of them fails too, whose `run` restores the project
+    /// as the whole command found it. The stacks are put back on every return.
+    pub(crate) fn run_part(&mut self, id: &str, params: &Value) -> CmdResult {
+        let (undo, redo) = (std::mem::take(&mut self.undo), std::mem::take(&mut self.redo));
+        let res = self.run(id, params);
+        (self.undo, self.redo) = (undo, redo);
+        res
+    }
+
     /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
     /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {

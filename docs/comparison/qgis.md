@@ -173,7 +173,7 @@ Most QGIS ideas have a counterpart under a different name:
 | Field Calculator | Calculate Field |
 | Print Layout, Atlas | Layouts, Map Series |
 | Plugin Manager | **Plugins › Plugin Manager** |
-| Project (`.qgz`) | Project (`.rgis`), or a package (`.rgispkg`) with its data inside |
+| Project (`.qgz`) | Project (`.rgis`), or a package (`.rgispkg`) with its data inside; a QGIS project opens as a map |
 
 The [User Guide](../user-guide/index.md) walks through the interface, and
 [Getting Started](../getting-started.md) is a short tour.
@@ -192,8 +192,11 @@ between them without conversion:
 - **Web maps**: MapLibre styles and OGC API Features collections exported from RustGIS can be
   served and opened anywhere, QGIS included.
 
-RustGIS does not open QGIS project files (`.qgz`) or full QGIS layer styles; move the data
-across and restyle it.
+- **Projects and layer styles**: RustGIS opens QGIS projects (`.qgs`, `.qgz`) as maps and
+  applies QGIS layer styles (`.qml`), carrying over the layers, their order and visibility,
+  renderers, symbols, labels and reference scales, and listing what it draws differently; see
+  [QGIS projects and styles](../user-guide/workspace.md#qgis-projects-and-styles). It doesn't
+  write them back.
 
 A common split is to do heavy editing, PROJ-dependent work and detailed cartography in QGIS,
 and use RustGIS where a light install, the browser, scripting by command id or the AI Assistant

@@ -3575,6 +3575,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if !l.graphics {
         reference_scale_row(app, ui, &l);
     }
+    ui.add_space(6.0);
+    if ui.button(tl!("Import QGIS Style…")).on_hover_text(tl!("Style this layer as a QGIS layer style file (.qml) does")).clicked() {
+        let _ = app.run("ui.openItem", json!({"kind": "qgisStyle"}));
+    }
 }
 
 /// The scales the Reference scale picker offers, besides none and the map's own.
