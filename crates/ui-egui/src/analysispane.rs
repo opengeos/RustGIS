@@ -34,6 +34,16 @@ pub struct Workflow {
     pub script: String,
     pub script_out: Vec<(String, bool)>,
     pub trend: TrendForm,
+    pub zonal_stats: ZonalStatsForm,
+    pub selected_only: bool,
+}
+
+/// The Zonal Statistics section's inputs.
+#[derive(Default)]
+pub struct ZonalStatsForm {
+    pub bands: String,
+    pub prefix: String,
+    pub output: String,
 }
 
 /// The Trend Analysis section's inputs (#579), and a run under way.
@@ -200,7 +210,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if !inputs.contains(&w.layer) {
         w.layer = inputs.first().cloned().unwrap_or_default();
     }
-    if w.section == "zonalStats" && !polygons.contains(&w.layer2) {
+    if (w.section == "zonalStats" || w.section == "process") && !polygons.contains(&w.layer2) {
         w.layer2 = polygons.first().cloned().unwrap_or_default();
     }
     ui.add_space(6.0);
@@ -259,15 +269,19 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             combo(ui, "wf_zs_poly", &mut app.workflow.layer2, &polygons);
             ui.horizontal(|ui| {
                 ui.label(tl!("Band"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0));
                 ui.label(tl!("Prefix"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.text).hint_text("elev").desired_width(70.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.prefix).hint_text("elev").desired_width(70.0));
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Output"));
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text(tl!("output layer name")).desired_width(120.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.workflow.zonal_stats.output)
+                        .hint_text(tl!("output layer name"))
+                        .desired_width(120.0),
+                );
             });
-            let band_str = app.workflow.number.trim();
+            let band_str = app.workflow.zonal_stats.bands.trim();
             let band_valid = if band_str.is_empty() || band_str.eq_ignore_ascii_case("all") {
                 true
             } else {
@@ -291,11 +305,11 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if !band_str.is_empty() {
                     params["bands"] = json!(band_str);
                 }
-                if !app.workflow.text.trim().is_empty() {
-                    params["prefix"] = json!(app.workflow.text.trim());
+                if !app.workflow.zonal_stats.prefix.trim().is_empty() {
+                    params["prefix"] = json!(app.workflow.zonal_stats.prefix.trim());
                 }
-                if !app.workflow.number2.trim().is_empty() {
-                    params["output"] = json!(app.workflow.number2.trim());
+                if !app.workflow.zonal_stats.output.trim().is_empty() {
+                    params["output"] = json!(app.workflow.zonal_stats.output.trim());
                 }
                 run(app, "gp.zonalStats", params);
             }
@@ -645,13 +659,58 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         }
         "process" => {
             heading(ui, "Clip or resample");
+            ui.label(egui::RichText::new(tl!("Raster layer")).small().weak());
             combo(ui, "wf_pr", &mut app.workflow.layer, &rasters);
+
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tl!("Clip to polygon layer")).small().weak());
+            let has_polys = !polygons.is_empty();
+            if has_polys {
+                combo(ui, "wf_pr_poly", &mut app.workflow.layer2, &polygons);
+                let poly_layer = app.session.map().layer_by_name(&app.workflow.layer2);
+                let sel_count = poly_layer.as_ref().map_or(0, |l| l.selection.len());
+                let total_features = poly_layer.as_ref().map_or(0, |l| l.dataset.features.len());
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut app.workflow.selected_only, tl!("Selected only"));
+                    if sel_count > 0 {
+                        ui.label(egui::RichText::new(format!("({sel_count} of {total_features})")).small().weak());
+                    }
+                });
+
+                let sel_invalid = app.workflow.selected_only && sel_count == 0;
+                let can_clip_poly = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty() && !sel_invalid;
+
+                if sel_invalid {
+                    ui.label(egui::RichText::new(tl!("No features are selected in this layer.")).small().color(t.amber));
+                }
+
+                if ui.add_enabled(can_clip_poly, egui::Button::new(tl!("Clip To Polygon"))).clicked() {
+                    let mut p = json!({
+                        "layer": app.workflow.layer,
+                        "operation": "clip",
+                        "polygon": app.workflow.layer2,
+                    });
+                    if app.workflow.selected_only {
+                        p["selectedOnly"] = json!(true);
+                    }
+                    run(app, "raster.process", p);
+                }
+            } else {
+                ui.label(egui::RichText::new(tl!("No polygon layer available in the map.")).small().weak());
+            }
+
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button(tl!("Clip To Map View")).clicked() {
+                if ui.add_enabled(!app.workflow.layer.is_empty(), egui::Button::new(tl!("Clip To Map View"))).clicked() {
                     run(app, "raster.process", json!({"layer": app.workflow.layer, "operation": "clip"}));
                 }
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text(tl!("factor")).desired_width(50.0));
-                if ui.button(tl!("Resample")).clicked() {
+                if ui.add_enabled(!app.workflow.layer.is_empty(), egui::Button::new(tl!("Resample"))).clicked() {
                     run(
                         app,
                         "raster.process",

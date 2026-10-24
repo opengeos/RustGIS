@@ -12414,6 +12414,49 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
     assert!(e.to_string().contains("no cell"), "{e}");
     assert!(s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "west"})).is_err());
 
+    // selectedOnly: true with no selected features fails with a descriptive error.
+    s.map_mut().layers.iter_mut().find(|l| l.name == "City").unwrap().selection.clear();
+    let e_sel_none =
+        s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "City", "selectedOnly": true})).unwrap_err();
+    assert!(e_sel_none.to_string().contains("no features are selected"), "{e_sel_none}");
+
+    // Add a second feature to City further east in dem's extent.
+    let ring2 = [ll(361_500.0, 5_700_000.0), ll(362_000.0, 5_700_000.0), ll(362_000.0, 5_699_000.0), ll(361_500.0, 5_700_000.0)];
+    s.run("edit.addFeature", &json!({"layer": "City", "geometry": {"type": "Polygon", "coordinates": [ring2]}})).unwrap();
+    assert_eq!(s.map().layer_by_name("City").unwrap().dataset.features.len(), 2);
+
+    // With feature 0 selected: selectedOnly: true clips only feature 0.
+    s.map_mut().layers.iter_mut().find(|l| l.name == "City").unwrap().selection = vec![0];
+    let v_sel = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "City", "selectedOnly": true})).unwrap();
+    let c_sel = raster(&s, &v_sel);
+    assert_eq!(c_sel.bands[0].stats.count, 25);
+
+    // selectedOnly: false clips all features even with selection active.
+    let v_all = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "City", "selectedOnly": false})).unwrap();
+    let c_all = raster(&s, &v_all);
+    assert!(c_all.bands[0].stats.count > 25);
+
+    // An empty polygon layer fails validation.
+    s.run("layer.template", &json!({"template": "polygons", "name": "EmptyPoly"})).unwrap();
+    let e_empty = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "EmptyPoly"})).unwrap_err();
+    assert!(e_empty.to_string().contains("has no features"), "{e_empty}");
+
+    // A polygon layer in a projected CRS (UTM) reprojects and clips accurately.
+    let mut proj_ds = rustgis_data::Dataset::new("CityProj", rustgis_data::GeometryType::Polygon, vec![]);
+    proj_ds.crs = Some(utm);
+    let utm_ring = [
+        rustgis_geom::Coord::new(360_500.0, 5_700_000.0),
+        rustgis_geom::Coord::new(361_500.0, 5_700_000.0),
+        rustgis_geom::Coord::new(361_500.0, 5_699_500.0),
+        rustgis_geom::Coord::new(360_500.0, 5_700_000.0),
+    ];
+    proj_ds.push(Some(rustgis_data::Geometry::Polygon(vec![vec![utm_ring.to_vec()]])), vec![]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, proj_ds));
+    let v_proj = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "CityProj"})).unwrap();
+    let c_proj = raster(&s, &v_proj);
+    assert_eq!((c_proj.width, c_proj.height, c_proj.crs), (9, 5, utm));
+    assert_eq!(c_proj.bands[0].stats.count, 25);
+
     // One stretch shared across tiles, as fixed bounds.
     s.run("raster.stretch", &json!({"layer": "west", "type": "custom", "min": 100, "max": 300})).unwrap();
     s.run("raster.stretch", &json!({"layer": "east", "like": "west"})).unwrap();

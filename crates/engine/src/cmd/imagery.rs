@@ -70,7 +70,7 @@ pub fn commands() -> Vec<C> {
             r#"{"layer": raster, "index": "ndvi"|"ndwi"|"savi"|"nbr"|"ndbi"|"evi", "red"?, "green"?, "blue"?, "nir"?, "swir"?: band numbers, "name"?: output}"#,
         ),
         C::new("raster.process", "Process", "Analyze › Imagery Tools", process)
-            .params(r#"{"layer": raster, "operation": "clip"|"resample", "extent"?: [minLon, minLat, maxLon, maxLat] (clip; the view when omitted), "polygon"?: polygon layer (clip to its selected or all polygons; cells outside become no-data), "factor"?: n (resample: n×n pixels become one), "name"?: output}"#),
+            .params(r#"{"layer": raster, "operation": "clip"|"resample", "extent"?: [minLon, minLat, maxLon, maxLat] (clip; the view when omitted), "polygon"?: polygon layer (clip to its selected or all polygons; cells outside become no-data), "selectedOnly"?: bool (clip to selected polygons when true, all when false), "factor"?: n (resample: n×n pixels become one), "name"?: output}"#),
         C::new("raster.mosaic", "Mosaic Rasters", "Analyze › Imagery Tools", raster_mosaic).params(
             r#"{"inputs": [raster layer or file path, …] (two or more, in one coordinate system and cell size; where they overlap the first wins), "name"?: output, "path"?: GeoTIFF to write the mosaic to}"#,
         ),
@@ -531,16 +531,92 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
                 .layer_by_name(pl)
                 .filter(|l| l.geometry_type() == GeometryType::Polygon)
                 .ok_or_else(|| format!("no polygon layer '{pl}'"))?;
-            // The selected polygons, or all of them.
-            let rows: Vec<usize> = if l.selection.is_empty() { (0..l.dataset.features.len()).collect() } else { l.selection.clone() };
+            let rows: Vec<usize> = match b(p, "selectedOnly") {
+                Some(true) => {
+                    if l.selection.is_empty() {
+                        return Err(format!("{pl}: no features are selected"));
+                    }
+                    l.selection.clone()
+                }
+                Some(false) => (0..l.dataset.features.len()).collect(),
+                None => {
+                    if l.selection.is_empty() {
+                        (0..l.dataset.features.len()).collect()
+                    } else {
+                        l.selection.clone()
+                    }
+                }
+            };
+            if rows.is_empty() {
+                return Err(format!("{pl}: has no features to clip by"));
+            }
+            let poly_tr = match l.dataset.crs {
+                Some(crs) if crs != Crs::LonLat && crs != Crs::Epsg(4326) => {
+                    Some(crs.transformer().map_err(|e| format!("{pl} coordinate system isn't supported: {e}"))?)
+                }
+                _ => None,
+            };
             let polygons: Vec<Vec<Vec<Coord>>> = rows
                 .iter()
                 .filter_map(|row| match l.dataset.features.get(*row).and_then(|f| f.geometry.as_ref()) {
-                    Some(Geometry::Polygon(polys)) => Some(polys.iter().cloned()),
+                    Some(Geometry::Polygon(polys)) => {
+                        let rings: Vec<Vec<Vec<Coord>>> = match &poly_tr {
+                            Some(tr) => polys
+                                .iter()
+                                .filter_map(|rings| {
+                                    let exterior = rings.first()?;
+                                    let mut ext_pts = Vec::with_capacity(exterior.len());
+                                    for &c in exterior {
+                                        ext_pts.push(tr.to_lonlat(c)?);
+                                    }
+                                    if ext_pts.len() < 3 {
+                                        return None;
+                                    }
+                                    let mut valid_rings = vec![ext_pts];
+                                    for hole in rings.iter().skip(1) {
+                                        let mut hole_pts = Vec::with_capacity(hole.len());
+                                        let mut ok = true;
+                                        for &c in hole {
+                                            if let Some(ll) = tr.to_lonlat(c) {
+                                                hole_pts.push(ll);
+                                            } else {
+                                                ok = false;
+                                                break;
+                                            }
+                                        }
+                                        if ok && hole_pts.len() >= 3 {
+                                            valid_rings.push(hole_pts);
+                                        }
+                                    }
+                                    Some(valid_rings)
+                                })
+                                .collect(),
+                            None => polys
+                                .iter()
+                                .filter_map(|rings| {
+                                    let exterior = rings.first()?;
+                                    if exterior.len() < 3 {
+                                        return None;
+                                    }
+                                    let mut valid_rings = vec![exterior.clone()];
+                                    for hole in rings.iter().skip(1) {
+                                        if hole.len() >= 3 {
+                                            valid_rings.push(hole.clone());
+                                        }
+                                    }
+                                    Some(valid_rings)
+                                })
+                                .collect(),
+                        };
+                        Some(rings.into_iter())
+                    }
                     _ => None,
                 })
                 .flatten()
                 .collect();
+            if polygons.is_empty() {
+                return Err(format!("{pl}: has no valid polygon geometries"));
+            }
             let (cols, rows, mask) =
                 rasterops::polygon_mask(&r, &polygons).ok_or_else(|| format!("no cell of {} falls inside {pl}", r.name))?;
             let out = clip_window(&r, cols, rows, Some(&mask), name(p, format!("{}_clip", r.name)))?;

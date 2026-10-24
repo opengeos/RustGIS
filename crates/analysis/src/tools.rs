@@ -1648,6 +1648,56 @@ fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
     Ok(out)
 }
 
+/// Projects a polygon (exterior ring + optional holes) to WGS 84 lon/lat coordinates.
+///
+/// Returns `None` if the exterior ring fails transformation or has fewer than 3 vertices.
+/// A hole is never promoted to become the exterior ring.
+/// Holes whose vertices fail transformation or have fewer than 3 vertices are skipped,
+/// preserving the valid exterior ring and any surviving valid holes.
+/// If any coordinate in a ring cannot be transformed, the entire ring is rejected rather
+/// than silently dropping vertices and distorting the zone boundary.
+fn reproject_polygon(rings: &[Vec<Coord>], tr: &rustgis_data::raster::Transformer) -> Option<Vec<Vec<Coord>>> {
+    let exterior = rings.first()?;
+    let mut ext_lonlat = Vec::with_capacity(exterior.len());
+    for &c in exterior {
+        ext_lonlat.push(tr.to_lonlat(c)?);
+    }
+    if ext_lonlat.len() < 3 {
+        return None;
+    }
+    let mut out_rings = vec![ext_lonlat];
+    for hole in rings.iter().skip(1) {
+        let mut hole_lonlat = Vec::with_capacity(hole.len());
+        let mut ok = true;
+        for &c in hole {
+            if let Some(ll) = tr.to_lonlat(c) {
+                hole_lonlat.push(ll);
+            } else {
+                ok = false;
+                break;
+            }
+        }
+        if ok && hole_lonlat.len() >= 3 {
+            out_rings.push(hole_lonlat);
+        }
+    }
+    Some(out_rings)
+}
+
+fn validate_lonlat_polygon(rings: &[Vec<Coord>]) -> Option<Vec<Vec<Coord>>> {
+    let exterior = rings.first()?;
+    if exterior.len() < 3 {
+        return None;
+    }
+    let mut out_rings = vec![exterior.clone()];
+    for hole in rings.iter().skip(1) {
+        if hole.len() >= 3 {
+            out_rings.push(hole.clone());
+        }
+    }
+    Some(out_rings)
+}
+
 fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let r_name = {
         let n = s(p, "raster");
@@ -1720,32 +1770,28 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
 
     let target_rows = rows(inp, p, poly_param, poly_ds);
+    let mut skipped_features = 0usize;
     for r_idx in target_rows {
         let Some(f) = poly_ds.features.get(r_idx) else { continue };
-        let stats_by_band = match &f.geometry {
+        let (stats_by_band, feature_valid) = match &f.geometry {
             Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
                 let polys_lonlat: Vec<Vec<Vec<Coord>>> = match &poly_tr {
-                    Some(tr) => polys
-                        .iter()
-                        .map(|rings| {
-                            rings
-                                .iter()
-                                .map(|ring| ring.iter().filter_map(|&c| tr.to_lonlat(c)).collect::<Vec<_>>())
-                                .filter(|ring| ring.len() >= 3)
-                                .collect::<Vec<_>>()
-                        })
-                        .filter(|rings| !rings.is_empty())
-                        .collect(),
-                    None => polys.clone(),
+                    Some(tr) => polys.iter().filter_map(|rings| reproject_polygon(rings, tr)).collect(),
+                    None => polys.iter().filter_map(|rings| validate_lonlat_polygon(rings)).collect(),
                 };
                 if polys_lonlat.is_empty() {
-                    vec![crate::rasterops::ZoneStats::default(); bands.len()]
+                    (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
                 } else {
-                    crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?
+                    let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
+                    (st, true)
                 }
             }
-            _ => vec![crate::rasterops::ZoneStats::default(); bands.len()],
+            _ => (vec![crate::rasterops::ZoneStats::default(); bands.len()], false),
         };
+
+        if !feature_valid {
+            skipped_features += 1;
+        }
 
         let mut attrs = f.attrs.clone();
         for (b_idx, _, stat, _, _) in &out_fields {
@@ -1766,7 +1812,11 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
 
     let n_features = out.features.len();
-    result(out, format!("Calculated zonal statistics for {n_features} feature(s)"))
+    let mut messages = vec![format!("Calculated zonal statistics for {n_features} feature(s)")];
+    if skipped_features > 0 {
+        messages.push(format!("{skipped_features} feature(s) had invalid geometry or failed coordinate transformation"));
+    }
+    Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
 #[cfg(test)]
@@ -2811,6 +2861,74 @@ mod tests {
             rasters: HashMap::from([("elev".to_string(), &raster)]),
         };
         assert!(crate::run("zonalStats", &m_bad_crs, &serde_json::json!({"raster": "elev", "polygons": "bad_crs"})).is_err());
+
+        // 12. Exterior ring dropped during reprojection (does not promote hole)
+        let hole_p0 = merc_tr.from_lonlat(Coord::new(1.0, 8.0)).unwrap();
+        let hole_p1 = merc_tr.from_lonlat(Coord::new(2.0, 9.0)).unwrap();
+        let bad_ext_geom = Geometry::Polygon(vec![vec![
+            vec![p0, p1], // Only 2 points (< 3 points, invalid exterior ring)
+            vec![hole_p0, Coord::new(hole_p1.x, hole_p0.y), hole_p1, Coord::new(hole_p0.x, hole_p1.y), hole_p0], // valid hole
+        ]]);
+        let mut drop_ext_ds = Dataset::new("drop_ext", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        drop_ext_ds.crs = Some(rustgis_data::raster::Crs::WebMercator);
+        drop_ext_ds.push(Some(bad_ext_geom), vec![Value::Int(1)]);
+        let m_drop_ext = RasterMap {
+            datasets: HashMap::from([("drop_ext".to_string(), drop_ext_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let res_drop_ext = crate::run("zonalStats", &m_drop_ext, &serde_json::json!({"raster": "elev", "polygons": "drop_ext"})).unwrap();
+        assert!(res_drop_ext.messages.iter().any(|m| m.contains("failed coordinate transformation") || m.contains("invalid geometry")));
+        let out_drop_ext = layer(res_drop_ext);
+        let drop_count_idx = out_drop_ext.field_index("elev_count").unwrap();
+        let drop_mean_idx = out_drop_ext.field_index("elev_mean").unwrap();
+        assert_eq!(out_drop_ext.value(0, drop_count_idx), &Value::Int(0));
+        assert_eq!(out_drop_ext.value(0, drop_mean_idx), &Value::Null);
+
+        // 13. Silent vertex loss prevention during reprojection:
+        // A polygon where one exterior ring vertex has non-finite coords (cannot be reprojected to lon/lat).
+        let nan_ext_geom = Geometry::Polygon(vec![vec![vec![
+            Coord::new(f64::NAN, p0.y),
+            Coord::new(p1.x, p0.y),
+            p1,
+            Coord::new(p0.x, p1.y),
+            Coord::new(f64::NAN, p0.y),
+        ]]]);
+        let mut nan_ext_ds = Dataset::new("nan_ext", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        nan_ext_ds.crs = Some(rustgis_data::raster::Crs::WebMercator);
+        nan_ext_ds.push(Some(nan_ext_geom), vec![Value::Int(1)]);
+        let m_nan_ext = RasterMap {
+            datasets: HashMap::from([("nan_ext".to_string(), nan_ext_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let res_nan_ext = crate::run("zonalStats", &m_nan_ext, &serde_json::json!({"raster": "elev", "polygons": "nan_ext"})).unwrap();
+        assert!(res_nan_ext.messages.iter().any(|m| m.contains("failed coordinate transformation") || m.contains("invalid geometry")));
+        let out_nan_ext = layer(res_nan_ext);
+        let nan_count_idx = out_nan_ext.field_index("elev_count").unwrap();
+        let nan_mean_idx = out_nan_ext.field_index("elev_mean").unwrap();
+        assert_eq!(out_nan_ext.value(0, nan_count_idx), &Value::Int(0));
+        assert_eq!(out_nan_ext.value(0, nan_mean_idx), &Value::Null);
+
+        // 14. Valid projected polygon with holes reprojects both and subtracts holes correctly
+        let merc_outer0 = merc_tr.from_lonlat(Coord::new(0.0, 7.0)).unwrap();
+        let merc_outer1 = merc_tr.from_lonlat(Coord::new(3.0, 10.0)).unwrap();
+        let merc_hole0 = merc_tr.from_lonlat(Coord::new(1.0, 8.0)).unwrap();
+        let merc_hole1 = merc_tr.from_lonlat(Coord::new(2.0, 9.0)).unwrap();
+        let valid_hole_geom = Geometry::Polygon(vec![vec![
+            vec![merc_outer0, Coord::new(merc_outer1.x, merc_outer0.y), merc_outer1, Coord::new(merc_outer0.x, merc_outer1.y), merc_outer0],
+            vec![merc_hole0, Coord::new(merc_hole1.x, merc_hole0.y), merc_hole1, Coord::new(merc_hole0.x, merc_hole1.y), merc_hole0],
+        ]]);
+        let mut hole_ds = Dataset::new("merc_hole", GeometryType::Polygon, vec![Field::new("id", FieldType::Integer)]);
+        hole_ds.crs = Some(rustgis_data::raster::Crs::WebMercator);
+        hole_ds.push(Some(valid_hole_geom), vec![Value::Int(1)]);
+        let m_hole = RasterMap {
+            datasets: HashMap::from([("merc_hole".to_string(), hole_ds)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let res_hole = crate::run("zonalStats", &m_hole, &serde_json::json!({"raster": "elev", "polygons": "merc_hole"})).unwrap();
+        let out_hole = layer(res_hole);
+        let hole_cnt_idx = out_hole.field_index("elev_count").unwrap();
+        // 9 outer cells - 1 hole cell = 8 cells
+        assert_eq!(out_hole.value(0, hole_cnt_idx), &Value::Int(8));
 
         assert_eq!(m.datasets["zones"], input_clone);
     }

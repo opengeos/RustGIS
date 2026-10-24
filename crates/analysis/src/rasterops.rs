@@ -533,14 +533,34 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
     let tr = r.transformer();
     let projected: Vec<Vec<Vec<(f64, f64)>>> = polygons
         .iter()
-        .map(|rings| {
-            rings
-                .iter()
-                .map(|ring| ring.iter().filter_map(|c| tr.from_lonlat(*c)).map(|w| r.transform.to_pixel(w)).collect::<Vec<_>>())
-                .filter(|ring| ring.len() >= 3)
-                .collect::<Vec<_>>()
+        .filter_map(|rings| {
+            let exterior = rings.first()?;
+            let mut ext_pts = Vec::with_capacity(exterior.len());
+            for c in exterior {
+                let w = tr.from_lonlat(*c)?;
+                ext_pts.push(r.transform.to_pixel(w));
+            }
+            if ext_pts.len() < 3 {
+                return None;
+            }
+            let mut valid_rings = vec![ext_pts];
+            for hole in rings.iter().skip(1) {
+                let mut hole_pts = Vec::with_capacity(hole.len());
+                let mut ok = true;
+                for c in hole {
+                    if let Some(w) = tr.from_lonlat(*c) {
+                        hole_pts.push(r.transform.to_pixel(w));
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok && hole_pts.len() >= 3 {
+                    valid_rings.push(hole_pts);
+                }
+            }
+            Some(valid_rings)
         })
-        .filter(|rings| !rings.is_empty())
         .collect();
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for &(x, y) in projected.iter().flatten().flatten() {
@@ -1119,5 +1139,23 @@ mod tests {
 
         // 6. Invalid band index returns Err
         assert!(zonal_statistics(&r, &[99], &cell_poly).is_err());
+
+        // 7. Invalid exterior ring (< 3 points) with surviving hole does NOT promote hole to exterior
+        let bad_ext_with_hole = vec![vec![
+            vec![Coord::new(0.005, 0.005), Coord::new(0.015, 0.015)], // only 2 points!
+            sq(0.009, 0.009, 0.011, 0.011),                           // 5 points (hole)
+        ]];
+        let bad_ext_stats = zonal_statistics(&r, &[0], &bad_ext_with_hole).unwrap();
+        assert_eq!(bad_ext_stats[0], ZoneStats::default());
+        assert!(polygon_mask(&r, &bad_ext_with_hole).is_none());
+
+        // 8. Exterior ring with non-finite/unprojectable coordinate is rejected
+        let nan_ext_with_hole = vec![vec![
+            vec![Coord::new(f64::NAN, 0.005), Coord::new(0.015, 0.005), Coord::new(0.015, 0.015), Coord::new(f64::NAN, 0.005)],
+            sq(0.009, 0.009, 0.011, 0.011),
+        ]];
+        let nan_ext_stats = zonal_statistics(&r, &[0], &nan_ext_with_hole).unwrap();
+        assert_eq!(nan_ext_stats[0], ZoneStats::default());
+        assert!(polygon_mask(&r, &nan_ext_with_hole).is_none());
     }
 }
