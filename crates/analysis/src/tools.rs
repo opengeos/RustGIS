@@ -578,6 +578,9 @@ fn copy_schema(ds: &Dataset, name: String, g: GeometryType) -> Dataset {
 /// If multiple fields in `ds.fields` match `name` case-insensitively, returns an error
 /// detailing the collision rather than silently selecting an arbitrary field.
 pub fn find_field_case_insensitive(ds: &Dataset, name: &str) -> Result<usize, String> {
+    if let Some(idx) = ds.fields.iter().position(|f| f.name == name) {
+        return Ok(idx);
+    }
     let mut matches = Vec::new();
     for (idx, f) in ds.fields.iter().enumerate() {
         if f.name.eq_ignore_ascii_case(name) {
@@ -3036,12 +3039,16 @@ mod tests {
         assert!(out.field_index("SUM_Population").is_some());
         assert!(out.field_index("MEAN_Population").is_some());
 
-        // 4. Case-insensitive collision detection
+        // 4. Exact match precedence and case-insensitive collision detection
         let colliding_fields = vec![Field::new("Population", FieldType::Double), Field::new("population", FieldType::Double)];
         let ds_collision = Dataset::new("colliding", GeometryType::None, colliding_fields);
-        let err = find_field_case_insensitive(&ds_collision, "population").unwrap_err();
+        // Exact matches must resolve directly:
+        assert_eq!(find_field_case_insensitive(&ds_collision, "population").unwrap(), 1);
+        assert_eq!(find_field_case_insensitive(&ds_collision, "Population").unwrap(), 0);
+        // Inexact matches with multiple candidates are ambiguous:
+        let err = find_field_case_insensitive(&ds_collision, "POPULATION").unwrap_err();
         assert!(err.contains("ambiguous") && err.contains("collision"), "collision must be explicitly reported: {err}");
-        let err2 = find_field_case_insensitive(&ds_collision, "POPULATION").unwrap_err();
+        let err2 = find_field_case_insensitive(&ds_collision, "pOpUlAtIoN").unwrap_err();
         assert!(err2.contains("collision"));
     }
 
