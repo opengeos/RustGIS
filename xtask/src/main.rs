@@ -185,6 +185,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn desktop_enables_system_clipboard() {
+        // Check the resolved backend, not just eframe's requested features: an egui
+        // upgrade must not silently replace the OS clipboard with an in-app string.
+        let output = Command::new(env!("CARGO"))
+            .args(["tree", "--locked", "-p", "rustgis", "-e", "normal", "--prefix", "none", "--format", "{p} features=[{f}]"])
+            .current_dir(root())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let tree = String::from_utf8(output.stdout).unwrap();
+        let backend = tree.lines().find(|line| line.starts_with("egui-winit ")).unwrap();
+        let features = backend.split("features=[").nth(1).unwrap().trim_end_matches(']');
+        assert!(features.split(',').any(|feature| feature == "clipboard"), "system clipboard disabled: {backend}");
+    }
+
+    #[test]
     fn web_sw_fills_the_real_template() {
         let template = include_str!("../../apps/rustgis-web/sw.js");
         let files = vec!["index.html".to_string(), "rustgis-web-1a2b.js".to_string(), "odd\"name\\.wasm".to_string()];
