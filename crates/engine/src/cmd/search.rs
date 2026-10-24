@@ -738,7 +738,8 @@ mod tests {
             }),
         )
         .unwrap();
-        // The same layer twice; `map.addTiles` would replace it, so the copy goes in by hand.
+        // The same layer twice: `map.addTiles` replaces it, but a project load only repairs each
+        // layer and truncates the stack, duplicates and all, so two alike layers do occur.
         let twin = s.map().tiles[0].clone();
         s.map_mut().tiles.insert(0, twin);
         let hits = search(&s, "Twin", LIMIT).hits;
