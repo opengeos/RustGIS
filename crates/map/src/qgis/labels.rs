@@ -109,9 +109,10 @@ fn flatten<'a, 'i>(
         return;
     }
     let rules: Vec<Node> = node.children().filter(|c| c.has_tag_name("rule")).collect();
-    // The filters an else rule here is the rest of.
+    // The filters an else rule here is the rest of: its switched-on siblings', as QGIS has it.
     let siblings: Vec<String> = rules
         .iter()
+        .filter(|r| r.attribute("active") != Some("0"))
         .filter_map(|r| r.attribute("filter").map(str::trim))
         .filter(|f| !f.is_empty() && !is_else(f))
         .map(str::to_string)
