@@ -233,8 +233,11 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."))
             .clicked()
         {
-            run(app, "labels.class.remove", c.params(json!({})));
-            choose(ui, app, l, None);
+            // Default chosen outright: a class added later by the removed one's name (an undo, a
+            // script) isn't chosen again by the name left behind.
+            if run(app, "labels.class.remove", c.params(json!({}))).is_some() {
+                choose(ui, app, l, None);
+            }
         }
     });
     let mut visible = c.it.visible;
@@ -1030,6 +1033,11 @@ mod tests {
         assert_eq!(names(h.state()), ["Class 1", "Default"]);
         assert!(shown(&h, "Default"));
         assert_eq!(h.state().session.undo_depth(), steps + 5);
+        // Undone, the class is back, but the pane doesn't choose it again by its name.
+        h.state_mut().run("edit.undo", json!(null)).unwrap();
+        h.run();
+        assert_eq!(names(h.state()), ["Class 2 big", "Class 1", "Default"]);
+        assert!(shown(&h, "Default"));
     }
 
     /// A name refused keeps the box open, saying why; Escape leaves the name as it was.
