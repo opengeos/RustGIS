@@ -293,14 +293,14 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 );
             });
             let band_str = app.workflow.zonal_stats.bands.trim();
-            let band_valid = if band_str.is_empty() || band_str.eq_ignore_ascii_case("all") {
-                true
-            } else {
-                band_str.split([',', ';', ' ']).all(|part| {
-                    let p = part.trim().trim_matches(|c| c == '[' || c == ']' || c == '"');
-                    p.is_empty() || p.parse::<u64>().is_ok_and(|b| b >= 1)
-                })
-            };
+            let total_bands = app
+                .session
+                .map()
+                .layer_by_name(&app.workflow.layer)
+                .and_then(|l| l.raster.as_ref())
+                .and_then(|r| r.data.as_ref())
+                .map_or(0, |r| r.band_count());
+            let band_valid = rustgis_engine::analysis::zonal_bands(&json!(band_str), total_bands).is_ok();
             let layers_ready = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
             let can_run = layers_ready && band_valid;
             if !layers_ready {
@@ -702,9 +702,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "operation": "clip",
                         "polygon": app.workflow.layer2,
                     });
-                    if app.workflow.selected_only {
-                        p["selectedOnly"] = json!(true);
-                    }
+                    p["selectedOnly"] = json!(app.workflow.selected_only);
                     run(app, "raster.process", p);
                 }
             } else {

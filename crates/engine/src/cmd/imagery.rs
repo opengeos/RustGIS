@@ -560,54 +560,15 @@ fn process(s: &mut Session, p: &Value) -> CmdResult {
                 .iter()
                 .filter_map(|row| match l.dataset.features.get(*row).and_then(|f| f.geometry.as_ref()) {
                     Some(Geometry::Polygon(polys)) => {
-                        let rings: Vec<Vec<Vec<Coord>>> = match &poly_tr {
-                            Some(tr) => polys
-                                .iter()
-                                .filter_map(|rings| {
-                                    let exterior = rings.first()?;
-                                    let mut ext_pts = Vec::with_capacity(exterior.len());
-                                    for &c in exterior {
-                                        ext_pts.push(tr.to_lonlat(c)?);
-                                    }
-                                    if ext_pts.len() < 3 {
-                                        return None;
-                                    }
-                                    let mut valid_rings = vec![ext_pts];
-                                    for hole in rings.iter().skip(1) {
-                                        let mut hole_pts = Vec::with_capacity(hole.len());
-                                        let mut ok = true;
-                                        for &c in hole {
-                                            if let Some(ll) = tr.to_lonlat(c) {
-                                                hole_pts.push(ll);
-                                            } else {
-                                                ok = false;
-                                                break;
-                                            }
-                                        }
-                                        if ok && hole_pts.len() >= 3 {
-                                            valid_rings.push(hole_pts);
-                                        }
-                                    }
-                                    Some(valid_rings)
+                        let rings: Vec<Vec<Vec<Coord>>> = polys
+                            .iter()
+                            .filter_map(|rings| {
+                                rasterops::transform_polygon(rings, |c| match &poly_tr {
+                                    Some(tr) => tr.to_lonlat(c),
+                                    None => Some(c),
                                 })
-                                .collect(),
-                            None => polys
-                                .iter()
-                                .filter_map(|rings| {
-                                    let exterior = rings.first()?;
-                                    if exterior.len() < 3 {
-                                        return None;
-                                    }
-                                    let mut valid_rings = vec![exterior.clone()];
-                                    for hole in rings.iter().skip(1) {
-                                        if hole.len() >= 3 {
-                                            valid_rings.push(hole.clone());
-                                        }
-                                    }
-                                    Some(valid_rings)
-                                })
-                                .collect(),
-                        };
+                            })
+                            .collect();
                         Some(rings.into_iter())
                     }
                     _ => None,

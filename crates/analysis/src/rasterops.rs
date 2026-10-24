@@ -523,6 +523,30 @@ pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Option<
     (n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n))
 }
 
+/// Transforms one polygon part, keeping its exterior and holes together. A failed coordinate
+/// rejects the whole part, so a missing hole cannot enlarge it. Short holes have no area.
+/// `transform` maps input coordinates into the caller's target coordinate system.
+pub fn transform_polygon(rings: &[Vec<Coord>], mut transform: impl FnMut(Coord) -> Option<Coord>) -> Option<Vec<Vec<Coord>>> {
+    if rings.first()?.len() < 3 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for ring in rings {
+        if ring.len() < 3 {
+            continue;
+        }
+        let transformed: Option<Vec<Coord>> = ring
+            .iter()
+            .map(|&c| {
+                let p = transform(c)?;
+                (p.x.is_finite() && p.y.is_finite()).then_some(p)
+            })
+            .collect();
+        out.push(transformed?);
+    }
+    Some(out)
+}
+
 /// The cells of `r` whose centres fall inside any of `polygons` (each an exterior ring and its
 /// holes, in longitude/latitude): the column and row window around the polygons, clamped to the
 /// raster, and a row-major mask over it. `None` when no cell centre falls inside.
@@ -534,32 +558,12 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
     let projected: Vec<Vec<Vec<(f64, f64)>>> = polygons
         .iter()
         .filter_map(|rings| {
-            let exterior = rings.first()?;
-            let mut ext_pts = Vec::with_capacity(exterior.len());
-            for c in exterior {
-                let w = tr.from_lonlat(*c)?;
-                ext_pts.push(r.transform.to_pixel(w));
-            }
-            if ext_pts.len() < 3 {
-                return None;
-            }
-            let mut valid_rings = vec![ext_pts];
-            for hole in rings.iter().skip(1) {
-                let mut hole_pts = Vec::with_capacity(hole.len());
-                let mut ok = true;
-                for c in hole {
-                    if let Some(w) = tr.from_lonlat(*c) {
-                        hole_pts.push(r.transform.to_pixel(w));
-                    } else {
-                        ok = false;
-                        break;
-                    }
-                }
-                if ok && hole_pts.len() >= 3 {
-                    valid_rings.push(hole_pts);
-                }
-            }
-            Some(valid_rings)
+            transform_polygon(rings, |c| {
+                let w = tr.from_lonlat(c)?;
+                let (x, y) = r.transform.to_pixel(w);
+                Some(Coord::new(x, y))
+            })
+            .map(|rings| rings.into_iter().map(|ring| ring.into_iter().map(|c| (c.x, c.y)).collect()).collect())
         })
         .collect();
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -865,6 +869,16 @@ mod tests {
         let b: Vec<f32> = (0..w * h).map(|i| (i / w) as f32).collect();
         let gt = GeoTransform { origin_x: 0.0, origin_y: 0.02, pixel_width: 0.001, pixel_height: -0.001 };
         Raster::new("ramp", w, h, vec![a, b], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn a_failed_hole_transform_rejects_the_polygon_part() {
+        let square = vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 0.0)];
+        let mut hole = square.clone();
+        hole[0].x = f64::NAN;
+        assert!(transform_polygon(&[square.clone(), hole], Some).is_none());
+        assert!(transform_polygon(std::slice::from_ref(&square), |_| None).is_none());
+        assert_eq!(transform_polygon(&[square.clone(), vec![Coord::new(0.1, 0.1)]], Some), Some(vec![square]));
     }
 
     #[test]

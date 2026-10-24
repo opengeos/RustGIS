@@ -74,7 +74,7 @@ pub static TOOLS: &[ToolSpec] = &[
         summary: "Encloses each feature, or all features, in its convex hull.",
         params: &[
             P { name: "input", label: "Input Features", kind: K::Layer, required: true, default: "", help: "" },
-            P { name: "group", label: "Group Option", kind: K::Choice(&["All", "None"]), required: false, default: "\"All\"", help: "" },
+            P { name: "group", label: "Group Option", kind: K::Choice(&["All", "None"]), required: false, default: "All", help: "" },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "" },
         ],
         run: convex_hull,
@@ -477,14 +477,14 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::PolygonLayer,
                 required: true,
                 default: "",
-                help: "Polygon layer defining the zones.",
+                help: "Polygon layer defining the zones; uses selected features when a selection exists.",
             },
             P {
                 name: "bands",
                 label: "Bands",
                 kind: K::Text,
                 required: false,
-                default: "\"1\"",
+                default: "1",
                 help: "1-based band number(s) (e.g. 1 or [1, 2]); defaults to band 1.",
             },
             P {
@@ -492,7 +492,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 label: "Statistics",
                 kind: K::Text,
                 required: false,
-                default: "\"All\"",
+                default: "All",
                 help: "Statistical operations: All, Mean, Min, Max, Sum, Count, StdDev (comma-separated or array); defaults to All.",
             },
             P {
@@ -1517,86 +1517,60 @@ impl StatOp {
     }
 }
 
+fn validate_band(f: f64, total: usize) -> Result<usize, String> {
+    if !f.is_finite() {
+        return Err("band number must be a finite number".into());
+    }
+    if f <= 0.0 {
+        return Err("band numbers must be positive (1-based)".into());
+    }
+    if f.fract() != 0.0 {
+        return Err("band numbers must be integers, not decimals".into());
+    }
+    if f > total as f64 || f >= usize::MAX as f64 {
+        return Err(format!("band index {f} is invalid: raster has bands 1 to {total}"));
+    }
+    Ok(f as usize)
+}
+
 fn parse_single_band(item: &Json, total_bands: usize, out: &mut Vec<usize>) -> Result<(), String> {
     match item {
         Json::Number(n) => {
-            let f = n.as_f64().ok_or_else(|| "invalid band number".to_string())?;
-            if !f.is_finite() {
-                return Err("band number must be a finite number".into());
-            }
-            if f <= 0.0 {
-                return Err("band numbers must be positive (1-based)".into());
-            }
-            if f.fract() != 0.0 {
-                return Err("band numbers must be integers, not decimals".into());
-            }
-            let b = f as usize;
-            if b > total_bands {
-                return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-            }
-            out.push(b);
-            Ok(())
+            out.push(validate_band(n.as_f64().ok_or("invalid band number")?, total_bands)?);
         }
         Json::String(s) => {
-            let txt = s.trim();
-            if txt.eq_ignore_ascii_case("all") {
-                out.extend(1..=total_bands);
-                Ok(())
-            } else {
-                let clean = txt.trim_matches(|c| c == '[' || c == ']');
-                for part in clean.split([',', ';', ' ']) {
-                    let part = part.trim().trim_matches('"');
-                    if part.is_empty() {
-                        continue;
-                    }
-                    if part.eq_ignore_ascii_case("all") {
-                        out.extend(1..=total_bands);
-                        continue;
-                    }
-                    let f: f64 = part.parse().map_err(|_| format!("invalid band number '{part}'"))?;
-                    if !f.is_finite() {
-                        return Err("band number must be a finite number".into());
-                    }
-                    if f <= 0.0 {
-                        return Err("band numbers must be positive (1-based)".into());
-                    }
-                    if f.fract() != 0.0 {
-                        return Err("band numbers must be integers, not decimals".into());
-                    }
-                    let b = f as usize;
-                    if b > total_bands {
-                        return Err(format!("band index {b} is invalid: raster has bands 1 to {total_bands}"));
-                    }
-                    out.push(b);
+            for part in s.trim().trim_matches(|c| c == '[' || c == ']').split([',', ';', ' ']) {
+                let part = part.trim().trim_matches('"');
+                if part.is_empty() {
+                    continue;
                 }
-                Ok(())
+                if part.eq_ignore_ascii_case("all") {
+                    out.extend(1..=total_bands);
+                } else {
+                    let f = part.parse().map_err(|_| format!("invalid band number '{part}'"))?;
+                    out.push(validate_band(f, total_bands)?);
+                }
             }
         }
-        _ => Err("band numbers must be positive integers or 'all'".into()),
+        _ => return Err("band numbers must be positive integers or 'all'".into()),
     }
+    Ok(())
 }
 
-fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+/// Parses the Zonal Statistics band's text or JSON list into unique zero-based indices.
+pub fn zonal_bands(value: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
     let mut raw_bands = Vec::new();
-    if let Some(arr) = p.get("bands").and_then(Json::as_array) {
-        if arr.is_empty() {
-            raw_bands.push(1);
-        } else {
+    match value {
+        Json::Array(arr) => {
             for item in arr {
                 parse_single_band(item, total_bands, &mut raw_bands)?;
             }
         }
-    } else if let Some(v) = p.get("bands") {
-        if v.is_null() {
-            raw_bands.push(1);
-        } else {
-            parse_single_band(v, total_bands, &mut raw_bands)?;
-        }
-    } else {
-        raw_bands.push(1);
+        v if !v.is_null() => parse_single_band(v, total_bands, &mut raw_bands)?,
+        _ => {}
     }
     if raw_bands.is_empty() {
-        raw_bands.push(1);
+        raw_bands.push(validate_band(1.0, total_bands)?);
     }
     let mut unique = Vec::new();
     for b in raw_bands {
@@ -1607,37 +1581,30 @@ fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
     Ok(unique.into_iter().map(|b| b - 1).collect())
 }
 
+fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
+    zonal_bands(p.get("bands").unwrap_or(&Json::Null), total_bands)
+}
+
 fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
-    let mut out = Vec::new();
-    if let Some(arr) = p.get("stats").and_then(Json::as_array) {
-        if arr.is_empty() {
-            return Ok(StatOp::ALL.to_vec());
-        }
-        for item in arr {
-            let txt = item.as_str().ok_or_else(|| "statistic names must be strings".to_string())?;
-            let ops = StatOp::parse(txt)?;
-            for op in ops {
-                if !out.contains(&op) {
-                    out.push(op);
-                }
-            }
-        }
+    if p.get("stats").is_some_and(|v| !v.is_null() && !v.is_array() && !v.is_string()) {
+        return Err("statistic names must be strings or an array of strings".into());
+    }
+    let names: Vec<&str> = if let Some(arr) = p.get("stats").and_then(Json::as_array) {
+        arr.iter().map(|item| item.as_str().ok_or_else(|| "statistic names must be strings".to_string())).collect::<Result<_, _>>()?
     } else {
-        let txt = s(p, "stats").trim();
-        if txt.is_empty() {
-            return Ok(StatOp::ALL.to_vec());
-        }
-        let clean = txt.trim_matches(|c| c == '[' || c == ']');
-        for part in clean.split([',', ';']) {
-            let part = part.trim().trim_matches('"');
-            if part.is_empty() {
-                continue;
-            }
-            let ops = StatOp::parse(part)?;
-            for op in ops {
-                if !out.contains(&op) {
-                    out.push(op);
-                }
+        s(p, "stats")
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .split([',', ';'])
+            .map(|part| part.trim().trim_matches('"'))
+            .filter(|part| !part.is_empty())
+            .collect()
+    };
+    let mut out = Vec::new();
+    for name in names {
+        for op in StatOp::parse(name)? {
+            if !out.contains(&op) {
+                out.push(op);
             }
         }
     }
@@ -1645,56 +1612,6 @@ fn parse_stats(p: &Json) -> Result<Vec<StatOp>, String> {
         out = StatOp::ALL.to_vec();
     }
     Ok(out)
-}
-
-/// Projects a polygon (exterior ring + optional holes) to WGS 84 lon/lat coordinates.
-///
-/// Returns `None` if the exterior ring fails transformation or has fewer than 3 vertices.
-/// A hole is never promoted to become the exterior ring.
-/// Holes whose vertices fail transformation or have fewer than 3 vertices are skipped,
-/// preserving the valid exterior ring and any surviving valid holes.
-/// If any coordinate in a ring cannot be transformed, the entire ring is rejected rather
-/// than silently dropping vertices and distorting the zone boundary.
-fn reproject_polygon(rings: &[Vec<Coord>], tr: &rustgis_data::raster::Transformer) -> Option<Vec<Vec<Coord>>> {
-    let exterior = rings.first()?;
-    let mut ext_lonlat = Vec::with_capacity(exterior.len());
-    for &c in exterior {
-        ext_lonlat.push(tr.to_lonlat(c)?);
-    }
-    if ext_lonlat.len() < 3 {
-        return None;
-    }
-    let mut out_rings = vec![ext_lonlat];
-    for hole in rings.iter().skip(1) {
-        let mut hole_lonlat = Vec::with_capacity(hole.len());
-        let mut ok = true;
-        for &c in hole {
-            if let Some(ll) = tr.to_lonlat(c) {
-                hole_lonlat.push(ll);
-            } else {
-                ok = false;
-                break;
-            }
-        }
-        if ok && hole_lonlat.len() >= 3 {
-            out_rings.push(hole_lonlat);
-        }
-    }
-    Some(out_rings)
-}
-
-fn validate_lonlat_polygon(rings: &[Vec<Coord>]) -> Option<Vec<Vec<Coord>>> {
-    let exterior = rings.first()?;
-    if exterior.len() < 3 {
-        return None;
-    }
-    let mut out_rings = vec![exterior.clone()];
-    for hole in rings.iter().skip(1) {
-        if hole.len() >= 3 {
-            out_rings.push(hole.clone());
-        }
-    }
-    Some(out_rings)
 }
 
 fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
@@ -1755,7 +1672,9 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let base_name = format!("{prefix}_{}", stat.name());
             let mut final_name = base_name.clone();
             let mut counter = 1usize;
-            while out.field_index(&final_name).is_some() || new_field_names.iter().any(|n| n.eq_ignore_ascii_case(&final_name)) {
+            while out.fields.iter().any(|f| f.name.eq_ignore_ascii_case(&final_name))
+                || new_field_names.iter().any(|n| n.eq_ignore_ascii_case(&final_name))
+            {
                 counter += 1;
                 final_name = format!("{base_name}_{counter}");
             }
@@ -1775,14 +1694,14 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let (stats_by_band, feature_valid) = match &f.geometry {
             Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
                 let polys_lonlat: Vec<Vec<Vec<Coord>>> = match &poly_tr {
-                    Some(tr) => polys.iter().filter_map(|rings| reproject_polygon(rings, tr)).collect(),
-                    None => polys.iter().filter_map(|rings| validate_lonlat_polygon(rings)).collect(),
+                    Some(tr) => polys.iter().filter_map(|rings| crate::rasterops::transform_polygon(rings, |c| tr.to_lonlat(c))).collect(),
+                    None => polys.iter().filter_map(|rings| crate::rasterops::transform_polygon(rings, Some)).collect(),
                 };
                 if polys_lonlat.is_empty() {
                     (vec![crate::rasterops::ZoneStats::default(); bands.len()], false)
                 } else {
                     let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
-                    (st, true)
+                    (st, polys_lonlat.len() == polys.len())
                 }
             }
             _ => (vec![crate::rasterops::ZoneStats::default(); bands.len()], false),
@@ -1793,6 +1712,7 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         }
 
         let mut attrs = f.attrs.clone();
+        attrs.resize(poly_ds.fields.len(), Value::Null);
         for (b_idx, _, stat, _, _) in &out_fields {
             let b_stats = stats_by_band.get(*b_idx);
             let val = match (b_stats, stat) {
@@ -1813,7 +1733,9 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let n_features = out.features.len();
     let mut messages = vec![format!("Calculated zonal statistics for {n_features} feature(s)")];
     if skipped_features > 0 {
-        messages.push(format!("{skipped_features} feature(s) had invalid geometry or failed coordinate transformation"));
+        messages.push(format!(
+            "{skipped_features} feature(s) had missing geometry, invalid polygon parts or failed coordinate transformations"
+        ));
     }
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
@@ -2693,6 +2615,34 @@ mod tests {
             rasters: HashMap::from([("elev".to_string(), &raster)]),
         };
 
+        // Missing source attributes stay in their own columns, including case-insensitive collisions.
+        let mut short = input_clone.clone();
+        short.fields[1].name = "ELEV_MEAN".into();
+        short.features[0].attrs.truncate(1);
+        let sparse =
+            RasterMap { datasets: HashMap::from([("zones".to_string(), short)]), rasters: HashMap::from([("elev".to_string(), &raster)]) };
+        let sparse_out =
+            layer(crate::run("zonalStats", &sparse, &serde_json::json!({"raster":"elev", "polygons":"zones", "stats":"mean"})).unwrap());
+        assert_eq!(sparse_out.features[0].attrs[1], Value::Null);
+        assert_eq!(sparse_out.fields[2].name, "elev_mean_2");
+        assert!(matches!(sparse_out.features[0].attrs[2], Value::Float(_)));
+
+        let mut partial = input_clone.clone();
+        partial.features.truncate(1);
+        if let Some(Geometry::Polygon(parts)) = &mut partial.features[0].geometry {
+            parts.push(vec![vec![Coord::new(1.0, 1.0)]]);
+        }
+        let multipart = RasterMap {
+            datasets: HashMap::from([("zones".to_string(), partial)]),
+            rasters: HashMap::from([("elev".to_string(), &raster)]),
+        };
+        let partial_result =
+            crate::run("zonalStats", &multipart, &serde_json::json!({"raster":"elev", "polygons":"zones", "stats":"count"})).unwrap();
+        assert!(partial_result.messages.iter().any(|m| m.starts_with("1 feature(s) had missing geometry")));
+        let partial_out = layer(partial_result);
+        let count = partial_out.field_index("elev_count").unwrap();
+        assert_eq!(partial_out.value(0, count), &Value::Int(4));
+
         let res = crate::run(
             "zonalStats",
             &m,
@@ -2833,6 +2783,10 @@ mod tests {
         let out_float = layer(res_float_band);
         assert!(out_float.field_index("elev_mean").is_some());
 
+        assert!(
+            crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [4294967297u64]})).is_err()
+        );
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "stats": 17})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [1.5]})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [0]})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [-1]})).is_err());
