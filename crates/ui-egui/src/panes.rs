@@ -1634,7 +1634,10 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
                     ("renderer", tl_raw!(rl.style.renderer.label())),
                 ],
             ),
-            None => crate::i18n::fmt("The raster's data couldn't be read: {path}", &[("path", rl.path.as_deref().unwrap_or(""))]),
+            None => crate::i18n::fmt(
+                "The raster's data couldn't be read: {error}",
+                &[("error", rl.error.as_deref().or(rl.path.as_deref()).unwrap_or(""))],
+            ),
         },
         None => match &l.source {
             Some(src) if src.error.is_some() => {

@@ -442,7 +442,7 @@ fn level(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, node: &s
             });
         }
         Some(Err(Some(e))) => {
-            ui.label(RichText::new(e).small().color(t.red));
+            ui.label(RichText::new(crate::connectionui::translated(&e)).small().color(t.red));
             ui.horizontal(|ui| {
                 if ui.small_button(tl!("Retry")).clicked() {
                     app.ui.connection_tree.entries.remove(&key);

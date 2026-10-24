@@ -343,11 +343,56 @@ rustgis-cli run --cmd 's3.connect={"name":"minio","endpoint":"https://minio.exam
   --cmd 's3.list={"url":"s3://my-bucket/rasters/"}' --cmd 'layer.addUrl={"url":"s3://my-bucket/rasters/dem.tif"}'
 ```
 
-Keys are kept until RustGIS closes: never in a project (which keeps the `s3://` address), a
-command's result, a notice or the log. After **Connect**, **Save as Connection** keeps its name,
-endpoint, region and credential source under **Data Sources › Connections**, never its keys.
-Use **Saved connection** to pick it again; typed keys must be entered again after RustGIS closes.
-Storing secrets in the system keychain isn't supported.
+Keys are kept until RustGIS closes unless you ask otherwise: never in a project (which keeps the
+address), a command's result, a notice or the log. After **Connect**, **Save as Connection** keeps
+its name, endpoint, region and credential source under **Data Sources › Connections**, never its
+keys. Use **Saved connection** to pick it again.
+
+On the desktop, a saved connection that uses typed keys can also keep them in your computer's
+credential store (the macOS Keychain, the Windows Credential Manager, or the Secret Service):
+tick **Remember on this computer** in the S3 dialog or the connection's form when you log in
+(it is off every time; `connection.login` takes `"remember": true`). Both keys go to the store,
+with the endpoint they are for, and the connection only gets a **Saved keys** mark; the
+connection's definition, the preferences and projects never contain a key. Displaying that mark
+does not read the store or guarantee it is available. In the next session, choosing, browsing,
+testing or logging in to the connection can read its keys from the store with nothing typed
+(the system may ask you to unlock it). Typed keys win over saved ones for that login.
+Temporary credentials (with a session token) are never kept: they work for the session,
+and keys saved earlier stay as they were. If the store is missing or refuses (the web app and the
+command line have none), the login still works for this session and says the keys weren't
+remembered; without keys typed, a connection with nothing available says so, and is not logged in.
+**Forget Saved Keys** (`connection.forgetSavedKeys`; the connection's right-click menu or its
+form) deletes them from the store and keeps the session's login. Removing a connection deletes
+its saved keys first, and changing its endpoint or switching away from typed keys does too.
+With a credential store available, these actions check it even when the **Saved keys** indication
+is absent: the indication may be stale. If the store refuses deletion, the forget, removal or
+edit doesn't happen. Without a store, a connection marked as holding saved keys cannot be
+removed or have its endpoint changed. Renaming, grouping, buckets and region keep the keys,
+and a copy of a connection has none. A profile, the environment or anonymous access never
+read saved keys.
+
+A saved connection's login reads only what is added through it: its listings, and the objects
+**Add** takes from them, are kept as addresses that name that connection (and its endpoint), so a
+project reads a bucket through the connection it was added with, never with another connection's
+keys because the endpoint or bucket is the same. Opening a project (or importing a map or layer)
+finds each bucket its S3 sources read. A single matching connection whose bucket list explicitly
+includes that bucket logs in and opens the sources when its credentials are available.
+Connections with an empty bucket list require an explicit choice, even when only one matches.
+When only one such connection matches, the notice names it and asks you to confirm it in
+**Choose S3 connection…**; it is not automatically authorized to read an unlisted bucket.
+Missing or unavailable keys leave the sources blocked until you log in.
+If several connections fit, **Choose S3 connection…** (`connection.resolveS3`) asks which one,
+with no connection selected initially; nothing is read until you choose, and **Cancel** leaves
+the sources blocked. If none fits, sources carrying saved-connection provenance stay unread
+(an older project's bare `s3://` address is read as before). Addresses of plain `s3.connect`
+sessions keep reading as they did.
+A saved login belonging to another open session is not reused merely because its name matches:
+each session logs in through its selected saved connection.
+Resolving a bucket retries only that bucket's deferred sources, keeping layer styles and ordering.
+An older source with an unknown endpoint stays separate from an explicitly AWS-backed source,
+even when both name the same bucket and object. Saving and reopening while a choice is pending
+preserves that distinction; choosing a connection for one resource does not choose for the other.
+Raster reloads use the same authorized address and load their pixels in the background.
 Keys go only to the endpoint they're for: a signed request that is redirected isn't followed, and
 keys from a profile or the environment are used only with AWS or the profile's own
 `endpoint_url`. In the web app, the bucket's CORS rules must allow the page's origin (and, for a
@@ -460,9 +505,9 @@ names the command and parameters that add it (`service.add`, `layer.addDatabase`
 it left some out. Like `connection.test`, it reads the address itself on the desktop and the
 command line; with `probe: true` it returns the address to fetch, and the app passes what it
 fetched back as `answer` (and further `documents` when a service asks for them, as `next`).
-Browsing never changes the project. When a saved password turns out to be missing, or to have been
-saved for another address, the connection loses its **Saved password** marker; the stored entry
-itself is left for **Forget Saved Password**, an address edit or a removal to delete.
+Browsing never changes the project. When a saved database password turns out to be missing, or
+to have been saved for another address, the connection loses its **Saved password** marker; the
+stored entry itself is left for **Forget Saved Password**, an address edit or a removal to delete.
 
 Addresses are saved without passwords or tokens. Database passwords entered through
 `connection.login` are kept separately by connection ID for this session.
@@ -474,18 +519,20 @@ If the store is missing, unavailable or denies access, the login remains usable 
 session and a visible warning says it was not remembered (`passwordSaved:false` in the result).
 The browser and command line have no OS-store hook and remain session-only.
 
-The stored envelope is bound to the connection's ID, kind and cleaned address, including its
-username. Renaming or regrouping preserves it. Changing the address or username, or removing
-the connection, deletes the old stored password before committing the change; if deletion
-fails, the definition remains unchanged. Invalid edits do not delete a password.
+The stored database password envelope is bound to the connection's ID, kind and cleaned address,
+including its username. Renaming or regrouping preserves it. Changing the address or username,
+or removing the connection, deletes the old stored password before committing the change; if
+deletion fails, the definition remains unchanged. Invalid edits do not delete a password.
 Duplicating a connection copies neither its stored password nor its session login.
-**Saved password** marks a remembered connection without reading the store just to display it.
+**Saved password** marks a remembered database connection without reading the store just to
+display it; it is separate from an S3 connection's **Saved keys** marker.
 **Forget Saved Password** (`connection.forgetPassword {"id":"c1"}`) deletes the stored value,
 but leaves an explicitly entered session password and already-open layers alone. Forgetting an
 inactive connection never selects it or replaces another connection's active password.
 
-Projects remain address-only: they contain neither passwords nor saved connection IDs.
-On opening a project, one exact matching remembered connection may reconnect automatically.
+Database layer origins remain address-only: projects contain neither database passwords nor saved
+database connection IDs. On opening a project, one exact matching remembered database connection
+may reconnect automatically.
 Matching strips passwords and outer wrappers/whitespace, but does not infer that URI and
 libpq forms, reordered parameters, host aliases or different usernames mean the same server.
 Several eligible remembered matches open a chooser with no default; cancel leaves the layers
@@ -522,7 +569,11 @@ server positively refuses a password typed for that Test, the previous per-ID se
 selection and active address password are restored (or the attempted credential is removed if
 none existed).
 A failure after authentication, such as a table-listing error, keeps the new session login.
-S3 `accessKeyId`, `secretAccessKey` and optional `sessionToken` remain session-only.
+S3 `accessKeyId` and `secretAccessKey` likewise stay session-only unless a typed-key login opts
+into remembering them; a nonblank `sessionToken` always keeps the complete temporary credential
+set session-only, leaving previously saved keys unchanged (see [S3 buckets](#s3-buckets)).
+With login parameters, an S3 `connection.test` logs in first, never remembers keys, and a failed
+listing does not undo that session login.
 S3 profiles and environment credentials remain subject to the existing endpoint restrictions;
 editing an S3 name, endpoint or options disconnects its session login. S3 shares the name-based
 session registry used by the S3 dialog and `s3.connect`, so editing or removing a saved
@@ -530,10 +581,10 @@ connection also affects a session entry of the same name created there.
 Renaming clears runtime entries under both the old and new names, so the renamed
 connection cannot inherit an unrelated login at its destination name.
 Web-service logins are not supported. Plugins may list connections but cannot manage, log in
-to, forget passwords for, test or browse them. The in-app assistant asks for fresh approval
-each time for those operations, including Forget and scripted calls; external assistants
-using MCP cannot run them. Even `probe: true` needs approval: connection operations cannot be
-approved for the whole conversation.
+to, forget passwords or S3 keys for, choose an S3 connection for, test or browse them. The in-app
+assistant asks for fresh approval each time for those operations, including Forget, S3 source
+selection and scripted calls; external assistants using MCP cannot run them. Even `probe: true`
+needs approval: connection operations cannot be approved for the whole conversation.
 
 Desktop and web apps save connections with their preferences (`connections` in desktop
 `prefs.json`, `rustgis.connections` in web localStorage). The first load imports saved services,

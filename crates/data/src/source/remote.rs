@@ -400,6 +400,11 @@ pub fn forget() {
     files().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
+/// Forgets the fetched parts of one file (after the address's login changed).
+pub fn forget_file(url: &str) {
+    files().lock().unwrap_or_else(|e| e.into_inner()).retain(|r| r.url != url);
+}
+
 /// The error a read that needs bytes gives (it runs again once they are fetched).
 pub fn need() -> DataError {
     DataError::Format(NEED.into())

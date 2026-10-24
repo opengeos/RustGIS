@@ -1397,6 +1397,12 @@ fn hostile_params_never_panic() {
         json!({"id": {"unexpected":"object"}, "remember": "true", "password": []}),
         json!({"kind": "stac", "address": "http://127.0.0.1:9/stac", "answer": "\u{0}{"}),
         json!({"id": "c1", "node": "s3:/\u{7}", "probe": true, "answer": 7, "documents": "x"}),
+        // Saved S3 keys: junk remember flags, partial pairs, tokens, and a choice of nothing.
+        json!({"id": "c1", "accessKeyId": "A", "secretAccessKey": "S", "sessionToken": "T", "remember": "yes"}),
+        json!({"id": "c1", "accessKeyId": 7, "secretAccessKey": [], "remember": null}),
+        json!({"id": "c1", "remember": true, "source": "rustgis-s3:junk", "node": 5}),
+        json!({"source": "rustgis-s3::0::s3://bucket/key", "id": "c1", "remember": {"a": 1}}),
+        json!({"source": 7, "id": ["c1"]}),
     ];
     let ids: Vec<&str> = Session::new(Project::default()).registry.commands.iter().map(|c| c.id).collect();
     let streamed = grid_fgb("hostile", 20);
@@ -10573,7 +10579,8 @@ fn connections_commands() {
         assert_eq!(list["connections"][0]["loggedIn"], false);
     }
     s.run("connection.new", &json!({"kind":"s3","name":"conn-test-s3","options":{"credentials":"keys","buckets":"b11"}})).unwrap();
-    assert!(s.run("connection.test", &json!({"id":"conn-test-s3"})).unwrap_err().contains("log in first"));
+    // A saved connection that uses keys reads them from the credential store (this session has none).
+    assert!(s.run("connection.test", &json!({"id":"conn-test-s3"})).unwrap_err().contains("Saved S3 keys are unavailable"));
     s.run("connection.login", &json!({"id":"conn-test-s3","accessKeyId":"AKIDTEST","secretAccessKey":"very-secret-key"})).unwrap();
     assert!(s3::connection("conn-test-s3").is_some());
     assert!(!s.connections.to_json().contains("very-secret"));
@@ -10656,7 +10663,7 @@ fn connections_s3_rename_cannot_inherit_a_destination_session() {
     assert_eq!(renamed["loggedIn"], false);
     assert!(s3::connection(old).is_none());
     assert!(s3::connection(destination).is_none());
-    assert!(s.run("connection.test", &json!({"id":destination})).unwrap_err().contains("log in first"));
+    assert!(s.run("connection.test", &json!({"id":destination})).unwrap_err().contains("Saved S3 keys are unavailable"));
     s.run("connection.login", &json!({"id":destination,"accessKeyId":"NEWKEY","secretAccessKey":"new-test-secret"})).unwrap();
     assert_eq!(s3::connection(destination).unwrap().endpoint.as_deref(), Some("https://saved.example"));
     s.run("connection.remove", &json!({"id":destination})).unwrap();
@@ -10839,7 +10846,12 @@ fn connection_browse_levels_and_adds() {
     let v = s.run("connection.browse", &json!({"id": "BrowseB", "node": "s3:bkt1/", "answer": listing})).unwrap();
     assert_eq!(v["children"][0]["node"], "s3:bkt1/p/");
     assert_eq!(v["children"][0]["name"], "p/");
-    assert_eq!(v["children"][1]["add"]["params"]["url"], "s3://bkt1/p.tif");
+    // Through a saved connection's login, a file's address names it: only that login reads it.
+    let added = v["children"][1]["add"]["params"]["url"].as_str().unwrap();
+    let bound = rustgis_data::s3_address::parse(added).unwrap().unwrap();
+    let saved_id = &s.connections.find("BrowseB").unwrap().id;
+    assert_eq!((bound.url, bound.endpoint, Some(bound.binding)), ("s3://bkt1/p.tif", "", s.s3_binding(saved_id)));
+    assert_eq!(v["children"][1]["key"], "s3://bkt1/p.tif");
     assert_eq!(v["children"].as_array().unwrap().len(), 2, "{v}");
     s3::disconnect("BrowseB");
 

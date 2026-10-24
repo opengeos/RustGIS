@@ -19,6 +19,11 @@ pub const DATABASE_KINDS: &[&str] = &["postgres", "mysql", "sqlserver"];
 pub const S3_CREDENTIALS: &[&str] = &["keys", "profile", "environment", "none"];
 pub const DESKTOP_ONLY: &str = "database connections are used by the desktop app";
 
+/// Whether a serialized flag is off (so it is left out).
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Connection {
     pub id: String,
@@ -30,6 +35,11 @@ pub struct Connection {
     pub address: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub options: BTreeMap<String, String>,
+    /// An S3 connection whose keys the user asked to keep in the computer's credential store
+    /// (`connection.login` with `remember`). Only a marker, never a key; not proof that the store
+    /// still has them. Commands never take it from a caller.
+    #[serde(default, rename = "savedKeys", skip_serializing_if = "is_false")]
+    pub saved_keys: bool,
     /// A database connection's password was saved in the system's secret store (never the
     /// password itself, which is `DatabaseLogins`' to read). Set only by a login that asked to
     /// remember it, and cleared when the saved password is forgotten or no longer fits.
@@ -133,6 +143,9 @@ pub fn clean(mut c: Connection) -> Result<(Connection, bool), String> {
         c.name = if c.kind == "s3" && c.address.is_empty() { "AWS S3".into() } else { sources::default_name(&c.address) };
     }
     c.group = name_text(&c.group);
+    if c.kind != "s3" {
+        c.saved_keys = false;
+    }
     // Only a database connection has a password to remember.
     c.remembered &= DATABASE_KINDS.contains(&c.kind.as_str());
     if c.kind != "s3" && !c.options.is_empty() {
@@ -324,6 +337,8 @@ impl Connections {
 
     pub fn add(&mut self, c: Connection, explicit_name: bool) -> Result<(Connection, bool), String> {
         let (mut c, stripped) = clean(c)?;
+        // A new connection (or a copy) has no saved keys of its own.
+        c.saved_keys = false;
         if self.connections.len() >= MAX_CONNECTIONS {
             return Err(format!("up to {MAX_CONNECTIONS} connections"));
         }
@@ -353,7 +368,10 @@ impl Connections {
         self.add(c, false)
     }
 
-    pub fn update(&mut self, id: &str, c: Connection) -> Result<(Connection, bool), String> {
+    /// What [`Connections::update`] would store for connection `id` given `c` (checked, named
+    /// uniquely, keeping its id and its saved-keys marker), and whether an address was stripped of
+    /// secrets, without changing anything.
+    pub(crate) fn prepare_update(&self, id: &str, c: Connection) -> Result<(Connection, bool), String> {
         let explicit_name = !c.name.trim().is_empty();
         let (mut c, stripped) = clean(c)?;
         if explicit_name && self.name_is_id(&c.name) {
@@ -364,14 +382,36 @@ impl Connections {
             return Err(format!("a connection named '{}' exists", c.name));
         }
         c.name = name;
-        let slot = self.connections.iter_mut().find(|c| c.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
+        let slot = self.connections.iter().find(|c| c.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
         c.id = id.into();
-        // The saved password belongs to the saved definition: an edit of the server or the user
-        // leaves it behind (the command deletes it first), and no edit claims one.
+        c.saved_keys = slot.saved_keys && c.kind == "s3";
+        // Password identity includes the cleaned database kind, server and user.
         c.remembered = slot.remembered && slot.kind == c.kind && slot.address == c.address;
-        *slot = c.clone();
-        self.generation = self.generation.wrapping_add(1);
         Ok((c, stripped))
+    }
+
+    /// Commits to a target located before credential deletion. No lookup or validation remains.
+    pub(crate) fn commit_update(slot: &mut Connection, generation: &mut u64, c: Connection) -> Connection {
+        *slot = c.clone();
+        *generation = generation.wrapping_add(1);
+        c
+    }
+
+    pub fn update(&mut self, id: &str, c: Connection) -> Result<(Connection, bool), String> {
+        let (c, stripped) = self.prepare_update(id, c)?;
+        let slot = self.connections.iter_mut().find(|slot| slot.id == id).ok_or_else(|| format!("no connection '{id}'"))?;
+        Ok((Self::commit_update(slot, &mut self.generation, c), stripped))
+    }
+
+    /// Records whether connection `id` has saved keys (the marker): after a store call said so.
+    /// Changing it bumps `generation`, as every change to the preference does.
+    pub fn set_saved_keys(&mut self, id: &str, saved: bool) {
+        if let Some(c) = self.connections.iter_mut().find(|c| c.id == id && c.kind == "s3")
+            && c.saved_keys != saved
+        {
+            c.saved_keys = saved;
+            self.generation = self.generation.wrapping_add(1);
+        }
     }
 
     pub fn remove(&mut self, id: &str) -> Option<Connection> {
@@ -444,7 +484,7 @@ pub struct LoginRequest {
     pub prompted: bool,
 }
 
-/// The account a saved connection's password lives under in the system's secret store.
+/// The shared account for a saved connection's database password or S3 key pair.
 pub fn account(id: &str) -> String {
     format!("connection/{id}")
 }
@@ -511,6 +551,11 @@ impl DatabaseLogins {
 
     pub fn has_store(&self) -> bool {
         self.store.is_some()
+    }
+
+    /// The same desktop credential store for all saved connection kinds.
+    pub fn secret_store(&self) -> Option<&Arc<dyn SecretStore>> {
+        self.store.as_ref()
     }
 
     /// Whether `id` has a password given this session.

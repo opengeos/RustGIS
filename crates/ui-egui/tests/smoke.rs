@@ -7,6 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 mod remembered_database;
 
+mod remembered_s3;
 /// Builds a headless World Atlas UI for interaction tests.
 fn harness() -> egui_kittest::Harness<'static, RustGisApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
@@ -1781,6 +1782,11 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     h.state_mut().run("ui.dialog", json!({"name":"s3"})).unwrap();
     h.step();
     h.step();
+    // Other tests may have live process-wide connections, so the section can start collapsed.
+    if h.query_by_role_and_label(egui::accesskit::Role::Button, "Connect").is_none() {
+        h.get_by_label("Connection").click();
+        h.run_steps(3);
+    }
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Connect").click();
     h.step();
     h.get_by_label("Save as Connection").click();
@@ -1790,6 +1796,7 @@ fn s3_dialog_selects_the_kept_connection_after_a_blank_name_connect() {
     assert!(h.query_by_label("Save as Connection").is_none());
     assert!(h.query_by_label("Rename it to save it: a connection has this name").is_none());
     assert!(h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some("default")));
+    rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::disconnect("default");
 }
 
 /// A table list and the table chosen belong to the address they were listed for: editing the

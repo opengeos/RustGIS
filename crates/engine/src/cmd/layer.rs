@@ -1956,6 +1956,8 @@ fn add_layer_file(s: &mut Session, path: &str) -> CmdResult {
 /// Adds a layer from a layer file's JSON.
 pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     let mut layer: rustgis_map::Layer = serde_json::from_str(text).map_err(|e| format!("not a RustGIS layer file: {e}"))?;
+    // A binding in a file is no authority to use a login here.
+    crate::s3_connections::clear_bindings(layer.addresses_mut());
     // A fresh id and a unique name in this map; the rest goes through project repair.
     let base = layer.name.clone();
     let mut i = 1;
@@ -1970,6 +1972,7 @@ pub(crate) fn add_layer_text(s: &mut Session, text: &str) -> CmdResult {
     // Only the database the added layer reads can change here.
     let keys: Vec<_> = s.map().layer(id).and_then(|l| l.source.as_ref()).map(super::connections::layer_keys).unwrap_or_default();
     super::connections::resolve_keys(s, &keys);
+    crate::s3_connections::resolve_project_s3(s);
     super::connections::note_waiting(s);
     s.active_layer = Some(id);
     Ok(json!({"layer": id}))
@@ -2170,7 +2173,9 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
 /// Add Data › From URL does, so a plugin, a script or the assistant can add data by address too.
 pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
-    let lower = url.to_ascii_lowercase();
+    // An address read through a saved S3 connection is judged by the address it wraps; the whole
+    // address stays what is fetched and kept.
+    let lower = rustgis_data::s3_address::inner(url).to_ascii_lowercase();
     if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://")) {
         return Err(format!("{url}: give an http://, https:// or s3:// address (Add Data opens files)"));
     }
@@ -2276,6 +2281,7 @@ fn add_remote(s: &mut Session, p: &Value, url: &str, src: Box<dyn rustgis_data::
 
 /// Whether a web address names a GeoTIFF (by its path's extension).
 pub fn is_tiff_url(url: &str) -> bool {
+    let url = rustgis_data::s3_address::inner(url);
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     path.ends_with(".tif") || path.ends_with(".tiff")
 }

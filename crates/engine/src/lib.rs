@@ -10,6 +10,10 @@ pub mod connections;
 pub mod geometry_calc;
 pub mod model;
 pub mod project;
+pub mod s3_connections;
+pub mod s3_keys;
+#[cfg(test)]
+mod s3_saved_tests;
 pub mod sample;
 pub mod sources;
 #[cfg(test)]
@@ -465,9 +469,15 @@ pub struct Session {
     pub sources: sources::Sources,
     /// Saved connections (`connection.*`): kept with the app's preferences, not the project; never a secret.
     pub connections: connections::Connections,
-    /// The database logins of this run: the system's secret store (desktop app only), passwords
-    /// given and read, which saved connection each database uses, and the logins to ask for. Never
-    /// saved; see [`connections::DatabaseLogins`].
+    /// The runtime token of each saved S3 connection's login in this session, by saved id (see
+    /// `rustgis_tiles::s3::connect_saved`): given on the first successful login, kept after.
+    pub(crate) s3_bindings: std::collections::BTreeMap<String, String>,
+    /// Project sources that read an S3 bucket through a saved connection and wait for the user to
+    /// choose which (see [`s3_connections`]); none is fetched meanwhile.
+    pub s3_pending: Vec<s3_connections::PendingS3>,
+    /// This run's connection credential store (desktop only), plus database passwords, selections
+    /// and login requests. S3 uses the same store through `DatabaseLogins::secret_store`.
+    /// Never saved; see [`connections::DatabaseLogins`].
     pub database_logins: connections::DatabaseLogins,
     /// How rasters added from now on are drawn (`raster.setDefaultStyle`; kept with the app's
     /// preferences, not the project).
@@ -681,6 +691,8 @@ impl Session {
             dirty: false,
             sources: sources::Sources::default(),
             connections: connections::Connections::default(),
+            s3_bindings: std::collections::BTreeMap::new(),
+            s3_pending: Vec::new(),
             database_logins: connections::DatabaseLogins::default(),
             raster_defaults: rustgis_map::RasterDefaults::default(),
             registry: Registry { commands: cmd::all() },

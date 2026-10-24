@@ -268,6 +268,11 @@ fn gate_rules() {
     assert!(g("run_command", json!({"command": "plugin.install", "params": {"path": "x.rgplugin"}})).is_some());
     assert!(g("run_command", json!({"command": "map.addTiles", "params": {"url": "https://tile.example/{z}/{x}/{y}.png"}})).is_some());
     assert!(g("run_command", json!({"command": "plugin:x/y"})).is_some());
+    // Saved S3 keys and the choice of a connection are the user's: asked for, every time.
+    for command in ["connection.forgetSavedKeys", "connection.resolveS3"] {
+        assert!(g("run_command", json!({"command": command, "params": {"id": "c1", "source": "s3://bucket/key"}})).is_some(), "{command}");
+    }
+    assert!(g("run_command", json!({"command": "connection.login", "params": {"id": "c1", "remember": true}})).is_some());
     let sql = g("run_command", json!({"command": "layer.addSql", "params": {"sql": "SELECT ST_Point(0, 0) AS g"}}));
     assert!(sql.as_deref().is_some_and(|w| w.contains("SQL") && w.contains("internet")), "{sql:?}");
     let sql = g("run_command", json!({"command": "layer.addSql", "params": {"sql": "FROM t", "database": "/data/x.duckdb"}}));

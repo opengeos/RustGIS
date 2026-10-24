@@ -235,6 +235,18 @@ pub(crate) fn forget() {
     t.samples = 0;
 }
 
+/// Forgets what was read of one file (its info and its tiles), but not a read under way: a
+/// failed read is made again with whatever login now signs the file's address.
+pub(crate) fn forget_file(url: &str) {
+    let mut all = infos().lock().unwrap_or_else(|e| e.into_inner());
+    if all.get(url).is_some_and(|s| !matches!(s, State::Loading(_))) {
+        all.remove(url);
+    }
+    drop(all);
+    let mut t = tiles().lock().unwrap_or_else(|e| e.into_inner());
+    t.map.retain(|(u, _, _), s| u != url || matches!(s, TileState::Loading(_)));
+}
+
 /// A file's info: `Ok(None)` while it is being read (asking for it starts the read).
 pub fn info(url: &str) -> Result<Option<Arc<Info>>, String> {
     let url = split(url).0;

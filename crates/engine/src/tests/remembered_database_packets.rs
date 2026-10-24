@@ -307,6 +307,7 @@ fn remembered_database_exact_address_and_explicit_precedence_packets() {
     // saved one either: the address's wins, as it does when the project opens.
     explicit.run("connection.login", &json!({"id":id})).unwrap();
     assert_eq!(server.take(), b"explicit-sentinel\0");
+
     server.empty();
 }
 

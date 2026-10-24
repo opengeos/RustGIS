@@ -237,6 +237,16 @@ fn empty(ui: &mut Ui, what: &str) {
 
 fn connections(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, list: &[Connection]) {
     crate::connectiontree::prune(app);
+    // A project's S3 sources waiting for the saved connection that reads them.
+    if !app.session.s3_pending.is_empty()
+        && ui
+            .button(tl!("Choose S3 connection…"))
+            .on_hover_text(tl!("Some of the project's S3 sources wait for you to choose the saved connection that reads them"))
+            .clicked()
+        && let Err(e) = app.run("ui.s3Connections", Value::Null)
+    {
+        app.session.notify(e, true);
+    }
     ui.horizontal(|ui| {
         ui.menu_button(tl!("New Connection ▾"), |ui| {
             for (kind, label) in crate::connectionui::KINDS {
@@ -319,6 +329,16 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
     if DATABASE_KINDS.contains(&c.kind.as_str()) && c.remembered {
         ui.label(RichText::new(tl!("Saved password")).small().weak());
     }
+    // The saved-keys marker (the store isn't asked while drawing).
+    if c.kind == "s3" && c.saved_keys {
+        if app.session.database_logins.has_store() {
+            ui.label(RichText::new(tl!("Saved keys")).small().weak())
+                .on_hover_text(tl!("This computer keeps this connection's keys: logging in reads them."));
+        } else {
+            ui.label(RichText::new(tl!("Saved keys unavailable")).small().weak())
+                .on_hover_text(tl!("Keys were saved for this connection, but there is no credential store here to read them from."));
+        }
+    }
     ui.label(RichText::new(tl!(crate::connectionui::label(&c.kind))).small().weak());
     response.context_menu(|ui| {
         let mut items = vec![
@@ -361,6 +381,16 @@ fn connection_header(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connecti
             if ui.button(tl!("Add With Options…")).clicked() {
                 if let Err(e) = crate::connectionui::open_connection(app, c) {
                     app.session.notify(e, true);
+                }
+                ui.close();
+            }
+            if c.kind == "s3" && c.saved_keys && ui.button(tl!("Forget Saved Keys")).clicked() {
+                match crate::connectionui::forget_keys(app, &c.id) {
+                    Ok(()) => app.session.notify(
+                        tl!("The keys saved on this computer were forgotten; a login in this session keeps working.").to_string(),
+                        false,
+                    ),
+                    Err(e) => app.session.notify(e, true),
                 }
                 ui.close();
             }

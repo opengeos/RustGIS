@@ -46,15 +46,23 @@ pub struct RasterLayer {
     /// The pixels; `None` when the source couldn't be read.
     #[serde(skip)]
     pub data: Option<Arc<Raster>>,
+    /// The last reload failure; transient, like the decoded pixels.
+    #[serde(skip)]
+    pub error: Option<String>,
     /// Statistics of the pixels the style's mask leaves, worked out on the first draw.
     #[serde(skip)]
     masked: MaskedStats,
+    /// A remote reload shared with render snapshots, never serialized.
+    #[serde(skip)]
+    opening: Option<RasterRead>,
 }
 
 /// The renderer bands' statistics without the masked pixels, and what they were worked out for:
 /// the mask, the renderer's bands and the pixels (held weakly, so their address isn't reused).
 #[derive(Clone, Default)]
 struct MaskedStats(Arc<Mutex<Option<(RasterMask, Vec<usize>, Weak<Raster>, Arc<Vec<BandStats>>)>>>);
+
+type RasterRead = Arc<Mutex<Option<Result<Arc<Raster>, String>>>>;
 
 impl std::fmt::Debug for RasterLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -80,7 +88,9 @@ impl RasterLayer {
             placement: None,
             style,
             data: Some(Arc::new(raster)),
+            error: None,
             masked: MaskedStats::default(),
+            opening: None,
         }
     }
 
@@ -97,7 +107,9 @@ impl RasterLayer {
             placement: None,
             style,
             data: Some(Arc::new(raster)),
+            error: None,
             masked: MaskedStats::default(),
+            opening: None,
         }
     }
 
@@ -105,6 +117,40 @@ impl RasterLayer {
     /// layer that follows the time slider is left to the engine, which reads the step shown.
     pub fn reload(&mut self) -> Result<(), String> {
         if self.time_zarr.is_some() {
+            return Ok(());
+        }
+        self.opening = None;
+        self.error = None;
+        if self.embedded.is_none()
+            && let Some(path) = self
+                .path
+                .as_deref()
+                .filter(|p| rustgis_data::s3_address::is_wrapper(p) || p.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("s3://")))
+        {
+            let name = rustgis_data::s3_address::inner(path).split(['?', '#']).next().unwrap_or("raster.tif").to_string();
+            let placement = self.placement;
+            let slot = Arc::new(Mutex::new(None));
+            let land = slot.clone();
+            self.data = None;
+            self.opening = Some(slot);
+            rustgis_data::source::remote::fetch_whole(
+                path,
+                Box::new(move |result| {
+                    let result = result
+                        .map_err(|e| match e {
+                            rustgis_data::source::remote::Failed::Other(message) => message,
+                            _ => "The raster could not be downloaded.".to_string(),
+                        })
+                        .and_then(|bytes| {
+                            rustgis_data::raster::read_bytes(&name, &bytes)
+                                .and_then(|r| placed(r, placement))
+                                .map(Arc::new)
+                                .map_err(|e| e.to_string())
+                        });
+                    *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                    crate::source::landed();
+                }),
+            );
             return Ok(());
         }
         let r = if let Some(bytes) = &self.embedded {
@@ -115,15 +161,7 @@ impl RasterLayer {
             return Err("the raster has no source".into());
         };
         // A scan goes back where it was laid (a GeoTIFF opened `as` a scan is one again).
-        let r = r.and_then(|mut r| {
-            if let Some(bbox) = self.placement {
-                if r.georeferenced {
-                    r = r.into_scan()?;
-                }
-                r.place(bbox)?;
-            }
-            Ok(r)
-        });
+        let r = r.and_then(|r| placed(r, self.placement));
         match r {
             Ok(r) => {
                 self.style.repair(&r);
@@ -131,10 +169,26 @@ impl RasterLayer {
                 Ok(())
             }
             Err(e) => {
+                self.error = Some(e.to_string());
                 self.data = None;
                 Err(e.to_string())
             }
         }
+    }
+
+    /// Installs a completed remote read; each render copy can observe the same shared result.
+    pub(crate) fn poll_reload(&mut self) -> bool {
+        let Some(slot) = self.opening.as_ref() else { return false };
+        let Some(result) = slot.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return true };
+        self.opening = None;
+        match result {
+            Ok(raster) => {
+                self.style.repair(&raster);
+                self.data = Some(raster);
+            }
+            Err(error) => self.error = Some(error),
+        }
+        false
     }
 
     /// Statistics of the renderer's bands (one per band, in its order) without the pixels the
@@ -161,6 +215,17 @@ impl RasterLayer {
         }
         Some(stats)
     }
+}
+
+/// Reapplies a scan's placement to pixels read again, without copying their bands.
+fn placed(mut raster: Raster, placement: Option<[f64; 4]>) -> rustgis_data::Result<Raster> {
+    if let Some(bbox) = placement {
+        if raster.georeferenced {
+            raster = raster.into_scan()?;
+        }
+        raster.place(bbox)?;
+    }
+    Ok(raster)
 }
 
 /// The most steps a Zarr layer following the time slider lists (as the slider itself does).

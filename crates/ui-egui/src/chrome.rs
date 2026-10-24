@@ -688,6 +688,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.addUrl" => Command("ui.addUrl"),
         "service.add" | "service.import" => Command("ui.addService"),
         "connection.new" => Command("ui.connection"),
+        "connection.resolveS3" => Command("ui.s3Connections"),
         "layer.addSql" => Pane(RightPane::Sql),
         "layer.addDatabase" => Dialog("addDatabase"),
         "layer.addZarr" => Command("ui.addZarr"),
