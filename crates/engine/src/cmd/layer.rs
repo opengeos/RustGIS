@@ -109,7 +109,7 @@ pub fn commands() -> Vec<C> {
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation", "ramp"?: string}"#),
+            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
         C::new("layer.ramp", "Color Scheme", "Style › Drawing", |s, p| {
             let r = s.ramp(s_req(p, "ramp")?)?;
             with(s, p, |l| match &mut l.raster {
@@ -2672,7 +2672,20 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         Some(n) => Some(s.ramp(n).or_else(|e| current.filter(|r| r.name().eq_ignore_ascii_case(n.trim())).ok_or(e))?),
         None => current,
     };
-    let method = ps(p, "method").and_then(ClassMethod::from_name).unwrap_or_default();
+    // Manual bounds, as typed; "breaks" alone means manual.
+    let typed = match p.get("breaks") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => Some(a.iter().map(|v| v.as_f64().ok_or("breaks are numbers")).collect::<Result<Vec<f64>, _>>()?),
+        Some(_) => return Err("breaks are a list of numbers".into()),
+    };
+    let method = match ps(p, "method").and_then(ClassMethod::from_name) {
+        Some(m) if m != ClassMethod::Manual && typed.is_some() => {
+            return Err(format!("breaks go with the manual method, not {}", m.label()));
+        }
+        Some(m) => m,
+        None if typed.is_some() => ClassMethod::Manual,
+        None => ClassMethod::default(),
+    };
     let classes = f(p, "classes").map(|c| c.clamp(1.0, 12.0) as usize).unwrap_or(5);
     let l = s.map().layer(id).ok_or("no such layer")?;
     let g = l.geometry_type();
@@ -2714,7 +2727,17 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         "single" | "singlesymbol" => Renderer::Single(base),
         "unique" | "uniquevalues" => Renderer::unique(&l.dataset, &rows()?, &field(false)?, ramp.unwrap_or(Ramp::Harbour), base)?,
         "graduated" | "graduatedcolors" => {
-            Renderer::graduated(&l.dataset, &rows()?, &field(true)?, classes, method, ramp.unwrap_or(Ramp::Ember), base)?
+            let (field, ramp) = (field(true)?, ramp.unwrap_or(Ramp::Ember));
+            // Manual with no bounds keeps the layer's current ones on the same field, so switching
+            // to it changes nothing.
+            let kept = match &l.renderer {
+                Renderer::Graduated { field: f, breaks, .. } if *f == field => Some(breaks.clone()),
+                _ => None,
+            };
+            match (method, typed.or(kept)) {
+                (ClassMethod::Manual, Some(b)) => Renderer::graduated_manual(&l.dataset, &rows()?, &field, &b, ramp, base)?,
+                _ => Renderer::graduated(&l.dataset, &rows()?, &field, classes, method, ramp, base)?,
+            }
         }
         "proportional" | "proportionalsymbols" => {
             if g != GeometryType::Point {

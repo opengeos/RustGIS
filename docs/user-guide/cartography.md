@@ -22,7 +22,9 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
   below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
   101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
-  out a class no value falls in, so a skewed field can get fewer classes than asked. If no field is
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
+  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  class** adds one, and the field's largest value closes the last class. If no field is
   chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
   field is used. If the layer has no numeric field, or the
   switch fails for another reason, the pane shows why and keeps the current renderer. When numeric

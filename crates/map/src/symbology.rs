@@ -315,15 +315,18 @@ pub enum ClassMethod {
     GeometricInterval,
     /// Classes one standard deviation wide about the mean.
     StandardDeviation,
+    /// Bounds typed by hand, kept as they are (see [`Renderer::graduated_manual`]).
+    Manual,
 }
 
 impl ClassMethod {
-    pub const ALL: [ClassMethod; 5] = [
+    pub const ALL: [ClassMethod; 6] = [
         ClassMethod::NaturalBreaks,
         ClassMethod::EqualInterval,
         ClassMethod::Quantile,
         ClassMethod::GeometricInterval,
         ClassMethod::StandardDeviation,
+        ClassMethod::Manual,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -332,6 +335,7 @@ impl ClassMethod {
             ClassMethod::Quantile => "Quantile",
             ClassMethod::GeometricInterval => "Geometric Interval",
             ClassMethod::StandardDeviation => "Standard Deviation",
+            ClassMethod::Manual => "Manual",
         }
     }
     pub fn from_name(s: &str) -> Option<ClassMethod> {
@@ -342,6 +346,7 @@ impl ClassMethod {
             "quantile" => ClassMethod::Quantile,
             "geometricinterval" | "geometric_interval" | "geometric interval" | "geometric" => ClassMethod::GeometricInterval,
             "standarddeviation" | "standard_deviation" | "standard deviation" | "stddev" => ClassMethod::StandardDeviation,
+            "manual" => ClassMethod::Manual,
             _ => return None,
         })
     }
@@ -521,6 +526,51 @@ impl Renderer {
         ramp: Ramp,
         base: Symbol,
     ) -> Result<Renderer, String> {
+        let k = classes.clamp(1, 12);
+        Self::graduated_by(ds, rows, field, method, ramp, base, |vals| Ok(class_breaks(vals, k, method)))
+    }
+
+    /// Builds a graduated-colours renderer on the class bounds typed by hand: the classes' upper
+    /// bounds, sorted and each once, closed by the field's largest value when they stop short of
+    /// it, so every feature has a class. At most 12 classes.
+    pub fn graduated_manual(
+        ds: &Dataset,
+        rows: &[bool],
+        field: &str,
+        breaks: &[f64],
+        ramp: Ramp,
+        base: Symbol,
+    ) -> Result<Renderer, String> {
+        Self::graduated_by(ds, rows, field, ClassMethod::Manual, ramp, base, |vals| {
+            let mut b: Vec<f64> = breaks.iter().copied().filter(|v| v.is_finite()).collect();
+            if b.is_empty() {
+                return Err("manual breaks need at least one number".into());
+            }
+            b.sort_by(|a, b| a.total_cmp(b));
+            b.dedup();
+            if let Some(&hi) = vals.last()
+                && b.last().is_some_and(|&l| l < hi)
+            {
+                b.push(hi);
+            }
+            if b.len() > 12 {
+                return Err(format!("{} classes; Graduated Colors takes at most 12", b.len()));
+            }
+            Ok(b)
+        })
+    }
+
+    /// A graduated renderer on `field`, with the bounds `breaks` works out from the field's sorted
+    /// values.
+    fn graduated_by(
+        ds: &Dataset,
+        rows: &[bool],
+        field: &str,
+        method: ClassMethod,
+        ramp: Ramp,
+        base: Symbol,
+        breaks: impl FnOnce(&[f64]) -> Result<Vec<f64>, String>,
+    ) -> Result<Renderer, String> {
         let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
         if !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric()) {
             return Err(format!("'{field}' is not a numeric field"));
@@ -530,8 +580,7 @@ impl Renderer {
             return Err(format!("'{field}' has no numeric values"));
         }
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let k = classes.clamp(1, 12);
-        let breaks = class_breaks(&vals, k, method);
+        let breaks = breaks(&vals)?;
         let n = breaks.len();
         let symbols = (0..n).map(|i| base.with_ramp_fill(ramp.pick(i, n), ds.geometry_type)).collect();
         let min = vals.first().copied().unwrap_or(0.0);
@@ -1059,7 +1108,8 @@ pub fn class_breaks(sorted: &[f64], k: usize, method: ClassMethod) -> Vec<f64> {
         return vec![hi];
     }
     let mut b = match method {
-        ClassMethod::EqualInterval => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
+        // Manual bounds are typed, not worked out: asked to work them out, it starts from equal intervals.
+        ClassMethod::EqualInterval | ClassMethod::Manual => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
         ClassMethod::Quantile => (1..=k).map(|i| sorted.get(((n * i) / k).saturating_sub(1).min(n - 1)).copied().unwrap_or(hi)).collect(),
         ClassMethod::NaturalBreaks => jenks(sorted, k),
         ClassMethod::GeometricInterval => {

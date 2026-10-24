@@ -158,7 +158,8 @@ class Layer:
             field: The field the colours or sizes come from (not for ``"single"``).
             **params: More ``layer.symbology`` parameters: ``classes`` (1 to 12), ``method``
                 (``"naturalBreaks"``, ``"equalInterval"``, ``"quantile"``,
-                ``"geometricInterval"``, ``"standardDeviation"``), ``ramp``.
+                ``"geometricInterval"``, ``"standardDeviation"``, ``"manual"``),
+                ``breaks`` (manual: the classes' upper bounds), ``ramp``.
 
         Returns:
             The layer, so calls can be chained.
