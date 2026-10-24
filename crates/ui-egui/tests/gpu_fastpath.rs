@@ -19,17 +19,24 @@ fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
 /// UI steps alone do not run paced uploads; every candidate settled frame must be painted.
 fn wait_for_frame(h: &mut egui_kittest::Harness<'_, RustGisApp>) {
     use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::cache;
-    let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // A hang guard: a software adapter (WARP on the Windows runners) is many times slower.
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         assert!(std::time::Instant::now() < end, "frame workers, tiles or GPU uploads did not settle");
         let tiles = cache::generation();
         for _ in 0..40 {
             h.step();
         }
-        h.render().expect("paint frame and advance tile uploads");
         // Painting can discover another upload backlog. Let the next UI frame adopt it
         // before treating drawing=false as proof that the displayed scene is complete.
-        h.step();
+        // Uploads are paced per paint (fewer a paint on a slow adapter): paint until done.
+        loop {
+            h.render().expect("paint frame and advance tile uploads");
+            h.step();
+            if !h.state().map.drawing() || std::time::Instant::now() >= end {
+                break;
+            }
+        }
         if !h.state().map.drawing() && cache::in_flight() == 0 && cache::generation() == tiles {
             break;
         }
