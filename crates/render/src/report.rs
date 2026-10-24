@@ -55,7 +55,7 @@ pub fn width_mm(s: &str, pt: f32, bold: bool) -> f64 {
 /// [`width_mm`] in the serif a layout draws a `"font": "serif"` text in (the sans where no serif is
 /// installed): the ink's width, which the line has to hold.
 pub fn serif_width_mm(s: &str, pt: f32, bold: bool) -> f64 {
-    let (lo, hi) = text::styled_extent(s, pt * 1.33, text::Face { bold, italic: false, serif: true }, 0.0);
+    let (lo, hi) = text::styled_extent(s, pt * 1.33, text::Face { bold, italic: false, serif: true, family: None }, 0.0);
     f64::from((hi - lo).max(0.0)) * 25.4 / 96.0
 }
 

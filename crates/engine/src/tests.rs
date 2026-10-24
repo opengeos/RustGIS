@@ -1710,6 +1710,30 @@ fn label_range_placement_lock_and_convert() {
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
+/// A label class's font is set by its family name, installed here or not (the project may be
+/// drawn on a machine that has it), and cleared with a blank one; `labels.fonts` lists the
+/// installed families.
+#[test]
+fn labels_take_a_font_by_family_name() {
+    let mut s = world();
+    let font = |s: &Session| s.map().layer_by_name("Cities").unwrap().labels.default.font.clone();
+    s.run("labels.style", &json!({"layer": "Cities", "font": " Liberation Sans Narrow "})).unwrap();
+    assert_eq!(font(&s).as_deref(), Some("Liberation Sans Narrow"));
+    // Drawn in the label font where it isn't installed, without fail.
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    let v = crate::render::View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+    crate::render::render(s.map_mut(), &v).unwrap();
+    s.run("labels.style", &json!({"layer": "Cities", "size": 12})).unwrap();
+    assert!(font(&s).is_some(), "other settings leave it");
+    s.run("labels.style", &json!({"layer": "Cities", "font": ""})).unwrap();
+    assert_eq!(font(&s), None);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(font(&s).is_some(), "undoes");
+    let listed = s.run("labels.fonts", &json!({"search": "zzz-no-such-family"})).unwrap();
+    assert_eq!(listed["fonts"], json!([]));
+    assert!(s.run("labels.fonts", &json!({})).unwrap()["fonts"].is_array());
+}
+
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
 /// moved or removed) locks the labels again on the next frame, a change within a class keeps the
 /// lock (#732).

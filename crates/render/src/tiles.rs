@@ -78,6 +78,7 @@ pub(crate) fn tile_label(l: rustgis_tiles::Label) -> Option<(PlacedLabel, f64)> 
             framed: false,
             italic: l.italic,
             spacing,
+            font: None,
             line_align,
             angle: l.angle,
             collide: l.collide,

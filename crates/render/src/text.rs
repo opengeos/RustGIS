@@ -37,6 +37,9 @@ pub struct Face {
     pub italic: bool,
     /// The installed serif; the sans where there is none.
     pub serif: bool,
+    /// An installed family, by its place in [`crate::families::installed`] (a label's named
+    /// font); the serif or sans where it can't be drawn.
+    pub family: Option<u16>,
 }
 
 /// The installed serif's faces, parsed once: (regular, bold, italic, bold italic).
@@ -81,7 +84,38 @@ fn face_in(face: Face, serif: Option<&'static SerifFaces>) -> Option<(&'static F
 }
 
 fn face_font(face: Face) -> Option<(&'static FontRef<'static>, bool)> {
-    face_in(face, serif())
+    let named = face.family.and_then(|i| crate::families::installed().get(usize::from(i)));
+    named.and_then(|fam| family_font(fam, face)).or_else(|| face_in(face, serif()))
+}
+
+/// The face of an installed family that draws `face`'s weight and slope, parsed once and kept,
+/// and whether it is slanted by hand (the family has no italic face): see
+/// [`crate::families::pick`]. `None` when its file can't be read.
+fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static FontRef<'static>, bool)> {
+    type Parsed = std::collections::HashMap<(std::path::PathBuf, u32, bool), Option<&'static FontRef<'static>>>;
+    static PARSED: OnceLock<std::sync::Mutex<Parsed>> = OnceLock::new();
+    let (installed, slanted) = crate::families::pick(fam, face.bold, face.italic)?;
+    let heavier = crate::families::heavier(installed, face.bold);
+    let key = (installed.path.clone(), installed.index, heavier);
+    let lock = PARSED.get_or_init(Default::default);
+    if let Some(f) = lock.lock().ok()?.get(&key) {
+        return f.map(|f| (f, slanted));
+    }
+    // Read and parsed with the lock let go: a file can be 48 MB, and other text is drawn meanwhile.
+    let read = crate::families::bytes(installed).and_then(|b| FontRef::try_from_slice_and_index(b, installed.index).ok());
+    let mut parsed = lock.lock().ok()?;
+    // Another thread parsed it meanwhile: its face is the one kept.
+    if let Some(f) = parsed.get(&key) {
+        return f.map(|f| (f, slanted));
+    }
+    let f = read.map(|mut f| {
+        if heavier {
+            f.set_variation(b"wght", crate::families::BOLD_WEIGHT);
+        }
+        &*Box::leak(Box::new(f))
+    });
+    parsed.insert(key, f);
+    f.map(|f| (f, slanted))
 }
 
 /// The label font of `face`'s weight, for the characters `f` lacks: `None` when `f` is it.
@@ -220,6 +254,23 @@ fn measure_uncached(text: &str, size: f32, bold: bool) -> f32 {
     shape(text, size * 1.33, f, None).1
 }
 
+/// [`measure`] in `face`: a label in a named family is as wide as that family draws it.
+pub fn measure_in(text: &str, size: f32, face: Face) -> f32 {
+    if face.family.is_none() && !face.serif {
+        return measure(text, size, face.bold);
+    }
+    // Labels in a named family are measured as often as those in the label font (every feature,
+    // every frame), so they share its retention, keyed by the whole face.
+    static WIDTHS: OnceLock<widths::Cache<(bool, bool, bool, Option<u16>)>> = OnceLock::new();
+    let key = (face.bold, face.italic, face.serif, face.family);
+    WIDTHS.get_or_init(widths::Cache::default).measure(text, size, key, || {
+        let Some((f, _)) = face_font(face) else {
+            return text.chars().count() as f32 * size * 0.6;
+        };
+        shape(text, size * 1.33, f, sans_beside(f, face)).1
+    })
+}
+
 /// How wide `text` is on one line at `size` with `spacing` points between letters, in points.
 fn spaced_width(text: &str, size: f32, bold: bool, spacing: f32) -> f32 {
     let w = measure(text, size, bold);
@@ -292,8 +343,8 @@ pub fn wrap(line: &str, size: f32, bold: bool, spacing: f32, max_w: f32) -> Vec<
 
 /// A label's width in points: its widest line, as [`draw`] lays its lines out (#577). Text drawn
 /// on one line (table cells, chart names…) is measured with [`measure`].
-pub fn block_width(text: &str, size: f32, bold: bool) -> f32 {
-    lines(text).map(|line| measure(line, size, bold)).fold(0.0, f32::max)
+pub fn block_width(text: &str, size: f32, face: Face) -> f32 {
+    lines(text).map(|line| measure_in(line, size, face)).fold(0.0, f32::max)
 }
 
 /// The distance between a label's lines in points, as [`draw`] sets them: 1.25 × the font's
@@ -308,22 +359,28 @@ pub fn block_height(text: &str, size: f32) -> f32 {
     size * 1.25 + line_count(text).saturating_sub(1) as f32 * line_pitch(size)
 }
 
-/// Whether a label is slanted or letter-spaced (a text graphic's, #535), drawn with
-/// [`styled_at`].
+/// Whether a label is slanted or letter-spaced (a text graphic's, #535), or in a named family,
+/// drawn with [`styled_at`].
 fn styled(l: &PlacedLabel) -> bool {
-    l.italic || l.spacing != 0.0
+    l.italic || l.spacing != 0.0 || l.font.is_some()
+}
+
+/// The face a label is drawn in.
+pub fn label_face(l: &PlacedLabel) -> Face {
+    Face { bold: l.bold, italic: l.italic, serif: false, family: l.font }
 }
 
 /// How wide a line of `l` is laid out, in pixels at `ppp`: its advance, and its letter spacing
 /// between letters (not past the last), as the map view lays it out (#535), so a text is placed
 /// alike on screen and in an export. A slant's overhang isn't counted, as it isn't there either.
 fn line_width(l: &PlacedLabel, line: &str, ppp: f32) -> f32 {
-    let advance = measure(line, l.size, l.bold) * ppp;
+    let face = label_face(l);
+    let advance = measure_in(line, l.size, face) * ppp;
     if l.spacing == 0.0 {
         return advance;
     }
-    let letters = match font(l.bold) {
-        Some(f) => shape(line, l.size * 1.33 * ppp, f, None).0.len(),
+    let letters = match face_font(face) {
+        Some((f, _)) => shape(line, l.size * 1.33 * ppp, f, sans_beside(f, face)).0.len(),
         None => line.chars().count(),
     };
     // Letters drawn tighter than their own width (the most negative spacing) don't make it less
@@ -521,7 +578,7 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
     let (styled, spacing) = (styled(l), l.spacing * 1.33 * ppp);
     let put = |pm: &mut Pixmap, &(line, left, lw, y): &(&str, f32, f32, f32), color: Rgba, (dx, dy): (f32, f32)| {
         if styled {
-            styled_at(pm, line, left + dx, y + dy, px, color, Face { bold: l.bold, italic: l.italic, serif: false }, spacing);
+            styled_at(pm, line, left + dx, y + dy, px, color, label_face(l), spacing);
         } else {
             draw_text(pm, line, left + lw / 2.0, y, px, color, l.bold, (dx, dy));
         }
@@ -593,6 +650,7 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
         framed: false,
         italic: false,
         spacing: 0.0,
+        font: None,
         line_align: TextAlign::Left,
         angle: None,
         collide: Default::default(),
@@ -694,7 +752,7 @@ mod coverage_tests {
         use super::{Face, face_in, font};
         for bold in [false, true] {
             for italic in [false, true] {
-                let (f, slant) = face_in(Face { bold, italic, serif: true }, None).unwrap();
+                let (f, slant) = face_in(Face { bold, italic, serif: true, family: None }, None).unwrap();
                 assert!(std::ptr::eq(f, font(bold).unwrap()) && slant == italic);
             }
         }
@@ -711,7 +769,7 @@ mod coverage_tests {
         let faces: &'static SerifFaces =
             Box::leak(Box::new((parse(epaint_default_fonts::HACK_REGULAR), None, Some(parse(epaint_default_fonts::UBUNTU_LIGHT)), None)));
         let (regular, italic) = (&faces.0, faces.2.as_ref().unwrap());
-        let pick = |bold, it| face_in(Face { bold, italic: it, serif: true }, Some(faces)).unwrap();
+        let pick = |bold, it| face_in(Face { bold, italic: it, serif: true, family: None }, Some(faces)).unwrap();
         let is = |(f, slant): (&FontRef, bool), g: &FontRef, s: bool| std::ptr::eq(f, g) && slant == s;
         assert!(is(pick(false, false), regular, false));
         assert!(is(pick(false, true), italic, false), "the real italic, not slanted");
@@ -729,6 +787,26 @@ mod coverage_tests {
         let it = Face { italic: true, serif: true, ..Face::default() };
         assert!(!leans(it, italic, false, italic) && leans(it, italic, false, regular));
         assert!(!leans(Face { serif: true, ..Face::default() }, regular, false, sans), "upright text stays upright");
+    }
+
+    /// A label in an installed family is drawn in its face, parsed once; a family that isn't
+    /// installed is drawn in the label font.
+    #[test]
+    fn a_label_is_drawn_in_its_installed_family() {
+        use super::{Face, family_font, measure, measure_in, shape};
+        use crate::families::{Family, InstalledFace};
+        // Hack, a monospaced face, as an installed family: every letter as wide.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Hack-Regular.ttf");
+        std::fs::write(&path, epaint_default_fonts::HACK_REGULAR).unwrap();
+        let fam = Family { name: "Hack".into(), listed: true, faces: vec![InstalledFace { path, index: 0, weight: 400, italic: false }] };
+        let (f, slanted) = family_font(&fam, Face::default()).unwrap();
+        assert_eq!(shape("iiii", 20.0, f, None).1, shape("MMMM", 20.0, f, None).1);
+        assert!(std::ptr::eq(f, family_font(&fam, Face::default()).unwrap().0), "parsed once");
+        assert!(!slanted && family_font(&fam, Face { italic: true, ..Face::default() }).unwrap().1, "no italic face: slanted");
+        // A family that isn't installed measures and draws as the label font.
+        let missing = Face { family: Some(u16::MAX), ..Face::default() };
+        assert_eq!(measure_in("Winterthur", 12.0, missing), measure("Winterthur", 12.0, false));
     }
 
     /// With a serif installed (Georgia on Windows, Times on macOS, Noto or DejaVu Serif on Linux),

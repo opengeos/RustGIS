@@ -203,7 +203,8 @@ pub fn render(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> O
             ElementKind::Text { text: t, size, color, bold, italic, align, letter_spacing, font } => {
                 let first = layout.first_frame().and_then(frame);
                 let s = expand(t, layout, info, first.and_then(|f| maps.get(f.1).map(|m| (m, f.2))));
-                let face = text::Face { bold: *bold, italic: *italic, serif: *font == rustgis_map::layout::FontFamily::Serif };
+                let face =
+                    text::Face { bold: *bold, italic: *italic, serif: *font == rustgis_map::layout::FontFamily::Serif, family: None };
                 let style = TextStyle { face, align: *align, spacing: *letter_spacing as f32 };
                 text_block(&mut pm, r, &s, *size as f32, *color, style, ppp);
             }

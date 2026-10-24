@@ -36,6 +36,7 @@ mod globe_drape;
 mod graphicformat;
 pub mod icons;
 mod keymap;
+mod labelfonts;
 mod labelpane;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -803,6 +804,8 @@ pub struct RustGisApp {
     fonts_failed: Vec<String>,
     /// Fonts were installed this frame: `set_fonts` only takes effect on the next one.
     fonts_pending: bool,
+    /// Whether the installed font families were indexed by a frame (see `families::warm_up`).
+    label_fonts_indexed: bool,
     /// The language the interface is drawn in. It trails the chosen one until a font for its
     /// script is active, so switching to Chinese never draws a frame of missing-glyph boxes.
     shown_lang: i18n::Lang,
@@ -857,6 +860,8 @@ impl RustGisApp {
     }
 
     pub fn new(session: Session) -> Self {
+        // The installed fonts a label can be drawn in, indexed while the app starts.
+        rustgis_engine::render::families::warm_up();
         let mut s = session;
         if s.active_layer.is_none() {
             s.active_layer = s.map().layers.first().map(|l| l.id);
@@ -907,6 +912,7 @@ impl RustGisApp {
             fonts_requested: Vec::new(),
             fonts_failed: Vec::new(),
             fonts_pending: false,
+            label_fonts_indexed: false,
             shown_lang: i18n::Lang::EN,
             seen_project: None,
         }
@@ -3400,6 +3406,24 @@ impl RustGisApp {
             theme::install_fonts(ctx, &self.extra_fonts, self.installed_region);
             self.fonts_pending = true;
             self.map.invalidate();
+        }
+        // The label fonts the last frame's labels asked for (after the interface fonts, which
+        // would replace them). Not in a frame that set the interface fonts: those take effect on
+        // the next, and setting fonts now, from the definitions in effect, would undo them.
+        if self.fonts_pending {
+            ctx.request_repaint();
+        } else {
+            labelfonts::install_pending(ctx);
+        }
+        // Labels in a named family draw in the label font until the installed fonts are
+        // indexed (`families::warm_up`); then the map is drawn again in theirs.
+        if !self.label_fonts_indexed {
+            if rustgis_engine::render::families::installed_now().is_some() {
+                self.label_fonts_indexed = true;
+                self.map.invalidate();
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
