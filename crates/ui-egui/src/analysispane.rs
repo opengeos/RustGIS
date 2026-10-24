@@ -272,7 +272,8 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             ui.horizontal(|ui| {
                 let input_label = ui.label(tl!("Weights"));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.number).hint_text("1").desired_width(40.0)).labelled_by(input_label.id);
-                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text("1").desired_width(40.0));
+                ui.add(egui::TextEdit::singleline(&mut app.workflow.number2).hint_text("1").desired_width(40.0))
+                    .labelled_by(input_label.id);
             });
             if ui.button(tl!("Run")).clicked() {
                 let crit = |app: &RustGisApp, n: &str, high: bool, w: f64| -> Value {
@@ -1212,4 +1213,38 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
             ui.label(egui::RichText::new(line.chars().take(400).collect::<String>()).monospace().small().color(c));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// Every workflow has named inputs, including both weights sharing a row (#790).
+    #[test]
+    fn every_workflow_names_its_inputs() {
+        for &(section, _) in SECTIONS {
+            let mut app = RustGisApp::with_sample();
+            app.workflow.section = section;
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 1200.0)).build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx(), &[], None);
+                        fonts = true;
+                        return;
+                    }
+                    workflows(app, ui, &Tokens::light());
+                },
+                app,
+            );
+            h.run();
+            if section == "suitability" {
+                assert_eq!(h.query_all_by_role_and_label(egui::accesskit::Role::TextInput, "Weights").count(), 2);
+                for label in ["First raster", "Second raster"] {
+                    assert!(h.query_by_role_and_label(egui::accesskit::Role::ComboBox, label).is_some());
+                }
+            }
+        }
+    }
 }
