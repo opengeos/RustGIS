@@ -435,7 +435,7 @@ fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)
 /// `.parquet`/`.geoparquet`, `.shp`, `.zip`, `.kml`, `.kmz` or `.gpx`); returns the number of features the
 /// format couldn't hold (FlatGeobuf, KML, GPX and Shapefile hold only features with geometry). A
 /// Shapefile is written as its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg` files (or zipped, to a
-/// `.zip`).
+/// `.zip`). GeoPackage exports require a new path and never replace an existing file.
 pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
     write_path_in(ds, path, Crs::LonLat)
 }

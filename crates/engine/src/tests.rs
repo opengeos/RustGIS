@@ -8100,6 +8100,9 @@ fn blank_project_starts_in_a_projected_crs() {
 #[test]
 fn exporting_features_refuses_to_replace_an_existing_geopackage() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-gpkg-preserve-{}", std::process::id()));
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("county.gpkg");
     let mut s = world();

@@ -178,6 +178,9 @@ s["Cities"].to_geojson()                            # a FeatureCollection dict
 big.to_file("big-cities.gpkg", crs="EPSG:3857")     # GeoJSON, CSV, FlatGeobuf, GeoParquet, …
 ```
 
+GeoPackage exports through `Layer.to_file` or `share.exportLayer` require a new filename.
+An existing `.gpkg` is refused to preserve its tables; export does not append or replace tables.
+
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
 `add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for
 multiple layers, or the command result for standalone tables. For example, a CSV without

@@ -443,8 +443,8 @@ fn export_sample() -> Dataset {
 #[test]
 fn writes_geopackage_geoparquet_and_shapefile() {
     let ds = export_sample();
-    let d = dir().join("export");
-    std::fs::create_dir_all(&d).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let d = workspace.path();
     for ext in ["gpkg", "parquet", "shp", "fgb"] {
         let p = d.join(format!("parcels.{ext}"));
         let left_out = crate::io::write_path(&ds, &p).unwrap();
@@ -554,6 +554,20 @@ fn geopackage_export_refuses_existing_entries_and_orphaned_journals() {
     std::fs::create_dir(&path).unwrap();
     assert!(crate::io::write_path(&ds, &path).is_err());
     assert!(path.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn geopackage_export_uses_regular_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = tempfile::tempdir().unwrap();
+    let regular = workspace.path().join("regular");
+    std::fs::write(&regular, b"control").unwrap();
+    let path = workspace.path().join("permits.gpkg");
+    crate::io::write_path(&Dataset::new("permits", GeometryType::Point, vec![]), &path).unwrap();
+    // Compare with an ordinary file under the current umask, without changing process-wide state.
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), mode(&regular));
 }
 
 #[cfg(unix)]

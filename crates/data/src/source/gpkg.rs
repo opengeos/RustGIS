@@ -411,18 +411,28 @@ pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
     write_in(ds, path, Crs::LonLat)
 }
 
-/// Writes a dataset whose geometry is in `crs`'s coordinates as a GeoPackage in that system.
+/// Writes a dataset whose geometry is in `crs`'s coordinates as a new GeoPackage in that system.
+/// Existing destinations are refused, as with [`write`].
 pub fn write_in(ds: &crate::Dataset, path: &Path, crs: Crs) -> Result<()> {
     check_new_destination(path)?;
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
     // Drop the file handle before SQLite opens it, including on Windows. TempPath cleans up on
     // every error, and persist_noclobber refuses files created after the check above as well.
-    let tmp = tempfile::Builder::new().prefix(".rustgis-gpkg-").suffix(".tmp").tempfile_in(parent)?.into_temp_path();
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".rustgis-gpkg-").suffix(".tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Match ordinary exports: request 0666 and let the user's umask restrict it.
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let tmp = builder.tempfile_in(parent)?.into_temp_path();
     let conn = Connection::open(&tmp).map_err(err)?;
     build(&conn, ds, crs)?;
     conn.close().map_err(|(_, e)| err(e))?;
     // Built without syncing (fast); synced once before installation. Windows needs a write handle.
     std::fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
+    // Refuse journals that appeared during the build; persistence also closes the file race.
     check_new_destination(path)?;
     tmp.persist_noclobber(path).map_err(|e| destination_error(path, e.error))?;
     Ok(())
