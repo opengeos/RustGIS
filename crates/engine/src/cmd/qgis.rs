@@ -32,21 +32,27 @@ fn qgis_text(p: &Value) -> Result<String, String> {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.decode(d.trim()).map_err(|_| "data must be base64".to_string())?
         }
-        (None, Some(t), _) if t.len() as u64 > MAX_FILE => return Err("text is too large for a QGIS file".into()),
+        (None, Some(t), _) if t.len() > MAX_XML => return Err("text is too large for a QGIS project or style".into()),
         (None, Some(t), _) => return Ok(t.to_string()),
         (None, None, Some(path)) => read_file(path)?,
         _ => return Err("path, text or data is required".into()),
     };
     if bytes.starts_with(b"PK") {
-        let entries = rustgis_data::zip::read_matching_within(&bytes, |n| n.to_ascii_lowercase().ends_with(".qgs"), MAX_FILE as usize)?;
+        let entries = rustgis_data::zip::read_matching_within(&bytes, |n| n.to_ascii_lowercase().ends_with(".qgs"), MAX_XML)?;
         let (_, qgs) = entries.into_iter().next().ok_or("the .qgz holds no .qgs project")?;
         return String::from_utf8(qgs).map_err(|_| "the .qgz's project isn't text".to_string());
+    }
+    if bytes.len() > MAX_XML {
+        return Err("too large for a QGIS project or style".into());
     }
     String::from_utf8(bytes).map_err(|_| "not a QGIS file (it isn't text)".to_string())
 }
 
-/// The most bytes of a QGIS file read.
+/// The most bytes of a QGIS file read (a `.qgz` can carry data files beside its project).
 const MAX_FILE: u64 = 256 << 20;
+/// The most bytes of a project's or style's XML parsed: its tree is several times larger than
+/// the text, and real ones are a few megabytes.
+const MAX_XML: usize = 64 << 20;
 
 /// Reads at most [`MAX_FILE`] bytes of `path` (natively: the web app passes `text` or `data`).
 fn read_file(path: &str) -> Result<Vec<u8>, String> {

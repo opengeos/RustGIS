@@ -724,6 +724,8 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
         let text = serde_json::to_string(&out["notes"]).unwrap();
         assert!(text.contains("pass dir"), "{text}");
     }
+    // XML past what's parsed (64 MiB) is refused before parsing.
+    assert!(s.run("project.importQgis", &json!({"text": " ".repeat((64 << 20) + 1)})).is_err());
     // A path relative to a drive's working directory is noted, with or without a folder.
     let drive = rel.replace("./data/roads.geojson", "C:roads.geojson");
     let out = s.run("project.importQgis", &json!({"text": drive, "dir": dir.display().to_string()})).unwrap();
