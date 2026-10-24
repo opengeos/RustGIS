@@ -280,6 +280,15 @@ fn completions(word: &str, names: &[(String, String)]) -> Vec<String> {
     out
 }
 
+/// Whether `events` press Ctrl+Enter (⌘+Enter) to run the query: once a press, not again for each
+/// repeat of a key held down (#845), as the Script pane runs.
+fn run_pressed(events: &[egui::Event]) -> bool {
+    events.iter().any(|e| {
+        matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. }
+            if modifiers.matches_logically(egui::Modifiers::COMMAND))
+    })
+}
+
 /// The word being typed before character `at`: letters, digits, `_` and `.`.
 fn word_before(text: &str, at: usize) -> (usize, String) {
     let chars: Vec<char> = text.chars().take(at).collect();
@@ -340,7 +349,7 @@ fn body(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         .hint_text("SELECT name, ST_Area(geom) AS area\nFROM read_parquet('https://…/countries.parquet')\nORDER BY area DESC")
         .show(ui);
     let focused = out.response.response.has_focus();
-    let run_key = focused && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
+    let run_key = focused && ui.input(|i| run_pressed(&i.events));
     // Completion of the word before the cursor. The offers are kept in the state, so they stay
     // clickable once a button takes the focus from the editor (until the text changes).
     if focused && let Some(range) = out.cursor_range {
@@ -497,5 +506,17 @@ mod tests {
         assert_eq!(word_before("x, towns.po FROM", 11), (3, "towns.po".to_string()));
         assert_eq!(database_text(" host=h dbname=d "), "postgres:host=h dbname=d");
         assert_eq!(database_text("a.duckdb"), "a.duckdb");
+    }
+
+    /// Ctrl+Enter runs the query once a press: a key held down sends repeats (egui marks every
+    /// press after the first as one), and those don't run it again (#845).
+    #[test]
+    fn a_held_ctrl_enter_runs_once() {
+        let key = |repeat, modifiers| egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat, modifiers, physical_key: None };
+        assert!(run_pressed(&[key(false, egui::Modifiers::COMMAND)]));
+        assert!(!run_pressed(&[key(true, egui::Modifiers::COMMAND)]), "a repeat");
+        assert!(run_pressed(&[key(true, egui::Modifiers::COMMAND), key(false, egui::Modifiers::COMMAND)]), "a press among repeats");
+        assert!(!run_pressed(&[key(false, egui::Modifiers::NONE)]), "Enter alone breaks the line");
+        assert!(run_pressed(&[key(false, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT)]), "Shift aside, as before");
     }
 }
