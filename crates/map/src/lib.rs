@@ -1670,6 +1670,9 @@ mod tests {
         for solid in [serde_json::json!([0, 0]), serde_json::json!([]), serde_json::json!([-3])] {
             v["line_strokes"][0]["dash"] = solid.clone();
             assert_eq!(read(&v), None, "{solid}");
+            // Read as a stroke alone too, so no empty pattern is ever made.
+            let st = serde_json::from_value::<symbology::LineStroke>(v["line_strokes"][0].clone()).unwrap();
+            assert_eq!(st.dash, None, "{solid}");
         }
     }
 

@@ -170,8 +170,8 @@ pub const MAX_DASH_STEP: f32 = 500.0;
 /// SVG's `stroke-dasharray`: an odd number of steps is repeated to make it even). Written to a
 /// project as that list, `[4, 2]`. Built only through [`Dash::new`], so its steps are always
 /// in range and add up to more than nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "Vec<f32>", into = "Vec<f32>")]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(into = "Vec<f32>")]
 pub struct Dash {
     steps: [f32; MAX_DASH_STEPS],
     len: u8,
@@ -208,14 +208,13 @@ impl Dash {
     }
 }
 
-/// A project's pattern brought into range: at most [`MAX_DASH_STEPS`] steps, each clamped to 0
-/// to [`MAX_DASH_STEP`]; one left without length is solid (a project file is hostile input).
-impl From<Vec<f32>> for Dash {
-    fn from(v: Vec<f32>) -> Dash {
-        let steps: Vec<f32> =
-            v.iter().take(MAX_DASH_STEPS).map(|x| if x.is_finite() { x.clamp(0.0, MAX_DASH_STEP) } else { 0.0 }).collect();
-        Dash::new(&steps).unwrap_or(Dash { steps: [0.0; MAX_DASH_STEPS], len: 0 })
-    }
+/// Reads a stroke's pattern from a project, brought into range: at most [`MAX_DASH_STEPS`] steps,
+/// each clamped to 0 to [`MAX_DASH_STEP`]; one left without length is `None`, solid (a project
+/// file is hostile input).
+fn de_dash<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Dash>, D::Error> {
+    let Some(v) = Option::<Vec<f32>>::deserialize(d)? else { return Ok(None) };
+    let steps: Vec<f32> = v.iter().take(MAX_DASH_STEPS).map(|x| if x.is_finite() { x.clamp(0.0, MAX_DASH_STEP) } else { 0.0 }).collect();
+    Ok(Dash::new(&steps))
 }
 
 impl From<Dash> for Vec<f32> {
@@ -250,7 +249,7 @@ pub struct LineStroke {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<u8>,
     /// Dashed: the pattern along the line, in points; `None` is a solid line.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_dash")]
     pub dash: Option<Dash>,
 }
 
@@ -276,8 +275,6 @@ impl LineStroke {
     pub fn clamped(mut self) -> LineStroke {
         self.width = self.width.map(|w| if w.is_finite() { w.clamp(0.0, MAX_STROKE_WIDTH) } else { 1.0 });
         self.offset = if self.offset.is_finite() { self.offset.clamp(-MAX_STROKE_OFFSET, MAX_STROKE_OFFSET) } else { 0.0 };
-        // A pattern read without length (see `From<Vec<f32>> for Dash`) is a solid line.
-        self.dash = self.dash.filter(|d| !d.steps().is_empty());
         self
     }
 }
