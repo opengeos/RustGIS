@@ -549,6 +549,7 @@ fn chunked_label_compaction_keeps_late_priorities_stable_ties_and_nan_order() {
                     line_align: TextAlign::Left,
                     angle: None,
                     collide: Default::default(),
+                    glyphs: Vec::new(),
                 },
                 if i % 17 == 0 { f64::NAN } else { (i % 7) as f64 },
                 (1, i, 0),

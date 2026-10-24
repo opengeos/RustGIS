@@ -1197,6 +1197,25 @@ fn place_galley(anchor: Align2, at: Pos2, g: &egui::Galley) -> (Pos2, Rect) {
 }
 
 fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
+    // Curved along a line: each character turned into its place, every character's halo first,
+    // so none covers the letter before it.
+    if !l.glyphs.is_empty() {
+        let inks: &[(bool, bool)] = if l.halo.is_some() { &[(true, false), (false, true)] } else { &[(false, true)] };
+        // (The label without its characters, copied for each: not the characters each time.)
+        let base = PlacedLabel { text: String::new(), align: 0.0, glyphs: Vec::new(), ..l.clone() };
+        for &(halo, text) in inks {
+            for g in &l.glyphs {
+                let one = PlacedLabel { text: g.text.clone(), angle: Some(g.angle), ..base.clone() };
+                draw_label_ink(p, &one, at + vec2(g.dx, g.dy), halo, text);
+            }
+        }
+        return;
+    }
+    draw_label_ink(p, l, at, true, true);
+}
+
+/// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
+fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
     let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
     let anchor = if l.align < -0.25 {
@@ -1214,13 +1233,15 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
                 .with_override_text_color(color)
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
-        if let Some(h) = l.halo {
+        if let Some(h) = l.halo.filter(|_| halo) {
             let hc = c32(h);
             for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
                 p.add(shape(vec2(dx, dy), hc));
             }
         }
-        p.add(shape(egui::Vec2::ZERO, c32(l.color)));
+        if text {
+            p.add(shape(egui::Vec2::ZERO, c32(l.color)));
+        }
         return;
     }
     let (pos, r) = place_galley(anchor, at, &galley);
@@ -1229,13 +1250,15 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
         let cyan = c32(rustgis_engine::render::SELECTION);
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
-    if let Some(h) = l.halo {
+    if let Some(h) = l.halo.filter(|_| halo) {
         let hc = c32(h);
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
             p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
         }
     }
-    p.galley_with_override_text_color(pos, galley, c32(l.color));
+    if text {
+        p.galley_with_override_text_color(pos, galley, c32(l.color));
+    }
 }
 
 /// The globe as seen in this view, when the map is a globe.

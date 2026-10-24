@@ -10,6 +10,8 @@ use crate::{PlacedLabel, View};
 use rustgis_map::Rgba;
 use rustgis_map::layout::TextAlign;
 
+mod widths;
+
 fn font(bold: bool) -> Option<&'static FontRef<'static>> {
     static R: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
     static B: OnceLock<Option<FontRef<'static>>> = OnceLock::new();
@@ -202,7 +204,16 @@ pub fn line_count(text: &str) -> usize {
 }
 
 /// Text width in points at `size` (font px ≈ size × 1.33 for point sizes), drawn on one line.
+/// Repeated measurements share a bounded retention cache; fonts are discovered once per process.
+/// Long strings and non-finite sizes keep the uncached behavior, including its glyph limit.
 pub fn measure(text: &str, size: f32, bold: bool) -> f32 {
+    static WIDTHS: OnceLock<widths::Cache> = OnceLock::new();
+    WIDTHS.get_or_init(widths::Cache::default).measure(text, size, bold, || measure_uncached(text, size, bold))
+}
+
+/// The original measurement, including em scaling, font fallbacks and the missing-font estimate.
+/// Cache misses call this outside the cache lock; no glyphs or font faces are retained by the cache.
+fn measure_uncached(text: &str, size: f32, bold: bool) -> f32 {
     let Some(f) = font(bold) else {
         return text.chars().count() as f32 * size * 0.6;
     };
@@ -431,14 +442,36 @@ pub fn styled_at(pm: &mut Pixmap, text: &str, left: f32, cy: f32, px: f32, color
 /// Draws a placed label (logical coordinates) with its halo. A label turned with the map (one
 /// along a street) is drawn upright into a picture of its own, which is turned into place.
 pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
+    // Curved along a line: each character turned into its place, every character's halo
+    // first, so none covers the letter before it.
+    if !l.glyphs.is_empty() {
+        let inks: &[Ink] = if l.halo.is_some() { &[Ink::Halo, Ink::Text] } else { &[Ink::Text] };
+        // (The label without its characters, copied for each: not the characters each time.)
+        let base = PlacedLabel { text: String::new(), align: 0.0, angle: None, glyphs: Vec::new(), ..l.clone() };
+        for &ink in inks {
+            for g in &l.glyphs {
+                let one = PlacedLabel { text: g.text.clone(), x: l.x + g.dx, y: l.y + g.dy, ..base.clone() };
+                draw_turned(pm, &one, g.angle, ppp, ink);
+            }
+        }
+        return;
+    }
     match l.angle {
-        Some(a) if a.is_finite() && a.abs() > 1e-3 => draw_turned(pm, l, a, ppp),
-        _ => draw_upright(pm, l, ppp),
+        Some(a) if a.is_finite() && a.abs() > 1e-3 => draw_turned(pm, l, a, ppp, Ink::Both),
+        _ => draw_upright(pm, l, ppp, Ink::Both),
     }
 }
 
+/// What of a label to draw: its halo, its text, or both (the halo under the text).
+#[derive(Clone, Copy, PartialEq)]
+enum Ink {
+    Halo,
+    Text,
+    Both,
+}
+
 /// Draws `l` turned by `angle` (radians, clockwise) about its centre.
-fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32) {
+fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32, ink: Ink) {
     let (w, h) = (label_width(l), block_height(&l.text, l.size).max(line_pitch(l.size)));
     // Room for the halo, and for the glyphs reaching past the line.
     let pad = 4.0 + l.size * 0.5;
@@ -449,14 +482,14 @@ fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32) {
     let Some(mut pic) = Pixmap::new(pw.max(1.0) as u32, ph.max(1.0) as u32) else { return };
     let (cx, cy) = (pw / ppp / 2.0, ph / ppp / 2.0);
     let upright = PlacedLabel { x: cx + l.align * w, y: cy, angle: None, framed: false, icon: None, ..l.clone() };
-    draw_upright(&mut pic, &upright, ppp);
+    draw_upright(&mut pic, &upright, ppp, ink);
     let (tx, ty) = (l.center_x() * ppp, l.y * ppp);
     let t = Transform::from_translate(-pw / 2.0, -ph / 2.0).post_rotate(angle.to_degrees()).post_translate(tx, ty);
     let paint = tiny_skia::PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..tiny_skia::PixmapPaint::default() };
     pm.draw_pixmap(0, 0, pic.as_ref(), &paint, t, None);
 }
 
-fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
+fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
     let px = l.size * 1.33 * ppp;
     let (cx, cy) = (l.center_x() * ppp, l.y * ppp);
     // Several lines (#577) as the map view draws them: each aligned in a block as wide as the
@@ -494,7 +527,7 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
         }
     };
     // Every line's halo first, so none covers the line above it.
-    if let Some(h) = l.halo {
+    if let Some(h) = l.halo.filter(|_| ink != Ink::Text) {
         let r = 1.2 * ppp;
         let ring =
             [(-r, 0.0), (r, 0.0), (0.0, -r), (0.0, r), (-r * 0.7, -r * 0.7), (r * 0.7, r * 0.7), (-r * 0.7, r * 0.7), (r * 0.7, -r * 0.7)];
@@ -503,6 +536,9 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
                 put(pm, line, h, offset);
             }
         }
+    }
+    if ink == Ink::Halo {
+        return;
     }
     for line in &placed {
         put(pm, line, l.color, (0.0, 0.0));
@@ -560,6 +596,7 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
         line_align: TextAlign::Left,
         angle: None,
         collide: Default::default(),
+        glyphs: Vec::new(),
     };
     draw(pm, &label, ppp);
 }
