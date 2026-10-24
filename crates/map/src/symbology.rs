@@ -1291,8 +1291,19 @@ pub fn font_name(name: &str) -> Option<String> {
 }
 
 /// Reads a label class's font as [`font_name`] keeps it: a project file is hostile input.
+/// A label class's font as a project has it: a name, or none for anything else (a number, a
+/// list), so a damaged font doesn't make the project unreadable.
 fn de_font<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.as_deref().and_then(font_name))
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Font {
+        Name(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Font>::deserialize(d)? {
+        Some(Font::Name(n)) => font_name(&n),
+        Some(Font::Other(_)) | None => None,
+    })
 }
 
 fn default_class_name() -> String {
@@ -1575,7 +1586,14 @@ mod tests {
         let l = read("  Liberation Sans Narrow \n".into());
         assert_eq!(l.default.font.as_deref(), Some("Liberation Sans Narrow"));
         assert_eq!(serde_json::to_value(&l).unwrap()["font"], "Liberation Sans Narrow");
-        for blank in [serde_json::json!("  "), serde_json::Value::Null] {
+        // Not a name (a number, a list, an object): no font, and the rest of the labels still read.
+        for blank in [
+            serde_json::json!("  "),
+            serde_json::Value::Null,
+            serde_json::json!(7),
+            serde_json::json!(["Arial"]),
+            serde_json::json!({"a": 1}),
+        ] {
             let l = read(blank);
             assert_eq!(l.default.font, None);
             assert!(serde_json::to_value(&l).unwrap().get("font").is_none());

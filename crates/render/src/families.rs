@@ -5,7 +5,7 @@
 //! lacks is drawn in the label font. In the browser, and with `RUSTGIS_BUILTIN_FONTS` set (so
 //! tests draw alike on every machine), there are none.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +36,8 @@ pub const MAX_NAME: usize = 128;
 /// Most font files indexed, folders walked deep and faces in one collection.
 const MAX_FILES: usize = 50_000;
 const MAX_DEPTH: usize = 8;
+/// Most folders walked.
+const MAX_DIRS: usize = 20_000;
 const MAX_COLLECTION: u32 = 64;
 /// Most tables a face's directory lists, and the most of its `name` table read.
 const MAX_TABLES: u16 = 512;
@@ -198,8 +200,9 @@ fn font_dirs() -> Vec<PathBuf> {
 /// The families of the font files under `dirs`, sorted by name.
 fn index(dirs: &[PathBuf]) -> Vec<Family> {
     let mut files = Vec::new();
+    let mut seen = HashSet::new();
     for d in dirs {
-        walk(d, 0, &mut files);
+        walk(d, 0, &mut files, &mut seen);
     }
     // In name order, so the same file wins a duplicate face on every machine.
     files.sort();
@@ -227,9 +230,13 @@ fn index(dirs: &[PathBuf]) -> Vec<Family> {
 }
 
 /// The font files under `dir`, at most [`MAX_DEPTH`] folders deep, until there are
-/// [`MAX_FILES`].
-fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    if depth > MAX_DEPTH || out.len() >= MAX_FILES {
+/// [`MAX_FILES`]. A folder is walked once (`seen`, by its real path, at most [`MAX_DIRS`]), so a
+/// link back up the tree, or two links to one folder, add nothing twice.
+fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
+    if depth > MAX_DEPTH || out.len() >= MAX_FILES || seen.len() >= MAX_DIRS {
+        return;
+    }
+    if !seen.insert(std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())) {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -238,9 +245,9 @@ fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
             return;
         }
         let path = e.path();
-        // (A link to a folder is followed as the folder, within the depth limit.)
+        // (A link to a folder is followed as the folder, within the limits.)
         if path.is_dir() {
-            walk(&path, depth + 1, out);
+            walk(&path, depth + 1, out, seen);
         } else if path
             .extension()
             .and_then(|x| x.to_str())
@@ -407,6 +414,22 @@ mod tests {
         let b = bytes(face).unwrap();
         assert!(std::ptr::eq(b, bytes(face).unwrap()), "kept, not read again");
         assert!(find_in(&fams, "No Such Family").is_none() && find_in(&fams, "  ").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_is_walked_once_however_many_links_reach_it() {
+        // Links back up the tree, four to a folder: followed blindly, they'd fan out to 4^8 folders
+        // and list the one font thousands of times.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Hack-Regular.ttf"), epaint_default_fonts::HACK_REGULAR).unwrap();
+        for i in 0..4 {
+            std::os::unix::fs::symlink(dir.path(), dir.path().join(format!("up{i}"))).unwrap();
+        }
+        let mut files = Vec::new();
+        let mut seen = HashSet::new();
+        walk(dir.path(), 0, &mut files, &mut seen);
+        assert_eq!((files.len(), seen.len()), (1, 1), "{files:?}");
     }
 
     #[test]
