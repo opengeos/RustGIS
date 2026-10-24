@@ -98,7 +98,7 @@ brotli-decompressor = { version = "~6.0.1", default-features = false, features =
 egui = "0.36"
 egui-wgpu = "0.36"
 egui_extras = { version = "0.36", default-features = false }
-eframe = { version = "0.36", default-features = false }
+eframe = { version = "0.37", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 pollster = "0.4"
