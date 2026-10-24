@@ -296,6 +296,13 @@ pub(super) fn zoom_to_index(s: &mut Session, i: usize) -> Result<rustgis_geom::E
     Ok(e)
 }
 
+/// Finds exactly one tile matching a retained search hit; zero or ambiguous matches are stale.
+pub(super) fn index_of_identity(s: &Session, identity: &super::search::TileIdentity) -> Option<usize> {
+    let mut found = s.map().tiles.iter().enumerate().filter(|(_, tile)| identity.matches(tile)).map(|(i, _)| i);
+    let index = found.next()?;
+    found.next().is_none().then_some(index)
+}
+
 /// The date a dated tile layer starts at: the time slider's step. Its `start` (and `end`,
 /// `unit`, `interval` or `dates`) set the slider up, turning it on when it is off. Should a later
 /// check of the layer fail, the session restores the project, the slider with it (tested).

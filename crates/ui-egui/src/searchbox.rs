@@ -428,7 +428,19 @@ fn pick(app: &mut RustGisApp, row: Row) {
             // The query the list was found for (the box may have been typed in since), with the
             // list's limit, so the index is the row picked.
             let query = st.searched.clone();
-            if let Err(e) = app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": i})) {
+            let go = if let Hit::Tile { identity, .. } = &hit {
+                search::search(&app.session, &query, search::LIMIT)
+                    .hits
+                    .iter()
+                    .position(|current| matches!(current, Hit::Tile { identity: found, .. } if found == identity))
+            } else {
+                Some(i)
+            };
+            let Some(go) = go else {
+                app.session.notify(tl!("Tile layer has changed; search again"), true);
+                return;
+            };
+            if let Err(e) = app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": go})) {
                 app.session.notify(e, true);
                 return;
             }
