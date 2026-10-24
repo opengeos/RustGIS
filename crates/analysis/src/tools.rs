@@ -1608,6 +1608,9 @@ fn parse_bands(p: &Json, total_bands: usize) -> Result<Vec<usize>, String> {
                         }
                     }
                     Json::String(s) => {
+                        if s.trim().is_empty() {
+                            return Err("band items cannot be empty strings".into());
+                        }
                         let sub = crate::rasterops::parse_bands_str(s, total_bands)?;
                         for b_idx in sub {
                             if !out.contains(&b_idx) {
@@ -3143,5 +3146,7 @@ mod tests {
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 1.5})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": 99})).is_err());
         assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": -1})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": [""]})).is_err());
+        assert!(crate::run("zonalStats", &m, &serde_json::json!({"raster": "elev", "polygons": "zones", "bands": ["  "]})).is_err());
     }
 }
