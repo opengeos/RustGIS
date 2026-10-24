@@ -5616,7 +5616,8 @@ mod tests {
     #[test]
     fn a_line_cut_at_the_clip_box_keeps_its_dashes_where_they_were() {
         // A dashed line from far left of the image (beyond the clip box, where it's cut) across it:
-        // drawn cut, its dashes lie where the whole line, drawn uncut, has them.
+        // drawn cut, its dashes lie where the whole line, drawn uncut, has them. So do an offset
+        // stroke's, shifted beside it (straight, so the shifted line is as long as the line).
         let camera = Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 100.0, height: 20.0, pixels_per_point: 1.0, camera, sky: false };
         let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
@@ -5626,28 +5627,34 @@ mod tests {
         ctx.ring_path_at(&mut pb, &line, false, &mut starts);
         let cut = pb.finish().unwrap();
         assert!(cut.bounds().left() > -200.0, "cut at the clip box: {:?}", cut.bounds());
-        let stroke = LineStroke {
-            color: Some(Rgba::rgb(0, 0, 0)),
-            width: Some(2.0),
-            cap: rustgis_map::LineCap::Butt,
-            dash: rustgis_map::symbology::Dash::new(&[4.0, 3.0]),
-            ..Default::default()
-        };
-        let s = Symbol::default_for(GeometryType::Polyline, 0);
-        let mut drawn = Pixmap::new(100, 20).unwrap();
-        ctx.stacked_path(&mut drawn, &cut, &s, &[stroke], &starts);
-        let mut whole = Pixmap::new(100, 20).unwrap();
-        let mut pb = PathBuilder::new();
-        let (x0, y) = view.to_screen(line[0]);
-        let (x1, _) = view.to_screen(line[1]);
-        pb.move_to(x0 as f32, y as f32);
-        pb.line_to(x1 as f32, y as f32);
-        let st = Stroke { width: 2.0, line_cap: LineCap::Butt, dash: tiny_skia::StrokeDash::new(vec![4.0, 3.0], 0.0), ..Stroke::default() };
-        whole.stroke_path(&pb.finish().unwrap(), &paint(Rgba::rgb(0, 0, 0), 1.0), &st, Transform::identity(), None);
-        let row = |pm: &Pixmap| (0..100).map(|x| pm.pixel(x, (y as u32).min(19)).unwrap().alpha() > 128).collect::<Vec<bool>>();
-        assert!(row(&whole).iter().any(|d| *d) && row(&whole).iter().any(|d| !*d), "dashed");
-        let differ = row(&drawn).iter().zip(row(&whole)).filter(|(a, b)| **a != *b).count();
-        assert!(differ <= 2, "{differ} pixels differ:\n{:?}\n{:?}", row(&drawn), row(&whole));
+        for offset in [0.0, 3.0] {
+            let stroke = LineStroke {
+                color: Some(Rgba::rgb(0, 0, 0)),
+                width: Some(2.0),
+                offset,
+                cap: rustgis_map::LineCap::Butt,
+                dash: rustgis_map::symbology::Dash::new(&[4.0, 3.0]),
+                ..Default::default()
+            };
+            let s = Symbol::default_for(GeometryType::Polyline, 0);
+            let mut drawn = Pixmap::new(100, 20).unwrap();
+            ctx.stacked_path(&mut drawn, &cut, &s, &[stroke], &starts);
+            let mut whole = Pixmap::new(100, 20).unwrap();
+            let mut pb = PathBuilder::new();
+            let (x0, y) = view.to_screen(line[0]);
+            let (x1, _) = view.to_screen(line[1]);
+            // Right of the line's direction: left to right, that's down the screen.
+            let y = y as f32 + offset;
+            pb.move_to(x0 as f32, y);
+            pb.line_to(x1 as f32, y);
+            let st =
+                Stroke { width: 2.0, line_cap: LineCap::Butt, dash: tiny_skia::StrokeDash::new(vec![4.0, 3.0], 0.0), ..Stroke::default() };
+            whole.stroke_path(&pb.finish().unwrap(), &paint(Rgba::rgb(0, 0, 0), 1.0), &st, Transform::identity(), None);
+            let row = |pm: &Pixmap| (0..100).map(|x| pm.pixel(x, (y as u32).min(19)).unwrap().alpha() > 128).collect::<Vec<bool>>();
+            assert!(row(&whole).iter().any(|d| *d) && row(&whole).iter().any(|d| !*d), "dashed");
+            let differ = row(&drawn).iter().zip(row(&whole)).filter(|(a, b)| **a != *b).count();
+            assert!(differ <= 2, "offset {offset}: {differ} pixels differ:\n{:?}\n{:?}", row(&drawn), row(&whole));
+        }
     }
 
     #[test]
