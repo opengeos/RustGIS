@@ -332,6 +332,9 @@ fn describe(st: &State, row: &Row) -> (String, &'static str, String, Option<Stri
                 None,
             ),
             Some(Hit::Layer { name, .. }) => (tl!("Layers").to_string(), "contents", name.clone(), None),
+            Some(Hit::Tile { name, overlay, .. }) => {
+                (tl!("Layers").to_string(), "basemap", if *overlay { format!("{} · {}", name, tl!("overlay")) } else { name.clone() }, None)
+            }
             Some(Hit::Bookmark { name }) => (tl!("Bookmarks").to_string(), "bookmark", name.clone(), None),
             Some(Hit::Feature { layer, layer_name, field, value, name, .. }) => {
                 let partial = st.results.partial.contains(layer);
@@ -425,7 +428,19 @@ fn pick(app: &mut RustGisApp, row: Row) {
             // The query the list was found for (the box may have been typed in since), with the
             // list's limit, so the index is the row picked.
             let query = st.searched.clone();
-            if let Err(e) = app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": i})) {
+            let go = if let Hit::Tile { identity, .. } = &hit {
+                search::search(&app.session, &query, search::LIMIT)
+                    .hits
+                    .iter()
+                    .position(|current| matches!(current, Hit::Tile { identity: found, .. } if found == identity))
+            } else {
+                Some(i)
+            };
+            let Some(go) = go else {
+                app.session.notify(tl!("Tile layer has changed; search again"), true);
+                return;
+            };
+            if let Err(e) = app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": go})) {
                 app.session.notify(e, true);
                 return;
             }
@@ -434,7 +449,7 @@ fn pick(app: &mut RustGisApp, row: Row) {
                     let label = search::format_lat_lon(*lat, *lon);
                     (label.clone(), Some((Coord::new(*lon, *lat), label)))
                 }
-                Hit::Layer { name, .. } | Hit::Bookmark { name } => (name.clone(), None),
+                Hit::Layer { name, .. } | Hit::Tile { name, .. } | Hit::Bookmark { name } => (name.clone(), None),
                 Hit::Feature { value, name, .. } => (name.clone().unwrap_or_else(|| value.clone()), None),
             };
             settle(app, text, marker);
