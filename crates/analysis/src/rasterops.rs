@@ -723,12 +723,26 @@ fn project_ring(r: &Raster, ring: &[Coord]) -> Option<Vec<(f64, f64)>> {
 /// raster costs a pass over the polygon edges per row rather than a point test per cell.
 /// A malformed ring or a failed projection rejects the entire polygon part, including its holes.
 pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u32>, Range<u32>, Vec<bool>)> {
+    polygon_mask_with_failures(r, polygons, &mut Vec::new())
+}
+
+/// Builds a polygon mask and appends the zero-based indices of rejected parts to `failed_parts`.
+/// Valid parts are retained even if another part cannot be projected onto the raster grid.
+pub fn polygon_mask_with_failures(
+    r: &Raster,
+    polygons: &[Vec<Vec<Coord>>],
+    failed_parts: &mut Vec<usize>,
+) -> Option<(Range<u32>, Range<u32>, Vec<bool>)> {
     let projected: Vec<Vec<Vec<(f64, f64)>>> = polygons
         .iter()
-        .filter_map(|rings| {
+        .enumerate()
+        .filter_map(|(index, rings)| {
             // Reject a complete part if any ring fails, so a lost hole cannot enlarge it.
-            rings.first()?;
-            rings.iter().map(|ring| project_ring(r, ring)).collect::<Option<Vec<_>>>()
+            let part = if rings.is_empty() { None } else { rings.iter().map(|ring| project_ring(r, ring)).collect::<Option<Vec<_>>>() };
+            if part.is_none() {
+                failed_parts.push(index);
+            }
+            part
         })
         .collect();
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -884,6 +898,16 @@ impl Accumulator {
 /// excluded. If no valid cells fall inside the polygon or if the polygon is outside the raster extent,
 /// returns `ZoneStats` with `count = 0` and all numeric statistics set to `None`.
 pub fn zonal_statistics(r: &Raster, bands: &[usize], polygons: &[Vec<Vec<Coord>>]) -> Result<Vec<ZoneStats>, String> {
+    zonal_statistics_with_failures(r, bands, polygons, &mut Vec::new())
+}
+
+/// Computes zonal statistics, appending raster-side projection failures as zero-based part indices.
+pub(crate) fn zonal_statistics_with_failures(
+    r: &Raster,
+    bands: &[usize],
+    polygons: &[Vec<Vec<Coord>>],
+    failed_parts: &mut Vec<usize>,
+) -> Result<Vec<ZoneStats>, String> {
     r.require_coordinates()?;
     for &b in bands {
         if b >= r.band_count() {
@@ -894,7 +918,7 @@ pub fn zonal_statistics(r: &Raster, bands: &[usize], polygons: &[Vec<Vec<Coord>>
         return Ok(Vec::new());
     }
 
-    let Some((cols, rows, mask)) = polygon_mask(r, polygons) else {
+    let Some((cols, rows, mask)) = polygon_mask_with_failures(r, polygons, failed_parts) else {
         return Ok(vec![ZoneStats::default(); bands.len()]);
     };
 
@@ -1055,6 +1079,27 @@ mod tests {
         // Outside the raster, or too small to hold a cell centre: nothing.
         assert!(polygon_mask(&r, &[vec![sq(1.0, 1.0, 2.0, 2.0)]]).is_none());
         assert!(polygon_mask(&r, &[vec![sq(0.0051, 0.0051, 0.0052, 0.0052)]]).is_none());
+    }
+
+    /// A failed hole drops only its containing part and reports that part, even with no mask.
+    #[test]
+    fn polygon_mask_reports_rejected_parts_and_retains_valid_parts() {
+        let r = ramp();
+        let valid = vec![vec![Coord::new(0.0, 0.0), Coord::new(0.002, 0.0), Coord::new(0.002, 0.002), Coord::new(0.0, 0.002)]];
+        let mut invalid = valid.clone();
+        invalid.push(vec![Coord::new(f64::NAN, 0.0); 3]);
+        let polys = vec![invalid.clone(), valid.clone()];
+        let mut failures = Vec::new();
+        let mask = polygon_mask_with_failures(&r, &polys, &mut failures);
+        assert_eq!(mask, polygon_mask(&r, &[valid]));
+        assert_eq!(failures, vec![0]);
+        failures.clear();
+        let stats = zonal_statistics_with_failures(&r, &[0], &polys, &mut failures).unwrap();
+        assert_eq!(stats[0].count, 4);
+        assert_eq!(failures, vec![0]);
+        failures.clear();
+        assert!(polygon_mask_with_failures(&r, &[invalid], &mut failures).is_none());
+        assert_eq!(failures, vec![0]);
     }
 
     #[test]

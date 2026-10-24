@@ -76,7 +76,7 @@ pub fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
 pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &str, params: &Value) -> Response {
     let sc = crate::keymap::shortcut_text(&resp.ctx, app, id, params);
     let why = why_disabled(app, id);
-    resp.on_hover_ui(|ui| {
+    let contents = |ui: &mut Ui| {
         ui.set_max_width(280.0);
         // Callers pass text that is already translated.
         let head = if sc.is_empty() { title.to_string() } else { format!("{title}  ({sc})") };
@@ -87,7 +87,8 @@ pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &s
         if let Some(w) = why {
             ui.label(egui::RichText::new(crate::i18n::fmt("Unavailable: {reason}", &[("reason", tl_raw!(w))])).size(11.0).italics().weak());
         }
-    })
+    };
+    if resp.enabled() { resp.on_hover_ui(contents) } else { resp.on_disabled_hover_ui(contents) }
 }
 
 fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
@@ -131,29 +132,106 @@ pub fn big(
     let on = enabled(app, id) || menu;
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, label.replace('\n', " ")));
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 21.0), vec2(32.0, 32.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
-    let lines: Vec<&str> = label.split('\n').collect();
-    let mut y = r.min.y + 42.0;
-    for (i, l) in lines.iter().enumerate() {
-        let col = if on { t.text } else { t.text_disabled };
-        if menu && i + 1 == lines.len() {
-            let tw = text_w(ui, l, regular(11.5));
-            let x0 = r.center().x - (tw + 9.0) / 2.0;
-            ui.painter().text(pos2(x0, y), Align2::LEFT_TOP, *l, regular(11.5), col);
-            caret(ui.painter(), pos2(x0 + tw + 5.0, y + 7.5), col);
-        } else {
-            ui.painter().text(pos2(r.center().x, y), Align2::CENTER_TOP, *l, regular(11.5), col);
-        }
-        y += 13.5;
-    }
+    paint_big(ui, r, icon, label, on, menu, &t);
     let resp = tooltip(app, resp, &label.replace('\n', " "), desc, id, &params);
     crate::showme::ring(ui, app, r, id, &params);
     if resp.clicked() && on && !menu {
         let _ = app.run(id, params);
     }
     resp
+}
+
+/// The shared icon and label layout of large ribbon controls. A split button gives this only
+/// its primary region, keeping even a long translated label clear of the adjacent arrow.
+fn paint_big(ui: &Ui, r: Rect, icon: &str, label: &str, on: bool, menu: bool, t: &Tokens) {
+    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 21.0), vec2(32.0, 32.0));
+    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint(ui.painter(), ic, icon, c, a);
+    let mut lines = label.split('\n').peekable();
+    let mut y = r.min.y + 42.0;
+    while let Some(l) = lines.next() {
+        let col = if on { t.text } else { t.text_disabled };
+        if menu && lines.peek().is_none() {
+            let tw = text_w(ui, l, regular(11.5));
+            let x0 = r.center().x - (tw + 9.0) / 2.0;
+            ui.painter().text(pos2(x0, y), Align2::LEFT_TOP, l, regular(11.5), col);
+            caret(ui.painter(), pos2(x0 + tw + 5.0, y + 7.5), col);
+        } else {
+            ui.painter().text(pos2(r.center().x, y), Align2::CENTER_TOP, l, regular(11.5), col);
+        }
+        y += 13.5;
+    }
+}
+
+/// A large ribbon button with a fixed primary command and an independent alternatives menu.
+///
+/// Labels and descriptions are translated here, as for [`big`]. `menu_label` names the arrow
+/// for assistive technology; give it a distinct name such as "Select options". `menu_enabled`
+/// is independent of the primary command's availability. Both regions respect a disabled UI.
+/// Menu rows should use [`menu_item`] internally, or run their action and call `ui.close()`.
+/// Alternatives never change `id` or `params`. Escape/outside clicks use egui's menu dismissal.
+///
+/// Returns the primary and arrow responses, in that order. Both are keyboard focusable when
+/// enabled and activate with Enter/Space. Enclose repeated controls in `ui.push_id` when their
+/// positions in a dynamic list can change.
+pub fn big_split_menu(
+    ui: &mut Ui,
+    app: &mut RustGisApp,
+    icon: &str,
+    label: &str,
+    desc: &str,
+    id: &str,
+    params: Value,
+    checked: bool,
+    menu_label: &str,
+    menu_desc: &str,
+    menu_enabled: bool,
+    menu: impl FnOnce(&mut Ui, &mut RustGisApp),
+) -> (Response, Response) {
+    let (label, desc, menu_label, menu_desc) = (tl!(label), tl!(desc), tl!(menu_label), tl!(menu_desc));
+    let t = Tokens::get(ui.ctx());
+    let w = (label.split('\n').map(|l| text_w(ui, l, regular(11.5))).fold(0.0, f32::max) + 14.0).max(50.0);
+    let on = enabled(app, id);
+    let (primary, arrow) = ui
+        .allocate_ui_with_layout(vec2(w + 20.0, CONTENT_H - 2.0), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let primary = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(w, CONTENT_H - 2.0), Sense::click()).1).inner;
+            let arrow = ui.add_enabled_ui(menu_enabled, |ui| ui.allocate_exact_size(vec2(20.0, CONTENT_H - 2.0), Sense::click()).1).inner;
+            (primary, arrow)
+        })
+        .inner;
+    primary.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, primary.enabled(), label.replace('\n', " ")));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, arrow.enabled(), menu_label));
+    let popup_id = egui::Popup::default_response_id(&arrow);
+    if !arrow.enabled() {
+        egui::Popup::close_id(ui.ctx(), popup_id);
+    }
+    if primary.enabled() {
+        bg(ui, primary.rect, &primary, checked, &t);
+    }
+    if arrow.enabled() {
+        bg(ui, arrow.rect, &arrow, egui::Popup::is_id_open(ui.ctx(), popup_id), &t);
+    }
+    paint_big(ui, primary.rect, icon, label, primary.enabled(), false, &t);
+    let x = arrow.rect.min.x;
+    ui.painter().line_segment([pos2(x, arrow.rect.min.y + 6.0), pos2(x, arrow.rect.max.y - 6.0)], Stroke::new(1.0, t.border));
+    caret(ui.painter(), arrow.rect.center(), if arrow.enabled() { t.text } else { t.text_disabled });
+    for resp in [&primary, &arrow] {
+        if resp.has_focus() {
+            ui.painter().rect_stroke(resp.rect, CornerRadius::same(6), Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        }
+    }
+    let primary = tooltip(app, primary, &label.replace('\n', " "), desc, id, &params);
+    let arrow = tooltip(app, arrow, menu_label, menu_desc, "ui.menu", &Value::Null);
+    crate::showme::ring(ui, app, primary.rect, id, &params);
+    if primary.clicked() {
+        let _ = app.run(id, params);
+    }
+    egui::Popup::menu(&arrow).show(|ui| {
+        ui.set_min_width(200.0);
+        menu(ui, app);
+    });
+    (primary, arrow)
 }
 
 /// A small button: 18 px icon with an optional label.
@@ -591,3 +669,6 @@ mod tests {
         assert!(s.real > 3.0 && s.whole > 4, "kept: {} and {}", s.real, s.whole);
     }
 }
+
+#[cfg(test)]
+mod split_tests;

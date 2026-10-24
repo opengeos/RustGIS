@@ -688,6 +688,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.addUrl" => Command("ui.addUrl"),
         "service.add" | "service.import" => Command("ui.addService"),
         "connection.new" => Command("ui.connection"),
+        "connection.resolveS3" => Command("ui.s3Connections"),
         "layer.addSql" => Pane(RightPane::Sql),
         "layer.addDatabase" => Dialog("addDatabase"),
         "layer.addZarr" => Command("ui.addZarr"),
@@ -714,6 +715,8 @@ fn search_action(id: &str) -> Option<SearchAction> {
         }
         "style.add" => OpenItem("styles"),
         "style.import" => OpenItem("importStyles"),
+        "style.importQgis" => OpenItem("qgisStyle"),
+        "project.importQgis" => OpenItem("qgisProject"),
         "style.save" => SaveItem("styles"),
         "ramp.add" => OpenItem("ramps"),
         "ramp.save" => SaveItem("ramps"),

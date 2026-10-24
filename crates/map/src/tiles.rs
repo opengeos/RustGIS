@@ -314,8 +314,12 @@ impl TileLayer {
 /// The prefix of an MBTiles archive added to the web app, held in memory.
 pub const UPLOAD: &str = "upload:";
 
-/// Whether a PMTiles or MBTiles archive address is a file rather than a web address.
+/// Whether a PMTiles or MBTiles archive address is a file rather than a web address. An address
+/// read through a saved S3 connection is never a file, well formed or not.
 pub fn is_local_archive(url: &str) -> bool {
+    if rustgis_data::s3_address::is_wrapper(url) {
+        return false;
+    }
     let lower = url.to_ascii_lowercase();
     !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("s3://"))
 }
@@ -340,8 +344,15 @@ pub fn check_path(path: &str, ext: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether `url` may be fetched: HTTP or HTTPS, with a host, and no longer than 4096 bytes.
+/// Whether `url` may be fetched: HTTP or HTTPS, with a host, and no longer than 4096 bytes. An
+/// address read through a saved S3 connection is judged by the address it wraps (still bounded
+/// by 4096 bytes), and itself by the wrapper's own bound; it needs no login to be kept.
 pub fn check_url(url: &str) -> Result<(), String> {
+    let url = match rustgis_data::s3_address::parse(url) {
+        Ok(Some(b)) => b.url,
+        Ok(None) => url,
+        Err(e) => return Err(e.to_string()),
+    };
     if url.len() > 4096 {
         return Err("the address is too long".into());
     }
@@ -358,8 +369,10 @@ pub fn check_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The host part of an HTTP(S) address.
+/// The host part of an HTTP(S) address (of the address an address read through a saved S3
+/// connection wraps).
 pub fn host_of(url: &str) -> Option<&str> {
+    let url = rustgis_data::s3_address::inner(url);
     let rest = url.split_once("://")?.1;
     let host = rest.split(['/', '?', '#']).next()?;
     let host = host.rsplit_once('@').map_or(host, |(_, h)| h);

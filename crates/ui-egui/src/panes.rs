@@ -1634,7 +1634,10 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
                     ("renderer", tl_raw!(rl.style.renderer.label())),
                 ],
             ),
-            None => crate::i18n::fmt("The raster's data couldn't be read: {path}", &[("path", rl.path.as_deref().unwrap_or(""))]),
+            None => crate::i18n::fmt(
+                "The raster's data couldn't be read: {error}",
+                &[("error", rl.error.as_deref().or(rl.path.as_deref()).unwrap_or(""))],
+            ),
         },
         None => match &l.source {
             Some(src) if src.error.is_some() => {
@@ -3401,6 +3404,9 @@ fn pending_symbology(app: &RustGisApp, ctx: &egui::Context) -> Option<PendingSym
 
 /// Shows the active layer's renderer controls, including No Fill for polygon layers.
 fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    if app.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&app.session)) {
+        app.ui.symbology_pending = None;
+    }
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else {
         ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane.")).color(t.text_dim));
         return;
@@ -3410,6 +3416,8 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     let g = l.geometry_type();
+    let numeric: Vec<String> = l.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+    let all: Vec<String> = l.dataset.fields.iter().map(|f| f.name.clone()).collect();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Primary symbology")).size(11.5).color(t.text_dim));
@@ -3432,7 +3440,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 "graduated" => "graduated",
                 _ => "proportional",
             };
-            let sel = cur_kind == *label;
+            let sel = if app.ui.symbology_pending.is_some() { *code == "unique" } else { cur_kind == *label };
             let (r, resp) = ui.allocate_exact_size(vec2(68.0, 56.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, tl!(*label)));
             ui.painter().rect_filled(
@@ -3462,6 +3470,14 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let short = tl!(label).split(' ').next().unwrap_or(label);
             ui.painter().text(pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, short, regular(11.0), t.text);
             if resp.on_hover_text(tl!(*label)).clicked() && !sel {
+                if *code == "unique" && !all.is_empty() {
+                    let field = l.dataset.fields.iter().find(|f| !f.ty.is_numeric()).or_else(|| l.dataset.fields.first());
+                    if let Some(field) = field {
+                        app.ui.symbology_pending = Some(crate::PendingUniqueSymbology::new(&app.session, &l, field.name.clone()));
+                        clear_pending_symbology(ui.ctx());
+                    }
+                    continue;
+                }
                 match app.run("layer.symbology", json!({"type": code})) {
                     Err(error) => {
                         let pending = PendingSymbology {
@@ -3474,20 +3490,53 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         };
                         ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
                     }
-                    Ok(_) => clear_pending_symbology(ui.ctx()),
+                    Ok(_) => {
+                        clear_pending_symbology(ui.ctx());
+                        app.ui.symbology_pending = None;
+                    }
                 }
             }
         }
     });
     ui.add_space(8.0);
+    if let Some(mut pending) = app.ui.symbology_pending.clone() {
+        let pending_field = pending.field.clone();
+        let mut selected = if all.contains(&pending_field) { pending_field.clone() } else { all.first().cloned().unwrap_or_default() };
+        ui.horizontal(|ui| {
+            let input_label = ui.label(tl!("Field"));
+            egui::ComboBox::from_id_salt("sym_pending_field")
+                .selected_text(&selected)
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for field in &all {
+                        ui.selectable_value(&mut selected, field.clone(), field);
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
+            let applied = ui.button(tl!("Apply")).clicked()
+                && match app.run("layer.symbology", json!({"type": "unique", "field": selected.clone()})) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        app.session.notify(error, true);
+                        false
+                    }
+                };
+            if applied {
+                app.ui.symbology_pending = None;
+            } else if selected != pending_field {
+                pending.field = selected;
+                app.ui.symbology_pending = Some(pending);
+            }
+        });
+        ui.add_space(6.0);
+    }
     if g == GeometryType::Polygon && !l.graphics {
         if ui.button(tl!("No Fill")).on_hover_text(tl!("Draw only polygon outlines, keeping their colors and widths.")).clicked() {
             let _ = app.run("layer.noFill", Value::Null);
         }
         ui.add_space(6.0);
     }
-    let numeric: Vec<String> = l.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
-    let all: Vec<String> = l.dataset.fields.iter().map(|f| f.name.clone()).collect();
     if let Some(pending) = pending_symbology(app, ui.ctx()) {
         ui.label(egui::RichText::new(pending.error.as_ref()).color(ui.visuals().error_fg_color));
         let fields = if pending.kind == "unique" { &all } else { &numeric };
@@ -3526,7 +3575,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             );
             legend_list(app, ui, &l, t);
         }
-        Renderer::Graduated { field, breaks, ramp, method, .. } => {
+        Renderer::Graduated { field, breaks, ramp, method, min, .. } => {
             field_combo(app, ui, "Field", field, &numeric, "graduated");
             ui.horizontal(|ui| {
                 let input_label = ui.label(tl!("Method"));
@@ -3538,16 +3587,20 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                     }
                 }).response.labelled_by(input_label.id);
             });
-            ui.horizontal(|ui| {
-                let input_label = ui.label(tl!("Classes"));
-                let mut k = breaks.len();
-                if ui.add(egui::DragValue::new(&mut k).range(1..=12)).labelled_by(input_label.id).changed() {
-                    let _ = app.run(
-                        "layer.symbology",
-                        json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": ramp.name()}),
-                    );
-                }
-            });
+            if *method == ClassMethod::Manual {
+                manual_breaks(app, ui, field, breaks, *min, ramp);
+            } else {
+                ui.horizontal(|ui| {
+                    let input_label = ui.label(tl!("Classes"));
+                    let mut k = breaks.len();
+                    if ui.add(egui::DragValue::new(&mut k).range(1..=12)).labelled_by(input_label.id).changed() {
+                        let _ = app.run(
+                            "layer.symbology",
+                            json!({"type": "graduated", "field": field, "method": format!("{method:?}"), "classes": k, "ramp": ramp.name()}),
+                        );
+                    }
+                });
+            }
             ramp_picker(app, ui, ramp, t);
             ui.add_space(6.0);
             legend_list(app, ui, &l, t);
@@ -3574,6 +3627,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
     if !l.graphics {
         reference_scale_row(app, ui, &l);
+    }
+    ui.add_space(6.0);
+    if ui.button(tl!("Import QGIS Style…")).on_hover_text(tl!("Style this layer as a QGIS layer style file (.qml) does")).clicked() {
+        let _ = app.run("ui.openItem", json!({"kind": "qgisStyle"}));
     }
 }
 
@@ -3919,6 +3976,56 @@ fn legend_list(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
             }
         },
     );
+}
+
+/// Graduated Colors' bounds typed by hand: each class's upper bound as a number, a button to take
+/// a bound out, and one to split the widest class in two. A bound being dragged or typed is held
+/// here and applied once, when the drag stops or the field is left, so a drag is one undo step.
+fn manual_breaks(app: &mut RustGisApp, ui: &mut Ui, field: &str, breaks: &[f64], min: f64, ramp: &Ramp) {
+    let mut b = breaks.to_vec();
+    let speed = ((b.last().copied().unwrap_or(min) - min).abs() / 200.0).max(1e-9);
+    let mut apply = false;
+    let mut remove = None;
+    let (layer, last) = (app.session.active_layer, b.len().saturating_sub(1));
+    for (i, v) in b.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let id = egui::Id::unique(("manual-break", layer, field, i));
+            if let Some(held) = ui.data(|d| d.get_temp::<f64>(id)) {
+                *v = held;
+            }
+            let input_label = ui.label(crate::i18n::fmt("Class {n} up to", &[("n", &(i + 1).to_string())]));
+            let r = ui.add(egui::DragValue::new(v).speed(speed)).labelled_by(input_label.id);
+            if r.changed() {
+                ui.data_mut(|d| d.insert_temp(id, *v));
+            }
+            if (r.drag_stopped() || r.lost_focus()) && ui.data(|d| d.get_temp::<f64>(id)).is_some() {
+                ui.data_mut(|d| d.remove_temp::<f64>(id));
+                apply = true;
+            }
+            // The last bound closes the classes at the field's largest value: taking it out would
+            // only bring it back.
+            if i < last && ui.small_button("×").on_hover_text(tl!("Take this bound out")).clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = remove {
+        b.remove(i);
+        apply = true;
+    }
+    if b.len() < 12 && ui.button(tl!("Split the widest class")).clicked() {
+        let lower = |i: usize| if i == 0 { min } else { b[i - 1] };
+        if let Some(i) = (0..b.len()).max_by(|&x, &y| (b[x] - lower(x)).total_cmp(&(b[y] - lower(y)))) {
+            b.insert(i, (lower(i) + b[i]) / 2.0);
+            apply = true;
+        }
+    }
+    if apply
+        && let Err(e) =
+            app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": "manual", "breaks": b, "ramp": ramp.name()}))
+    {
+        app.session.notify(e, true);
+    }
 }
 
 fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, t: &Tokens) {
@@ -4795,7 +4902,8 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     .selected_text(tl!(method.label()))
                     .width(180.0)
                     .show_ui(ui, |ui| {
-                        for mm in ClassMethod::ALL {
+                        // Manual bounds are for Graduated Colors; a raster's are worked out.
+                        for mm in ClassMethod::ALL.into_iter().filter(|m| *m != ClassMethod::Manual) {
                             if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
                                 let _ = app.run(
                                     "raster.symbology",

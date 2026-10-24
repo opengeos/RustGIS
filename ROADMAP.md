@@ -57,7 +57,6 @@ The bugs users hit, the docs and a few quick wins: good first pull requests.
 - A pass over the user guide, the comparison pages and the README against what the app does
   today (vertex editing, spatial join and kriging are listed as missing or undocumented; some
   pages still say 16 languages).
-- Styling: manual breaks _(open)_.
 - Selection by polygon and lasso, and a radius tool on the map (Neighborhood Explorer already
   selects by radius) _(open)_.
 
@@ -188,7 +187,7 @@ Open questions rather than plans; discuss before building.
   layers (XYZ/TMS/WMS, Mapbox Vector Tiles, MapLibre styles, PMTiles and MBTiles archives),
   a basemap gallery (OpenFreeMap, USGS Imagery), worldviews.
 - Cartography: single, unique values, graduated colours (natural breaks, equal interval, quantile,
-  geometric interval, standard deviation) and proportional symbols; layer groups;
+  geometric interval, standard deviation, manual) and proportional symbols; layer groups;
   label classes with SQL queries, placement and annotation; custom colour ramps (and QGIS, GDAL
   and GMT palette files); masking, display filters, blend modes, aggregation, extrusion; graphics.
 - Editing: create, move, rotate, scale, merge, split, explode, vertex editing; snapping, templates, elevation,

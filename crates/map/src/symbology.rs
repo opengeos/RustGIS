@@ -315,15 +315,18 @@ pub enum ClassMethod {
     GeometricInterval,
     /// Classes one standard deviation wide about the mean.
     StandardDeviation,
+    /// Bounds typed by hand, kept as they are (see [`Renderer::graduated_manual`]).
+    Manual,
 }
 
 impl ClassMethod {
-    pub const ALL: [ClassMethod; 5] = [
+    pub const ALL: [ClassMethod; 6] = [
         ClassMethod::NaturalBreaks,
         ClassMethod::EqualInterval,
         ClassMethod::Quantile,
         ClassMethod::GeometricInterval,
         ClassMethod::StandardDeviation,
+        ClassMethod::Manual,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -332,6 +335,7 @@ impl ClassMethod {
             ClassMethod::Quantile => "Quantile",
             ClassMethod::GeometricInterval => "Geometric Interval",
             ClassMethod::StandardDeviation => "Standard Deviation",
+            ClassMethod::Manual => "Manual",
         }
     }
     pub fn from_name(s: &str) -> Option<ClassMethod> {
@@ -342,6 +346,7 @@ impl ClassMethod {
             "quantile" => ClassMethod::Quantile,
             "geometricinterval" | "geometric_interval" | "geometric interval" | "geometric" => ClassMethod::GeometricInterval,
             "standarddeviation" | "standard_deviation" | "standard deviation" | "stddev" => ClassMethod::StandardDeviation,
+            "manual" => ClassMethod::Manual,
             _ => return None,
         })
     }
@@ -521,6 +526,51 @@ impl Renderer {
         ramp: Ramp,
         base: Symbol,
     ) -> Result<Renderer, String> {
+        let k = classes.clamp(1, 12);
+        Self::graduated_by(ds, rows, field, method, ramp, base, |vals| Ok(class_breaks(vals, k, method)))
+    }
+
+    /// Builds a graduated-colours renderer on the class bounds typed by hand: the classes' upper
+    /// bounds, sorted and each once, closed by the field's largest value when they stop short of
+    /// it, so every feature has a class. At most 12 classes.
+    pub fn graduated_manual(
+        ds: &Dataset,
+        rows: &[bool],
+        field: &str,
+        breaks: &[f64],
+        ramp: Ramp,
+        base: Symbol,
+    ) -> Result<Renderer, String> {
+        Self::graduated_by(ds, rows, field, ClassMethod::Manual, ramp, base, |vals| {
+            let mut b: Vec<f64> = breaks.iter().copied().filter(|v| v.is_finite()).collect();
+            if b.is_empty() {
+                return Err("manual breaks need at least one number".into());
+            }
+            b.sort_by(|a, b| a.total_cmp(b));
+            b.dedup();
+            if let Some(&hi) = vals.last()
+                && b.last().is_some_and(|&l| l < hi)
+            {
+                b.push(hi);
+            }
+            if b.len() > 12 {
+                return Err(format!("{} classes; Graduated Colors takes at most 12", b.len()));
+            }
+            Ok(b)
+        })
+    }
+
+    /// A graduated renderer on `field`, with the bounds `breaks` works out from the field's sorted
+    /// values.
+    fn graduated_by(
+        ds: &Dataset,
+        rows: &[bool],
+        field: &str,
+        method: ClassMethod,
+        ramp: Ramp,
+        base: Symbol,
+        breaks: impl FnOnce(&[f64]) -> Result<Vec<f64>, String>,
+    ) -> Result<Renderer, String> {
         let fi = ds.field_index(field).ok_or_else(|| format!("no field named '{field}'"))?;
         if !ds.fields.get(fi).is_some_and(|f| f.ty.is_numeric()) {
             return Err(format!("'{field}' is not a numeric field"));
@@ -530,8 +580,7 @@ impl Renderer {
             return Err(format!("'{field}' has no numeric values"));
         }
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let k = classes.clamp(1, 12);
-        let breaks = class_breaks(&vals, k, method);
+        let breaks = breaks(&vals)?;
         let n = breaks.len();
         let symbols = (0..n).map(|i| base.with_ramp_fill(ramp.pick(i, n), ds.geometry_type)).collect();
         let min = vals.first().copied().unwrap_or(0.0);
@@ -1059,7 +1108,8 @@ pub fn class_breaks(sorted: &[f64], k: usize, method: ClassMethod) -> Vec<f64> {
         return vec![hi];
     }
     let mut b = match method {
-        ClassMethod::EqualInterval => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
+        // Manual bounds are typed, not worked out: asked to work them out, it starts from equal intervals.
+        ClassMethod::EqualInterval | ClassMethod::Manual => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
         ClassMethod::Quantile => (1..=k).map(|i| sorted.get(((n * i) / k).saturating_sub(1).min(n - 1)).copied().unwrap_or(hi)).collect(),
         ClassMethod::NaturalBreaks => jenks(sorted, k),
         ClassMethod::GeometricInterval => {
@@ -1272,6 +1322,37 @@ pub struct LabelClass {
     /// Slanted (an italic face where the font has one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
+    /// The installed font family the labels are drawn in, by name ("Liberation Sans Narrow"), as
+    /// QGIS names a text format's; none is the label font. A machine without the family draws
+    /// them in the label font too.
+    #[serde(default, deserialize_with = "de_font", skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+}
+
+/// The longest font family name kept (characters).
+pub const MAX_FONT_NAME: usize = 128;
+
+/// A label font's family name as it is kept: trimmed, at most [`MAX_FONT_NAME`] characters, and
+/// none when blank.
+pub fn font_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_FONT_NAME).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// A label class's font as a project has it, kept as [`font_name`] keeps it: a name, or none for
+/// anything else (a number, a list), so a damaged font doesn't make the project unreadable.
+fn de_font<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Font {
+        Name(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Font>::deserialize(d)? {
+        Some(Font::Name(n)) => font_name(&n),
+        Some(Font::Other(_)) | None => None,
+    })
 }
 
 fn default_class_name() -> String {
@@ -1415,6 +1496,7 @@ impl LabelClass {
             farthest: None,
             placement: LabelPlacement::Auto,
             italic: false,
+            font: None,
         }
     }
 
@@ -1538,6 +1620,34 @@ mod tests {
         assert_eq!(v["field"], "name");
         assert_eq!(v["classes"][0]["where"], "capital = 1");
         assert_eq!(serde_json::from_value::<Labeling>(v).unwrap(), with);
+    }
+
+    /// A label font is kept by its family name, trimmed and bounded (a project file is hostile
+    /// input); a blank one is the label font, and isn't written.
+    #[test]
+    fn a_label_font_is_kept_by_name() {
+        let read = |font: serde_json::Value| {
+            serde_json::from_value::<Labeling>(serde_json::json!({
+                "enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": false, "bold": false, "font": font
+            }))
+            .unwrap()
+        };
+        let l = read("  Liberation Sans Narrow \n".into());
+        assert_eq!(l.default.font.as_deref(), Some("Liberation Sans Narrow"));
+        assert_eq!(serde_json::to_value(&l).unwrap()["font"], "Liberation Sans Narrow");
+        // Not a name (a number, a list, an object): no font, and the rest of the labels still read.
+        for blank in [
+            serde_json::json!("  "),
+            serde_json::Value::Null,
+            serde_json::json!(7),
+            serde_json::json!(["Arial"]),
+            serde_json::json!({"a": 1}),
+        ] {
+            let l = read(blank);
+            assert_eq!(l.default.font, None);
+            assert!(serde_json::to_value(&l).unwrap().get("font").is_none());
+        }
+        assert_eq!(read("x".repeat(10_000).into()).default.font.map(|f| f.chars().count()), Some(MAX_FONT_NAME));
     }
 
     /// A project file is read with at most `MAX_LABEL_CLASSES` classes, and only that many count

@@ -56,6 +56,10 @@ fn reset(s: &mut Session, p: Project) {
     s.history_from_file = s.project.gp_history.len();
     // Zarr layers that follow the time slider read the step it is at.
     super::zarr::follow_time(s);
+    // The sources that read an S3 bucket through a saved connection wait for it (or its choice):
+    // nothing of the new project is fetched before.
+    s.s3_pending.clear();
+    crate::s3_connections::resolve_project_s3(s);
 }
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {

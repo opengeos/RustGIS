@@ -14,6 +14,7 @@ pub mod palette;
 pub mod planets;
 pub mod presentation;
 pub mod projection;
+pub mod qgis;
 pub mod raster;
 pub mod report;
 pub mod source;
@@ -1332,6 +1333,9 @@ impl Map {
         let sources = self.layers.iter().filter(|l| l.source.is_some()).count().max(1);
         let bytes = source::VIEW_BYTES / sources;
         for layer in &mut self.layers {
+            if let Some(raster) = &mut layer.raster {
+                pending |= raster.poll_reload();
+            }
             if let Some(src) = &mut layer.source {
                 let changed = src.projection.as_ref().is_some_and(|p| p != &self.projection);
                 let mode_changed = src.full_read != block;

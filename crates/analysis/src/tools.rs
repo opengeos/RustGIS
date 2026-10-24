@@ -1708,6 +1708,7 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let target_rows = rows(inp, p, poly_param, poly_ds);
     let mut skipped_features = 0usize;
+    let mut skipped_parts = 0usize;
     let mut failure_details = Vec::new();
     for r_idx in target_rows {
         let Some(f) = poly_ds.features.get(r_idx) else { continue };
@@ -1715,7 +1716,13 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             Some(Geometry::Polygon(polys)) if !polys.is_empty() => {
                 match crate::rasterops::transform_feature_polygons_to_lonlat(polys, poly_tr.as_ref()) {
                     Ok(polys_lonlat) => {
-                        let st = crate::rasterops::zonal_statistics(r, &bands, &polys_lonlat)?;
+                        let mut failed_parts = Vec::new();
+                        let st = crate::rasterops::zonal_statistics_with_failures(r, &bands, &polys_lonlat, &mut failed_parts)?;
+                        skipped_parts += failed_parts.len();
+                        if !failed_parts.is_empty() {
+                            failure_details
+                                .push(format!("feature {}: raster projection failed for polygon part(s) {failed_parts:?}", f.id));
+                        }
                         (st, true)
                     }
                     Err(e) => {
@@ -1756,6 +1763,11 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut messages = vec![format!("Calculated zonal statistics for {n_features} feature(s)")];
     if skipped_features > 0 {
         messages.push(format!("{skipped_features} feature(s) had invalid geometry or failed coordinate transformation"));
+    }
+    if skipped_parts > 0 {
+        messages.push(format!("{skipped_parts} polygon part(s) could not be projected onto the raster grid; valid parts were retained"));
+    }
+    if !failure_details.is_empty() {
         for detail in failure_details.iter().take(5) {
             messages.push(detail.clone());
         }

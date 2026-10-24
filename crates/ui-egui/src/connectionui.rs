@@ -1,8 +1,11 @@
-//! Named endpoint definitions, optional remembered database passwords, and off-frame web probes.
+//! Named endpoint definitions, optional remembered database passwords and S3 keys, off-frame
+//! web probes, and explicit saved-connection choices for project sources.
 
 use egui::vec2;
 use rustgis_engine::connections::{Connection, DATABASE_KINDS, LoginReason, LoginRequest, database_key, database_label};
 use rustgis_engine::render::rustgis_tiles::{cache, s3};
+use rustgis_engine::s3_connections::STALE;
+use rustgis_engine::s3_keys as keys;
 use rustgis_engine::sources::Source;
 use serde_json::{Value, json};
 
@@ -28,6 +31,84 @@ pub struct State {
     pub secret_key: String,
     pub session_token: String,
     pub test: Option<(Value, Slot<Result<Vec<u8>, String>>)>,
+    /// The form was opened to log in (Log In…): Save logs in even with no keys typed (an S3
+    /// connection's saved keys are then read), where a plain edit only changes the definition.
+    pub login: bool,
+    /// A login that worked with a warning (translated, e.g. the keys weren't remembered): the
+    /// dialog stays open to say so until it is closed or edited again.
+    pub warned: Option<String>,
+    /// A project's S3 source waiting for this connection (the chooser's), as (source address,
+    /// connection id): its choice is made again once that connection has logged in.
+    pub resolving: Option<(String, String)>,
+}
+
+/// The chooser of the saved S3 connection that reads a project's S3 sources (Data Sources ›
+/// Choose S3 connection…): what was picked, for the project it is for. Nothing is picked for the
+/// user.
+#[derive(Default)]
+pub struct Chooser {
+    /// The candidate picked for each resource waiting, by the source address that names it.
+    picked: std::collections::BTreeMap<String, String>,
+    /// The project (`Session::opened`) this state is for.
+    project: Option<u64>,
+    /// Whether the chooser may still open by itself for this project (once).
+    auto: bool,
+    error: Option<String>,
+}
+
+/// A fixed sentence the engine says about saved S3 keys and S3 connection choices, in the
+/// current language; any other message as it is.
+pub(crate) fn translated(e: &str) -> String {
+    match e {
+        keys::UNUSABLE => tl!("Saved S3 keys could not be used. Enter the keys again."),
+        keys::NONE_SAVED => tl!("No saved S3 keys. Enter accessKeyId and secretAccessKey."),
+        keys::UNAVAILABLE => tl!("Saved S3 keys are unavailable. Enter the keys for this session."),
+        keys::NOT_REMEMBERED => tl!("Keys are available for this session but were not remembered on this computer."),
+        keys::TEMPORARY => tl!("Temporary credentials are session-only. Previously saved keys are unchanged."),
+        keys::NOT_FORGOTTEN => tl!("Saved S3 keys could not be forgotten. The connection was not changed."),
+        s3::UNRESOLVED => tl!("Choose a saved S3 connection before opening this source."),
+        s3::MISMATCH => tl!("The saved S3 connection no longer matches this source."),
+        STALE => tl!("This S3 connection choice is no longer available."),
+        other => other,
+    }
+    .to_string()
+}
+
+/// Whether a login failed for want of usable saved keys: typing them is the way on.
+pub(crate) fn needs_keys(e: &str) -> bool {
+    matches!(e, keys::NONE_SAVED | keys::UNAVAILABLE | keys::UNUSABLE)
+}
+
+/// Why the Remember checkbox can't be used, when it can't: no credential store (the browser, or a
+/// shell without one), or temporary credentials (a session token), which are never kept.
+pub(crate) fn remember_blocked(store: bool, session_token: &str) -> Option<&'static str> {
+    if !store {
+        Some(tl!("Keys are kept for this session only: there is no credential store to remember them in here."))
+    } else if !session_token.trim().is_empty() {
+        Some(tl!("Temporary credentials (with a session token) are kept for this session only."))
+    } else {
+        None
+    }
+}
+
+/// The checkbox, its reason when it can't be used, and what it does when it can. Unticked when
+/// it can't be used.
+pub(crate) fn remember_checkbox(ui: &mut egui::Ui, remember: &mut bool, blocked: Option<&str>) -> bool {
+    if blocked.is_some() {
+        *remember = false;
+    }
+    let changed = ui.add_enabled(blocked.is_none(), egui::Checkbox::new(remember, tl!("Remember on this computer"))).changed();
+    let note = blocked.unwrap_or(tl!(
+        "Keeps the access key ID and secret access key in this computer's credential store, never in the connection or the project."
+    ));
+    ui.label(egui::RichText::new(note).small().weak());
+    changed
+}
+
+/// Forgets the keys saved on this computer for the S3 connection `id`; its login in this session
+/// keeps working. A failure leaves everything as it was.
+pub(crate) fn forget_keys(app: &mut RustGisApp, id: &str) -> Result<(), String> {
+    app.run("connection.forgetSavedKeys", json!({"id": id})).map(|_| ()).map_err(|e| translated(&e))
 }
 
 pub(crate) const KINDS: [(&str, &str); 13] = [
@@ -153,16 +234,27 @@ pub fn open_edit(app: &mut RustGisApp, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn log_in(app: &mut RustGisApp, id: &str) {
+/// Opens the connection's form to log in (Log In…): Save then logs in. True when it opened.
+pub fn log_in(app: &mut RustGisApp, id: &str) -> bool {
     match app.run("ui.connection", json!({"id": id})) {
         Ok(_) => {
+            app.ui.connection.login = true;
+            let saved = app.ui.connection.kind == "s3"
+                && app.ui.connection.credentials == "keys"
+                && app.ui.connection.id.as_deref().and_then(|id| app.session.connections.find(id)).is_some_and(|c| c.saved_keys);
             app.dialogs.info = Some(if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
                 tl!("Type the password, then Save. Remember on this computer is optional.").to_string()
+            } else if saved {
+                tl!("Leave the keys blank to log in with the keys saved on this computer, or type others, then Save.").to_string()
             } else {
                 tl!("Type the keys to log in for this session, then Save.").to_string()
             });
+            true
         }
-        Err(e) => app.session.notify(e, true),
+        Err(e) => {
+            app.session.notify(e, true);
+            false
+        }
     }
 }
 
@@ -406,8 +498,38 @@ fn summary(kind: &str, r: &Value) -> String {
     }
 }
 
+/// Whether a password or any key is typed in the form.
+fn typed_secrets(st: &State) -> bool {
+    (DATABASE_KINDS.contains(&st.kind.as_str()) && !st.password.is_empty())
+        || (st.kind == "s3"
+            && st.credentials == "keys"
+            && [&st.access_key, &st.secret_key, &st.session_token].iter().any(|v| !v.is_empty()))
+}
+
+fn clear_secrets(st: &mut State) {
+    st.password.clear();
+    st.access_key.clear();
+    st.secret_key.clear();
+    st.session_token.clear();
+    st.remember = false;
+}
+
+/// Saves the definition, then logs in when keys or a password are typed, or when the form was
+/// opened to log in (an S3 connection with keys then reads those saved on this computer). Only
+/// the login is asked to remember keys. A login that worked with a warning keeps the dialog open
+/// to say so.
 fn save(app: &mut RustGisApp) -> Result<(), String> {
+    let store = app.session.database_logins.has_store();
     let st = &app.ui.connection;
+    let keys_mode = st.kind == "s3" && st.credentials == "keys";
+    let remember = keys_mode && st.remember && remember_blocked(store, &st.session_token).is_none();
+    if remember && (st.access_key.trim().is_empty() || st.secret_key.trim().is_empty()) {
+        return Err(tl!("Type the access key ID and the secret access key to remember them on this computer.").into());
+    }
+    if DATABASE_KINDS.contains(&st.kind.as_str()) && st.remember && st.password.is_empty() {
+        return Err(tl!("Type the password to remember it on this computer.").into());
+    }
+    let wants_login = typed_secrets(st) || (st.login && keys_mode && st.id.is_some());
     let mut p = definition(st);
     let command = if let Some(id) = &st.id {
         p["id"] = json!(id);
@@ -427,54 +549,81 @@ fn save(app: &mut RustGisApp) -> Result<(), String> {
     };
     let v = app.run(command, p)?;
     stripped_notice(app, &v);
-    let mut login = json!({"id": v["id"]});
+    let id = v["id"].as_str().map(str::to_owned).ok_or_else(|| "the connection has no id".to_string())?;
+    // Kept at once: a Save tried again edits this connection rather than adding another.
+    let created = app.ui.connection.id.is_none();
+    app.ui.connection.id = Some(id.clone());
+    if !wants_login {
+        clear_secrets(&mut app.ui.connection);
+        crate::connectiontree::refresh(app, Some(&id));
+        return Ok(());
+    }
+    let mut login = json!({"id": id});
     secrets(&app.ui.connection, &mut login);
-    if login.as_object().is_some_and(|p| p.len() > 1) {
-        if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
-            login["remember"] = json!(app.ui.connection.remember);
-        }
-        let id = v["id"].as_str().unwrap_or("").to_owned();
-        let result = app.run("connection.login", login);
+    let database = DATABASE_KINDS.contains(&app.ui.connection.kind.as_str());
+    if database {
+        login["remember"] = json!(app.ui.connection.remember);
+    } else if remember {
+        login["remember"] = json!(true);
+    }
+    let result = app.run("connection.login", login);
+    if database {
         crate::connectiontree::refresh(app, Some(&id));
         let refused = password_request(app, &id);
         if result.is_err() || refused.is_some() {
-            app.ui.connection.id = Some(id);
             app.ui.connection.password.clear();
             app.ui.connection.remember = false;
             app.ui.connection.request = refused;
             app.dialogs.open = Some("editConnection");
             return Err(result.err().unwrap_or_else(|| tl!("The password was refused. Type a password to try again.").into()));
         }
-        // The command says why a checked Remember didn't keep the password; nothing is claimed
-        // when it did.
-        if let Some(warning) = result.as_ref().ok().and_then(|v| v["warning"].as_str()) {
+    }
+    let v = match result {
+        Ok(v) => v,
+        Err(e) => {
+            if created {
+                app.dialogs.open = Some("editConnection");
+            }
+            return Err(translated(&e));
+        }
+    };
+    clear_secrets(&mut app.ui.connection);
+    app.ui.connection.login = false;
+    if let Some(warning) = v["warning"].as_str() {
+        if database {
+            // Database login retains its established notice-and-close behavior.
             app.session.notify(warning.to_string(), true);
+        } else {
+            app.ui.connection.warned = Some(translated(warning));
+            app.dialogs.open = Some("editConnection");
         }
     }
-    if let Some(id) = v["id"].as_str() {
-        crate::connectiontree::refresh(app, Some(id));
-    }
-    let st = &mut app.ui.connection;
-    st.password.clear();
-    st.remember = false;
-    st.access_key.clear();
-    st.secret_key.clear();
-    st.session_token.clear();
+    resolve_waiting(app, &id);
     Ok(())
 }
 
 pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
-    let help = if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
+    let intro = if DATABASE_KINDS.contains(&app.ui.connection.kind.as_str()) {
         tl!(
             "A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store."
+        )
+    } else if app.ui.connection.kind == "s3" {
+        tl!(
+            "A named endpoint you can reuse. Keys are kept until RustGIS closes unless you choose to remember them on this computer; the connection itself never keeps them."
         )
     } else {
         tl!("A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.")
     };
-    ui.label(egui::RichText::new(help).weak());
+    ui.label(egui::RichText::new(intro).weak());
+    let store = app.session.database_logins.has_store();
+    // Status metadata only: rendering must never read the credential store.
+    let saved_keys =
+        app.ui.connection.id.as_deref().and_then(|id| app.session.connections.find(id)).is_some_and(|c| c.kind == "s3" && c.saved_keys);
     let st = &mut app.ui.connection;
     let database = DATABASE_KINDS.contains(&st.kind.as_str());
     let mut changed = false;
+    let mut source_changed = false;
+    let mut forget = false;
     egui::Grid::new("connection").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
         ui.label(tl!("Type"));
         ui.label(tl!(label(&st.kind)));
@@ -532,7 +681,8 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                         if cfg!(target_arch = "wasm32") && matches!(code, "profile" | "environment") {
                             continue;
                         }
-                        changed |= ui.selectable_value(&mut st.credentials, code.to_owned(), tl!(label)).changed();
+                        source_changed |= ui.selectable_value(&mut st.credentials, code.to_owned(), tl!(label)).changed();
+                        changed |= source_changed;
                     }
                 })
                 .response
@@ -556,6 +706,23 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                         .changed();
                     ui.end_row();
                 }
+                ui.label("");
+                let blocked = remember_blocked(store, &st.session_token);
+                ui.vertical(|ui| changed |= remember_checkbox(ui, &mut st.remember, blocked));
+                ui.end_row();
+                if saved_keys {
+                    ui.label(tl!("Saved keys"));
+                    ui.vertical(|ui| {
+                        let note = if store {
+                            tl!("This computer keeps keys for this connection: leave the keys blank to log in with them.")
+                        } else {
+                            tl!("Keys were saved for this connection, but there is no credential store here to read them from.")
+                        };
+                        ui.label(egui::RichText::new(note).small().weak());
+                        forget = ui.button(tl!("Forget Saved Keys")).clicked();
+                    });
+                    ui.end_row();
+                }
             }
         } else {
             let input_label = ui.label(tl!("Address"));
@@ -572,12 +739,44 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             ui.end_row();
         }
     });
+    // A credential-source switch never carries opt-in to the newly chosen source.
+    if source_changed || !(database || st.kind == "s3" && st.credentials == "keys") {
+        st.remember = false;
+    }
     if changed {
         // A late download may finish, but its detached slot cannot report on the edited form.
         st.test = None;
+        // Edited again: back to saving.
+        st.warned = None;
         app.dialogs.info = None;
         app.dialogs.error = None;
     }
+    if forget && let Some(id) = app.ui.connection.id.clone() {
+        match forget_keys(app, &id) {
+            Ok(()) => {
+                app.dialogs.error = None;
+                app.dialogs.info =
+                    Some(tl!("The keys saved on this computer were forgotten; a login in this session keeps working.").to_string());
+            }
+            Err(e) => {
+                app.dialogs.info = None;
+                app.dialogs.error = Some(e);
+            }
+        }
+    }
+    // A login that worked but couldn't do all it was asked: said until closed (or edited again).
+    if let Some(warning) = app.ui.connection.warned.clone() {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!("Logged in for this session")).strong());
+        ui.label(egui::RichText::new(warning).color(ui.visuals().warn_fg_color));
+        return ui
+            .with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                let accent = crate::theme::Tokens::get(ui.ctx()).accent;
+                crate::widgets::dialog_button(ui, tl!("Close"), Some(accent), vec2(84.0, 28.0)).clicked()
+            })
+            .inner;
+    }
+    let st = &app.ui.connection;
     let testing = st.test.is_some();
     let unavailable = database && cfg!(target_arch = "wasm32");
     let clicked = ui
@@ -599,7 +798,9 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     if clicked {
         start_test(app);
     }
-    crate::dialogs::buttons(app, ui, "Save", save)
+    let close = crate::dialogs::buttons(app, ui, "Save", save);
+    // A warning to read keeps it open.
+    close && app.ui.connection.warned.is_none()
 }
 
 pub fn open_connection(app: &mut RustGisApp, c: &Connection) -> Result<(), String> {
@@ -633,13 +834,26 @@ pub fn open_connection(app: &mut RustGisApp, c: &Connection) -> Result<(), Strin
         "wms" | "wmts" | "wfs" | "wcs" | "ogcapi" | "arcgis" | "csw" => ("service", json!({"type":c.kind})),
         "stac" => ("stac", json!({"api":"true"})),
         "s3" => {
-            if s3::connection(&c.name).is_none() {
-                if c.options.get("credentials").is_some_and(|v| v == "keys") {
+            if !app.session.has_s3_login(&c.id) {
+                let keys = c.options.get("credentials").is_some_and(|v| v == "keys");
+                // Keys typed for the session: the form, to type them. Keys saved on this computer
+                // are read by this click's login (the system may ask to unlock its store).
+                if keys && !c.saved_keys {
                     open_edit(app, &c.id)?;
+                    app.ui.connection.login = true;
                     app.dialogs.info = Some(tl!("Type the keys to log in for this session, then Save.").into());
                     return Ok(());
                 }
-                app.run("connection.login", json!({"id":c.id}))?;
+                if let Err(e) = app.run("connection.login", json!({"id":c.id})) {
+                    if keys && needs_keys(&e) {
+                        open_edit(app, &c.id)?;
+                        app.ui.connection.login = true;
+                        app.dialogs.error = Some(translated(&e));
+                        app.dialogs.info = Some(tl!("Type the keys to log in for this session, then Save.").into());
+                        return Ok(());
+                    }
+                    return Err(translated(&e));
+                }
             }
             crate::s3ui::fill(app, c);
             let r = crate::sourcespane::open(
@@ -664,6 +878,158 @@ pub fn open_connection(app: &mut RustGisApp, c: &Connection) -> Result<(), Strin
     r
 }
 
+/// After a login from the form: the project's S3 sources that waited for that connection (the
+/// chooser asked for its login) are given to it now.
+fn resolve_waiting(app: &mut RustGisApp, id: &str) {
+    let Some((source, waiting)) = app.ui.connection.resolving.take() else { return };
+    if waiting == id
+        && let Err(e) = choose_s3(app, &source, id)
+    {
+        app.session.notify(translated(&e), true);
+    }
+}
+
+/// The user's choice of the saved connection `id` for the project's S3 sources waiting under
+/// `source`: the engine logs it in if needed and opens them; nothing is read or signed here.
+fn choose_s3(app: &mut RustGisApp, source: &str, id: &str) -> Result<(), String> {
+    let v = app.run("connection.resolveS3", json!({"source": source, "id": id}))?;
+    let name = app.session.connections.find(id).map(|c| c.name.clone()).unwrap_or_else(|| id.to_string());
+    let opened = v["reopened"].as_u64().unwrap_or(0).to_string();
+    let failed = v["failed"].as_u64().unwrap_or(0);
+    let text = if failed == 0 {
+        i18n::fmt("{name} now reads {n} project sources", &[("name", &name), ("n", &opened)])
+    } else {
+        i18n::fmt(
+            "{name} now reads {n} project sources; {failed} could not be read",
+            &[("name", &name), ("n", &opened), ("failed", &failed.to_string())],
+        )
+    };
+    app.session.notify(text, failed > 0);
+    Ok(())
+}
+
+/// Opens the chooser of the saved S3 connections that read the project's waiting S3 sources
+/// (`ui.s3Connections`), with nothing picked.
+pub fn open_chooser(app: &mut RustGisApp) -> Result<(), String> {
+    if app.session.s3_pending.is_empty() {
+        return Err(tl!("No project sources are waiting for an S3 connection.").into());
+    }
+    let ch = &mut app.ui.s3_chooser;
+    ch.picked.clear();
+    ch.error = None;
+    ch.auto = false;
+    app.dialogs = crate::dialogs::Dialogs { open: Some("s3Connections"), ..Default::default() };
+    Ok(())
+}
+
+/// Once a frame: a project replacing the open one drops what was picked for the old one (and a
+/// source waiting for a login), and the chooser opens by itself once for a project with S3
+/// sources waiting for a choice (not again after Cancel).
+pub fn follow_project(app: &mut RustGisApp) {
+    let opened = app.session.opened;
+    if app.ui.s3_chooser.project != Some(opened) {
+        app.ui.s3_chooser = Chooser { project: Some(opened), auto: true, ..Default::default() };
+        app.ui.connection.resolving = None;
+        if app.dialogs.open == Some("s3Connections") {
+            app.dialogs.open = None;
+        }
+    }
+    if app.ui.s3_chooser.auto && app.dialogs.open.is_none() {
+        app.ui.s3_chooser.auto = false;
+        if !app.session.s3_pending.is_empty() {
+            let _ = open_chooser(app);
+        }
+    }
+}
+
+/// Where a waiting resource's bucket is, as the chooser says it.
+fn endpoint_label(endpoint: Option<&str>) -> String {
+    match endpoint {
+        None => tl!("unknown (an older project)").to_string(),
+        Some("") => tl!("Amazon S3").to_string(),
+        Some(e) => e.to_string(),
+    }
+}
+
+/// The chooser (dialog `s3Connections`): each bucket the project's waiting sources read, and the
+/// saved connections that could read it. True when it should close.
+pub fn s3_chooser(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
+    let pending = app.session.s3_pending.clone();
+    app.ui.s3_chooser.picked.retain(|source, _| pending.iter().any(|p| &p.source == source));
+    ui.label(
+        egui::RichText::new(tl!(
+            "More than one saved connection could read these buckets. Choose the one that reads each; the project's sources that read it stay closed until you do."
+        ))
+        .weak(),
+    );
+    if pending.is_empty() {
+        ui.label(tl!("No project sources are waiting for an S3 connection."));
+    }
+    for p in &pending {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new(i18n::fmt(
+                "Bucket {bucket} at {endpoint}",
+                &[("bucket", &p.bucket), ("endpoint", &endpoint_label(p.endpoint.as_deref()))],
+            )));
+            for id in &p.candidates {
+                let Some(c) = app.session.connections.connections.iter().find(|c| &c.id == id) else { continue };
+                let name = if c.group.is_empty() { c.name.clone() } else { format!("{} › {}", c.group, c.name) };
+                let at = if c.address.is_empty() { tl!("Amazon S3") } else { c.address.as_str() };
+                let selected = app.ui.s3_chooser.picked.get(&p.source) == Some(id);
+                if ui.radio(selected, format!("{name} — {at}")).clicked() {
+                    app.ui.s3_chooser.picked.insert(p.source.clone(), id.clone());
+                }
+            }
+        });
+    }
+    if let Some(e) = &app.ui.s3_chooser.error {
+        ui.colored_label(ui.visuals().error_fg_color, e);
+    }
+    let mut close = false;
+    let mut open = false;
+    ui.add_space(4.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        let accent = crate::theme::Tokens::get(ui.ctx()).accent;
+        let any = !app.ui.s3_chooser.picked.is_empty();
+        open = ui.add_enabled_ui(any, |ui| crate::widgets::dialog_button(ui, tl!("Open"), Some(accent), vec2(84.0, 28.0))).inner.clicked();
+        // The sources stay closed.
+        close = crate::widgets::dialog_button(ui, tl!("Cancel"), None, vec2(84.0, 28.0)).clicked();
+    });
+    if open {
+        close = open_chosen(app);
+    }
+    close
+}
+
+/// Gives each resource picked to its connection. One whose keys must be typed opens that
+/// connection's Log In, and the choice is made again once it has logged in. True when nothing
+/// waits any more.
+fn open_chosen(app: &mut RustGisApp) -> bool {
+    app.ui.s3_chooser.error = None;
+    let picks: Vec<(String, String)> = app.ui.s3_chooser.picked.iter().map(|(s, id)| (s.clone(), id.clone())).collect();
+    for (source, id) in picks {
+        match choose_s3(app, &source, &id) {
+            Ok(()) => {
+                app.ui.s3_chooser.picked.remove(&source);
+            }
+            Err(e) if needs_keys(&e) => {
+                app.ui.s3_chooser.picked.remove(&source);
+                if log_in(app, &id) {
+                    app.ui.connection.resolving = Some((source, id));
+                    app.dialogs.error = Some(translated(&e));
+                }
+                // Log In is open in its place.
+                return false;
+            }
+            Err(e) => {
+                app.ui.s3_chooser.error = Some(translated(&e));
+                return false;
+            }
+        }
+    }
+    app.session.s3_pending.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +1045,43 @@ mod tests {
         assert!(picked(&list, Some("removed"), &list[0].address).is_none());
         assert!(picked(&list, Some("c1"), "https://example.com/other").is_none());
         assert_eq!(picked(&list, Some("c1"), "https://example.com/wms?token=secret").map(|c| c.id.as_str()), Some("c1"));
+    }
+
+    #[test]
+    fn remember_needs_a_store_and_no_session_token() {
+        assert!(remember_blocked(true, "").is_none());
+        assert!(remember_blocked(true, "  ").is_none());
+        assert!(remember_blocked(false, "").is_some());
+        assert!(remember_blocked(true, "token").is_some());
+    }
+
+    fn new_s3_form(app: &mut RustGisApp, name: &str) {
+        app.run("ui.connection", json!({"kind": "s3"})).unwrap();
+        let st = &mut app.ui.connection;
+        assert!(!st.remember, "Remember starts off");
+        st.name = name.into();
+        st.access_key = "AKIDREMEMBERUI".into();
+        st.secret_key = "remember-ui-secret".into();
+        st.remember = true;
+    }
+
+    #[test]
+    fn remember_without_a_database_password_changes_nothing() {
+        let mut app = RustGisApp::with_sample();
+        app.session.database_logins.set_store(Some(std::sync::Arc::new(rustgis_engine::data::secrets::MemorySecrets::new())));
+        app.run("ui.connection", json!({"kind": "postgres"})).unwrap();
+        app.ui.connection.remember = true;
+        assert!(save(&mut app).is_err());
+        assert!(app.session.connections.connections.is_empty());
+    }
+
+    #[test]
+    fn remember_without_a_typed_pair_changes_nothing() {
+        let mut app = RustGisApp::with_sample();
+        app.session.database_logins.set_store(Some(std::sync::Arc::new(rustgis_engine::data::secrets::MemorySecrets::new())));
+        new_s3_form(&mut app, "remember-ui-partial-test");
+        app.ui.connection.secret_key.clear();
+        assert!(save(&mut app).is_err());
+        assert!(app.session.connections.connections.is_empty(), "nothing saved");
     }
 }

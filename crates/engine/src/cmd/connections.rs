@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::{b, ps};
 use crate::connections::{Connection, DATABASE_KINDS, DESKTOP_ONLY, KINDS};
 use crate::render::rustgis_tiles::{s3, stac};
+use crate::s3_keys as keys;
 use crate::{CmdResult, CommandSpec as C, Session};
 
 #[path = "connection_browse.rs"]
@@ -35,7 +36,13 @@ pub fn commands() -> Vec<C> {
         C::new("connection.duplicate", "Duplicate Connection", "Home › Add › Data Sources", duplicate).view().params(r#"{"id": "a connection's id or name", "name"?: text}"#),
         C::new("connection.remove", "Remove Connection", "Home › Add › Data Sources", remove).view().params(r#"{"id": "a connection's id or name"}"#),
         C::new("connection.login", "Log In to Connection", "Home › Add › Data Sources", login_command).view().params(
-            r#"{"id": "a connection's id or name; without password explicitly selects its existing session or remembered database password", "password"?: "database password, session-only by default", "remember"?: "boolean, default false: desktop OS-store opt-in for this password; S3 keys remain session-only", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: text}"#,
+            r#"{"id": "a connection's id or name; blank credentials explicitly use this ID's session or saved credentials", "password"?: "a database password, session-only by default", "accessKeyId"?: text, "secretAccessKey"?: text, "sessionToken"?: "temporary S3 credentials, never persisted", "remember"?: "boolean, default false: opt into this computer's credential store for a newly typed database password or complete S3 key pair (saved keys mode only). No credentials are stored in connections or projects; a failed save preserves the session login"}"#,
+        ),
+        C::new("connection.forgetSavedKeys", "Forget Saved Keys", "Home › Add › Data Sources", forget_saved_keys).view().params(
+            r#"{"id": "a saved S3 connection's id or name"} (deletes stored keys; a login in this session keeps working)"#,
+        ),
+        C::new("connection.resolveS3", "Choose S3 Connection", "Home › Add › Data Sources", resolve_s3).view().params(
+            r#"{"source": "a pending project S3 source address", "id": "a candidate saved connection id"} → {id, reopened, failed}: explicitly grants this bucket and opens only its waiting sources"#,
         ),
         C::new("connection.forgetPassword", "Forget Saved Password", "Home › Add › Data Sources", forget_password).view().params(r#"{"id": "a database connection's id or name"}"#),
         C::new("connection.test", "Test Connection", "Home › Add › Data Sources", test).view().params(
@@ -50,8 +57,7 @@ pub fn commands() -> Vec<C> {
 fn shown(s: &Session, c: &Connection) -> Value {
     let database = DATABASE_KINDS.contains(&c.kind.as_str());
     let available = !database || !cfg!(target_arch = "wasm32");
-    let logged_in =
-        if c.kind == "s3" { s3::connection(&c.name).is_some() } else { database && s.database_logins.known_password(&c.id).is_some() };
+    let logged_in = if c.kind == "s3" { s.has_s3_login(&c.id) } else { database && s.database_logins.known_password(&c.id).is_some() };
     let add_with = "connection.browse {id}, then {id, node} for a child's node; run a dataset's add {command, params}";
     let mut out = serde_json::to_value(c).unwrap_or(Value::Null);
     out["available"] = json!(available);
@@ -59,6 +65,11 @@ fn shown(s: &Session, c: &Connection) -> Value {
         out["why"] = json!(DESKTOP_ONLY);
     }
     out["loggedIn"] = json!(logged_in);
+    // Whether the keys were saved when last asked of the credential store (never a key; listing
+    // doesn't ask the store).
+    if c.kind == "s3" {
+        out["savedKeys"] = json!(c.saved_keys);
+    }
     out["remembered"] = json!(c.remembered);
     out["addWith"] = json!(add_with);
     out
@@ -168,6 +179,15 @@ fn shown_stripped(s: &Session, c: &Connection, stripped: bool) -> Value {
     out
 }
 
+/// Whether an edit changes the endpoint a connection's keys are for: another canonical endpoint
+/// (a different spelling of the same one isn't a change).
+fn endpoint_changed(old: &Connection, new: &Connection) -> bool {
+    match (s3::canonical(&old.address), s3::canonical(&new.address)) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => old.address.trim() != new.address.trim(),
+    }
+}
+
 fn edit(s: &mut Session, p: &Value) -> CmdResult {
     let old = found(s, p)?.clone();
     let mut c = old.clone();
@@ -184,13 +204,24 @@ fn edit(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(v) = p.get("options") {
         c.options = options(v)?;
     }
-    let mut proposed = s.connections.clone();
-    let (c, stripped) = proposed.update(&old.id, c)?;
-    if DATABASE_KINDS.contains(&old.kind.as_str()) && old.address != c.address {
-        delete_account(s, &old)?;
+    // Validate everything, then locate the commit target before touching the store.
+    let (mut prepared, stripped) = s.connections.prepare_update(&old.id, c)?;
+    let database_changed = DATABASE_KINDS.contains(&old.kind.as_str()) && old.address != prepared.address;
+    let credentials_changed = database_changed
+        || (old.kind == "s3"
+            && (endpoint_changed(&old, &prepared)
+                || (old.options.get("credentials").is_some_and(|v| v == "keys")
+                    && prepared.options.get("credentials").is_none_or(|v| v != "keys"))));
+    let slot = s.connections.connections.iter_mut().find(|c| c.id == old.id).ok_or("connection no longer exists")?;
+    if credentials_changed {
+        delete_account(&mut s.database_logins, &old)?;
+        prepared.saved_keys = false;
+        prepared.remembered = false;
+    }
+    let c = crate::connections::Connections::commit_update(slot, &mut s.connections.generation, prepared);
+    if database_changed {
         clear_identity(s, &old.id);
     }
-    s.connections = proposed;
     if old.address != c.address {
         // Only the two databases this definition names can change: another database's layers
         // waiting for a login keep their request, and an unrelated down server is not retried.
@@ -214,6 +245,7 @@ fn duplicate(s: &mut Session, p: &Value) -> CmdResult {
     if let Some(name) = ps(p, "name") {
         c.name = name.into();
     }
+    // A copy has no saved keys: `add` starts it without any.
     let (c, _) = s.connections.add(c, explicit)?;
     resolve_keys(s, &address_keys(&c.address));
     Ok(shown(s, &c))
@@ -221,29 +253,46 @@ fn duplicate(s: &mut Session, p: &Value) -> CmdResult {
 
 fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let c = found(s, p)?.clone();
-    let mut proposed = s.connections.clone();
-    proposed.remove(&c.id);
+    if DATABASE_KINDS.contains(&c.kind.as_str()) || c.kind == "s3" {
+        delete_account(&mut s.database_logins, &c)?;
+    }
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
-        delete_account(s, &c)?;
         clear_identity(s, &c.id);
     }
-    s.connections = proposed;
+    s.connections.remove(&c.id);
     // The removed definition named one database: only its layers can change. The requests naming
     // it went with `clear_identity`.
     resolve_keys(s, &address_keys(&c.address));
     if c.kind == "s3" {
         s3::disconnect(&c.name);
+        s.s3_bindings.remove(&c.id);
     }
     Ok(json!({"removed": c.id}))
 }
 
-fn delete_account(s: &mut Session, c: &Connection) -> Result<(), String> {
-    if s.database_logins.has_store() {
-        s.database_logins
-            .delete(&c.id)
-            .map_err(|_| "The saved password couldn't be deleted. The connection was left unchanged.".to_string())
-    } else if c.remembered {
-        Err("The saved password couldn't be deleted. The connection was left unchanged.".into())
+/// Deletes the keys saved for an S3 connection from the credential store. The login of this
+/// session keeps working.
+fn forget_saved_keys(s: &mut Session, p: &Value) -> CmdResult {
+    let c = found(s, p)?.clone();
+    if c.kind != "s3" {
+        return Err(format!("{} connections have no saved keys", c.kind));
+    }
+    delete_account(&mut s.database_logins, &c)?;
+    s.connections.set_saved_keys(&c.id, false);
+    let c = s.connections.find(&c.id).cloned().unwrap_or(c);
+    Ok(shown(s, &c))
+}
+
+fn delete_account(logins: &mut crate::connections::DatabaseLogins, c: &Connection) -> Result<(), String> {
+    let (marked, error) = if c.kind == "s3" {
+        (c.saved_keys, keys::NOT_FORGOTTEN)
+    } else {
+        (c.remembered, "The saved password couldn't be deleted. The connection was left unchanged.")
+    };
+    if logins.has_store() {
+        logins.delete(&c.id).map_err(|_| error.to_string())
+    } else if marked {
+        Err(error.into())
     } else {
         Ok(())
     }
@@ -271,7 +320,7 @@ fn forget_password(s: &mut Session, p: &Value) -> CmdResult {
     if !DATABASE_KINDS.contains(&c.kind.as_str()) {
         return Err("only database connections have saved passwords".into());
     }
-    delete_account(s, &c)?;
+    delete_account(&mut s.database_logins, &c)?;
     s.connections.set_remembered(&c.id, false);
     s.database_logins.forget_saved(&c.id);
     #[cfg(not(target_arch = "wasm32"))]
@@ -300,6 +349,8 @@ fn forget_password(s: &mut Session, p: &Value) -> CmdResult {
 struct Reopened {
     opened: usize,
     failed: usize,
+    /// A login that worked but couldn't do all it was asked (the keys weren't kept).
+    warning: Option<&'static str>,
     /// The server refused this attempt's password: desktop database reopen only.
     #[cfg(not(target_arch = "wasm32"))]
     refused: bool,
@@ -388,11 +439,71 @@ fn reopen(s: &mut Session, c: &Connection, saved: bool, session: bool, all_unope
     result
 }
 
-fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String> {
-    let remember = p.get("remember").map(|v| v.as_bool().ok_or("remember is a boolean")).transpose()?.unwrap_or(false);
-    if remember && !DATABASE_KINDS.contains(&c.kind.as_str()) {
-        return Err("only database connections can remember a password".into());
+/// `remember` of a login: only `true` or `false`, judged before anything happens.
+fn remember_flag(p: &Value) -> Result<bool, String> {
+    match p.get("remember") {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err("remember is true or false".into()),
     }
+}
+
+/// The access key pair typed in a login: both or neither (never half a pair).
+fn typed_keys(p: &Value) -> Result<Option<(String, String)>, String> {
+    let text = |k: &str| ps(p, k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+    match (text("accessKeyId"), text("secretAccessKey")) {
+        (Some(k), Some(s)) => Ok(Some((k, s))),
+        (None, None) => Ok(None),
+        _ => Err("give both accessKeyId and secretAccessKey".into()),
+    }
+}
+
+/// Logs in to a saved S3 connection that has no login yet, with what needs no typing: its
+/// profile or the environment, anonymously, or the keys saved on this computer (a user action
+/// that may ask the system to unlock its store). An unsaved connection with typed keys has none
+/// to read: the caller says to give them.
+pub(super) fn ensure_login(s: &mut Session, c: &Connection) -> Result<(), String> {
+    if s.has_s3_login(&c.id) {
+        return Ok(());
+    }
+    let keys_mode = c.options.get("credentials").is_some_and(|v| v == "keys");
+    if keys_mode && c.id.is_empty() {
+        return Ok(());
+    }
+    login(s, c, &Value::Null).map(|_| ())
+}
+
+/// The token of this session's login of the saved connection `c`, when the live S3 connection
+/// `conn` is that login (an ordinary `s3.connect` of the same name isn't).
+pub(super) fn saved_binding(s: &Session, c: &Connection, conn: &s3::Connection) -> Option<String> {
+    let mine = s.s3_binding(&c.id)?;
+    (s3::binding_of(&conn.name).as_deref() == Some(mine)).then(|| mine.to_string())
+}
+
+/// The address a fetch of `url` through the live S3 connection `conn` of the saved connection `c`
+/// uses: one that names this session's login of `c`, so only that login signs it. (A live
+/// connection of that name that isn't the saved login — an ordinary `s3.connect` — keeps its
+/// address.)
+pub(super) fn through(s: &Session, c: &Connection, conn: &s3::Connection, url: String) -> Result<String, String> {
+    match saved_binding(s, c, conn) {
+        Some(binding) => s3::bound_url(&binding, &url),
+        None => Ok(url),
+    }
+}
+
+/// Lets the live connection `conn` of the saved connection `c` serve `bucket`: through this
+/// session's login of `c` when that is what it is, as a connection always did otherwise.
+pub(super) fn grant(s: &Session, c: &Connection, conn: &s3::Connection, bucket: &str) {
+    match saved_binding(s, c, conn) {
+        Some(binding) => {
+            let _ = s3::grant_saved(&binding, bucket);
+        }
+        None => s3::grant(&conn.name, bucket),
+    }
+}
+
+fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String> {
+    let remember = remember_flag(p)?;
     if DATABASE_KINDS.contains(&c.kind.as_str()) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -462,20 +573,60 @@ fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String>
     if c.kind != "s3" {
         return Err(format!("{} connections don't log in yet", c.kind));
     }
+    let mode = c.options.get("credentials").map(String::as_str).unwrap_or("none");
+    if remember && (mode != "keys" || c.id.is_empty()) {
+        return Err("remember keeps the typed keys of a saved S3 connection that uses keys (credentials: keys)".into());
+    }
     let mut q = json!({"name": c.name, "endpoint": c.address});
     for key in ["region", "buckets"] {
         if let Some(v) = c.options.get(key).filter(|v| !v.is_empty()) {
             q[key] = json!(v);
         }
     }
-    match c.options.get("credentials").map(String::as_str).unwrap_or("none") {
+    // The typed pair, when it is to be kept after the login (a login with a session token isn't).
+    let mut to_keep = None;
+    let mut temporary = false;
+    match mode {
         "keys" => {
-            if ["accessKeyId", "secretAccessKey"].iter().any(|k| ps(p, k).is_none_or(|v| v.trim().is_empty())) {
-                return Err("accessKeyId and secretAccessKey are required: an S3 connection's keys are typed each session".into());
-            }
-            for key in ["accessKeyId", "secretAccessKey", "sessionToken"] {
-                if let Some(v) = p.get(key) {
-                    q[key] = v.clone();
+            let typed = typed_keys(p)?;
+            let token = ps(p, "sessionToken").map(str::trim).filter(|t| !t.is_empty());
+            match typed {
+                Some((key, secret)) => {
+                    if let Some(t) = token {
+                        q["sessionToken"] = json!(t);
+                        temporary = true;
+                    }
+                    q["accessKeyId"] = json!(key);
+                    q["secretAccessKey"] = json!(secret);
+                    if remember {
+                        to_keep = Some((key, secret));
+                    }
+                }
+                None => {
+                    if token.is_some() {
+                        return Err("a session token needs accessKeyId and secretAccessKey".into());
+                    }
+                    if remember {
+                        return Err("remember needs the keys typed in this login: give accessKeyId and secretAccessKey".into());
+                    }
+                    if c.id.is_empty() {
+                        return Err("accessKeyId and secretAccessKey are required".into());
+                    }
+                    // The saved pair, if there is one. Another connection's keys, a profile and the
+                    // environment are never tried instead.
+                    match keys::load(s.database_logins.secret_store(), c) {
+                        keys::Loading::Keys(key, secret) => {
+                            s.connections.set_saved_keys(&c.id, true);
+                            q["accessKeyId"] = json!(key);
+                            q["secretAccessKey"] = json!(secret);
+                        }
+                        keys::Loading::Missing => {
+                            s.connections.set_saved_keys(&c.id, false);
+                            return Err(keys::NONE_SAVED.into());
+                        }
+                        keys::Loading::Unavailable => return Err(keys::UNAVAILABLE.into()),
+                        keys::Loading::Unusable => return Err(keys::UNUSABLE.into()),
+                    }
                 }
             }
         }
@@ -486,15 +637,38 @@ fn login(s: &mut Session, c: &Connection, p: &Value) -> Result<Reopened, String>
         "environment" => q["environment"] = json!(true),
         _ => q["anonymous"] = json!(true),
     }
-    super::s3::connect(s, &q)?;
-    Ok(Reopened::default())
+    if c.id.is_empty() {
+        // A definition not saved (Test): an ordinary session connection.
+        super::s3::connect(s, &q)?;
+        return Ok(Reopened::default());
+    }
+    // A saved connection's login is live under this session's token for it, and signs only the
+    // addresses that name it.
+    let binding = match s.s3_bindings.get(&c.id) {
+        Some(b) => b.clone(),
+        None => s3::new_binding()?,
+    };
+    super::s3::connect_saved(s, &q, &binding, &c.id)?;
+    s.s3_bindings.insert(c.id.clone(), binding);
+    let mut done = Reopened::default();
+    // Kept only once the login has worked, so what is stored is a pair that signed in; a failed
+    // save leaves the login as it is (and an earlier saved pair as it was).
+    if let Some((key, secret)) = to_keep {
+        if temporary {
+            done.warning = Some(keys::TEMPORARY);
+        } else if keys::save(s.database_logins.secret_store(), c, &key, &secret) {
+            s.connections.set_saved_keys(&c.id, true);
+        } else {
+            done.warning = Some(keys::NOT_REMEMBERED);
+        }
+    }
+    Ok(done)
 }
 
 fn login_command(s: &mut Session, p: &Value) -> CmdResult {
     let c = found(s, p)?.clone();
     let result = login(s, &c, p)?;
-    let mut c = c;
-    c.remembered = s.connections.find(&c.id).is_some_and(|c| c.remembered);
+    let c = s.connections.find(&c.id).cloned().unwrap_or(c);
     let mut out = shown(s, &c);
     if let Some(saved) = result.password_saved {
         out["passwordSaved"] = json!(saved);
@@ -508,9 +682,27 @@ fn login_command(s: &mut Session, p: &Value) -> CmdResult {
         out["reopened"] = json!(result.opened);
         out["failed"] = json!(result.failed);
     }
+    if let Some(warning) = result.warning {
+        out["warning"] = json!(warning);
+    }
     Ok(out)
 }
 
+/// This session's login of the saved S3 connection `c`, made if it has none (with what needs no
+/// typing: its profile, the environment, anonymously, or the keys saved on this computer), and
+/// its token: what an address names to be read through it. One that fails says why, in words
+/// fit for a notice.
+pub(crate) fn login_saved(s: &mut Session, c: &Connection) -> Result<String, String> {
+    ensure_login(s, c)?;
+    s.s3_binding(&c.id).map(str::to_string).ok_or_else(|| "the connection didn't log in".to_string())
+}
+
+/// Binds a project's S3 sources that wait for a choice to the saved connection chosen.
+fn resolve_s3(s: &mut Session, p: &Value) -> CmdResult {
+    let source = ps(p, "source").unwrap_or("");
+    let id = ps(p, "id").unwrap_or("");
+    crate::s3_connections::choose(s, source, id)
+}
 #[cfg(not(target_arch = "wasm32"))]
 fn activate(s: &mut Session, c: &Connection, password: &str) {
     if let Some((_, key)) = crate::connections::database_key(&c.address) {
@@ -570,10 +762,10 @@ fn probe_url(s: &Session, c: &Connection) -> Result<Option<String>, String> {
         "s3" => {
             let conn = s3::connection(&c.name).ok_or("log in first: connection.login {id, accessKeyId, secretAccessKey}")?;
             if let Some(bucket) = first_bucket(c) {
-                s3::grant(&conn.name, &bucket);
-                s3::list_url(&bucket, "", None, Some(&conn))
+                grant(s, c, &conn, &bucket);
+                through(s, c, &conn, s3::list_url(&bucket, "", None, Some(&conn)))?
             } else if conn.credentials.is_some() {
-                s3::buckets_url(&conn)
+                through(s, c, &conn, s3::buckets_url(&conn))?
             } else {
                 return Err("name a bucket under Buckets to test an anonymous S3 connection".into());
             }
@@ -616,8 +808,13 @@ fn test(s: &mut Session, p: &Value) -> CmdResult {
         }
         login(s, &c, &input)?;
     }
-    if c.kind == "s3" && !secrets && c.options.get("credentials").is_none_or(|v| v != "keys") {
-        login(s, &c, &Value::Null)?;
+    if c.kind == "s3" && !secrets {
+        let keys_mode = c.options.get("credentials").is_some_and(|v| v == "keys");
+        // Other sources are logged in again (a profile may have changed); saved keys are read
+        // when there is no login yet.
+        if !keys_mode || (!c.id.is_empty() && !s.has_s3_login(&c.id)) {
+            login(s, &c, &Value::Null)?;
+        }
     }
     let mut out = json!({});
     if !c.id.is_empty() {

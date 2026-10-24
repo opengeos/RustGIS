@@ -539,10 +539,13 @@ rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","co
 
 ## Zonal statistics and polygon clipping
 
+Open **Zonal Statistics** through Command Search, or choose it in the Workflows pane.
+
 Zonal Statistics uses the selected polygon features when the layer has a selection. It keeps
 original geometries and fields, and reports features with missing or rejected polygon parts.
-If any polygon part fails validation or transformation, the feature receives count 0 and null
-statistics, so results never summarize only the surviving parts. Large
+If any polygon part fails validation or transformation to WGS 84, the feature receives count 0 and null
+statistics. If a part subsequently fails projection onto the raster grid, it is omitted and reported;
+statistics cover the remaining valid parts. Large
 overlapping zones each require a separate pass over their raster window.
 
 For `raster.process` polygon clipping, `selectedOnly: true` requires a selection,
@@ -555,7 +558,9 @@ operations. Clipping skips invalid features and reports their count in the comma
 its output bounds cover the valid polygons only.
 
 An empty band field or `bands: ""` selects band 1. The pane disables calculation when raster
-data is unavailable and indicates when only selected polygons will appear in the output.
+data is unavailable, shows the available band range for invalid band input, and indicates when
+only selected polygons will appear in the output. Both tools report parts omitted during raster-grid
+projection while retaining the valid parts.
 
 Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
 case-insensitive names. An exact spelling takes precedence; otherwise a name matching several

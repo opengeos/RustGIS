@@ -6,6 +6,7 @@
 use egui::{RichText, Ui, vec2};
 use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, MAX_LABEL_CLASSES};
 use rustgis_engine::map::{LabelPlacement, Layer, Rgba};
+use rustgis_engine::render::families;
 use serde_json::{Value, json};
 
 use crate::RustGisApp;
@@ -162,6 +163,8 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
 fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
     section(ui, "Text Symbol", |ui| {
         grid(ui, "symbol", |ui| {
+            font(app, ui, l);
+            ui.end_row();
             let input_label = ui.label(tl!("Size"));
             // The whole range `labels.style` accepts (#457); the map follows a drag and letting
             // go runs the command once, so a drag is one undo step.
@@ -206,6 +209,58 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
             ui.end_row();
         });
     });
+}
+
+/// The most installed families the font list shows at once (a machine can have thousands); the
+/// rest are found by typing part of a name.
+const MAX_FONTS_SHOWN: usize = 200;
+
+/// The installed family the labels are drawn in: the label font, or one picked from the
+/// installed families (found by typing part of the name). A family this machine lacks, from a
+/// project made on another, is shown as missing and drawn in the label font.
+fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
+    let input_label = ui.label(tl!("Font"));
+    // The installed fonts are indexed on a thread of their own; until then there's none to pick.
+    let Some(installed) = families::installed_now() else {
+        families::warm_up();
+        ui.add_enabled(false, egui::Button::new(tl!("Reading the installed fonts…"))).labelled_by(input_label.id);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    };
+    let cur = l.labels.default.font.as_deref();
+    let shown = match cur {
+        None => tl!("Label font").to_string(),
+        Some(name) if families::find(name).is_some() => name.to_string(),
+        Some(name) => crate::i18n::fmt("{name} (not installed)", &[("name", name)]),
+    };
+    let search_id = egui::Id::unique(("label_pane_font_search", l.id));
+    egui::ComboBox::from_id_salt("label_pane_font")
+        .selected_text(shown)
+        .width(180.0)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+            if ui.add(egui::TextEdit::singleline(&mut search).hint_text(tl!("Search fonts"))).changed() {
+                ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
+            }
+            if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
+                run(app, "labels.style", json!({"font": ""}));
+            }
+            let search = search.to_lowercase();
+            let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
+            for f in matching.by_ref().take(MAX_FONTS_SHOWN) {
+                let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
+                if ui.selectable_label(on, &f.name).clicked() && !on {
+                    run(app, "labels.style", json!({"font": f.name}));
+                }
+            }
+            let more = matching.count();
+            if more > 0 {
+                ui.weak(crate::i18n::fmt("{count} more: type part of a name", &[("count", &more.to_string())]));
+            }
+        })
+        .response
+        .labelled_by(input_label.id);
 }
 
 fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
@@ -424,7 +479,7 @@ mod tests {
         use egui::accesskit::Role;
         let mut h = harness(with_cities());
         h.run();
-        for label in ["Field", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
+        for label in ["Field", "Font", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
             assert!(h.query_by_role_and_label(Role::ComboBox, label).is_some(), "missing input: {label}");
         }
         assert!(h.query_by_role_and_label(Role::SpinButton, "Size").is_some());

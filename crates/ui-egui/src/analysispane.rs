@@ -358,6 +358,11 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 ui.label(egui::RichText::new(tl!("Raster data is unavailable.")).small().color(t.amber));
             } else if band_err.is_some() {
                 ui.label(egui::RichText::new(tl!("Band must be a positive integer, list of bands, or 'all'.")).small().color(t.amber));
+                ui.label(
+                    egui::RichText::new(crate::i18n::fmt("Raster has bands 1 to {count}.", &[("count", &total_bands.to_string())]))
+                        .small()
+                        .color(t.amber),
+                );
             }
             if ui.add_enabled(can_run, egui::Button::new(tl!("Calculate Statistics"))).clicked() {
                 let mut params = json!({

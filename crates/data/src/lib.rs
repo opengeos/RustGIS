@@ -24,6 +24,7 @@ pub mod osm;
 pub mod photo;
 pub mod query;
 pub mod raster;
+pub mod s3_address;
 pub mod secrets;
 pub mod sheets;
 pub mod source;
@@ -76,6 +77,8 @@ impl DataError {
     /// The error with `secret` (a password the driver sent) taken out of its message, whatever a
     /// server or driver echoes, keeping the kind: a refused login stays [`DataError::Login`].
     /// An empty secret leaves the error as it is, and so does text without it (nothing is copied).
+    /// Even one-character passwords must be redacted: diagnostics may lose readability,
+    /// but an untrusted server can echo a secret of any length.
     pub fn redact_secret(self, secret: &str) -> Self {
         if secret.is_empty() {
             return self;

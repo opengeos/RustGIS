@@ -546,6 +546,7 @@ fn chunked_label_compaction_keeps_late_priorities_stable_ties_and_nan_order() {
                     framed: false,
                     italic: false,
                     spacing: 0.0,
+                    font: None,
                     line_align: TextAlign::Left,
                     angle: None,
                     collide: Default::default(),
