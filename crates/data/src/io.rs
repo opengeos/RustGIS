@@ -2398,6 +2398,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
     /// An ESRI .prj without an authority retains the national datum shift (issue #807).
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shapefile_esri_national_datum() {
         use shapefile::dbase::{Record, TableWriterBuilder};

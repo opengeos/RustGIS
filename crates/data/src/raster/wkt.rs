@@ -738,6 +738,13 @@ fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
     // (WKT2 names a datum ensemble: `World Geodetic System 1984 ensemble`.)
     match norm(datum.map_or("", Node::title)).trim_start_matches("D_").trim_end_matches("_ENSEMBLE") {
         "WGS_1984" | "WGS84" | "WORLD_GEODETIC_SYSTEM_1984" => Some("+datum=WGS84"),
+        // New Italian aliases require the published ellipsoid. GRS80 and the WGS84
+        // ellipsoid in older IGM95 definitions differ by less than a millimetre.
+        // MILITAIRE is the legacy spelling in crs-definitions 0.6's EPSG:3064/4670 WKT.
+        "RETE_DINAMICA_NAZIONALE_2008" | "RDN2008" | "IGM_1995" | "IGM95"
+        | "ISTITUTO_GEOGRAFICO_MILITARE_1995" | "ISTITUTO_GEOGRAFICO_MILITAIRE_1995" => datum
+            .filter(|d| ellipsoid_matches(d, "+proj=longlat +ellps=GRS80"))
+            .map(|_| "+ellps=GRS80 +towgs84=0,0,0"),
         "NORTH_AMERICAN_1983"
         | "NORTH_AMERICAN_DATUM_1983"
         | "NAD_1983"
@@ -757,13 +764,6 @@ fn wgs84_like(datum: Option<&Node>) -> Option<&'static str> {
         // transformation to WGS 84 is null, like the others here.
         | "SIRGAS_2000"
         | "SIRGAS2000"
-        | "RETE_DINAMICA_NAZIONALE_2008"
-        | "RDN2008"
-        | "IGM_1995"
-        | "IGM95"
-        | "ISTITUTO_GEOGRAFICO_MILITARE_1995"
-        // Legacy spelling in crs-definitions 0.6's EPSG:3064 and EPSG:4670 WKT.
-        | "ISTITUTO_GEOGRAFICO_MILITAIRE_1995"
         | "SISTEMA_DE_REFERENCIA_GEOCENTRICO_PARA_LAS_AMERICAS_2000" => Some("+ellps=GRS80 +towgs84=0,0,0"),
         _ => None,
     }
@@ -794,13 +794,17 @@ fn national_datum(datum: Option<&Node>) -> Option<&'static str> {
         _ => return None,
     };
     let def = epsg_proj4(code)?;
-    let proj = proj4rs::Proj::from_proj_string(def).ok()?;
+    ellipsoid_matches(datum, def).then_some(def)
+}
+
+/// Whether the file's ellipsoid axes agree with a known definition within a centimetre.
+fn ellipsoid_matches(datum: &Node, def: &str) -> bool {
+    let Ok(proj) = proj4rs::Proj::from_proj_string(def) else { return false };
+    let Some(sph) = datum.child_of(&["SPHEROID", "ELLIPSOID"]) else { return false };
+    let (Some(actual_a), Some(rf)) = (sph.num(0), sph.num(1)) else { return false };
     let (a, b) = proj.ellipse_parameters();
-    let sph = datum.child_of(&["SPHEROID", "ELLIPSOID"])?;
-    let actual_a = sph.num(0)?;
-    let rf = sph.num(1)?;
     let actual_b = if rf > 0.0 { actual_a * (1.0 - 1.0 / rf) } else { actual_a };
-    ((actual_a - a).abs() < 0.01 && (actual_b - b).abs() < 0.01).then_some(def)
+    (actual_a - a).abs() < 0.01 && (actual_b - b).abs() < 0.01
 }
 
 /// Whether the file gives the datum a `TOWGS84` shift other than none, which then wins over the
@@ -1313,6 +1317,25 @@ mod tests {
             let row = include_str!("esri_datum_corpus.tsv").lines().find(|l| l.starts_with(&format!("{code}\t"))).unwrap();
             let changed = row.split('\t').nth(5).unwrap().replace(from, to);
             assert!(crs_from_wkt(&changed).is_err(), "{changed}");
+        }
+    }
+
+    #[test]
+    fn italian_datums_require_their_ellipsoid() {
+        for datum in ["D_Rete_Dinamica_Nazionale_2008", "D_IGM_1995", "Istituto_Geografico_Militaire_1995"] {
+            let geographic = GEOG_4326.replace("D_WGS_1984", datum).replace("6378137.0", "6378000.0");
+            let (crs, note) = read_wkt(&geographic).unwrap();
+            assert!(note.is_some(), "{datum}");
+            let def = crs.custom_def().unwrap();
+            assert!(def.proj4.contains("+a=6378000") && !def.proj4.contains("+towgs84="), "{}", def.proj4);
+        }
+        for code in ["6707", "3064"] {
+            let row = include_str!("esri_datum_corpus.tsv").lines().find(|l| l.starts_with(&format!("{code}\t"))).unwrap();
+            let projected = row.split('\t').nth(5).unwrap().replace("6378137.0", "6378000.0");
+            let (crs, note) = read_wkt(&projected).unwrap();
+            assert!(note.is_some(), "{code}");
+            let def = crs.custom_def().unwrap();
+            assert!(def.proj4.contains("+a=6378000") && !def.proj4.contains("+towgs84="), "{}", def.proj4);
         }
     }
 
