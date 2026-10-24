@@ -339,6 +339,32 @@ pub fn script_font(script: ScriptFont) -> Option<&'static (Vec<u8>, u32)> {
     }
 }
 
+/// Installed faces with the symbols the interface marks things with (checked by
+/// [`covers_symbols`]): the interface faces lack some, Segoe UI the check mark among them.
+const SYMBOL_CANDIDATES: &[&str] = &[
+    "C:\\Windows\\Fonts\\seguisym.ttf",
+    "/System/Library/Fonts/Apple Symbols.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
+];
+
+/// Whether a face draws the check and cross marks.
+fn covers_symbols(bytes: &[u8], index: u32) -> bool {
+    use ab_glyph::Font;
+    ab_glyph::FontRef::try_from_slice_and_index(bytes, index).is_ok_and(|f| ['\u{2713}', '\u{2717}'].iter().all(|c| f.glyph_id(*c).0 != 0))
+}
+
+/// An installed face for symbols the interface faces may lack (bytes and face index), found
+/// once. `None` on the web or when nothing suitable is installed.
+pub fn symbol_font() -> Option<&'static (Vec<u8>, u32)> {
+    static FOUND: OnceLock<Option<(Vec<u8>, u32)>> = OnceLock::new();
+    FOUND.get_or_init(|| SYMBOL_CANDIDATES.iter().find_map(|p| read(p).filter(|b| covers_symbols(b, 0)).map(|b| (b, 0)))).as_ref()
+}
+
 /// Where the web app downloads a face for `script` from (SIL Open Font License): Noto Sans for
 /// CJK, Vazirmatn for Arabic script.
 pub fn script_font_url(script: ScriptFont) -> &'static str {
@@ -369,6 +395,19 @@ mod tests {
         assert!(f.variable && f.bold.is_none() && f.bold_italic.is_none(), "the bold is the same file, kept once");
         assert_eq!(f.italic.as_deref(), Some(epaint_default_fonts::UBUNTU_LIGHT));
         assert!(super::variable_noto_serif(&["/no/such/folder"]).is_none());
+    }
+
+    #[test]
+    fn a_symbol_face_needs_the_check_and_cross_marks() {
+        // Ubuntu Light has neither; junk is no font at all.
+        assert!(!super::covers_symbols(epaint_default_fonts::UBUNTU_LIGHT, 0));
+        assert!(!super::covers_symbols(b"not a font", 0));
+        // DejaVu Sans has both, where it is installed.
+        for p in super::SYMBOL_CANDIDATES.iter().filter(|p| p.contains("DejaVu")) {
+            if let Ok(b) = std::fs::read(p) {
+                assert!(super::covers_symbols(&b, 0), "{p}");
+            }
+        }
     }
 
     #[test]
