@@ -539,7 +539,22 @@ mod tests {
         assert!(h.get_by_label("Run").rect().max.y < 700.0);
         let first = h.get_by_label_contains("line 0:").rect();
         assert!(first.min.y < 700.0, "the first result shows: {first:?}");
-        assert!(h.get_by_label_contains("Run #1 (").rect().max.y < first.min.y, "the run above them");
+        let run = h.get_by_label_contains("Run #1 (").rect();
+        assert!(run.max.y < first.min.y, "the run above them");
+        // Scrolled down, the results move under the run's line, which stays where it was: it's
+        // not in their scroll.
+        h.event(egui::Event::PointerMoved(first.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -100_000.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        // egui eases a wheel's scroll over frames, asking for a repaint until it's done.
+        h.run_steps(60);
+        assert!(h.get_by_label_contains("line 0:").rect().min.y < first.min.y, "the results scrolled");
+        assert_eq!(h.get_by_label_contains("Run #1 (").rect(), run, "the run's line didn't move");
     }
 
     /// The kept unknown ids follow the script: a change is read again, the same script isn't.
