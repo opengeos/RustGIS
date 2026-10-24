@@ -84,14 +84,15 @@ fn file(datasource: &str, dir: &str) -> Source {
     let mut parts = datasource.split('|');
     let path = parts.next().unwrap_or_default().trim();
     let (mut layer, mut subset, mut ignored) = (None, None, Vec::new());
-    for p in parts.take(32) {
+    // Every part is read for the layer and the filter; at most 32 others are kept for the note.
+    for p in parts {
         if let Some(v) = p.strip_prefix("layername=") {
             layer = Some(v.to_string());
         } else if let Some(v) = p.strip_prefix("subset=") {
             subset = Some(v.to_string()).filter(|s| !s.trim().is_empty());
-        } else if !p.trim().is_empty() && p.trim() != "layerid=0" {
+        } else if !p.trim().is_empty() && p.trim() != "layerid=0" && ignored.len() < 32 {
             // (layerid=0 is the first layer, which is what opens.)
-            ignored.push(p.trim().chars().take(100).collect());
+            ignored.push(noted_option(p.trim()));
         }
     }
     // A layer named as well as numbered: the name is what's read.
@@ -99,6 +100,21 @@ fn file(datasource: &str, dir: &str) -> Source {
         ignored.retain(|o: &String| !o.starts_with("layerid="));
     }
     Source::File { path: absolute(path, dir), layer, subset, ignored }
+}
+
+/// A source option as the import notes it: its name only when it may carry a secret (a key, a
+/// token, a password, a credential), else its text, cut to 100 characters.
+fn noted_option(option: &str) -> String {
+    match option.split_once('=') {
+        Some((key, _))
+            if ["credential", "secret", "password", "passwd", "pwd", "token", "key", "auth"]
+                .iter()
+                .any(|w| key.to_ascii_lowercase().contains(w)) =>
+        {
+            format!("{}=…", key.chars().take(100).collect::<String>())
+        }
+        _ => option.chars().take(100).collect(),
+    }
 }
 
 /// A `delimitedtext` source: `file:///path.csv?type=csv&xField=…&yField=…&crs=…`.
@@ -224,6 +240,15 @@ mod tests {
         assert!(ignored.is_empty());
         let Source::File { ignored, .. } = read("ogr", "./multi.gpkg|layername=roads|layerid=3", dir) else { panic!() };
         assert!(ignored.is_empty(), "the name is read: {ignored:?}");
+        // An option that may carry a secret is noted by its name only.
+        let Source::File { ignored, .. } = read("ogr", "/vsis3/b/x.gpkg|credential:AWS_SECRET_ACCESS_KEY=hunter2|token=abc", dir) else {
+            panic!()
+        };
+        assert_eq!(ignored, ["credential:AWS_SECRET_ACCESS_KEY=…", "token=…"]);
+        // The layer and the filter are read past the options kept for the note.
+        let many = format!("./m.gpkg|{}|layername=late|subset=a = 1", vec!["x=1"; 40].join("|"));
+        let Source::File { layer, subset, ignored, .. } = read("ogr", &many, dir) else { panic!() };
+        assert_eq!((layer.as_deref(), subset.as_deref(), ignored.len()), (Some("late"), Some("a = 1"), 32));
         assert_eq!(
             read("gdal", "GPKG:./m.gpkg:relief", dir),
             Source::File { path: "/data/project/m.gpkg".into(), layer: Some("relief".into()), subset: None, ignored: Vec::new() }

@@ -139,11 +139,10 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
     match &layer.source {
         Source::File { path, layer: table, ignored, .. } => {
             if !ignored.is_empty() {
-                // `layerid=2`: RustGIS opens a layer by name, so a file's first layer comes in.
-                report.approximated(
-                    name,
-                    format!("its source options {} (not read: a file with several layers opens its first)", ignored.join(", ")),
-                );
+                // `layerid=2`: RustGIS opens a layer by name, so without one a file's first layer
+                // comes in; with one, the options are only not read.
+                let why = if table.is_some() { "not read" } else { "not read: a file with several layers opens its first" };
+                report.approximated(name, format!("its source options {} ({why})", ignored.join(", ")));
             }
             let mut q = json!({"path": path, "name": name});
             if let Some(t) = table {

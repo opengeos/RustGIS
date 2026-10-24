@@ -175,7 +175,8 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     }
     let min = ranges.first().map_or(0.0, |r| r.0);
     // QGIS draws nothing for a value outside every range; a RustGIS graduated renderer gives it the
-    // first or last class.
+    // first or last class. The import doesn't read the data, so it can't tell whether any value
+    // falls outside: the note is always given, on purpose.
     report.approximated(layer, "values below the first range or above the last, drawn in the first or last class (QGIS leaves them out)");
     let mut class_labels = BTreeMap::new();
     let mut class_strokes: BTreeMap<usize, Vec<LineStroke>> = BTreeMap::new();
