@@ -538,6 +538,8 @@ pub struct UiState {
     /// that can be read in place are added so, others downloaded (the `ui.addUrl` parameters,
     /// and the answer).
     pub cog_probes: Vec<(Value, Slot<Result<bool, String>>)>,
+    /// Service layers whose features are being read page by page, after their first page landed.
+    pub service_pages: Vec<serviceui::PageRead>,
     /// A link's data (`?data=`) has zoomed the map: the first of its files to land with something
     /// to show does, whichever it is.
     pub link_zoomed: bool,
@@ -685,6 +687,7 @@ impl Default for UiState {
             project_download: None,
             sql: Default::default(),
             cog_probes: Vec::new(),
+            service_pages: Vec::new(),
             link_zoomed: false,
             service: None,
             service_browse: ServiceBrowse::default(),
@@ -3107,37 +3110,43 @@ impl RustGisApp {
         for (id, url, mut p, r) in landed {
             let origin = connectiontree::take_origin_key(&mut p);
             match r {
-                Ok(bytes) => {
-                    if !self.session.download_landed(id, bytes) {
-                        self.session.notify(
-                            i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]),
-                            false,
-                        );
-                        continue;
-                    }
-                    p["id"] = json!(id);
-                    p["url"] = json!(url);
-                    let zoom = p.get("zoom").and_then(Value::as_bool) == Some(true);
-                    if zoom && self.ui.link_zoomed {
-                        p["zoom"] = json!(false);
-                    }
-                    let before = self.session.sources.generation;
-                    match self.run("layer.addDownload", p) {
-                        Ok(r) => {
-                            connectiontree::name_recent(self, before, origin.as_deref());
-                            if r.get("zoomed").and_then(Value::as_bool) == Some(true) {
-                                self.ui.link_zoomed = true;
-                            }
-                            self.map.invalidate();
-                        }
-                        Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
-                    }
+                // A service's features: the pages after the first are read, off the frame, first.
+                Ok(bytes) if p.get("service").and_then(Value::as_bool) == Some(true) => {
+                    serviceui::read_pages(self, serviceui::Landed { id, url, params: p, origin }, bytes);
                 }
+                Ok(bytes) => self.add_landed(serviceui::Landed { id, url, params: p, origin }, bytes),
                 Err(e) => {
                     self.session.download_failed(id);
                     self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
                 }
             }
+        }
+    }
+
+    /// Adds a download that landed (`layer.addDownload`), named in Recent after the connection it
+    /// came from; one whose project was closed meanwhile is said and dropped.
+    pub(crate) fn add_landed(&mut self, landed: serviceui::Landed, bytes: Vec<u8>) {
+        let serviceui::Landed { id, url, params: mut p, origin } = landed;
+        if !self.session.download_landed(id, bytes) {
+            self.session.notify(i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", &url)]), false);
+            return;
+        }
+        p["id"] = json!(id);
+        p["url"] = json!(url);
+        let zoom = p.get("zoom").and_then(Value::as_bool) == Some(true);
+        if zoom && self.ui.link_zoomed {
+            p["zoom"] = json!(false);
+        }
+        let before = self.session.sources.generation;
+        match self.run("layer.addDownload", p) {
+            Ok(r) => {
+                connectiontree::name_recent(self, before, origin.as_deref());
+                if r.get("zoomed").and_then(Value::as_bool) == Some(true) {
+                    self.ui.link_zoomed = true;
+                }
+                self.map.invalidate();
+            }
+            Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
         }
     }
 
@@ -3321,6 +3330,7 @@ impl RustGisApp {
         sqlpane::poll(self, ctx);
         self.poll_service();
         serviceui::poll(self, ctx);
+        serviceui::poll_pages(self, ctx);
         // Sources the AI Assistant or a background add brought in (not through `run`) are kept
         // too: a generation compared each frame. So is a default raster style it set.
         sourcespane::save(self);

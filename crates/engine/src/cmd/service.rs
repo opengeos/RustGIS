@@ -196,30 +196,36 @@ pub fn features_answer(s: &mut Session, name: &str, bytes: Vec<u8>) -> Vec<u8> {
     rustgis_data::ogc::fix_axes(&bytes).unwrap_or(bytes)
 }
 
-/// A service's features at `url`, with the pages its `next` links lead to: at most `max` bytes
-/// and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT) in all. A
-/// `next` link is fetched only where its page may point.
+/// A service's features at `url`, with the pages that follow (its `next` links, or an ArcGIS
+/// layer's pages past its record limit, see [`read_pages`](rustgis_data::ogc::read_pages)): at
+/// most `max` bytes and [`BLOCKING_TIMEOUT`](crate::render::rustgis_tiles::cache::BLOCKING_TIMEOUT)
+/// in all. A page is fetched only where the page before it may point.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn download_features(s: &mut Session, name: &str, url: &str, max: usize) -> Result<Vec<u8>, String> {
     use crate::render::rustgis_tiles::{address, cache};
     let until = std::time::Instant::now() + cache::BLOCKING_TIMEOUT;
     let first = cache::download_blocking_limited(url, max).map_err(|e| format!("{url}: {e}"))?;
     let mut left = max.saturating_sub(first.len());
-    let mut from = url.to_string();
-    let (bytes, note) = rustgis_data::ogc::join_pages(url, first, rustgis_data::ogc::MAX_PAGED_FEATURES, |next| {
-        address::check(next, Some(&from))?;
-        let wait = until.saturating_duration_since(std::time::Instant::now());
-        if wait.is_zero() {
-            return Err("the pages took too long".into());
-        }
-        let page = cache::download_blocking_within(next, left, wait)?;
-        if page.len() > left {
-            return Err("the pages are larger than RustGIS downloads".into());
-        }
-        left -= page.len();
-        from = next.to_string();
-        Ok(page)
-    });
+    let mut step = rustgis_data::ogc::read_pages(url, first, rustgis_data::ogc::MAX_PAGED_FEATURES);
+    let (bytes, note) = loop {
+        let pages = match step {
+            rustgis_data::ogc::Step::Done(bytes, note) => break (bytes, note),
+            rustgis_data::ogc::Step::Fetch(pages) => pages,
+        };
+        let answer = address::check(pages.next_url(), Some(pages.referrer())).and_then(|()| {
+            let wait = until.saturating_duration_since(std::time::Instant::now());
+            if wait.is_zero() {
+                return Err("the pages took too long".to_string());
+            }
+            let page = cache::download_blocking_within(pages.next_url(), left, wait)?;
+            if page.len() > left {
+                return Err("the pages are larger than RustGIS downloads".into());
+            }
+            left -= page.len();
+            Ok(page)
+        });
+        step = (*pages).land(answer);
+    };
     if let Some(note) = note {
         s.notify(format!("{name}: {note}"), false);
     }

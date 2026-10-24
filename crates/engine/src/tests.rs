@@ -7613,6 +7613,62 @@ fn ogc_api_features_follow_next_pages() {
     assert!(s.notices.iter().any(|n| n.text.starts_with("Inward: ") && n.text.contains("never fetched")));
 }
 
+/// An ArcGIS layer past its record limit is read again in pages ordered by its object ids, from
+/// the start (its first page, in the server's own order, may hold other features than the ordered
+/// first: Hawaii's zoning did), when its description says it can be; a layer that can't keeps its
+/// first page, and says so.
+#[test]
+fn arcgis_features_read_past_the_record_limit() {
+    use ogc_server::{Route, Server, arcgis_layer, arcgis_page};
+    let q = "where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
+    let parcels = "/arcgis/rest/services/P/MapServer/0";
+    let page = |offset: u32| format!("{parcels}/query?{q}&resultOffset={offset}&resultRecordCount=2&orderByFields=OBJECTID");
+    let server = Server::new(vec![
+        // The first page in the server's own order: two of the five, not the ordered first two.
+        Route::new(&format!("{parcels}/query?{q}"), &arcgis_page(&[3, 0], true)),
+        Route::new(parcels, &arcgis_layer(2, true)),
+        Route::new(&page(0), &arcgis_page(&[0, 1], true)),
+        Route::new(&page(2), &arcgis_page(&[2, 3], true)),
+        Route::new(&page(4), &arcgis_page(&[4], false)),
+        Route::new("/arcgis/rest/services/P/MapServer/1/query", &arcgis_page(&[0, 1], true)),
+        Route::new("/arcgis/rest/services/P/MapServer/1", &arcgis_layer(2, false)),
+    ]);
+    let service = r#"{"currentVersion": 11.5, "maxRecordCount": 2, "layers": [{"id": 0, "name": "Parcels"}, {"id": 1, "name": "Zoning"}]}"#;
+    let url = format!("{}/arcgis/rest/services/P/MapServer", server.base);
+    let mut s = Session::new(Project::default());
+    let r = s.run("service.add", &json!({"url": url, "layer": "Parcels", "text": service})).unwrap();
+    assert_eq!(r["features"], 5);
+    let ids: Vec<_> = s.map().layer_by_name("Parcels").unwrap().dataset.features.iter().map(|f| f.attrs[0].as_f64()).collect();
+    assert_eq!(ids, [Some(0.0), Some(1.0), Some(2.0), Some(3.0), Some(4.0)]);
+    assert!(!s.notices.iter().any(|n| n.text.contains("aren't read")), "{:?}", s.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
+    let r = s.run("service.add", &json!({"url": url, "layer": "Zoning", "text": service})).unwrap();
+    assert_eq!(r["features"], 2);
+    assert!(s.notices.iter().any(|n| n.text.starts_with("Zoning: ") && n.text.contains("record limit")));
+    // The description once, then the pages from the start; a layer that can't page, its
+    // description alone.
+    let asked: Vec<_> = server
+        .requests()
+        .iter()
+        .map(|r| {
+            let offset = r.query.iter().find(|(k, _)| k == "resultOffset").map(|(_, v)| v.clone());
+            (r.path.trim_start_matches("/arcgis/rest/services/P/MapServer").to_string(), offset)
+        })
+        .collect();
+    let at = |path: &str, offset: Option<&str>| (path.to_string(), offset.map(str::to_string));
+    assert_eq!(
+        asked,
+        [
+            at("/0/query", None),
+            at("/0", None),
+            at("/0/query", Some("0")),
+            at("/0/query", Some("2")),
+            at("/0/query", Some("4")),
+            at("/1/query", None),
+            at("/1", None)
+        ]
+    );
+}
+
 /// A WCS coverage (from a local server) becomes a raster of the view, asked for in EPSG:4326 within
 /// its bounds; an error answer is refused. A catalogue's records come with the links RustGIS can
 /// follow, those pointing inward left out.

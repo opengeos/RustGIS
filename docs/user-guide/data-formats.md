@@ -174,10 +174,10 @@ Scripts use `service.import {"url":"…","name":"My OGC Layer"}` and
 | WMS 1.1.1 / 1.3.0 | Named layers offered in Web Mercator | A tile layer of GetMap images (PNG when the service offers it, else JPEG) |
 | WMTS | Layers whose tile matrix set is Web Mercator's pyramid | A tile layer from the tile template (or KVP GetTile) |
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
-| OGC API Features | Collections | Their items downloaded as GeoJSON, following the service's `next` pages up to 100,000 features or a minute of downloading (the web app reads the first page) |
+| OGC API Features | Collections | Their items downloaded as GeoJSON, following the service's `next` pages up to 100,000 features (a command such as `service.add` waits a minute at most) |
 | OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad, from the tile template the tileset advertises (its `item` link; `…/tiles/WebMercatorQuad/{z}/{y}/{x}`, the usual path, when that can't be read), keeping the tiles link's query (a token), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
 | WCS 1.0 / 2.0 (a 1.1 service is asked in 1.0) | Coverages, with their bounds | A raster: GetCoverage of the map's view within the coverage's bounds (or its whole extent: `"bbox": "full"`), as a GeoTIFF in EPSG:4326, at most 2048 pixels on a side |
-| ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON (up to the server's record limit); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
+| ArcGIS REST | FeatureServer and MapServer layers; a MapServer's map; an ImageServer; a VectorTileServer | Layers queried as GeoJSON, page by page past the server's record limit (`resultOffset`) up to 100,000 features (a command such as `service.add` waits a minute at most), where the layer supports paging (ArcGIS Server 10.3 and later; otherwise up to the record limit); a map as its tile cache when it is Web Mercator's pyramid, else exported images; an ImageServer as exported images; a VectorTileServer as its MapLibre style |
 
 The type is guessed from the address (`?SERVICE=`, `/wmts`, `/wfs`, `/wcs`, `/collections`, `/rest/services`…) or
 chosen (select **OGC API Features and Tiles** when a landing page's address doesn't identify

@@ -58,3 +58,26 @@ pub fn fixture_lines() -> &'static str {
         LazyLock::new(|| feature("route-1", "Test Route", json!({"type":"LineString", "coordinates":[[10.0,50.0],[11.0,51.0]]})));
     &TEXT
 }
+
+/// An ArcGIS layer query's GeoJSON answer: points whose `OBJECTID` are `ids`, cut off at the
+/// server's record limit (`exceededTransferLimit`, among its `properties` as ArcGIS puts it) when
+/// `more`.
+pub fn arcgis_page(ids: &[u32], more: bool) -> String {
+    let features: Vec<Value> = ids
+        .iter()
+        .map(|&i| json!({"type":"Feature", "id":i, "properties":{"OBJECTID":i}, "geometry":{"type":"Point", "coordinates":[i, 1]}}))
+        .collect();
+    let mut page = json!({"type":"FeatureCollection", "features":features});
+    if more {
+        page["properties"] = json!({"exceededTransferLimit": true});
+    }
+    page.to_string()
+}
+
+/// An ArcGIS layer's description (`…/MapServer/0?f=json`): its record limit and whether it can be
+/// read in pages. The object id field is named only among its fields, as a MapServer layer's is.
+pub fn arcgis_layer(max: u32, pages: bool) -> String {
+    json!({"currentVersion":11.5, "maxRecordCount":max, "advancedQueryCapabilities":{"supportsPagination":pages},
+        "fields":[{"name":"OBJECTID", "type":"esriFieldTypeOID"}]})
+    .to_string()
+}
