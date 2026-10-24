@@ -2987,6 +2987,86 @@ fn geometry_calculator_switching_back_creates_a_unique_field() {
 }
 
 #[test]
+fn unique_symbology_lets_the_user_choose_a_text_field_before_applying() {
+    use rustgis_ui_egui::rustgis_engine::data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_ui_egui::rustgis_engine::geom::Coord;
+
+    let mut h = harness();
+    let mut ds = Dataset::new(
+        "Text attributes",
+        GeometryType::Point,
+        vec![Field::new("id", FieldType::Integer), Field::new("category", FieldType::Text), Field::new("other", FieldType::Text)],
+    );
+    ds.push(Some(Geometry::Point(Coord::new(117.0, 3.0))), vec![Value::Int(1), Value::Text("village".into()), Value::Text("town".into())]);
+    let id = h.state_mut().session.map_mut().add_dataset(ds);
+    h.state_mut().session.active_layer = Some(id);
+    h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+    h.step();
+    assert_eq!(h.state().ui.symbology_pending.as_ref().map(|pending| pending.field.as_str()), Some("category"));
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| n.value().as_deref() == Some("category")).unwrap().click();
+    h.step();
+    h.step(); // Combo popups enter the accessibility tree on the following frame.
+    h.get_by_label("other").click();
+    h.step();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Apply").click();
+    h.step();
+    let layer = h.state().session.map().layer(id).unwrap();
+    assert!(matches!(layer.renderer, rustgis_ui_egui::rustgis_engine::map::Renderer::Unique { ref field, .. } if field == "other"));
+    assert_eq!(h.state().ui.symbology_pending, None);
+}
+
+#[test]
+fn unique_symbology_pending_choice_follows_its_context() {
+    for change in ["map", "project", "renderer", "undo", "external renderer", "layer"] {
+        let mut h = harness();
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+        h.state_mut().run("layer.symbology", json!({"type": "single"})).unwrap();
+        // A second map deliberately has the same layer IDs and renderer as the first.
+        let mut other = h.state().session.map().clone();
+        other.name = "Other map".into();
+        h.state_mut().session.project.maps.push(other);
+        h.state_mut().run("ui.pane.symbology", json!(null)).unwrap();
+        h.step();
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Unique Values").click();
+        h.step();
+        assert!(h.state().ui.symbology_pending.is_some());
+        // Failed commands leave the valid choice available for retry.
+        assert!(h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "missing field"})).is_err());
+        assert!(h.state().ui.symbology_pending.is_some());
+        if change != "external renderer" {
+            h.state_mut().ui.close_right(rustgis_ui_egui::RightPane::Symbology);
+        }
+        match change {
+            "map" => {
+                h.state_mut().run("map.activate", json!({"name": "Other map"})).unwrap();
+            }
+            "project" => {
+                h.state_mut().run("project.sample", json!(null)).unwrap();
+            }
+            "renderer" => {
+                h.state_mut().run("layer.symbology", json!({"type": "unique", "field": "name"})).unwrap();
+            }
+            "undo" => {
+                h.state_mut().run("edit.undo", json!(null)).unwrap();
+            }
+            "external renderer" => {
+                // Commands from other clients can bypass RustGisApp::run.
+                h.state_mut().session.run("layer.symbology", &json!({"type": "unique", "field": "name"})).unwrap();
+                h.step();
+            }
+            "layer" => {
+                h.state_mut().run("layer.select", json!({"layer": "Countries"})).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(h.state().ui.symbology_pending.is_none(), "pending choice survived {change}");
+    }
+}
+
+#[test]
 fn map_and_layout_tabs_rename_from_their_menus() {
     let mut h = harness();
     h.state_mut().run("ui.language", json!({"code":"en"})).unwrap();

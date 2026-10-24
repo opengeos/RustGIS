@@ -3373,6 +3373,9 @@ fn pending_symbology(app: &RustGisApp, ctx: &egui::Context) -> Option<PendingSym
 
 /// Shows the active layer's renderer controls, including No Fill for polygon layers.
 fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
+    if app.ui.symbology_pending.as_ref().is_some_and(|pending| !pending.is_current(&app.session)) {
+        app.ui.symbology_pending = None;
+    }
     let Some(l) = app.session.active_layer.and_then(|id| app.session.map().layer(id)).cloned() else {
         ui.label(egui::RichText::new(tl!("Select a layer in the Layers pane.")).color(t.text_dim));
         return;
@@ -3382,6 +3385,8 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         return;
     }
     let g = l.geometry_type();
+    let numeric: Vec<String> = l.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
+    let all: Vec<String> = l.dataset.fields.iter().map(|f| f.name.clone()).collect();
     ui.label(egui::RichText::new(&l.name).font(semibold(14.0)));
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Primary symbology")).size(11.5).color(t.text_dim));
@@ -3404,7 +3409,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 "graduated" => "graduated",
                 _ => "proportional",
             };
-            let sel = cur_kind == *label;
+            let sel = if app.ui.symbology_pending.is_some() { *code == "unique" } else { cur_kind == *label };
             let (r, resp) = ui.allocate_exact_size(vec2(68.0, 56.0), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, tl!(*label)));
             ui.painter().rect_filled(
@@ -3434,6 +3439,14 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             let short = tl!(label).split(' ').next().unwrap_or(label);
             ui.painter().text(pos2(r.center().x, r.max.y - 11.0), Align2::CENTER_CENTER, short, regular(11.0), t.text);
             if resp.on_hover_text(tl!(*label)).clicked() && !sel {
+                if *code == "unique" && !all.is_empty() {
+                    let field = l.dataset.fields.iter().find(|f| !f.ty.is_numeric()).or_else(|| l.dataset.fields.first());
+                    if let Some(field) = field {
+                        app.ui.symbology_pending = Some(crate::PendingUniqueSymbology::new(&app.session, &l, field.name.clone()));
+                        clear_pending_symbology(ui.ctx());
+                    }
+                    continue;
+                }
                 match app.run("layer.symbology", json!({"type": code})) {
                     Err(error) => {
                         let pending = PendingSymbology {
@@ -3446,20 +3459,48 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         };
                         ui.data_mut(|data| data.insert_temp(egui::Id::unique(PENDING_SYMBOLOGY), pending));
                     }
-                    Ok(_) => clear_pending_symbology(ui.ctx()),
+                    Ok(_) => {
+                        clear_pending_symbology(ui.ctx());
+                        app.ui.symbology_pending = None;
+                    }
                 }
             }
         }
     });
     ui.add_space(8.0);
+    if let Some(mut pending) = app.ui.symbology_pending.clone() {
+        let pending_field = pending.field.clone();
+        let mut selected = if all.contains(&pending_field) { pending_field.clone() } else { all.first().cloned().unwrap_or_default() };
+        ui.horizontal(|ui| {
+            ui.label(tl!("Field"));
+            egui::ComboBox::from_id_salt("sym_pending_field").selected_text(&selected).width(200.0).show_ui(ui, |ui| {
+                for field in &all {
+                    ui.selectable_value(&mut selected, field.clone(), field);
+                }
+            });
+            let applied = ui.button(tl!("Apply")).clicked()
+                && match app.run("layer.symbology", json!({"type": "unique", "field": selected.clone()})) {
+                    Ok(_) => true,
+                    Err(error) => {
+                        app.session.notify(error, true);
+                        false
+                    }
+                };
+            if applied {
+                app.ui.symbology_pending = None;
+            } else if selected != pending_field {
+                pending.field = selected;
+                app.ui.symbology_pending = Some(pending);
+            }
+        });
+        ui.add_space(6.0);
+    }
     if g == GeometryType::Polygon && !l.graphics {
         if ui.button(tl!("No Fill")).on_hover_text(tl!("Draw only polygon outlines, keeping their colors and widths.")).clicked() {
             let _ = app.run("layer.noFill", Value::Null);
         }
         ui.add_space(6.0);
     }
-    let numeric: Vec<String> = l.dataset.fields.iter().filter(|f| f.ty.is_numeric()).map(|f| f.name.clone()).collect();
-    let all: Vec<String> = l.dataset.fields.iter().map(|f| f.name.clone()).collect();
     if let Some(pending) = pending_symbology(app, ui.ctx()) {
         ui.label(egui::RichText::new(pending.error.as_ref()).color(ui.visuals().error_fg_color));
         let fields = if pending.kind == "unique" { &all } else { &numeric };
