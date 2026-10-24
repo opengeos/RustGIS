@@ -174,6 +174,9 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
         report.approximated(layer, "ranges with gaps or overlaps between them, drawn as if each began where the one before ends");
     }
     let min = ranges.first().map_or(0.0, |r| r.0);
+    // QGIS draws nothing for a value outside every range; a RustGIS graduated renderer gives it the
+    // first or last class.
+    report.approximated(layer, "values below the first range or above the last, drawn in the first or last class (QGIS leaves them out)");
     let mut class_labels = BTreeMap::new();
     let mut class_strokes: BTreeMap<usize, Vec<LineStroke>> = BTreeMap::new();
     for (i, (.., c, label)) in ranges.iter().enumerate() {

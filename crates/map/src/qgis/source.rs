@@ -5,8 +5,9 @@
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     /// A file (`ogr`, `gdal`, `spatialite`): its path, the layer or table in it, and the filter
-    /// QGIS's subset string sets (as QGIS has it).
-    File { path: String, layer: Option<String>, subset: Option<String> },
+    /// QGIS's subset string sets (as QGIS has it), and the source's options RustGIS doesn't read
+    /// (`layerid=2`, `geometrytype=Point`), for the import to note.
+    File { path: String, layer: Option<String>, subset: Option<String>, ignored: Vec<String> },
     /// A delimited text file (`delimitedtext`): its path, and the fields its points (or WKT
     /// geometry) are in.
     Csv { path: String, x: Option<String>, y: Option<String>, wkt: Option<String>, crs: Option<String> },
@@ -29,7 +30,7 @@ pub fn read(provider: &str, datasource: &str, dir: &str) -> Source {
         "spatialite" => {
             let kv = conninfo(datasource);
             match (kv.iter().find(|(k, _)| k == "dbname"), table_of(datasource)) {
-                (Some((_, db)), Some(t)) => Source::File { path: absolute(db, dir), layer: Some(t), subset: None },
+                (Some((_, db)), Some(t)) => Source::File { path: absolute(db, dir), layer: Some(t), subset: None, ignored: Vec::new() },
                 _ => Source::Other { provider: provider.into() },
             }
         }
@@ -77,20 +78,27 @@ fn file(datasource: &str, dir: &str) -> Source {
     if let Some(rest) = datasource.strip_prefix("GPKG:") {
         // GPKG:path:table, the path itself possibly with a drive letter's colon.
         if let Some((path, table)) = rest.rsplit_once(':') {
-            return Source::File { path: absolute(path, dir), layer: Some(table.to_string()), subset: None };
+            return Source::File { path: absolute(path, dir), layer: Some(table.to_string()), subset: None, ignored: Vec::new() };
         }
     }
     let mut parts = datasource.split('|');
     let path = parts.next().unwrap_or_default().trim();
-    let (mut layer, mut subset) = (None, None);
-    for p in parts {
+    let (mut layer, mut subset, mut ignored) = (None, None, Vec::new());
+    for p in parts.take(32) {
         if let Some(v) = p.strip_prefix("layername=") {
             layer = Some(v.to_string());
         } else if let Some(v) = p.strip_prefix("subset=") {
             subset = Some(v.to_string()).filter(|s| !s.trim().is_empty());
+        } else if !p.trim().is_empty() && p.trim() != "layerid=0" {
+            // (layerid=0 is the first layer, which is what opens.)
+            ignored.push(p.trim().chars().take(100).collect());
         }
     }
-    Source::File { path: absolute(path, dir), layer, subset }
+    // A layer named as well as numbered: the name is what's read.
+    if layer.is_some() {
+        ignored.retain(|o: &String| !o.starts_with("layerid="));
+    }
+    Source::File { path: absolute(path, dir), layer, subset, ignored }
 }
 
 /// A `delimitedtext` source: `file:///path.csv?type=csv&xField=…&yField=…&crs=…`.
@@ -197,14 +205,28 @@ mod tests {
             Source::File {
                 path: "/data/project/roads.gpkg".into(),
                 layer: Some("roads".into()),
-                subset: Some("\"type\" = 'motorway'".into())
+                subset: Some("\"type\" = 'motorway'".into()),
+                ignored: Vec::new()
             }
         );
-        assert_eq!(read("ogr", "/abs/rivers.shp", dir), Source::File { path: "/abs/rivers.shp".into(), layer: None, subset: None });
-        assert_eq!(read("gdal", "C:/maps/dem.tif", dir), Source::File { path: "C:/maps/dem.tif".into(), layer: None, subset: None });
+        assert_eq!(
+            read("ogr", "/abs/rivers.shp", dir),
+            Source::File { path: "/abs/rivers.shp".into(), layer: None, subset: None, ignored: Vec::new() }
+        );
+        assert_eq!(
+            read("gdal", "C:/maps/dem.tif", dir),
+            Source::File { path: "C:/maps/dem.tif".into(), layer: None, subset: None, ignored: Vec::new() }
+        );
+        // Options RustGIS doesn't read are kept for a note; the first layer's number isn't one.
+        let Source::File { ignored, .. } = read("ogr", "./multi.gpkg|layerid=2|geometrytype=Point", dir) else { panic!() };
+        assert_eq!(ignored, ["layerid=2", "geometrytype=Point"]);
+        let Source::File { ignored, .. } = read("ogr", "./one.gpkg|layerid=0", dir) else { panic!() };
+        assert!(ignored.is_empty());
+        let Source::File { ignored, .. } = read("ogr", "./multi.gpkg|layername=roads|layerid=3", dir) else { panic!() };
+        assert!(ignored.is_empty(), "the name is read: {ignored:?}");
         assert_eq!(
             read("gdal", "GPKG:./m.gpkg:relief", dir),
-            Source::File { path: "/data/project/m.gpkg".into(), layer: Some("relief".into()), subset: None }
+            Source::File { path: "/data/project/m.gpkg".into(), layer: Some("relief".into()), subset: None, ignored: Vec::new() }
         );
         assert_eq!(
             read("delimitedtext", "file:///data/pts%20a.csv?type=csv&xField=lon&yField=lat&crs=EPSG:4326", dir),

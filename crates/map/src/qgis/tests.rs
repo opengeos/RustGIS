@@ -77,6 +77,7 @@ const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTE
               <settings><text-style fieldName="name" fontSize="7"/><placement placement="2"/></settings>
             </rule>
             <rule key="c" filter="&quot;kind&quot; = 'x'"><settings><text-style fieldName="name" fontSize="7"/></settings></rule>
+            <rule key="off" filter="upper(&quot;kind&quot;) = 'X'" description="Switched off" active="0"><settings><text-style fieldName="name"/></settings></rule>
           </rule>
           <rule key="d" filter="length(&quot;name&quot;) &gt; 3"><settings><text-style fieldName="name"/></settings></rule>
         </rules>
@@ -117,7 +118,12 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     let land = &p.layers[2];
     assert_eq!(
         land.source,
-        Source::File { path: "/maps/data/base.gpkg".into(), layer: Some("land".into()), subset: Some("\"kind\" <> 'sea'".into()) }
+        Source::File {
+            path: "/maps/data/base.gpkg".into(),
+            layer: Some("land".into()),
+            subset: Some("\"kind\" <> 'sea'".into()),
+            ignored: Vec::new()
+        }
     );
     assert_eq!(land.definition_query.as_deref(), Some("\"kind\" <> 'sea'"));
     assert_eq!(land.crs.as_deref(), Some("EPSG:2056"));
@@ -141,7 +147,7 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
 
     // Roads: categories with stacked strokes in levels, a hidden one and the rest.
     let roads = &p.layers[1];
-    assert_eq!(roads.source, Source::File { path: "/abs/roads.shp".into(), layer: None, subset: None });
+    assert_eq!(roads.source, Source::File { path: "/abs/roads.shp".into(), layer: None, subset: None, ignored: Vec::new() });
     let s = &roads.style;
     assert_eq!((s.stroke_levels, s.line_strokes.as_deref()), (Some(true), Some(&[][..])));
     let Some(Renderer::Unique { field, classes, class_strokes, class_labels, other, .. }) = &s.renderer else { panic!() };
@@ -179,11 +185,14 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     let said =
         |layer: &str, kind: NoteKind, part: &str| report.notes.iter().any(|n| n.layer == layer && n.kind == kind && n.text.contains(part));
     assert!(said("Land", NoteKind::Approximated, "line pattern"));
+    assert!(said("Land", NoteKind::Approximated, "above the last"), "values outside the ranges are noted");
     assert!(said("Land", NoteKind::Approximated, "Liberation Sans Narrow"));
     assert!(said("Roads", NoteKind::Approximated, "dashed"));
     assert!(said("Roads", NoteKind::Skipped, "markers and hash marks"));
     assert!(said("Roads", NoteKind::Skipped, "length("));
     assert!(said("Towns", NoteKind::Approximated, "font markers"));
+    // A switched-off label rule is never drawn, so its filter isn't noted.
+    assert!(!report.notes.iter().any(|n| n.text.contains("Switched off")), "{:?}", report.notes);
 }
 
 #[test]

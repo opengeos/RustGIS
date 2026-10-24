@@ -24,6 +24,10 @@ pub(super) fn read(l: Node, layer: &str, report: &mut Report) -> Option<Labeling
             }
             for (i, r) in rules.iter().enumerate() {
                 let Some(settings) = child(r.node, "settings") else { continue };
+                // Switched off: never drawn, so nothing about it is noted.
+                if r.node.attribute("active") == Some("0") {
+                    continue;
+                }
                 let name = r
                     .node
                     .attribute("description")
@@ -53,9 +57,6 @@ pub(super) fn read(l: Node, layer: &str, report: &mut Report) -> Option<Labeling
                     );
                     continue;
                 };
-                if r.node.attribute("active") == Some("0") {
-                    continue;
-                }
                 classes.extend(class(settings, &name, where_, r.scales, layer, report));
             }
         }

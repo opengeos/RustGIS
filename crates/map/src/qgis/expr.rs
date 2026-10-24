@@ -123,8 +123,9 @@ fn tokenize(s: &str) -> Option<Vec<Token>> {
                     }
                 }
                 let n: String = chars.get(start..i).unwrap_or_default().iter().collect();
-                n.parse::<f64>().ok()?;
-                out.push(Token::Word(n));
+                let v = n.parse::<f64>().ok()?;
+                // An exponent is written out (0.001 for 1e-3): RustGIS SQL reads plain decimals.
+                out.push(Token::Word(if n.contains(['e', 'E']) && v.is_finite() { format!("{v}") } else { n }));
             }
             c if c.is_alphabetic() || c == '_' => {
                 let start = i;
@@ -135,6 +136,8 @@ fn tokenize(s: &str) -> Option<Vec<Token>> {
                 // A word followed by a bracket is a function call.
                 let next = chars.get(i..).unwrap_or_default().iter().find(|c| !c.is_whitespace());
                 match keyword(&w) {
+                    // TRUE and FALSE are values, bare as RustGIS SQL has them, not fields.
+                    _ if w.eq_ignore_ascii_case("true") || w.eq_ignore_ascii_case("false") => out.push(Token::Word(w.to_lowercase())),
                     Some(k) => out.push(Token::Word(k.into())),
                     None if next == Some(&'(') => return None,
                     None => out.push(Token::Field(w)),
@@ -180,9 +183,12 @@ mod tests {
         assert_eq!(to_sql(r#""Symbol" = 'Ortsteil_20-49'"#).as_deref(), Some(r#""Symbol" = 'Ortsteil_20-49'"#));
         assert_eq!(
             to_sql(r#"pop >= 1e3 AND ("name" ILIKE 'z%' OR kind IN ('a', 'b''s')) AND note IS NOT NULL"#).as_deref(),
-            Some(r#""pop" >= 1e3 AND ( "name" LIKE 'z%' OR "kind" IN ( 'a' , 'b''s' ) ) AND "note" IS NOT NULL"#)
+            Some(r#""pop" >= 1000 AND ( "name" LIKE 'z%' OR "kind" IN ( 'a' , 'b''s' ) ) AND "note" IS NOT NULL"#)
         );
         assert_eq!(to_sql("a <> -2.5").as_deref(), Some(r#""a" <> -2.5"#));
+        // Exponents written out, and TRUE and FALSE as values, as RustGIS SQL reads them.
+        assert_eq!(to_sql("d < 2.5E-4 OR d > -1e+2").as_deref(), Some(r#""d" < 0.00025 OR "d" > -100"#));
+        assert_eq!(to_sql("flag = TRUE AND gone = false").as_deref(), Some(r#""flag" = true AND "gone" = false"#));
         for refused in ["upper(\"name\") = 'X'", "\"a\" + 1 > 2", "\"a\" || 'x' = 'y'", "@map_scale < 5000", "'unclosed", "", "a ! b"] {
             assert_eq!(to_sql(refused), None, "{refused}");
         }
