@@ -1201,9 +1201,11 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
     // so none covers the letter before it.
     if !l.glyphs.is_empty() {
         let inks: &[(bool, bool)] = if l.halo.is_some() { &[(true, false), (false, true)] } else { &[(false, true)] };
+        // (The label without its characters, copied for each: not the characters each time.)
+        let base = PlacedLabel { text: String::new(), align: 0.0, glyphs: Vec::new(), ..l.clone() };
         for &(halo, text) in inks {
             for g in &l.glyphs {
-                let one = PlacedLabel { text: g.text.clone(), angle: Some(g.angle), align: 0.0, glyphs: Vec::new(), ..l.clone() };
+                let one = PlacedLabel { text: g.text.clone(), angle: Some(g.angle), ..base.clone() };
                 draw_label_ink(p, &one, at + vec2(g.dx, g.dy), halo, text);
             }
         }

@@ -127,8 +127,10 @@ fn angle(a: (f32, f32), b: (f32, f32)) -> f32 {
 }
 
 /// The line as text `len` points long reads along it, left to right: reversed when its middle
-/// stretch runs leftward, so the text is never upside down. `None` when the line, with
-/// `overrun` past each end, is shorter than the text.
+/// stretch runs leftward, so the text is never upside down. A vertical stretch reads downward,
+/// as street labels turned with the map do ([`rustgis_tiles::symbols::upright`]), whichever way
+/// the line was drawn. `None` when the line, with `overrun` past each end, is shorter than the
+/// text.
 fn upright(line: &[(f32, f32)], len: f32, overrun: f32) -> Option<Path> {
     let path = Path::new(line, false)?;
     let total = path.length();
@@ -136,7 +138,10 @@ fn upright(line: &[(f32, f32)], len: f32, overrun: f32) -> Option<Path> {
         return None;
     }
     let (a, b) = (path.at((total - len) / 2.0)?, path.at((total + len) / 2.0)?);
-    if b.0 < a.0 { Path::new(line, true) } else { Some(path) }
+    let a_to_b = angle(a, b);
+    // Turned half round to stand upright: read from the other end.
+    let flipped = (rustgis_tiles::symbols::upright(a_to_b) - a_to_b).abs() > 1.0;
+    if flipped { Path::new(line, true) } else { Some(path) }
 }
 
 /// Text `len` points long straight along `line` at its middle: its centre and angle (radians,
@@ -201,6 +206,21 @@ mod tests {
         assert!(parallel(&[(0.0, 0.0), (30.0, 0.0)], 40.0, 0.0).is_none());
         assert!(parallel(&[(0.0, 0.0), (30.0, 0.0)], 40.0, 5.0).is_some());
         assert!(parallel(&[(0.0, 0.0), (0.0, 0.0)], 1.0, 5.0).is_none(), "no length");
+    }
+
+    #[test]
+    fn a_vertical_line_reads_downward_whichever_way_it_was_drawn() {
+        // Screen y down: downward is +90°. Drawn up or down, exactly vertical or a hair off it.
+        let down = std::f32::consts::FRAC_PI_2;
+        for line in
+            [[(50.0, 0.0), (50.0, 100.0)], [(50.0, 100.0), (50.0, 0.0)], [(50.0, 100.0), (50.001, 0.0)], [(50.001, 100.0), (50.0, 0.0)]]
+        {
+            let (_, _, a) = parallel(&line, 40.0, 0.0).unwrap();
+            assert!((a - down).abs() < 1e-3, "{line:?}: {a}");
+            let (_, glyphs) = curved(&line, &[10.0; 4], 0.0).unwrap();
+            assert!(glyphs.iter().all(|g| (g.2 - down).abs() < 1e-3), "{line:?}: {glyphs:?}");
+            assert!(glyphs.windows(2).all(|w| w[1].1 > w[0].1), "first character at the top: {glyphs:?}");
+        }
     }
 
     #[test]

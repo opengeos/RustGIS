@@ -435,17 +435,11 @@ pub fn draw(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32) {
     // first, so none covers the letter before it.
     if !l.glyphs.is_empty() {
         let inks: &[Ink] = if l.halo.is_some() { &[Ink::Halo, Ink::Text] } else { &[Ink::Text] };
+        // (The label without its characters, copied for each: not the characters each time.)
+        let base = PlacedLabel { text: String::new(), align: 0.0, angle: None, glyphs: Vec::new(), ..l.clone() };
         for &ink in inks {
             for g in &l.glyphs {
-                let one = PlacedLabel {
-                    text: g.text.clone(),
-                    x: l.x + g.dx,
-                    y: l.y + g.dy,
-                    align: 0.0,
-                    angle: None,
-                    glyphs: Vec::new(),
-                    ..l.clone()
-                };
+                let one = PlacedLabel { text: g.text.clone(), x: l.x + g.dx, y: l.y + g.dy, ..base.clone() };
                 draw_turned(pm, &one, g.angle, ppp, ink);
             }
         }
