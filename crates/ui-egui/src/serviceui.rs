@@ -1,7 +1,8 @@
 //! Background group import/refresh for both desktop and browser. Discovery and updates live in
 //! engine commands; this state machine only supplies their downloaded documents.
 
-use crate::{RustGisApp, Slot, fetch_into, fetch_into_limited};
+use crate::{RustGisApp, Slot, fetch_into, fetch_into_limited, i18n};
+use rustgis_engine::data::ogc::{self, Pages, Step};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
@@ -247,5 +248,84 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     } else {
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
         app.ui.service_import = Some(task);
+    }
+}
+
+/// A download that landed, with what it is added with: its id, address and `layer.addDownload`
+/// parameters, and the connection it came from (named in Recent).
+pub(crate) struct Landed {
+    pub id: u64,
+    pub url: String,
+    pub params: Value,
+    pub origin: Option<String>,
+}
+
+/// A service layer's features read page by page off the frame, after its first page landed (#764):
+/// each further answer [`Pages`] asks for is fetched in the background and handed to it, until
+/// the collection is read; then it is added as the download it began as.
+pub struct PageRead {
+    landed: Landed,
+    pages: Box<Pages>,
+    /// The bytes the answers still to come may take (the download's budget, less those read).
+    left: usize,
+    slot: Slot<Result<Vec<u8>, String>>,
+}
+
+/// Starts reading a service's features past their first page (`first`, landed): added now when it
+/// leads nowhere, else read on in the background ([`poll_pages`]).
+pub(crate) fn read_pages(app: &mut RustGisApp, landed: Landed, first: Vec<u8>) {
+    let left = rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD.saturating_sub(first.len());
+    let step = ogc::read_pages(&landed.url, first, ogc::MAX_PAGED_FEATURES);
+    if matches!(step, Step::Fetch(_)) {
+        app.session.notify(i18n::fmt("Reading {url} page by page…", &[("url", &landed.url)]), false);
+    }
+    go_on(app, landed, left, step);
+}
+
+/// Hands each page that landed to its read, and adds the layers whose features are all read. A
+/// read whose project was closed meanwhile is dropped.
+pub fn poll_pages(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.ui.service_pages.is_empty() {
+        return;
+    }
+    for read in std::mem::take(&mut app.ui.service_pages) {
+        if !app.session.download_is_pending(read.landed.id) {
+            let url = &read.landed.url;
+            app.session.notify(i18n::fmt("{url}: downloaded after its project was closed, so it wasn't added", &[("url", url)]), false);
+            continue;
+        }
+        let answer = read.slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        match answer {
+            Some(answer) => {
+                let left = read.left.saturating_sub(answer.as_ref().map_or(0, Vec::len));
+                let step = (*read.pages).land(answer);
+                go_on(app, read.landed, left, step);
+            }
+            None => app.ui.service_pages.push(read),
+        }
+    }
+    if !app.ui.service_pages.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    }
+}
+
+/// The next answer fetched, or the collection added (with a note when some features were left
+/// unread).
+fn go_on(app: &mut RustGisApp, landed: Landed, left: usize, step: Step) {
+    match step {
+        Step::Fetch(pages) => {
+            let slot = match rustgis_engine::render::rustgis_tiles::address::check(pages.next_url(), Some(pages.referrer())) {
+                Ok(()) => fetch_into_limited(pages.next_url(), left),
+                Err(e) => Slot::new(std::sync::Mutex::new(Some(Err(e)))),
+            };
+            app.ui.service_pages.push(PageRead { landed, pages, left, slot });
+        }
+        Step::Done(bytes, note) => {
+            if let Some(note) = note {
+                let name = landed.params.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).unwrap_or(&landed.url);
+                app.session.notify(format!("{name}: {note}"), false);
+            }
+            app.add_landed(landed, bytes);
+        }
     }
 }

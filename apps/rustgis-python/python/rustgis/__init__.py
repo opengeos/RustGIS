@@ -157,7 +157,8 @@ class Layer:
                 (colours by class) or ``"proportional"`` (symbol sizes by value).
             field: The field the colours or sizes come from (not for ``"single"``).
             **params: More ``layer.symbology`` parameters: ``classes`` (1 to 12), ``method``
-                (``"naturalBreaks"``, ``"equalInterval"``, ``"quantile"``), ``ramp``.
+                (``"naturalBreaks"``, ``"equalInterval"``, ``"quantile"``,
+                ``"geometricInterval"``, ``"standardDeviation"``), ``ramp``.
 
         Returns:
             The layer, so calls can be chained.

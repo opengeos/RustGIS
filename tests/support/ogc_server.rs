@@ -19,6 +19,8 @@ pub const LINE_ITEMS: &str = "/ogc/user/test-token/collections/routes/items";
 
 #[derive(Clone)]
 pub struct Route {
+    /// The path answered, or a path and query (`/query?resultOffset=2`) to answer that request
+    /// alone (a page of a layer that comes in pages).
     pub path: String,
     pub body: String,
     pub status: u16,
@@ -121,7 +123,10 @@ impl Server {
                         })
                         .collect(),
                 });
-                let route = serving.lock().unwrap().iter().find(|r| r.path == path).cloned();
+                let route = {
+                    let routes = serving.lock().unwrap();
+                    routes.iter().find(|r| r.path == target).or_else(|| routes.iter().find(|r| r.path == path)).cloned()
+                };
                 let (status, body, extra) = match route {
                     Some(r) => {
                         let until = Instant::now() + r.delay;

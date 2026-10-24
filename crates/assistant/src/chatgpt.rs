@@ -1597,8 +1597,13 @@ mod native {
                     std::thread::sleep(Duration::from_millis(30));
                     *cancel.lock().unwrap() = true;
                 });
-                let e = cancellable(&cancel, Instant::now() + Duration::from_secs(10), || {
-                    std::thread::sleep(Duration::from_millis(150));
+                // The work outlasts the cancel however late the cancelling thread runs.
+                let flag = cancel.clone();
+                let e = cancellable(&cancel, Instant::now() + Duration::from_secs(10), move || {
+                    let end = Instant::now() + Duration::from_secs(5);
+                    while !*flag.lock().unwrap() && Instant::now() < end {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                     Ok(())
                 })
                 .unwrap_err();

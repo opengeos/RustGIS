@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 rustgis-engine = { workspace = true, features = ["geolibre"] }
 rustgis-ui-egui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "links", "wgpu", "accesskit", "wayland", "x11"] }
+eframe = { workspace = true, features = ["clipboard", "default_fonts", "links", "wgpu", "accesskit", "wayland", "x11"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

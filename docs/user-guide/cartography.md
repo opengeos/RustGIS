@@ -18,8 +18,13 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval or quantile. If no field is chosen, the current renderer's field is kept when it is
-  numeric; otherwise the first numeric field is used. If the layer has no numeric field, or the
+  interval, quantile, geometric interval or standard deviation. Geometric interval makes class
+  widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
+  below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
+  101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
+  out a class no value falls in, so a skewed field can get fewer classes than asked. If no field is
+  chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
+  field is used. If the layer has no numeric field, or the
   switch fails for another reason, the pane shows why and keeps the current renderer. When numeric
   fields exist, a field picker lets you try another one; the error stays visible if a retry fails.
   A problem no field can fix, such as a definition query that keeps no features, needs fixing
@@ -239,7 +244,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
-  colour, halo and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+  colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says
@@ -251,7 +256,14 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
 - **Placement**: automatic (above points, centred on lines and polygons), centred, or one of
   eight positions around the feature (`labels.placement={"layer": "Cities", "position":
-  "aboveRight"}`).
+  "aboveRight"}`). Lines can be labelled **along** them (Position › Along lines): **Parallel**
+  sets the text straight, turned to the line's direction across it; **Curved** turns each
+  character with the line where it bends. Both sit at the middle of the line's longest stretch
+  in view, centred on the line and kept upright, and may run past its ends by about a letter; a
+  line too short for its text, or (curved) one bending more than 25° from one character to the
+  next, is left unlabelled. A text over 200 characters long is set straight rather than
+  curved. Points and polygons with these placements are labelled as automatic
+  (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its

@@ -194,6 +194,10 @@ fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 if ui.checkbox(&mut bold, tl!("Bold")).changed() {
                     run(app, "labels.style", json!({"bold": bold}));
                 }
+                let mut italic = l.labels.default.italic;
+                if ui.checkbox(&mut italic, tl!("Italic")).changed() {
+                    run(app, "labels.style", json!({"italic": italic}));
+                }
                 let mut halo = l.labels.default.halo;
                 if ui.checkbox(&mut halo, tl!("Halo")).changed() {
                     run(app, "labels.style", json!({"halo": halo}));
@@ -222,6 +226,15 @@ fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer) {
                 ui.end_row();
             }
         });
+        // Lines: the text along them, straight or bending with them.
+        if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
+            ui.add_space(4.0);
+            ui.label(RichText::new(tl!("Along lines")).size(11.5));
+            ui.horizontal(|ui| {
+                pick(app, ui, LabelPlacement::Parallel);
+                pick(app, ui, LabelPlacement::Curved);
+            });
+        }
     });
 }
 

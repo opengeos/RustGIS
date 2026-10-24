@@ -311,15 +311,27 @@ pub enum ClassMethod {
     NaturalBreaks,
     EqualInterval,
     Quantile,
+    /// Class widths that grow by one ratio, for values that pile up at the low end.
+    GeometricInterval,
+    /// Classes one standard deviation wide about the mean.
+    StandardDeviation,
 }
 
 impl ClassMethod {
-    pub const ALL: [ClassMethod; 3] = [ClassMethod::NaturalBreaks, ClassMethod::EqualInterval, ClassMethod::Quantile];
+    pub const ALL: [ClassMethod; 5] = [
+        ClassMethod::NaturalBreaks,
+        ClassMethod::EqualInterval,
+        ClassMethod::Quantile,
+        ClassMethod::GeometricInterval,
+        ClassMethod::StandardDeviation,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             ClassMethod::NaturalBreaks => "Natural Breaks (Jenks)",
             ClassMethod::EqualInterval => "Equal Interval",
             ClassMethod::Quantile => "Quantile",
+            ClassMethod::GeometricInterval => "Geometric Interval",
+            ClassMethod::StandardDeviation => "Standard Deviation",
         }
     }
     pub fn from_name(s: &str) -> Option<ClassMethod> {
@@ -328,6 +340,8 @@ impl ClassMethod {
             "naturalbreaks" | "natural_breaks" | "jenks" | "natural breaks" => ClassMethod::NaturalBreaks,
             "equalinterval" | "equal_interval" | "equal interval" => ClassMethod::EqualInterval,
             "quantile" => ClassMethod::Quantile,
+            "geometricinterval" | "geometric_interval" | "geometric interval" | "geometric" => ClassMethod::GeometricInterval,
+            "standarddeviation" | "standard_deviation" | "standard deviation" | "stddev" => ClassMethod::StandardDeviation,
             _ => return None,
         })
     }
@@ -1048,8 +1062,50 @@ pub fn class_breaks(sorted: &[f64], k: usize, method: ClassMethod) -> Vec<f64> {
         ClassMethod::EqualInterval => (1..=k).map(|i| lo + (hi - lo) * i as f64 / k as f64).collect::<Vec<_>>(),
         ClassMethod::Quantile => (1..=k).map(|i| sorted.get(((n * i) / k).saturating_sub(1).min(n - 1)).copied().unwrap_or(hi)).collect(),
         ClassMethod::NaturalBreaks => jenks(sorted, k),
+        ClassMethod::GeometricInterval => {
+            // Positive values: each bound is the one before times (hi / lo)^(1/k), worked out on
+            // logarithms. Values from zero or below are taken as if the minimum sat at a hundredth
+            // of the range, which makes the ratio 101^(1/k); each bound is then a share of the way
+            // from lo to hi. Neither adds large values, so the bounds stay finite and in order.
+            let range = hi - lo;
+            (1..=k)
+                .map(|i| {
+                    let f = i as f64 / k as f64;
+                    let v = if lo > 0.0 {
+                        (lo.ln() + (hi.ln() - lo.ln()) * f).exp()
+                    } else {
+                        let t = (101f64.powf(f) - 1.0) / 100.0;
+                        if range.is_finite() { lo + range * t } else { lo * (1.0 - t) + hi * t }
+                    };
+                    v.clamp(lo, hi)
+                })
+                .collect()
+        }
+        ClassMethod::StandardDeviation => {
+            // On values scaled by the largest magnitude, so the squares can't overflow.
+            let s = lo.abs().max(hi.abs());
+            let mean_s = sorted.iter().map(|v| v / s).sum::<f64>() / n as f64;
+            let mean = mean_s * s;
+            let sd = s * (sorted.iter().map(|v| (v / s - mean_s).powi(2)).sum::<f64>() / n as f64).sqrt();
+            // k − 1 inner bounds one deviation apart, centred on the mean. A bound with no value
+            // above the one before it is dropped, so no class is empty.
+            let inner = (1..k).map(|i| mean + sd * (i as f64 - k as f64 / 2.0)).filter(|&v| v > lo && v < hi);
+            let mut b = Vec::new();
+            let mut below = 0;
+            for v in inner.chain(std::iter::once(hi)) {
+                let upto = sorted.partition_point(|x| *x <= v);
+                if upto > below {
+                    b.push(v);
+                    below = upto;
+                }
+            }
+            b
+        }
     };
-    b.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+    // Only bounds that are the same value: any tolerance merges distinct values somewhere (tiny
+    // ones under an absolute one, large ones under a relative one). Repeated bounds come from
+    // repeated values (quantiles, Jenks), so they are equal exactly.
+    b.dedup();
     if let Some(l) = b.last_mut() {
         *l = hi;
     }
@@ -1213,6 +1269,9 @@ pub struct LabelClass {
     /// Where a label sits relative to its feature.
     #[serde(default)]
     pub placement: LabelPlacement,
+    /// Slanted (an italic face where the font has one).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
 }
 
 fn default_class_name() -> String {
@@ -1246,10 +1305,22 @@ pub enum LabelPlacement {
     AboveLeft,
     BelowRight,
     BelowLeft,
+    /// Along a line, straight, turned to its direction across the text, at its middle; points
+    /// and polygons are labelled as `Auto`.
+    Parallel,
+    /// Along a line, each character turned with it where it bends, at its middle; points and
+    /// polygons are labelled as `Auto`.
+    Curved,
 }
 
 impl LabelPlacement {
-    pub const ALL: [LabelPlacement; 10] = [
+    /// Whether a line is labelled along it ([`Parallel`](Self::Parallel) or
+    /// [`Curved`](Self::Curved)).
+    pub fn along_line(self) -> bool {
+        matches!(self, LabelPlacement::Parallel | LabelPlacement::Curved)
+    }
+
+    pub const ALL: [LabelPlacement; 12] = [
         LabelPlacement::Auto,
         LabelPlacement::Center,
         LabelPlacement::Above,
@@ -1260,6 +1331,8 @@ impl LabelPlacement {
         LabelPlacement::AboveLeft,
         LabelPlacement::BelowRight,
         LabelPlacement::BelowLeft,
+        LabelPlacement::Parallel,
+        LabelPlacement::Curved,
     ];
     pub fn code(self) -> &'static str {
         match self {
@@ -1273,6 +1346,8 @@ impl LabelPlacement {
             LabelPlacement::AboveLeft => "aboveLeft",
             LabelPlacement::BelowRight => "belowRight",
             LabelPlacement::BelowLeft => "belowLeft",
+            LabelPlacement::Parallel => "parallel",
+            LabelPlacement::Curved => "curved",
         }
     }
     pub fn label(self) -> &'static str {
@@ -1287,6 +1362,8 @@ impl LabelPlacement {
             LabelPlacement::AboveLeft => "Above Left",
             LabelPlacement::BelowRight => "Below Right",
             LabelPlacement::BelowLeft => "Below Left",
+            LabelPlacement::Parallel => "Parallel",
+            LabelPlacement::Curved => "Curved",
         }
     }
     pub fn from_code(s: &str) -> Option<LabelPlacement> {
@@ -1298,8 +1375,8 @@ impl LabelPlacement {
         let gap = marker / 2.0 + 2.0;
         let (dx, dy) = (w / 2.0 + gap, h / 2.0 + gap);
         match self {
-            LabelPlacement::Auto if is_point => (0.0, -(marker / 2.0 + h * 0.6)),
-            LabelPlacement::Auto | LabelPlacement::Center => (0.0, 0.0),
+            LabelPlacement::Auto | LabelPlacement::Parallel | LabelPlacement::Curved if is_point => (0.0, -(marker / 2.0 + h * 0.6)),
+            LabelPlacement::Auto | LabelPlacement::Center | LabelPlacement::Parallel | LabelPlacement::Curved => (0.0, 0.0),
             LabelPlacement::Above => (0.0, -dy),
             LabelPlacement::Below => (0.0, dy),
             LabelPlacement::Left => (-dx, 0.0),
@@ -1337,6 +1414,7 @@ impl LabelClass {
             closest: None,
             farthest: None,
             placement: LabelPlacement::Auto,
+            italic: false,
         }
     }
 
@@ -1746,6 +1824,86 @@ mod tests {
         assert_eq!(class_breaks(&v, 3, ClassMethod::EqualInterval).len(), 3);
         assert_eq!(class_breaks(&[], 3, ClassMethod::Quantile), Vec::<f64>::new());
         assert_eq!(class_breaks(&[5.0, 5.0], 4, ClassMethod::NaturalBreaks), vec![5.0]);
+    }
+
+    fn close(a: &[f64], b: &[f64]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9 * y.abs().max(1.0))
+    }
+
+    #[test]
+    fn geometric_interval_breaks_grow_by_one_ratio() {
+        // Positive values: each bound is the one before times (hi / lo)^(1/k).
+        let v = [1.0, 5.0, 40.0, 300.0, 1000.0];
+        let b = class_breaks(&v, 3, ClassMethod::GeometricInterval);
+        assert!(close(&b, &[10.0, 100.0, 1000.0]), "{b:?}");
+        // From zero (or below), the values are shifted so the minimum sits at a hundredth of the
+        // range: the widths still grow by one ratio, and the last bound is the maximum.
+        let b = class_breaks(&[-50.0, 0.0, 50.0], 2, ClassMethod::GeometricInterval);
+        assert!(close(&b, &[-51.0 + 101f64.sqrt(), 50.0]), "{b:?}");
+        let b = class_breaks(&[0.0, 100.0], 4, ClassMethod::GeometricInterval);
+        let widths: Vec<f64> = std::iter::once(b[0]).chain(b.windows(2).map(|w| w[1] - w[0])).collect();
+        assert!(widths.windows(2).all(|w| w[1] > w[0]), "{b:?}");
+        assert_eq!(b.len(), 4);
+        assert_eq!(b.last(), Some(&100.0));
+        // Far from zero the shift is not added and taken away again, so it can't round off.
+        let b = class_breaks(&[-1e16, -9_999_999_999_999_998.0], 2, ClassMethod::GeometricInterval);
+        assert!(b.iter().all(|v| v.is_finite()), "{b:?}");
+        assert_eq!(b.last(), Some(&-9_999_999_999_999_998.0));
+        // Near the largest float nothing overflows: the bounds stay finite and in order.
+        for v in [[1e308, 1.1e308], [-1e308, 1e308], [1e-308, 1e308]] {
+            let b = class_breaks(&v, 2, ClassMethod::GeometricInterval);
+            assert!(b.len() == 2 && b.iter().all(|x| x.is_finite()) && b[0] >= v[0] && b[0] < b[1], "{v:?}: {b:?}");
+        }
+    }
+
+    #[test]
+    fn standard_deviation_breaks_are_one_deviation_wide_about_the_mean() {
+        // 0..=100: mean 50, population deviation sqrt(850).
+        let v: Vec<f64> = (0..=100).map(f64::from).collect();
+        let sd = 850f64.sqrt();
+        // An even count puts a bound on the mean; an odd one centres a class on it.
+        let b = class_breaks(&v, 4, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[50.0 - sd, 50.0, 50.0 + sd, 100.0]), "{b:?}");
+        let b = class_breaks(&v, 3, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[50.0 - sd / 2.0, 50.0 + sd / 2.0, 100.0]), "{b:?}");
+        // Bounds past the data are dropped rather than leaving empty classes: 8 classes of one
+        // deviation would reach ±4 deviations, but the data spans less than ±2.
+        let b = class_breaks(&v, 8, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[50.0 - sd, 50.0, 50.0 + sd, 100.0]), "{b:?}");
+        // A bound with no value above the one before it goes too: mean 4, deviation sqrt(24), so
+        // (4, 4 + sqrt(24)] would hold nothing between the zeros and the tens.
+        let b = class_breaks(&[0.0, 0.0, 0.0, 10.0, 10.0], 4, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[4.0, 10.0]), "{b:?}");
+        // Large values: the squared deviations would overflow without scaling.
+        let b = class_breaks(&[1e160, 2e160], 2, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[1.5e160, 2e160]), "{b:?}");
+        let b = class_breaks(&[-1e308, 1e308], 2, ClassMethod::StandardDeviation);
+        assert!(close(&b, &[0.0, 1e308]), "{b:?}");
+    }
+
+    #[test]
+    fn close_values_keep_their_classes() {
+        // Bounds closer than f64::EPSILON in absolute terms are still distinct when the values
+        // themselves are that small.
+        for m in ClassMethod::ALL {
+            let b = class_breaks(&[0.0, 1e-18], 2, m);
+            assert!(b.len() == 2 && b[0] >= 0.0 && b[0] < b[1], "{m:?}: {b:?}");
+        }
+        // And close values far from zero keep theirs too.
+        let b = class_breaks(&[1e16, 1e16 + 2.0], 2, ClassMethod::Quantile);
+        assert_eq!(b, vec![1e16, 1e16 + 2.0]);
+    }
+
+    #[test]
+    fn every_method_is_listed_named_and_read_back() {
+        for m in ClassMethod::ALL {
+            let name = format!("{m:?}");
+            let camel = format!("{}{}", name[..1].to_ascii_lowercase(), &name[1..]);
+            assert_eq!(ClassMethod::from_name(&camel), Some(m), "{camel}");
+            assert_eq!(ClassMethod::from_name(&m.label().replace(" (Jenks)", "")), Some(m), "{}", m.label());
+        }
+        assert_eq!(ClassMethod::from_name("stddev"), Some(ClassMethod::StandardDeviation));
+        assert_eq!(ClassMethod::from_name("geometric"), Some(ClassMethod::GeometricInterval));
     }
 
     #[test]
