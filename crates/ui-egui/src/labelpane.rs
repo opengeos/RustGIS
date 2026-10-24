@@ -930,6 +930,7 @@ mod tests {
         assert_eq!(last.params.get("layer"), Some(&json!("Cities")));
         assert_eq!(last.params.get("class"), None);
     }
+
     fn labels(app: &RustGisApp) -> rustgis_engine::map::symbology::Labeling {
         app.session.map().layer(app.session.active_layer.unwrap()).unwrap().labels.clone()
     }
