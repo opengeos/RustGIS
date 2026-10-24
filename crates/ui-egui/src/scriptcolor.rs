@@ -429,7 +429,7 @@ mod tests {
         let mut app = crate::RustGisApp::with_sample();
         let script = "# zoom\nnope.cmd {\"a\": \"é\"}\nlabels.style {\"size\": }\n";
         app.workflow.script = script.into();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 400.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 400.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
@@ -480,7 +480,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
@@ -496,7 +496,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull".into();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
@@ -531,7 +531,7 @@ mod tests {
         app.workflow.script = "map.zoomFull\n".repeat(300);
         app.workflow.script_out = (0..12).map(|i| (format!("line {i}: {}", "a long error ".repeat(30)), true)).collect();
         app.workflow.script_last = Some(crate::analysispane::ScriptRun { n: 1, secs: 0.5, at: 1_800_000_000 });
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
@@ -565,7 +565,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(300);
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 150.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 150.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );
@@ -595,7 +595,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = crate::RustGisApp::with_sample();
         app.workflow.script = "map.zoomFull\n".repeat(30);
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             app,
         );

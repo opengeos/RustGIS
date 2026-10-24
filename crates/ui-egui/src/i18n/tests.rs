@@ -30,6 +30,7 @@ fn lookup_fallback_and_tags() {
     assert_eq!(tr(Lang::EN, "no such string"), "no such string");
     assert_eq!(lang_from_tag("de_DE.UTF-8").map(Lang::code), Some("de"));
     assert_eq!(lang_from_tag("pt-BR").map(Lang::code), Some("pt"));
+    assert_eq!(lang_from_tag("bn-BD").map(Lang::code), Some("bn"));
     assert_eq!(lang_from_tag("zh-Hans-CN").map(Lang::code), Some("zh"));
     assert_eq!(lang_from_tag("zh_CN.UTF-8").map(Lang::code), Some("zh"));
     assert_eq!(lang_from_tag("zh-TW"), None);
@@ -38,6 +39,16 @@ fn lookup_fallback_and_tags() {
     assert_eq!(lang_from_tag("xx-YY"), None);
     assert_eq!(first_supported(["xx", "fr-CA", "de"]).map(Lang::code), Some("fr"));
     assert_eq!(fmt("{n} of {total} selected", &[("n", "3"), ("total", "{n}")]), "3 of {n} selected");
+}
+
+#[test]
+fn bengali_registration_and_fallback() {
+    let bn = Lang::from_code("bn").unwrap_or(Lang::EN);
+    assert_eq!(bn.name(), "বাংলা");
+    assert_eq!(bn.english(), "Bengali");
+    assert_eq!(bn.script(), Script::Bengali);
+    assert_eq!(tr(bn, "Open"), "খুলুন");
+    assert_eq!(tr(bn, "A string not in the Bengali catalog"), "A string not in the Bengali catalog");
 }
 
 #[test]

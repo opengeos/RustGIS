@@ -79,7 +79,9 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         app.docs.page = 0;
                     }
                 }
-            });
+            })
+            .response
+            .on_hover_text(tl!("Presentation"));
         if ui.small_button(tl!("Delete")).clicked() {
             run(app, "presentation.remove", json!({"presentation": i}));
             app.docs.page = 0;
@@ -152,8 +154,9 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
         };
         ui.horizontal(|ui| {
-            ui.label(tl!("Title"));
-            let resp = ui.add(egui::TextEdit::singleline(&mut app.docs.title).desired_width(ui.available_width()));
+            let input_label = ui.label(tl!("Title"));
+            let resp =
+                ui.add(egui::TextEdit::singleline(&mut app.docs.title).desired_width(ui.available_width())).labelled_by(input_label.id);
             let v = app.docs.title.clone();
             if let Some(fresh) = field(app, resp, "title", v, &page.title) {
                 app.docs.title = fresh;
@@ -177,8 +180,8 @@ pub fn presentation(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             app.docs.notes = fresh;
         }
         ui.horizontal(|ui| {
-            ui.label(tl!("Seconds"));
-            let resp = ui.add(egui::DragValue::new(&mut app.docs.seconds).range(0.5..=3600.0).speed(0.5));
+            let input_label = ui.label(tl!("Seconds"));
+            let resp = ui.add(egui::DragValue::new(&mut app.docs.seconds).range(0.5..=3600.0).speed(0.5)).labelled_by(input_label.id);
             if (resp.drag_stopped() || resp.lost_focus()) && app.docs.seconds != page.seconds {
                 let secs = app.docs.seconds;
                 run(app, "presentation.updatePage", json!({"presentation": i, "page": k, "seconds": secs}));
@@ -302,7 +305,9 @@ pub fn notebook(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         let _ = app.run("notebook.activate", json!({"notebook": j}));
                     }
                 }
-            });
+            })
+            .response
+            .on_hover_text(tl!("Notebook"));
         if ui.small_button(tl!("Run All")).clicked() {
             run(app, "notebook.run", json!({"notebook": i}));
             app.map.invalidate();

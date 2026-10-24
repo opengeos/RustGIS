@@ -50,14 +50,19 @@ impl Form {
 }
 
 /// A combo box over `choices` (`(key, label)` pairs) editing the key `value`; true when changed.
-fn choice(ui: &mut egui::Ui, id: &str, value: &mut String, choices: &[(&str, &str)], width: f32) -> bool {
+fn choice(ui: &mut egui::Ui, id: &str, value: &mut String, choices: &[(&str, &str)], width: f32, label_id: egui::Id) -> bool {
     let mut changed = false;
     let label = choices.iter().find(|(k, _)| *k == value).map(|v| v.1).unwrap_or("");
-    egui::ComboBox::from_id_salt(id).selected_text(tl!(label)).width(width).show_ui(ui, |ui| {
-        for (key, label) in choices {
-            changed |= ui.selectable_value(value, (*key).into(), tl!(*label)).changed();
-        }
-    });
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(tl!(label))
+        .width(width)
+        .show_ui(ui, |ui| {
+            for (key, label) in choices {
+                changed |= ui.selectable_value(value, (*key).into(), tl!(*label)).changed();
+            }
+        })
+        .response
+        .labelled_by(label_id);
     changed
 }
 
@@ -96,14 +101,14 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     ui.label(&name);
                     ui.end_row();
                     let previous = (f.property.clone(), f.unit.clone());
-                    ui.label(tl!("Property"));
-                    if choice(ui, "geom_property", &mut f.property, props, control_width) {
+                    let property_label = ui.label(tl!("Property"));
+                    if choice(ui, "geom_property", &mut f.property, props, control_width, property_label.id) {
                         f.unit = units(&f.property).first().map(|v| v.0).unwrap_or("m").into();
                         f.overwrite = false;
                     }
                     ui.end_row();
-                    ui.label(tl!("Unit"));
-                    if choice(ui, "geom_unit", &mut f.unit, units(&f.property), control_width) {
+                    let unit_label = ui.label(tl!("Unit"));
+                    if choice(ui, "geom_unit", &mut f.unit, units(&f.property), control_width, unit_label.id) {
                         f.overwrite = false;
                     }
                     ui.end_row();
@@ -117,8 +122,12 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         }
                     }
                     if f.unit == "projected" {
-                        ui.label(tl!("EPSG code"));
-                        if ui.add(egui::TextEdit::singleline(&mut f.epsg).desired_width(control_width)).changed() {
+                        let input_label = ui.label(tl!("EPSG code"));
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut f.epsg).desired_width(control_width))
+                            .labelled_by(input_label.id)
+                            .changed()
+                        {
                             f.overwrite = false;
                         }
                         ui.end_row();
@@ -146,19 +155,24 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                         }
                     });
                     ui.end_row();
-                    ui.label(tl!("Field"));
+                    let input_label = ui.label(tl!("Field"));
                     if f.create {
                         f.field_edited |= ui
                             .add(egui::TextEdit::singleline(&mut f.field).hint_text(tl!("Field name")).desired_width(control_width))
                             .changed();
                     } else {
-                        egui::ComboBox::from_id_salt("geom_field").selected_text(&f.field).width(control_width).show_ui(ui, |ui| {
-                            for (name, _) in &fields {
-                                if ui.selectable_value(&mut f.field, name.clone(), name).changed() {
-                                    f.overwrite = false;
+                        egui::ComboBox::from_id_salt("geom_field")
+                            .selected_text(&f.field)
+                            .width(control_width)
+                            .show_ui(ui, |ui| {
+                                for (name, _) in &fields {
+                                    if ui.selectable_value(&mut f.field, name.clone(), name).changed() {
+                                        f.overwrite = false;
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .labelled_by(input_label.id);
                     }
                     ui.end_row();
                     ui.label(tl!("Features"));
