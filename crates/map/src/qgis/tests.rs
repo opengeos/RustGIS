@@ -236,4 +236,16 @@ fn hostile_files_are_refused_or_bounded() {
         r.skipped("a", "the same");
     }
     assert_eq!((r.notes.len(), r.notes[0].count), (1, 10_000));
+    // Many different notes stop at the cap; the ones kept still count their repeats, each in its
+    // own place (layer, kind and text all tell notes apart).
+    for i in 0..(MAX_NOTES + 500) {
+        r.approximated("a", format!("note {i}"));
+    }
+    assert_eq!(r.notes.len(), MAX_NOTES);
+    r.approximated("a", "note 7");
+    r.approximated("b", "note 7");
+    r.skipped("a", "note 7");
+    let at = r.notes.iter().position(|n| n.text == "note 7").unwrap();
+    assert_eq!((r.notes[at].count, r.notes[at].kind), (2, NoteKind::Approximated));
+    assert!(!r.notes.iter().any(|n| n.layer == "b"), "past the cap, a new note isn't kept");
 }

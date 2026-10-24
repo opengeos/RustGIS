@@ -129,15 +129,13 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, report: &mut Report) -
             if let Some(z) = zmax {
                 q["maxZoom"] = json!(z);
             }
-            s.run_part("map.addTiles", &q)?;
-            if !layer.visible {
-                // A tile layer has no visibility of its own: an invisible one isn't wanted.
-                report.approximated(name, "a hidden tile layer, added shown");
-            }
+            let added = s.run_part("map.addTiles", &q)?;
+            tile_settings(s, &added, layer, report);
             return Ok(Some(name.to_string()));
         }
         Source::Wms { url, layer: wms, .. } => {
-            s.run_part("service.add", &json!({"url": url, "type": "wms", "layer": wms, "name": name}))?;
+            let added = s.run_part("service.add", &json!({"url": url, "type": "wms", "layer": wms, "name": name}))?;
+            tile_settings(s, &added, layer, report);
             return Ok(Some(name.to_string()));
         }
         Source::Wfs { url, layer: typename } => {
@@ -174,13 +172,21 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, report: &mut Report) -
         return Ok(Some(added_name));
     }
     layer.style.apply(l);
-    // What reads only against the layer's fields: its definition query and its label clauses.
+    // What reads only against the layer's fields: its definition query, and what the style names.
     if let Some(q) = &layer.definition_query {
         match rustgis_data::query::parse(q, &l.dataset) {
             Ok(_) => l.definition_query = Some(q.clone()),
             Err(e) => report.skipped(name, format!("its filter `{q}` ({e})")),
         }
     }
+    check_fields(l, name, report);
+    Ok(Some(added_name))
+}
+
+/// Checks what a style names against the layer's fields: its label classes' clauses and fields
+/// (a class that can't label is switched off) and the field a Unique Values or Graduated Colors
+/// renderer classes by.
+fn check_fields(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
     for c in std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut()) {
         if let Some(w) = c.where_.clone()
             && let Err(e) = rustgis_data::query::parse(&w, &l.dataset)
@@ -200,7 +206,35 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, report: &mut Report) -
     if let Some(f) = field.filter(|f| l.dataset.field_index(f).is_none()) {
         report.approximated(name, format!("classes by the field {f}, which the layer hasn't: every feature draws as the rest"));
     }
-    Ok(Some(added_name))
+}
+
+/// Gives the tile layer a QGIS web layer was added as (`added` is what `map.addTiles` or
+/// `service.add` answered) the layer's visibility and opacity. Tile layers have no scale range,
+/// so one is noted.
+fn tile_settings(s: &mut Session, added: &Value, layer: &qgis::ProjectLayer, report: &mut Report) {
+    let name = layer.name.as_str();
+    let st = &layer.style;
+    let transparency = st.transparency.filter(|t| t.is_finite() && *t > 0.0);
+    let index = added.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    match index.and_then(|i| s.map_mut().tiles.get_mut(i)) {
+        Some(t) => {
+            t.visible = layer.visible;
+            if let Some(tr) = transparency {
+                t.opacity = (1.0 - tr / 100.0).clamp(0.0, 1.0);
+            }
+        }
+        None => {
+            if !layer.visible {
+                report.approximated(name, "a hidden web layer, added shown");
+            }
+            if transparency.is_some() {
+                report.approximated(name, "its transparency: added opaque");
+            }
+        }
+    }
+    if st.min_scale.flatten().is_some() || st.max_scale.flatten().is_some() {
+        report.approximated(name, "its scale range: a web layer draws at every scale");
+    }
 }
 
 /// Goes to the project's saved view, or to its layers when that view shows none of them.
@@ -232,13 +266,6 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let style = qgis::read_style(&text, &name, &mut report)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     style.apply(l);
-    for c in std::iter::once(&mut l.labels.default).chain(l.labels.classes.iter_mut()) {
-        if let Some(w) = c.where_.clone()
-            && rustgis_data::query::parse(&w, &l.dataset).is_err()
-        {
-            report.skipped(&name, format!("the label class \"{}\", whose clause `{w}` doesn't fit the layer", c.name));
-            c.visible = false;
-        }
-    }
+    check_fields(l, &name, &mut report);
     Ok(json!({"notes": report.notes.iter().map(note_json).collect::<Vec<_>>()}))
 }

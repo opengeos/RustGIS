@@ -690,6 +690,29 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let rivers = s.map().layer_by_name("Rivers").unwrap();
     assert_eq!((rivers.line_strokes.len(), rivers.transparency), (2, 50.0));
     assert!(s.run("style.importQgis", &json!({"layer": "Rivers", "text": "<nonsense"})).is_err());
+    // A style saved from another layer: classes and labels by fields Rivers hasn't are noted, and
+    // the label class that has nothing to label from is switched off.
+    let qml = r#"<qgis version="3.22" labelsEnabled="1"><renderer-v2 type="categorizedSymbol" attr="nofield"><categories><category value="a" symbol="0" render="true"/></categories>
+        <symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1"><prop k="line_color" v="0,0,0,255"/></layer></symbol></symbols></renderer-v2>
+        <labeling type="simple"><settings><text-style fieldName="nolabelfield"/></settings></labeling></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("nofield") && text.contains("nolabelfield"), "{text}");
+    let rivers = s.map().layer_by_name("Rivers").unwrap();
+    assert!(rivers.labels.classes.iter().chain(std::iter::once(&rivers.labels.default)).all(|c| c.field != "nolabelfield" || !c.visible));
+    // A project's web layer keeps its visibility and opacity; its scale range is noted.
+    let qgs = r#"<qgis version="3.42.0"><title>Web</title>
+  <layer-tree-group><layer-tree-layer id="x" checked="Qt::Unchecked"/></layer-tree-group>
+  <projectlayers><maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>x</id><datasource>type=xyz&amp;url=https://tiles.example/%7Bz%7D/%7Bx%7D/%7By%7D.png&amp;zmax=19&amp;zmin=0</datasource><layername>Tiles</layername><provider>wms</provider>
+    <pipe><rasterrenderer opacity="0.25" type="singlebandcolordata"/></pipe></maplayer></projectlayers></qgis>"#;
+    let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let t = s.map().tiles.iter().find(|t| t.name == "Tiles").expect("the web layer is added");
+    assert!(!t.visible, "unchecked in the layer tree");
+    assert!((t.opacity - 0.25).abs() < 1e-6, "{}", t.opacity);
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("scale range"), "{text}");
+    // Plugins can't run the import: a project names files and web addresses its layers come from.
+    assert!(crate::cmd::plugins::user_only("project.importQgis"));
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1428,6 +1451,8 @@ fn hostile_params_never_panic() {
         json!({"type": "albers", "lon_0": f64::MAX, "lat_1": "x", "lat_2": -1e308}),
         json!({"kind": "legend", "element": 1, "exclude": [null, 7, "", {"x": 1}]}),
         json!({"kind": "text", "element": 1, "font": {"family": "serif"}, "italic": [], "align": 7}),
+        // A QGIS project and style whose web layer and scale range are junk.
+        json!({"text": "<qgis><projectlayers><maplayer type=\"raster\" hasScaleBasedVisibilityFlag=\"1\" minScale=\"NaN\" maxScale=\"-1e308\"><datasource>type=xyz&amp;url=&amp;zmax=999</datasource><layername></layername><provider>wms</provider><pipe><rasterrenderer opacity=\"inf\"/></pipe></maplayer></projectlayers></qgis>"}),
         // A label class placed along lines, with junk the placement and style read after it.
         json!({"layer": "Countries", "position": "curved", "italic": "maybe", "size": -1e308}),
         // A publication sheet's style, accent and orientation, and a shape's rounded corners.

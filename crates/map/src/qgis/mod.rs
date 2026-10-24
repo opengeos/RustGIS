@@ -17,6 +17,8 @@ mod symbol;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
+
 use roxmltree::{Document, Node, ParsingOptions};
 use serde::Serialize;
 
@@ -42,7 +44,12 @@ pub const QGIS_SCALE: f64 = (25.4 / 96.0) / 0.28;
 /// What an import carried over only in part, or left out, layer by layer.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Report {
+    /// Added to by [`Report::note`] only, which keeps `index` in step.
     pub notes: Vec<Note>,
+    /// Where each note is in `notes`, by layer, kind and text: a hostile project can make
+    /// thousands of different notes, and a repeat is found without going through them all.
+    #[serde(skip)]
+    index: HashMap<(String, NoteKind, String), usize>,
 }
 
 /// One thing an import couldn't carry over as QGIS has it.
@@ -56,7 +63,7 @@ pub struct Note {
     pub count: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteKind {
     /// Drawn, but not quite as QGIS draws it.
@@ -68,11 +75,13 @@ pub enum NoteKind {
 impl Report {
     /// Notes `text` about `layer`, counting a repeat rather than listing it again.
     pub fn note(&mut self, layer: &str, kind: NoteKind, text: impl Into<String>) {
-        let text = text.into();
-        if let Some(n) = self.notes.iter_mut().find(|n| n.layer == layer && n.kind == kind && n.text == text) {
+        let key = (layer.to_string(), kind, text.into());
+        if let Some(n) = self.index.get(&key).and_then(|&i| self.notes.get_mut(i)) {
             n.count = n.count.saturating_add(1);
         } else if self.notes.len() < MAX_NOTES {
-            self.notes.push(Note { layer: layer.to_string(), kind, text, count: 1 });
+            self.index.insert(key.clone(), self.notes.len());
+            let (layer, kind, text) = key;
+            self.notes.push(Note { layer, kind, text, count: 1 });
         }
     }
 
@@ -82,15 +91,6 @@ impl Report {
 
     pub fn skipped(&mut self, layer: &str, text: impl Into<String>) {
         self.note(layer, NoteKind::Skipped, text);
-    }
-
-    /// Takes in another report's notes, on top of its own.
-    pub fn extend(&mut self, other: Report) {
-        for n in other.notes {
-            for _ in 0..n.count.min(MAX_NOTES) {
-                self.note(&n.layer, n.kind, n.text.clone());
-            }
-        }
     }
 }
 
@@ -288,17 +288,11 @@ fn read_style_node(node: Node, layer: &str, report: &mut Report) -> Style {
         }
         report.skipped(layer, format!("its raster colouring ({} renderer)", r.attribute("type").unwrap_or("unknown")));
     }
-    if node.attribute("labelsEnabled") != Some("0")
-        && let Some(l) = child(node, "labeling")
-    {
-        style.labels = labels::read(l, layer, report);
-    }
-    if node.attribute("labelsEnabled") == Some("0")
-        && let Some(l) = child(node, "labeling")
-    {
+    if let Some(l) = child(node, "labeling") {
         // Set up but switched off: carried over, switched off.
+        let off = node.attribute("labelsEnabled") == Some("0");
         style.labels = labels::read(l, layer, report).map(|mut l| {
-            l.enabled = false;
+            l.enabled &= !off;
             l
         });
     }

@@ -835,8 +835,6 @@ impl Session {
         cmd::tiles::follow_style_view(self, web_time::Duration::ZERO)
     }
 
-    /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
-    /// panic restores it.
     /// Runs command `id` as a part of the one running now (a command made of others): its
     /// changes are in that command's one undo step, not a step of their own.
     pub(crate) fn run_part(&mut self, id: &str, params: &Value) -> CmdResult {
@@ -846,6 +844,8 @@ impl Session {
         res
     }
 
+    /// Runs a command by id. Mutating commands snapshot the project for undo; an error or a
+    /// panic restores it.
     pub fn run(&mut self, id: &str, params: &Value) -> CmdResult {
         // The merge key asked for ([`Session::merge_undo`]) goes to this command if it runs, and is
         // gone if it's refused first, so it can't merge a later command into the last step.
