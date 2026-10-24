@@ -4214,7 +4214,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     // The pattern as typed, kept while the box has focus; set when it loses it. The
                     // draft remembers whose stroke it is, so it never shows or lands on another
                     // layer's or class's stroke at the same place.
-                    let id = ui.id().with(("stroke_dash", i));
+                    let id = ui.scope_id().with(("stroke_dash", i));
                     let owner = (l.id, class.cloned());
                     let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
                     let draft = draft_for(ui.data_mut(|m| m.get_temp::<DashDraft>(id)), &owner);
