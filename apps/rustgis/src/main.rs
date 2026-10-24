@@ -309,7 +309,7 @@ fn main() -> eframe::Result {
     let files: Vec<&String> = args
         .iter()
         .enumerate()
-        .filter(|(i, a)| !a.starts_with("--") && !(*i > 0 && args.get(i - 1).is_some_and(|p| p == "--backend")))
+        .filter(|(i, a)| !(a.starts_with("--") || *i > 0 && args.get(i - 1).is_some_and(|p| p == "--backend")))
         .map(|(_, a)| a)
         .collect();
     // Installed plugins, before the first session lists commands and tools.

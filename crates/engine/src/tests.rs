@@ -15380,11 +15380,25 @@ fn gp_zonal_stats_end_to_end_and_undo() {
     assert_eq!(merc_layer.dataset.value(0, m_count_idx), &Value::Int(4));
     assert_eq!(merc_layer.dataset.value(0, m_mean_idx), &Value::Float(16.5));
 
+    let multiband = Raster::new(
+        "multi",
+        w,
+        h,
+        vec![vec![2.0; (w * h) as usize], vec![7.0; (w * h) as usize]],
+        gt,
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    s.map_mut().add_raster("multi", rustgis_map::RasterLayer::from_path(multiband, "multi.tif"));
+
     // "bands": "all"
     let all_res = s.run(
         "gp.zonalStats",
         &json!({
-            "raster": "dem",
+            "raster": "multi",
             "polygons": "districts",
             "output": "all_bands_out",
             "bands": "all",
@@ -15394,11 +15408,23 @@ fn gp_zonal_stats_end_to_end_and_undo() {
 
     assert!(s.run("gp.zonalStats", &json!({})).is_err());
     assert!(s.run("gp.zonalStats", &json!({"raster": "nonexistent", "polygons": "districts"})).is_err());
-    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "Cities"})).is_err());
-    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [999]})).is_err());
-    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [0]})).is_err());
-    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [-1]})).is_err());
-    assert!(s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [1.5]})).is_err());
+    let all_layer = s.map().layer_by_name("all_bands_out").unwrap();
+    for (field, expected) in [("multi_b1_mean", 2.0), ("multi_b2_mean", 7.0)] {
+        let idx = all_layer.dataset.field_index(field).expect("all bands must be expanded");
+        assert_eq!(all_layer.dataset.value(0, idx), &Value::Float(expected));
+    }
+    let error = s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "Cities"})).unwrap_err();
+    assert!(error.contains("needs polygon geometries"), "{error}");
+    for (band, fragment) in [
+        (json!(999), "raster has bands"),
+        (json!(0), "positive"),
+        (json!(-1), "positive"),
+        (json!(1.5), "integers"),
+        (json!(4294967297u64), "raster has bands"),
+    ] {
+        let error = s.run("gp.zonalStats", &json!({"raster": "dem", "polygons": "districts", "bands": [band]})).unwrap_err();
+        assert!(error.contains(fragment), "{error}");
+    }
 }
 
 #[test]
@@ -15552,7 +15578,9 @@ fn raster_clip_polygon_selection_semantics_and_partial_failure() {
             "name": "dem_partial",
         }),
     );
-    assert!(res_partial.is_ok(), "clip partial should succeed for valid feature: {res_partial:?}");
+    let partial_result = res_partial.expect("clip partial should succeed for valid feature");
+    let warning = partial_result["messages"][0].as_str().expect("partial failures must be visible in command output");
+    assert!(warning.contains("skipped 1 feature(s)"), "{warning}");
     let partial_layer = s.map().layer_by_name("dem_partial").expect("dem_partial exists");
     let partial_raster = partial_layer.raster.as_ref().unwrap().data.as_ref().unwrap();
     assert_eq!(partial_raster.width, 2);

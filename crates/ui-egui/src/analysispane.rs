@@ -322,6 +322,9 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             combo(ui, "wf_zs_raster", "Raster layer", &mut app.workflow.layer, &rasters);
             ui.label(egui::RichText::new(tl!("Polygon layer")).small().weak());
             combo(ui, "wf_zs_poly", "Polygon layer", &mut app.workflow.layer2, &polygons);
+            if app.session.map().layer_by_name(&app.workflow.layer2).is_some_and(|l| !l.selection.is_empty()) {
+                ui.label(egui::RichText::new(tl!("Only selected polygons will be included in the output.")).small().weak());
+            }
             ui.horizontal(|ui| {
                 let band_label = ui.label(tl!("Band"));
                 ui.add(egui::TextEdit::singleline(&mut app.workflow.zonal_stats.bands).hint_text("1").desired_width(40.0))
@@ -340,24 +343,21 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 .labelled_by(output_label.id);
             });
             let band_str = app.workflow.zonal_stats.bands.trim();
-            let total_bands = app
-                .session
-                .map()
-                .layer_by_name(&app.workflow.layer)
-                .and_then(|l| l.raster.as_ref())
-                .and_then(|r| r.data.as_ref())
-                .map(|d| d.bands.len())
-                .unwrap_or(1);
-            let band_res =
-                if band_str.is_empty() { Ok(vec![0]) } else { rustgis_engine::analysis::rasterops::parse_bands_str(band_str, total_bands) };
+            let raster_data =
+                app.session.map().layer_by_name(&app.workflow.layer).and_then(|l| l.raster.as_ref()).and_then(|r| r.data.as_ref());
+            let total_bands = raster_data.map_or(0, |d| d.band_count());
+            let raster_ready = raster_data.is_some();
+            let band_res = rustgis_engine::analysis::zonal_bands(&json!(band_str), total_bands);
             let band_valid = band_res.is_ok();
             let band_err = band_res.err();
             let layers_ready = !app.workflow.layer.is_empty() && !app.workflow.layer2.is_empty();
-            let can_run = layers_ready && band_valid;
+            let can_run = layers_ready && raster_ready && band_valid;
             if !layers_ready {
                 ui.label(egui::RichText::new(tl!("Add a raster and a polygon layer to calculate zonal statistics.")).small().weak());
-            } else if let Some(err) = band_err {
-                ui.label(egui::RichText::new(err).small().color(t.amber));
+            } else if !raster_ready {
+                ui.label(egui::RichText::new(tl!("Raster data is unavailable.")).small().color(t.amber));
+            } else if band_err.is_some() {
+                ui.label(egui::RichText::new(tl!("Band must be a positive integer, list of bands, or 'all'.")).small().color(t.amber));
             }
             if ui.add_enabled(can_run, egui::Button::new(tl!("Calculate Statistics"))).clicked() {
                 let mut params = json!({
@@ -729,7 +729,7 @@ pub fn workflows(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "operation": "clip",
                         "polygon": app.workflow.layer2,
                     });
-                    p["selectedOnly"] = json!(app.workflow.selected_only);
+                    p["selectedOnly"] = json!(effective_selected_only);
                     run(app, "raster.process", p);
                 }
             } else {

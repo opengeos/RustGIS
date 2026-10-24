@@ -403,7 +403,7 @@ fn utm_zone(lon: f64, lat: f64) -> u32 {
 /// The Sentinel-2 (MGRS 100 km) tile holding a place, such as `17SKV`; `None` outside MGRS's
 /// UTM latitudes (80° S to 84° N).
 pub fn mgrs_tile(lon: f64, lat: f64) -> Option<String> {
-    if !(lon.is_finite() && lat.is_finite()) || !(-80.0..84.0).contains(&lat) {
+    if !(lon.is_finite() && lat.is_finite() && (-80.0..84.0).contains(&lat)) {
         return None;
     }
     let zone = utm_zone(lon, lat);

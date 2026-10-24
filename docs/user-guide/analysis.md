@@ -550,6 +550,16 @@ For `raster.process` polygon clipping, `selectedOnly: true` requires a selection
 The Process pane initially checks Selected only when the chosen layer has a selection, and sends
 the choice explicitly. Clipping and Zonal Statistics share
 polygon transformation rules so a failed hole cannot silently enlarge the sampled area.
+A malformed ring or a failed projection rejects its complete polygon part in all raster masking
+operations. Clipping skips invalid features and reports their count in the command result;
+its output bounds cover the valid polygons only.
+
+An empty band field or `bands: ""` selects band 1. The pane disables calculation when raster
+data is unavailable and indicates when only selected polygons will appear in the output.
+
+Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
+case-insensitive names. An exact spelling takes precedence; otherwise a name matching several
+fields is rejected as ambiguous. This prevents silently using the wrong field.
 
 ## Deep learning and hosted imagery
 

@@ -400,7 +400,7 @@ impl Raster {
         if self.georeferenced {
             return Err(DataError::Format("only a raster with no coordinates can be placed".into()));
         }
-        if !bbox.iter().all(|v| v.is_finite()) || !(w < e && s < n) {
+        if !(bbox.iter().all(|v| v.is_finite()) && w < e && s < n) {
             return Err(DataError::Format("the box is [west, south, east, north]".into()));
         }
         let old = self.transform;
