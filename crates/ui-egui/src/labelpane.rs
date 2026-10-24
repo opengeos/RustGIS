@@ -657,6 +657,8 @@ mod tests {
     }
 
     fn with_cities() -> RustGisApp {
+        // Keep the font picker ready before the harness checks its role or settles the layout.
+        super::families::installed();
         let mut app = RustGisApp::with_sample();
         let id = layer_id(&app, "Cities");
         app.session.run("layer.select", &json!({"layer": id})).unwrap();
@@ -1101,7 +1103,6 @@ mod tests {
     /// Font, italic and line placement edits affect the chosen class and leave Default unchanged.
     #[test]
     fn font_italic_and_line_placement_edit_the_chosen_class() {
-        super::families::installed();
         let mut app = with_cities();
         let rivers = layer_id(&app, "Rivers");
         app.session.run("layer.select", &json!({"layer": rivers})).unwrap();
