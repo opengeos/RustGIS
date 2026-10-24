@@ -296,7 +296,12 @@ help; there the help by the cursor is the tool's. A `task.addStep` line works th
 `"command": "` offers the commands, and its `"params"` that command's keys and help. For a
 command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
 icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
-(before or after it), or of the active layer when it names none, with each field's type beside it. Accepting one writes its name
+(before or after it), or of the active layer when it names none, with each field's type beside it.
+`"map": "`, `"layout": "` and `"table": "` offer the project's maps, layouts and standalone tables,
+with their layer counts, page sizes and row counts. `"class": "` offers the line's layer's label
+classes (or the active layer's), with each class's SQL clause, or **All features**. Default is
+included under its current name, except for commands that cannot remove or move it.
+Accepting one writes its name
 as the line's JSON needs it (`"Big \"lakes\""`). A `{` or `[`
 typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
 so does a `"` where a string can start (after a space, `{`, `[`, `,` or `:`). A `}` or `]` typed
