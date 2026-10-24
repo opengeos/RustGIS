@@ -17,6 +17,10 @@ table. **Data › Export** also writes rasters to GeoTIFF, and **Data Interop** 
 KML, GPX or CSV with WKT. Layouts, reports and presentations export from their own tabs and panes
 (see [Layouts and Reports](layouts.md)).
 
+GeoPackage exports require a new filename. Exporting to an existing `.gpkg` is refused to
+protect its tables and data, even if the save dialog offers to replace the file. Export does
+not append a table to an existing GeoPackage or replace one of its tables.
+
 Packages and project item files are described under [Project items](data.md#project-items).
 
 ## Sharing as open formats

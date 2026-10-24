@@ -404,36 +404,57 @@ fn free_name(fields: &[Field], base: &str) -> String {
 }
 
 /// Writes a dataset as a GeoPackage with one table (WGS 84, with an R-tree spatial index), or an
-/// attributes table for a dataset without geometry. The file is built beside `path` and moved into
-/// place when complete, so a failed write leaves any existing file as it was.
+/// attributes table for a dataset without geometry. The destination must be new: an existing
+/// GeoPackage may contain other tables. The file is built beside `path` and installed without
+/// replacing anything, so a failed write leaves existing data untouched.
 pub fn write(ds: &crate::Dataset, path: &Path) -> Result<()> {
     write_in(ds, path, Crs::LonLat)
 }
 
 /// Writes a dataset whose geometry is in `crs`'s coordinates as a GeoPackage in that system.
 pub fn write_in(ds: &crate::Dataset, path: &Path, crs: Crs) -> Result<()> {
-    let tmp = crate::io::temp_beside(path)?;
-    std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-    let res = (|| {
-        let conn = Connection::open(&tmp).map_err(err)?;
-        build(&conn, ds, crs)?;
-        conn.close().map_err(|(_, e)| err(e))?;
-        // Built without syncing (fast); synced once before it replaces anything. (Windows flushes
-        // only a handle open for writing.)
-        std::fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        // The old file's journal or write-ahead log would be replayed against the new one.
-        for side in ["-wal", "-shm", "-journal"] {
-            let mut p = path.as_os_str().to_owned();
-            p.push(side);
-            let _ = std::fs::remove_file(std::path::PathBuf::from(p));
+    check_new_destination(path)?;
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    // Drop the file handle before SQLite opens it, including on Windows. TempPath cleans up on
+    // every error, and persist_noclobber refuses files created after the check above as well.
+    let tmp = tempfile::Builder::new().prefix(".rustgis-gpkg-").suffix(".tmp").tempfile_in(parent)?.into_temp_path();
+    let conn = Connection::open(&tmp).map_err(err)?;
+    build(&conn, ds, crs)?;
+    conn.close().map_err(|(_, e)| err(e))?;
+    // Built without syncing (fast); synced once before installation. Windows needs a write handle.
+    std::fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
+    check_new_destination(path)?;
+    tmp.persist_noclobber(path).map_err(|e| destination_error(path, e.error))?;
+    Ok(())
+}
+
+/// Refuses existing files, including dangling symlinks and journals left without their database.
+fn check_new_destination(path: &Path) -> Result<()> {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let mut entry = path.as_os_str().to_owned();
+        entry.push(suffix);
+        match std::fs::symlink_metadata(Path::new(&entry)) {
+            Ok(_) => return Err(destination_error(path, std::io::ErrorKind::AlreadyExists.into())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
-        Ok(())
-    })();
-    if res.is_err() {
-        let _ = std::fs::remove_file(&tmp);
     }
-    res
+    Ok(())
+}
+
+fn destination_error(path: &Path, error: std::io::Error) -> DataError {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "GeoPackage export cannot replace {} or its SQLite journals. Choose a new filename to preserve existing data.",
+                path.display()
+            ),
+        )
+        .into()
+    } else {
+        error.into()
+    }
 }
 
 fn build(conn: &Connection, ds: &crate::Dataset, crs: Crs) -> Result<()> {

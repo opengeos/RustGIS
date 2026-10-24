@@ -8098,6 +8098,28 @@ fn blank_project_starts_in_a_projected_crs() {
 }
 
 #[test]
+fn exporting_features_refuses_to_replace_an_existing_geopackage() {
+    let dir = std::env::temp_dir().join(format!("rustgis-engine-gpkg-preserve-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("county.gpkg");
+    let mut s = world();
+    s.run("share.exportLayer", &json!({"layer": "Cities", "path": path})).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE zoning (name TEXT);
+         INSERT INTO zoning VALUES ('residential');
+         INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('zoning', 'attributes', 'zoning');",
+    )
+    .unwrap();
+    drop(conn);
+    let before = std::fs::read(&path).unwrap();
+    let error = s.run("share.exportLayer", &json!({"layer": "Countries", "path": path})).unwrap_err();
+    assert!(error.to_string().contains("Choose a new filename"), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn layers_export_to_geopackage_geoparquet_shapefile_and_kmz() {
     let dir = std::env::temp_dir().join(format!("rustgis-engine-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
