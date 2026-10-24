@@ -163,6 +163,7 @@ fn zooming_a_planet_with_raster_tiles_reuses_the_gpu_frame() {
             delta: egui::vec2(0.0, 2.0),
             phase: egui::TouchPhase::Move,
             modifiers: Default::default(),
+            source: egui::MouseWheelSource::Wheel,
         });
         h.step();
     }
@@ -298,6 +299,7 @@ fn raster_tiles_move_with_the_camera_on_the_gpu() {
                 delta: egui::vec2(0.0, 0.5),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
+                source: egui::MouseWheelSource::Wheel,
             });
             h.step();
         }

@@ -99,7 +99,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     pos2(full.min.x - layout.left_pad, full.min.y),
                     pos2(full.max.x + HEADER_PAD, full.max.y + layout.bottom_pad),
                 );
-                let drag = ui.interact(bar, egui::Id::new("header_drag"), Sense::click_and_drag());
+                let drag = ui.interact(bar, egui::Id::unique("header_drag"), Sense::click_and_drag());
                 if drag.double_clicked() {
                     let maximized = ui.ctx().input(|i| i.viewport().maximized).unwrap_or(false);
                     let action = app.ui.titlebar.map_or(DoubleClick::Zoom, |m| m.double_click);
@@ -174,7 +174,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                     26.0
                 };
                 let sr = Rect::from_min_max(pos2(right - sw, full.center().y - 12.0), pos2(right, full.center().y + 12.0));
-                let resp = ui.interact(sr, egui::Id::new("command_search_box"), Sense::click());
+                let resp = ui.interact(sr, egui::Id::unique("command_search_box"), Sense::click());
                 ui.painter().rect_filled(sr, CornerRadius::same(12), if resp.hovered() { t.hover } else { t.input });
                 ui.painter().rect_stroke(sr, CornerRadius::same(12), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                 let compact = sw < 100.0;
@@ -816,7 +816,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
     let screen = ctx.content_rect();
     let width = (screen.width() - 48.0).clamp(220.0, 520.0);
     let list_h = (screen.height() - 190.0).clamp(120.0, 360.0);
-    let modal = egui::Modal::new(egui::Id::new("command_search")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("command_search")).show(ctx, |ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
@@ -1129,7 +1129,7 @@ pub fn notices(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut y = screen.max.y - 40.0;
     for toast in app.map.toasts.iter_mut().rev().take(3) {
         // Keyed by the notice, not the slot, so a selection stays with its text as toasts come and go.
-        let shown = egui::Area::new(egui::Id::new(("toast", toast.id)))
+        let shown = egui::Area::new(egui::Id::unique(("toast", toast.id)))
             .fixed_pos(pos2(screen.max.x - 380.0, y - 44.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
@@ -1216,7 +1216,7 @@ mod tests {
         h.run();
         assert_eq!(h.state().session.undo_depth(), depth, "the project untouched");
         assert_eq!(h.state().workflow.script, "", "the typing undone");
-        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("script_text")));
+        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("script_text")));
         h.run();
         h.event(undo);
         h.run();

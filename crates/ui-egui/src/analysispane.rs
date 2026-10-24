@@ -1092,7 +1092,7 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
     let out_h = script_out_height(ui);
     // One id whether the pane scrolls as a whole or not, so resizing it across that keeps the
     // box's focus, cursor and selection.
-    let box_id = egui::Id::new("script_text");
+    let box_id = egui::Id::unique("script_text");
     // The suggestion list's keys (#662), taken before the box sees them.
     if let Some((offer, item)) = crate::scriptcomplete::keys(ui, box_id, &app.workflow.script) {
         crate::scriptcomplete::accept(ui, box_id, &mut app.workflow.script, &offer, &item, &app.session);

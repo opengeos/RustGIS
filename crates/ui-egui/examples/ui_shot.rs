@@ -228,6 +228,7 @@ fn main() {
                 delta: egui::vec2(0.0, dy),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Wheel,
             });
             harness.step();
         } else if l.get("release").is_some() {

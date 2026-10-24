@@ -101,6 +101,7 @@ fn command_search_basemap_gallery_selects_and_can_open_tile_dialog() {
         delta: egui::vec2(0.0, -800.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
     });
     for _ in 0..6 {
         h.step();

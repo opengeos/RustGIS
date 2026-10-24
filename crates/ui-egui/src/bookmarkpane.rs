@@ -66,7 +66,7 @@ fn run(app: &mut RustGisApp, id: &str, p: Value) {
 fn act(ui: &mut Ui, icon: &str, tip: &str) -> egui::Response {
     let enabled = ui.is_enabled();
     let r = widgets::icon_button(ui, icon, tip);
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
     r
 }
 
@@ -181,7 +181,7 @@ fn row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, map: &str, in_view: bool, 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
             let tip = if open { tl!("Hide the description") } else { tl!("Show the description") };
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
             icons::paint(ui.painter(), r, if open { "chevron_down" } else { "chevron_right" }, t.text_dim, t.accent);
             if resp.on_hover_text(tip).clicked() {
                 app.ui.bookmarks.open = if open { None } else { Some(key.clone()) };

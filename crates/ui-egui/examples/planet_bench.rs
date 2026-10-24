@@ -94,6 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     delta: egui::vec2(0.0, 4.0),
                     phase: egui::TouchPhase::Move,
                     modifiers: Default::default(),
+                    source: egui::MouseWheelSource::Wheel,
                 });
                 let start = std::time::Instant::now();
                 h.step();

@@ -294,7 +294,7 @@ pub fn windows(app: &mut RustGisApp, ctx: &egui::Context) {
         let offset = 28.0 * i as f32;
         let mut open = true;
         egui::Window::new(format!("{} · {}", th.label, th.id))
-            .id(egui::Id::new(("acp_thread", th.id.as_str())))
+            .id(egui::Id::unique(("acp_thread", th.id.as_str())))
             .open(&mut open)
             .collapsible(true)
             .resizable(true)

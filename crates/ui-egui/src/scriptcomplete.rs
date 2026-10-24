@@ -658,7 +658,7 @@ fn help_at(session: &rustgis_engine::Session, script: &str, at: usize, h: &Hint)
 /// commands don't while the app runs; their count tells another session's registry apart).
 fn script_ids_cached(ui: &Ui, session: &rustgis_engine::Session) -> std::sync::Arc<Vec<String>> {
     type Kept = ((u64, usize), std::sync::Arc<Vec<String>>);
-    let key = Id::new("script_complete_ids");
+    let key = Id::unique("script_complete_ids");
     let now = (rustgis_engine::plugins::revision(), session.registry.commands.len());
     if let Some((was, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
         && was == now
@@ -1494,7 +1494,7 @@ mod tests {
         type_in(&mut h, "labels.sty");
         h.key_press(egui::Key::Enter);
         h.run();
-        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::new("script_text")).unwrap();
+        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::unique("script_text")).unwrap();
         let now = (state.cursor.char_range().unwrap(), h.state().workflow.script.clone());
         let mut undoer = state.undoer();
         let back = undoer.undo(&now).map(|(_, text)| text.clone());
@@ -1589,6 +1589,7 @@ mod tests {
             delta: egui::vec2(0.0, 100_000.0),
             modifiers: egui::Modifiers::NONE,
             phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
         });
         // egui eases a wheel's scroll over frames, asking for a repaint until it's done.
         h.run_steps(60);
@@ -1793,7 +1794,7 @@ mod tests {
         }
         let items = super::offer("labels.", 7, &super::script_ids(&h.state().session)).unwrap().items;
         assert!(items.len() > 3, "a longer list: {items:?}");
-        let list = h.ctx.data(|d| d.get_temp::<super::List>(egui::Id::new("script_text").with("complete"))).unwrap();
+        let list = h.ctx.data(|d| d.get_temp::<super::List>(egui::Id::unique("script_text").with("complete"))).unwrap();
         let (shown, _) = list.drawn.unwrap();
         let last = h.get_by_role_and_label(egui::accesskit::Role::Button, items.last().unwrap()).rect();
         assert!(last.max.y <= shown.max.y, "every item in view, no scroll: {last:?} in {shown:?}");
@@ -1915,7 +1916,7 @@ mod tests {
         h.run();
         assert_eq!(h.state().workflow.script, "labels.style ");
         type_in(&mut h, "{");
-        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::new("script_text")).unwrap();
+        let state = egui::widgets::text_edit::TextEditState::load(&h.ctx, egui::Id::unique("script_text")).unwrap();
         let now = (state.cursor.char_range().unwrap(), h.state().workflow.script.clone());
         let back = state.undoer().undo(&now).map(|(_, text)| text.clone());
         assert!(back.is_some_and(|t| !t.contains('{')), "no lone brace left by undo");

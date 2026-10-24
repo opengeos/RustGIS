@@ -101,7 +101,7 @@ pub struct AssistantState {
 const FIELDS: [&str; 3] = ["assistant_model", "assistant_url", "assistant_key"];
 
 fn typing(ctx: &egui::Context) -> bool {
-    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::new(f))))
+    ctx.memory(|m| FIELDS.iter().any(|f| m.has_focus(egui::Id::unique(f))))
 }
 
 fn pref(app: &RustGisApp, key: &str) -> Option<String> {
@@ -692,7 +692,10 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
                     return;
                 }
                 ui.add(
-                    egui::TextEdit::singleline(&mut cfg.model).id(egui::Id::new(FIELDS[0])).desired_width(150.0).hint_text(tl!("model id")),
+                    egui::TextEdit::singleline(&mut cfg.model)
+                        .id(egui::Id::unique(FIELDS[0]))
+                        .desired_width(150.0)
+                        .hint_text(tl!("model id")),
                 );
                 if !app.assistant.models.is_empty() {
                     egui::ComboBox::from_id_salt("assistant_models").selected_text("").width(24.0).height(320.0).show_ui(ui, |ui| {
@@ -724,14 +727,14 @@ fn provider_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, cfg: &mut Co
         let preset = provider::preset(&cfg.provider);
         if !cfg.login() {
             ui.label(tl!("Address"));
-            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::new(FIELDS[1])).desired_width(200.0));
+            ui.add(egui::TextEdit::singleline(&mut cfg.base_url).id(egui::Id::unique(FIELDS[1])).desired_width(200.0));
             ui.end_row();
             ui.label(tl!("API key"));
             ui.horizontal(|ui| {
                 let hint = if preset.is_some_and(|p| p.keyless) { tl!("not needed") } else { tl!("paste your key") };
                 ui.add(
                     egui::TextEdit::singleline(&mut cfg.key)
-                        .id(egui::Id::new(FIELDS[2]))
+                        .id(egui::Id::unique(FIELDS[2]))
                         .password(!app.assistant.show_key)
                         .desired_width(150.0)
                         .hint_text(hint),
@@ -1159,7 +1162,7 @@ fn composer(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, busy: bool, ctx: &egu
     if app.assistant.agent.as_ref().is_some_and(|a| a.config.login() && !a.config.key.is_empty()) {
         plan_line(ui, t);
     }
-    let id = egui::Id::new("assistant_input");
+    let id = egui::Id::unique("assistant_input");
     // Enter sends; Shift+Enter starts a new line.
     let focused = ui.memory(|m| m.has_focus(id));
     let mut submit = false;
@@ -1846,7 +1849,7 @@ mod tests {
     }
 
     fn right_pane(h: &egui_kittest::Harness<'_, RustGisApp>) -> egui::Rect {
-        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("right_pane")).unwrap().outer_rect
+        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::unique("right_pane")).unwrap().outer_rect
     }
 
     /// The window with the assistant open and `entries` in the conversation.

@@ -78,7 +78,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut calculate = false;
     let t = Tokens::get(ctx);
     egui::Window::new(tl!("Calculate Geometry"))
-        .id(egui::Id::new("geometry_calculator_compact"))
+        .id(egui::Id::unique("geometry_calculator_compact"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)

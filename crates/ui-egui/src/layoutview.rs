@@ -556,7 +556,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     // A stable id: dragging an element selects it and opens the Format pane beside the page,
     // and an automatic id would change with it, losing the drag before it is dropped (#325).
     ui.advance_cursor_after_rect(area);
-    let resp = ui.interact(area, ui.id().with("layout_page"), Sense::click_and_drag());
+    let resp = ui.interact(area, ui.scope_id().with("layout_page"), Sense::click_and_drag());
     let painter = ui.painter_at(area);
     painter.rect_filled(area, 0.0, if t.dark { Color32::from_gray(38) } else { Color32::from_rgb(0xD9, 0xDD, 0xE3) });
     let (page, s) = page_rect(&app.layout, area, &layout);
@@ -1177,7 +1177,7 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
     }
     let Some(g) = grid else { return };
     // Each number kept across a drag until it is let go (#607).
-    let key = |field: &str| egui::Id::new(("grid_drag", id, field));
+    let key = |field: &str| egui::Id::unique(("grid_drag", id, field));
     egui::Grid::new(("grid_props", id)).num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Interval"));
         let mut step = g.step;
@@ -1320,7 +1320,7 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
     let Some(e) = app.layout.selected.and_then(|id| layout.element(id)).cloned() else { return };
     let id = e.id;
     // Each number kept across a drag until it is let go (#607): one key per layout, element and field.
-    let drag_key = |field: &str| egui::Id::new(("layout_drag", li, id, field));
+    let drag_key = |field: &str| egui::Id::unique(("layout_drag", li, id, field));
     let update = |app: &mut RustGisApp, p: Value| {
         let mut p = p;
         p["layout"] = json!(li);

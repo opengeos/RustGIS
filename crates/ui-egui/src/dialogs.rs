@@ -193,7 +193,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut close = false;
     // Opens centred and can be moved; each dialog remembers where it was put.
     egui::Window::new(tl!(title))
-        .id(egui::Id::new(("dialog", which)))
+        .id(egui::Id::unique(("dialog", which)))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
@@ -234,7 +234,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 ui.label(tl!("Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file."));
                 ui.label(tl!("Source coordinate system"));
                 let response = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:2263").desired_width(f32::INFINITY));
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Source coordinate system")));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(tl!("In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP."));
                 close = buttons(app, ui, "Choose File…", |app| app.run("ui.importShapefile", json!({"crs": app.dialogs.text.trim()})).map(|_| ()));
             }
@@ -243,7 +243,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                 ui.label(tl!("Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged."));
                 ui.label(tl!("Source coordinate system"));
                 let label = ui.add(egui::TextEdit::singleline(&mut app.dialogs.text).hint_text("EPSG:2263").desired_width(f32::INFINITY));
-                label.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Source coordinate system")));
+                label.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Source coordinate system")));
                 ui.label(egui::RichText::new(tl!("Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.")).weak());
                 if ui.button(tl!("Import Original File…")).clicked() {
                     let crs = app.dialogs.text.clone();

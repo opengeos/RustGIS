@@ -255,7 +255,7 @@ pub type Cache = egui::cache::FrameCache<LayoutJob, Highlighter>;
 /// commands don't change while the app runs.
 pub fn unknown_ids_cached(ui: &egui::Ui, session: &rustgis_engine::Session, script: &str) -> std::sync::Arc<Vec<String>> {
     type Kept = (u64, u64, std::sync::Arc<Vec<String>>);
-    let key = egui::Id::new("script_unknown_ids");
+    let key = egui::Id::unique("script_unknown_ids");
     let (text, plugins) = (egui::util::hash(script), rustgis_engine::plugins::revision());
     if let Some((t, p, ids)) = ui.data(|d| d.get_temp::<Kept>(key))
         && (t, p) == (text, plugins)
