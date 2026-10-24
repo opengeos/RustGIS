@@ -296,11 +296,11 @@ pub(super) fn zoom_to_index(s: &mut Session, i: usize) -> Result<rustgis_geom::E
     Ok(e)
 }
 
-/// Finds exactly one tile matching a retained search hit; zero or ambiguous matches are stale.
-pub fn index_of_identity(s: &Session, identity: &super::search::TileIdentity) -> Option<usize> {
-    let mut found = s.map().tiles.iter().enumerate().filter(|(_, tile)| identity.matches(tile)).map(|(i, _)| i);
-    let index = found.next()?;
-    found.next().is_none().then_some(index)
+/// The tile layer a retained search hit names: the match nearest the stack position the hit was
+/// listed at, so layers that are wholly alike (the same one added twice) still resolve. Zero
+/// matches mean the layer has gone.
+pub fn index_of_identity(s: &Session, identity: &super::search::TileIdentity, near: usize) -> Option<usize> {
+    s.map().tiles.iter().enumerate().filter(|(_, tile)| identity.matches(tile)).map(|(i, _)| i).min_by_key(|i| i.abs_diff(near))
 }
 
 /// The date a dated tile layer starts at: the time slider's step. Its `start` (and `end`,

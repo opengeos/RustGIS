@@ -426,12 +426,12 @@ fn pick(app: &mut RustGisApp, row: Row) {
         Row::Hit(i) => {
             let Some(hit) = st.results.hits.get(i).cloned() else { return };
             let query = st.searched.clone();
-            let result = if let Hit::Tile { identity, .. } = &hit {
-                let Some(index) = rustgis_engine::cmd::tiles::index_of_identity(&app.session, identity) else {
+            let result = if let Hit::Tile { index, identity, .. } = &hit {
+                let Some(at) = rustgis_engine::cmd::tiles::index_of_identity(&app.session, identity, *index) else {
                     app.session.notify(tl!("Tile layer has changed; search again"), true);
                     return;
                 };
-                app.run("map.zoomToTiles", json!({"index": index}))
+                app.run("map.zoomToTiles", json!({"index": at}))
             } else {
                 app.run("map.search", json!({"query": query, "limit": search::LIMIT, "go": i}))
             };
