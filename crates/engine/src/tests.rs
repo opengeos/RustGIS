@@ -9425,13 +9425,17 @@ fn load_all_features_waits_for_a_source_still_opening() {
     let (slow, _) = serve_gated(fgb, true, Some(gate.clone()));
     let mut t = Session::new(Project::default());
     t.run("project.openText", &json!({"text": text.replace(&base, &slow)})).unwrap();
-    let open = gate.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        open.store(true, std::sync::atomic::Ordering::Relaxed);
-    });
-    let all = t.map().layers.iter().find(|l| l.is_streamed()).unwrap().load_all().unwrap();
-    assert_eq!(all.features.len(), 100);
+    let layer = t.map().layers.iter().find(|l| l.is_streamed()).unwrap().clone();
+    // Started as the view starts it, and held by the server: still opening when the load begins.
+    let mut started = layer.source.clone().unwrap();
+    started.open().unwrap();
+    assert!(!started.is_open() && started.is_pending());
+    let load = std::thread::spawn(move || layer.load_all());
+    // Still waiting while the server holds its answers, rather than failed at once.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!load.is_finished(), "the load didn't wait for the source: {:?}", load.join().unwrap().err());
+    gate.store(true, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(load.join().unwrap().unwrap().features.len(), 100);
 }
 
 /// A FlatGeobuf and a GeoParquet by their address are read in place, by range: a view fetches a
