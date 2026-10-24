@@ -332,6 +332,9 @@ fn describe(st: &State, row: &Row) -> (String, &'static str, String, Option<Stri
                 None,
             ),
             Some(Hit::Layer { name, .. }) => (tl!("Layers").to_string(), "contents", name.clone(), None),
+            Some(Hit::Tile { name, overlay, .. }) => {
+                (tl!("Layers").to_string(), "basemap", if *overlay { format!("{} · {}", name, tl!("overlay")) } else { name.clone() }, None)
+            }
             Some(Hit::Bookmark { name }) => (tl!("Bookmarks").to_string(), "bookmark", name.clone(), None),
             Some(Hit::Feature { layer, layer_name, field, value, name, .. }) => {
                 let partial = st.results.partial.contains(layer);
@@ -434,7 +437,7 @@ fn pick(app: &mut RustGisApp, row: Row) {
                     let label = search::format_lat_lon(*lat, *lon);
                     (label.clone(), Some((Coord::new(*lon, *lat), label)))
                 }
-                Hit::Layer { name, .. } | Hit::Bookmark { name } => (name.clone(), None),
+                Hit::Layer { name, .. } | Hit::Tile { name, .. } | Hit::Bookmark { name } => (name.clone(), None),
                 Hit::Feature { value, name, .. } => (name.clone().unwrap_or_else(|| value.clone()), None),
             };
             settle(app, text, marker);
