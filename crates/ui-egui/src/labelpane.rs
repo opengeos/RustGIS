@@ -97,8 +97,8 @@ fn shown(c: &Class) -> String {
 /// `l` as a layer of this map of this project: another map, or another project, may reuse its id.
 /// A map goes by its place and its name, as Define Projection's does: deleting a map moves the
 /// next one into its place, and a copy keeps its layer ids.
-fn layer_key(app: &RustGisApp, l: &Layer) -> (u64, usize, String, u32) {
-    (app.session.opened, app.session.project.active_map, app.session.map().name.clone(), l.id)
+fn layer_key(app: &RustGisApp, l: &Layer) -> egui::Id {
+    egui::Id::new((app.session.opened, app.session.project.active_map, app.session.map().name.as_str(), l.id))
 }
 
 /// Where the class chosen on a layer is kept.
@@ -173,6 +173,8 @@ struct Renaming {
     owner: egui::Id,
     text: String,
     focused: bool,
+    /// The pass it was last shown on: one the pane skipped (closed, or behind another tab) ends it.
+    pass: u64,
 }
 
 /// The class chooser, and New, Rename, Move Up, Move Down, Remove and Visible for the chosen
@@ -180,8 +182,10 @@ struct Renaming {
 fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let rename_key = egui::Id::new("label_pane_rename");
     let owner = egui::Id::new((layer_key(app, l), c.name));
-    // A rename started on another class or layer (chosen since, or by an undo) is dropped.
-    let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner);
+    // A rename started on another class or layer (chosen since, or by an undo), or left when the
+    // pane was last hidden, is dropped.
+    let pass = ui.ctx().cumulative_pass_nr();
+    let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner && r.pass + 1 >= pass);
     ui.data_mut(|d| d.remove::<Renaming>(rename_key));
     grid(ui, "class_pick", |ui| {
         ui.label(tl!("Class"));
@@ -219,7 +223,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             }
         }
         if ui.button(tl!("Rename")).clicked() {
-            let r = Renaming { owner, text: c.it.name.clone(), focused: false };
+            let r = Renaming { owner, text: c.it.name.clone(), focused: false, pass };
             ui.data_mut(|d| d.insert_temp(rename_key, r));
         }
         let up = at.filter(|i| *i > 0).map(|i| i - 1);
@@ -278,6 +282,7 @@ fn rename_box(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, key: egui
         }
         r.focused = false;
     }
+    r.pass = ui.ctx().cumulative_pass_nr();
     ui.data_mut(|d| d.insert_temp(key, r));
 }
 
@@ -1122,6 +1127,38 @@ mod tests {
         assert_eq!(names(h.state()), ["big", "Default"]);
         assert!(shown(&h, "big"), "still chosen by its new name");
         assert_eq!(h.state().session.undo_depth(), steps + 1);
+    }
+
+    /// A rename left open when the pane is hidden is gone when it shows again.
+    #[test]
+    fn a_rename_ends_with_the_pane() {
+        let mut app = with_cities();
+        app.ui.right = Some(RightPane::Labeling);
+        let mut fonts = false;
+        // Drawn only while it is the right pane in view, as the app does.
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(360.0, 900.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx(), &[], None);
+                    fonts = true;
+                    return;
+                }
+                if app.ui.right == Some(RightPane::Labeling) {
+                    super::show(app, ui, &crate::theme::Tokens::light());
+                }
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("Rename").click();
+        h.run();
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_some());
+        h.state_mut().ui.right = None;
+        h.run();
+        h.state_mut().ui.right = Some(RightPane::Labeling);
+        h.run();
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none(), "the box is closed");
+        assert!(shown(&h, "Default"));
     }
 
     /// New is off once the layer has as many classes as it keeps.
