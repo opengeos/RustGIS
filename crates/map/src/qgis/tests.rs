@@ -249,3 +249,14 @@ fn hostile_files_are_refused_or_bounded() {
     assert_eq!((r.notes[at].count, r.notes[at].kind), (2, NoteKind::Approximated));
     assert!(!r.notes.iter().any(|n| n.layer == "b"), "past the cap, a new note isn't kept");
 }
+
+#[test]
+fn paths_on_a_drive_are_told_apart_from_absolute_ones() {
+    for p in ["C:roads.gpkg", "d:data\\x.shp", "C:"] {
+        assert!(is_drive_relative(p) && !is_relative(p), "{p}");
+    }
+    for p in ["C:/gis/roads.gpkg", "C:\\gis\\roads.gpkg", "/srv/x.shp", "https://x.org/a.geojson"] {
+        assert!(!is_drive_relative(p) && !is_relative(p), "{p}");
+    }
+    assert!(is_relative("./data/x.shp") && is_relative("data/x.shp") && !is_drive_relative("data/x.shp"));
+}

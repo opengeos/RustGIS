@@ -149,8 +149,15 @@ fn absolute(path: &str, dir: &str) -> String {
     format!("{}/{}", dir.trim_end_matches(['/', '\\']), rel)
 }
 
-/// Whether `path` is relative to the project's folder: not absolute (`/…`, `\\…`, `C:…`) and not
-/// a web address.
+/// Whether `path` is relative to a Windows drive's working directory (`C:roads.gpkg`, not
+/// `C:\…` or `C:/…`): no project folder tells where that is.
+pub fn is_drive_relative(path: &str) -> bool {
+    let b = path.trim().as_bytes();
+    b.get(1) == Some(&b':') && b.first().is_some_and(u8::is_ascii_alphabetic) && !matches!(b.get(2), Some(b'/' | b'\\'))
+}
+
+/// Whether `path` is relative to the project's folder: not absolute (`/…`, `\…`, `C:\…`), not
+/// on a drive (`C:…`, see [`is_drive_relative`]) and not a web address.
 pub fn is_relative(path: &str) -> bool {
     let path = path.trim();
     let windows_drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic);

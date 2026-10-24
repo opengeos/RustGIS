@@ -718,10 +718,31 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     // A project given as text with no folder: a relative path is noted, not looked for in the
     // working directory.
     let rel = r#"<qgis version="3.42.0"><projectlayers><maplayer type="vector"><id>a</id><datasource>./data/roads.geojson</datasource><layername>Rel</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#;
-    let out = s.run("project.importQgis", &json!({"text": rel})).unwrap();
-    assert!(out["layers"].as_array().unwrap().is_empty());
-    let text = serde_json::to_string(&out["notes"]).unwrap();
-    assert!(text.contains("pass dir"), "{text}");
+    for p in [json!({"text": rel}), json!({"text": rel, "dir": "  "})] {
+        let out = s.run("project.importQgis", &p).unwrap();
+        assert!(out["layers"].as_array().unwrap().is_empty(), "{p}");
+        let text = serde_json::to_string(&out["notes"]).unwrap();
+        assert!(text.contains("pass dir"), "{text}");
+    }
+    // A path relative to a drive's working directory is noted, with or without a folder.
+    let drive = rel.replace("./data/roads.geojson", "C:roads.geojson");
+    let out = s.run("project.importQgis", &json!({"text": drive, "dir": dir.display().to_string()})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("drive"), "{out}");
+    // A web layer a service offers as features or a coverage comes in as a map layer, which takes
+    // the QGIS layer's visibility, opacity, blending and scale range.
+    let web = r#"<qgis version="3.42.0"><layer-tree-group><layer-tree-layer id="w" checked="Qt::Unchecked"/></layer-tree-group><projectlayers>
+        <maplayer type="raster" hasScaleBasedVisibilityFlag="1" minScale="100000" maxScale="1000"><id>w</id><datasource>url=https://wms.example/wms&amp;layers=a</datasource><layername>Web</layername><provider>wms</provider>
+        <pipe><rasterrenderer opacity="0.5" type="singlebandcolordata"/></pipe><blendMode>13</blendMode></maplayer></projectlayers></qgis>"#;
+    let mut report = rustgis_map::qgis::Report::default();
+    let project = rustgis_map::qgis::read_project(web, "", &mut report).unwrap();
+    let mut w = world();
+    let before = w.active_layer;
+    w.active_layer = w.map().layers.iter().map(|l| l.id).find(|id| Some(*id) != before);
+    crate::cmd::qgis::web_settings(&mut w, &json!({"name": "Web"}), before, &project.layers[0], &mut report);
+    let l = w.map().layers.iter().find(|l| Some(l.id) == w.active_layer).unwrap();
+    assert!(!l.visible);
+    assert_eq!((l.transparency, l.blend), (50.0, rustgis_map::effects::Blend::Multiply));
+    assert!(l.min_scale.is_some() && l.max_scale.is_some());
     // Plugins can't run the import: a project names files and web addresses its layers come from.
     assert!(crate::cmd::plugins::user_only("project.importQgis"));
     std::fs::remove_dir_all(&dir).ok();

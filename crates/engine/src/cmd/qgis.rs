@@ -48,19 +48,27 @@ fn qgis_text(p: &Value) -> Result<String, String> {
 /// The most bytes of a QGIS file read.
 const MAX_FILE: u64 = 256 << 20;
 
+/// Reads at most [`MAX_FILE`] bytes of `path` (natively: the web app passes `text` or `data`).
 fn read_file(path: &str) -> Result<Vec<u8>, String> {
-    let len = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?.len();
-    if len > MAX_FILE {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(MAX_FILE + 1).read_to_end(&mut bytes)).map_err(|e| format!("{path}: {e}"))?;
+    if bytes.len() as u64 > MAX_FILE {
         return Err(format!("{path} is too large for a QGIS project"));
     }
-    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+    Ok(bytes)
 }
 
 fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let text = qgis_text(p)?;
-    let dir = ps(p, "dir")
-        .map(str::to_string)
-        .or_else(|| ps(p, "path").and_then(|path| std::path::Path::new(path).parent()).map(|d| d.to_string_lossy().into_owned()));
+    // The folder relative paths start from: `dir` (a blank one is none, so they don't start
+    // from the working directory), else the file's own (`.` for a file named without one).
+    let dir = ps(p, "dir").filter(|d| !d.trim().is_empty()).map(str::to_string).or_else(|| {
+        ps(p, "path").and_then(|path| std::path::Path::new(path).parent()).map(|d| match d.to_string_lossy() {
+            d if d.is_empty() => ".".to_string(),
+            d => d.into_owned(),
+        })
+    });
     let mut report = Report::default();
     let project = qgis::read_project(&text, dir.as_deref().unwrap_or_default(), &mut report)?;
     // A map of its own, named as the project.
@@ -111,12 +119,16 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
 /// is noted rather than looked for in the working directory.
 fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report: &mut Report) -> Result<Option<String>, String> {
     let name = layer.name.as_str();
-    if let Source::File { path, .. } | Source::Csv { path, .. } = &layer.source
-        && !has_dir
-        && qgis::is_relative(path)
-    {
-        report.skipped(name, format!("the file {path}, relative to the project's folder, which the import wasn't given (pass dir)"));
-        return Ok(None);
+    if let Source::File { path, .. } | Source::Csv { path, .. } = &layer.source {
+        if !has_dir && qgis::is_relative(path) {
+            report.skipped(name, format!("the file {path}, relative to the project's folder, which the import wasn't given (pass dir)"));
+            return Ok(None);
+        }
+        // `C:roads.gpkg`: relative to the working directory on drive C, which no folder fixes.
+        if qgis::is_drive_relative(path) {
+            report.skipped(name, format!("the file {path}, relative to a drive's working directory (give a full path in QGIS)"));
+            return Ok(None);
+        }
     }
     match &layer.source {
         Source::File { path, layer: table, .. } => {
@@ -144,13 +156,15 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
             if let Some(z) = zmax {
                 q["maxZoom"] = json!(z);
             }
+            let before = s.active_layer;
             let added = s.run_part("map.addTiles", &q)?;
-            tile_settings(s, &added, layer, report);
+            web_settings(s, &added, before, layer, report);
             return Ok(Some(name.to_string()));
         }
         Source::Wms { url, layer: wms, .. } => {
+            let before = s.active_layer;
             let added = s.run_part("service.add", &json!({"url": url, "type": "wms", "layer": wms, "name": name}))?;
-            tile_settings(s, &added, layer, report);
+            web_settings(s, &added, before, layer, report);
             return Ok(Some(name.to_string()));
         }
         Source::Wfs { url, layer: typename } => {
@@ -209,7 +223,8 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
             report.skipped(name, format!("the label class \"{}\", whose clause `{w}` doesn't fit the layer ({e})", c.name));
             c.visible = false;
         }
-        if l.dataset.field_index(&c.field).is_none() && c.visible {
+        // (A class with no field set labels nothing, and isn't noted.)
+        if c.visible && !c.field.is_empty() && l.dataset.field_index(&c.field).is_none() {
             report.skipped(name, format!("labels from the field {}, which the layer hasn't", c.field));
             c.visible = false;
         }
@@ -223,14 +238,35 @@ fn check_fields(l: &mut rustgis_map::Layer, name: &str, report: &mut Report) {
     }
 }
 
-/// Gives the tile layer a QGIS web layer was added as (`added` is what `map.addTiles` or
-/// `service.add` answered) the layer's visibility, opacity and blending mode. Tile layers have no scale range,
-/// so one is noted.
-fn tile_settings(s: &mut Session, added: &Value, layer: &qgis::ProjectLayer, report: &mut Report) {
+/// Gives what a QGIS web layer was added as the layer's visibility, opacity and blending mode.
+/// `added` is what `map.addTiles` or `service.add` answered: a tile layer's `index`, or no index
+/// when the service offered the layer as features or a coverage, which come in as a map layer
+/// (the active one, if it isn't `before` any more), which takes the scale range too. A tile layer
+/// has no scale range, so one is noted.
+pub(crate) fn web_settings(s: &mut Session, added: &Value, before: Option<u32>, layer: &qgis::ProjectLayer, report: &mut Report) {
     let name = layer.name.as_str();
     let st = &layer.style;
     let transparency = st.transparency.filter(|t| t.is_finite() && *t > 0.0);
     let index = added.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+    if index.is_none()
+        && let Some(id) = s.active_layer.filter(|id| Some(*id) != before)
+        && let Some(l) = s.map_mut().layer_mut(id)
+    {
+        l.visible = layer.visible;
+        if let Some(tr) = transparency {
+            l.transparency = tr.clamp(0.0, 100.0);
+        }
+        if let Some(blend) = st.blend {
+            l.blend = blend;
+        }
+        if let Some(m) = st.min_scale {
+            l.min_scale = m;
+        }
+        if let Some(m) = st.max_scale {
+            l.max_scale = m;
+        }
+        return;
+    }
     match index.and_then(|i| s.map_mut().tiles.get_mut(i)) {
         Some(t) => {
             t.visible = layer.visible;
