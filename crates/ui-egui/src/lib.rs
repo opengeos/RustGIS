@@ -36,6 +36,7 @@ mod globe_drape;
 mod graphicformat;
 pub mod icons;
 mod keymap;
+mod labelfonts;
 mod labelpane;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -3391,6 +3392,9 @@ impl RustGisApp {
             self.fonts_pending = true;
             self.map.invalidate();
         }
+        // The label fonts the last frame's labels asked for (after the interface fonts, which
+        // would replace them).
+        labelfonts::install_pending(ctx);
         // Files from the async picker or browser drops.
         let arrived: Vec<(String, Vec<u8>)> = match &self.services.inbox {
             Some(inbox) => std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner())),

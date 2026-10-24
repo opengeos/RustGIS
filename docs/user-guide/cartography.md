@@ -245,6 +245,13 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+  › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
+  italic take the family's own bold and italic faces where it has them. The family is saved by
+  its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
+  font there (the pane shows it as not installed), and in the browser, which reads no installed
+  fonts (`labels.style={"layer": "Rivers", "font": "Liberation Serif"}`; `labels.fonts` lists the
+  installed families, `{"font": ""}` goes back to the label font).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says

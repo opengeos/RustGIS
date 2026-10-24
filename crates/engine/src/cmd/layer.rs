@@ -288,7 +288,13 @@ pub fn commands() -> Vec<C> {
             let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
             let color = s.get_color(p, "color")?;
             let (halo, bold, italic) = (b(p, "halo"), b(p, "bold"), b(p, "italic"));
+            // A family by name, whether or not this machine has it: the project may be drawn on
+            // one that does. Blank goes back to the label font.
+            let font = ps(p, "font").map(rustgis_map::symbology::font_name);
             super::labels::with_class(s, p, |c| {
+                if let Some(name) = font.clone() {
+                    c.font = name;
+                }
                 if let Some(v) = size {
                     c.size = v;
                 }
@@ -307,7 +313,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool, "italic"?: bool}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font)}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;

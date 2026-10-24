@@ -1171,15 +1171,26 @@ fn tex_rect(app: &RustGisApp, cam: Camera, rect: Rect, globe_view: bool) -> Rect
     Rect::from_min_max(to_screen(0.0, 0.0), to_screen(tw, th))
 }
 
-/// Map text laid out as the map view draws it: its font, and a text graphic's style (#535), its
-/// lines aligned in their block, slanted (egui's own slant, as the fonts have no italic face)
-/// and letter-spaced. The one layout for drawing a label and for picking or dragging a text
-/// graphic, so they agree.
-fn label_job(text: &str, size: f32, bold: bool, italic: bool, spacing: f32, align: TextAlign) -> egui::text::LayoutJob {
-    let font_id = if bold { semibold(size * 1.33) } else { regular(size * 1.33) };
+/// Map text laid out as the map view draws it: its font (a label class's installed `family`, as
+/// [`crate::labelfonts::family`] gives it, and whether egui slants it), and a text graphic's
+/// style (#535), its lines aligned in their block, slanted (egui's own slant, as the interface
+/// fonts have no italic face) and letter-spaced. The one layout for drawing a label and for
+/// picking or dragging a text graphic, so they agree.
+fn label_job(
+    text: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    spacing: f32,
+    align: TextAlign,
+    family: Option<(egui::FontFamily, bool)>,
+) -> egui::text::LayoutJob {
+    let (font_id, italics) = match family {
+        Some((family, slanted)) => (egui::FontId::new(size * 1.33, family), slanted),
+        None => (if bold { semibold(size * 1.33) } else { regular(size * 1.33) }, italic),
+    };
     // Letter spacing in points, scaled as the size is.
-    let format =
-        egui::TextFormat { font_id, color: Color32::WHITE, italics: italic, extra_letter_spacing: spacing * 1.33, ..Default::default() };
+    let format = egui::TextFormat { font_id, color: Color32::WHITE, italics, extra_letter_spacing: spacing * 1.33, ..Default::default() };
     let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
     job.halign = match align {
         TextAlign::Left => egui::Align::LEFT,
@@ -1216,7 +1227,8 @@ fn draw_label(p: &egui::Painter, l: &PlacedLabel, at: Pos2) {
 
 /// Draws a label (not a curved one) at `at`: its halo when `halo`, its text when `text`.
 fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text: bool) {
-    let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align));
+    let family = crate::labelfonts::family(p.ctx(), l.font, l.bold, l.italic);
+    let galley = p.layout_job(label_job(&l.text, l.size, l.bold, l.italic, l.spacing, l.line_align, family));
     // Text set beside an icon is lined up by its edge, with egui's own measure of its width.
     let anchor = if l.align < -0.25 {
         Align2::LEFT_CENTER
@@ -1336,6 +1348,7 @@ fn text_shown(
         graphics::italic(ds, row),
         graphics::letter_spacing(ds, row),
         graphics::align(ds, row),
+        None,
     );
     Some((at, job))
 }

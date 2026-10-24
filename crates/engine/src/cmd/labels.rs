@@ -33,6 +33,18 @@ pub fn commands() -> Vec<C> {
         })
         .view()
         .params(r#"{"on"?: bool}"#),
+        C::new("labels.fonts", "Label Fonts", "Style › Text Symbol", |_, p| {
+            // The families a font picker lists, those containing `search` (in any case) if given.
+            let search = ps(p, "search").map(str::to_lowercase).unwrap_or_default();
+            let fonts: Vec<&str> = crate::render::families::installed()
+                .iter()
+                .filter(|f| f.listed && f.name.to_lowercase().contains(&search))
+                .map(|f| f.name.as_str())
+                .collect();
+            Ok(json!({"fonts": fonts}))
+        })
+        .view()
+        .params(r#"{"search"?: text in the family name} → {"fonts": [the installed font families, by name]}"#),
         C::new("labels.convert", "Convert To Annotation", "View › Labeling", convert)
             .when(need_feature_layer)
             .params(r#"{"layer"?, "name"?: string}"#),

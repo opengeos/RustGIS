@@ -1272,6 +1272,27 @@ pub struct LabelClass {
     /// Slanted (an italic face where the font has one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub italic: bool,
+    /// The installed font family the labels are drawn in, by name ("Liberation Sans Narrow"), as
+    /// QGIS names a text format's; none is the label font. A machine without the family draws
+    /// them in the label font too.
+    #[serde(default, deserialize_with = "de_font", skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+}
+
+/// The longest font family name kept (characters).
+pub const MAX_FONT_NAME: usize = 128;
+
+/// A label font's family name as it is kept: trimmed, at most [`MAX_FONT_NAME`] characters, and
+/// none when blank.
+pub fn font_name(name: &str) -> Option<String> {
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_FONT_NAME).collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Reads a label class's font as [`font_name`] keeps it: a project file is hostile input.
+fn de_font<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.as_deref().and_then(font_name))
 }
 
 fn default_class_name() -> String {
@@ -1415,6 +1436,7 @@ impl LabelClass {
             farthest: None,
             placement: LabelPlacement::Auto,
             italic: false,
+            font: None,
         }
     }
 
@@ -1538,6 +1560,27 @@ mod tests {
         assert_eq!(v["field"], "name");
         assert_eq!(v["classes"][0]["where"], "capital = 1");
         assert_eq!(serde_json::from_value::<Labeling>(v).unwrap(), with);
+    }
+
+    /// A label font is kept by its family name, trimmed and bounded (a project file is hostile
+    /// input); a blank one is the label font, and isn't written.
+    #[test]
+    fn a_label_font_is_kept_by_name() {
+        let read = |font: serde_json::Value| {
+            serde_json::from_value::<Labeling>(serde_json::json!({
+                "enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": false, "bold": false, "font": font
+            }))
+            .unwrap()
+        };
+        let l = read("  Liberation Sans Narrow \n".into());
+        assert_eq!(l.default.font.as_deref(), Some("Liberation Sans Narrow"));
+        assert_eq!(serde_json::to_value(&l).unwrap()["font"], "Liberation Sans Narrow");
+        for blank in [serde_json::json!("  "), serde_json::Value::Null] {
+            let l = read(blank);
+            assert_eq!(l.default.font, None);
+            assert!(serde_json::to_value(&l).unwrap().get("font").is_none());
+        }
+        assert_eq!(read("x".repeat(10_000).into()).default.font.map(|f| f.chars().count()), Some(MAX_FONT_NAME));
     }
 
     /// A project file is read with at most `MAX_LABEL_CLASSES` classes, and only that many count

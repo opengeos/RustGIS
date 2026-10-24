@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod effects;
+pub mod families;
 pub mod fonts;
 pub mod gpu_scene;
 pub mod layout;
@@ -187,6 +188,9 @@ pub struct PlacedLabel {
     /// upright with no spacing.
     pub italic: bool,
     pub spacing: f32,
+    /// The installed family it is drawn in, by its place in [`families::installed`] (a label
+    /// class's font); `None` is the label font.
+    pub font: Option<u16>,
     /// How the lines line up in their block (a text graphic's, #535); the block itself sits where
     /// `align` puts it.
     pub line_align: TextAlign,
@@ -3086,6 +3090,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             framed: selection.contains(&row),
                             italic: rustgis_map::graphics::italic(ds_ptr, row),
                             spacing: rustgis_map::graphics::letter_spacing(ds_ptr, row),
+                            font: None,
                             line_align: rustgis_map::graphics::align(ds_ptr, row),
                             angle: None,
                             collide: Default::default(),
@@ -3103,6 +3108,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             };
             if label_fields.iter().any(Option::is_some) {
                 let label_factor = layer.size_factor(label_scale);
+                // Each class's font, where it is installed (the fonts are indexed the first time
+                // a class names one).
+                let class_fonts: Vec<Option<u16>> = labels.in_order().map(|c| c.font.as_deref().and_then(families::find)).collect();
                 let classes = rustgis_map::LabelMatcher::new(labels, ds_ptr);
                 let lid = layer.id;
                 // Whether a class labels lines along them: those take the stretch of a line in
@@ -3158,8 +3166,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         // Placed as at its own size, then that much farther out: the gap between
                         // the label and its feature grows with it too.
                         let size = class.size * label_factor;
+                        let font = class_fonts.get(ci).copied().flatten();
+                        let face = text::Face { bold: class.bold, italic: class.italic, serif: false, family: font };
                         let (dx, dy) = class.placement.offset(
-                            text::block_width(&text, class.size, class.bold),
+                            text::block_width(&text, class.size, face),
                             text::block_height(&text, class.size),
                             marker,
                             is_point,
@@ -3175,13 +3185,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             let curved = class.placement == LabelPlacement::Curved
                                 && text.graphemes(true).nth(line_labels::MAX_CURVED_CHARS).is_none();
                             if !curved {
-                                let width = text::block_width(&text, size, class.bold);
+                                let width = text::block_width(&text, size, face);
                                 let Some((cx, cy, a)) = line_labels::parallel(line, width, overrun) else { continue };
                                 (lx, ly, angle) = (cx, cy, Some(a));
                             } else {
                                 // Each character with its accents, drawn as one.
                                 let chars: Vec<String> = text.graphemes(true).map(String::from).collect();
-                                let advances: Vec<f32> = chars.iter().map(|c| text::measure(c, size, class.bold)).collect();
+                                let advances: Vec<f32> = chars.iter().map(|c| text::measure_in(c, size, face)).collect();
                                 let Some(((cx, cy), at)) = line_labels::curved(line, &advances, overrun) else { continue };
                                 (lx, ly) = (cx, cy);
                                 glyphs =
@@ -3206,6 +3216,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 framed: false,
                                 italic: class.italic,
                                 spacing: 0.0,
+                                font,
                                 line_align: TextAlign::Left,
                                 angle,
                                 collide: Default::default(),
@@ -3911,7 +3922,7 @@ fn turn_with(l: &mut PlacedLabel, at: &impl Fn(f32, f32) -> Option<(f32, f32)>) 
 /// as far from that end as it was from the start, by its own width rather than that of the
 /// character whose place it takes, a step along the nearest one's angle from it.
 fn read_back(l: &mut PlacedLabel) {
-    let widths: Vec<f32> = l.glyphs.iter().map(|g| text::measure(&g.text, l.size, l.bold)).collect();
+    let widths: Vec<f32> = l.glyphs.iter().map(|g| text::measure_in(&g.text, l.size, text::label_face(l))).collect();
     let total: f32 = widths.iter().sum();
     // How far along the text each character's centre was.
     let mut centres = Vec::with_capacity(widths.len());
@@ -4171,6 +4182,7 @@ pub(crate) fn draw_attribution(pm: &mut Pixmap, attribution: &[String], ppp: f32
         framed: false,
         italic: false,
         spacing: 0.0,
+        font: None,
         line_align: TextAlign::Left,
         angle: None,
         collide: Default::default(),
@@ -4196,6 +4208,7 @@ mod tests {
             framed: false,
             italic: false,
             spacing: 0.0,
+            font: None,
             line_align: TextAlign::Left,
             angle: None,
             collide: Default::default(),
@@ -4710,7 +4723,7 @@ mod tests {
         let (_, alone) = ink(&at("Atlantic", false));
         assert!(cols.first().zip(alone.first()).is_some_and(|(a, b)| a.abs_diff(*b) <= 2), "the longer line keeps its place");
         // As wide as the widest line, as tall as its lines; a trailing newline is an empty line.
-        assert_eq!(text::block_width("ab\ncdef", 10.0, false), text::measure("cdef", 10.0, false));
+        assert_eq!(text::block_width("ab\ncdef", 10.0, text::Face::default()), text::measure("cdef", 10.0, false));
         // Text drawn on one line (a table cell, a chart's name) is still measured whole, so it is
         // cut to its column as it is drawn.
         assert_eq!(text::measure("ab\ncdef", 10.0, false), text::measure("abcdef", 10.0, false));
@@ -5996,6 +6009,7 @@ mod tests {
             framed: false,
             italic: false,
             spacing: 0.0,
+            font: None,
             line_align: TextAlign::Left,
             angle: None,
             collide: Default::default(),
@@ -6034,6 +6048,7 @@ mod tests {
             framed: false,
             italic: false,
             spacing: 0.0,
+            font: None,
             line_align: TextAlign::Left,
             angle: None,
             collide: Default::default(),
