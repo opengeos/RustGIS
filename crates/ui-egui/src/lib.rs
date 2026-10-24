@@ -488,6 +488,8 @@ pub struct UiState {
     /// The keyboard shortcuts.
     pub keymap: keymap::Keymap,
     pub tab_strip_rect: Option<egui::Rect>,
+    /// Where the left and right panes were drawn on the last frame, while they show.
+    pub pane_rects: [Option<egui::Rect>; 2],
     /// Tabs hidden from the ribbon (Settings › Customize › Ribbon).
     pub hidden_tabs: Vec<String>,
     /// Extra Quick Access Toolbar commands.
@@ -667,6 +669,7 @@ impl Default for UiState {
             shortcuts: false,
             keymap: keymap::Keymap::default(),
             tab_strip_rect: None,
+            pane_rects: [None; 2],
             copy_out: None,
             open_url: None,
             copy_image: None,

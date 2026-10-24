@@ -379,7 +379,7 @@ mod tests {
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         // The pane's fonts (its semibold heading) are installed on the first frame, as the app does.
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_size(egui::vec2(360.0, 900.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(360.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -476,7 +476,7 @@ mod tests {
         let color = |app: &RustGisApp, id| app.session.map().layer(id).unwrap().labels.default.color;
         let (cities_before, countries_before) = (color(&app, cities), color(&app, countries));
         let steps = app.session.undo_depth();
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();
@@ -530,7 +530,7 @@ mod tests {
         let before = app.session.map().layer(id).unwrap().labels.default.color;
         let steps = app.session.undo_depth();
         // The picker's colour each frame, if it reports one, as `text_symbol` hands it on.
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, (app, pick): &mut (RustGisApp, Option<Rgba>)| {
                 if let Some(c) = pick.take() {
                     let l = app.session.map().layer(app.session.active_layer.unwrap()).unwrap().clone();

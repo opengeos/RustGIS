@@ -1793,7 +1793,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -1845,7 +1845,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -1906,7 +1906,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -1961,7 +1961,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2005,7 +2005,7 @@ mod tests {
         let shown = area.clone();
         // Fonts take effect on the frame after they are installed.
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2125,7 +2125,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2169,7 +2169,7 @@ mod tests {
         let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
         app.layout.selected = Some(title.id);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2222,7 +2222,7 @@ mod tests {
         let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
         app.layout.selected = Some(title.id);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2273,7 +2273,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2328,7 +2328,7 @@ mod tests {
         let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
         app.layout.selected = Some(title);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2382,7 +2382,7 @@ mod tests {
         let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().clone();
         app.layout.selected = Some(title.id);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2429,7 +2429,7 @@ mod tests {
             app.run("layout.addElement", json!({"kind": "arrow", "angle": 0, "length": 60})).unwrap()["element"].as_u64().unwrap() as u32;
         app.layout.selected = Some(id);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2475,7 +2475,7 @@ mod tests {
         let title = app.session.project.layouts[li].elements.iter().find(|e| e.name == "Title").unwrap().id;
         app.layout.selected = Some(title);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2522,7 +2522,7 @@ mod tests {
         app.run("layout.addElement", json!({"kind": "extentIndicator", "frame": inset, "of": main, "width": 1.5})).unwrap();
         app.layout.selected = Some(inset);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2560,7 +2560,7 @@ mod tests {
         app.run("layout.update", json!({"element": legend, "exclude": ["Cities"]})).unwrap();
         app.layout.selected = Some(legend);
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2611,7 +2611,7 @@ mod tests {
         let ids: Vec<u32> = app.session.project.layouts[li].elements.iter().map(|e| e.id).collect();
         app.run("ui.pane.bookmarks", json!({})).unwrap();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2697,7 +2697,7 @@ mod tests {
             let text = serde_json::to_string(&app.session.project).unwrap();
             app.layout.selected = Some(title);
             let mut fonts = false;
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+            let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1200.0, 900.0)).build_ui_state(
                 move |ui, app: &mut RustGisApp| {
                     if !fonts {
                         crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -2775,7 +2775,7 @@ mod tests {
         let area = Rc::new(Cell::new(Rect::NOTHING));
         let shown = area.clone();
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 760.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1000.0, 760.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);

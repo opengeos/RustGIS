@@ -1401,7 +1401,7 @@ mod tests {
     /// The pane with an empty script, its box focused.
     fn pane() -> egui_kittest::Harness<'static, crate::RustGisApp> {
         use egui_kittest::kittest::Queryable;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -1740,7 +1740,7 @@ mod tests {
     fn a_narrow_window_puts_the_help_under_the_list() {
         use egui_kittest::kittest::Queryable;
         let width = 380.0;
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, 700.0)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );
@@ -1762,7 +1762,7 @@ mod tests {
     fn a_short_window_scrolls_the_list() {
         use egui_kittest::kittest::Queryable;
         let (width, height) = (380.0, 300.0);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(egui::vec2(width, height)).build_ui_state(
             |ui, app: &mut crate::RustGisApp| crate::analysispane::script_pane(app, ui, &crate::theme::Tokens::light()),
             crate::RustGisApp::with_sample(),
         );

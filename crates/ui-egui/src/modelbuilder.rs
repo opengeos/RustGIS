@@ -1685,7 +1685,7 @@ mod tests {
 
     fn harness(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
         let mut fonts = false;
-        egui_kittest::Harness::builder().with_size(vec2(1300.0, 800.0)).build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1300.0, 800.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);

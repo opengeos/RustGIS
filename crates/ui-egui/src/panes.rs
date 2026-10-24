@@ -25,22 +25,25 @@ use crate::{LayersView, LeftPane, RightPane, RustGisApp, icons};
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.pane).inner_margin(egui::Margin::ZERO);
+    app.ui.pane_rects = [None; 2];
     if let Some(left) = app.ui.left {
-        egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
-            left_header(app, ui, left, &t);
-            // The search box sits at the foot of every left pane, the app's lower-left corner.
-            crate::searchbox::show(app, ui, &t);
-            // As on the right: a row wider than the pane (a long folder path, a long favourite) is
-            // clipped at its edge, never reported to the panel, which would widen to fit it (#353).
-            let rect = ui.available_rect_before_wrap();
-            let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
-            match left {
-                LeftPane::Contents => contents(app, &mut body, &t),
-                LeftPane::Catalog => catalog(app, &mut body, &t),
-                LeftPane::Sources => crate::sourcespane::show(app, &mut body, &t),
-            }
-            ui.advance_cursor_after_rect(rect);
-        });
+        let pane =
+            egui::Panel::left("left_pane").resizable(true).default_size(270.0).size_range(200.0..=480.0).frame(frame).show(ui, |ui| {
+                left_header(app, ui, left, &t);
+                // The search box sits at the foot of every left pane, the app's lower-left corner.
+                crate::searchbox::show(app, ui, &t);
+                // As on the right: a row wider than the pane (a long folder path, a long favourite) is
+                // clipped at its edge, never reported to the panel, which would widen to fit it (#353).
+                let rect = ui.available_rect_before_wrap();
+                let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                match left {
+                    LeftPane::Contents => contents(app, &mut body, &t),
+                    LeftPane::Catalog => catalog(app, &mut body, &t),
+                    LeftPane::Sources => crate::sourcespane::show(app, &mut body, &t),
+                }
+                ui.advance_cursor_after_rect(rect);
+            });
+        app.ui.pane_rects[0] = Some(pane.response.rect);
     }
     // A point picked for the Time Series pane is taken only while that pane shows: with it
     // closed or another in view, the pick ends rather than waiting with a stale click.
@@ -68,7 +71,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     if let Some(right) = app.ui.right {
         // The Web Data pane's searches and lists want room: it keeps its own width.
         let (id, width) = if right == RightPane::WebData { ("right_pane_web", 440.0) } else { ("right_pane", 320.0) };
-        egui::Panel::right(id).resizable(true).default_size(width).size_range(260.0..=640.0).frame(frame).show(ui, |ui| {
+        let pane = egui::Panel::right(id).resizable(true).default_size(width).size_range(260.0..=640.0).frame(frame).show(ui, |ui| {
             // The pane is as wide as the user made it. Content wider than that is clipped, never
             // reported to the panel: egui would keep the panel's edge where the content ends, off
             // the window, and give the map the room it no longer covers (#307).
@@ -77,6 +80,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
             right_pane(app, &mut body, right, &t);
             ui.advance_cursor_after_rect(rect);
         });
+        app.ui.pane_rects[1] = Some(pane.response.rect);
     }
     // Here rather than in the Symbology and Labeling panes, so a drag still finishes if the pane
     // closes meanwhile; and after the panes, so a change the picker reports as the pointer is let
@@ -5011,20 +5015,24 @@ mod tests {
         app.session.project.folders.push(long.clone());
         let fav = rustgis_engine::sources::Source { kind: "file".into(), name: long.clone(), address: long, ..Default::default() };
         app.session.sources.favourites.push(fav);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 860.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 860.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         let width = |h: &mut egui_kittest::Harness<'_, RustGisApp>, pane: LeftPane| {
             h.state_mut().ui.left = Some(pane);
             for _ in 0..6 {
                 h.step();
             }
-            egui::containers::panel::PanelState::load(&h.ctx, egui::Id::unique("left_pane")).map(|s| s.outer_rect.width())
+            h.state().ui.pane_rects[0].map(|r| r.width())
         };
         let start = width(&mut h, LeftPane::Contents);
         assert!(start.is_some_and(|w| w < 300.0), "the Layers pane starts at its default width: {start:?}");
@@ -5092,14 +5100,18 @@ mod tests {
         .unwrap();
         app.run("layer.definitionQuery", json!({"where": "c_valid < 30"})).unwrap();
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 900.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(6);
         h
     }
@@ -5257,14 +5269,18 @@ mod tests {
         let id = layer(&app, "Countries");
         app.session.active_layer = Some(id);
         app.ui.open_right(RightPane::Symbology);
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 1400.0)).with_max_steps(64).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(1400.0, 1400.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(6);
         let transparency = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).map(|l| l.transparency);
         let start = transparency(&h);
@@ -5302,14 +5318,18 @@ mod tests {
             app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
             app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": original.hex8()})).unwrap();
             let id = layer(&app, "Countries");
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
-                move |ui, app: &mut RustGisApp| {
-                    finish_class_color_drag(app, ui);
-                    let layer = app.session.map().layer(id).unwrap().clone();
-                    legend_list(app, ui, &layer, &Tokens::light());
-                },
-                app,
-            );
+            let mut h = egui_kittest::Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(vec2(600.0, 600.0))
+                .with_max_steps(64)
+                .build_ui_state(
+                    move |ui, app: &mut RustGisApp| {
+                        finish_class_color_drag(app, ui);
+                        let layer = app.session.map().layer(id).unwrap().clone();
+                        legend_list(app, ui, &layer, &Tokens::light());
+                    },
+                    app,
+                );
             h.run_steps(3);
             let fill =
                 |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
@@ -5355,14 +5375,18 @@ mod tests {
         app.run("layer.symbology", json!({"layer": "Countries", "type": "graduated", "field": "pop_est", "classes": 1})).unwrap();
         app.run("layer.classStyle", json!({"layer": "Countries", "index": 0, "color": "#FF000000"})).unwrap();
         let id = layer(&app, "Countries");
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 600.0)).with_max_steps(64).build_ui_state(
-            move |ui, app: &mut RustGisApp| {
-                finish_class_color_drag(app, ui);
-                let layer = app.session.map().layer(id).unwrap().clone();
-                legend_list(app, ui, &layer, &Tokens::light());
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .with_size(vec2(600.0, 600.0))
+            .with_max_steps(64)
+            .build_ui_state(
+                move |ui, app: &mut RustGisApp| {
+                    finish_class_color_drag(app, ui);
+                    let layer = app.session.map().layer(id).unwrap().clone();
+                    legend_list(app, ui, &layer, &Tokens::light());
+                },
+                app,
+            );
         h.run_steps(3);
         let fill = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.map().layer(id).unwrap().renderer.legend()[0].symbol.fill;
         let inactive_theme = match h.ctx.theme() {
@@ -5412,7 +5436,9 @@ mod tests {
     fn an_open_layer_menu_leaves_the_map_alone() {
         let app = RustGisApp::with_sample();
         let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
-        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
+            .build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
         h.step();
         assert_eq!(h.state().session.active_layer, Some(layer.id));
         let rev = h.state().session.revision;

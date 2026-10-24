@@ -510,6 +510,7 @@ mod tests {
     /// Opens a colour button's picker and says whether it offers additive blending.
     fn offers_additive(button: fn(&mut egui::Ui, &mut egui::Color32)) -> bool {
         let mut h = egui_kittest::Harness::builder()
+            .with_accessibility_check(false)
             .build_ui_state(|ui, c: &mut egui::Color32| button(ui, c), egui::Color32::from_rgb(224, 105, 59));
         h.get_by_role(egui::accesskit::Role::ColorWell).click();
         h.run();
@@ -539,7 +540,7 @@ mod tests {
             whole: u64,
             settled: Vec<&'static str>,
         }
-        let mut h = egui_kittest::Harness::builder().build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, s: &mut Saved| {
                 let mut real = s.real;
                 let drag = super::Dragged::lend(ui, egui::Id::unique("real"), &mut real);

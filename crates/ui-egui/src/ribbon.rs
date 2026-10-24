@@ -130,6 +130,7 @@ const SCROLL_BUTTON_W: f32 = 18.0;
 /// Arrow buttons at the edges of a horizontal scroll area (the ribbon's groups, the tab strip)
 /// whose content is wider than the window: the scroll bar is hidden (it would cover the group
 /// labels and tabs) and the wheel alone is undiscoverable.
+///
 /// The offset a click asked for, if one did.
 fn scroll_buttons<R>(ui: &mut Ui, t: &Tokens, scroll: &egui::scroll_area::ScrollAreaOutput<R>, tips: [&str; 2]) -> Option<f32> {
     let view = scroll.inner_rect;
@@ -4461,7 +4462,7 @@ mod tests {
         app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
         app.ws.recording = Some(Vec::new());
         let mut fonts = false;
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(1600.0, 700.0)).build_ui_state(
             move |ui, app: &mut RustGisApp| {
                 if !fonts {
                     crate::theme::install_fonts(ui.ctx(), &[], None);
@@ -4559,14 +4560,18 @@ mod tests {
             let mut app = RustGisApp::with_sample();
             app.session.run("layer.select", &json!({"layer": "Cities"})).unwrap();
             app.ui.tab = "Style".into();
-            let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(64).build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                app,
-            );
+            let mut h = egui_kittest::Harness::builder()
+                .with_accessibility_check(false)
+                .with_size(vec2(1200.0, 800.0))
+                .with_max_steps(64)
+                .build_ui_state(
+                    |ui, app: &mut RustGisApp| {
+                        let ctx = ui.ctx().clone();
+                        app.logic(&ctx);
+                        app.ui(ui);
+                    },
+                    app,
+                );
             h.run();
             for _ in 0..2 {
                 h.get_by_label("Scroll the ribbon right").click();

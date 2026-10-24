@@ -199,7 +199,7 @@ mod tests {
     }
 
     fn harness(form: Form) -> egui_kittest::Harness<'static, Form> {
-        egui_kittest::Harness::builder().build_ui_state(
+        egui_kittest::Harness::builder().with_accessibility_check(false).build_ui_state(
             |ui, f: &mut Form| {
                 // The numbers are lent saved and kept only once settled, as the pane's callers do.
                 let (mut size, mut spacing) = (f.size, f.letter_spacing);

@@ -16,15 +16,21 @@ const SCREENSHOT_GRACE: f64 = 10.0;
 /// snapshot's screenshot is taken for it (not a late one of an earlier snapshot that timed out).
 static NEXT_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// The screenshots egui handed back, by number, until a frame takes them.
-static ARRIVED: Mutex<Vec<(u64, Arc<ColorImage>)>> = Mutex::new(Vec::new());
+/// The number of the screenshot waited for (0 for none) and that screenshot once egui hands it
+/// back. Only that one is kept: one coming back after its snapshot ended is dropped.
+static ARRIVED: Mutex<(u64, Option<Arc<ColorImage>>)> = Mutex::new((0, None));
 
-/// The screenshot numbered `tag`, if it is back; earlier ones nobody waits for any more are dropped.
+/// Waits for the screenshot numbered `tag` (0: for none), dropping any other.
+fn wait_for(tag: u64) {
+    if let Ok(mut arrived) = ARRIVED.lock() {
+        *arrived = (tag, None);
+    }
+}
+
+/// The screenshot numbered `tag`, if it is back.
 fn take_arrived(tag: u64) -> Option<Arc<ColorImage>> {
     let mut arrived = ARRIVED.lock().ok()?;
-    arrived.retain(|(t, _)| *t >= tag);
-    let at = arrived.iter().position(|(t, _)| *t == tag)?;
-    Some(arrived.swap_remove(at).1)
+    if arrived.0 == tag { arrived.1.take() } else { None }
 }
 
 /// A screen snapshot under way.
@@ -61,12 +67,16 @@ fn settled(app: &RustGisApp) -> bool {
 /// ran its messages.
 pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(relay) = app.relay.clone() else {
-        app.relay_shot = None;
+        if app.relay_shot.take().is_some() {
+            wait_for(0);
+        }
         app.map.hide_overlays = false;
         return;
     };
     let Some(request) = relay.screen_request() else {
-        app.relay_shot = None;
+        if app.relay_shot.take().is_some() {
+            wait_for(0);
+        }
         app.map.hide_overlays = false;
         return;
     };
@@ -75,6 +85,7 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     let rect = view_rect(app, ctx);
     let finish = |app: &mut RustGisApp, png: Result<Vec<u8>, String>, settled: bool| {
         app.relay_shot = None;
+        wait_for(0);
         app.map.hide_overlays = false;
         relay.finish_screen(&mut app.session, png, settled);
     };
@@ -107,10 +118,13 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
                 // Overlays leave only the frame being captured (this one draws after this), and
                 // come back with the screenshot.
                 app.map.hide_overlays = !request.overlays;
+                wait_for(tag);
                 let repaint = ctx.clone();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
-                    if let Ok(mut arrived) = ARRIVED.lock() {
-                        arrived.push((tag, image));
+                    if let Ok(mut arrived) = ARRIVED.lock()
+                        && arrived.0 == tag
+                    {
+                        arrived.1 = Some(image);
                     }
                     repaint.request_repaint();
                 })));

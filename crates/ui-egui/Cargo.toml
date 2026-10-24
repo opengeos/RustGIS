@@ -11,7 +11,9 @@ workspace = true
 [dependencies]
 rustgis-engine = { workspace = true }
 rustgis-assistant = { workspace = true }
-egui = { workspace = true }
+# egui's own faces (Hack, the theme's fallback for Georgian) and its emoji, which egui 0.37 no longer
+# bundles by default.
+egui = { workspace = true, features = ["monochrome_emoji_fonts"] }
 # The GPU map backend draws inside egui's own wgpu render pass.
 egui-wgpu = { workspace = true }
 bytemuck = { workspace = true }
