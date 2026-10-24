@@ -16,21 +16,34 @@ const SCREENSHOT_GRACE: f64 = 10.0;
 /// snapshot's screenshot is taken for it (not a late one of an earlier snapshot that timed out).
 static NEXT_TAG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// The number of the screenshot waited for (0 for none) and that screenshot once egui hands it
-/// back. Only that one is kept: one coming back after its snapshot ended is dropped.
-static ARRIVED: Mutex<(u64, Option<Arc<ColorImage>>)> = Mutex::new((0, None));
+/// An app's slot for the screenshot it waits for: that screenshot's number (0 for none) and the
+/// screenshot once egui hands it back. Only that one is kept: one coming back after its snapshot
+/// ended is dropped.
+#[derive(Debug, Clone, Default)]
+pub struct Arrived(Arc<Mutex<(u64, Option<Arc<ColorImage>>)>>);
 
-/// Waits for the screenshot numbered `tag` (0: for none), dropping any other.
-fn wait_for(tag: u64) {
-    if let Ok(mut arrived) = ARRIVED.lock() {
-        *arrived = (tag, None);
+impl Arrived {
+    /// Waits for the screenshot numbered `tag` (0: for none), dropping any other.
+    fn wait_for(&self, tag: u64) {
+        if let Ok(mut arrived) = self.0.lock() {
+            *arrived = (tag, None);
+        }
     }
-}
 
-/// The screenshot numbered `tag`, if it is back.
-fn take_arrived(tag: u64) -> Option<Arc<ColorImage>> {
-    let mut arrived = ARRIVED.lock().ok()?;
-    if arrived.0 == tag { arrived.1.take() } else { None }
+    /// The screenshot numbered `tag`, if it is back.
+    fn take(&self, tag: u64) -> Option<Arc<ColorImage>> {
+        let mut arrived = self.0.lock().ok()?;
+        if arrived.0 == tag { arrived.1.take() } else { None }
+    }
+
+    /// Keeps `image` if it is the screenshot numbered `tag` waited for.
+    fn arrive(&self, tag: u64, image: Arc<ColorImage>) {
+        if let Ok(mut arrived) = self.0.lock()
+            && arrived.0 == tag
+        {
+            arrived.1 = Some(image);
+        }
+    }
 }
 
 /// A screen snapshot under way.
@@ -68,14 +81,14 @@ fn settled(app: &RustGisApp) -> bool {
 pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(relay) = app.relay.clone() else {
         if app.relay_shot.take().is_some() {
-            wait_for(0);
+            app.relay_arrived.wait_for(0);
         }
         app.map.hide_overlays = false;
         return;
     };
     let Some(request) = relay.screen_request() else {
         if app.relay_shot.take().is_some() {
-            wait_for(0);
+            app.relay_arrived.wait_for(0);
         }
         app.map.hide_overlays = false;
         return;
@@ -85,13 +98,13 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
     let rect = view_rect(app, ctx);
     let finish = |app: &mut RustGisApp, png: Result<Vec<u8>, String>, settled: bool| {
         app.relay_shot = None;
-        wait_for(0);
+        app.relay_arrived.wait_for(0);
         app.map.hide_overlays = false;
         relay.finish_screen(&mut app.session, png, settled);
     };
     match shot.asked {
         Some((was_settled, at, ppp)) => {
-            if let Some(image) = take_arrived(shot.tag) {
+            if let Some(image) = app.relay_arrived.take(shot.tag) {
                 let png = crop_png(&image, at, ppp)
                     .ok_or_else(|| "the window's screenshot didn't hold the map, so it was drawn offscreen".to_string());
                 return finish(app, png, was_settled);
@@ -118,14 +131,10 @@ pub fn drive(app: &mut RustGisApp, ctx: &egui::Context) {
                 // Overlays leave only the frame being captured (this one draws after this), and
                 // come back with the screenshot.
                 app.map.hide_overlays = !request.overlays;
-                wait_for(tag);
-                let repaint = ctx.clone();
+                app.relay_arrived.wait_for(tag);
+                let (arrived, repaint) = (app.relay_arrived.clone(), ctx.clone());
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |image| {
-                    if let Ok(mut arrived) = ARRIVED.lock()
-                        && arrived.0 == tag
-                    {
-                        arrived.1 = Some(image);
-                    }
+                    arrived.arrive(tag, image);
                     repaint.request_repaint();
                 })));
             }

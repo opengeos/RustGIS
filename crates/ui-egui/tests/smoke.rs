@@ -734,6 +734,8 @@ fn browse_lists_thousands_of_plugins_quickly() {
 #[test]
 fn language_switch_waits_for_its_font() {
     let mut h = harness();
+    // A machine without a CJK face draws Chinese as boxes, whenever it switches.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     h.state_mut().run("ui.language", json!({"code": "en"})).unwrap();
     for _ in 0..4 {
         h.step();
