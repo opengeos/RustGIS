@@ -11050,6 +11050,7 @@ fn coverage_answers_that_are_not_geotiffs_are_errors() {
 /// The keys a command's source reads from its parameters, found by scanning `src/cmd/*.rs`: the
 /// command's function (or closure) and the functions it passes its parameters to (in its own
 /// file, or another's as `module::name(…)`), a few calls deep.
+/// Scans top-level Rust modules; helper subdirectories are not source files or command entries.
 fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> {
     use std::collections::{BTreeMap, BTreeSet};
     type Fn = (Vec<String>, String);
@@ -11058,6 +11059,9 @@ fn keys_read_by_commands() -> Vec<(String, std::collections::BTreeSet<String>)> 
     let mut modules: BTreeMap<String, (String, BTreeMap<String, Fn>)> = BTreeMap::new();
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
+        if !path.is_file() || path.extension().is_none_or(|ext| ext != "rs") {
+            continue;
+        }
         let stem = path.file_stem().unwrap().to_string_lossy().to_string();
         let src = std::fs::read_to_string(&path).unwrap();
         let mut fns: BTreeMap<String, Fn> = BTreeMap::new();
@@ -11217,6 +11221,7 @@ fn literal_keys(body: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
+/// Checks every discovered command's declared keys, even when helper directories accompany modules.
 #[test]
 fn params_name_every_key_a_command_reads() {
     // Read by a shared helper but of no use to the command.
