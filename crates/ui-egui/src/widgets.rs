@@ -53,10 +53,10 @@ pub fn text_w(ui: &Ui, s: &str, font: egui::FontId) -> f32 {
     ui.ctx().fonts_mut(|f| f.layout_no_wrap(s.to_string(), font, egui::Color32::WHITE).size().x)
 }
 
-/// The shortcut of a command run without parameters (`⌘S` on macOS, `Ctrl+S` elsewhere), or
-/// empty for none.
-pub fn shortcut_text(app: &RustGisApp, id: &str) -> String {
-    crate::keymap::shortcut_text(app, id, &Value::Null)
+/// The shortcut of a command run without parameters (`⌘S` on a Mac, as egui reads the keys,
+/// `Ctrl+S` elsewhere), or empty for none.
+pub fn shortcut_text(ctx: &egui::Context, app: &RustGisApp, id: &str) -> String {
+    crate::keymap::shortcut_text(ctx, app, id, &Value::Null)
 }
 
 /// Whether a command exists and is enabled now.
@@ -74,7 +74,7 @@ pub fn why_disabled(app: &RustGisApp, id: &str) -> Option<&'static str> {
 /// A rich tooltip: title (with the shortcut of `id` with `params`), description and why it's
 /// disabled.
 pub fn tooltip(app: &RustGisApp, resp: Response, title: &str, desc: &str, id: &str, params: &Value) -> Response {
-    let sc = crate::keymap::shortcut_text(app, id, params);
+    let sc = crate::keymap::shortcut_text(&resp.ctx, app, id, params);
     let why = why_disabled(app, id);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(280.0);
@@ -267,7 +267,7 @@ const MENU_ICON_W: f32 = 22.0;
 /// A menu row that runs a command (disabled when the command is).
 pub fn menu_item(ui: &mut Ui, app: &mut RustGisApp, icon: &str, label: &str, id: &str, params: Value) {
     let on = enabled(app, id);
-    let shortcut = crate::keymap::shortcut_text(app, id, &params);
+    let shortcut = crate::keymap::shortcut_text(ui.ctx(), app, id, &params);
     if menu_row(ui, icon, tl!(label), &shortcut, on).clicked() {
         let _ = app.run(id, params);
         ui.close();

@@ -1152,7 +1152,8 @@ fn script(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, fit: bool) {
         crate::scriptcomplete::braces(ui, before, &out.inner, &mut app.workflow.script);
     }
     ui.horizontal(|ui| {
-        let shortcut = if cfg!(target_os = "macos") { "⌘+Enter" } else { "Ctrl+Enter" };
+        // As egui reads the keys: ⌘ on a Mac, the browser's too (from its user agent).
+        let shortcut = if ui.ctx().os().is_mac() { "⌘+Enter" } else { "Ctrl+Enter" };
         let run = ui.button(tl!("Run")).on_hover_text(crate::i18n::fmt("Run the script ({keys})", &[("keys", shortcut)])).clicked();
         if run || ctrl_enter {
             let script = app.workflow.script.clone();

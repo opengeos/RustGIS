@@ -2959,8 +2959,12 @@ fn help_shortcuts_lists_the_keymap() {
     h.step();
     // What it opened shows on the next frame.
     h.step();
-    let undo = if cfg!(target_os = "macos") { "⌘Z" } else { "Ctrl+Z" };
-    assert!(h.query_by_label(undo).is_some(), "Help › Shortcuts lists Undo's key");
+    // Named by the OS egui reads (a browser's from its user agent), not the build's (#799): the
+    // harness tells Linux, whatever runs it.
+    assert!(h.query_by_label("Ctrl+Z").is_some(), "Help › Shortcuts lists Undo's key");
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.step();
+    assert!(h.query_by_label("⌘Z").is_some(), "with ⌘ on a Mac");
     assert!(h.query_by_label("Map Tool: Explore").is_some(), "and what Esc does");
 }
 

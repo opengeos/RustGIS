@@ -2777,7 +2777,7 @@ pub fn confirm_delete(app: &mut RustGisApp, ctx: &egui::Context) {
         Deletion::Map(n) => crate::i18n::fmt("Delete the map {name}?", &[("name", n)]),
         Deletion::Layout(n) => crate::i18n::fmt("Delete the layout {name}?", &[("name", n)]),
     };
-    let undo = crate::widgets::shortcut_text(app, "edit.undo");
+    let undo = crate::widgets::shortcut_text(ctx, app, "edit.undo");
     let mut decision = None;
     egui::Modal::new(egui::Id::unique("confirm_delete")).show(ctx, |ui| {
         ui.set_width(360.0);
