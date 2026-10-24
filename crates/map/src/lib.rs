@@ -167,6 +167,10 @@ pub struct Layer {
     /// Set for streamed layers, whose `dataset` holds the features of the last view read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<source::SourceLayer>,
+    /// Set for a layer loaded whole from a PostGIS table to be edited: the table its edits are
+    /// saved to, and the rows' versions as loaded (desktop only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgis: Option<source::PostgisEdit>,
     /// Shared, like the features: an undo snapshot or other copy of the layer doesn't copy it.
     #[serde(skip)]
     projected: std::sync::Arc<Vec<Option<Geometry>>>,
@@ -236,6 +240,7 @@ impl Layer {
             design: design::Design::default(),
             raster: None,
             source: None,
+            postgis: None,
             projected: Default::default(),
             projected_extents: Default::default(),
             projected_vertices: 0,

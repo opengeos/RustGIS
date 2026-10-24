@@ -197,6 +197,50 @@ A query can read any file the app can and fetch any web address, and a database 
 server, so the [AI Assistant](assistant.md) asks before it runs a query or reads a database, and
 plugins need both the files and network permissions.
 
+### The PostGIS tab
+
+The **PostGIS** tab of the ribbon (desktop only) works with one PostgreSQL database with PostGIS
+at a time, and loads its tables to be edited.
+
+- **Connect PostGIS** (`pg.connect`) asks for the host, port, database, user, password and
+  encryption, or takes a whole connection string instead. The connection lasts until you
+  **Disconnect** (`pg.disconnect`) or close RustGIS. It isn't saved with the project, and neither
+  is the password. Without a password, `PGPASSWORD` or libpq's password file serve.
+- **Add Layer** (`pg.addLayer`) lists the database's tables with a geometry or geography column
+  (`pg.tables`) and loads the one you choose whole, up to 100,000 rows, in the order of its key.
+  A **condition** (an SQL expression on its columns, such as `population > 10000`) loads only the
+  rows it keeps. The layer is an ordinary layer in memory, so every editing tool works on it.
+
+- **Save Edits** (`pg.saveEdits`) shows how many of the layer's rows are new, changed and
+  deleted, and writes them to its table in one transaction. **Discard Edits** (`pg.discardEdits`)
+  loads the rows again as they are in the database, dropping the edits (Undo brings them back).
+
+A table needs a single-column integer primary key to be added this way. The key becomes each
+feature's id, and the layer keeps each row's version (PostgreSQL's `xmin`) and what it held as it
+was read. Saving locks the rows you changed or deleted and checks them first: when one was changed
+or deleted in the database since you loaded it, or a new row's key is already taken, **nothing is
+saved**, and the message lists those rows. Discard Edits then loads them as they are now. A row
+someone else changed that you didn't edit is no conflict, and stays as they left it.
+
+Only what you changed is written: the columns whose values differ, and the geometry when it moved
+(converted back to the table's coordinate system, single or multi type and dimensions). A new row
+takes the value of its key field, else the table's default key (`serial`, identity), else its
+feature id, and its feature takes the key it was saved with. Fields the table has no column for
+aren't saved, and the message names them. The layer says when the database's user can't insert,
+update or delete the table's rows; saving is then refused.
+
+```sh
+rustgis-cli run --cmd 'pg.connect={"host":"localhost","database":"gis","user":"postgres","password":"…"}' \
+  --cmd 'pg.addLayer={"table":"public.roads","where":"lanes > 2","name":"Roads"}' \
+  --cmd 'edit.enable={"on":true}' \
+  --cmd 'edit.setValue={"layer":"Roads","row":0,"field":"name","value":"Main St"}' \
+  --cmd 'pg.saveEdits={"layer":"Roads"}'
+```
+
+Connecting and adding a layer read the database, so the [AI Assistant](assistant.md) asks
+before it connects or adds a table, and asks every time before it saves edits. Plugins can't
+connect or save at all.
+
 ## MySQL and MariaDB
 
 **Home › Add Data › Database…** (`layer.addDatabase`) also connects to a MySQL (8 or later) or

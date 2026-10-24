@@ -557,6 +557,29 @@ pub fn paint(painter: &Painter, r: Rect, name: &str, ink: Color32, accent: Color
             p.text(16.5, 17.2, "km²", 4.6, ink);
         }
         "table" => p.table(2.0, 4.0, 20.0, 16.0),
+        "database" | "db_add" => {
+            // A cylinder: a database.
+            let cx = if name == "db_add" { 10.5 } else { 12.0 };
+            let ellipse = |cy: f32, a0: f32, a1: f32| -> Vec<(f32, f32)> {
+                (0..=24)
+                    .map(|i| {
+                        let a = (a0 + (a1 - a0) * i as f32 / 24.0).to_radians();
+                        (cx + 7.5 * a.cos(), cy + 2.8 * a.sin())
+                    })
+                    .collect()
+            };
+            p.rect(cx - 7.5, 5.0, 15.0, 13.0, Some(p.tint(60)), None, 0.0);
+            p.fill(&ellipse(18.0, 0.0, 180.0), p.tint(60));
+            p.fill(&ellipse(5.0, 0.0, 360.0), accent);
+            p.closed(&ellipse(5.0, 0.0, 360.0), 1.3, ink);
+            p.line(&ellipse(11.5, 0.0, 180.0), 1.1, ink);
+            p.line(&ellipse(18.0, 0.0, 180.0), 1.3, ink);
+            p.line(&[(cx - 7.5, 5.0), (cx - 7.5, 18.0)], 1.3, ink);
+            p.line(&[(cx + 7.5, 5.0), (cx + 7.5, 18.0)], 1.3, ink);
+            if name == "db_add" {
+                p.plus_badge(19.0, 18.5);
+            }
+        }
         "field" => {
             p.table(2.0, 4.0, 15.0, 16.0);
             p.plus_badge(19.0, 18.5);

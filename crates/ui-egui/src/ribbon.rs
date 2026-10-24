@@ -16,7 +16,11 @@ use crate::widgets::{
 };
 use crate::{RightPane, RustGisApp, icons};
 
-pub const TABS: [&str; 10] = ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
+#[cfg(not(target_arch = "wasm32"))]
+pub const TABS: &[&str] = &["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "PostGIS", "Plugins", "Settings", "Help"];
+/// The browser has no PostGIS: its databases are reached from the desktop app.
+#[cfg(target_arch = "wasm32")]
+pub const TABS: &[&str] = &["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"];
 
 /// Tabs that always show: Settings holds Customize › Ribbon, the way to show hidden tabs again.
 pub const FIXED_TABS: [&str; 2] = ["Settings", "Help"];
@@ -108,6 +112,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                         "Analyze" => analyze_tab(app, ui),
                         "View" => view_tab(app, ui),
                         "Publish" => publish_tab(app, ui),
+                        "PostGIS" => postgis_tab(app, ui),
                         "Plugins" => plugins_tab(app, ui),
                         "Settings" => settings_tab(app, ui),
                         "Help" => help_tab(app, ui),
@@ -2244,6 +2249,62 @@ fn publish_tab(app: &mut RustGisApp, ui: &mut Ui) {
 /// The layer selected in Layers.
 fn active_layer(app: &RustGisApp) -> Option<&rustgis_engine::map::Layer> {
     app.session.active_layer.and_then(|id| app.session.map().layer(id))
+}
+
+/// The PostGIS tab: a PostgreSQL database's PostGIS tables as layers to edit (desktop only).
+fn postgis_tab(app: &mut RustGisApp, ui: &mut Ui) {
+    let connected = app.session.postgis.is_some();
+    group(ui, "Connection", |ui| {
+        big(
+            ui,
+            app,
+            "database",
+            "Connect\nPostGIS",
+            "Connect to a PostgreSQL database with PostGIS.",
+            "ui.dialog",
+            json!({"name": "pgConnect"}),
+            connected,
+            false,
+        );
+        big(ui, app, "close", "Disconnect", "Close the PostGIS connection.", "pg.disconnect", Value::Null, false, false);
+    });
+    group(ui, "Layer", |ui| {
+        big(
+            ui,
+            app,
+            "db_add",
+            "Add\nLayer",
+            "Add a table of the database as a layer you can edit.",
+            "ui.dialog",
+            json!({"name": "pgAddLayer"}),
+            false,
+            false,
+        );
+    });
+    group(ui, "Edit", |ui| {
+        big(
+            ui,
+            app,
+            "save",
+            "Save\nEdits",
+            "Save a PostGIS layer's edits to its table, unless rows changed there since.",
+            "ui.dialog",
+            json!({"name": "pgSave"}),
+            false,
+            false,
+        );
+        big(
+            ui,
+            app,
+            "update",
+            "Discard\nEdits",
+            "Load a PostGIS layer's rows again as they are in the database, dropping its edits.",
+            "ui.dialog",
+            json!({"name": "pgDiscard"}),
+            false,
+            false,
+        );
+    });
 }
 
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {

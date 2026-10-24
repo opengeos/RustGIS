@@ -14932,6 +14932,243 @@ fn scans_have_no_coordinates_to_give_away() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The PostGIS tab's commands need a connection first, and a connection that isn't there fails
+/// as an error that never shows its password, leaving the session unconnected.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn postgis_tab_needs_a_connection() {
+    let mut s = Session::new(Project::default());
+    assert_eq!(s.run("pg.status", &json!({})).unwrap()["connected"], false);
+    for (id, p) in [("pg.tables", json!({})), ("pg.addLayer", json!({"table": "roads"})), ("pg.disconnect", json!({}))] {
+        let e = s.run(id, &p).unwrap_err();
+        assert!(e.contains("connect to a PostGIS database first"), "{id}: {e}");
+    }
+    let before = s.map().layers.len();
+    let e =
+        s.run("pg.connect", &json!({"host": "127.0.0.1", "port": 1, "database": "gis", "user": "me", "password": "s3cret"})).unwrap_err();
+    assert!(e.starts_with("gis: ") && !e.contains("s3cret"), "{e}");
+    let e = s.run("pg.connect", &json!({"connection": "postgresql://me:s3cret@127.0.0.1:1/gis"})).unwrap_err();
+    assert!(!e.contains("s3cret"), "{e}");
+    assert!(s.postgis.is_none());
+    assert_eq!(s.map().layers.len(), before);
+}
+
+/// A live PostGIS database through the PostGIS tab's commands: `RUSTGIS_TEST_POSTGIS` names one
+/// (as for `postgis_live_end_to_end`) with a table that has an integer primary key.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn postgis_tab_live() {
+    let Ok(dsn) = std::env::var("RUSTGIS_TEST_POSTGIS") else { return };
+    let mut s = Session::new(Project::default());
+    let dsn = dsn.trim_start_matches("postgres:").to_string();
+    let r = s.run("pg.connect", &json!({"connection": dsn})).unwrap();
+    assert_eq!(r["connected"], true);
+    assert_eq!(s.run("pg.status", &json!({})).unwrap()["connected"], true);
+    let listed = s.run("pg.tables", &json!({})).unwrap();
+    let names: Vec<String> = listed["tables"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).map(str::to_string).collect();
+    assert!(!names.is_empty());
+    // The first table with an integer key loads whole, every row with its version.
+    let r = names.iter().find_map(|n| s.run("pg.addLayer", &json!({"table": n, "limit": 500})).ok()).expect("a table with an integer key");
+    let id = r["layers"][0].as_u64().unwrap() as u32;
+    let l = s.map().layer(id).unwrap();
+    assert!(!l.is_streamed() && !l.dataset.features.is_empty());
+    let pg = l.postgis.as_ref().unwrap();
+    assert_eq!(pg.versions.len(), l.dataset.features.len());
+    assert!(l.dataset.features.iter().all(|f| pg.versions.get(f.id).is_some()));
+    // Saved with the project (never with a password), and read back.
+    let text = serde_json::to_string(l).unwrap();
+    assert!(text.contains("\"versions\"") && !text.contains("password"), "{}", &text[..text.len().min(400)]);
+    // A condition no row meets loads nothing, and a bad one is the server's error.
+    let table = l.postgis.as_ref().unwrap().origin.table.clone();
+    assert!(s.run("pg.addLayer", &json!({"table": table, "where": "1 = 1; DROP TABLE x"})).unwrap_err().contains("without ';'"));
+    assert!(s.run("pg.addLayer", &json!({"table": table, "where": "no_such_column > 1"})).is_err());
+    s.run("pg.disconnect", &json!({})).unwrap();
+    assert!(s.postgis.is_none());
+}
+
+/// A layer loaded from PostGIS knows what changed in it, and saving refuses what it can't do
+/// before it reaches a database: no edits, a user who can't write, a layer not from PostGIS.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn postgis_edits_are_counted_and_checked() {
+    use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_map::source::{PostgisEdit, PostgisOrigin, RowVersion, row_hash};
+    let mut s = Session::new(Project::default());
+    let mut ds =
+        Dataset::new("roads", GeometryType::Point, vec![Field::new("id", FieldType::Integer), Field::new("name", FieldType::Text)]);
+    for (i, n) in ["a", "b", "c"].iter().enumerate() {
+        ds.push_next(Some(Geometry::Point(Coord { x: i as f64, y: 0.0 })), vec![Value::Int(i as i64 + 1), Value::Text(n.to_string())]);
+    }
+    let versions = ds.features.iter().map(|f| (f.id, RowVersion { version: 7, hash: row_hash(f) })).collect();
+    let id = crate::cmd::layer::add_dataset(&mut s, ds);
+    s.map_mut().layer_mut(id).unwrap().postgis = Some(PostgisEdit {
+        origin: PostgisOrigin {
+            database: "postgres:host=127.0.0.1 port=1 dbname=gis".into(),
+            table: "roads".into(),
+            family: None,
+            crs: None,
+        },
+        key: "id".into(),
+        srid: 4326,
+        writable: false,
+        condition: None,
+        limit: 0,
+        versions,
+    });
+    let p = json!({"layer": "roads"});
+    let r = s.run("pg.pendingEdits", &p).unwrap();
+    assert_eq!((r["inserts"].as_u64(), r["updates"].as_u64(), r["deletes"].as_u64()), (Some(0), Some(0), Some(0)), "{r}");
+    assert_eq!(s.run("pg.saveEdits", &p).unwrap()["saved"], false);
+    // An edit, a deletion and a new feature, counted as such.
+    s.map_mut().editing.settings.enabled = true;
+    s.run("edit.setValue", &json!({"layer": "roads", "row": 0, "field": "name", "value": "aa"})).unwrap();
+    s.run(
+        "edit.addFeature",
+        &json!({"layer": "roads", "geometry": {"type": "Point", "coordinates": [5, 5]}, "attributes": {"name": "new"}}),
+    )
+    .unwrap();
+    {
+        let l = s.map_mut().layer_mut(id).unwrap();
+        l.dataset.features.remove(1);
+        l.touch_geometry();
+    }
+    let r = s.run("pg.pendingEdits", &p).unwrap();
+    assert_eq!((r["inserts"].as_u64(), r["updates"].as_u64(), r["deletes"].as_u64()), (Some(1), Some(1), Some(1)), "{r}");
+    // A user who can't write saves nothing; nor does a database that isn't there.
+    let e = s.run("pg.saveEdits", &p).unwrap_err();
+    assert!(e.contains("can't insert, update or delete"), "{e}");
+    s.map_mut().layer_mut(id).unwrap().postgis.as_mut().unwrap().writable = true;
+    let e = s.run("pg.saveEdits", &p).unwrap_err();
+    assert!(e.starts_with("gis: "), "{e}");
+    assert!(s.run("pg.discardEdits", &p).is_err());
+    // The edits are still there to save.
+    assert_eq!(s.run("pg.pendingEdits", &p).unwrap()["updates"], 1);
+    // A layer not from PostGIS has no edits to save there.
+    crate::cmd::layer::add_dataset(&mut s, Dataset::new("plain", GeometryType::Point, Vec::new()));
+    let e = s.run("pg.saveEdits", &json!({"layer": "plain"})).unwrap_err();
+    assert!(e.contains("not a layer added with PostGIS"), "{e}");
+}
+
+/// Edits saved to a live PostGIS database and read back, and every conflict refused:
+/// `RUSTGIS_TEST_POSTGIS` names a database (`postgresql://…`) where the test may make and drop
+/// two tables of its own.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn postgis_edits_live() {
+    /// Drops the test's tables, however the test ends.
+    struct Cleanup(String, String, String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            if let Ok(mut c) = postgres::Client::connect(&self.0, postgres::NoTls) {
+                let _ = c.batch_execute(&format!("DROP TABLE IF EXISTS public.{}; DROP TABLE IF EXISTS public.{}", self.1, self.2));
+            }
+        }
+    }
+    let Ok(url) = std::env::var("RUSTGIS_TEST_POSTGIS") else { return };
+    let url = url.trim_start_matches("postgres:").to_string();
+    let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    let serial = format!("rustgis_edit_test_{}", std::process::id());
+    let keyed = format!("{serial}_k");
+    let _cleanup = Cleanup(url.clone(), serial.clone(), keyed.clone());
+    db.batch_execute(&format!(
+        "CREATE TABLE public.{serial} (id serial PRIMARY KEY, name text, pop numeric(12,3), geom geometry(Polygon, 3857));
+         INSERT INTO public.{serial} (name, pop, geom) VALUES
+           ('a', 12345.678, ST_Transform(ST_MakeEnvelope(10, 10, 10.1, 10.1, 4326), 3857)),
+           ('b', 1.001, ST_Transform(ST_MakeEnvelope(11, 10, 11.1, 10.1, 4326), 3857)),
+           ('c', 2.002, ST_Transform(ST_MakeEnvelope(12, 10, 12.1, 10.1, 4326), 3857));
+         CREATE TABLE public.{keyed} (id int PRIMARY KEY, name text, geom geometry(Point, 4326));
+         INSERT INTO public.{keyed} VALUES (1, 'one', ST_SetSRID(ST_MakePoint(1, 1), 4326)), (2, 'two', ST_SetSRID(ST_MakePoint(2, 2), 4326));"
+    ))
+    .unwrap();
+    let name_of = |db: &mut postgres::Client, id: i32| -> Option<String> {
+        db.query_opt(format!("SELECT name FROM public.{serial} WHERE id = $1").as_str(), &[&id]).unwrap().map(|r| r.get(0))
+    };
+
+    let mut s = Session::new(Project::default());
+    s.run("pg.connect", &json!({"connection": url})).unwrap();
+    let r = s.run("pg.addLayer", &json!({"table": format!("public.{serial}"), "name": "T"})).unwrap();
+    let id = r["layers"][0].as_u64().unwrap() as u32;
+    s.map_mut().editing.settings.enabled = true;
+    let row_of = |s: &Session, key: u64| s.map().layer(id).unwrap().dataset.features.iter().position(|f| f.id == key).unwrap();
+
+    // Rename row 1, delete row 3, add a polygon: saved in one go.
+    let r1 = row_of(&s, 1);
+    s.run("edit.setValue", &json!({"layer": "T", "row": r1, "field": "name", "value": "renamed"})).unwrap();
+    let r3 = row_of(&s, 3);
+    s.map_mut().layer_mut(id).unwrap().selection = vec![r3];
+    s.active_layer = Some(id);
+    s.run("edit.delete", &json!({})).unwrap();
+    s.run(
+        "edit.addFeature",
+        &json!({"layer": "T", "geometry": {"type": "Polygon", "coordinates": [[[13, 10], [13.1, 10], [13.1, 10.1], [13, 10.1], [13, 10]]]}, "attributes": {"name": "new", "pop": 4.5}}),
+    )
+    .unwrap();
+    let r = s.run("pg.saveEdits", &json!({"layer": "T"})).unwrap();
+    assert_eq!((r["inserted"].as_u64(), r["updated"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(1), Some(1)), "{r}");
+    let new_key = r["keys"][0].as_i64().unwrap() as i32;
+    assert_eq!(name_of(&mut db, 1).as_deref(), Some("renamed"));
+    assert_eq!(name_of(&mut db, 3), None);
+    let row = db
+        .query_one(
+            format!(
+                "SELECT name, pop::text, ST_GeometryType(geom), ST_SRID(geom), round(ST_XMin(ST_Transform(geom, 4326))::numeric, 6)::text FROM public.{serial} WHERE id = $1"
+            )
+            .as_str(),
+            &[&new_key],
+        )
+        .unwrap();
+    assert_eq!(
+        (row.get::<_, String>(0), row.get::<_, String>(1), row.get::<_, String>(2), row.get::<_, i32>(3), row.get::<_, String>(4)),
+        ("new".into(), "4.500".into(), "ST_Polygon".into(), 3857, "13.000000".into())
+    );
+    // The numeric of a row whose name changed is as it was, to the last digit.
+    let pop: String = db.query_one(format!("SELECT pop::text FROM public.{serial} WHERE id = 1").as_str(), &[]).unwrap().get(0);
+    assert_eq!(pop, "12345.678");
+    // The new feature took its key; nothing is left to save.
+    assert!(s.map().layer(id).unwrap().dataset.features.iter().any(|f| f.id == new_key as u64));
+    let r = s.run("pg.pendingEdits", &json!({"layer": "T"})).unwrap();
+    assert_eq!((r["inserts"].as_u64(), r["updates"].as_u64(), r["deletes"].as_u64()), (Some(0), Some(0), Some(0)), "{r}");
+
+    // Someone else renames row 1 while it is edited here: nothing is saved.
+    db.execute(format!("UPDATE public.{serial} SET name = 'theirs' WHERE id = 1").as_str(), &[]).unwrap();
+    let r1 = row_of(&s, 1);
+    s.run("edit.setValue", &json!({"layer": "T", "row": r1, "field": "name", "value": "mine"})).unwrap();
+    let e = s.run("pg.saveEdits", &json!({"layer": "T"})).unwrap_err();
+    assert!(e.contains("row 1 was changed in the database"), "{e}");
+    assert_eq!(name_of(&mut db, 1).as_deref(), Some("theirs"));
+    // Discarded: the rows as they are now; and a row someone else changed that isn't edited here
+    // is no conflict.
+    s.run("pg.discardEdits", &json!({"layer": "T"})).unwrap();
+    db.execute(format!("UPDATE public.{serial} SET name = 'theirs too' WHERE id = 2").as_str(), &[]).unwrap();
+    let r1 = row_of(&s, 1);
+    assert_eq!(s.map().layer(id).unwrap().dataset.value(r1, 1), &rustgis_data::Value::Text("theirs".into()));
+    s.run("edit.setValue", &json!({"layer": "T", "row": r1, "field": "name", "value": "mine"})).unwrap();
+    assert_eq!(s.run("pg.saveEdits", &json!({"layer": "T"})).unwrap()["updated"], 1);
+    assert_eq!((name_of(&mut db, 1).as_deref(), name_of(&mut db, 2).as_deref()), (Some("mine"), Some("theirs too")));
+    // A row someone else deleted can't be saved.
+    db.execute(format!("DELETE FROM public.{serial} WHERE id = 1").as_str(), &[]).unwrap();
+    let r1 = row_of(&s, 1);
+    s.run("edit.setValue", &json!({"layer": "T", "row": r1, "field": "name", "value": "gone"})).unwrap();
+    let e = s.run("pg.saveEdits", &json!({"layer": "T"})).unwrap_err();
+    assert!(e.contains("row 1 was deleted from the database"), "{e}");
+
+    // A table without a default key: a new row's key is its key field, which must be free.
+    let r = s.run("pg.addLayer", &json!({"table": format!("public.{keyed}"), "name": "K"})).unwrap();
+    let kid = r["layers"][0].as_u64().unwrap() as u32;
+    let point = |id: i64, name: &str| json!({"layer": "K", "geometry": {"type": "Point", "coordinates": [3, 3]}, "attributes": {"id": id, "name": name}});
+    s.run("edit.addFeature", &point(2, "taken")).unwrap();
+    let e = s.run("pg.saveEdits", &json!({"layer": "K"})).unwrap_err();
+    assert!(e.contains("a row with key 2 is already in the database"), "{e}");
+    let rows = s.map().layer(kid).unwrap().dataset.features.len();
+    s.map_mut().layer_mut(kid).unwrap().dataset.features.truncate(rows - 1);
+    s.run("edit.addFeature", &point(7, "seven")).unwrap();
+    assert_eq!(s.run("pg.saveEdits", &json!({"layer": "K"})).unwrap()["keys"][0], 7);
+    let n: i64 = db.query_one(format!("SELECT count(*) FROM public.{keyed} WHERE id = 7 AND name = 'seven'").as_str(), &[]).unwrap().get(0);
+    assert_eq!(n, 1);
+}
+
 #[test]
 fn layer_selection_replaces_toggles_and_extends() {
     let mut s = world();
