@@ -12,6 +12,8 @@ use serde_json::{Value as Json, json};
 use super::{b, f, need_feature_layer, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+mod snap_vertex;
+
 /// One edited feature: its state before (none for an insert) and its row after (none for a
 /// delete).
 pub(crate) struct Change {
@@ -1069,7 +1071,31 @@ pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
 
 /// [`snap_at`], leaving out one feature (layer id, row): a vertex being dragged doesn't snap to
 /// the shape it is changing.
+/// Use [`snap_vertex_except`] when the source node is known and its other parts should remain targets.
 pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Option<(Coord, &'static str)> {
+    snap_excluding(s, c, skip, None)
+}
+
+/// Snaps while moving one source vertex, excluding that node and its incident edges instead of
+/// its whole feature. Other line/polygon parts remain targets. Polygon closing copies alias the
+/// first node; a closed line's two endpoints remain distinct, as in `Geometry::move_vertex`.
+/// Invalid addresses are ignored. Point/multipoint targets retain the existing snapping policy.
+/// Moving a point or multipoint still excludes its whole feature, as with [`snap_except`].
+pub fn snap_vertex_except(s: &mut Session, c: Coord, skip: Option<(u32, usize, rustgis_data::VertexId)>) -> Option<(Coord, &'static str)> {
+    let skip = skip.filter(|(id, row, v)| {
+        s.map().layer(*id).and_then(|l| l.dataset.features.get(*row)).and_then(|f| f.geometry.as_ref()).and_then(|g| g.vertex(*v)).is_some()
+    });
+    snap_excluding(s, c, None, skip)
+}
+
+/// Shares the original layer/row ordering, scale rules and distance selection between legacy
+/// feature exclusion and source-node exclusion. Only the addressed row needs source identities.
+fn snap_excluding(
+    s: &mut Session,
+    c: Coord,
+    skip: Option<(u32, usize)>,
+    vertex: Option<(u32, usize, rustgis_data::VertexId)>,
+) -> Option<(Coord, &'static str)> {
     let sn = s.map().editing.snapping;
     if !sn.enabled {
         return None;
@@ -1092,9 +1118,16 @@ pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Opt
             continue;
         }
         let id = l.id;
-        for (row, g) in l.projected_in(&flat, &key).iter().enumerate() {
+        l.projected_in(&flat, &key);
+        for (row, g) in l.projected_cache().iter().enumerate() {
             let Some(g) = g.as_ref().filter(|_| skip != Some((id, row))) else { continue };
             if !g.extent().padded(0.0, tol).contains(m) {
+                continue;
+            }
+            if let Some((_, _, v)) = vertex.filter(|(layer, source_row, _)| *layer == id && *source_row == row) {
+                if let Some(source) = l.dataset.features.get(row).and_then(|f| f.geometry.as_ref()) {
+                    snap_vertex::consider(source, v, &flat, sn, m, &mut consider);
+                }
                 continue;
             }
             let paths: Vec<&Vec<Coord>> = match g {
