@@ -189,21 +189,26 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner && r.pass + 1 >= pass);
     ui.data_mut(|d| d.remove::<Renaming>(rename_key));
     grid(ui, "class_pick", |ui| {
-        ui.label(tl!("Class"));
+        let input_label = ui.label(tl!("Class"));
         match renaming {
-            Some(r) => rename_box(app, ui, l, c, rename_key, r),
+            Some(r) => rename_box(app, ui, l, c, rename_key, input_label.id, r),
             None => {
-                egui::ComboBox::from_id_salt("label_pane_class").selected_text(shown(c)).width(180.0).show_ui(ui, |ui| {
-                    for k in extras(l) {
-                        if ui.selectable_label(c.name == Some(k.name.as_str()), &k.name).clicked() {
-                            choose(ui, app, l, Some(&k.name));
+                egui::ComboBox::from_id_salt("label_pane_class")
+                    .selected_text(shown(c))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for k in extras(l) {
+                            if ui.selectable_label(c.name == Some(k.name.as_str()), &k.name).clicked() {
+                                choose(ui, app, l, Some(&k.name));
+                            }
                         }
-                    }
-                    let default = Class { it: &l.labels.default, name: None };
-                    if ui.selectable_label(c.name.is_none(), shown(&default)).clicked() {
-                        choose(ui, app, l, None);
-                    }
-                });
+                        let default = Class { it: &l.labels.default, name: None };
+                        if ui.selectable_label(c.name.is_none(), shown(&default)).clicked() {
+                            choose(ui, app, l, None);
+                        }
+                    })
+                    .response
+                    .labelled_by(input_label.id);
             }
         }
         ui.end_row();
@@ -259,9 +264,9 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
 
 /// The box the chosen class is renamed in: Enter (or clicking away) renames it, Escape leaves it as
 /// it was. A name refused (empty, or another class's) keeps the box open, with the notice saying why.
-fn rename_box(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, key: egui::Id, mut r: Renaming) {
+fn rename_box(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, key: egui::Id, label: egui::Id, mut r: Renaming) {
     let keys = egui::EventFilter { escape: true, ..Default::default() };
-    let edit = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width(180.0).event_filter(keys));
+    let edit = ui.add(egui::TextEdit::singleline(&mut r.text).desired_width(180.0).event_filter(keys)).labelled_by(label);
     if !r.focused {
         edit.request_focus();
         r.focused = true;
@@ -681,7 +686,7 @@ mod tests {
         use egui::accesskit::Role;
         let mut h = harness(with_cities());
         h.run();
-        for label in ["Field", "Font", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
+        for label in ["Class", "Field", "Font", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
             assert!(h.query_by_role_and_label(Role::ComboBox, label).is_some(), "missing input: {label}");
         }
         assert!(h.query_by_role_and_label(Role::SpinButton, "Size").is_some());
@@ -1093,7 +1098,7 @@ mod tests {
         );
     }
 
-    /// Controls added on main keep editing the chosen class after the merge.
+    /// Font, italic and line placement edits affect the chosen class and leave Default unchanged.
     #[test]
     fn font_italic_and_line_placement_edit_the_chosen_class() {
         super::families::installed();
