@@ -204,7 +204,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         let max = MAX_LABEL_CLASSES.to_string();
         let new = ui
             .add_enabled(!full, egui::Button::new(tl!("New")))
-            .on_hover_text(tl!("Add a class with this one's field and text symbol."))
+            .on_hover_text(tl!("Add a class with this one's field, text symbol, placement and range."))
             .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
         if new.clicked() {
             let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
