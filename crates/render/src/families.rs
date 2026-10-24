@@ -309,7 +309,8 @@ fn face_info(r: &mut (impl Read + Seek), start: u32) -> Option<FaceInfo> {
     let style = read_name(17).or_else(|| read_name(2)).unwrap_or_default().to_lowercase();
     let (weight, selection) = match table(b"OS/2") {
         Some((at, len)) => {
-            let os2 = read_at(r, at, len.min(64))?;
+            // An unreadable `OS/2` (cut short, past the end) keeps the face, at the defaults.
+            let os2 = read_at(r, at, len.min(64)).unwrap_or_default();
             (u16_at(&os2, 4).unwrap_or(400), u16_at(&os2, 62).unwrap_or(0))
         }
         None => (400, 0),
