@@ -4,6 +4,7 @@
 '{text}' isn't a scale: type one such as 1:12,345	«{text}» não é uma escala: digite uma como 1:12,345
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(filtrada)
+({selected} of {total})	({selected} de {total})
 + Add Stop	+ Adicionar parada
 + Input	+ Entrada
 + New expression	+ Nova expressão
@@ -18,12 +19,14 @@
 3035, vn2000tm3	3035, vn2000tm3
 3D mesh	Malha 3D
 <None>	<Nenhum>
+A .qgs or .qgz project as a map	Um projeto .qgs ou .qgz como mapa
 A 3D globe seen from space.	Um globo 3D visto do espaço.
 A blank map with a basemap	Um mapa em branco com um mapa base
 A call for the rustgis Python package	Uma chamada para o pacote Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	O endereço de um catálogo (CSW 2.0.2): pesquise seus registros por palavras e, se quiser, pela área do mapa, e depois adicione os serviços e arquivos a que eles se vinculam.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Um limite de uso do plano ChatGPT ou do aplicativo foi atingido. Consulte o uso semanal antes de tentar novamente.
 A ChatGPT sign-in can only be used with the OpenAI API.	Um início de sessão do ChatGPT só pode ser usado com a API da OpenAI.
+A connection has this name: give this one another name to remember its keys.	Já existe uma conexão com este nome: dê outro nome a esta para lembrar as suas chaves.
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	Os limites administrativos de um país do geoBoundaries (CC BY 4.0): o próprio país (ADM0), suas divisões de primeiro nível (ADM1, como estados) e outras mais detalhadas.
 A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	Um realce personalizado está nas unidades deste raster: escolha outro tipo de realce para salvá-lo como padrão.
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Um SIG rápido, livre e de código aberto escrito em Rust puro, para mapear, analisar e compartilhar dados geoespaciais no desktop e no navegador.
@@ -37,17 +40,21 @@ A line for the Script pane	Uma linha para o painel Script
 A magnifying lens that follows the pointer.	Uma lupa que acompanha o ponteiro.
 A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	O endereço de um serviço de mapas, feições ou coberturas: WMS, WMTS, WFS, WCS, OGC API Features ou Tiles, ou um ArcGIS FeatureServer, MapServer, ImageServer ou VectorTileServer (ou um diretório de serviços, para navegar).
 a name, or owner/name such as giswqs/geospatial	um nome, ou proprietário/nome como giswqs/geospatial
-A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.	Um endpoint com nome que você pode reutilizar. Senhas e chaves são mantidas até o RustGIS fechar, nunca são salvas.
+A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.	Um endpoint nomeado que você pode reutilizar. Chaves e tokens são mantidos até o RustGIS ser fechado, nunca salvos.
+A named endpoint you can reuse. Keys are kept until RustGIS closes unless you choose to remember them on this computer; the connection itself never keeps them.	Um endpoint nomeado que você pode reutilizar. As chaves são mantidas até o RustGIS ser fechado, a menos que você opte por lembrá-las neste computador; a conexão em si nunca as guarda.
+A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store.	Um endpoint nomeado que você pode reutilizar. As senhas valem para esta sessão, a menos que você opte por lembrá-las no armazenamento de senhas deste computador.
 A node cannot connect to itself.	Um nó não pode se conectar a si mesmo.
 A notebook of text and command cells.	Um notebook de células de texto e de comandos.
-A password or token in the address was left out: connections never keep secrets.	Uma senha ou token no endereço foi omitido: as conexões nunca guardam segredos.
+A password or token in the address was left out of the saved connection definition.	Uma senha ou token presente no endereço foi omitido da definição da conexão salva.
 A place or an address	Um local ou um endereço
+A previously saved key is still kept unencrypted in the app's preferences until it can be moved to the system keychain.	Uma chave salva anteriormente ainda fica sem criptografia nas preferências do aplicativo até poder ser movida para o chaveiro do sistema.
 A project keeps at least one map	Um projeto mantém pelo menos um mapa
 A projected coordinate system.	Um sistema de coordenadas projetadas.
 A report listing the selected layer's records, page after page.	Um relatório que lista os registros da camada selecionada, página após página.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Um resultado que só alimenta outras ferramentas é removido depois que o modelo é executado; adicione uma saída para mantê-lo.
 A result the model keeps, under a name	Um resultado que o modelo mantém, com um nome
 A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)	Um comando do rustgis-cli, para um shell POSIX (macOS, Linux, WSL, Git Bash)
+A saved key could not be read. A key entered now will be kept for this session only.	Não foi possível ler uma chave salva. Uma chave inserida agora será mantida apenas durante esta sessão.
 A service import or refresh is already running.	Já está em curso uma importação ou atualização de serviço.
 A service's layers stay in their service group.	As camadas de um serviço permanecem no grupo do serviço.
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	Uma tarefa comporta no máximo 200 etapas: pare a gravação para criá-la e depois grave o restante como outra tarefa.
@@ -77,6 +84,7 @@ Above Left	Acima à esquerda
 Above Right	Acima à direita
 Access key ID	ID da chave de acesso
 Accessibility	Acessibilidade
+Accessing the system keychain…	Acessando o chaveiro do sistema…
 Account	Conta
 Activate Map	Ativar mapa
 Add	Adicionar
@@ -88,6 +96,7 @@ Add a colorbar of a raster layer's colour scale in the map frame.	Adicionar ao q
 Add a description.	Adicionar uma descrição.
 Add a field.	Adicionar um campo.
 Add a file path	Adicionar um caminho de arquivo
+Add a group…	Adicionar um grupo…
 Add a legend of the map frame's layers.	Adicionar uma legenda das camadas do quadro de mapa.
 Add a map frame showing a map of the project.	Adicionar um quadro de mapa que mostra um mapa do projeto.
 Add a new map to the project.	Adicionar um novo mapa ao projeto.
@@ -97,6 +106,7 @@ Add a page layout for printing and exporting the map.	Adicionar um layout de pá
 Add a page to the presentation.	Adicionar uma página à apresentação.
 Add a PNG or JPEG picture to the page.	Adicionar uma imagem PNG ou JPEG à página.
 Add a presentation file.	Adicionar um arquivo de apresentação.
+Add a raster and a polygon layer to calculate zonal statistics.	Adicione um raster e uma camada de polígonos para calcular estatísticas zonais.
 Add a rectangle, to frame or highlight part of the page.	Adicionar um retângulo, para enquadrar ou destacar parte da página.
 Add a report file, or a report template for the selected layer.	Adicionar um arquivo de relatório ou um modelo de relatório para a camada selecionada.
 Add a scale bar for the map frame.	Adicionar uma barra de escala para o quadro de mapa.
@@ -223,6 +233,7 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	Limites administrativos
+After	Depois
 After the event	Depois do evento
 Agent input exceeds the protocol line limit.	A entrada do agente excede o limite de linha do protocolo.
 Agent input pipe closed.	O pipe de entrada do agente foi fechado.
@@ -256,6 +267,7 @@ Allow only certain combinations of values across fields.	Permitir somente certas
 Allow such actions for this conversation	Permitir ações desse tipo nesta conversa
 Allow this action?	Permitir esta ação?
 Allow this agent's RustGIS action?	Permitir a ação do RustGIS deste agente?
+Along lines	Ao longo das linhas
 Along Selected Line	Ao longo da linha selecionada
 Alt+	Alt+
 Alternating bar	Barra alternada
@@ -310,6 +322,7 @@ Ask about your data, or tell the assistant what to do with the map.	Pergunte sob
 Asking NASA's CMR…	Consultando o CMR da NASA…
 Asking the catalog…	Consultando o catálogo…
 Asking the NLDI…	Consultando o NLDI…
+Asset	Ativo
 Assistant settings	Configurações do assistente
 At the end	No fim
 At the start	No início
@@ -341,6 +354,7 @@ Back to tools	Voltar às ferramentas
 Backdrop	Pano de fundo
 Band	Banda
 Band Combination	Combinação de bandas
+Band must be a positive integer, list of bands, or 'all'.	A banda deve ser um inteiro positivo, uma lista de bandas ou 'all'.
 Band values at a point	Valores das bandas em um ponto
 Band {n}	Banda {n}
 Bands	Bandas
@@ -349,6 +363,7 @@ Basemap	Mapa base
 Basemaps	Mapas base
 Basin from hydrolocation	Bacia a partir de hidrolocalização
 Bearing	Orientação
+Before	Antes
 Before the event	Antes do evento
 Below	Abaixo
 Below 1:5,000,000 show everything; beyond it only what matches:	Abaixo de 1:5.000.000 mostrar tudo; além disso, somente o que corresponder:
@@ -394,6 +409,7 @@ Browser	Navegador
 Browser\nPane	Painel\nNavegador
 Browser View	Visualização do navegador
 Bucket	Bucket
+Bucket {bucket} at {endpoint}	Bucket {bucket} em {endpoint}
 Buckets	Buckets
 Buffer	Buffer
 Buffer A Point	Buffer de um ponto
@@ -410,6 +426,7 @@ Bundle the project and its data into one file to share.	Empacotar o projeto e se
 Bundle the visible layers, with simplified geometry for phones and tablets.	Empacotar as camadas visíveis, com geometria simplificada para celulares e tablets.
 By\nAttributes	Por\natributos
 By\nLocation	Por\nlocalização
+By layer	Por camada
 by {author}	por {author}
 By {field}	Por {field}
 cached tiles	blocos em cache
@@ -421,7 +438,10 @@ Calculate field values.	Calcular os valores de um campo.
 Calculate fields and enforce conditions on every edit.	Calcular campos e impor condições em cada edição.
 Calculate Geometry	Calcular geometria
 Calculate Geometry Attributes	Calcular atributos de geometria
+Calculate raster statistics per polygon	Calcular estatísticas do raster por polígono
+Calculate Statistics	Calcular estatísticas
 Calculated {rows} features	{rows} feições calculadas
+Calculates raster summary statistics for each polygon feature.	Calcula estatísticas de resumo do raster para cada feição poligonal.
 Calculation	Cálculo
 Camera	Câmera
 Camera Effect	Efeito de câmera
@@ -438,6 +458,7 @@ Catalog	Catálogo
 catalog is a static STAC catalog's catalog.json or collection.json	catalog é o catalog.json ou collection.json de um catálogo STAC estático
 Catalogue (CSW)	Catálogo (CSW)
 Catalogue search (CSW)	Pesquisa em catálogo (CSW)
+Category	Categoria
 Celestial Bodies	Corpos celestes
 Celestial Body	Corpo celeste
 Celestial body: {body}	Corpo celeste: {body}
@@ -481,27 +502,39 @@ Choose a contrast stretch for the raster layer.	Escolha um realce de contraste p
 Choose a country	Escolha um país
 Choose a delimited text file or a spreadsheet, then pick its columns.	Escolha um arquivo de texto delimitado ou uma planilha e depois as colunas.
 Choose a destination	Escolha um destino
+Choose a field to apply this renderer:	Escolha um campo para aplicar este renderizador:
 choose a file first	escolha um arquivo primeiro
 Choose a layer…	Escolha uma camada…
 Choose a model.	Escolha um modelo.
 Choose a resampling type for the raster layer.	Escolha um tipo de reamostragem para a camada raster.
+Choose a saved S3 connection before opening this source.	Escolha uma conexão S3 salva antes de abrir esta fonte.
 Choose a start	Escolha um ponto de partida
 Choose a stop	Escolha uma parada
+Choose a zipped Shapefile, or pick its .shp and .dbf together.	Escolha um Shapefile compactado em zip, ou selecione seus .shp e .dbf juntos.
 Choose an account	Escolher uma conta
+Choose Connection	Escolher conexão
+Choose Connection…	Escolher conexão…
 Choose extra buttons for the Quick Access Toolbar.	Escolher botões extras para a barra de ferramentas de acesso rápido.
 Choose File…	Escolher arquivo…
 Choose how the flat map lays out the Earth.	Escolher como o mapa plano representa a Terra.
 Choose how the layer is drawn.	Escolher como a camada é desenhada.
 Choose how the raster is drawn.	Escolha como o raster é desenhado.
 Choose Project…	Escolher projeto…
+Choose S3 Connection	Escolher conexão S3
+Choose S3 connection	Escolher conexão S3
+Choose S3 connection…	Escolher conexão S3…
 Choose the interface language.	Escolher o idioma da interface.
+Choose the source coordinate system before importing	Escolha o sistema de coordenadas de origem antes de importar
+Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file.	Escolha o sistema de coordenadas de origem antes de importar. Ele substitui um .prj ausente ou incorreto sem alterar o arquivo original.
 Choose which layers a click identifies.	Escolher quais camadas um clique identifica.
+Choose which saved connection to use for this database. This choice lasts for this session.	Escolha qual conexão salva usar para este banco de dados. Esta escolha vale para esta sessão.
 Choose which tabs the ribbon shows.	Escolher quais guias a faixa de opções mostra.
 Circle	Círculo
 Circle Radius (km)	Raio do círculo (km)
 Class	Classe
 Class color	Cor da classe
 Class Style	Estilo por classe
+Class {n} up to	Classe {n} até
 Classes	Classes
 Classes from training polygons.	Classes a partir de polígonos de treinamento.
 Classic arrow	Seta clássica
@@ -563,6 +596,8 @@ Clip a raster to the view, or resample it.	Recortar um raster pela visualizaçã
 Clip Features	Recortar feições
 Clip or resample	Recortar ou reamostrar
 Clip To Map View	Recortar pela visualização do mapa
+Clip To Polygon	Recortar por polígono
+Clip to polygon layer	Recortar pela camada de polígonos
 Clipboard	Área de transferência
 Close	Fechar
 Close (Esc)	Fechar (Esc)
@@ -678,6 +713,7 @@ Copy this run as code, or open it in its tool	Copiar esta execução como códig
 Corrections	Correções
 Cost	Custo
 could not draw the map	não foi possível desenhar o mapa
+could not start the keychain worker	não foi possível iniciar o processo do chaveiro
 Couldn't check for updates: {error}	Não foi possível procurar atualizações: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Não foi possível baixar a fonte para {language}; escolha o idioma novamente para tentar de novo.
 Couldn't load the plugin registry: {error}	Não foi possível carregar o registro de plugins: {error}
@@ -707,13 +743,16 @@ Cross Section	Seção transversal
 Cross Section (2 clicks)	Seção transversal (2 cliques)
 CSV	CSV
 Ctrl+	Ctrl+
+Ctrl+Enter	Ctrl+Enter
 Ctrl+K	Ctrl+K
 Ctrl+T	Ctrl+T
 Cumulative	Cumulativo
 Current date	Data atual
 Current Project	Projeto atual
+Current scale ({scale})	Escala atual ({scale})
 Current time	Hora atual
 Curve	Curva
+Curved	Curvo
 Custom	Personalizado
 Custom Min/Max	Mín/Máx personalizados
 Customize	Personalizar
@@ -721,6 +760,10 @@ Cut	Recortar
 Cut a raster into web map tiles	Cortar um raster em blocos de mapa web
 Cut a raster into web map tiles (XYZ PNG) with a viewer page.	Cortar um raster em blocos de mapa web (XYZ PNG) com uma página de visualização.
 Dark\nMode	Modo\nescuro
+Dash	Traço
+Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line.	Comprimentos de traço e espaço em pontos, alternados, como 4 2. Vazio para uma linha contínua.
+Dash-dot	Traço-ponto
+Dashed	Tracejada
 Data	Dados
 Data\nSources	Fontes\nde dados
 Data Design	Design de dados
@@ -755,6 +798,8 @@ Deep Learning\nTools	Ferramentas de\naprendizado profundo
 Deep Learning Package	Pacote de aprendizado profundo
 Deep Learning Tools	Ferramentas de aprendizado profundo
 Default	Padrão
+Define Projection	Definir projeção
+Define Projection…	Definir projeção…
 Definition\nQuery	Consulta de\ndefinição
 Definition Query	Consulta de definição
 Definition query	Consulta de definição
@@ -791,6 +836,8 @@ Descending	Decrescente
 Describing	Descrevendo
 Description	Descrição
 Desktop and command line only	Somente aplicativo desktop e linha de comando
+Destination	Destino
+Destination key	Chave de destino
 Details	Detalhes
 Details of the selected layer.	Detalhes da camada selecionada.
 Deviations	Desvios
@@ -832,6 +879,7 @@ Do the step for me	Fazer a etapa por mim
 Documents	Documentos
 Domains	Domínios
 Done	Concluído
+Dotted	Pontilhada
 Double	Duplo
 Double-click	Clique duplo
 Double-click to add	Clique duplo para adicionar
@@ -863,6 +911,7 @@ Drag inside map frames to pan their maps and turn the wheel to zoom them, instea
 Drag the frame's outline · Esc to stop	Arraste o contorno do quadro · Esc para parar
 drag the picture's rectangle on the map first	arraste primeiro o retângulo da imagem no mapa
 Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.	Arrastar os vértices das feições selecionadas para movê-los, clicar em uma aresta para adicionar um, Delete para remover um.
+Drag to an input to connect	Arraste até uma entrada para conectar
 Drag to draw	Arraste para desenhar
 Drag to draw a freehand line.	Arraste para desenhar uma linha à mão livre.
 Drag to draw a freehand polygon.	Arraste para desenhar um polígono à mão livre.
@@ -987,6 +1036,7 @@ EPSG	EPSG
 EPSG code	Código EPSG
 EPSG or ESRI code	Código EPSG ou ESRI
 EPSG:	EPSG:
+EPSG:2263	EPSG:2263
 EPSG:4326	EPSG:4326
 Equal	Equal
 Equal Earth	Equal Earth
@@ -1145,6 +1195,7 @@ Finish Profile	Concluir perfil
 Finish Tool Run	Concluir execução da ferramenta
 Finished: {tool}	Concluído: {tool}
 Firewall	Firewall
+First raster	Primeiro raster
 First standard parallel	Primeiro paralelo padrão
 First-Person	Primeira pessoa
 First-Person Navigation	Navegação em primeira pessoa
@@ -1168,6 +1219,8 @@ Font	Fonte
 for a store that doesn't say	para um armazenamento que não o indica
 Forest	Floresta
 Forget Earthdata Login Token	Esquecer token do Earthdata Login
+Forget Saved Keys	Esquecer chaves salvas
+Forget Saved Password	Esquecer senha salva
 Format	Formato
 Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	Encontrados: {names}. Um agente trabalha neste mapa com as ferramentas do RustGIS e com as próprias (web, scripts, arquivos), em uma pasta própria guardada em Documentos › RustGIS › Agent work. Ele pergunta a você antes de cada ação.
 Frame rate	Taxa de quadros
@@ -1188,6 +1241,7 @@ Full Extent	Extensão total
 Full extent	Extensão total
 Full lines	Linhas completas
 Full size	Tamanho total
+Function	Função
 Function Editor	Editor de funções
 Gamma	Gama
 Gemini stopped the reply ({reason}).	O Gemini interrompeu a resposta ({reason}).
@@ -1208,7 +1262,9 @@ GeoLens	GeoLens
 GeoLens…	GeoLens…
 GeoLibre	GeoLibre
 GeoLibre Tools	Ferramentas GeoLibre
+Geometric Interval	Intervalo geométrico
 Geometry	Geometria
+Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.	A geometria perdida durante a importação não pode ser recuperada aqui. Use Importar arquivo original para escolher o seu sistema de coordenadas antes de lê-lo. Camadas transmitidas precisam primeiro ser carregadas na memória.
 GeoPackage	GeoPackage
 GeoParquet	GeoParquet
 Geoprocessing	Geoprocessamento
@@ -1349,10 +1405,16 @@ Import Deep Learning Package	Importar pacote de aprendizado profundo
 Import Layout	Importar layout
 Import Layout…	Importar layout…
 Import Model	Importar modelo
+Import Original File…	Importar arquivo original…
 Import Package…	Importar pacote…
 Import Presentation	Importar apresentação
+Import QGIS Project	Importar projeto QGIS
+Import QGIS Style	Importar estilo QGIS
+Import QGIS Style…	Importar estilo QGIS…
 Import Report	Importar relatório
 Import Service	Importar serviço
+Import Shapefile with Projection	Importar Shapefile com projeção
+Import Shapefile with Projection…	Importar Shapefile com projeção…
 Import Styles	Importar estilos
 Import Styles From…	Importar estilos de…
 Import Task	Importar tarefa
@@ -1366,6 +1428,7 @@ In Progress	Em andamento
 in progress	em andamento
 In project	No projeto
 In RustGIS, it can:	No RustGIS, ele pode:
+In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP.	No navegador, selecione os .shp e .dbf juntos, com os arquivos auxiliares que houver, ou selecione um ZIP. A substituição se aplica a todos os Shapefiles do ZIP.
 In use	Em uso
 Indexes	Índices
 Indices	Índices
@@ -1377,6 +1440,7 @@ Input Features	Feições de entrada
 Input Layer	Camada de entrada
 Input Points	Pontos de entrada
 Input Polygons	Polígonos de entrada
+Input Raster	Raster de entrada
 Input Rows	Linhas de entrada
 Input Summary Features	Feições de resumo de entrada
 Input Table	Tabela de entrada
@@ -1407,6 +1471,7 @@ Interpolates a 2-band raster surface (Prediction and Variance) from point featur
 Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	Interpola uma superfície raster a partir dos valores das feições por ponderação pelo inverso da distância, como faz o QGIS.
 Interpolation	Interpolação
 Interpolation Attribute	Atributo de interpolação
+Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Interpretar as coordenadas nativas da camada neste sistema de coordenadas. Isso muda onde ela é desenhada; o arquivo de origem não é alterado.
 Interval	Intervalo
 invalid child id	id de processo filho inválido
 Invalid: {error}	Inválida: {error}
@@ -1455,10 +1520,14 @@ Keep this endpoint under Data Sources › Connections, without its password or k
 Keep this result	Manter este resultado
 Keep Tool	Manter ferramenta
 Keep value	Manter valor
+Keeps the access key ID and secret access key in this computer's credential store, never in the connection or the project.	Guarda o ID da chave de acesso e a chave de acesso secreta no armazenamento de credenciais deste computador, nunca na conexão nem no projeto.
 Key	Key
 Keyboard Shortcuts	Atalhos de teclado
 Keyboard shortcuts.	Atalhos de teclado.
+Keys are available for this session but were not remembered on this computer.	As chaves estão disponíveis para esta sessão, mas não foram lembradas neste computador.
+Keys are kept for this session only: there is no credential store to remember them in here.	As chaves são mantidas apenas durante esta sessão: aqui não há armazenamento de credenciais para lembrá-las.
 Keys from	Chaves de
+Keys were saved for this connection, but there is no credential store here to read them from.	Chaves foram salvas para esta conexão, mas aqui não há armazenamento de credenciais de onde lê-las.
 Kilometers	Quilômetros
 kind is required	kind é obrigatório
 KML	KML
@@ -1468,6 +1537,8 @@ Label Class	Classe de rótulo
 Label Distance Range	Intervalo de distância dos rótulos
 Label features in this layer	Rotular as feições desta camada
 Label Field	Campo de rótulo
+Label font	Fonte do rótulo
+Label Fonts	Fontes dos rótulos
 Label only the features that match.	Rotular apenas as feições que correspondem.
 Label Placement	Posicionamento dos rótulos
 Label Range	Intervalo de rótulos
@@ -1518,6 +1589,7 @@ Layout: {kind}	Layout: {kind}
 Layouts	Layouts
 Learn	Aprender
 Learning\nResources	Recursos de\naprendizagem
+Leave the keys blank to log in with the keys saved on this computer, or type others, then Save.	Deixe as chaves em branco para entrar com as chaves salvas neste computador, ou digite outras, e depois Salvar.
 Left	Esquerda
 Legend	Legenda
 Legend label. Clear it to show the value again.	Rótulo da legenda. Limpe-o para mostrar o valor novamente.
@@ -1600,7 +1672,9 @@ Locked: unlock it in the Format pane to move or change it	Bloqueado: desbloqueie
 Log In to Connection	Entrar na conexão
 Log In to {name}…	Entrar em {name}…
 Log In…	Entrar…
+Logged in for this session	Conectado nesta sessão
 Long	Inteiro longo
+Long dash	Traço longo
 Longitude	Longitude
 Longitude (X)	Longitude (X)
 Look for {name}, outlined on the ribbon.	Procure {name}, destacado na faixa de opções.
@@ -1619,6 +1693,7 @@ Manage Bookmarks	Gerenciar marcadores
 Manage Edits	Gerenciar edições
 Manage Templates	Gerenciar modelos
 Mann–Kendall	Mann–Kendall
+Manual	Manual
 Map	Mapa
 Map\nFrame	Quadro\nde mapa
 Map (the current view)	Mapa (a visualização atual)
@@ -1732,6 +1807,7 @@ Months	Meses
 Months are numbers from 1 to 12 (12, 1, 2 for December to February)	Os meses são números de 1 a 12 (12, 1, 2 para dezembro a fevereiro)
 More	Mais
 More basemaps:	Mais mapas base:
+More than one saved connection could read these buckets. Choose the one that reads each; the project's sources that read it stay closed until you do.	Mais de uma conexão salva poderia ler estes buckets. Escolha a que lê cada um; as fontes do projeto que o leem ficam fechadas até você escolher.
 Mosaic images into an orthomosaic	Mosaicar imagens em um ortomosaico
 Mosaic Rasters	Mosaico de rasters
 Mosaic the visible rasters into an orthomosaic.	Mosaicar os rasters visíveis em um ortomosaico.
@@ -1840,6 +1916,7 @@ No datasets match.	Nenhum conjunto de dados corresponde.
 No datasets with data RustGIS can add	Nenhum conjunto de dados com dados que o RustGIS possa adicionar
 no date in the name	sem data no nome
 No edits since the project was saved	Nenhuma edição desde que o projeto foi salvo
+No features are selected in this layer.	Nenhuma feição está selecionada nesta camada.
 No field of this layer holds dates.	Nenhum campo desta camada contém datas.
 No Fill	Sem preenchimento
 No geometry to calculate	Não há geometria para calcular
@@ -1848,6 +1925,7 @@ no home folder	nenhuma pasta pessoal
 no layer	nenhuma camada
 No layer has a field of dates.	Nenhuma camada tem um campo de datas.
 no layer has a field of dates: add one that has, or a tile layer whose address has a date (map.addTiles)	nenhuma camada tem um campo de datas: adicione uma que tenha, ou uma camada de blocos cujo endereço tenha uma data (map.addTiles)
+No layer selected	Nenhuma camada selecionada
 No layers match	Nenhuma camada corresponde
 No layers match your search.	Nenhuma camada corresponde à sua pesquisa.
 No mask	Sem máscara
@@ -1860,20 +1938,24 @@ No place matches that address.	Nenhum local corresponde a esse endereço.
 No plugin panel is open.	Nenhum painel de plugin está aberto.
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Nenhum plugin instalado. Explore o registro de plugins ou instale um arquivo .rgplugin.
 No plugins match.	Nenhum plugin corresponde.
+No polygon layer available in the map.	Nenhuma camada de polígonos disponível no mapa.
 No Pop-ups	Sem pop-ups
 No presentations yet. Publish › New Presentation starts one.	Ainda não há apresentações. Publicar › Nova apresentação cria uma.
 No products	Nenhum produto
 No project opened or saved yet	Nenhum projeto aberto ou salvo ainda
+No project sources are waiting for an S3 connection.	Nenhuma fonte do projeto está aguardando uma conexão S3.
 No properties	Sem propriedades
 No relationships (Data Design › Relationships)	Nenhum relacionamento (Design de dados › Relacionamentos)
 No relationships yet	Ainda não há relacionamentos
 No reports yet. Publish › New Report lists the selected layer's records.	Ainda não há relatórios. Publicar › Novo relatório lista os registros da camada selecionada.
 no row	nenhuma linha
+No saved S3 keys. Enter accessKeyId and secretAccessKey.	Nenhuma chave S3 salva. Insira accessKeyId e secretAccessKey.
 No serif font is installed, so this text is drawn in the sans-serif	Nenhuma fonte serifada está instalada, então este texto é desenhado na fonte sem serifa
 no service or file links	nenhum link para serviços ou arquivos
 No services match your search.	Nenhum serviço corresponde à sua pesquisa.
 No standalone tables	Nenhuma tabela independente
 No styles yet	Ainda não há estilos
+no system keychain in this build	nenhum chaveiro do sistema nesta compilação
 No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	Ainda não há tarefas. Grave uma ou crie uma a partir do seu histórico de geoprocessamento com Análise › Tarefa.
 no text graphic there	nenhum gráfico de texto ali
 No tools match your search.	Nenhuma ferramenta corresponde à sua pesquisa.
@@ -1941,6 +2023,7 @@ One page per feature of an index layer.	Uma página por feição de uma camada d
 One per line: code=name	Um por linha: código=nome
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Um traço, do símbolo. Adicione traços para contornos, linhas paralelas e deslocamentos.
 Only features matching this expression draw in {layer}.	Somente as feições que atendem a esta expressão são desenhadas em {layer}.
+Only selected polygons will be included in the output.	Somente os polígonos selecionados serão incluídos na saída.
 Only where the map is	Somente onde o mapa está
 Opacity	Opacidade
 Open	Abrir
@@ -2001,6 +2084,7 @@ OpenStreetMap's public server	Servidor público do OpenStreetMap
 OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.	OpenStreetMap, Esri, USGS, NASA e mais, do registro de plugins.
 OpenStreetMap…	OpenStreetMap…
 Open…	Abrir…
+Optional	Opcional
 Optional. Shift+Enter starts a new line.	Opcional. Shift+Enter inicia uma nova linha.
 Options	Opções
 OR	OR
@@ -2011,6 +2095,8 @@ Or run, for Claude Code or Codex:	Ou execute, para o Claude Code ou o Codex:
 ORDER BY	ORDER BY
 Ordinary Kriging	Krigagem ordinária
 Orientation	Orientação
+Origin	Origem
+Origin key	Chave de origem
 Ortho Mapping	Ortomapeamento
 Other	Outro
 Other Data	Outros dados
@@ -2023,6 +2109,7 @@ Outline width	Largura do contorno
 Outlines {frame}	Delimita {frame}
 OUTPUT	SAÍDA
 Output	Saída
+output layer name	nome da camada de saída
 Output Name	Nome de saída
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Mais de 1.000 ferramentas raster, vetoriais, LiDAR, hidrológicas e de terreno que rodam no navegador, após um download único de cerca de 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Mais de 1.000 ferramentas raster, vetoriais, LiDAR, hidrológicas e de terreno, em um download opcional de cerca de 20 MB.
@@ -2062,6 +2149,7 @@ Pan with the mouse, zoom with the wheel and click features to see their attribut
 Pan/Zoom\nMap	Mover/Zoom\nno mapa
 Pane Sets	Conjuntos de painéis
 Paper	Papel
+Parallel	Paralelo
 Parent folder	Pasta superior
 parks, bike lanes, flood zones…	parques, ciclovias, zonas de inundação…
 Password	Senha
@@ -2138,10 +2226,12 @@ Polar, conformal: Antarctica and the Southern Ocean.	Polar, conforme: a Antárti
 Polar, conformal: the Arctic and the northern lands.	Polar, conforme: o Ártico e as terras do norte.
 Polygon	Polígono
 Polygon (draw)	Polígono (desenhar)
+Polygon layer	Camada de polígonos
 Polygons	Polígonos
 Polyline	Polilinha
 Pop-up Mode	Modo de pop-up
 pop_max > 1000000	pop_max > 1000000
+Popular datasets…	Conjuntos de dados populares…
 Populated Places	Locais povoados
 Portal	Portal
 Portolan	Portolan
@@ -2152,6 +2242,7 @@ PostgreSQL/PostGIS	PostgreSQL/PostGIS
 Postprocessing	Pós-processamento
 power 2	potência 2
 Precision 6 (OSRM, Valhalla)	Precisão 6 (OSRM, Valhalla)
+Prefix	Prefixo
 Prepare	Preparar
 Prepare every layer's geometry for this projection.	Preparar a geometria de todas as camadas para esta projeção.
 Prepare Plugin Environment	Preparar o ambiente de plugins
@@ -2193,6 +2284,7 @@ Project templates: start projects from a saved setup.	Modelos de projeto: inicia
 project's path is required	o caminho de project é obrigatório
 Projection	Projeção
 Projections	Projeções
+Projects (RustGIS, QGIS)	Projetos (RustGIS, QGIS)
 Properties	Propriedades
 Property	Propriedade
 Proportional Symbols	Símbolos proporcionais
@@ -2211,6 +2303,9 @@ Python environment failed: {error}	Falha no ambiente Python: {error}
 Python environment not prepared	Ambiente Python não preparado
 Python environment ready	Ambiente Python pronto
 Python script	Script Python
+QGIS layer style	Estilo de camada do QGIS
+QGIS project	Projeto QGIS
+QGIS Project…	Projeto QGIS…
 Qualitative	Qualitativa
 Quantile	Quantil
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	Consultar arquivos, endereços web e bancos de dados com o DuckDB Spatial; adicionar os resultados ao mapa.
@@ -2231,10 +2326,13 @@ Raster	Raster
 Raster\nAnalysis	Análise\nraster
 Raster\nInformation	Informações\ndo raster
 Raster Data	Dados do raster
+Raster data is unavailable.	Os dados do raster não estão disponíveis.
 Raster Effects	Efeitos raster
 Raster Functions	Funções raster
+Raster has bands 1 to {count}.	O raster tem as bandas 1 a {count}.
 Raster Information	Informações do raster
 Raster Layer	Camada raster
+Raster layer	Camada raster
 Raster tiles (XYZ)	Blocos raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} bandas · {renderer}
 Read and write files on this computer	Ler e gravar arquivos neste computador
@@ -2245,9 +2343,11 @@ Reading a granule's files needs an Earthdata Login token, which works for every 
 Reading the catalog: {n} documents read, {m} items found…	Lendo o catálogo: {n} documentos lidos, {m} itens encontrados…
 Reading the catalog…	Lendo o catálogo…
 Reading the embeddings…	Lendo os embeddings…
+Reading the installed fonts…	Lendo as fontes instaladas…
 Reading the store… ({n} files to go)	Lendo o armazenamento… (faltam {n} arquivos)
 Reading the tileset of	Lendo o conjunto de blocos de
 Reading {n} of Overture's {ty} files where the map is: {attribution}	Lendo {n} arquivos de {ty} do Overture onde o mapa está: {attribution}
+Reading {url} page by page…	Lendo {url} página por página…
 Reading {url}…	Lendo {url}…
 Reads and writes files	Lê e grava arquivos
 Reads the map	Lê o mapa
@@ -2264,6 +2364,8 @@ Redo (Ctrl+Y)	Refazer (Ctrl+Y)
 Redo the change you undid.	Refazer a alteração desfeita.
 Redo {action}	Refazer {action}
 Red–Blue	Vermelho–Azul
+Reference Scale	Escala de referência
+Reference scale	Escala de referência
 Refine the search to see {n} more	Refine a pesquisa para ver mais {n}
 Refresh	Atualizar
 Refresh every connection's lists	Atualizar as listas de todas as conexões
@@ -2283,6 +2385,7 @@ Relationships	Relacionamentos
 Release	Versão
 Reload	Recarregar
 Reload Web Layers	Recarregar camadas web
+Remember on this computer	Lembrar neste computador
 Remember the key on this computer	Lembrar a chave neste computador
 Remove	Remover
 Remove All	Remover todas
@@ -2373,9 +2476,11 @@ roundabout turn	vire na rotatória
 Routes (name, surface, length)	Rotas (nome, superfície, comprimento)
 Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	Rotas do Valhalla (FOSSGIS) com dados do OpenStreetMap. Os tempos de viagem não incluem o trânsito em tempo real.
 Rows	Linhas
+Rule	Regra
 Rule name	Nome da regra
 Rulers	Réguas
 Run	Executar
+Run #{n} ({secs} s)	Execução nº {n} ({secs} s)
 Run a query whose result has a geometry column	Execute uma consulta cujo resultado tenha uma coluna de geometria
 Run All	Executar tudo
 Run All Steps	Executar todas as etapas
@@ -2390,12 +2495,14 @@ Run Script	Executar script
 Run SQL Query	Executar consulta SQL
 Run Task	Executar tarefa
 Run the model	Executar o modelo
+Run the script ({keys})	Executar o script ({keys})
 Run Tool	Executar ferramenta
 Run {name}	Executar {name}
 Running the query for the map…	Executando a consulta para o mapa…
 Running…	Executando…
 RustGIS	RustGIS
 RustGIS bookmarks	Marcadores do RustGIS
+RustGIS could not confirm that any previously saved key was deleted from the system keychain.	O RustGIS não conseguiu confirmar que alguma chave salva anteriormente foi excluída do chaveiro do sistema.
 RustGIS couldn't reach the server.	O RustGIS não conseguiu acessar o servidor.
 RustGIS deep learning package	Pacote de aprendizado profundo do RustGIS
 RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	O RustGIS não foi fechado corretamente da última vez, por isso abriu o World Atlas em vez do seu projeto inicial. Abra o projeto pelo menu Projeto quando quiser.
@@ -2482,8 +2589,15 @@ Saved	Salvo
 Saved as the connection {name}	Salvo como a conexão {name}
 Saved as the default style for new single-band rasters.	Salvo como estilo padrão para novos rasters de banda única.
 Saved connection	Conexão salva
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	As chaves salvas ficam sem criptografia nas preferências do aplicativo (no armazenamento do navegador, na web).
+Saved keys	Chaves salvas
+Saved keys are kept unencrypted in the browser's storage.	As chaves salvas ficam sem criptografia no armazenamento do navegador.
+Saved keys unavailable	Chaves salvas indisponíveis
+Saved keys: leave the keys blank to log in with those this computer keeps.	Chaves salvas: deixe as chaves em branco para entrar com as que este computador guarda.
 Saved models	Modelos salvos
+Saved password	Senha salva
+Saved S3 keys are unavailable. Enter the keys for this session.	As chaves S3 salvas não estão disponíveis. Insira as chaves para esta sessão.
+Saved S3 keys could not be forgotten. The connection was not changed.	Não foi possível esquecer as chaves S3 salvas. A conexão não foi alterada.
+Saved S3 keys could not be used. Enter the keys again.	Não foi possível usar as chaves S3 salvas. Insira as chaves novamente.
 Saved symbology: apply it to the selected layer, or save the layer's.	Simbologia salva: aplique-a à camada selecionada ou salve a da camada.
 Saved View	Vista guardada
 Saved {name}	{name} salvo
@@ -2513,6 +2627,7 @@ Search commands — e.g. buffer, basemap, labels	Pesquisar comandos — ex.: buf
 Search datasets, e.g. GEDI biomass	Pesquisar conjuntos de dados, ex.: GEDI biomass
 Search Distance	Distância de pesquisa
 Search every command and its parameters	Pesquisar todos os comandos e seus parâmetros
+Search fonts	Pesquisar fontes
 Search layers (e.g. temperature)	Pesquisar camadas (ex.: temperature)
 Search layers, places, lat/lon…	Pesquisar camadas, locais, lat/lon…
 Search layers…	Pesquisar camadas…
@@ -2538,6 +2653,7 @@ Searching…	Pesquisando…
 Searching… try again in a moment.	Pesquisando… tente novamente em instantes.
 Seasonal Mann–Kendall	Mann–Kendall sazonal
 Seasons a year	Estações por ano
+Second raster	Segundo raster
 Second standard parallel	Segundo paralelo padrão
 Seconds	Segundos
 Secret access key	Chave de acesso secreta
@@ -2552,6 +2668,7 @@ Select (click)	Selecionar (clique)
 Select (rectangle)	Selecionar (retângulo)
 Select a direction…	Selecione uma direção…
 Select a feature layer in the Layers pane	Selecione uma camada de feições no painel Camadas
+Select a field	Selecione um campo
 Select a layer in Layers to style it.	Selecione uma camada em Camadas para estilizá-la.
 Select a layer in the Layers pane	Selecione uma camada no painel Camadas
 select a layer in the Layers pane first	primeiro selecione uma camada no painel Camadas
@@ -2733,18 +2850,26 @@ Snap Point	Ponto de aderência
 Snapping	Aderência
 Snow	Neve
 Socrata	Socrata
+Solid	Contínua
+Some of the project's S3 sources wait for you to choose the saved connection that reads them	Algumas fontes S3 do projeto aguardam que você escolha a conexão salva que as lê
+Sort	Ordenar
+Sort: {field}	Ordem: {field}
 Source	Fonte
 Source Cooperative	Source Cooperative
 Source Cooperative…	Source Cooperative…
+Source coordinate system	Sistema de coordenadas de origem
+Source coordinate system is required	O sistema de coordenadas de origem é obrigatório
 South	Sul
 South Polar Stereographic	Estereográfica polar sul
 Spatial Join	Junção espacial
 Speaker notes	Notas do apresentador
 Spectral Analysis	Análise espectral
 Spectral indices	Índices espectrais
+Speed	Velocidade
 Speed Display	Velocidade de exibição
 Split	Dividir
 Split (click the line)	Dividir (clique na linha)
+Split the widest class	Dividir a classe mais ampla
 SQL	SQL
 SQL Pane	Painel SQL
 SQL queries run through DuckDB, a program the desktop app calls: open this project in the desktop app to query it.	As consultas SQL são executadas pelo DuckDB, um programa que o aplicativo desktop chama: abra este projeto no aplicativo desktop para consultá-lo.
@@ -2839,6 +2964,7 @@ Strokes	Traços
 Strokes for	Traços de
 Style	Estilo
 Style Items	Itens de estilo
+Style this layer as a QGIS layer style file (.qml) does	Aplicar a esta camada o estilo de um arquivo de estilo de camada do QGIS (.qml)
 Style › Drawing	Estilo › Desenho
 Styles	Estilos
 Subreport	Sub-relatório
@@ -2847,6 +2973,7 @@ Subtypes	Subtipos
 Subtypes, one per line: code=name	Subtipos, um por linha: código=nome
 Suitability Modeler	Modelador de adequação
 Summarise	Resumir
+Summarise a Data Cube over Time	Resumir um cubo de dados ao longo do tempo
 Summarise over time	Resumir ao longo do tempo
 Summarise the conversation so far, so a long chat stays within the model's context	Resumir a conversa até agora, para que uma conversa longa caiba no contexto do modelo
 Summarise Zarr Over Time	Resumir Zarr ao longo do tempo
@@ -2883,6 +3010,7 @@ Table or layer	Tabela ou camada
 Tables	Tabelas
 Tags	Etiquetas
 Take the data in view offline, to edit and sync back later.	Levar os dados à vista para o modo offline, para editar e sincronizar depois.
+Take this bound out	Remover este limite
 Target Features	Feições de destino
 Target Records	Registros de destino
 Task	Tarefa
@@ -2892,6 +3020,8 @@ Tasks	Tarefas
 Tasks: guided steps that each run a command.	Tarefas: etapas guiadas que executam, cada uma, um comando.
 Template name	Nome do modelo
 Templates	Modelos
+Temporary credentials (with a session token) are kept for this session only.	As credenciais temporárias (com um token de sessão) são mantidas apenas durante esta sessão.
+Temporary credentials are session-only. Previously saved keys are unchanged.	As credenciais temporárias valem apenas para a sessão. As chaves salvas anteriormente não mudam.
 Tennessee GIS	Tennessee GIS
 Tennessee GIS…	Tennessee GIS…
 Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	Dados SIG públicos do Tennessee (Tennessee GeoData, geodata.tn.gov): limites de propriedades, transporte, saúde, hidrologia e mais.
@@ -2902,6 +3032,7 @@ Testing…	Testando…
 Text	Texto
 Text Symbol	Símbolo de texto
 That connection would create a loop.	Essa conexão criaria um ciclo.
+The active project or map changed; reopen Define Projection for the intended layer.	O projeto ou mapa ativo mudou; reabra Definir projeção para a camada pretendida.
 The address fields are empty in every row.	Os campos de endereço estão vazios em todas as linhas.
 The answer isn't UTF-8 text	A resposta não é texto UTF-8
 the answer isn't UTF-8 text	a resposta não é texto UTF-8
@@ -2911,6 +3042,7 @@ The assistant wants to run this, and {why}:	O assistente quer executar o seguint
 The Basemaps plugin's tab of public basemaps.	A guia de mapas base públicos do plugin Mapas base.
 the capture failed unexpectedly	a captura falhou inesperadamente
 The connection failed; trying again in {seconds} s.	A ligação falhou; nova tentativa dentro de {seconds} s.
+the connection has no id	a conexão não tem id
 The country list couldn't be read ({e}): type a country's code	Não foi possível ler a lista de países ({e}): digite o código de um país
 The current elevation stays in effect while you edit inputs. Click Apply elevation to apply the value and units.	A elevação atual continua valendo enquanto você edita os valores. Clique em Aplicar elevação para aplicar o valor e as unidades.
 The dataset has nothing RustGIS can add	O conjunto de dados não tem nada que o RustGIS possa adicionar
@@ -2924,6 +3056,11 @@ The flowtrace didn't answer: the whole flowline nearest the point is shown.	O fl
 The installed GeoLibre runner lists no tools.	O executor do GeoLibre instalado não lista nenhuma ferramenta.
 The job covers the map view	O trabalho abrange a visualização do mapa
 The key is kept for this session only.	A chave é mantida apenas durante esta sessão.
+The key is kept for this session only; it has not been remembered.	A chave é mantida apenas durante esta sessão; ela não foi lembrada.
+The key is saved in the system keychain.	A chave está salva no chaveiro do sistema.
+the keychain backend stopped unexpectedly	o serviço do chaveiro parou inesperadamente
+the keychain worker stopped	o processo do chaveiro parou
+The keys saved on this computer were forgotten; a login in this session keeps working.	As chaves salvas neste computador foram esquecidas; um login nesta sessão continua funcionando.
 The layer shows the step the time slider is at, and turns the slider on over the variable's dates.	A camada mostra o passo em que o controle deslizante de tempo está e ativa o controle sobre as datas da variável.
 The layer's file couldn't be read: {error}	Não foi possível ler o arquivo da camada: {error}
 The layer's strokes	Os traços da camada
@@ -2947,6 +3084,7 @@ The National Map	The National Map
 The National Map…	The National Map…
 the NLDI's answer isn't UTF-8 text	a resposta do NLDI não é texto UTF-8
 the page is too large to draw	a página é grande demais para ser desenhada
+The password was refused. Type a password to try again.	A senha foi recusada. Digite uma senha para tentar novamente.
 the picture is too large to show	a imagem é grande demais para ser exibida
 the picture is too large to show, or isn't one	a imagem é grande demais para ser exibida, ou não é uma imagem
 The places leave this device for the public Valhalla server at {server}, run by FOSSGIS. Don't continue if your project is bound by data privacy or data sovereignty rules.	Os locais saem deste dispositivo para o servidor público do Valhalla em {server}, mantido pela FOSSGIS. Não continue se o seu projeto estiver sujeito a regras de privacidade ou soberania de dados.
@@ -2961,7 +3099,7 @@ The provider's content filter stopped the reply.	O filtro de conteúdo do fornec
 The public server is free and shared by many: it answers light use, and may ask you to wait.	O servidor público é gratuito e compartilhado por muitos: atende a um uso leve e pode pedir que você espere.
 The range is two numbers, low and high (0, 0.9)	O intervalo são dois números, mínimo e máximo (0, 0.9)
 The raster's data couldn't be read.	Não foi possível ler os dados do raster.
-The raster's data couldn't be read: {path}	Não foi possível ler os dados do raster: {path}
+The raster's data couldn't be read: {error}	Não foi possível ler os dados do raster: {error}
 the release isn't known	a versão não é conhecida
 The reply reached its length limit.	A resposta atingiu o limite de comprimento.
 The reply stopped before completion; no actions were run.	A resposta foi interrompida antes de terminar; nenhuma ação foi executada.
@@ -2969,7 +3107,10 @@ The reply stopped early ({reason}).	A resposta parou antes do tempo ({reason}).
 the report export failed unexpectedly	a exportação do relatório falhou inesperadamente
 The request failed.	A solicitação falhou.
 The result wired into this output is added to the map under this name.	O resultado ligado a esta saída é adicionado ao mapa com este nome.
+The saved password could not be used. Type a password to try again; check Remember on this computer to replace the saved password.	Não foi possível usar a senha salva. Digite uma senha para tentar novamente; marque Lembrar neste computador para substituir a senha salva.
+The saved S3 connection no longer matches this source.	A conexão S3 salva não corresponde mais a esta fonte.
 The saved sign-in changed. Select your account again.	O login salvo mudou. Selecione sua conta novamente.
+The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper.	A escala para a qual os tamanhos dos símbolos e rótulos da camada estão definidos. Em outras escalas eles aumentam e diminuem com o mapa, como no papel.
 The server had a problem answering.	O servidor teve um problema ao responder.
 The server is limiting requests.	O servidor está limitando as solicitações.
 The server refused the request.	O servidor recusou a solicitação.
@@ -2990,6 +3131,9 @@ the store is gone	o armazenamento não existe mais
 The summary couldn't start: {error}	Não foi possível iniciar o resumo: {error}
 The summary failed unexpectedly	O resumo falhou inesperadamente
 The summary finished after another project was opened, so it wasn't added	O resumo terminou depois que outro projeto foi aberto, então não foi adicionado
+The system keychain could not complete the request.	O chaveiro do sistema não conseguiu concluir a solicitação.
+The system keychain is locked or access was refused.	O chaveiro do sistema está bloqueado ou o acesso foi negado.
+The system keychain is unavailable.	O chaveiro do sistema não está disponível.
 The task's steps changed, so the step being edited was closed: edit it again.	As etapas da tarefa mudaram, então a etapa em edição foi fechada: edite-a novamente.
 the time slider is off	o controle deslizante de tempo está desativado
 The token expires on {date}.	O token expira em {date}.
@@ -3017,6 +3161,8 @@ This ChatGPT account was already saved. Next time, choose it in the list instead
 This class is drawn with the layer's strokes. Changing them here gives it its own.	Esta classe é desenhada com os traços da camada. Alterá-los aqui dá a ela os seus próprios.
 This class is hidden, so it labels nothing.	Esta classe está oculta, então não rotula nada.
 This clause no longer reads, so no feature is labelled: {error}	Esta cláusula não pode mais ser lida, então nenhuma feição é rotulada: {error}
+This computer keeps keys for this connection: leave the keys blank to log in with them.	Este computador guarda chaves para esta conexão: deixe as chaves em branco para entrar com elas.
+This computer keeps this connection's keys: logging in reads them.	Este computador guarda as chaves desta conexão: ao entrar, elas são lidas.
 This map has no layers yet.	Este mapa ainda não tem camadas.
 This map's thumbnail, from an image.	A miniatura deste mapa, a partir de uma imagem.
 This map's thumbnail, from the view.	A miniatura deste mapa, a partir da visualização.
@@ -3026,7 +3172,7 @@ This request has no one-time allow option.	Esta solicitação não tem a opção
 This request uses an unsupported capability. Check the parameter and change the request.	Esta solicitação usa um recurso não compatível. Verifique o parâmetro e altere a solicitação.
 This result is kept	Este resultado é mantido
 This run has no tool form to open	Esta execução não tem um formulário de ferramenta para abrir
-This session only (optional)	Somente esta sessão (opcional)
+This S3 connection choice is no longer available.	Esta escolha de conexão S3 não está mais disponível.
 This step	Este passo
 This step names no tool to show.	Esta etapa não indica nenhuma ferramenta para mostrar.
 Thumbnail	Miniatura
@@ -3035,6 +3181,7 @@ Ticks	Marcas
 Ticks only	Somente marcas
 Tile archive	Arquivo de blocos
 Tile Archive File…	Arquivo de blocos…
+Tile layer has changed; search again	A camada de blocos mudou; pesquise novamente
 Tile Layer Properties	Propriedades da camada de blocos
 Tile Layers	Camadas de blocos
 Tilt Map	Inclinar mapa
@@ -3084,6 +3231,7 @@ Train a neural network on training polygons and classify every pixel.	Treinar um
 Train And Classify	Treinar e classificar
 Train Deep Learning Model	Treinar modelo de aprendizado profundo
 Trained models	Modelos treinados
+Training polygons	Polígonos de treinamento
 Transparency	Transparência
 Traverse	Poligonal
 Trend Analysis	Análise de tendência
@@ -3107,8 +3255,10 @@ type a longitude and latitude, or click the map	digite uma longitude e uma latit
 Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	Digite uma escala, como 1:12,345, 12345 ou 25k, e pressione Enter
 Type an address or coordinates and press Enter, or click the map.	Digite um endereço ou coordenadas e pressione Enter, ou clique no mapa.
 Type numbers separated by commas	Digite números separados por vírgulas
+Type the access key ID and the secret access key to remember them on this computer.	Digite o ID da chave de acesso e a chave de acesso secreta para lembrá-los neste computador.
 Type the keys to log in for this session, then Save.	Digite as chaves para entrar nesta sessão e depois Salvar.
-Type the password or keys to log in for this session, then Save.	Digite a senha ou as chaves para entrar nesta sessão e depois Salvar.
+Type the password to remember it on this computer.	Digite a senha para lembrá-la neste computador.
+Type the password, then Save. Remember on this computer is optional.	Digite a senha e depois Salvar. Lembrar neste computador é opcional.
 Typed below	Digitadas abaixo
 UM	UM
 Unavailable: {reason}	Indisponível: {reason}
@@ -3129,6 +3279,7 @@ Unit	Unidade
 United States	Estados Unidos
 Units	Unidades
 Units per step	Unidades por passo
+unknown (an older project)	desconhecido (um projeto mais antigo)
 UNKNOWN TOOL	FERRAMENTA DESCONHECIDA
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Descarregar as ferramentas GeoLibre e parar de carregá-las quando o RustGIS iniciar.
 Unsaved changes	Alterações não salvas
@@ -3156,6 +3307,7 @@ USA Contiguous Albers Equal Area	Albers de áreas iguais dos EUA contíguos
 Use	Usar
 Use a Single Stroke	Usar um único traço
 Use another account	Usar outra conta
+Use Connection	Usar conexão
 Use Current View	Usar a vista atual
 Use each feature's line color	Usar a cor de linha de cada feição
 Use each feature's line width	Usar a largura de linha de cada feição
@@ -3286,6 +3438,7 @@ WMTS	WMTS
 Words	Palavras
 words in the name	palavras no nome
 words to keep to (optional)	palavras às quais se limitar (opcional)
+Workflow	Fluxo de trabalho
 Workflow Manager	Gerenciador de fluxos de trabalho
 Workflows	Fluxos de trabalho
 Working	Trabalhando
@@ -3331,6 +3484,8 @@ Z factor	Fator Z
 Zarr	Zarr
 Zarr Variables	Variáveis Zarr
 Zarr…	Zarr…
+Zonal Statistics	Estatísticas zonais
+Zone Polygons	Polígonos de zona
 Zoom	Zoom
 Zoom about the pointer	Zoom em torno do ponteiro
 Zoom Box	Zoom por retângulo
@@ -3381,5 +3536,6 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 © OpenStreetMap contributors	© Colaboradores do OpenStreetMap
 ±, dequantised	±, desquantizado
 — fps	— fps
+⌘+Enter	⌘+Enter
 ⌘K	⌘K
 ▶ Simulate	▶ Simular

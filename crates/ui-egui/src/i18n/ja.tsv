@@ -4,6 +4,7 @@
 '{text}' isn't a scale: type one such as 1:12,345	「{text}」は縮尺ではありません: 1:12,345 のように入力してください
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(フィルター適用)
+({selected} of {total})	({total} 件中 {selected} 件)
 + Add Stop	+ 経由地を追加
 + Input	+ 入力
 + New expression	+ 新しい式
@@ -18,12 +19,14 @@
 3035, vn2000tm3	3035, vn2000tm3
 3D mesh	3D メッシュ
 <None>	<なし>
+A .qgs or .qgz project as a map	.qgs または .qgz プロジェクトをマップとして
 A 3D globe seen from space.	宇宙から見た 3D 地球儀。
 A blank map with a basemap	ベースマップ付きの空白マップ
 A call for the rustgis Python package	rustgis Python パッケージ用の呼び出し
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	カタログ (CSW 2.0.2) のアドレス: 単語と、必要に応じてマップの範囲でレコードを検索し、リンク先のサービスやファイルを追加します。
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	ChatGPT プランまたはアプリの使用上限に達しました。週間使用量を確認してから再試行してください。
 A ChatGPT sign-in can only be used with the OpenAI API.	ChatGPT のサインインは OpenAI API でのみ使用できます。
+A connection has this name: give this one another name to remember its keys.	この名前の接続がすでにあります。キーを保存するには別の名前を付けてください。
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	geoBoundaries (CC BY 4.0) による国の行政界: 国そのもの (ADM0)、第 1 レベルの区画 (ADM1、州など)、さらに細かい区画。
 A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	カスタム ストレッチはこのラスター固有の単位で指定されています。既定値として保存するには、別のストレッチ タイプを選択してください。
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	純粋な Rust で書かれた高速・無料のオープンソース GIS。デスクトップとブラウザーで地理空間データの地図作成、解析、共有ができます。
@@ -37,17 +40,21 @@ A line for the Script pane	スクリプト ウィンドウ用の 1 行
 A magnifying lens that follows the pointer.	ポインターに追従する拡大鏡。
 A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	マップ、フィーチャ、またはカバレッジ サービスのアドレス: WMS、WMTS、WFS、WCS、OGC API Features または Tiles、あるいは ArcGIS FeatureServer、MapServer、ImageServer または VectorTileServer (参照する場合はサービス ディレクトリ)。
 a name, or owner/name such as giswqs/geospatial	名前、または giswqs/geospatial のような所有者/名前
-A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.	再利用できる名前付きのエンドポイントです。パスワードとキーは RustGIS を閉じるまで保持され、保存されることはありません。
+A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.	再利用できる名前付きエンドポイントです。キーとトークンは RustGIS を閉じるまで保持され、保存されることはありません。
+A named endpoint you can reuse. Keys are kept until RustGIS closes unless you choose to remember them on this computer; the connection itself never keeps them.	再利用できる名前付きエンドポイントです。このコンピューターに保存することを選ばない限り、キーは RustGIS を閉じるまで保持されます。接続自体がキーを保持することはありません。
+A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store.	再利用できる名前付きエンドポイントです。このコンピューターのパスワード ストアに保存することを選ばない限り、パスワードはこのセッションの間だけ有効です。
 A node cannot connect to itself.	ノードを自分自身に接続することはできません。
 A notebook of text and command cells.	テキスト セルとコマンド セルからなるノートブック。
-A password or token in the address was left out: connections never keep secrets.	アドレス内のパスワードまたはトークンは除外されました: 接続にシークレットが保持されることはありません。
+A password or token in the address was left out of the saved connection definition.	アドレス内のパスワードまたはトークンは、保存された接続定義から除外されました。
 A place or an address	場所または住所
+A previously saved key is still kept unencrypted in the app's preferences until it can be moved to the system keychain.	以前に保存したキーは、システム キーチェーンに移動できるまで、アプリの環境設定に暗号化されずに保持されています。
 A project keeps at least one map	プロジェクトには少なくとも 1 つのマップが必要です
 A projected coordinate system.	投影座標系。
 A report listing the selected layer's records, page after page.	選択したレイヤーのレコードをページごとに一覧表示するレポート。
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	他のツールに渡すだけの結果は、モデルの実行後に削除されます。残すには出力を追加してください。
 A result the model keeps, under a name	モデルが名前を付けて残す結果
 A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)	rustgis-cli コマンド (POSIX シェル用: macOS、Linux、WSL、Git Bash)
+A saved key could not be read. A key entered now will be kept for this session only.	保存したキーを読み取れませんでした。今入力したキーはこのセッションの間だけ保持されます。
 A service import or refresh is already running.	サービスのインポートまたは更新が既に進行中です。
 A service's layers stay in their service group.	サービスのレイヤーはそのサービス グループ内に留まります。
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	1 つのタスクに含められるステップは最大 200 個です。記録を停止してタスクを作成し、残りは別のタスクとして記録してください。
@@ -77,6 +84,7 @@ Above Left	左上
 Above Right	右上
 Access key ID	アクセス キー ID
 Accessibility	アクセシビリティ
+Accessing the system keychain…	システム キーチェーンにアクセスしています…
 Account	アカウント
 Activate Map	マップをアクティブ化
 Add	追加
@@ -88,6 +96,7 @@ Add a colorbar of a raster layer's colour scale in the map frame.	マップ フ�
 Add a description.	説明を追加します。
 Add a field.	フィールドを追加します。
 Add a file path	ファイル パスを追加
+Add a group…	グループを追加…
 Add a legend of the map frame's layers.	マップ フレームのレイヤーの凡例を追加します。
 Add a map frame showing a map of the project.	プロジェクトのマップを表示するマップ フレームを追加します。
 Add a new map to the project.	プロジェクトに新しいマップを追加します。
@@ -97,6 +106,7 @@ Add a page layout for printing and exporting the map.	マップの印刷とエ�
 Add a page to the presentation.	プレゼンテーションにページを追加します。
 Add a PNG or JPEG picture to the page.	ページに PNG または JPEG の画像を追加します。
 Add a presentation file.	プレゼンテーション ファイルを追加します。
+Add a raster and a polygon layer to calculate zonal statistics.	ゾーン統計を計算するには、ラスターとポリゴン レイヤーを追加してください。
 Add a rectangle, to frame or highlight part of the page.	ページの一部を囲んだり強調したりする四角形を追加します。
 Add a report file, or a report template for the selected layer.	レポート ファイル、または選択したレイヤーのレポート テンプレートを追加します。
 Add a scale bar for the map frame.	マップ フレームの縮尺記号を追加します。
@@ -223,6 +233,7 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	行政界
+After	後
 After the event	イベント後
 Agent input exceeds the protocol line limit.	エージェントの入力がプロトコルの行の長さの上限を超えています。
 Agent input pipe closed.	エージェントの入力パイプが閉じられました。
@@ -256,6 +267,7 @@ Allow only certain combinations of values across fields.	フィールド間で�
 Allow such actions for this conversation	この会話ではこの種の操作を許可する
 Allow this action?	この操作を許可しますか？
 Allow this agent's RustGIS action?	このエージェントの RustGIS 操作を許可しますか？
+Along lines	線に沿う
 Along Selected Line	選択したラインに沿って
 Alt+	Alt+
 Alternating bar	交互バー
@@ -310,6 +322,7 @@ Ask about your data, or tell the assistant what to do with the map.	データに
 Asking NASA's CMR…	NASA の CMR に問い合わせています…
 Asking the catalog…	カタログに問い合わせています…
 Asking the NLDI…	NLDI に問い合わせています…
+Asset	アセット
 Assistant settings	アシスタントの設定
 At the end	終点
 At the start	始点
@@ -341,6 +354,7 @@ Back to tools	ツールに戻る
 Backdrop	背景
 Band	バンド
 Band Combination	バンドの組み合わせ
+Band must be a positive integer, list of bands, or 'all'.	バンドは正の整数、バンドのリスト、または 'all' である必要があります。
 Band values at a point	ポイントのバンド値
 Band {n}	バンド {n}
 Bands	バンド
@@ -349,6 +363,7 @@ Basemap	ベースマップ
 Basemaps	ベースマップ
 Basin from hydrolocation	水文地点からの流域
 Bearing	方位
+Before	前
 Before the event	イベント前
 Below	下
 Below 1:5,000,000 show everything; beyond it only what matches:	1:5,000,000 より大縮尺ではすべてを表示し、それより小縮尺では一致するものだけを表示:
@@ -394,6 +409,7 @@ Browser	ブラウザー
 Browser\nPane	ブラウザー\nウィンドウ
 Browser View	ブラウザー ビュー
 Bucket	バケット
+Bucket {bucket} at {endpoint}	{endpoint} のバケット {bucket}
 Buckets	バケット
 Buffer	バッファー
 Buffer A Point	ポイントのバッファー
@@ -410,6 +426,7 @@ Bundle the project and its data into one file to share.	プロジェクトとそ
 Bundle the visible layers, with simplified geometry for phones and tablets.	表示中のレイヤーを、スマートフォンやタブレット向けにジオメトリを単純化してまとめます。
 By\nAttributes	属性\n条件
 By\nLocation	空間\n条件
+By layer	レイヤー別
 by {author}	作成者: {author}
 By {field}	{field} 別
 cached tiles	キャッシュされたタイル
@@ -421,7 +438,10 @@ Calculate field values.	フィールド値を計算します。
 Calculate fields and enforce conditions on every edit.	フィールドを計算し、編集のたびに条件を適用します。
 Calculate Geometry	ジオメトリ演算
 Calculate Geometry Attributes	ジオメトリ属性の計算
+Calculate raster statistics per polygon	ポリゴンごとにラスター統計を計算
+Calculate Statistics	統計を計算
 Calculated {rows} features	{rows} 件のフィーチャを計算しました
+Calculates raster summary statistics for each polygon feature.	各ポリゴン フィーチャについてラスターの要約統計を計算します。
 Calculation	計算
 Camera	カメラ
 Camera Effect	カメラ効果
@@ -438,6 +458,7 @@ Catalog	カタログ
 catalog is a static STAC catalog's catalog.json or collection.json	catalog は静的 STAC カタログの catalog.json または collection.json です
 Catalogue (CSW)	カタログ (CSW)
 Catalogue search (CSW)	カタログ検索 (CSW)
+Category	カテゴリ
 Celestial Bodies	天体
 Celestial Body	天体
 Celestial body: {body}	天体: {body}
@@ -481,27 +502,39 @@ Choose a contrast stretch for the raster layer.	ラスター レイヤーのコ�
 Choose a country	国を選択
 Choose a delimited text file or a spreadsheet, then pick its columns.	区切りテキストファイルまたはスプレッドシートを選び、次にその列を選択します。
 Choose a destination	目的地を選択
+Choose a field to apply this renderer:	このレンダラーを適用するフィールドを選択してください:
 choose a file first	先にファイルを選択してください
 Choose a layer…	レイヤーを選択…
 Choose a model.	モデルを選択してください。
 Choose a resampling type for the raster layer.	ラスター レイヤーのリサンプリング タイプを選択します。
+Choose a saved S3 connection before opening this source.	このソースを開く前に、保存済みの S3 接続を選択してください。
 Choose a start	出発地を選択
 Choose a stop	経由地を選択
+Choose a zipped Shapefile, or pick its .shp and .dbf together.	ZIP 圧縮した Shapefile を選択するか、.shp と .dbf を一緒に選択してください。
 Choose an account	アカウントを選択
+Choose Connection	接続を選択
+Choose Connection…	接続を選択…
 Choose extra buttons for the Quick Access Toolbar.	クイック アクセス ツールバーに追加するボタンを選択します。
 Choose File…	ファイルを選択…
 Choose how the flat map lays out the Earth.	平面マップで地球をどのように表すかを選択します。
 Choose how the layer is drawn.	レイヤーの描画方法を選択します。
 Choose how the raster is drawn.	ラスターの描画方法を選択します。
 Choose Project…	プロジェクトを選択…
+Choose S3 Connection	S3 接続を選択
+Choose S3 connection	S3 接続を選択
+Choose S3 connection…	S3 接続を選択…
 Choose the interface language.	インターフェイスの言語を選択します。
+Choose the source coordinate system before importing	インポート前にソース座標系を選択
+Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file.	インポート前にソース座標系を選択します。元のファイルを変更せずに、欠落または誤った .prj を置き換えます。
 Choose which layers a click identifies.	クリックで個別属性を表示するレイヤーを選択します。
+Choose which saved connection to use for this database. This choice lasts for this session.	このデータベースに使用する保存済み接続を選択してください。この選択はこのセッションの間有効です。
 Choose which tabs the ribbon shows.	リボンに表示するタブを選択します。
 Circle	円
 Circle Radius (km)	円の半径 (km)
 Class	クラス
 Class color	クラスの色
 Class Style	クラス スタイル
+Class {n} up to	クラス {n} の上限
 Classes	クラス
 Classes from training polygons.	トレーニング ポリゴンからのクラス。
 Classic arrow	クラシック矢印
@@ -563,6 +596,8 @@ Clip a raster to the view, or resample it.	ラスターをビューでクリッ�
 Clip Features	フィーチャのクリップ
 Clip or resample	クリップまたはリサンプリング
 Clip To Map View	マップ ビューでクリップ
+Clip To Polygon	ポリゴンでクリップ
+Clip to polygon layer	ポリゴン レイヤーでクリップ
 Clipboard	クリップボード
 Close	閉じる
 Close (Esc)	閉じる (Esc)
@@ -678,6 +713,7 @@ Copy this run as code, or open it in its tool	この実行をコードとして�
 Corrections	補正
 Cost	コスト
 could not draw the map	マップを描画できませんでした
+could not start the keychain worker	キーチェーン ワーカーを起動できませんでした
 Couldn't check for updates: {error}	更新を確認できませんでした: {error}
 Couldn't download the font for {language}; pick the language again to retry.	{language} のフォントをダウンロードできませんでした。もう一度言語を選択して再試行してください。
 Couldn't load the plugin registry: {error}	プラグイン レジストリを読み込めませんでした: {error}
@@ -707,13 +743,16 @@ Cross Section	断面
 Cross Section (2 clicks)	断面 (2 クリック)
 CSV	CSV
 Ctrl+	Ctrl+
+Ctrl+Enter	Ctrl+Enter
 Ctrl+K	Ctrl+K
 Ctrl+T	Ctrl+T
 Cumulative	累積
 Current date	現在の日付
 Current Project	現在のプロジェクト
+Current scale ({scale})	現在の縮尺 ({scale})
 Current time	現在の時刻
 Curve	曲線
+Curved	曲線
 Custom	カスタム
 Custom Min/Max	カスタム最小/最大
 Customize	カスタマイズ
@@ -721,6 +760,10 @@ Cut	切り取り
 Cut a raster into web map tiles	ラスターを Web マップ タイルに分割
 Cut a raster into web map tiles (XYZ PNG) with a viewer page.	ラスターを Web マップ タイル (XYZ PNG) に分割し、ビューアー ページを作成します。
 Dark\nMode	ダーク\nモード
+Dash	破線
+Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line.	破線と間隔の長さをポイント単位で交互に指定します (例: 4 2)。実線の場合は空欄にします。
+Dash-dot	一点鎖線
+Dashed	破線
 Data	データ
 Data\nSources	データ\nソース
 Data Design	データ設計
@@ -755,6 +798,8 @@ Deep Learning\nTools	ディープ ラーニング\nツール
 Deep Learning Package	ディープ ラーニング パッケージ
 Deep Learning Tools	ディープ ラーニング ツール
 Default	既定
+Define Projection	投影法を定義
+Define Projection…	投影法を定義…
 Definition\nQuery	定義\nクエリ
 Definition Query	定義クエリ
 Definition query	定義クエリ
@@ -791,6 +836,8 @@ Descending	降順
 Describing	情報を取得中
 Description	説明
 Desktop and command line only	デスクトップ アプリとコマンド ラインのみ
+Destination	目的地
+Destination key	目的地キー
 Details	詳細
 Details of the selected layer.	選択したレイヤーの詳細。
 Deviations	標準偏差数
@@ -832,6 +879,7 @@ Do the step for me	このステップを代わりに実行
 Documents	ドキュメント
 Domains	ドメイン
 Done	完了
+Dotted	点線
 Double	倍精度
 Double-click	ダブルクリック
 Double-click to add	ダブルクリックで追加
@@ -863,6 +911,7 @@ Drag inside map frames to pan their maps and turn the wheel to zoom them, instea
 Drag the frame's outline · Esc to stop	フレームの輪郭をドラッグ · Esc で停止
 drag the picture's rectangle on the map first	先にマップ上で画像の四角形をドラッグしてください
 Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.	選択したフィーチャの頂点をドラッグして移動し、エッジをクリックして頂点を追加し、Delete で頂点を削除します。
+Drag to an input to connect	入力にドラッグして接続
 Drag to draw	ドラッグして描画
 Drag to draw a freehand line.	ドラッグしてフリーハンドのラインを描画します。
 Drag to draw a freehand polygon.	ドラッグしてフリーハンドのポリゴンを描画します。
@@ -987,6 +1036,7 @@ EPSG	EPSG
 EPSG code	EPSG コード
 EPSG or ESRI code	EPSG または ESRI コード
 EPSG:	EPSG:
+EPSG:2263	EPSG:2263
 EPSG:4326	EPSG:4326
 Equal	Equal
 Equal Earth	イコールアース図法
@@ -1145,6 +1195,7 @@ Finish Profile	プロファイルを終了
 Finish Tool Run	ツールの実行を完了
 Finished: {tool}	完了: {tool}
 Firewall	ファイアウォール
+First raster	1 つ目のラスター
 First standard parallel	第 1 標準緯線
 First-Person	一人称
 First-Person Navigation	一人称ナビゲーション
@@ -1168,6 +1219,8 @@ Font	フォント
 for a store that doesn't say	指定のないストアの場合
 Forest	森林
 Forget Earthdata Login Token	Earthdata Login トークンを削除
+Forget Saved Keys	保存したキーを削除
+Forget Saved Password	保存したパスワードを削除
 Format	形式
 Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	見つかったエージェント: {names}。エージェントは RustGIS のツールと自身のツール (Web、スクリプト、ファイル) を使ってこの地図を操作し、専用フォルダー (ドキュメント › RustGIS › Agent work に保存) で作業します。操作のたびに確認を求めます。
 Frame rate	フレーム レート
@@ -1188,6 +1241,7 @@ Full Extent	全体表示
 Full extent	全体表示
 Full lines	全体線
 Full size	フル サイズ
+Function	関数
 Function Editor	関数エディター
 Gamma	ガンマ
 Gemini stopped the reply ({reason}).	Gemini が回答を停止しました（{reason}）。
@@ -1208,7 +1262,9 @@ GeoLens	GeoLens
 GeoLens…	GeoLens…
 GeoLibre	GeoLibre
 GeoLibre Tools	GeoLibre ツール
+Geometric Interval	幾何間隔
 Geometry	ジオメトリ
+Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.	インポート時に失われたジオメトリはここでは復元できません。「元のファイルをインポート」を使用して、読み込む前に座標系を選択してください。ストリーミング レイヤーは先にメモリに読み込む必要があります。
 GeoPackage	GeoPackage
 GeoParquet	GeoParquet
 Geoprocessing	ジオプロセシング
@@ -1349,10 +1405,16 @@ Import Deep Learning Package	ディープ ラーニング パッケージのイ�
 Import Layout	レイアウトのインポート
 Import Layout…	レイアウトのインポート…
 Import Model	モデルのインポート
+Import Original File…	元のファイルをインポート…
 Import Package…	パッケージのインポート…
 Import Presentation	プレゼンテーションのインポート
+Import QGIS Project	QGIS プロジェクトをインポート
+Import QGIS Style	QGIS スタイルをインポート
+Import QGIS Style…	QGIS スタイルをインポート…
 Import Report	レポートのインポート
 Import Service	サービスをインポート
+Import Shapefile with Projection	投影法を指定して Shapefile をインポート
+Import Shapefile with Projection…	投影法を指定して Shapefile をインポート…
 Import Styles	スタイルのインポート
 Import Styles From…	スタイルのインポート元…
 Import Task	タスクのインポート
@@ -1366,6 +1428,7 @@ In Progress	進行中
 in progress	進行中
 In project	プロジェクト内
 In RustGIS, it can:	RustGIS 内でできること:
+In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP.	ブラウザーでは、.shp と .dbf を付随ファイルと一緒に選択するか、ZIP を選択してください。指定は ZIP 内のすべての Shapefile に適用されます。
 In use	使用中
 Indexes	指数
 Indices	指数
@@ -1377,6 +1440,7 @@ Input Features	入力フィーチャ
 Input Layer	入力レイヤー
 Input Points	入力ポイント
 Input Polygons	入力ポリゴン
+Input Raster	入力ラスター
 Input Rows	入力行
 Input Summary Features	入力集計フィーチャ
 Input Table	入力テーブル
@@ -1407,6 +1471,7 @@ Interpolates a 2-band raster surface (Prediction and Variance) from point featur
 Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	QGIS と同様に、逆距離加重法でフィーチャの値からラスター表面を内挿します。
 Interpolation	内挿
 Interpolation Attribute	内挿属性
+Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	レイヤーのネイティブ座標をこの座標系で解釈します。描画される位置が変わりますが、ソース ファイルは変更されません。
 Interval	間隔
 invalid child id	子プロセス ID が無効です
 Invalid: {error}	無効：{error}
@@ -1455,10 +1520,14 @@ Keep this endpoint under Data Sources › Connections, without its password or k
 Keep this result	この結果を残す
 Keep Tool	ツールを保持
 Keep value	値を残す
+Keeps the access key ID and secret access key in this computer's credential store, never in the connection or the project.	アクセス キー ID とシークレット アクセス キーを、接続やプロジェクトではなく、このコンピューターの資格情報ストアに保持します。
 Key	Key
 Keyboard Shortcuts	キーボード ショートカット
 Keyboard shortcuts.	キーボード ショートカット。
+Keys are available for this session but were not remembered on this computer.	キーはこのセッションでは使用できますが、このコンピューターには保存されていません。
+Keys are kept for this session only: there is no credential store to remember them in here.	キーはこのセッションの間だけ保持されます。ここにはキーを保存する資格情報ストアがありません。
 Keys from	キーの取得元
+Keys were saved for this connection, but there is no credential store here to read them from.	この接続のキーは保存されていますが、ここにはキーを読み取る資格情報ストアがありません。
 Kilometers	キロメートル
 kind is required	kind は必須です
 KML	KML
@@ -1468,6 +1537,8 @@ Label Class	ラベル クラス
 Label Distance Range	ラベル距離範囲
 Label features in this layer	このレイヤーのフィーチャにラベルを付ける
 Label Field	ラベル フィールド
+Label font	ラベル フォント
+Label Fonts	ラベル フォント
 Label only the features that match.	一致するフィーチャにのみラベルを付けます。
 Label Placement	ラベルの配置
 Label Range	ラベル範囲
@@ -1518,6 +1589,7 @@ Layout: {kind}	レイアウト: {kind}
 Layouts	レイアウト
 Learn	学習
 Learning\nResources	学習\nリソース
+Leave the keys blank to log in with the keys saved on this computer, or type others, then Save.	このコンピューターに保存されたキーでログインするにはキーを空欄のままにするか、別のキーを入力してから「保存」をクリックしてください。
 Left	左
 Legend	凡例
 Legend label. Clear it to show the value again.	凡例ラベル。クリアすると値が再び表示されます。
@@ -1600,7 +1672,9 @@ Locked: unlock it in the Format pane to move or change it	ロック済み: 移�
 Log In to Connection	接続にログイン
 Log In to {name}…	{name} にログイン…
 Log In…	ログイン…
+Logged in for this session	このセッションでログイン済み
 Long	長整数
+Long dash	長破線
 Longitude	経度
 Longitude (X)	経度（X）
 Look for {name}, outlined on the ribbon.	リボン上で枠で囲まれた {name} を探してください。
@@ -1619,6 +1693,7 @@ Manage Bookmarks	ブックマークの管理
 Manage Edits	編集の管理
 Manage Templates	テンプレートの管理
 Mann–Kendall	Mann–Kendall
+Manual	手動
 Map	マップ
 Map\nFrame	マップ\nフレーム
 Map (the current view)	マップ (現在のビュー)
@@ -1732,6 +1807,7 @@ Months	月
 Months are numbers from 1 to 12 (12, 1, 2 for December to February)	月は 1 から 12 の数値で指定します (12 月から 2 月は 12, 1, 2)
 More	その他
 More basemaps:	その他のベースマップ:
+More than one saved connection could read these buckets. Choose the one that reads each; the project's sources that read it stay closed until you do.	これらのバケットを読み取れる保存済み接続が複数あります。それぞれを読み取る接続を選択してください。選択するまで、それを読み取るプロジェクトのソースは閉じたままです。
 Mosaic images into an orthomosaic	画像をモザイクしてオルソモザイクを作成
 Mosaic Rasters	ラスターのモザイク
 Mosaic the visible rasters into an orthomosaic.	表示中のラスターをモザイクしてオルソモザイクを作成します。
@@ -1840,6 +1916,7 @@ No datasets match.	一致するデータセットがありません。
 No datasets with data RustGIS can add	RustGIS が追加できるデータを含むデータセットはありません
 no date in the name	名前に日付なし
 No edits since the project was saved	プロジェクトの保存後の編集はありません
+No features are selected in this layer.	このレイヤーではフィーチャが選択されていません。
 No field of this layer holds dates.	このレイヤーには日付を持つフィールドがありません。
 No Fill	塗りつぶしなし
 No geometry to calculate	計算するジオメトリがありません
@@ -1848,6 +1925,7 @@ no home folder	ホーム フォルダーがありません
 no layer	レイヤーなし
 No layer has a field of dates.	日付のフィールドを持つレイヤーがありません。
 no layer has a field of dates: add one that has, or a tile layer whose address has a date (map.addTiles)	日付のフィールドを持つレイヤーがありません: そのようなレイヤーか、アドレスに日付を含むタイル レイヤー (map.addTiles) を追加してください
+No layer selected	レイヤーが選択されていません
 No layers match	一致するレイヤーはありません
 No layers match your search.	検索に一致するレイヤーがありません。
 No mask	マスクなし
@@ -1860,20 +1938,24 @@ No place matches that address.	その住所に一致する場所はありませ�
 No plugin panel is open.	開いているプラグイン パネルはありません。
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	プラグインがインストールされていません。プラグイン レジストリを参照するか、.rgplugin ファイルをインストールしてください。
 No plugins match.	一致するプラグインはありません。
+No polygon layer available in the map.	マップに使用できるポリゴン レイヤーがありません。
 No Pop-ups	ポップアップなし
 No presentations yet. Publish › New Presentation starts one.	プレゼンテーションはまだありません。[公開] › [新しいプレゼンテーション] で作成します。
 No products	プロダクトはありません
 No project opened or saved yet	まだ開いたり保存したりしたプロジェクトはありません
+No project sources are waiting for an S3 connection.	S3 接続を待っているプロジェクト ソースはありません。
 No properties	プロパティなし
 No relationships (Data Design › Relationships)	リレーションシップはありません (データ設計 › リレーションシップ)
 No relationships yet	リレーションシップはまだありません
 No reports yet. Publish › New Report lists the selected layer's records.	レポートはまだありません。[公開] › [新しいレポート] で選択したレイヤーのレコードを一覧表示します。
 no row	行なし
+No saved S3 keys. Enter accessKeyId and secretAccessKey.	保存された S3 キーがありません。accessKeyId と secretAccessKey を入力してください。
 No serif font is installed, so this text is drawn in the sans-serif	セリフ フォントがインストールされていないため、このテキストはサンセリフで描画されます
 no service or file links	サービスやファイルへのリンクがありません
 No services match your search.	検索に一致するサービスがありません。
 No standalone tables	スタンドアロン テーブルはありません
 No styles yet	スタイルはまだありません
+no system keychain in this build	このビルドにはシステム キーチェーンがありません
 No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	タスクはまだありません。記録するか、[解析] › [タスク] でジオプロセシング履歴から作成してください。
 no text graphic there	そこにテキスト グラフィックはありません
 No tools match your search.	検索に一致するツールがありません。
@@ -1941,6 +2023,7 @@ One page per feature of an index layer.	インデックス レイヤーのフィ
 One per line: code=name	1 行に 1 つ: コード=名前
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	シンボルからの 1 本のストローク。ケーシング、平行線、オフセットにはストロークを追加してください。
 Only features matching this expression draw in {layer}.	この式に一致するフィーチャのみが {layer} に描画されます。
+Only selected polygons will be included in the output.	選択したポリゴンのみが出力に含まれます。
 Only where the map is	マップの表示範囲のみ
 Opacity	不透明度
 Open	開く
@@ -2001,6 +2084,7 @@ OpenStreetMap's public server	OpenStreetMap の公開サーバー
 OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.	プラグイン レジストリから OpenStreetMap、Esri、USGS、NASA など。
 OpenStreetMap…	OpenStreetMap…
 Open…	開く…
+Optional	オプション
 Optional. Shift+Enter starts a new line.	省略可能。Shift+Enter で改行します。
 Options	オプション
 OR	OR
@@ -2011,6 +2095,8 @@ Or run, for Claude Code or Codex:	または、Claude Code か Codex では次を
 ORDER BY	ORDER BY
 Ordinary Kriging	普通クリギング
 Orientation	向き
+Origin	出発地
+Origin key	出発地キー
 Ortho Mapping	オルソ マッピング
 Other	その他
 Other Data	その他のデータ
@@ -2023,6 +2109,7 @@ Outline width	アウトラインの幅
 Outlines {frame}	アウトライン {frame}
 OUTPUT	出力
 Output	出力
+output layer name	出力レイヤー名
 Output Name	出力名
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	ブラウザーで動く、ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (初回のみ約 25 MB をダウンロード)。
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	ラスター、ベクター、LiDAR、水文、地形の 1,000 以上のツール (約 20 MB のオプションのダウンロード)。
@@ -2062,6 +2149,7 @@ Pan with the mouse, zoom with the wheel and click features to see their attribut
 Pan/Zoom\nMap	マップの\n画面移動/ズーム
 Pane Sets	ウィンドウ セット
 Paper	紙
+Parallel	平行
 Parent folder	親フォルダー
 parks, bike lanes, flood zones…	公園、自転車レーン、浸水区域…
 Password	パスワード
@@ -2138,10 +2226,12 @@ Polar, conformal: Antarctica and the Southern Ocean.	極域、正角: 南極大�
 Polar, conformal: the Arctic and the northern lands.	極域、正角: 北極圏と北方の陸地。
 Polygon	ポリゴン
 Polygon (draw)	ポリゴン (描画)
+Polygon layer	ポリゴン レイヤー
 Polygons	ポリゴン
 Polyline	ポリライン
 Pop-up Mode	ポップアップ モード
 pop_max > 1000000	pop_max > 1000000
+Popular datasets…	人気のデータセット…
 Populated Places	人口集中地
 Portal	ポータル
 Portolan	Portolan
@@ -2152,6 +2242,7 @@ PostgreSQL/PostGIS	PostgreSQL/PostGIS
 Postprocessing	後処理
 power 2	べき乗 2
 Precision 6 (OSRM, Valhalla)	精度 6 (OSRM、Valhalla)
+Prefix	プレフィックス
 Prepare	準備
 Prepare every layer's geometry for this projection.	この投影法用にすべてのレイヤーのジオメトリを準備します。
 Prepare Plugin Environment	プラグイン環境の準備
@@ -2193,6 +2284,7 @@ Project templates: start projects from a saved setup.	プロジェクト テン�
 project's path is required	プロジェクトのパスが必要です
 Projection	投影法
 Projections	投影法
+Projects (RustGIS, QGIS)	プロジェクト (RustGIS、QGIS)
 Properties	プロパティ
 Property	プロパティ
 Proportional Symbols	比例シンボル
@@ -2211,6 +2303,9 @@ Python environment failed: {error}	Python 環境の準備に失敗しました: 
 Python environment not prepared	Python 環境が準備されていません
 Python environment ready	Python 環境の準備完了
 Python script	Python スクリプト
+QGIS layer style	QGIS レイヤー スタイル
+QGIS project	QGIS プロジェクト
+QGIS Project…	QGIS プロジェクト…
 Qualitative	定性
 Quantile	等量
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	DuckDB Spatial でファイル、Web アドレス、データベースをクエリし、結果をマップに追加します。
@@ -2231,10 +2326,13 @@ Raster	ラスター
 Raster\nAnalysis	ラスター\n解析
 Raster\nInformation	ラスター\n情報
 Raster Data	ラスター データ
+Raster data is unavailable.	ラスター データを利用できません。
 Raster Effects	ラスター効果
 Raster Functions	ラスター関数
+Raster has bands 1 to {count}.	ラスターにはバンド 1 ～ {count} があります。
 Raster Information	ラスター情報
 Raster Layer	ラスター レイヤー
+Raster layer	ラスター レイヤー
 Raster tiles (XYZ)	ラスター タイル (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	ラスター · {w} × {h} · {n} バンド · {renderer}
 Read and write files on this computer	このコンピューター上のファイルの読み書き
@@ -2245,9 +2343,11 @@ Reading a granule's files needs an Earthdata Login token, which works for every 
 Reading the catalog: {n} documents read, {m} items found…	カタログを読み込んでいます: {n} 件のドキュメントを読み込み、{m} 件のアイテムが見つかりました…
 Reading the catalog…	カタログを読み込んでいます…
 Reading the embeddings…	埋め込みを読み込んでいます…
+Reading the installed fonts…	インストール済みフォントを読み込んでいます…
 Reading the store… ({n} files to go)	ストアを読み込んでいます… (残り {n} ファイル)
 Reading the tileset of	タイルセットを読み込んでいます:
 Reading {n} of Overture's {ty} files where the map is: {attribution}	マップの表示範囲にある Overture の {ty} ファイルを {n} 個読み込んでいます: {attribution}
+Reading {url} page by page…	{url} をページごとに読み込んでいます…
 Reading {url}…	{url} を読み込んでいます…
 Reads and writes files	ファイルの読み書き
 Reads the map	マップの読み取り
@@ -2264,6 +2364,8 @@ Redo (Ctrl+Y)	やり直し (Ctrl+Y)
 Redo the change you undid.	元に戻した変更をやり直します。
 Redo {action}	{action} をやり直す
 Red–Blue	赤–青
+Reference Scale	参照縮尺
+Reference scale	参照縮尺
 Refine the search to see {n} more	検索を絞り込むと、さらに {n} 件表示されます
 Refresh	更新
 Refresh every connection's lists	すべての接続の一覧を更新
@@ -2283,6 +2385,7 @@ Relationships	リレーションシップ
 Release	リリース
 Reload	再読み込み
 Reload Web Layers	Web レイヤーの再読み込み
+Remember on this computer	このコンピューターに保存する
 Remember the key on this computer	このコンピューターにキーを保存する
 Remove	削除
 Remove All	すべて削除
@@ -2373,9 +2476,11 @@ roundabout turn	環状交差点で曲がる
 Routes (name, surface, length)	ルート (名前、路面、長さ)
 Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	ルートは OpenStreetMap データを使用した Valhalla (FOSSGIS) によるものです。所要時間にリアルタイムの交通状況は含まれません。
 Rows	行
+Rule	ルール
 Rule name	ルール名
 Rulers	ルーラー
 Run	実行
+Run #{n} ({secs} s)	実行 #{n} ({secs} 秒)
 Run a query whose result has a geometry column	結果にジオメトリ列を含むクエリを実行してください
 Run All	すべて実行
 Run All Steps	すべてのステップを実行
@@ -2390,12 +2495,14 @@ Run Script	スクリプトの実行
 Run SQL Query	SQL クエリの実行
 Run Task	タスクの実行
 Run the model	モデルを実行
+Run the script ({keys})	スクリプトを実行 ({keys})
 Run Tool	ツールの実行
 Run {name}	{name} を実行
 Running the query for the map…	マップ用のクエリを実行しています…
 Running…	実行中…
 RustGIS	RustGIS
 RustGIS bookmarks	RustGIS ブックマーク
+RustGIS could not confirm that any previously saved key was deleted from the system keychain.	RustGIS は、以前に保存したキーがシステム キーチェーンから削除されたことを確認できませんでした。
 RustGIS couldn't reach the server.	RustGIS はサーバーに接続できませんでした。
 RustGIS deep learning package	RustGIS ディープ ラーニング パッケージ
 RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	前回 RustGIS が正しく終了しなかったため、起動時のプロジェクトの代わりに World Atlas で起動しました。準備ができたら、プロジェクト メニューからプロジェクトを開いてください。
@@ -2482,8 +2589,15 @@ Saved	保存済み
 Saved as the connection {name}	接続 {name} として保存しました
 Saved as the default style for new single-band rasters.	新しい単バンド ラスターの既定のスタイルとして保存しました。
 Saved connection	保存済みの接続
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	保存したキーは暗号化されずにアプリの設定に保存されます（Web 版ではブラウザーのストレージ）。
+Saved keys	保存したキー
+Saved keys are kept unencrypted in the browser's storage.	保存したキーはブラウザーのストレージに暗号化されずに保持されます。
+Saved keys unavailable	保存したキーを使用できません
+Saved keys: leave the keys blank to log in with those this computer keeps.	保存したキー: このコンピューターに保存されたキーでログインするには、キーを空欄のままにしてください。
 Saved models	保存したモデル
+Saved password	保存したパスワード
+Saved S3 keys are unavailable. Enter the keys for this session.	保存した S3 キーを使用できません。このセッション用のキーを入力してください。
+Saved S3 keys could not be forgotten. The connection was not changed.	保存した S3 キーを削除できませんでした。接続は変更されていません。
+Saved S3 keys could not be used. Enter the keys again.	保存した S3 キーを使用できませんでした。キーを再入力してください。
 Saved symbology: apply it to the selected layer, or save the layer's.	保存したシンボル: 選択したレイヤーに適用するか、レイヤーのシンボルを保存します。
 Saved View	保存したビュー
 Saved {name}	{name} を保存しました
@@ -2513,6 +2627,7 @@ Search commands — e.g. buffer, basemap, labels	コマンドを検索（例: �
 Search datasets, e.g. GEDI biomass	データセットを検索 (例: GEDI biomass)
 Search Distance	検索距離
 Search every command and its parameters	すべてのコマンドとそのパラメーターを検索
+Search fonts	フォントを検索
 Search layers (e.g. temperature)	レイヤーを検索 (例: temperature)
 Search layers, places, lat/lon…	レイヤー、場所、緯度/経度を検索…
 Search layers…	レイヤーを検索…
@@ -2538,6 +2653,7 @@ Searching…	検索しています…
 Searching… try again in a moment.	検索しています… しばらくしてからもう一度お試しください。
 Seasonal Mann–Kendall	季節 Mann–Kendall
 Seasons a year	1 年あたりの季節数
+Second raster	2 つ目のラスター
 Second standard parallel	第 2 標準緯線
 Seconds	秒
 Secret access key	シークレット アクセス キー
@@ -2552,6 +2668,7 @@ Select (click)	選択（クリック）
 Select (rectangle)	選択（四角形）
 Select a direction…	方向を選択…
 Select a feature layer in the Layers pane	レイヤー ウィンドウでフィーチャ レイヤーを選択してください
+Select a field	フィールドを選択
 Select a layer in Layers to style it.	スタイルを設定するには、レイヤー ウィンドウでレイヤーを選択してください。
 Select a layer in the Layers pane	レイヤー ウィンドウでレイヤーを選択してください
 select a layer in the Layers pane first	先にレイヤー ウィンドウでレイヤーを選択してください
@@ -2733,18 +2850,26 @@ Snap Point	スナップ ポイント
 Snapping	スナップ
 Snow	雪
 Socrata	Socrata
+Solid	実線
+Some of the project's S3 sources wait for you to choose the saved connection that reads them	プロジェクトの一部の S3 ソースは、それを読み取る保存済み接続の選択を待っています
+Sort	並べ替え
+Sort: {field}	並べ替え: {field}
 Source	ソース
 Source Cooperative	Source Cooperative
 Source Cooperative…	Source Cooperative…
+Source coordinate system	ソース座標系
+Source coordinate system is required	ソース座標系が必要です
 South	南
 South Polar Stereographic	南極ステレオ図法
 Spatial Join	空間結合
 Speaker notes	スピーカー ノート
 Spectral Analysis	スペクトル解析
 Spectral indices	スペクトル指数
+Speed	速度
 Speed Display	表示速度
 Split	分割
 Split (click the line)	分割 (ラインをクリック)
+Split the widest class	最も幅の広いクラスを分割
 SQL	SQL
 SQL Pane	SQL ウィンドウ
 SQL queries run through DuckDB, a program the desktop app calls: open this project in the desktop app to query it.	SQL クエリはデスクトップ アプリが呼び出すプログラム DuckDB で実行されます: クエリを実行するには、このプロジェクトをデスクトップ アプリで開いてください。
@@ -2839,6 +2964,7 @@ Strokes	ストローク
 Strokes for	ストロークの対象
 Style	スタイル
 Style Items	スタイル アイテム
+Style this layer as a QGIS layer style file (.qml) does	QGIS レイヤー スタイル ファイル (.qml) のとおりにこのレイヤーのスタイルを設定
 Style › Drawing	スタイル › 描画
 Styles	スタイル
 Subreport	サブレポート
@@ -2847,6 +2973,7 @@ Subtypes	サブタイプ
 Subtypes, one per line: code=name	サブタイプ (1 行に 1 つ): コード=名前
 Suitability Modeler	適性モデラー
 Summarise	集計
+Summarise a Data Cube over Time	データ キューブを時間方向に集計
 Summarise over time	時間方向に集計
 Summarise the conversation so far, so a long chat stays within the model's context	これまでの会話を要約し、長いチャットがモデルのコンテキストに収まるようにします
 Summarise Zarr Over Time	Zarr を時間方向に集計
@@ -2883,6 +3010,7 @@ Table or layer	テーブルまたはレイヤー
 Tables	テーブル
 Tags	タグ
 Take the data in view offline, to edit and sync back later.	表示中のデータをオフラインにして編集し、後で同期します。
+Take this bound out	この境界を削除
 Target Features	ターゲット フィーチャ
 Target Records	ターゲット レコード
 Task	タスク
@@ -2892,6 +3020,8 @@ Tasks	タスク
 Tasks: guided steps that each run a command.	タスク: 各ステップでコマンドを実行するガイド付き手順。
 Template name	テンプレート名
 Templates	テンプレート
+Temporary credentials (with a session token) are kept for this session only.	一時的な資格情報 (セッション トークン付き) はこのセッションの間だけ保持されます。
+Temporary credentials are session-only. Previously saved keys are unchanged.	一時的な資格情報はこのセッション限りです。以前に保存したキーは変更されていません。
 Tennessee GIS	Tennessee GIS
 Tennessee GIS…	Tennessee GIS…
 Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	テネシー州の公開 GIS データ (Tennessee GeoData、geodata.tn.gov): 土地境界、交通、保健、水文など。
@@ -2902,6 +3032,7 @@ Testing…	テストしています…
 Text	テキスト
 Text Symbol	テキスト シンボル
 That connection would create a loop.	その接続はループを作ります。
+The active project or map changed; reopen Define Projection for the intended layer.	アクティブなプロジェクトまたはマップが変更されました。対象のレイヤーで「投影法を定義」を開き直してください。
 The address fields are empty in every row.	すべての行で住所フィールドが空です。
 The answer isn't UTF-8 text	応答が UTF-8 テキストではありません
 the answer isn't UTF-8 text	応答が UTF-8 テキストではありません
@@ -2911,6 +3042,7 @@ The assistant wants to run this, and {why}:	アシスタントが次の操作を
 The Basemaps plugin's tab of public basemaps.	ベースマップ プラグインの公開ベースマップのタブ。
 the capture failed unexpectedly	キャプチャが予期せず失敗しました
 The connection failed; trying again in {seconds} s.	接続に失敗しました。{seconds} 秒後に再試行します。
+the connection has no id	接続に ID がありません
 The country list couldn't be read ({e}): type a country's code	国のリストを読み込めませんでした ({e}): 国コードを入力してください
 The current elevation stays in effect while you edit inputs. Click Apply elevation to apply the value and units.	入力を編集している間は現在の標高が有効なままです。値と単位を適用するには [標高を適用] をクリックしてください。
 The dataset has nothing RustGIS can add	このデータセットには RustGIS が追加できるものがありません
@@ -2924,6 +3056,11 @@ The flowtrace didn't answer: the whole flowline nearest the point is shown.	フ�
 The installed GeoLibre runner lists no tools.	インストール済みの GeoLibre ランナーにツールがありません。
 The job covers the map view	ジョブはマップ ビューを対象とします
 The key is kept for this session only.	キーはこのセッションの間だけ保持されます。
+The key is kept for this session only; it has not been remembered.	キーはこのセッションの間だけ保持され、保存されていません。
+The key is saved in the system keychain.	キーはシステム キーチェーンに保存されています。
+the keychain backend stopped unexpectedly	キーチェーン バックエンドが予期せず停止しました
+the keychain worker stopped	キーチェーン ワーカーが停止しました
+The keys saved on this computer were forgotten; a login in this session keeps working.	このコンピューターに保存されたキーを削除しました。このセッションでのログインは引き続き有効です。
 The layer shows the step the time slider is at, and turns the slider on over the variable's dates.	レイヤーにはタイム スライダーの現在のステップが表示され、変数の日付範囲でスライダーがオンになります。
 The layer's file couldn't be read: {error}	レイヤーのファイルを読み込めませんでした: {error}
 The layer's strokes	レイヤーのストローク
@@ -2947,6 +3084,7 @@ The National Map	The National Map
 The National Map…	The National Map…
 the NLDI's answer isn't UTF-8 text	NLDI の応答が UTF-8 テキストではありません
 the page is too large to draw	ページが大きすぎて描画できません
+The password was refused. Type a password to try again.	パスワードが拒否されました。パスワードを入力して再試行してください。
 the picture is too large to show	画像が大きすぎて表示できません
 the picture is too large to show, or isn't one	画像が大きすぎて表示できないか、画像ではありません
 The places leave this device for the public Valhalla server at {server}, run by FOSSGIS. Don't continue if your project is bound by data privacy or data sovereignty rules.	これらの場所はこのデバイスから、FOSSGIS が運営する公開 Valhalla サーバー {server} に送信されます。プロジェクトがデータのプライバシーやデータ主権の規則に従う必要がある場合は、続行しないでください。
@@ -2961,7 +3099,7 @@ The provider's content filter stopped the reply.	プロバイダーのコンテ�
 The public server is free and shared by many: it answers light use, and may ask you to wait.	公開サーバーは無料で多くの人が共有しています。軽い利用には応答しますが、待つよう求められることがあります。
 The range is two numbers, low and high (0, 0.9)	範囲は下限と上限の 2 つの数値です (0, 0.9)
 The raster's data couldn't be read.	ラスターのデータを読み込めませんでした。
-The raster's data couldn't be read: {path}	ラスターのデータを読み込めませんでした: {path}
+The raster's data couldn't be read: {error}	ラスターのデータを読み取れませんでした: {error}
 the release isn't known	リリースが不明です
 The reply reached its length limit.	回答が長さの上限に達しました。
 The reply stopped before completion; no actions were run.	応答が完了前に停止しました。操作は実行されていません。
@@ -2969,7 +3107,10 @@ The reply stopped early ({reason}).	回答が途中で停止しました（{reas
 the report export failed unexpectedly	レポートのエクスポートが予期せず失敗しました
 The request failed.	リクエストに失敗しました。
 The result wired into this output is added to the map under this name.	この出力に接続された結果は、この名前でマップに追加されます。
+The saved password could not be used. Type a password to try again; check Remember on this computer to replace the saved password.	保存したパスワードを使用できませんでした。パスワードを入力して再試行してください。保存したパスワードを置き換えるには「このコンピューターに保存する」をオンにしてください。
+The saved S3 connection no longer matches this source.	保存された S3 接続はこのソースと一致しなくなりました。
 The saved sign-in changed. Select your account again.	保存されたサインイン情報が変更されました。アカウントを再度選択してください。
+The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper.	レイヤーのシンボルとラベルのサイズの基準となる縮尺です。ほかの縮尺では、紙の地図と同じようにマップに合わせて拡大・縮小します。
 The server had a problem answering.	サーバーの応答中に問題が発生しました。
 The server is limiting requests.	サーバーがリクエストを制限しています。
 The server refused the request.	サーバーがリクエストを拒否しました。
@@ -2990,6 +3131,9 @@ the store is gone	ストアがなくなりました
 The summary couldn't start: {error}	集計を開始できませんでした: {error}
 The summary failed unexpectedly	集計が予期せず失敗しました
 The summary finished after another project was opened, so it wasn't added	別のプロジェクトを開いた後に集計が完了したため、追加されませんでした
+The system keychain could not complete the request.	システム キーチェーンは要求を完了できませんでした。
+The system keychain is locked or access was refused.	システム キーチェーンがロックされているか、アクセスが拒否されました。
+The system keychain is unavailable.	システム キーチェーンを利用できません。
 The task's steps changed, so the step being edited was closed: edit it again.	タスクのステップが変更されたため、編集中のステップを閉じました。もう一度編集してください。
 the time slider is off	タイム スライダーはオフです
 The token expires on {date}.	トークンの有効期限は {date} です。
@@ -3017,6 +3161,8 @@ This ChatGPT account was already saved. Next time, choose it in the list instead
 This class is drawn with the layer's strokes. Changing them here gives it its own.	このクラスはレイヤーのストロークで描画されます。ここで変更すると、このクラス独自のストロークになります。
 This class is hidden, so it labels nothing.	このクラスは非表示のため、何もラベル付けされません。
 This clause no longer reads, so no feature is labelled: {error}	この句を解釈できなくなったため、どのフィーチャにもラベルが付きません: {error}
+This computer keeps keys for this connection: leave the keys blank to log in with them.	このコンピューターにはこの接続のキーが保存されています。そのキーでログインするには、キーを空欄のままにしてください。
+This computer keeps this connection's keys: logging in reads them.	このコンピューターにはこの接続のキーが保存されています。ログイン時に読み取られます。
 This map has no layers yet.	このマップにはまだレイヤーがありません。
 This map's thumbnail, from an image.	画像から作成するこのマップのサムネイル。
 This map's thumbnail, from the view.	ビューから作成するこのマップのサムネイル。
@@ -3026,7 +3172,7 @@ This request has no one-time allow option.	この要求には「今回のみ許�
 This request uses an unsupported capability. Check the parameter and change the request.	このリクエストは未対応の機能を使用しています。パラメーターを確認してリクエストを変更してください。
 This result is kept	この結果は残されます
 This run has no tool form to open	この実行には開くツール フォームがありません
-This session only (optional)	このセッションのみ (省略可)
+This S3 connection choice is no longer available.	この S3 接続の選択は利用できなくなりました。
 This step	このステップ
 This step names no tool to show.	このステップには表示するツールが指定されていません。
 Thumbnail	サムネイル
@@ -3035,6 +3181,7 @@ Ticks	目盛り
 Ticks only	目盛りのみ
 Tile archive	タイル アーカイブ
 Tile Archive File…	タイル アーカイブ ファイル…
+Tile layer has changed; search again	タイル レイヤーが変更されました。もう一度検索してください
 Tile Layer Properties	タイル レイヤーのプロパティ
 Tile Layers	タイル レイヤー
 Tilt Map	マップの傾斜
@@ -3084,6 +3231,7 @@ Train a neural network on training polygons and classify every pixel.	トレー�
 Train And Classify	トレーニングと分類
 Train Deep Learning Model	ディープ ラーニング モデルのトレーニング
 Trained models	学習済みモデル
+Training polygons	トレーニング ポリゴン
 Transparency	透過表示
 Traverse	トラバース
 Trend Analysis	トレンド分析
@@ -3107,8 +3255,10 @@ type a longitude and latitude, or click the map	経度と緯度を入力する�
 Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	1:12,345、12345、25k のように縮尺を入力し、Enter を押します
 Type an address or coordinates and press Enter, or click the map.	住所または座標を入力して Enter を押すか、マップをクリックしてください。
 Type numbers separated by commas	カンマ区切りで数値を入力
+Type the access key ID and the secret access key to remember them on this computer.	このコンピューターに保存するには、アクセス キー ID とシークレット アクセス キーを入力してください。
 Type the keys to log in for this session, then Save.	このセッションでログインするためのキーを入力し、[保存] をクリックしてください。
-Type the password or keys to log in for this session, then Save.	このセッションでログインするためのパスワードまたはキーを入力し、[保存] をクリックしてください。
+Type the password to remember it on this computer.	このコンピューターに保存するには、パスワードを入力してください。
+Type the password, then Save. Remember on this computer is optional.	パスワードを入力してから「保存」をクリックしてください。「このコンピューターに保存する」は任意です。
 Typed below	下に入力
 UM	UM
 Unavailable: {reason}	利用不可：{reason}
@@ -3129,6 +3279,7 @@ Unit	単位
 United States	アメリカ合衆国
 Units	単位
 Units per step	ステップあたりの単位数
+unknown (an older project)	不明 (古いプロジェクト)
 UNKNOWN TOOL	不明なツール
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	GeoLibre ツールをアンロードし、RustGIS の起動時に読み込まないようにします。
 Unsaved changes	未保存の変更
@@ -3156,6 +3307,7 @@ USA Contiguous Albers Equal Area	米国本土アルベルス正積図法
 Use	使用
 Use a Single Stroke	単一のストロークを使用
 Use another account	別のアカウントを使用
+Use Connection	接続を使用
 Use Current View	現在のビューを使用
 Use each feature's line color	各フィーチャのラインの色を使用
 Use each feature's line width	各フィーチャのラインの幅を使用
@@ -3286,6 +3438,7 @@ WMTS	WMTS
 Words	単語
 words in the name	名前に含まれる単語
 words to keep to (optional)	絞り込む単語 (任意)
+Workflow	ワークフロー
 Workflow Manager	ワークフロー マネージャー
 Workflows	ワークフロー
 Working	作業中
@@ -3331,6 +3484,8 @@ Z factor	Z 係数
 Zarr	Zarr
 Zarr Variables	Zarr 変数
 Zarr…	Zarr…
+Zonal Statistics	ゾーン統計
+Zone Polygons	ゾーン ポリゴン
 Zoom	ズーム
 Zoom about the pointer	ポインターを中心にズーム
 Zoom Box	ボックス ズーム
@@ -3381,5 +3536,6 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 © OpenStreetMap contributors	© OpenStreetMap contributors
 ±, dequantised	±、逆量子化
 — fps	— fps
+⌘+Enter	⌘+Enter
 ⌘K	⌘K
 ▶ Simulate	▶ シミュレート
