@@ -653,9 +653,13 @@ impl Ctx<'_> {
             };
             let steps = st.dash.and_then(|d| self.dash(&d, drawn));
             let period: f32 = steps.iter().flatten().sum();
-            // A dashed line cut into pieces: each piece starts its pattern where its line is.
+            // A dashed line cut into pieces: each piece starts its pattern where its line is. Only
+            // while every piece has its start: one off would shift every later piece's dashes.
             let pieces: Vec<(tiny_skia::Path, f32)> = match (&steps, starts.of(drawn)) {
-                (Some(_), Some(at)) => contours(drawn).into_iter().zip(at.iter().copied()).collect(),
+                (Some(_), Some(at)) => {
+                    let c = contours(drawn);
+                    if c.len() == at.len() { c.into_iter().zip(at.iter().copied()).collect() } else { Vec::new() }
+                }
                 _ => Vec::new(),
             };
             match steps {
