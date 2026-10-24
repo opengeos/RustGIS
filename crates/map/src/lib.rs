@@ -14,6 +14,7 @@ pub mod palette;
 pub mod planets;
 pub mod presentation;
 pub mod projection;
+pub mod qgis;
 pub mod raster;
 pub mod report;
 pub mod source;

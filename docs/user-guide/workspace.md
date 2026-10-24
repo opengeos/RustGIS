@@ -19,6 +19,47 @@ Saved layer addresses omit passwords, access keys, tokens and signatures. The op
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
 connection again or add it again with credentials.
 
+### QGIS projects and styles
+
+A QGIS project (`.qgs`, or a `.qgz` archive) opens as a new map of the current project: **Open**
+on the desktop, or **Project › New › QGIS Project…** (`project.importQgis={"path": "…/towns.qgs"}`).
+Its layers come in the layer tree's order, each from its file (GeoPackage, Shapefile, GeoJSON,
+GeoTIFF and the other formats RustGIS reads, relative paths from the project's folder), a CSV of
+points, XYZ tiles or a WMS layer, unchecked layers and groups hidden. The map takes the project's
+coordinate system and its saved view (or its layers' extent, when that view shows none of them),
+with no basemap and no graticule, as QGIS draws it. The import is one undo step.
+
+Each layer keeps its look:
+
+- **Renderers**: single symbol, categorized (as Unique Values, a category's merged values each a
+  class, its "all other values" category the rest), graduated (as Graduated Colors), and
+  rule-based where every rule picks values of one field (an else rule the rest); point cluster,
+  displacement and other renderers that wrap one are drawn by the one inside.
+- **Symbols**: simple fills, lines and markers with their colours, widths in any unit, offsets,
+  caps, joins and the symbol's opacity; a line's simple lines as stacked strokes, its rendering
+  passes as their levels when the renderer draws in symbol levels.
+- **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
+  reference scale.
+- **Labels**: simple and rule-based, each rule a label class whose SQL clause is its filter and
+  its parents' (an else rule's: none of its siblings'), with the text's field, size, colour,
+  bold and italic, its buffer as a halo, its placement (Parallel and Curved along lines,
+  around and over points) and its scale range.
+
+QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
+`IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
+near as it can, or left out, and said: the import's notes list, layer by layer, what was
+approximated (pattern fills drawn as a tint of their colour, font and SVG markers as circles,
+dashed lines solid, fonts other than RustGIS's label font) and what was skipped (marker lines,
+data-defined settings, labels from expressions, raster colouring, PostGIS, WFS and other sources
+RustGIS doesn't read). A database password in a project never reaches the notes.
+
+A QGIS layer style (`.qml`) styles the selected layer the same way: **Import QGIS Style…** in
+the Symbology pane (`style.importQgis={"layer": "Roads", "path": "…/roads.qml"}`).
+
+RustGIS works out a map's scale with the OGC's 0.28 mm screen pixel, QGIS at 96 pixels to the
+inch, so the same view is a larger scale in QGIS; scales from QGIS (reference scales, visibility
+ranges) are multiplied by 0.945 on the way in, so a layer shows at the same zoom in both.
+
 ## Panes and command search
 
 The left pane has tabs for **Layers**, **Browser** and **Data Sources**. Right-hand panes

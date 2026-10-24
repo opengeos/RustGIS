@@ -2333,8 +2333,12 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg"], tl!("RustGIS project")) {
-                    let r = self.run("project.open", json!({"path": path}));
+                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg", "qgs", "qgz"], tl!("Projects (RustGIS, QGIS)"))
+                {
+                    // A QGIS project opens as a new map of this one.
+                    let lower = path.to_ascii_lowercase();
+                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
+                    let r = self.run(cmd, json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
                     return r;
@@ -2479,6 +2483,8 @@ impl RustGisApp {
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
                     "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
+                    "qgisProject" => ("project.importQgis", &["qgs", "qgz"], "QGIS project"),
+                    "qgisStyle" => ("style.importQgis", &["qml"], "QGIS layer style"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
                     "task" => ("task.import", &["rgistask"], "RustGIS task"),
                     "bookmarks" => ("bookmark.import", &["rgisbookmarks"], "RustGIS bookmarks"),

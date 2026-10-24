@@ -264,22 +264,7 @@ fn qgis_ramp(node: Node, name: &str) -> Result<Option<CustomRamp>, String> {
 /// A ramp's properties: `<prop k v>` children (older QGIS) or `<Option name value>` inside an
 /// `<Option type="Map">` (QGIS 3.26 and later).
 fn qgis_props(node: Node) -> Vec<(String, String)> {
-    let mut props = Vec::new();
-    for c in node.children().filter(Node::is_element) {
-        if c.has_tag_name("prop")
-            && let (Some(k), Some(v)) = (c.attribute("k"), c.attribute("v"))
-        {
-            props.push((k.to_string(), v.to_string()));
-        }
-        if c.has_tag_name("Option") {
-            for o in c.children().filter(|o| o.has_tag_name("Option")) {
-                if let (Some(k), Some(v)) = (o.attribute("name"), o.attribute("value")) {
-                    props.push((k.to_string(), v.to_string()));
-                }
-            }
-        }
-    }
-    props
+    crate::qgis::props(node)
 }
 
 /// The stops of a QGIS gradient, `pos;color[;spec;direction]` joined by `:`. Newer colours
@@ -302,16 +287,7 @@ fn qgis_stops(s: &str) -> Vec<&str> {
 
 /// A QGIS colour: `r,g,b,a` (with anything after, such as `,rgb:…`) or `#RRGGBB[AA]`.
 fn qgis_color(s: &str) -> Option<Rgba> {
-    let s = s.trim();
-    if s.starts_with('#') {
-        return Rgba::from_hex(s);
-    }
-    let v: Vec<u8> = s.split(',').take(4).map(|p| p.trim().parse::<u8>().ok()).collect::<Option<_>>()?;
-    match v.as_slice() {
-        [r, g, b] => Some(Rgba::rgb(*r, *g, *b)),
-        [r, g, b, a] => Some(Rgba::new(*r, *g, *b, *a)),
-        _ => None,
-    }
+    crate::qgis::color(s)
 }
 
 /// Stops at 0..=1 made into steps: each colour holds until the next stop's position.

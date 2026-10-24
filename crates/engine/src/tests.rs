@@ -624,6 +624,76 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
 }
 
 #[test]
+fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
+    let dir = std::env::temp_dir().join(format!("rustgis-qgis-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    let roads = r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","properties":{"class":"motorway","name":"A1","lanes":3},"geometry":{"type":"LineString","coordinates":[[8.70,47.49],[8.75,47.51]]}},
+        {"type":"Feature","properties":{"class":"track","name":"Feldweg","lanes":1},"geometry":{"type":"LineString","coordinates":[[8.71,47.50],[8.74,47.48]]}}]}"#;
+    std::fs::write(dir.join("data/roads.geojson"), roads).unwrap();
+    std::fs::write(dir.join("data/towns.csv"), "name,lon,lat\nWinterthur,8.72,47.50\n").unwrap();
+    let qgs = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.42.0"><title>Winterthur</title>
+  <projectCrs><spatialrefsys><authid>EPSG:2056</authid></spatialrefsys></projectCrs>
+  <layer-tree-group><layer-tree-layer id="t" checked="Qt::Checked"/><layer-tree-layer id="r" checked="Qt::Unchecked"/><layer-tree-layer id="db" checked="Qt::Checked"/></layer-tree-group>
+  <mapcanvas name="theMapCanvas"><extent><xmin>0</xmin><ymin>0</ymin><xmax>10</xmax><ymax>10</ymax></extent></mapcanvas>
+  <projectlayers>
+    <maplayer type="vector" labelsEnabled="1"><id>r</id><datasource>./data/roads.geojson|subset="lanes" &gt; 0</datasource><layername>Roads</layername><provider>ogr</provider>
+      <renderer-v2 type="categorizedSymbol" attr="class" referencescale="25000"><categories><category value="motorway" symbol="0" render="true"/><category value="" symbol="1" render="true"/></categories>
+        <symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1"><prop k="line_color" v="0,0,0,255"/><prop k="line_width" v="1"/></layer><layer class="SimpleLine" enabled="1"><prop k="line_color" v="250,150,50,255"/><prop k="line_width" v="0.6"/></layer></symbol>
+        <symbol type="line" name="1" alpha="1"><layer class="SimpleLine" enabled="1"><prop k="line_color" v="120,120,120,255"/></layer></symbol></symbols></renderer-v2>
+      <labeling type="rule-based"><rules key="x"><rule filter="&quot;class&quot; = 'motorway'" description="Big"><settings><text-style fieldName="name" fontSize="9" namedStyle="Italic"/><placement placement="2"/></settings></rule>
+        <rule filter="&quot;nofield&quot; = 1" description="Broken"><settings><text-style fieldName="name"/></settings></rule></rules></labeling></maplayer>
+    <maplayer type="vector"><id>t</id><datasource>file:./data/towns.csv?type=csv&amp;xField=lon&amp;yField=lat&amp;crs=EPSG:4326</datasource><layername>Towns</layername><provider>delimitedtext</provider>
+      <renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1"><layer class="SimpleMarker" enabled="1"><prop k="name" v="square"/><prop k="color" v="200,0,0,255"/></layer></symbol></symbols></renderer-v2></maplayer>
+    <maplayer type="vector"><id>db</id><datasource>dbname='gis' host=db password='secret' table="public"."parcels" (geom)</datasource><layername>Parcels</layername><provider>postgres</provider></maplayer>
+  </projectlayers></qgis>"#;
+    let path = dir.join("winterthur.qgs");
+    std::fs::write(&path, qgs).unwrap();
+    let mut s = world();
+    let maps = s.project.maps.len();
+    let depth = s.undo_depth();
+    let out = s.run("project.importQgis", &json!({"path": path.display().to_string()})).unwrap();
+    assert_eq!((s.project.maps.len(), s.map().name.as_str()), (maps + 1, "Winterthur"), "a map of its own");
+    assert_eq!(s.undo_depth(), depth + 1, "one step");
+    assert_eq!(s.map().projection.code(), "EPSG:2056");
+    assert_eq!(s.map().basemap, rustgis_map::Basemap::Blank);
+    let names: Vec<&str> = s.map().layers.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["Towns", "Roads"], "top first; the database table isn't added");
+    let roads = s.map().layer_by_name("Roads").unwrap();
+    assert!(!roads.visible, "unchecked in the layer tree");
+    assert_eq!(roads.definition_query.as_deref(), Some("\"lanes\" > 0"));
+    assert!(roads.reference_scale.is_some());
+    let rustgis_map::Renderer::Unique { field, class_strokes, .. } = &roads.renderer else { panic!("{:?}", roads.renderer) };
+    assert_eq!((field.as_str(), class_strokes.get("motorway").map(Vec::len)), ("class", Some(2)));
+    let classes: Vec<(&str, bool)> = roads.labels.classes.iter().map(|c| (c.name.as_str(), c.visible)).collect();
+    assert_eq!(classes, [("Big", true), ("Broken", false)], "a clause the layer can't read is switched off");
+    assert_eq!(roads.labels.classes[0].placement, rustgis_map::LabelPlacement::Parallel);
+    let towns = s.map().layer_by_name("Towns").unwrap();
+    assert_eq!((towns.dataset.features.len(), towns.renderer.base_symbol().marker), (1, rustgis_map::Marker::Square));
+    // What wasn't carried over: the database table, with no password in the note.
+    let notes = out["notes"].as_array().unwrap();
+    let text = serde_json::to_string(notes).unwrap();
+    assert!(text.contains("parcels") && !text.contains("secret"), "{text}");
+    assert!(text.contains("Broken"), "{text}");
+    // Drawn, and gone again with one undo.
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(s.project.maps.len(), maps);
+
+    // A style file on a sample layer: Rivers drawn as a cased line.
+    let qml = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'><qgis version="3.22"><renderer-v2 type="singleSymbol"><symbols><symbol type="line" name="0" alpha="1">
+        <layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="20,60,120,255"/><Option name="line_width" value="1.2"/></Option></layer>
+        <layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="150,200,255,255"/><Option name="line_width" value="0.5"/></Option></layer>
+        </symbol></symbols></renderer-v2><layerOpacity>0.5</layerOpacity></qgis>"#;
+    s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
+    let rivers = s.map().layer_by_name("Rivers").unwrap();
+    assert_eq!((rivers.line_strokes.len(), rivers.transparency), (2, 50.0));
+    assert!(s.run("style.importQgis", &json!({"layer": "Rivers", "text": "<nonsense"})).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn project_save_and_open_roundtrip() {
     let mut s = world();
     let dir = std::env::temp_dir().join(format!("rustgis-test-{}", std::process::id()));
