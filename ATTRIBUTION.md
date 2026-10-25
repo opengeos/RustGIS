@@ -12,6 +12,8 @@ which every package ships next to LICENSE. They are generated from `Cargo.lock` 
 |---|---|---|
 | Sample data (`countries`, `countries_chn`, `cities`, `rivers`, `lakes` GeoJSON), embedded at build time from [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/data) | Natural Earth 1:110m, attributes trimmed; `countries_chn` is Natural Earth's China point of view (1:10m, simplified) | Public domain |
 | QGIS screenshot (`qgis-world-atlas.webp` in [rustgis-assets](https://github.com/opengeos/rustgis-assets/tree/main/images)), on the [RustGIS and QGIS](docs/comparison/qgis.md) page | Taken by the RustGIS project: [QGIS](https://qgis.org) 4.2 showing the Natural Earth sample data above | QGIS is GPL-2.0-or-later; the data is public domain |
+| QGIS test corpus (`crates/map/testdata/qgis/generated/`: styles, projects and their sample data) | Dominik Strebel ([@pick2510](https://github.com/pick2510)) for the RustGIS project: written by [QGIS](https://qgis.org) 4.2.3 through its API, from `generate.py` there; the data is made up | Apache-2.0 |
+| SMV25 QGIS project (`crates/map/testdata/qgis/smv25/SMV25_CHLV95LN02.qgz`) | Source: Federal Office of Topography swisstopo, the QGIS project of [Swiss Map Vector 25](https://www.swisstopo.admin.ch/en/national-map-swiss-map-vector-25) (July 2026), unchanged, zipped | swisstopo's [free geodata](https://www.swisstopo.admin.ch/en/free-geodata-ogd) (OGD): free use, the source must be given |
 
 Raster coordinate systems are looked up by EPSG code in the PROJ definitions of the
 [crs-definitions](https://crates.io/crates/crs-definitions) crate (CC0-1.0), compiled into the

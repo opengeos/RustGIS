@@ -420,3 +420,42 @@ fn what_rustgis_has_no_place_for_is_noted() {
     assert_eq!(report.notes.iter().find(|n| n.text.contains("draw effects")).map(|n| n.count), Some(1));
     assert!(!said("A", "repeated"), "a repeat distance of 0 is none");
 }
+
+/// Every file of the corpus in `testdata/qgis` (styles and projects QGIS wrote, and swisstopo's
+/// SMV25 project) reads, each project with its layers.
+#[test]
+fn every_corpus_file_reads() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/qgis");
+    let files = |dir: &str| {
+        let mut paths: Vec<_> = std::fs::read_dir(root.join(dir)).unwrap().map(|e| e.unwrap().path()).collect();
+        paths.sort();
+        paths
+    };
+    let styles = files("generated/qml");
+    assert_eq!(styles.len(), 90);
+    for path in &styles {
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut report = Report::default();
+        read_style(&text, "layer", &mut report).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+    let mut projects = files("generated/qgs");
+    projects.extend(files("smv25"));
+    assert_eq!(projects.len(), 22);
+    for path in &projects {
+        let bytes = std::fs::read(path).unwrap();
+        let text = if path.extension().is_some_and(|e| e == "qgz") {
+            let entries = rustgis_data::zip::read_matching_within(&bytes, |n| n.ends_with(".qgs"), 64 << 20).unwrap();
+            String::from_utf8(entries.into_iter().next().unwrap().1).unwrap()
+        } else {
+            String::from_utf8(bytes).unwrap()
+        };
+        let dir = path.parent().unwrap().to_string_lossy().to_string();
+        let mut report = Report::default();
+        let project = read_project(&text, &dir, &mut report).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(!project.layers.is_empty(), "{}: no layers", path.display());
+        if path.ends_with("SMV25_CHLV95LN02.qgz") {
+            assert_eq!(project.layers.len(), 66);
+            assert_eq!(project.crs.as_deref(), Some("EPSG:2056"));
+        }
+    }
+}
