@@ -2,8 +2,8 @@
 //! from a layer's right-click menu (Labeling Properties…) or View › Windows › Labeling. The ribbon
 //! keeps its label groups; both run the same `labels.*` commands, so the pane holds no state of its
 //! own (it reads the layer each frame, as the Symbology pane does) and every change undoes. It
-//! edits one label class at a time, the one chosen in its Class section (#722); the ribbon's label
-//! groups edit and choose the same one (#858).
+//! edits one label class at a time, the one chosen in its header (#722); the ribbon's label groups
+//! edit and choose the same one (#858).
 
 use egui::{RichText, Ui, vec2};
 use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, Labeling, MAX_LABEL_CLASSES, label_class_name};
@@ -42,6 +42,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         run(app, "labels.enable", json!({"on": on}));
     }
     let c = chosen(ui, app, &l);
+    classes(app, ui, &l, &c, t);
     class(app, ui, &l, &c, t);
     text_symbol(app, ui, &l, &c);
     position(app, ui, &l, &c);
@@ -164,12 +165,9 @@ enum ClassTab {
     Sql,
 }
 
-/// The class chosen, what makes, renames, removes and orders classes (#722), and the chosen
-/// class's field and SQL clause (#618) choosing the features it labels.
+/// The chosen class's field and SQL clause (#618) choosing the features it labels.
 fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     section(ui, "Class", |ui| {
-        classes(app, ui, l, c);
-        ui.add_space(4.0);
         let key = egui::Id::unique("label_pane_class_tab");
         let mut tab = ui.data(|d| d.get_temp::<ClassTab>(key)).unwrap_or(ClassTab::Field);
         ui.horizontal(|ui| {
@@ -199,9 +197,9 @@ struct Renaming {
     pass: u64,
 }
 
-/// The class chooser, and New, Rename, Move Up, Move Down, Remove and Visible for the chosen
-/// class. Default, last in the list, can be renamed or hidden, but not removed or moved.
-fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
+/// The pane's header for the chosen class (#858): its chooser, a row of what makes, renames,
+/// orders and removes classes (#722), and Visible.
+fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let rename_key = egui::Id::unique("label_pane_rename");
     let owner = egui::Id::unique((layer_key(app, l), c.name));
     // A rename started on another class or layer (chosen since, or by an undo), or left when the
@@ -219,42 +217,56 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         }
         ui.end_row();
     });
+    if ui.horizontal(|ui| class_actions(app, ui, l, c, t)).inner {
+        let r = Renaming { owner, text: c.it.name.clone(), focused: false, pass };
+        ui.data_mut(|d| d.insert_temp(rename_key, r));
+    }
+    let mut visible = c.it.visible;
+    if ui.checkbox(&mut visible, tl!("Visible")).on_hover_text(tl!("A hidden class leaves its features unlabelled.")).changed() {
+        run(app, "labels.class.update", c.params(json!({"visible": visible})));
+    }
+}
+
+/// New, Rename, Move Up and Move Down for the chosen class, then Remove; whether Rename was
+/// clicked. Default, last in the list, can be renamed, but not removed or moved.
+fn class_actions(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) -> bool {
     let count = extras(l).count();
     let at = c.name.and_then(|n| extras(l).position(|k| k.name == n));
-    ui.horizontal_wrapped(|ui| {
-        let full = l.labels.classes.len() >= MAX_LABEL_CLASSES;
-        let max = MAX_LABEL_CLASSES.to_string();
-        let new = ui
-            .add_enabled(!full, egui::Button::new(tl!("New")))
-            .on_hover_text(tl!("Add a class with this one's field, text symbol, placement and range."))
-            .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
-        if new.clicked() {
-            let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
-            if let Some(added) = run(app, "labels.class.add", p) {
-                choose(ui, app, l, added.get("class").and_then(Value::as_str));
-            }
+    let full = l.labels.classes.len() >= MAX_LABEL_CLASSES;
+    let max = MAX_LABEL_CLASSES.to_string();
+    let new = ui
+        .add_enabled(!full, egui::Button::new(tl!("New")))
+        .on_hover_text(tl!("Add a class with this one's field, text symbol, placement and range."))
+        .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
+    if new.clicked() {
+        let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
+        if let Some(added) = run(app, "labels.class.add", p) {
+            choose(ui, app, l, added.get("class").and_then(Value::as_str));
         }
-        if ui.button(tl!("Rename")).clicked() {
-            let r = Renaming { owner, text: c.it.name.clone(), focused: false, pass };
-            ui.data_mut(|d| d.insert_temp(rename_key, r));
+    }
+    let rename = ui.button(tl!("Rename")).clicked();
+    let up = at.filter(|i| *i > 0).map(|i| i - 1);
+    let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
+    for (icon, label, to) in [("up", "Move Up", up), ("down", "Move Down", down)] {
+        let moved = ui
+            .add_enabled_ui(to.is_some(), |ui| {
+                // Named for screen readers (and tests) by its label, as the Bookmarks pane's icons.
+                let r = crate::widgets::icon_button(ui, icon, tl!(label));
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, to.is_some(), tl!(label)));
+                r
+            })
+            .inner
+            .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
+        if moved.clicked() {
+            run(app, "labels.class.move", c.params(json!({"to": to})));
         }
-        let up = at.filter(|i| *i > 0).map(|i| i - 1);
-        let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
-        for (label, to) in [("Move Up", up), ("Move Down", down)] {
-            let moved = ui
-                .add_enabled(to.is_some(), egui::Button::new(tl!(label)))
-                .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
-            if moved.clicked() {
-                run(app, "labels.class.move", c.params(json!({"to": to})));
-            }
-        }
-        // Last and set apart: it is the one that deletes, and its name is close to Rename's.
-        ui.add_space(12.0);
-        if ui
-            .add_enabled(at.is_some(), egui::Button::new(tl!("Remove")))
-            .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."))
-            .clicked()
-        {
+    }
+    // At the far end and in red: it is the one that deletes, and its name is close to Rename's.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let remove = ui
+            .add_enabled(at.is_some(), egui::Button::new(RichText::new(tl!("Remove")).color(t.red)))
+            .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."));
+        if remove.clicked() {
             // Default chosen outright: a class added later by the removed one's name (an undo, a
             // script) isn't chosen again by the name left behind.
             if run(app, "labels.class.remove", c.params(json!({}))).is_some() {
@@ -262,10 +274,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             }
         }
     });
-    let mut visible = c.it.visible;
-    if ui.checkbox(&mut visible, tl!("Visible")).on_hover_text(tl!("A hidden class leaves its features unlabelled.")).changed() {
-        run(app, "labels.class.update", c.params(json!({"visible": visible})));
-    }
+    rename
 }
 
 /// The box the chosen class is renamed in: Enter (or clicking away) renames it, Escape leaves it as
@@ -1189,7 +1198,8 @@ mod tests {
         assert!(shown(&h, "Default"));
     }
 
-    /// New, Move Up, Rename and Remove each run their command once: one undo step each.
+    /// New, Move Up, Rename and Remove, under the header's chooser (#858), each run their command
+    /// once: one undo step each.
     #[test]
     fn classes_are_made_renamed_ordered_and_removed_from_the_pane() {
         let app = with_cities();
