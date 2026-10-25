@@ -167,9 +167,10 @@ first: a list such as `[{"field": "units", "rule": "sum"}, {"field": "name", "ru
 "delimiter": "; "}]` naming join fields. The rules are `first` (the default for fields without a
 rule), `last`, `sum` and `mean` (numeric fields), `min` and `max` (numbers or text), `count` (the
 matches with a value) and `join` (the values as text, separated by `delimiter`, `, ` by default).
-Every rule but `first` and `last` skips empty values. A target without matches gets empty values, except a `count` of 0. `mean` writes a decimal field, `count` a
-whole number and `join` text; a whole-number `sum` too large to hold is empty. For example, the
-total units permitted in each district:
+Every rule but `first` and `last` skips empty values. A target without matches gets empty
+values, except a `count` of 0. `mean` writes a decimal field, `count` a whole number and `join`
+text. The `sum` of a whole-number field adds its whole numbers, and is empty when too large to
+hold. For example, the total units permitted in each district:
 
 ```text
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
