@@ -648,16 +648,6 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             LayersView::DrawingOrder => {
                 let mut shown = std::collections::HashSet::new();
                 let mut rows: Vec<DropRow> = Vec::new();
-                // Reserve the insertion slot while idle too, so starting a drag never shifts rows.
-                let top = reorder.then(|| {
-                    let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-                    if egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some() {
-                        ui.painter().rect_filled(r.shrink2(vec2(4.0, 0.0)), CornerRadius::same(4), t.hover);
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, tl!("Drop at top"), regular(10.5), t.accent);
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tl!("Drop at top")));
-                    }
-                    r
-                });
                 // A layer group lists at its topmost layer (its layers are kept together); while
                 // filtering, when one of its layers or its own name matches.
                 for layer in
@@ -672,7 +662,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             layer_group_row(app, ui, group, &layers, scale, reorder, &mut rows, t);
                         }
                     } else {
-                        rows.push(layer_row(app, ui, layer, scale, reorder, t));
+                        let rect = layer_row(app, ui, layer, scale, reorder, t);
+                        rows.push(DropRow { id: layer.id, rect, group: None, header: false });
                     }
                 }
                 for group in &groups {
@@ -686,8 +677,8 @@ fn contents(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         layer_group_row(app, ui, group, &layers, scale, reorder, &mut rows, t);
                     }
                 }
-                if let Some(top) = top {
-                    layer_drop(app, ui, &rows, top, t);
+                if reorder {
+                    layer_drop(app, ui, &rows, t);
                 }
                 // Web tile layers (services, tile addresses) draw over the basemap and under the layers.
                 let mut n = rows.iter().filter(|r| r.group.is_none() && !r.header).count() + shown.len();
@@ -1202,7 +1193,7 @@ fn layer_group_row(
             egui::DragAndDrop::set_payload(ui.ctx(), DraggedLayer(group.id));
         }
         let dragging = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()).is_some_and(|d| d.0 == group.id);
-        rows.push(DropRow { id: group.id, rect: r, name_center_y: r.center().y, group: None, header: true });
+        rows.push(DropRow { id: group.id, rect: r, group: None, header: true });
         if resp.hovered() || dragging {
             ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
         }
@@ -1269,8 +1260,8 @@ fn layer_group_row(
         if group.expanded || filtering {
             ui.indent("children", |ui| {
                 for layer in children.iter().filter(|l| filter_shows(&q, &l.name) || filter_shows(&q, &group.name)) {
-                    let row = layer_row(app, ui, layer, scale, reorder, t);
-                    rows.push(DropRow { group: Some(group.id), ..row });
+                    let rect = layer_row(app, ui, layer, scale, reorder, t);
+                    rows.push(DropRow { id: layer.id, rect, group: Some(group.id), header: false });
                 }
             });
         }
@@ -1287,7 +1278,6 @@ struct DraggedLayer(u32);
 struct DropRow {
     id: u32,
     rect: Rect,
-    name_center_y: f32,
     group: Option<u32>,
     header: bool,
 }
@@ -1296,8 +1286,8 @@ struct DropRow {
 /// puts it there in one undo step. A layer dropped above one of a group's layers joins the group
 /// there, dropped elsewhere leaves its group, and dropped onto a group's row joins it at its end
 /// nearest the layer (`layer.group`); a group moves whole and only between groups (`group.move`). Released
-/// anywhere but over the rows or their top insertion slot, the drag does nothing.
-fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], top: Rect, t: &Tokens) {
+/// anywhere but over the rows, the drag does nothing.
+fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], t: &Tokens) {
     let Some(dragged) = egui::DragAndDrop::payload::<DraggedLayer>(ui.ctx()) else { return };
     let Some(from) = rows.iter().position(|r| r.id == dragged.0) else { return };
     let view = ui.clip_rect();
@@ -1312,34 +1302,20 @@ fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], top: Rect, t: &To
     }
     // Only the layer rows take a drop: not the map's name above them, the basemap or a table below.
     let (Some(first), Some(last)) = (rows.first(), rows.last()) else { return };
-    if !top.contains(pointer) && (pointer.y < first.rect.min.y || pointer.y > last.rect.max.y) {
+    if pointer.y < first.rect.min.y || pointer.y > last.rect.max.y {
         return;
     }
     let released = ui.input(|i| i.pointer.any_released());
     let m = app.session.map();
     let moving_group = m.group(dragged.0).is_some();
     let current = m.group_of(dragged.0).map(|g| g.id);
-    if top.contains(pointer) {
-        let already_top = m.layers.first().is_some_and(|l| match m.group(dragged.0) {
-            Some(g) => g.children.contains(&l.id),
-            None => current.is_none() && l.id == dragged.0,
-        });
-        if already_top {
-            return;
-        }
-        ui.painter().line_segment([pos2(top.min.x + 8.0, top.max.y), pos2(top.max.x - 8.0, top.max.y)], Stroke::new(2.0, t.accent));
-        if released {
-            if moving_group {
-                let _ = app.run("group.move", json!({"group": dragged.0, "to": 0}));
-            } else {
-                let before = m.layers.iter().find(|l| l.id != dragged.0).map(|l| l.id);
-                let _ = app.run("layer.group", json!({"layer": dragged.0, "group": null, "before": before}));
-            }
-        }
-        return;
-    }
-    // The topmost layer of a group, in drawing order.
-    let top_of = |g: u32| m.group(g).and_then(|g| m.layers.iter().find(|l| g.children.contains(&l.id)).map(|l| l.id));
+    // The topmost layer of a group, excluding the dragged layer itself. When its only child
+    // leaves, place it before the next layer instead of targeting itself.
+    let top_of = |g: u32| {
+        let group = m.group(g)?;
+        let start = m.layers.iter().position(|l| group.children.contains(&l.id))?;
+        m.layers.iter().skip(start).find(|l| l.id != dragged.0).map(|l| l.id)
+    };
     // Onto the middle of another group's row: into that group, at its end nearest the layer; onto
     // its own group's row, nothing.
     if !moving_group
@@ -1361,8 +1337,8 @@ fn layer_drop(app: &mut RustGisApp, ui: &Ui, rows: &[DropRow], top: Rect, t: &To
         }
         return;
     }
-    // The name row decides above or below; an expanded legend only extends the drop area.
-    let gap = rows.iter().position(|r| pointer.y < r.name_center_y).unwrap_or(rows.len());
+    // The entire block, including its expanded legend, has balanced above/below halves.
+    let gap = rows.iter().position(|r| pointer.y < r.rect.center().y).unwrap_or(rows.len());
     let below = rows.get(gap);
     // Above one of a group's layers is in that group; anywhere else, in none.
     let into = below.filter(|r| !r.header).and_then(|r| r.group);
@@ -1546,9 +1522,9 @@ impl RowName {
     }
 }
 
-/// A layer's drop row: its name's middle and the rectangle including its legend. With `reorder` off
+/// A layer's row and, expanded, its legend; returns the rectangle of both. With `reorder` off
 /// (the list is filtered or children are sorted by name) the row can't be dragged.
-fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: bool, t: &Tokens) -> DropRow {
+fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: bool, t: &Tokens) -> Rect {
     app.ui.layer_rows.push(l.id);
     let active = app.session.active_layer == Some(l.id);
     let picked = app.ui.layer_picked.contains(&l.id);
@@ -1731,13 +1707,7 @@ fn layer_row(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, scale: f64, reorder: 
             ui.painter().text(pos2(r.min.x + 100.0, r.center().y), Align2::LEFT_CENTER, &e.label, regular(11.5), t.text);
         }
     }
-    DropRow {
-        id: l.id,
-        rect: Rect::from_min_max(r.min, pos2(r.max.x, ui.min_rect().max.y.max(r.max.y))),
-        name_center_y: r.center().y,
-        group: None,
-        header: false,
-    }
+    Rect::from_min_max(r.min, pos2(r.max.x, ui.min_rect().max.y.max(r.max.y)))
 }
 
 /// Makes a group of layers from a menu, then asks for its name, as the default one says nothing.
@@ -5395,19 +5365,21 @@ mod tests {
         h.step();
     }
 
-    /// #836: the name's lower half means below, even with a tall legend; the legend
-    /// itself still accepts drops. Group membership and one-step undo follow the drop.
+    /// #836: both halves of the whole visible block accept drops, including multi-class
+    /// legends and the first/last layers. Group membership and one-step undo follow the drop.
     #[test]
-    fn expanded_legends_do_not_shift_layer_drop_boundaries() {
+    fn layer_drop_uses_whole_block_halves() {
         use egui_kittest::kittest::Queryable;
-        for at_end in [false, true] {
+        for position in [0, 2, 3] {
             for grouped in [false, true] {
-                for (expanded, offset) in [(false, -4.0), (false, 4.0), (true, -4.0), (true, 4.0), (true, 40.0)] {
+                for (expanded, fraction) in [(false, 0.25), (false, 0.75), (true, 0.25), (true, 0.49), (true, 0.51), (true, 0.75)] {
                     let mut app = RustGisApp::with_sample();
-                    let (cities, countries) = (layer(&app, "Cities"), layer(&app, "Countries"));
-                    if !at_end {
-                        app.run("layer.move", json!({"layer": countries, "to": 2})).unwrap();
+                    let source = if position == 0 { "Lakes" } else { "Cities" };
+                    let (moved, countries) = (layer(&app, source), layer(&app, "Countries"));
+                    if position != 3 {
+                        app.run("layer.move", json!({"layer": countries, "to": position})).unwrap();
                     }
+                    app.run("layer.symbology", json!({"layer": countries, "type": "unique", "field": "income_grp"})).unwrap();
                     app.session.map_mut().layer_mut(countries).unwrap().expanded = expanded;
                     if grouped {
                         app.run("group.add", json!({"layers": [countries], "name": "Base"})).unwrap();
@@ -5423,32 +5395,38 @@ mod tests {
                         app,
                     );
                     h.run_steps(6);
-                    let from = h.get_by_label("Cities").rect().center();
-                    let name = h.get_by_label("Countries").rect();
-                    let to = name.center() + vec2(0.0, offset);
+                    let from = h.get_by_label(source).rect().center();
+                    let mut block = h.get_by_label("Countries").rect();
+                    if expanded {
+                        let legend = h.state().session.map().layer(countries).unwrap().shown_legend(h.state().session.scale()).unwrap();
+                        for entry in legend {
+                            block.max.y = block.max.y.max(h.get_by_label(&entry.label).rect().max.y);
+                        }
+                    }
+                    let to = pos2(block.center().x, block.min.y + block.height() * fraction);
                     drag_layer(&mut h, from, to);
-                    let mut expected: Vec<_> = original.iter().copied().filter(|id| *id != cities).collect();
-                    let target = expected.iter().position(|id| *id == countries).unwrap() + usize::from(offset > 0.0);
-                    expected.insert(target, cities);
+                    let mut expected: Vec<_> = original.iter().copied().filter(|id| *id != moved).collect();
+                    let target = expected.iter().position(|id| *id == countries).unwrap() + usize::from(fraction >= 0.5);
+                    expected.insert(target, moved);
                     let map = h.state().session.map();
                     assert_eq!(
                         map.layers.iter().map(|l| l.id).collect::<Vec<_>>(),
                         expected,
-                        "at_end={at_end}, grouped={grouped}, expanded={expanded}, offset={offset}"
+                        "position={position}, grouped={grouped}, expanded={expanded}, fraction={fraction}"
                     );
-                    assert_eq!(map.group_of(cities).is_some(), grouped && offset < 0.0);
+                    assert_eq!(map.group_of(moved).is_some(), grouped && fraction < 0.5);
                     assert_eq!(h.state().session.undo_depth(), undo + 1);
                     h.state_mut().run("edit.undo", Value::Null).unwrap();
                     assert_eq!(h.state().session.map().layers.iter().map(|l| l.id).collect::<Vec<_>>(), original);
-                    assert!(h.state().session.map().group_of(cities).is_none());
+                    assert!(h.state().session.map().group_of(moved).is_none());
                 }
             }
         }
     }
 
-    /// The top slot moves layers out of groups and moves whole groups without splitting them.
+    /// The first visible row's upper half moves layers out of groups and moves groups whole.
     #[test]
-    fn layers_and_groups_drop_in_the_top_insertion_slot() {
+    fn layers_and_groups_drop_above_the_first_row() {
         use egui_kittest::kittest::Queryable;
         for case in 0..4 {
             let mut app = RustGisApp::with_sample();
@@ -5478,7 +5456,7 @@ mod tests {
             h.run_steps(6);
             let from = h.get_by_label(source).rect().center();
             let first = h.get_by_label(if case == 1 || case == 3 { "Base" } else { "Cities" }).rect();
-            let to = pos2(first.center().x, first.min.y - 12.0);
+            let to = pos2(first.center().x, first.min.y + first.height() * 0.125);
             drag_layer(&mut h, from, to);
             let expected: Vec<_> = original
                 .iter()
