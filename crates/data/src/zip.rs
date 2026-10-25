@@ -1,7 +1,7 @@
 //! Zip archives (Deflate or stored): packages bundle a project or map with its data files.
 
-/// Most entries read from an archive.
-const MAX_ENTRIES: usize = 10_000;
+/// Most entries read from an archive (plain zip holds at most 65,535; ZIP64 isn't read).
+const MAX_ENTRIES: usize = 65_535;
 /// Largest entry inflated (1 GiB).
 const MAX_ENTRY: usize = 1 << 30;
 /// Most bytes inflated from one archive, all entries together (less in the browser).
@@ -140,6 +140,7 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         }
         let at = |off: usize| add(&[p, off]).ok_or_else(bad);
         let method = u16_at(bytes, at(10)?).ok_or_else(bad)?;
+        let flags = u16_at(bytes, at(8)?).ok_or_else(bad)?;
         let crc = u32_at(bytes, at(16)?).ok_or_else(bad)?;
         let csize = u32_at(bytes, at(20)?).ok_or_else(bad)?;
         let usize_ = u32_at(bytes, at(24)?).ok_or_else(bad)?;
@@ -150,6 +151,13 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         p = add(&[p, 46, nl, xl, cl]).ok_or_else(bad)?;
         if name.ends_with('/') || !want(&name) {
             continue;
+        }
+        // Say what's wrong first: an encrypted entry or a ZIP64 one isn't damaged data.
+        if flags & 1 != 0 {
+            return Err(format!("{name} is encrypted; its contents can't be read"));
+        }
+        if csize == 0xFFFF_FFFF || usize_ == 0xFFFF_FFFF || local == 0xFFFF_FFFF {
+            return Err("the archive uses ZIP64, which can't be read yet".into());
         }
         let lnl = u16_at(bytes, add(&[local, 26]).ok_or_else(bad)?).ok_or_else(bad)?;
         let lxl = u16_at(bytes, add(&[local, 28]).ok_or_else(bad)?).ok_or_else(bad)?;
@@ -206,5 +214,33 @@ mod tests {
         let eocd = far.len() - 22;
         far[eocd + 16..eocd + 20].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(read(&far).is_err());
+    }
+
+    #[test]
+    fn encrypted_and_zip64_entries_say_what_they_are() {
+        assert_eq!(MAX_ENTRIES, u16::MAX as usize, "plain zip's own entry limit");
+        let z = write(&[("a.txt".to_string(), b"hi".to_vec())]).unwrap();
+        // The central directory starts where the end-of-central-directory record says, and each
+        // entry's header holds the general-purpose flags at +8, sizes at +20/+24 and its local
+        // header's offset at +42.
+        let central = |z: &[u8]| {
+            let e = z.len() - 22;
+            u32::from_le_bytes(z[e + 16..e + 20].try_into().unwrap()) as usize
+        };
+        let mut encrypted = z.clone();
+        let fl = central(&encrypted) + 8;
+        let f0 = u16::from_le_bytes(encrypted[fl..fl + 2].try_into().unwrap());
+        encrypted[fl..fl + 2].copy_from_slice(&(f0 | 1).to_le_bytes());
+        assert!(read(&encrypted).err().is_some_and(|e| e.contains("encrypted")));
+
+        let mut zip64 = z.clone();
+        let p = central(&zip64);
+        zip64[p + 24..p + 28].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read(&zip64).err().is_some_and(|e| e.contains("ZIP64")));
+
+        let mut offset64 = z.clone();
+        let p = central(&offset64);
+        offset64[p + 42..p + 46].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(read(&offset64).err().is_some_and(|e| e.contains("ZIP64")));
     }
 }

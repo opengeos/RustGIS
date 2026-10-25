@@ -88,7 +88,8 @@ impl<B: AsRef<[u8]>> Db<B> {
             return Err(bad("a page number past the end of the file"));
         }
         let start = (n as usize - 1).checked_mul(self.page_size).ok_or_else(|| bad("page offset"))?;
-        self.bytes.as_ref().get(start..start + self.page_size).ok_or_else(|| bad("a truncated page"))
+        let end = start.checked_add(self.page_size).ok_or_else(|| bad("page offset"))?;
+        self.bytes.as_ref().get(start..end).ok_or_else(|| bad("a truncated page"))
     }
 
     /// Calls `f` with the rowid and values of every row of the table b-tree rooted at `root`, in
