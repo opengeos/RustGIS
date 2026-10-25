@@ -570,6 +570,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
     let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
     let url = prepared.url.as_str();
+    // An ArcGIS sign-in's token, for the portal and the servers it covers (ArcGIS allows the
+    // header across origins).
+    let arcgis =
+        if prepared.signed { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::arcgis_auth::authorization(url) };
     let asked = match (range, tail) {
         (Some((a, b)), _) => Some(format!("bytes={a}-{b}")),
         (None, Some(n)) => Some(format!("bytes=-{n}")),
@@ -582,7 +586,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         init.set_signal(Some(&a.signal()));
     }
     let stalled = || format!("nothing came in {} seconds", STALL_MS / 1000);
-    if asked.is_some() || !prepared.headers.is_empty() {
+    if asked.is_some() || !prepared.headers.is_empty() || arcgis.is_some() {
         let headers = web_sys::Headers::new().map_err(err)?;
         if let Some(r) = &asked {
             headers.set("Range", r).map_err(err)?;
@@ -590,9 +594,12 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         for (k, v) in &prepared.headers {
             headers.set(k, v).map_err(err)?;
         }
+        if let Some(auth) = &arcgis {
+            headers.set("X-Esri-Authorization", auth).map_err(err)?;
+        }
         init.set_headers(&headers);
-        // A signed request goes only where its credentials are for.
-        if prepared.signed {
+        // A signed or authorized request goes only where its credentials are for.
+        if prepared.signed || arcgis.is_some() {
             init.set_redirect(web_sys::RequestRedirect::Error);
         }
     }

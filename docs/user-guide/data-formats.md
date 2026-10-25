@@ -198,6 +198,32 @@ and the same documents to `service.add` to distinguish layers with the same name
 follows at most four documents and rejects loops and disallowed addresses. Collection lists
 aren't paged. On the desktop, feature downloads follow their `next` pages (see the table above).
 
+### Secured ArcGIS services
+
+A secured ArcGIS service answers error 499, "Token Required". There are two ways in:
+
+- **Sign in to ArcGIS** (in Add From Service, shown for ArcGIS addresses; `arcgis.signIn`) signs in
+  to an ArcGIS Online organization (`https://myorg.maps.arcgis.com`) or an ArcGIS Enterprise portal
+  (`https://gis.example.org/portal`) on the portal's own page in the browser, with its single
+  sign-on and multi-factor checks: RustGIS never sees the password. It uses OAuth 2.0 with PKCE and
+  needs the client ID of an app registered on the portal (**Content › New item › Developer
+  credentials › OAuth 2.0 credentials**) whose redirect URLs list
+  `http://127.0.0.1:7290/arcgis/callback` exactly (ArcGIS accepts no other port or path; give
+  `"port"` to `arcgis.signIn` for another port, and register that address). The portal and client
+  ID are remembered; the session is not. Desktop and command line only.
+- **A token with the address**: a service address given with `?token=…` (from the portal, or
+  `arcgis.token` with `"url"` and `"token"`) keeps the token for that ArcGIS Server and takes it
+  out of the address the layer keeps. Works in the browser too.
+
+A token is sent, in the `X-Esri-Authorization` header, only where its session reaches: the portal
+and, for ArcGIS Online, the organization's own hosted services (`services*.arcgis.com/<org id>/…`,
+`tiles.arcgis.com/tiles/<org id>/…`), or, for ArcGIS Enterprise, the portal's host and its
+federated servers; a token given with an address goes to that server alone. Its layers, tiles and
+feature pages are then read with it. Tokens live in memory for the session, never in a project or
+a connection, and a sign-in renews itself until the portal's session ends (two weeks at most).
+**Sign out** (`arcgis.signOut`) forgets it and revokes it with the portal; `arcgis.status` lists
+the sessions.
+
 ### Catalogues
 
 The same dialog's **Catalogue search (CSW)** type searches a CSW 2.0.2 catalogue (GeoNetwork,

@@ -11,6 +11,7 @@ pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 mod agentthreads;
 mod analysispane;
+mod arcgisui;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
@@ -611,6 +612,8 @@ pub struct UiState {
     pub embeddings: embeddingsui::State,
     /// NASA Earthaccess: the dataset, the granules found and the request under way.
     pub earthaccess: earthaccessui::State,
+    /// Add From Service › Sign in to ArcGIS.
+    pub arcgis: arcgisui::State,
     /// USGS NLDI: the point traced, its COMID, the navigation and the request under way.
     pub nldi: nldiui::State,
     /// Find Place searches and Geocode Addresses runs under way.
@@ -743,6 +746,7 @@ impl Default for UiState {
             opendata: Default::default(),
             embeddings: Default::default(),
             earthaccess: Default::default(),
+            arcgis: Default::default(),
             nldi: Default::default(),
             geocode: Default::default(),
             nav: Default::default(),

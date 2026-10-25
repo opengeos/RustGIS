@@ -1159,6 +1159,13 @@ mod native {
             {
                 req = req.header("Authorization", &auth);
             }
+            // An ArcGIS sign-in's token goes to the portal and the servers it covers, asked for at
+            // each hop like Earthdata's.
+            if !prepared.signed
+                && let Some(auth) = crate::arcgis_auth::authorization_fresh(&at)
+            {
+                req = req.header("X-Esri-Authorization", &auth);
+            }
             // An error status is answered, not failed: its headers and body say who refused.
             let mut resp = req.config().http_status_as_error(false).build().call().map_err(unanswered)?;
             let status = resp.status().as_u16();

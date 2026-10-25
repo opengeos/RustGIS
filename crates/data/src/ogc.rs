@@ -301,10 +301,16 @@ pub fn parse(url: &str, body: &[u8]) -> Result<Service, String> {
     if text.starts_with('{') || text.starts_with('[') {
         let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("the service's JSON: {e}"))?;
         if let Some(e) = v.get("error") {
-            return Err(format!(
-                "the service answered with an error: {}",
-                e.get("message").and_then(|m| m.as_str()).unwrap_or("(no message)")
-            ));
+            let message = e.get("message").and_then(|m| m.as_str()).unwrap_or("(no message)");
+            // ArcGIS's "Token Required" (499) and "Invalid Token" (498): say how to sign in.
+            let hint = match e.get("code").and_then(serde_json::Value::as_i64) {
+                Some(499) => {
+                    " (the service is secured: sign in to its ArcGIS portal with Sign in to ArcGIS or arcgis.signIn, or add its address with ?token=…)"
+                }
+                Some(498) => " (the ArcGIS token was refused, perhaps expired: sign in to the portal again)",
+                _ => "",
+            };
+            return Err(format!("the service answered with an error: {message}{hint}"));
         }
         if is_arcgis(url) || v.get("currentVersion").is_some() {
             return arcgis(url, &v);
@@ -2237,6 +2243,10 @@ mod tests {
                 .unwrap_err()
                 .contains("Token Required")
         );
+        // A secured service's refusal says how to sign in.
+        let e = parse("https://x.org/arcgis/rest/services/A/FeatureServer", br#"{"error": {"code": 499, "message": "Token Required"}}"#)
+            .unwrap_err();
+        assert!(e.contains("arcgis.signIn"), "{e}");
     }
 
     #[test]
