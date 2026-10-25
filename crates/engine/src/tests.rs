@@ -624,6 +624,35 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
 }
 
 #[test]
+fn a_qgis_project_in_degrees_opens_in_equirectangular() {
+    // QGIS draws a project in degrees as plate carrée, longitude and latitude as x and y.
+    let qgs = |crs: &str| {
+        format!(
+            r#"<qgis version="3.10.0"><title>World</title><projectCrs><spatialrefsys><authid>{crs}</authid></spatialrefsys></projectCrs>
+  <mapcanvas name="theMapCanvas"><extent><xmin>5</xmin><ymin>45</ymin><xmax>15</xmax><ymax>50</ymax></extent></mapcanvas><projectlayers/></qgis>"#
+        )
+    };
+    let mut s = world();
+    for (crs, datum_note) in [("EPSG:4326", false), ("EPSG:4258", false), ("OGC:CRS84", false), ("EPSG:4314", true)] {
+        let out = s.run("project.importQgis", &json!({"text": qgs(crs)})).unwrap();
+        assert_eq!(s.map().projection.code(), "equirectangular", "{crs}");
+        let text = serde_json::to_string(&out["notes"]).unwrap();
+        assert!(!text.contains("Web Mercator"), "{crs}: {text}");
+        assert_eq!(text.contains("drawn in Equirectangular on WGS 84"), datum_note, "{crs}: {text}");
+        // The saved view, read in degrees.
+        let c = s.map().to_lonlat(s.map().camera.center).unwrap();
+        assert!((c.x - 10.0).abs() < 0.5 && (c.y - 47.5).abs() < 0.5, "{crs}: {c:?}");
+    }
+    // Longitudes from Paris (in grads): drawn the same way, the view left to the data.
+    let out = s.run("project.importQgis", &json!({"text": qgs("EPSG:4807")})).unwrap();
+    assert_eq!(s.map().projection.code(), "equirectangular");
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("on WGS 84"));
+    // A projected one keeps its own projection.
+    s.run("project.importQgis", &json!({"text": qgs("EPSG:2056").replace("<xmin>5</xmin>", "<xmin>2600000</xmin>")})).unwrap();
+    assert_eq!(s.map().projection.code(), "EPSG:2056");
+}
+
+#[test]
 fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let dir = std::env::temp_dir().join(format!("rustgis-qgis-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("data")).unwrap();

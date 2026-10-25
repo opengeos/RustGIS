@@ -84,13 +84,20 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let m = s.map_mut();
     m.basemap = rustgis_map::Basemap::Blank;
     m.graticule = false;
+    let degrees = project.crs.as_deref().and_then(Geographic::of);
     if let Some(crs) = &project.crs {
         let code = match crs.as_str() {
             "EPSG:3857" | "EPSG:900913" => "mercator",
+            // QGIS draws a project in degrees as plate carrée: longitude and latitude as x and y.
+            _ if degrees.is_some() => "equirectangular",
             other => other,
         };
-        if let Err(e) = s.run_part("map.projection", &json!({"type": code})) {
-            report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator"));
+        match s.run_part("map.projection", &json!({"type": code})) {
+            Err(e) => report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator")),
+            Ok(_) if degrees.is_some_and(|g| !g.wgs84) => {
+                report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84"));
+            }
+            Ok(_) => {}
         }
     }
     // Bottom first, so each is added on top of the ones below it.
@@ -102,7 +109,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             Err(e) => report.skipped(&layer.name, format!("the layer: {e}")),
         }
     }
-    go_to_view(s, &project);
+    go_to_view(s, &project, degrees);
     let notes: Vec<Value> = report.notes.iter().map(note_json).collect();
     if !report.notes.is_empty() {
         let left = report.notes.iter().filter(|n| n.kind == NoteKind::Skipped).count();
@@ -309,12 +316,21 @@ pub(crate) fn web_settings(s: &mut Session, added: &Value, before: Option<u32>, 
 }
 
 /// Goes to the project's saved view, or to its layers when that view shows none of them.
-fn go_to_view(s: &mut Session, project: &qgis::Project) {
+fn go_to_view(s: &mut Session, project: &qgis::Project, degrees: Option<Geographic>) {
     let data = s.map().full_extent();
-    let saved = project.extent.and_then(|[x0, y0, x1, y1]| {
-        let m = s.map();
-        let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| m.to_lonlat(Coord::new(x, y)));
-        corners.iter().flatten().fold(None, |e: Option<Extent>, c| Some(e.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y))))
+    let saved = project.extent.and_then(|[x0, y0, x1, y1]| match degrees {
+        // In degrees already (from Greenwich: the view of a project on another prime meridian
+        // is left to its data).
+        Some(g) if g.greenwich => Some(Extent::new(x0.max(-180.0), y0.max(-90.0), x1.min(180.0), y1.min(90.0))).filter(|e| !e.is_empty()),
+        Some(_) => None,
+        None => {
+            let m = s.map();
+            let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| m.to_lonlat(Coord::new(x, y)));
+            corners
+                .iter()
+                .flatten()
+                .fold(None, |e: Option<Extent>, c| Some(e.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y))))
+        }
     });
     let target = match saved {
         Some(e) if !e.is_empty() && (data.is_empty() || e.intersects(&data)) => e,
@@ -322,6 +338,31 @@ fn go_to_view(s: &mut Session, project: &qgis::Project) {
     };
     if !target.is_empty() {
         s.zoom_to(&target);
+    }
+}
+
+/// A coordinate system in degrees (EPSG:4326, ETRS89, NAD83, …), which QGIS draws as plate carrée.
+#[derive(Clone, Copy, Debug)]
+struct Geographic {
+    /// On WGS 84, or a datum PROJ takes as the same (no shift to WGS 84).
+    wgs84: bool,
+    /// Longitudes from Greenwich (not from another prime meridian, such as Paris's).
+    greenwich: bool,
+}
+
+impl Geographic {
+    /// `None` for a coordinate system that isn't in degrees, or isn't known.
+    fn of(crs: &str) -> Option<Geographic> {
+        if crs.eq_ignore_ascii_case("OGC:CRS84") {
+            return Some(Geographic { wgs84: true, greenwich: true });
+        }
+        let code = crs.strip_prefix("EPSG:")?.trim().parse::<u16>().ok()?;
+        let def = rustgis_data::raster::crs::epsg_proj4(code)?;
+        let has = |p: &str| def.split_whitespace().any(|t| t == p);
+        has("+proj=longlat").then(|| Geographic {
+            wgs84: has("+datum=WGS84") || has("+datum=NAD83") || has("+towgs84=0,0,0,0,0,0,0") || has("+towgs84=0,0,0"),
+            greenwich: !def.contains("+pm=") || has("+pm=greenwich") || has("+pm=0"),
+        })
     }
 }
 
