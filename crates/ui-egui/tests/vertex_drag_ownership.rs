@@ -121,6 +121,7 @@ fn undo_during_drag_rejects_queued_release() {
     assert_eq!(h.state().session.undo_depth(), 0);
     assert!(h.state().session.can_redo());
 }
+
 /// Redo replaces rows too; the pending release must preserve the redone geometry and history.
 #[test]
 fn redo_during_drag_rejects_queued_release() {
@@ -163,6 +164,31 @@ fn activating_cloned_map_rejects_queued_release() {
     assert_eq!(first(&h), c(0., 0.));
     assert_eq!(h.state().session.undo_depth(), 0);
     assert!(h.state().map.vertex_drag.is_none());
+}
+
+/// Renaming in place cancels movement and insertion even when rows, map slot, project and
+/// history are unchanged; the queued release must preserve the whole source geometry.
+#[test]
+fn renaming_active_map_rejects_queued_release() {
+    for insert in [false, true] {
+        let mut h = harness();
+        let rows = h.state().session.map().layers[0].dataset.features.allocation_key();
+        let map = h.state().session.project.active_map;
+        let project = h.state().session.opened;
+        let before = h.state().session.map().layers[0].dataset.features[0].geometry.clone();
+        let to = drag(&mut h, insert);
+        // Isolate the rename-only branch rather than introducing a row edit or an undo step.
+        h.state_mut().session.map_mut().name = "Renamed".into();
+        assert!(rows.ptr_eq(&h.state().session.map().layers[0].dataset.features.allocation_key()));
+        assert_eq!(h.state().session.project.active_map, map);
+        assert_eq!(h.state().session.opened, project);
+        h.step();
+        assert!(h.state().map.vertex_drag.is_none());
+        assert!(h.state().map.vertex.is_none());
+        release(&mut h, to);
+        assert_eq!(h.state().session.map().layers[0].dataset.features[0].geometry, before);
+        assert_eq!(h.state().session.undo_depth(), 0);
+    }
 }
 
 /// Deleting the original map can replace its slot with a clone sharing the same source allocation.

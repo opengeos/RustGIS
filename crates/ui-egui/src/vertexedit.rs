@@ -212,6 +212,7 @@ pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
 /// Letting go commits a still-owned move or insertion as one edit. A queued release after a
 /// source/context change is discarded, preserving the current geometry and undo/redo history.
 pub fn drag_stop(app: &mut RustGisApp) {
+    // Cancellation also drops the pending Vertex pointer action, swallowing a stale release.
     cancel_stale_drag(app);
     let Some(d) = app.map.vertex_drag.take() else { return };
     app.map.vertex_drag_owner = None;
