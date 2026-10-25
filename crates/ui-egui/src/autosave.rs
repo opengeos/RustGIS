@@ -134,6 +134,11 @@ pub(crate) fn load(app: &mut RustGisApp) {
     next_offer(app);
 }
 
+/// How many copies wait to be offered, the one offered now included.
+fn waiting(app: &RustGisApp) -> usize {
+    app.autosave.offer.as_ref().map_or(0, |_| app.autosave.more + 1)
+}
+
 /// Offers the next copy waiting in the store, if any.
 fn next_offer(app: &mut RustGisApp) {
     let store = app.services.recovery.as_ref();
@@ -196,6 +201,9 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
         ctx.request_repaint_after(interval - since);
         return;
     }
+    // Cheap: layers' features (`Features`), raster pixels and embedded bytes are `Arc`s shared
+    // with the copy, as they are with the undo snapshot every edit already takes; only the
+    // project's own settings are copied here. Serializing and writing happen on the store's thread.
     store.write(app.session.project.clone(), about(app));
     app.autosave.written = Some(app.session.revision);
     app.autosave.failed = false;
@@ -245,7 +253,7 @@ pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
     if discard {
         store.discard_pending();
         next_offer(app);
-        return Ok(json!({"discarded": true, "waiting": app.autosave.offer.as_ref().map(|_| app.autosave.more + 1).unwrap_or(0)}));
+        return Ok(json!({"discarded": true, "waiting": waiting(app)}));
     }
     // Opening it replaces the open project: never one with work of its own not saved (after
     // Later), which it would lose with its recovery copy.
@@ -266,7 +274,7 @@ pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
     let text = crate::i18n::fmt("Recovered unsaved work in {name}. Save to keep it.", &[("name", &app.session.project.name)]);
     app.session.notify(text, false);
     // Other copies wait for the next start: recovering one now would replace this work.
-    let waiting = app.autosave.offer.as_ref().map(|_| app.autosave.more + 1).unwrap_or(0);
+    let waiting = waiting(app);
     if waiting > 0 {
         app.autosave.later = true;
         let text =
@@ -536,9 +544,19 @@ mod folder {
         Recovery { time, ..Recovery::default() }
     }
 
-    /// The background thread: does what it is asked in order. A write followed by another is
-    /// skipped: only the latest copy matters.
+    /// How the background thread writes a copy (a test can make one fail).
+    type WriteCopy = fn(&Path, Project, &Recovery) -> Result<(), String>;
+
+    /// The background thread: does what it is asked in order, writing copies with [`write`].
     fn work(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>, wake: &Wake) {
+        work_with(dir, rx, error, wake, write);
+    }
+
+    /// [`work`] with its writer. A write followed by another is skipped, as only the latest copy
+    /// matters, but kept until the next one is done: if that one fails (a project grown past the
+    /// size a copy may have), the skipped one is written instead, before any later job, so the
+    /// folder holds the newest copy that could be written.
+    fn work_with(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>, wake: &Wake, write: WriteCopy) {
         let fail = |e: String| {
             log::warn!("autosave: {e}");
             *error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
@@ -547,12 +565,16 @@ mod folder {
             }
         };
         let mut next = rx.recv().ok();
+        let mut skipped: Option<(Box<Project>, Recovery)> = None;
         while let Some(job) = next.take() {
             if let Job::Write(..) = job
                 && let Ok(later) = rx.try_recv()
             {
                 match later {
                     Job::Write(..) => {
+                        if let Job::Write(project, about) = job {
+                            skipped = Some((project, about));
+                        }
                         next = Some(later);
                         continue;
                     }
@@ -561,7 +583,13 @@ mod folder {
             }
             match job {
                 Job::Write(project, about) => {
+                    let earlier = skipped.take();
                     if let Err(e) = write(dir, *project, &about) {
+                        if let Some((project, about)) = earlier
+                            && let Err(again) = write(dir, *project, &about)
+                        {
+                            log::warn!("autosave: the copy before it failed too: {again}");
+                        }
                         fail(e);
                     }
                 }
@@ -669,6 +697,55 @@ mod folder {
         /// Kept for the background thread, which calls it after each failure.
         fn set_wake(&self, wake: Box<dyn Fn() + Send + Sync>) {
             *self.wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod tests {
+        use std::sync::mpsc::channel;
+        use std::sync::{Arc, Mutex};
+
+        use rustgis_engine::Project;
+
+        use super::{Job, LIVE, Recovery, work_with};
+
+        /// Writes copies as the store does, except a project named "newer", which is refused
+        /// as too large.
+        fn newer_fails(dir: &std::path::Path, project: Project, about: &Recovery) -> Result<(), String> {
+            if project.name == "newer" {
+                return Err("the project is too large to keep a recovery copy".into());
+            }
+            super::write(dir, project, about)
+        }
+
+        /// The jobs given, in order, done by the background thread's loop with [`newer_fails`]:
+        /// what the folder holds then, and the error told.
+        fn run(dir: &std::path::Path, jobs: Vec<Job>) -> (Option<String>, Option<String>) {
+            let (tx, rx) = channel();
+            for job in jobs {
+                tx.send(job).unwrap();
+            }
+            drop(tx);
+            let error = Mutex::new(None);
+            work_with(dir, &rx, &error, &Arc::default(), newer_fails);
+            (std::fs::read_to_string(dir.join(LIVE)).ok(), error.into_inner().unwrap())
+        }
+
+        /// A skipped copy is written when the newer one that replaced it fails (#896 review), and
+        /// still in order: a removal queued after both removes it.
+        #[test]
+        fn a_skipped_copy_stands_in_for_a_newer_one_that_failed() {
+            let dir = std::env::temp_dir().join(format!("rustgis-autosave-skip-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let copy = |name: &str| Job::Write(Box::new(Project::new(name)), Recovery { name: name.into(), ..Recovery::default() });
+            let (held, error) = run(&dir, vec![copy("older"), copy("newer")]);
+            assert!(held.unwrap().contains("\"older\""), "the skipped copy is kept");
+            assert!(error.unwrap().contains("too large"), "the newer one's failure is told");
+            let (held, _) = run(&dir, vec![copy("older"), copy("newer"), Job::Clear]);
+            assert!(held.is_none(), "removed after, as asked");
+            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 }
