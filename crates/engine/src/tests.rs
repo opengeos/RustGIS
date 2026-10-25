@@ -975,6 +975,11 @@ fn a_qgis_raster_style_colours_a_raster() {
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("band 5 of a raster with 3"), "{out}");
     let l = s.map().layer_by_name("scene").unwrap();
     assert_eq!((&l.raster.as_ref().unwrap().style, l.transparency), (&before, 50.0));
+    // Pixels not there yet (a remote raster still loading): applied, and noted as unchecked.
+    let id = s.map().layer_by_name("scene").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = None;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("before the raster's bands could be checked"), "{out}");
 }
 
 /// The parts of a large GeoTIFF the web app reads (#140), opened and kept in a project: a

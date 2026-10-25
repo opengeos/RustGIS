@@ -334,6 +334,14 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
         if let Some(why) = l.raster.as_ref().and_then(|r| style.raster_misfit(r)) {
             report.skipped(&name, why);
         } else {
+            // Pixels still on their way (a remote raster) can't be checked: the style is applied,
+            // and a band it reads that the file hasn't is drawn from the file's last band.
+            if style.raster.is_some() && l.raster.as_ref().is_some_and(|r| r.data.is_none()) {
+                report.approximated(
+                    &name,
+                    "its raster colouring, applied before the raster's bands could be checked (a band the file hasn't is drawn from its last)",
+                );
+            }
             if style.raster.is_none() && style.renderer.is_some() {
                 report.skipped(
                     &name,
