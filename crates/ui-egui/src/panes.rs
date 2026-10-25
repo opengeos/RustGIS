@@ -1420,16 +1420,27 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
     x += 22.0;
     icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 9.0, cy), vec2(18.0, 16.0)), "basemap", t.icon, t.accent);
     x += 24.0;
-    // Greyed when it draws nothing: hidden, transparent, or a data cube tile with no file at the
+    // Unavailable archives are red; otherwise grey when hidden, transparent, or outside the
     // slider's step (the box still shows the choice to show it).
-    let color = if tile.draws() && tile.opacity > 0.0 { t.text } else { t.text_disabled };
+    let color = if tile.error.is_some() {
+        t.red
+    } else if tile.draws() && tile.opacity > 0.0 {
+        t.text
+    } else {
+        t.text_disabled
+    };
     let elided = name.elided;
     name.paint(ui, r, x, color);
     let mut action: Option<(&str, Value)> = None;
     if cb_resp.clicked() {
         action = Some(("map.setTiles", json!({"index": i, "visible": !tile.visible})));
     }
-    let resp = resp.on_hover_text(if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() });
+    let mut hover = if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() };
+    if let Some(error) = &tile.error {
+        hover.push('\n');
+        hover.push_str(error);
+    }
+    let resp = resp.on_hover_text(hover);
     resp.context_menu(|ui| {
         // Stored bounds, an archive or GeoTIFF say what the layer covers.
         if tile.bounds.is_some() || matches!(tile.kind, TileKind::PmTiles | TileKind::Cog) {
@@ -1464,6 +1475,10 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, count: usize, reorder: 
         }
         if ui.add_enabled(reorder && i + 1 < count, egui::Button::new(tl!("Move down"))).clicked() {
             action = Some(("map.setTiles", json!({"index": i, "move": "down"})));
+            ui.close();
+        }
+        if tile.archive_file().is_some() && ui.button(tl!("Repair Data Source…")).clicked() {
+            action = Some(("ui.dialog", json!({"name": "repairTiles", "index": i})));
             ui.close();
         }
         if ui.button(tl!("Remove")).clicked() {
@@ -1875,6 +1890,10 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {
         let _ = app.run("layer.loadAll", json!({"layer": l.id}));
+        ui.close();
+    }
+    if l.linked_file().is_some() && ui.button(tl!("Repair Data Source…")).clicked() {
+        let _ = app.run("ui.dialog", json!({"name": "repairSource", "layer": l.id}));
         ui.close();
     }
     ui.separator();

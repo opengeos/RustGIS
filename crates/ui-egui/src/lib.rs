@@ -55,6 +55,7 @@ mod pluginsui;
 mod portalsui;
 #[cfg(not(target_arch = "wasm32"))]
 mod relayshot;
+mod repairsource;
 mod reportpane;
 mod ribbon;
 mod s3ui;
@@ -1318,7 +1319,7 @@ impl RustGisApp {
         // Not an undoable edit: saving names the project, as `project.saveAs` does, once the
         // file is written.
         let old = std::mem::replace(&mut self.session.project.name, stem.clone());
-        let (text, stripped) = match self.session.project.saved_text() {
+        let (text, stripped) = match self.session.project.saved_text(None) {
             Ok(saved) => saved,
             Err(e) => {
                 self.session.project.name = old;
@@ -3006,6 +3007,38 @@ impl RustGisApp {
                     self.dialogs = dialogs::Dialogs { open: Some("calculateGeometry"), geometry: Some(form), ..Default::default() };
                     return Ok(Value::Null);
                 }
+                if matches!(which, "repairSource" | "repairTiles") {
+                    let form = (|| {
+                        let target = if which == "repairSource" {
+                            repairsource::Target::Layer(self.session.layer_id(p)?)
+                        } else {
+                            let tiles = &self.session.map().tiles;
+                            let index = if let Some(index) = p.get("index") {
+                                index
+                                    .as_u64()
+                                    .and_then(|i| usize::try_from(i).ok())
+                                    .ok_or_else(|| tl!("Give a valid tile archive index.").to_string())?
+                            } else {
+                                tiles
+                                    .iter()
+                                    .position(|t| t.archive_file().is_some() && t.error.is_some())
+                                    .or_else(|| tiles.iter().position(|t| t.archive_file().is_some()))
+                                    .ok_or_else(|| tl!("The map has no tile archive read from a file.").to_string())?
+                            };
+                            repairsource::Target::Tiles(index)
+                        };
+                        repairsource::Form::new(&self.session, target)
+                    })();
+                    let form = match form {
+                        Ok(form) => form,
+                        Err(e) => {
+                            self.session.notify(e.clone(), true);
+                            return Err(e);
+                        }
+                    };
+                    self.dialogs = dialogs::Dialogs { open: Some("repairSource"), repair: Some(form), ..Default::default() };
+                    return Ok(Value::Null);
+                }
                 // A Web Data service opens in the right pane, beside the map it searches.
                 if let Some(name) = panes::web_data_name(which) {
                     // A Web Data panel opened on a search.
@@ -3686,6 +3719,7 @@ const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
     "select.layerFromSelection",
     "data.similar",
     "layer.geocode",
+    "layer.repairSource",
     "report.new",
     "report.open",
     "share.webLayer",

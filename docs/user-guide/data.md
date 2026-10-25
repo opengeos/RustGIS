@@ -764,7 +764,7 @@ of another layer's stretch as fixed bounds, so the tiles match; `{"type": "custo
 "max": …}` sets the bounds yourself.
 
 Clicking a raster with the Explore tool shows its pixel values. Projects remember a raster's file
-path and reopen it; rasters added in the browser are stored inside the project.
+path relative to the project and reopen it; rasters added in the browser are stored inside the project.
 
 ### Zarr stores
 

@@ -75,6 +75,45 @@ impl std::fmt::Debug for RasterLayer {
 }
 
 impl RasterLayer {
+    /// Reads a replacement without silently changing the renderer or resetting its style.
+    pub fn relinked(&self, path: &str, subdataset: Option<&str>) -> Result<RasterLayer, String> {
+        if self.embedded.is_some() {
+            return Err("the raster's data is kept in the project: there's no file to repair".into());
+        }
+        let sub = subdataset.or(self.subdataset.as_deref());
+        let r = rustgis_data::raster::read_path_with(std::path::Path::new(path), sub, self.crs.as_deref())
+            .and_then(|r| placed(r, self.placement))
+            .map_err(|e| format!("{path}: {e}"))?;
+        let need = self.style.renderer.bands().into_iter().max().map_or(1, |b| b.saturating_add(1));
+        if r.band_count() < need {
+            return Err(format!(
+                "{path} has {} band(s); the layer's style draws band {need}: choose a raster with at least {need} bands",
+                r.band_count()
+            ));
+        }
+        if matches!(self.style.renderer, RasterRenderer::Colormap) && !matches!(r.color, ColorHint::Palette(_)) {
+            return Err(format!(
+                "{path} has no color palette; the layer's Colormap style uses the file's palette: choose a raster with a color palette"
+            ));
+        }
+        let mut style = self.style.clone();
+        style.repair(&r);
+        Ok(RasterLayer {
+            path: Some(path.into()),
+            file_name: None,
+            embedded: None,
+            subdataset: sub.map(String::from),
+            crs: self.crs.clone(),
+            time_zarr: None,
+            placement: self.placement,
+            style,
+            data: Some(Arc::new(r)),
+            error: None,
+            masked: MaskedStats::default(),
+            opening: None,
+        })
+    }
+
     /// A raster read from a file on disk.
     pub fn from_path(raster: Raster, path: impl Into<String>) -> RasterLayer {
         let style = RasterStyle::default_for(&raster);

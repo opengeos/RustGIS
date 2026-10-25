@@ -401,7 +401,41 @@ impl Default for Project {
     }
 }
 
+/// Resolve linked files and explicitly relative provenance against their containing document.
+pub(crate) fn resolve_file_paths<'a>(dir: &str, paths: impl IntoIterator<Item = (&'a mut String, bool)>) {
+    for (p, record) in paths {
+        if (!record || ["./", "../", ".\\", "..\\"].iter().any(|prefix| p.starts_with(prefix)))
+            && rustgis_map::paths::is_project_relative(p)
+            && let Some(full) = rustgis_map::paths::resolve(dir, p)
+        {
+            *p = full;
+        }
+    }
+}
+
 impl Project {
+    fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
+        let mut paths = Vec::new();
+        for map in &mut self.maps {
+            paths.extend(map.file_paths_mut());
+        }
+        for area in &mut self.offline_areas {
+            paths.extend(area.data.file_paths_mut());
+        }
+        for table in &mut self.tables {
+            if let Some(p) = &mut table.dataset.source
+                && rustgis_map::paths::is_local(p)
+            {
+                paths.push((p, true));
+            }
+        }
+        paths
+    }
+
+    fn resolve_paths(&mut self, dir: &str) {
+        resolve_file_paths(dir, self.file_paths_mut());
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Project {
             format: FORMAT,
@@ -595,16 +629,46 @@ impl Project {
             m.camera.clamp();
             // The time slider's window and dated tile addresses, before the addresses are checked.
             m.apply_time();
+            for t in &mut m.tiles {
+                if let Some(f) = t.archive_file().filter(|f| rustgis_map::paths::is_project_relative(f)) {
+                    t.error = Some(rustgis_map::paths::unknown_folder(f));
+                }
+            }
             // Tile layers with an address that can't be fetched (a hand edit) are dropped.
             m.tiles.retain_mut(|t| t.repair().map_err(|e| log::warn!("{}: {e}", m.name)).is_ok());
             m.tiles.truncate(rustgis_map::tiles::MAX_TILE_LAYERS);
+            #[cfg(not(target_arch = "wasm32"))]
+            for t in &mut m.tiles {
+                if t.error.is_none()
+                    && let Some(f) = t.archive_file()
+                    && !Path::new(f.strip_prefix("file://").unwrap_or(f)).is_file()
+                {
+                    t.error = Some(format!("{f}: the file isn't there"));
+                }
+            }
             for l in &mut m.layers {
                 if let Some(z) = l.raster.as_mut().and_then(|r| r.time_zarr.as_mut()) {
                     z.repair();
                 }
+                let unresolved = l
+                    .file_paths_mut()
+                    .into_iter()
+                    .find(|(p, record)| !record && rustgis_map::paths::is_project_relative(p))
+                    .map(|(p, _)| p.clone());
+                if let Some(p) = &unresolved {
+                    let error = rustgis_map::paths::unknown_folder(p);
+                    if let Some(rl) = &mut l.raster {
+                        rl.error = Some(error.clone());
+                        rl.data = None;
+                    }
+                    if let Some(src) = &mut l.source {
+                        src.error = Some(error);
+                    }
+                }
                 if let Some(rl) = &mut l.raster
                     && rl.data.is_none()
                     && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)
+                    && unresolved.is_none()
                     && let Err(e) = rl.reload()
                 {
                     log::warn!("{}: {e}", l.name);
@@ -652,10 +716,33 @@ impl Project {
     /// keeps them. This process remembers the 32 most recent distinct saved snapshots with stripped
     /// addresses: opening identical plain project text restores them until that snapshot is evicted
     /// or RustGIS closes. Packages and imports never restore them.
-    pub fn saved_text(&mut self) -> Result<(String, usize), String> {
+    pub fn saved_text(&mut self, dir: Option<&Path>) -> Result<(String, usize), String> {
         let was = strip_addresses(self.addresses_mut());
         let n = was.iter().flatten().count();
+        let originals: Vec<Option<String>> = if let Some(d) = dir.and_then(Path::to_str) {
+            self.file_paths_mut()
+                .into_iter()
+                .map(|(p, _)| {
+                    let relative = rustgis_map::paths::is_absolute_local(p)
+                        .then(|| rustgis_map::paths::relative_to(d, p))
+                        .flatten()
+                        // Keep the traversal stable during restoration, even for an unusually deep
+                        // destination whose relative spelling exceeds the local-path size bound.
+                        .filter(|r| rustgis_map::paths::is_local(r));
+                    relative.map(|r| std::mem::replace(p, r))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let text = serde_json::to_string(self).map_err(|e| e.to_string());
+        if !originals.is_empty() {
+            for ((p, _), original) in self.file_paths_mut().into_iter().zip(originals) {
+                if let Some(original) = original {
+                    *p = original;
+                }
+            }
+        }
         // Serialization can fail: put the live addresses back before handling its result.
         for (address, original) in self.addresses_mut().into_iter().zip(&was) {
             if let Some(original) = original {
@@ -690,22 +777,23 @@ impl Project {
     }
 
     pub fn save(&mut self, path: &Path) -> Result<usize, String> {
-        let (text, stripped) = self.saved_text()?;
+        let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
+        let (text, stripped) = self.saved_text(dir.as_deref())?;
         rustgis_data::io::write_atomic(path, text.as_bytes()).map_err(|e| format!("could not save {}: {e}", path.display()))?;
         Ok(stripped)
     }
 
     /// Reads a project from its JSON text (a browser upload).
     pub fn from_json(text: &str) -> Result<Project, String> {
-        Self::read_json(text, true)
+        Self::read_json(text, true, None)
     }
 
     /// Reads imported JSON (including package contents) without restoring a saved file's secrets.
-    pub(crate) fn from_import_json(text: &str) -> Result<Project, String> {
-        Self::read_json(text, false)
+    pub(crate) fn from_import_json(text: &str, dir: Option<&Path>) -> Result<Project, String> {
+        Self::read_json(text, false, dir)
     }
 
-    fn read_json(text: &str, restore: bool) -> Result<Project, String> {
+    fn read_json(text: &str, restore: bool, dir: Option<&Path>) -> Result<Project, String> {
         if text.len() as u64 > MAX_BYTES {
             return Err("the project file is too large".into());
         }
@@ -719,6 +807,9 @@ impl Project {
         // A binding is this computer's runtime token for a login: one in a file is no authority
         // to use any login here.
         crate::s3_connections::clear_bindings(p.addresses_mut());
+        if let Some(d) = dir.and_then(Path::to_str) {
+            p.resolve_paths(d);
+        }
         p.normalize();
         Ok(p)
     }
@@ -729,7 +820,8 @@ impl Project {
             return Err("the project file is too large".into());
         }
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Project::from_json(&text)
+        let dir = std::path::absolute(path).ok().and_then(|p| p.parent().map(Path::to_path_buf));
+        Self::read_json(&text, true, dir.as_deref())
     }
 }
 

@@ -228,7 +228,7 @@ fn remembered_database_recording_history_recent_and_preferences_never_get_sentin
     app.run("connection.new", json!({"kind":"postgres","name":"No leak","address":ADDRESS})).unwrap();
     app.run("connection.login", json!({"id":"No leak","password":"boundary-sentinel","remember":true})).unwrap();
     let mut project = app.session.project.clone();
-    let (text, _) = project.saved_text().unwrap();
+    let (text, _) = project.saved_text(None).unwrap();
     let outputs = [
         serde_json::to_string(&app.ws.recording).unwrap(),
         app.run("sources.list", json!({})).unwrap().to_string(),

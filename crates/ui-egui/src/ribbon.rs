@@ -2266,6 +2266,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
 /// The Data tab: bringing data in, tables, fields, queries, relationships and export.
 fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
     layer_templates_group(app, ui);
+    data_source_group(app, ui);
     if active_layer(app).is_some_and(|l| l.is_raster()) {
         raster_data_groups(app, ui);
     } else {
@@ -2273,6 +2274,22 @@ fn data_tab(app: &mut RustGisApp, ui: &mut Ui) {
     }
     offline_group(app, ui);
     feature_cache_group(app, ui);
+}
+
+fn data_source_group(app: &mut RustGisApp, ui: &mut Ui) {
+    group(ui, "Data Source", |ui| {
+        big(
+            ui,
+            app,
+            "open",
+            "Repair\nSource",
+            "Point the selected layer at its file after the file moved or was renamed.",
+            "ui.dialog",
+            json!({"name": "repairSource"}),
+            false,
+            false,
+        );
+    });
 }
 
 /// The Style tab: the drawing of the layer selected in Layers (its symbology, labels and

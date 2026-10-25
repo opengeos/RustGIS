@@ -178,7 +178,7 @@ pub fn commands() -> Vec<C> {
         C::new("project.fromTemplate", "Open Custom Template", "Home › Project", |s, p| {
             let text = read_text(p)?;
             super::connections::clear_active();
-            let mut proj = match Project::from_import_json(&text) {
+            let mut proj = match Project::from_import_json(&text, None) {
                 Ok(proj) => proj,
                 Err(error) => {
                     super::connections::restore_active(s);
@@ -428,10 +428,16 @@ fn embedded_map(m: &Map, budget: &mut u64) -> Map {
 /// Adds maps from a map file, project or package.
 fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     let text = read_text(p)?;
+    let dir = ps(p, "path").and_then(|path| std::path::absolute(path).ok()).and_then(|p| p.parent().map(Path::to_path_buf));
     super::connections::clear_active();
     let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {
-        Ok(m) => vec![m],
-        Err(_) => match Project::from_import_json(&text) {
+        Ok(mut m) => {
+            if let Some(d) = dir.as_deref().and_then(Path::to_str) {
+                crate::project::resolve_file_paths(d, m.file_paths_mut());
+            }
+            vec![m]
+        }
+        Err(_) => match Project::from_import_json(&text, dir.as_deref()) {
             Ok(project) => project.maps,
             Err(_) => {
                 super::connections::restore_active(s);
@@ -487,7 +493,7 @@ fn import_styles(s: &mut Session, p: &Value) -> CmdResult {
     } else {
         // A project parse opens sources even though this import only takes their styles.
         super::connections::clear_active();
-        let project = Project::from_import_json(&text);
+        let project = Project::from_import_json(&text, None);
         super::connections::restore_active(s);
         project.map_err(|_| "not a RustGIS layer file, map file or project".to_string())?.maps.into_iter().flat_map(|m| m.layers).collect()
     };

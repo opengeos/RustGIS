@@ -645,7 +645,7 @@ fn saved_project(bucket: &str) -> Saved {
     let cog_url = object("scene.tif");
     s.run("layer.addUrl", &json!({"url": cog_url, "name": "Scene"})).unwrap();
     s.run("layer.addUrl", &json!({"url": object("parks.pmtiles"), "name": "Parks"})).unwrap();
-    let (text, _) = s.project.saved_text().unwrap();
+    let (text, _) = s.project.saved_text(None).unwrap();
     let prefs = s.connections.to_json();
     s3::disconnect(&name);
     s3::disconnect(&format!("{bucket}-b"));
@@ -727,7 +727,7 @@ fn s3_saved_projects_hold_no_keys_and_reload_through_their_one_connection() {
     assert_eq!(p.srv.key_ids(from), BTreeSet::from(["SAVEDKEYA".to_string()]));
     assert!(!p.srv.saw("saved-secret"));
     // The text saved again has no key either, and the project names the login that was used.
-    let (again, _) = s.project.saved_text().unwrap();
+    let (again, _) = s.project.saved_text(None).unwrap();
     assert!(!again.contains("SAVEDKEY") && !again.contains("saved-secret"));
     s3::disconnect("sv-proj-one-a");
 }
@@ -852,7 +852,7 @@ fn s3_saved_imported_maps_layers_and_packages_never_bring_their_own_login() {
     let token = rustgis_data::s3_address::parse(&p.fgb).unwrap().unwrap().binding.to_string();
     let from = p.srv.requests();
     // Package and template reads (and a plain project read) clear every binding.
-    for read in [Project::from_import_json(&p.text).unwrap(), Project::from_json(&p.text).unwrap()] {
+    for read in [Project::from_import_json(&p.text, None).unwrap(), Project::from_json(&p.text).unwrap()] {
         for a in read.maps.iter().flat_map(|m| m.layers.iter()).filter_map(|l| l.source.as_ref().and_then(|s| s.path.as_ref())) {
             assert!(a.starts_with("rustgis-s3::") && !a.contains(&token), "{a}");
         }
@@ -861,7 +861,7 @@ fn s3_saved_imported_maps_layers_and_packages_never_bring_their_own_login() {
         }
     }
     // A map imported with no saved connection to read it keeps the cleared address, unfetched.
-    let map = serde_json::to_string(&Project::from_import_json(&p.text).unwrap().maps[0]).unwrap();
+    let map = serde_json::to_string(&Project::from_import_json(&p.text, None).unwrap().maps[0]).unwrap();
     let raw_map = map.replace("rustgis-s3::", &format!("rustgis-s3:{token}:"));
     assert!(raw_map.contains(&token));
     let mut s = session(Some(&Arc::new(Spy::default())));
@@ -877,7 +877,7 @@ fn s3_saved_imported_maps_layers_and_packages_never_bring_their_own_login() {
     assert!(text.contains(&own) && !text.contains(&token));
     // A layer file likewise.
     let layer =
-        serde_json::to_string(&Project::from_import_json(&p.text).unwrap().maps[0].layers.iter().find(|l| l.name == "Grid").unwrap())
+        serde_json::to_string(&Project::from_import_json(&p.text, None).unwrap().maps[0].layers.iter().find(|l| l.name == "Grid").unwrap())
             .unwrap();
     let raw_layer = layer.replace("rustgis-s3::", &format!("rustgis-s3:{token}:"));
     let mut u = session(Some(&Arc::new(Spy::default())));
@@ -928,7 +928,7 @@ fn s3_saved_typed_keys_are_in_no_script_result_notice_or_list_the_app_shows() {
     shown.push(s.run("connection.list", &json!({})).unwrap().to_string());
     shown.push(s.run("s3.connections", &Value::Null).unwrap().to_string());
     shown.push(serde_json::to_string(&s.notices.iter().map(|n| n.text.clone()).collect::<Vec<_>>()).unwrap());
-    shown.push(s.project.saved_text().unwrap().0);
+    shown.push(s.project.saved_text(None).unwrap().0);
     for e in [
         s.run("connection.login", &json!({"id": id, "accessKeyId": "SAVEDKEYA", "secretAccessKey": "saved-secret-A", "remember": "yes"}))
             .unwrap_err(),
@@ -1028,7 +1028,7 @@ fn s3_saved_raster_pixels_wait_for_selection_then_reload_with_style_intact() {
     layer.raster = Some(rustgis_map::RasterLayer::from_path(pixels, bound(&seed, &first, "s3://sv-raster/scene.tif")));
     layer.transparency = 0.25;
     seed.map_mut().layers.push(layer);
-    let text = seed.project.saved_text().unwrap().0;
+    let text = seed.project.saved_text(None).unwrap().0;
     let prefs = seed.connections.to_json();
     s3::disconnect("sv-raster-first");
     let mut unique = session(Some(&store));
@@ -1077,7 +1077,7 @@ fn s3_saved_resolving_one_bucket_does_not_retry_another_buckets_failed_source() 
         let source = serde_json::from_value(json!({"path": path})).unwrap();
         seed.map_mut().add_streamed(bucket, source);
     }
-    let text = seed.project.saved_text().unwrap().0;
+    let text = seed.project.saved_text(None).unwrap().0;
     let mut fresh = session(Some(&store));
     fresh.connections = Connections::from_json(&seed.connections.to_json());
     s3::disconnect("sv-group-first");
@@ -1170,11 +1170,11 @@ fn s3_saved_legacy_choice_never_rebinds_an_explicit_aws_source_for_the_same_obje
         for (name, path) in sources {
             s.map_mut().add_streamed(name, serde_json::from_value(json!({"path":path})).unwrap());
         }
-        let text = s.project.saved_text().unwrap().0;
+        let text = s.project.saved_text(None).unwrap().0;
         s.run("project.openText", &json!({"text":text})).unwrap();
         assert_eq!(srv.requests(), 0, "neither resource is read before a choice");
         // Saving while a choice is pending must retain unknown origin, not turn it into AWS.
-        let text = s.project.saved_text().unwrap().0;
+        let text = s.project.saved_text(None).unwrap().0;
         let definitions = s.connections.to_json();
         s = session(Some(&store));
         s.connections = Connections::from_json(&definitions);

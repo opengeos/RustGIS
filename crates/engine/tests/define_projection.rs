@@ -63,7 +63,7 @@ fn missing_prj_layer_command_preserves_native_numbers_and_undoes_as_one_step() {
     let c = point(&exported);
     assert!((c.x - 451_219.33).abs() < 1e-5 && (c.y - 5_411_550.20).abs() < 1e-5, "{c:?}");
     assert_eq!(io::default_export_crs(&layer.dataset, "shp"), Crs::parse("EPSG:32631").unwrap());
-    let saved = s.project.saved_text().unwrap().0;
+    let saved = s.project.saved_text(None).unwrap().0;
     let restored = Project::from_json(&saved).unwrap();
     paris(&restored.maps[0].layers[0].dataset);
     s.run("edit.undo", &json!({})).unwrap();
@@ -94,7 +94,7 @@ fn zip_override_precedes_wrong_prj_and_missing_geometry_requires_reimport() {
     let error = s.run("layer.defineProjection", &json!({"layer": id, "crs": "EPSG:32631"})).unwrap_err();
     assert!(error.contains("import the original file"), "{error}");
     assert_eq!(s.map().layer(id).unwrap().dataset, before);
-    let saved = s.project.saved_text().unwrap().0;
+    let saved = s.project.saved_text(None).unwrap().0;
     let restored = Project::from_json(&saved).unwrap();
     assert!(restored.maps[0].layers[0].dataset.crs_incomplete);
     let repaired = upload(&mut s, &bytes, Some("EPSG:32631"));
@@ -132,7 +132,7 @@ fn loose_and_streamed_overrides_survive_project_reopen_and_do_not_write_prj() {
                 assert!(
                     s.run("layer.defineProjection", &json!({"layer": id, "crs": "EPSG:32631"})).unwrap_err().contains("loaded into memory")
                 );
-                let saved = s.project.saved_text().unwrap().0;
+                let saved = s.project.saved_text(None).unwrap().0;
                 let restored = Session::new(Project::from_json(&saved).unwrap());
                 let restored_data = restored.map().layer(id).unwrap().load_all().unwrap();
                 paris(&restored_data);
@@ -152,7 +152,7 @@ fn import_override_accepts_missing_prj_wkt_and_custom_proj_definitions() {
         let mut s = Session::new(Project::default());
         let id = upload(&mut s, &zip(None), Some(crs));
         paris(&s.map().layer(id).unwrap().dataset);
-        let saved = s.project.saved_text().unwrap().0;
+        let saved = s.project.saved_text(None).unwrap().0;
         let restored = Session::new(Project::from_json(&saved).unwrap());
         paris(&restored.map().layer(id).unwrap().dataset);
         assert!(restored.map().layer(id).unwrap().dataset.crs.is_some());
@@ -201,7 +201,7 @@ fn blank_shapefile_crs_keeps_prj_for_whole_and_streamed_imports() {
             let result = s.run("layer.addData", &json!({"path": dir.join("parcels.shp"), "crs": crs, "stream": stream})).unwrap();
             let id = result["layer"].as_u64().unwrap() as u32;
             paris(&s.map().layer(id).unwrap().load_all().unwrap());
-            let saved = s.project.saved_text().unwrap().0;
+            let saved = s.project.saved_text(None).unwrap().0;
             let restored = Session::new(Project::from_json(&saved).unwrap());
             paris(&restored.map().layer(id).unwrap().load_all().unwrap());
         }
