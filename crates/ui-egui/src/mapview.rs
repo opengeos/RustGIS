@@ -145,6 +145,8 @@ pub struct MapView {
     pub vertex: Option<(u32, usize, rustgis_engine::data::VertexId)>,
     /// The vertex being dragged with the Edit Vertices tool.
     pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
+    /// Non-owning source identity for the held vertex gesture; never persisted with the project.
+    pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
@@ -213,6 +215,7 @@ pub struct MapView {
 }
 
 impl Default for MapView {
+    /// Starts with no chosen node, preview or retained gesture owner, alongside empty map caches.
     fn default() -> Self {
         MapView {
             texture: None,
@@ -239,6 +242,7 @@ impl Default for MapView {
             split_mode: false,
             vertex: None,
             vertex_drag: None,
+            vertex_drag_owner: None,
             magnifier: false,
             popup: None,
             popup_rev: 0,
@@ -338,6 +342,7 @@ impl MapView {
         self.render_ms
     }
 
+    /// Drops unfinished map sketches, selection shapes and node previews without committing them.
     pub fn cancel_sketch(&mut self) {
         self.sketch.clear();
         self.sketch_done = false;
@@ -346,8 +351,18 @@ impl MapView {
         }
         self.selection_gesture = None;
         self.radius_preview = None;
+        self.cancel_vertex_drag();
+    }
+
+    /// Cancels a vertex preview and its pending release together, leaving other map gestures
+    /// alone. The chosen node is cleared because its row/address may now belong to another shape.
+    pub(crate) fn cancel_vertex_drag(&mut self) {
         self.vertex = None;
         self.vertex_drag = None;
+        self.vertex_drag_owner = None;
+        if self.drag.is_some_and(|(_, kind)| kind == DragKind::Vertex) {
+            self.drag = None;
+        }
     }
     pub fn sketch_len(&self) -> usize {
         self.sketch.len()
@@ -358,10 +373,13 @@ fn now(ui: &Ui) -> f64 {
     ui.input(|i| i.time)
 }
 
+/// Shows the active map workspace, discarding stale node gestures after map-tab changes and
+/// before rendering their overlays or consuming pointer releases.
 pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     crate::modelbuilder::follow_view(app);
     view_tabs(app, ui, &t);
+    crate::vertexedit::cancel_stale_drag(app);
     if app.mb.shown() {
         crate::modelbuilder::show(app, ui);
         return;
