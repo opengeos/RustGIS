@@ -26,10 +26,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: downloads-mirror
-  cancel-in-progress: true
-
 jobs:
   sync:
     name: Publish the latest release
@@ -39,6 +35,13 @@ jobs:
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.event == 'release' &&
         github.event.workflow_run.conclusion == 'success'))
+    # On the job, not the workflow: a run whose job the `if` skips (a pull request's Python
+    # package build, say) must not join the group, or it cancels the release's own sync in
+    # progress, as it did for v0.4.0. Queue instead of cancelling: each run reads the release's
+    # assets afresh, so the last one to finish mirrors them all.
+    concurrency:
+      group: downloads-mirror
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
