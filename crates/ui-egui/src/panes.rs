@@ -3018,7 +3018,16 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     let first_layer = first_layer(spec).map(|p| p.name);
     // The file parameter whose Browse was pressed: picked once the form is drawn.
     let mut browse_for = None;
+    // A parameter that doesn't apply to the options picked (Spatial Join's search distance with
+    // Intersects) is hidden, and left out of the run.
+    let applies = |app: &RustGisApp, name: &str| {
+        let value = |n: &str| app.gp.values.get(n).cloned().unwrap_or_default();
+        rustgis_engine::analysis::param_applies(spec.id, name, &value)
+    };
     for p in spec.params {
+        if !applies(app, p.name) {
+            continue;
+        }
         let label = ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
         if !p.help.is_empty() {
             label.on_hover_text(p.help);
@@ -3193,7 +3202,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             // every parameter, so it gets only those it declares.
             let builtin = rustgis_engine::analysis::external_source(spec).is_none();
             let plugin = spec.id.starts_with(rustgis_engine::plugins::PREFIX);
-            for p in spec.params {
+            for p in spec.params.iter().filter(|p| applies(app, p.name)) {
                 if let Some(v) = app.gp.values.get(p.name).filter(|v| !v.trim().is_empty()) {
                     let val = match (p.kind, app.gp.tables.get(p.name)) {
                         // A table goes by its id: a number, which no name is taken for. Its name
