@@ -42,10 +42,9 @@ to English until the catalogs are updated; see [Languages](i18n.md).
 
 ## Ribbon guidelines
 
-These guidelines follow [discussion #862](https://github.com/opengeos/RustGIS/discussions/862),
-combining deniial00's tab purposes and control conventions with Mavrick-F's workflow and
-destination-based approach. They guide new features and small, tab-by-tab improvements; they
-are not a claim that the current ribbon already follows every rule.
+These guidelines decide where a ribbon control goes and what kind of control it is. They guide
+new features and small, tab-by-tab improvements; they are not a claim that the current ribbon
+already follows every rule. Decisions about particular controls live in their issues.
 
 ### Start with the task and the tab's purpose
 
@@ -66,24 +65,22 @@ is space. Agree on that purpose before reorganising a tab.
 | Settings | Preferences that apply to every project, such as language, appearance and start-up. |
 | Help | Learning RustGIS, finding commands and shortcuts, and getting information about the app. |
 
-The fixed Labeling tab is planned in [#897](https://github.com/opengeos/RustGIS/issues/897);
-until it lands, Style still includes layer labeling controls. Keep Data, Style and the planned
-Labeling tab fixed, rather than making the tab strip change with the selected layer. Put a
-layer chooser at the left of layer-dependent tabs so their target is explicit (for example,
-“Styling: Countries ▾”), with a useful hint when no suitable layer is selected. Where a class
-chooser is needed, the layer comes first, then the class.
+Until the Labeling tab lands, Style still holds the layer's label controls. Keep Data, Style and
+Labeling fixed, rather than making the tab strip change with the selected layer. Their target
+should be explicit: a layer chooser at the left of each layer-dependent tab (for example,
+“Styling: Countries ▾”) is planned, with a useful hint when no suitable layer is selected. Where
+a class chooser is needed, the layer comes first, then the class.
 
 If a control seems to fit two tabs, or none, clarify its task and destination before placing
 it. Home is not a catch-all for anything described as “frequently used”. Data exports data;
-Publish exports products. Keep deliberate interim exceptions explicit: discussion #862 keeps
-Directions in Home's Navigation group until Analyze is reorganised, rather than adding it to
-an already overloaded tab.
+Publish exports products. A control kept on a tab its purpose doesn't cover, until another tab
+is reorganised, is an interim exception: record it in the issue that tracks the move.
 
 ### Keep useful shortcuts, not duplicate destinations
 
 - **One button per destination, not per pane.** Buttons that open the same pane at different
   sections are useful task shortcuts. Merge controls that land in the same place with the same
-  context, such as Locate and Go To XY; keep the name **Go To XY** for the coordinates-only dialog.
+  context.
 - **Keep View › Windows complete.** Every pane must be reachable there. Working tabs may repeat
   the panes their tasks need; do not replace those shortcuts with a generic Panes dropdown just
   to reduce the button count.
@@ -92,6 +89,9 @@ an already overloaded tab.
 - **One name and icon per thing.** Use the same label and icon for the same command wherever it
   appears: ribbon, panes and Command Search. Do not give one tool different names, or expose
   one setting as two differently named toggles.
+- **Labels say what happens.** Name a control for what it does, not for a similar feature
+  elsewhere. Go To XY pans to coordinates; “Locate” would suggest it also finds addresses, as
+  Find Place does. End a label with “…” when it opens a dialog or file picker that asks for input.
 - **Keep a route to every feature.** Removing a ribbon control must not remove access to its
   action. Name and check the remaining route, including for UI-only actions.
 
@@ -102,12 +102,8 @@ an already overloaded tab.
   same settings and selected layer or class, not separate state.
 - Use a split button only when there is a clear everyday default. The main action stays fixed;
   choosing an alternative never changes it to “last used”. The arrow opens related alternatives.
-  Without an obvious default, use a plain dropdown.
-- For example, **Add Data** should open the all-formats file picker in one click, with URLs,
-  services, databases, sample data and Add Folder in its arrow menu. A small **Data Sources**
-  button beside it makes saved connections, favourites, recent data and the library discoverable.
-  That shortcut may repeat View › Windows › Data Sources; a Connections entry that opens the
-  same destination in the Add Data menu is then unnecessary.
+  Without an obvious default, use a plain dropdown. For example, Select's main action is click
+  or box selection; Polygon, Lasso and Radius are in its arrow menu.
 
 For split-button implementation and enabled-state handling, see
 [Architecture](architecture.md#everything-is-a-command).
@@ -119,24 +115,26 @@ at once. Clear naming and duplicate-destination fixes can land independently of 
 reorganisation.
 
 Check everyday workflows such as adding data, selecting by location, buffering, symbolising
-and exporting a map. Record clicks and tab switches before and after; fewer controls is not an
-improvement if those tasks become harder. Check the tab at laptop width with the
-[`ui_shot` example](contributing.md#documentation) and look at the image. Keep everyday controls
-reachable without horizontal scrolling; move deeper options to their pane rather than packing
-more controls into the strip.
+and exporting a map. When moving, removing or regrouping controls, record clicks and tab
+switches for these before and after; fewer controls is not an improvement if those tasks become
+harder. Check the tab at 1366 px wide with the [`ui_shot` example](#documentation) and look at
+the image. Keep everyday controls reachable without horizontal scrolling; move deeper options to
+their pane rather than packing more controls into the strip.
 
-A pull request that adds or moves a ribbon control should state:
+A pull request that adds a ribbon control should state:
 
 - the task it serves, its tab and group, and how it fits the tab's purpose;
 - whether it runs immediately, selects a tool, opens a dialog or opens a pane, including the
   pane section and layer/class context;
-- why it needs a ribbon control, which existing control it joins or replaces, and why any
-  repeated destination is useful in that workflow;
 - the fixed default and alternatives if it uses a split button;
-- where a removed control's action remains reachable, and any corresponding Command Search
-  location or label updates;
-- the workflows checked, their click/tab-switch comparison and a screenshot at the checked
-  window width.
+- a screenshot of the tab at 1366 px wide.
+
+A pull request that moves, removes or regroups controls should also state:
+
+- where each removed control's action remains reachable, and any Command Search location or
+  label updates;
+- why any repeated destination is useful in its workflow;
+- the workflows checked, with their click and tab-switch counts before and after.
 
 Changing ribbon placement does not require changing command ids or parameters: keep CLI,
 shortcuts and scripts working.
