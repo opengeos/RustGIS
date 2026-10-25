@@ -11144,6 +11144,23 @@ fn database_layers_wait_for_their_connection_login() {
     assert_eq!(result["failed"], 2);
 }
 
+/// An autosaved recovery copy (#873) leaves out layer secrets as a save does, from a copy of the
+/// project (the open one keeps them), and isn't registered as a file this process wrote: frequent
+/// copies don't evict saved snapshots, and opening a copy's text restores no secret.
+#[test]
+fn recovery_copies_keep_no_layer_tokens_and_restore_none() {
+    let mut s = world();
+    let url = "https://gis.example/arcgis/rest/services/a/MapServer/tile/{z}/{y}/{x}?token=s3cret";
+    s.run("map.addTiles", &json!({"url":url,"name":"Secured"})).unwrap();
+    let text = s.project.clone().recovery_text().unwrap();
+    assert!(!text.contains("s3cret") && text.contains("MapServer/tile/{z}/{y}/{x}"));
+    assert!(s.map().tiles.iter().any(|t| t.url == url), "the open project keeps its token");
+    let mut t = Session::new(Project::default());
+    t.run("project.openText", &json!({"text":text})).unwrap();
+    assert!(t.map().tiles.iter().any(|t| t.url.contains("MapServer/tile")));
+    assert!(!serde_json::to_string(&t.project).unwrap().contains("s3cret"));
+}
+
 #[test]
 fn saved_projects_keep_no_layer_tokens() {
     let mut s = world();

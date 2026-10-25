@@ -1,0 +1,629 @@
+//! Autosave and crash recovery (#873). While the project has unsaved changes, a recovery copy of
+//! it is kept through [`Services::recovery`](crate::Services), rewritten at most once per
+//! interval and only when the project changed since the last copy. Saving, starting another
+//! project and a clean exit remove it, so a copy left over at start means the last run ended
+//! without closing (a crash, a kill, a power cut): the app offers it then ([`offer`]).
+//!
+//! The desktop app keeps the copy in a folder ([`FolderStore`]); a shell without a store (the
+//! browser, for now) has no autosave.
+
+use egui::vec2;
+use rustgis_engine::Project;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use web_time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::RustGisApp;
+use crate::theme::{Tokens, semibold};
+
+/// The preference the interval is kept under, in minutes (`0` is off).
+pub(crate) const MINUTES_PREF: &str = "autosave_minutes";
+/// The interval until the user picks one.
+pub(crate) const DEFAULT_MINUTES: u32 = 5;
+/// The longest interval `ui.autosave` takes.
+const MAX_MINUTES: u64 = 60;
+/// The intervals Settings › Autosave offers (`0` is off).
+pub(crate) const CHOICES: [u32; 7] = [0, 1, 2, 5, 10, 15, 30];
+
+/// What a recovery copy holds beside the project: what the recovery dialog says about it and
+/// where saving the recovered work writes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recovery {
+    /// The project's name.
+    #[serde(default)]
+    pub name: String,
+    /// The file the project was opened from or saved to, if any.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// When the copy was made, in seconds since 1970 (UTC).
+    #[serde(default)]
+    pub time: u64,
+}
+
+/// Where a shell keeps the recovery copy. Writing and clearing may happen in the background, but
+/// in the order they were asked for: a copy cleared after a save is never written again by an
+/// earlier, slower write.
+pub trait RecoveryStore {
+    /// Replaces this run's copy with `project` (a copy of the open one) and `about` it.
+    fn write(&self, project: Project, about: Recovery);
+    /// Removes this run's copy (the work was saved, or replaced, or the app closes cleanly).
+    fn clear(&self);
+    /// Waits, for a bounded time, until what was asked for has been done: before the app exits.
+    fn flush(&self);
+    /// The copy an earlier run left that is offered now: the newest of those waiting to be
+    /// recovered or discarded (runs that crashed again after Later each leave one).
+    fn pending(&self) -> Option<Recovery>;
+    /// How many copies are waiting, the offered one included.
+    fn waiting(&self) -> usize;
+    /// The project text of the offered copy.
+    fn read_pending(&self) -> Result<String, String>;
+    /// Forgets the offered copy; the next one waiting is offered.
+    fn discard_pending(&self);
+    /// Makes the offered copy this run's copy, once it was recovered: it is kept, unchanged,
+    /// until the recovered work is saved or changes again.
+    fn adopt_pending(&self);
+    /// Why the last copy couldn't be written, once.
+    fn take_error(&self) -> Option<String>;
+}
+
+/// The app's autosave state.
+pub struct AutosaveState {
+    /// Minutes between copies; `0` is off.
+    pub(crate) minutes: u32,
+    /// The session revision the last copy was made at, while one is kept.
+    written: Option<u64>,
+    /// When the last copy was made.
+    last: Option<Instant>,
+    /// The copy an earlier run left, while the user hasn't recovered or discarded it.
+    offer: Option<Recovery>,
+    /// How many more copies wait behind the offered one.
+    more: usize,
+    /// Whether the offered copy's file changed on disk after the copy was made.
+    changed_since: bool,
+    /// The dialog was put off until the next start (Later, or other copies after a recovery).
+    later: bool,
+    /// Why recovering the offered copy failed, shown in the dialog.
+    offer_error: Option<String>,
+    /// The last write error told, so a failing folder isn't reported at every interval.
+    told: Option<String>,
+}
+
+impl Default for AutosaveState {
+    /// Every few minutes ([`DEFAULT_MINUTES`]), nothing written yet and nothing offered.
+    fn default() -> Self {
+        AutosaveState {
+            minutes: DEFAULT_MINUTES,
+            written: None,
+            last: None,
+            offer: None,
+            more: 0,
+            changed_since: false,
+            later: false,
+            offer_error: None,
+            told: None,
+        }
+    }
+}
+
+/// Seconds since 1970, now.
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The open project's description for its recovery copy.
+fn about(app: &RustGisApp) -> Recovery {
+    let path = app.session.path.as_ref().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()).display().to_string());
+    Recovery { name: app.session.project.name.clone(), path, time: now_secs() }
+}
+
+/// Reads the interval preference and the copy an earlier run left (from [`RustGisApp::with_services`]).
+pub(crate) fn load(app: &mut RustGisApp) {
+    let minutes = app.services.load_pref.as_ref().and_then(|load| load(MINUTES_PREF)).and_then(|v| v.trim().parse::<u32>().ok());
+    // A stored value out of range (edited by hand) means the default.
+    app.autosave.minutes = minutes.filter(|m| u64::from(*m) <= MAX_MINUTES).unwrap_or(DEFAULT_MINUTES);
+    next_offer(app);
+}
+
+/// Offers the next copy waiting in the store, if any.
+fn next_offer(app: &mut RustGisApp) {
+    let store = app.services.recovery.as_ref();
+    let pending = store.and_then(|s| s.pending());
+    app.autosave.more = store.map_or(0, |s| s.waiting()).saturating_sub(1);
+    app.autosave.changed_since = pending.as_ref().is_some_and(changed_since);
+    app.autosave.offer = pending;
+    app.autosave.offer_error = None;
+}
+
+/// Whether the copy's file was changed on disk after the copy was made.
+fn changed_since(r: &Recovery) -> bool {
+    let Some(path) = &r.path else { return false };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        modified.and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).is_some_and(|d| d.as_secs() > r.time)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Each frame: keeps the recovery copy in step with the project. A copy is made when the project
+/// has unsaved changes it doesn't hold yet and the interval has passed since the last one; it is
+/// removed once the project has none (saved, or another one started).
+pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(store) = &app.services.recovery else { return };
+    if let Some(e) = store.take_error()
+        && app.autosave.told.as_ref() != Some(&e)
+    {
+        app.autosave.told = Some(e.clone());
+        let text = crate::i18n::fmt("Autosave couldn't keep a recovery copy: {error}", &[("error", &e)]);
+        app.session.notify(text, true);
+    }
+    if app.autosave.minutes == 0 || !app.session.dirty {
+        if app.autosave.written.take().is_some() {
+            store.clear();
+        }
+        return;
+    }
+    if app.autosave.written == Some(app.session.revision) {
+        return;
+    }
+    let interval = Duration::from_secs(u64::from(app.autosave.minutes) * 60);
+    let now = Instant::now();
+    if let Some(since) = app.autosave.last.map(|l| now.saturating_duration_since(l))
+        && since < interval
+    {
+        ctx.request_repaint_after(interval - since);
+        return;
+    }
+    store.write(app.session.project.clone(), about(app));
+    app.autosave.written = Some(app.session.revision);
+    app.autosave.last = Some(now);
+}
+
+/// A clean exit: this run's copy goes, and what was asked of the store is done before the
+/// process ends. The copy an earlier run left stays until it is recovered or discarded.
+pub(crate) fn end(app: &mut RustGisApp) {
+    if let Some(store) = &app.services.recovery {
+        store.clear();
+        store.flush();
+    }
+    app.autosave.written = None;
+}
+
+/// `ui.autosave`: sets the interval (`minutes`, 0 to 60; `0` is off) and says what autosave
+/// does: the interval, and the copy waiting to be recovered.
+pub(crate) fn command(app: &mut RustGisApp, p: &Value) -> Result<Value, String> {
+    if let Some(m) = p.get("minutes") {
+        if app.services.recovery.is_none() {
+            return Err("autosave needs the desktop app".into());
+        }
+        let m = m.as_u64().filter(|m| *m <= MAX_MINUTES).ok_or("minutes is a whole number from 0 (off) to 60")?;
+        app.autosave.minutes = u32::try_from(m).unwrap_or(DEFAULT_MINUTES);
+        if let Some(save) = &app.services.save_pref {
+            save(MINUTES_PREF, &m.to_string());
+        }
+    }
+    Ok(json!({
+        "available": app.services.recovery.is_some(),
+        "minutes": app.autosave.minutes,
+        "pending": app.autosave.offer.as_ref().map(|r| json!({"name": r.name, "path": r.path, "time": r.time})),
+    }))
+}
+
+/// `ui.recover`: opens the copy an earlier run left as the project, unsaved, with its original
+/// file (so Save writes there); `{"discard": true}` deletes it instead.
+pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> {
+    let discard = match p.get("discard") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("discard is true or false".into()),
+    };
+    let none = "there is no unsaved work to recover";
+    let (Some(store), Some(offered)) = (&app.services.recovery, app.autosave.offer.clone()) else { return Err(none.into()) };
+    if discard {
+        store.discard_pending();
+        next_offer(app);
+        return Ok(json!({"discarded": true, "waiting": app.autosave.offer.as_ref().map(|_| app.autosave.more + 1).unwrap_or(0)}));
+    }
+    // Opening it replaces the open project: never one with work of its own not saved (after
+    // Later), which it would lose with its recovery copy.
+    if app.session.dirty {
+        return Err("the open project has unsaved changes: save them before recovering other work".into());
+    }
+    let text = store.read_pending()?;
+    app.run("project.openText", json!({"text": text}))?;
+    app.session.path = offered.path.as_ref().map(std::path::PathBuf::from);
+    app.session.dirty = true;
+    // The copy becomes this run's as it is: a crash now loses nothing, and nothing is written.
+    if let Some(store) = &app.services.recovery {
+        store.adopt_pending();
+    }
+    app.autosave.written = Some(app.session.revision);
+    app.autosave.last = Some(Instant::now());
+    next_offer(app);
+    let text = crate::i18n::fmt("Recovered unsaved work in {name}. Save to keep it.", &[("name", &app.session.project.name)]);
+    app.session.notify(text, false);
+    // Other copies wait for the next start: recovering one now would replace this work.
+    let waiting = app.autosave.offer.as_ref().map(|_| app.autosave.more + 1).unwrap_or(0);
+    if waiting > 0 {
+        app.autosave.later = true;
+        let text =
+            crate::i18n::fmt("Other copies of unsaved work will be offered at the next start ({n}).", &[("n", &waiting.to_string())]);
+        app.session.notify(text, false);
+    }
+    Ok(json!({"name": app.session.project.name, "path": offered.path, "waiting": waiting}))
+}
+
+/// The dialog's first line: what was kept, and how long ago (`then`, seconds since 1970). Whole
+/// sentences, one per unit, so each translates as a sentence; only data is filled in.
+fn kept_line(name: &str, then: u64) -> String {
+    let secs = now_secs().saturating_sub(then);
+    let (template, n) = match secs {
+        0..60 => ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept less than a minute ago.", 0),
+        60..7_200 => {
+            ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept {n} minutes ago.", secs / 60)
+        }
+        7_200..172_800 => {
+            ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept {n} hours ago.", secs / 3_600)
+        }
+        _ => ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept {n} days ago.", secs / 86_400),
+    };
+    crate::i18n::fmt(template, &[("name", name), ("n", &n.to_string())])
+}
+
+/// The recovery dialog, at start while a copy an earlier run left is waiting: Recover, Discard,
+/// or Later (it is offered again at the next start).
+pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
+    if app.autosave.later {
+        return;
+    }
+    let Some(r) = app.autosave.offer.clone() else { return };
+    let t = Tokens::get(ctx);
+    let name = if r.name.trim().is_empty() { tl_raw!("Untitled").to_string() } else { r.name.clone() };
+    let file = r.path.as_deref().map(|p| std::path::Path::new(p).file_name().map_or(p.to_string(), |n| n.to_string_lossy().into_owned()));
+    let mut decision = None;
+    egui::Modal::new(egui::Id::unique("autosave_recover")).show(ctx, |ui| {
+        ui.set_width(420.0);
+        ui.label(egui::RichText::new(tl!("Recover unsaved work?")).font(semibold(15.0)));
+        ui.add_space(4.0);
+        ui.label(kept_line(&name, r.time));
+        ui.add_space(4.0);
+        match &file {
+            Some(f) => {
+                ui.label(crate::i18n::fmt("It opens unsaved; saving replaces {file}.", &[("file", f)]));
+                if app.autosave.changed_since {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::fmt("{file} has changed since this copy was made.", &[("file", f)])).color(t.red),
+                    );
+                }
+            }
+            None => {
+                ui.label(tl!("It was never saved: it opens unsaved, and Save asks where to write it."));
+            }
+        }
+        if app.autosave.more > 0 {
+            ui.label(crate::i18n::fmt("Older copies waiting: {n}.", &[("n", &app.autosave.more.to_string())]));
+        }
+        if let Some(e) = &app.autosave.offer_error {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(crate::i18n::fmt("It didn't open: {error}", &[("error", e)])).color(t.red));
+        }
+        ui.add_space(10.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            if app.autosave.offer_error.is_none()
+                && crate::widgets::dialog_button(ui, tl!("Recover"), Some(t.accent), vec2(84.0, 28.0)).clicked()
+            {
+                decision = Some("recover");
+            }
+            if crate::widgets::dialog_button(ui, tl!("Discard"), None, vec2(84.0, 28.0)).clicked() {
+                decision = Some("discard");
+            }
+            if crate::widgets::dialog_button(ui, tl!("Later"), None, vec2(84.0, 28.0)).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Escape))
+            {
+                decision = Some("later");
+            }
+        });
+    });
+    match decision {
+        Some("recover") => {
+            if let Err(e) = app.run("ui.recover", Value::Null) {
+                app.autosave.offer_error = Some(e);
+            }
+        }
+        Some("discard") => {
+            let _ = app.run("ui.recover", json!({"discard": true}));
+        }
+        Some(_) => app.autosave.later = true,
+        None => {}
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use folder::FolderStore;
+
+/// The desktop's store: one file for this run's copy and one for each copy earlier runs left,
+/// in a folder of their own, written by a background thread.
+#[cfg(not(target_arch = "wasm32"))]
+mod folder {
+    use std::io::{BufRead, Read};
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use rustgis_engine::Project;
+
+    use super::{Recovery, RecoveryStore};
+
+    /// This run's copy.
+    const LIVE: &str = "autosave.recovery";
+    /// Copies earlier runs left are `recovered-<n>.recovery`.
+    const PENDING_PREFIX: &str = "recovered-";
+    const EXTENSION: &str = ".recovery";
+    /// The most copies kept waiting: the oldest beyond these go.
+    const MAX_WAITING: usize = 5;
+    /// The first line of a copy, describing it, is at most this long.
+    const MAX_HEADER: u64 = 64 * 1024;
+    /// How long a clean exit waits for a copy still being written.
+    const FLUSH_WAIT: Duration = Duration::from_secs(30);
+
+    /// What the background thread is asked to do, in order.
+    enum Job {
+        Write(Box<Project>, Recovery),
+        Clear,
+        Remove(PathBuf),
+        Adopt(PathBuf),
+        Flush(Sender<()>),
+    }
+
+    /// A recovery folder. A copy is one file: a line of JSON describing it ([`Recovery`]), then the
+    /// project's saved text. One file written atomically means the description always belongs to
+    /// the project after it, whenever the app stops.
+    pub struct FolderStore {
+        jobs: Mutex<Sender<Job>>,
+        /// The copies earlier runs left, newest first.
+        waiting: Mutex<Vec<(PathBuf, Recovery)>>,
+        error: Arc<Mutex<Option<String>>>,
+    }
+
+    impl FolderStore {
+        /// Takes `dir` as the recovery folder for this run, which must be the only one using it
+        /// (the desktop app holds the run marker). A copy the last run left there joins those
+        /// waiting to be offered; none is ever replaced by another, and only the oldest beyond
+        /// [`MAX_WAITING`] are removed.
+        pub fn open(dir: &Path) -> Result<FolderStore, String> {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            // The copies hold the project's data: this user's only.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+            let live = dir.join(LIVE);
+            if live.is_file() {
+                let set_aside = unused_pending_name(dir);
+                std::fs::rename(&live, &set_aside).map_err(|e| format!("{}: {e}", live.display()))?;
+            }
+            let mut waiting: Vec<(PathBuf, Recovery)> = std::fs::read_dir(dir)
+                .map_err(|e| format!("{}: {e}", dir.display()))?
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|p| p.is_file() && is_pending(p))
+                .map(|p| {
+                    let about = describe(&p);
+                    (p, about)
+                })
+                .collect();
+            // Newest first; copies of the same second by name, the later set aside first.
+            waiting.sort_by(|a, b| b.1.time.cmp(&a.1.time).then_with(|| b.0.cmp(&a.0)));
+            for (old, _) in waiting.drain(MAX_WAITING.min(waiting.len())..) {
+                log::warn!("autosave: removing {}, the oldest of more than {MAX_WAITING} copies", old.display());
+                remove(&old);
+            }
+            let (jobs, rx) = channel();
+            let error: Arc<Mutex<Option<String>>> = Arc::default();
+            let (worker_dir, worker_error) = (dir.to_path_buf(), error.clone());
+            std::thread::Builder::new()
+                .name("autosave".into())
+                .spawn(move || work(&worker_dir, &rx, &worker_error))
+                .map_err(|e| format!("could not start autosave: {e}"))?;
+            Ok(FolderStore { jobs: Mutex::new(jobs), waiting: Mutex::new(waiting), error })
+        }
+
+        /// Queues `job` for the background thread; one that stopped (it can't, short of a panic)
+        /// is logged, and the copy is then not kept.
+        fn send(&self, job: Job) {
+            let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            if jobs.send(job).is_err() {
+                log::warn!("autosave stopped: its thread is gone");
+            }
+        }
+
+        /// The copies waiting, locked.
+        fn list(&self) -> std::sync::MutexGuard<'_, Vec<(PathBuf, Recovery)>> {
+            self.waiting.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        /// Takes the offered copy off the list, for `job` to do with its file.
+        fn take_offered(&self, job: fn(PathBuf) -> Job) {
+            let mut waiting = self.list();
+            if waiting.is_empty() {
+                return;
+            }
+            let (path, _) = waiting.remove(0);
+            drop(waiting);
+            self.send(job(path));
+        }
+    }
+
+    /// Whether `path` is a copy an earlier run left.
+    fn is_pending(path: &Path) -> bool {
+        path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(PENDING_PREFIX) && n.ends_with(EXTENSION))
+    }
+
+    /// A name for a copy set aside that no other copy has: `recovered-<n>.recovery`, one past the
+    /// highest number there.
+    fn unused_pending_name(dir: &Path) -> PathBuf {
+        let highest = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().to_str()?.to_string();
+                name.strip_prefix(PENDING_PREFIX)?.strip_suffix(EXTENSION)?.parse::<u64>().ok()
+            })
+            .max();
+        let n = highest.map_or(1, |h| h.saturating_add(1));
+        dir.join(format!("{PENDING_PREFIX}{n}{EXTENSION}"))
+    }
+
+    /// A copy's description, from its first line; a copy whose line doesn't read (cut short,
+    /// garbled) is still offered, as an untitled project of its file's time.
+    fn describe(path: &Path) -> Recovery {
+        let mut line = String::new();
+        let read = std::fs::File::open(path).and_then(|f| std::io::BufReader::new(f.take(MAX_HEADER)).read_line(&mut line));
+        if read.is_ok()
+            && let Ok(r) = serde_json::from_str::<Recovery>(line.trim_end())
+        {
+            return r;
+        }
+        let time = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        Recovery { time, ..Recovery::default() }
+    }
+
+    /// The background thread: does what it is asked in order. A write followed by another is
+    /// skipped: only the latest copy matters.
+    fn work(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>) {
+        let fail = |e: String| {
+            log::warn!("autosave: {e}");
+            *error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+        };
+        let mut next = rx.recv().ok();
+        while let Some(job) = next.take() {
+            if let Job::Write(..) = job
+                && let Ok(later) = rx.try_recv()
+            {
+                match later {
+                    Job::Write(..) => {
+                        next = Some(later);
+                        continue;
+                    }
+                    other => next = Some(other),
+                }
+            }
+            match job {
+                Job::Write(project, about) => {
+                    if let Err(e) = write(dir, *project, &about) {
+                        fail(e);
+                    }
+                }
+                Job::Clear => remove(&dir.join(LIVE)),
+                Job::Remove(path) => remove(&path),
+                Job::Adopt(path) => {
+                    if let Err(e) = std::fs::rename(&path, dir.join(LIVE)) {
+                        fail(format!("could not keep the recovered copy: {e}"));
+                    }
+                }
+                Job::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+            if next.is_none() {
+                next = rx.recv().ok();
+            }
+        }
+    }
+
+    /// Writes this run's copy: the description line, then the project's text, in one atomic
+    /// write, so a stop part way leaves the previous copy whole.
+    fn write(dir: &Path, project: Project, about: &Recovery) -> Result<(), String> {
+        let text = project.recovery_text()?;
+        let header = serde_json::to_string(about).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::with_capacity(header.len() + 1 + text.len());
+        bytes.extend_from_slice(header.as_bytes());
+        bytes.push(b'\n');
+        bytes.extend_from_slice(text.as_bytes());
+        rustgis_engine::data::io::write_atomic(&dir.join(LIVE), &bytes).map_err(|e| e.to_string())
+    }
+
+    /// Removes a copy; one already gone is no error.
+    fn remove(path: &Path) {
+        if let Err(e) = std::fs::remove_file(path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            log::warn!("autosave: could not remove {}: {e}", path.display());
+        }
+    }
+
+    impl RecoveryStore for FolderStore {
+        /// Serialized and written by the background thread; a newer copy queued behind it wins.
+        fn write(&self, project: Project, about: Recovery) {
+            self.send(Job::Write(Box::new(project), about));
+        }
+
+        /// Done after any copy queued before it, so a slow write can't bring the copy back.
+        fn clear(&self) {
+            self.send(Job::Clear);
+        }
+
+        /// Waits up to [`FLUSH_WAIT`] for the background thread to reach this point. A copy still
+        /// being written then is left, and offered at the next start as if this run hadn't closed.
+        fn flush(&self) {
+            let (done, wait) = channel();
+            self.send(Job::Flush(done));
+            if wait.recv_timeout(FLUSH_WAIT).is_err() {
+                log::warn!("autosave: a recovery copy was still being written at exit");
+            }
+        }
+
+        /// The newest waiting, as [`FolderStore::open`] found them.
+        fn pending(&self) -> Option<Recovery> {
+            self.list().first().map(|(_, about)| about.clone())
+        }
+
+        /// As many as [`FolderStore::open`] found, less those recovered or discarded since.
+        fn waiting(&self) -> usize {
+            self.list().len()
+        }
+
+        /// Read here, on the caller's thread (the user is waiting for it), at most a project's
+        /// largest size; a copy cut short or not text is refused with why.
+        fn read_pending(&self) -> Result<String, String> {
+            let path = self.list().first().map(|(p, _)| p.clone()).ok_or("there is no unsaved work to recover")?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .and_then(|f| f.take(rustgis_engine::project::MAX_BYTES + MAX_HEADER + 1).read_to_end(&mut bytes))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if bytes.len() as u64 > rustgis_engine::project::MAX_BYTES + MAX_HEADER {
+                return Err("the recovery copy is too large".into());
+            }
+            let text = String::from_utf8(bytes).map_err(|_| "the recovery copy isn't text".to_string())?;
+            let (_, project) = text.split_once('\n').ok_or("the recovery copy is incomplete")?;
+            Ok(project.to_string())
+        }
+
+        /// The offered copy's file goes after what is queued before it; the next one is offered.
+        fn discard_pending(&self) {
+            self.take_offered(Job::Remove);
+        }
+
+        /// Renamed into this run's place, unchanged: nothing is written again. A rename that
+        /// fails is told as a failed write is.
+        fn adopt_pending(&self) {
+            self.take_offered(Job::Adopt);
+        }
+
+        /// The background thread's last failure, taken so it is told once.
+        fn take_error(&self) -> Option<String> {
+            self.error.lock().unwrap_or_else(|e| e.into_inner()).take()
+        }
+    }
+}

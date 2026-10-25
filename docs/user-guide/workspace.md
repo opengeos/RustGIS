@@ -19,6 +19,38 @@ Saved layer addresses omit passwords, access keys, tokens and signatures. The op
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
 connection again or add it again with credentials.
 
+### Autosave and recovery
+
+The desktop app keeps a recovery copy of unsaved work. While the project has changes that aren't
+saved, it writes a copy every few minutes (5 by default), and only when something changed since
+the last one. Choose how often, or turn it off, in **Settings › Autosave**
+(`ui.autosave={"minutes": 10}`; `0` is off). The copy is written in the background, so a large
+project doesn't hold up the app. It leaves out layer passwords, keys and tokens, as a saved project
+does. It is kept in the `recovery` folder of the app's
+[data folder](../installation.md#settings-data-and-cache-folders), not beside your project.
+Saving, opening or starting another project, and quitting RustGIS remove it.
+
+If RustGIS crashes, is closed by the system or loses power, the next launch asks **Recover unsaved
+work?** and says how old the copy is.
+
+- **Recover** opens the work unsaved, under its file's name, so **Save** writes it back to that
+  file. RustGIS warns you if the file was changed after the copy was made. A project that was never
+  saved stays untitled, and **Save** asks where to write it.
+- **Discard** deletes the copy.
+- **Later** keeps the copy for the next launch.
+
+If RustGIS crashes again before you decide, neither copy replaces the other. Up to five are kept
+and offered newest first, one per launch once you recover one. Recovering never replaces a project
+that has unsaved changes of its own: save it first.
+
+The same choices are commands: `ui.recover` opens the copy, and `ui.recover={"discard": true}`
+deletes it. `ui.autosave` reports the interval and any copy waiting.
+
+Quitting doesn't ask about unsaved changes, and their copy is removed: save before you quit. A
+second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
+one's copy. The browser app doesn't autosave yet; it warns before you leave a page with unsaved
+changes.
+
 ### QGIS projects and styles
 
 A QGIS project (`.qgs`, or a `.qgz` archive) opens as a new map of the current project: **Open**
@@ -185,6 +217,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Language**: **Settings › Language** switches the interface among
   [18 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
   borders.
+- **Autosave**: **Settings › Autosave** sets how often the desktop app keeps a
+  [recovery copy](#autosave-and-recovery) of unsaved work, or turns it off.
 - **Start-up**: **Settings › Start-up** sets what RustGIS opens with: **Start With** the World Atlas
   sample or a blank map, or, in the desktop app, **Last Project** (the `.rgis` project last opened
   or saved) or **Choose Project…** (one you pick once), the **Projection** the map opens in (a
@@ -192,7 +226,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
   full extent, or **Use Current View** to keep the view you are looking at). A project opened at
   start keeps its own projection and view; the Projection and Extent settings apply to the sample
   and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample
-  and says why. After a crash it starts with the sample too, in case the project is what crashed;
+  and says why. After a crash it starts with the sample too, in case the project is what crashed, and offers
+  back any [unsaved work](#autosave-and-recovery);
   starting `rustgis --sample` also skips the start-up project. The choices are remembered on this
   computer, or in this browser for the web app. Opening files from the command line starts a blank
   map.

@@ -817,6 +817,8 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
         save_pref: Some(save_pref),
         // No keychain in the browser: script on the page could read anything stored (#754).
         secrets: None,
+        // No autosave in the browser yet: localStorage is too small for a project (#873).
+        recovery: None,
         fetch_font: Some(Box::new(move |url: &str| {
             let (url, inbox, ctx) = (url.to_string(), font_sink.clone(), font_ctx.clone());
             wasm_bindgen_futures::spawn_local(async move {

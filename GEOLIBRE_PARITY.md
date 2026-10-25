@@ -214,8 +214,9 @@ storymaps.md_
   `postMessage` (`apps/rustgis-web/src/embed.rs`); no npm client.
 - [ ] **Import QGIS (`.qgs/.qgz`) and ArcGIS Pro (`.aprx/.mapx`) projects**. Missing
   (_Exploratory_).
-- [ ] **Autosave, project history, crash recovery, snapshot compare**. Partial: undo and per-layer
-  archive restore (_Roadmap: solid ground_ for autosave and crash recovery).
+- [ ] **Autosave, project history, crash recovery, snapshot compare**. Partial: undo, per-layer
+  archive restore, and autosave with crash recovery in the desktop app
+  ([#873](https://github.com/opengeos/RustGIS/issues/873)); the browser has neither yet.
 - [ ] **Startup preferences and shareable interface settings**. Partial: start-up preferences,
   Pane Sets and ribbon/QAT customization.
 - [ ] **Layer metadata with STAC Item export**. Missing (_Roadmap: data at the source_).
