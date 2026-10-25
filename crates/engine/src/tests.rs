@@ -360,6 +360,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             join: LineJoin::Round,
             level: None,
             dash: None,
+            markers: None,
         },
         LineStroke {
             color: Some(Rgba::rgb(0xFF, 0x8C, 0)),
@@ -369,6 +370,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             join: LineJoin::Miter,
             level: None,
             dash: None,
+            markers: None,
         },
         LineStroke { offset: -2.0, ..LineStroke::default() },
     ];
@@ -413,6 +415,59 @@ fn line_strokes_stack_and_survive_save_and_undo() {
     assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes.len(), 1);
+}
+
+#[test]
+fn line_strokes_take_markers_and_hash_marks_along_the_line() {
+    use rustgis_map::{LineMark, LineMarkers, Marker, Placements, Rgba};
+    let mut s = world();
+    // A river: its line, triangles at both ends turned with it, and ticks across it.
+    let strokes = json!([
+        {"color": "#1E5AA8", "width": 2},
+        {"color": "#1E5AA8", "markers": {"mark": "Triangle", "size": 8, "at": ["first", "last"], "outline": "#FFFFFF"}, "width": 1},
+        {"color": "#1E5AA8", "width": 1, "markers": {"mark": "hash", "size": 6, "interval": 10, "angle": 30, "rotate": false}}
+    ]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    let st = s.map().layer_by_name("Rivers").unwrap().line_strokes.clone();
+    assert_eq!(st[0].markers, None);
+    let ends = LineMarkers {
+        mark: LineMark::Marker(Marker::Triangle),
+        size: 8.0,
+        at: Placements::FIRST.with(Placements::LAST),
+        outline: Some(Rgba::rgb(255, 255, 255)),
+        ..LineMarkers::default()
+    };
+    assert_eq!(st[1].markers, Some(ends));
+    let ticks = LineMarkers { mark: LineMark::Hash, size: 6.0, interval: 10.0, angle: 30.0, rotate: false, ..LineMarkers::default() };
+    assert_eq!(st[2].markers, Some(ticks));
+    // A single place is a list of one; out-of-range numbers are brought into range.
+    let one = json!([{"markers": {"at": "middle", "size": 1e9, "interval": 0, "angle": 450}}]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": one})).unwrap();
+    let m = s.map().layer_by_name("Rivers").unwrap().line_strokes[0].markers.unwrap();
+    assert_eq!((m.at, m.size, m.interval, m.angle), (Placements::MIDDLE, 100.0, 0.5, 90.0));
+    // Drawn in an export.
+    let dir = std::env::temp_dir().join(format!("rustgis-markers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // Junk is refused, saying where, and changes nothing.
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"markers": 5}), "stroke 1: markers: an object"),
+        (json!({"markers": {"mark": "hexagon"}}), "unknown mark 'hexagon'"),
+        (json!({"markers": {"mark": 3}}), "mark is"),
+        (json!({"markers": {"at": "sideways"}}), "at is a placement"),
+        (json!({"markers": {"at": []}}), "at is a placement"),
+        (json!({"markers": {"at": ["first", 2]}}), "at is a placement"),
+        (json!({"markers": {"rotate": "yes"}}), "rotate is true or false"),
+        (json!({"markers": {"size": "big"}}), "size is a number"),
+        (json!({"markers": {"outline": "white"}}), "outline must be"),
+    ] {
+        let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [bad]})).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
 }
 
 #[test]

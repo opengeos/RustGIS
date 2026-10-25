@@ -12,6 +12,7 @@ pub mod fonts;
 pub mod gpu_scene;
 pub mod layout;
 mod line_labels;
+mod line_markers;
 pub mod logo;
 mod mesh;
 pub mod pdf;
@@ -621,7 +622,7 @@ impl Ctx<'_> {
             self.ring_path_at(&mut pb, part, false, &mut starts);
         }
         let Some(path) = pb.finish() else { return };
-        self.stacked_path(pm, &path, s, strokes, &starts);
+        self.stacked_path(pm, &path, s, strokes, &starts, parts);
     }
 
     /// A stroke's dash pattern in pixels for `path`, or `None` to draw it solid: a pattern under a
@@ -643,11 +644,29 @@ impl Ctx<'_> {
     /// line cut at the clip box keeps its dashes where they'd be uncut. An offset stroke takes the
     /// same starts: exact on a straight line, a little off after bends, where the shifted line is
     /// longer or shorter than the line.
-    fn stacked_path(&self, pm: &mut Pixmap, path: &tiny_skia::Path, s: &Symbol, strokes: &[LineStroke], starts: &DashStarts) {
+    ///
+    /// `parts` is the line `path` was made from: markers along it are placed along the line as a
+    /// whole ([`line_markers`]).
+    fn stacked_path(
+        &self,
+        pm: &mut Pixmap,
+        path: &tiny_skia::Path,
+        s: &Symbol,
+        strokes: &[LineStroke],
+        starts: &DashStarts,
+        parts: &[Vec<Coord>],
+    ) {
         // Shifted once per offset: a casing and its core usually share one.
         let mut shifted: Vec<(f32, Option<tiny_skia::Path>)> = Vec::new();
+        // The line in device pixels, made for the first stroke of markers.
+        let mut runs: Option<Vec<line_markers::Run>> = None;
         for st in strokes {
             let (c, w) = st.resolve(s);
+            if let Some(m) = &st.markers {
+                let runs = runs.get_or_insert_with(|| self.marker_runs(parts));
+                line_markers::draw(pm, runs, m, c, if w.is_nan() { 0.0 } else { w }, st.offset, self.ppp);
+                continue;
+            }
             if w.is_nan() || w <= 0.0 || c.a() == 0 {
                 continue;
             }
@@ -697,6 +716,20 @@ impl Ctx<'_> {
                 }
             }
         }
+    }
+
+    /// A line's parts in device pixels, for markers along it: each broken where the projection
+    /// can't show a point, as the line is drawn.
+    fn marker_runs(&self, parts: &[Vec<Coord>]) -> Vec<line_markers::Run> {
+        let ppp = self.view.pixels_per_point;
+        let mut runs = Vec::new();
+        for part in parts {
+            let pts: Vec<Option<(f64, f64)>> = part.iter().map(|c| self.screen(*c).map(|(x, y)| (x * ppp, y * ppp))).collect();
+            for run in pts.split(|p| p.is_none_or(|(x, y)| !x.is_finite() || !y.is_finite())) {
+                runs.extend(line_markers::Run::new(run.iter().flatten().copied()));
+            }
+        }
+        runs
     }
 
     fn marker(&self, pm: &mut Pixmap, c: Coord, s: &Symbol, opacity: f32, halo: Option<Rgba>) {
@@ -813,9 +846,15 @@ impl Ctx<'_> {
                     .iter()
                     .filter(|st| {
                         let (c, w) = st.resolve(s);
-                        w > 0.0 && c.a() > 0
+                        (w > 0.0 || st.markers.is_some()) && c.a() > 0
                     })
-                    .map(|st| LineStroke { color: Some(SELECTION), width: Some(st.resolve(s).1 + 3.0), ..*st })
+                    .map(|st| LineStroke {
+                        color: Some(SELECTION),
+                        width: Some(st.resolve(s).1.max(0.0) + 3.0),
+                        // A marker's halo is its outline.
+                        markers: st.markers.map(|m| rustgis_map::LineMarkers { outline: Some(SELECTION), ..m }),
+                        ..*st
+                    })
                     .collect();
                 self.stacked_line(pm, parts, s, &halo);
                 self.stacked_line(pm, parts, s, strokes);
@@ -1148,11 +1187,10 @@ const MAX_SPRITES: usize = 1024;
 /// gains little from one. With [`MAX_SPRITES`], the cache stays under about 10 MB.
 const MAX_SPRITE_REACH: i64 = 24;
 
-/// A marker centred at (`x`, `y`) device pixels.
-fn draw_marker(pm: &mut Pixmap, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) {
-    let r = (s.size.max(1.0) * ppp) / 2.0;
+/// A marker's outline at (`x`, `y`), `r` its radius in pixels.
+pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
-    match s.marker {
+    match marker {
         Marker::Circle => pb.push_circle(x, y, r),
         Marker::Square => {
             if let Some(rect) = tiny_skia::Rect::from_xywh(x - r * 0.9, y - r * 0.9, r * 1.8, r * 1.8) {
@@ -1182,7 +1220,13 @@ fn draw_marker(pm: &mut Pixmap, x: f32, y: f32, s: &Symbol, opacity: f32, halo: 
             pb.close();
         }
     }
-    let Some(path) = pb.finish() else { return };
+    pb.finish()
+}
+
+/// A marker centred at (`x`, `y`) device pixels.
+fn draw_marker(pm: &mut Pixmap, x: f32, y: f32, s: &Symbol, opacity: f32, halo: Option<Rgba>, ppp: f32) {
+    let r = (s.size.max(1.0) * ppp) / 2.0;
+    let Some(path) = marker_path(x, y, r, s.marker) else { return };
     if let Some(h) = halo {
         let st = Stroke { width: 3.5 * ppp, line_join: LineJoin::Round, ..Stroke::default() };
         pm.stroke_path(&path, &paint(h, 1.0), &st, Transform::identity(), None);
@@ -5683,6 +5727,63 @@ mod tests {
     }
 
     #[test]
+    fn markers_and_hash_marks_draw_along_a_line() {
+        use rustgis_map::{LineMark, LineMarkers, LineStroke, Placements};
+        // A line from lon -1 to 1 at 1,500 m a pixel: x 25.8 to 174.2, along y 100.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("rail", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.0), Coord::new(1.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let red = Rgba::rgb(255, 0, 0);
+        let draw = |m: &mut Map, markers: LineMarkers, offset: f32| {
+            m.layer_mut(id).unwrap().line_strokes =
+                vec![LineStroke { color: Some(red), width: Some(2.0), offset, markers: Some(markers), ..Default::default() }];
+            render(m, &view).unwrap()
+        };
+        let is_red = |r: &Rendered, x: u32, y: u32| {
+            let p = r.pixmap.pixel(x, y).unwrap();
+            (p.red(), p.green(), p.blue()) == (255, 0, 0)
+        };
+        let squares = LineMarkers { mark: LineMark::Marker(Marker::Square), size: 8.0, interval: 30.0, ..LineMarkers::default() };
+        // Every 30 pt from the start (x 25.8, 55.8, 85.8 …), nothing between, no line.
+        let r = draw(&mut m, squares, 0.0);
+        assert!([26, 56, 86, 116, 146].iter().all(|x| is_red(&r, *x, 100)));
+        assert!([41, 71, 101, 131, 161].iter().all(|x| !is_red(&r, *x, 100)), "nothing between");
+        // At the ends and the middle only.
+        let places = LineMarkers { at: Placements::FIRST.with(Placements::LAST).with(Placements::MIDDLE), ..squares };
+        let r = draw(&mut m, places, 0.0);
+        assert!(is_red(&r, 26, 100) && is_red(&r, 100, 100) && is_red(&r, 174, 100));
+        assert!(!is_red(&r, 56, 100) && !is_red(&r, 146, 100));
+        // Shifted 10 pt to the right of the line's direction (down the screen, going east).
+        let r = draw(&mut m, squares, 10.0);
+        assert!(is_red(&r, 56, 110) && !is_red(&r, 56, 100));
+        // Hash marks: across the line, 10 pt long, 2 pt wide.
+        let hash = LineMarkers { mark: LineMark::Hash, size: 10.0, ..squares };
+        let r = draw(&mut m, hash, 0.0);
+        assert!(is_red(&r, 55, 96) && is_red(&r, 55, 104) && !is_red(&r, 60, 100) && !is_red(&r, 55, 108));
+        // Selected: a halo around each marker.
+        m.layer_mut(id).unwrap().selection = vec![0];
+        let r = draw(&mut m, squares, 0.0);
+        let p = r.pixmap.pixel(61, 100).unwrap();
+        assert!(is_red(&r, 56, 100) && (p.red(), p.green(), p.blue()) != (255, 255, 255), "{p:?}");
+        m.layer_mut(id).unwrap().selection.clear();
+        // Zoomed far in on a line round the world, a mark every half point: only those that show
+        // are visited (this would be 80 billion marks), and they draw.
+        let mut d = Dataset::new("long", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-170.0, 0.0), Coord::new(170.0, 0.0)]])), vec![]);
+        let long = m.add_dataset(d);
+        m.layer_mut(id).unwrap().visible = false;
+        let tiny = LineMarkers { size: 0.4, interval: 0.5, ..squares };
+        m.layer_mut(long).unwrap().line_strokes = vec![LineStroke { color: Some(red), markers: Some(tiny), ..Default::default() }];
+        let near = View { camera: Camera { res: 0.001, ..camera }, ..view };
+        let r = render(&mut m, &near).unwrap();
+        assert!((0..200).any(|x| r.pixmap.pixel(x, 100).unwrap().red() > 0), "marks show");
+    }
+
+    #[test]
     fn a_class_draws_its_own_stacked_strokes() {
         // Two lines of two Unique Values classes: "road" has a black casing and a red core of its
         // own, "path" takes the layer's single green stroke.
@@ -5790,7 +5891,7 @@ mod tests {
             };
             let s = Symbol::default_for(GeometryType::Polyline, 0);
             let mut drawn = Pixmap::new(100, 20).unwrap();
-            ctx.stacked_path(&mut drawn, &cut, &s, &[stroke], &starts);
+            ctx.stacked_path(&mut drawn, &cut, &s, &[stroke], &starts, &[]);
             let mut whole = Pixmap::new(100, 20).unwrap();
             let mut pb = PathBuilder::new();
             let (x0, y) = view.to_screen(line[0]);

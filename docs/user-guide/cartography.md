@@ -159,6 +159,27 @@ layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A
 layer.strokeLevels={"layer":"Roads","on":true}
 ```
 
+A stroke can draw markers or hash marks along the line instead of a line, as railways, boundaries
+and directions of flow are drawn: its **Draw** menu picks **Line**, **Markers** or **Hash marks**.
+Markers take a **Shape** and a **Size**; hash marks a **Length**, crossing the line square at an
+**Angle** of 0°. **Place** puts them at intervals along the line (**Interval** apart, counted from
+its start), at its vertices or its inner ones, at either end or both, or in its middle. **With the
+line** turns each mark with the line's direction; the **Angle** turns it further, clockwise. Marks
+take the stroke's colour, its width as a hash mark's line (or a marker's outline, by command), and
+its offset to either side. Stack them with line strokes: a casing, a core and ticks across it. By
+command, `"markers"` on a stroke:
+
+```text
+layer.lineStrokes={"layer":"Railways","strokes":[{"color":"#333333","width":1.5},{"color":"#333333","width":1,"markers":{"mark":"hash","size":6,"interval":10}}]}
+layer.lineStrokes={"layer":"Rivers","strokes":[{"width":1},{"markers":{"mark":"triangle","size":7,"at":"middle"}}]}
+```
+
+`"at"` takes `"interval"`, `"vertices"`, `"innerVertices"`, `"first"`, `"last"`, `"middle"` and
+`"segmentMiddles"`, or a list of them; `"offsetAlong"` moves the marks along the line (from its
+start, back from its end, on from its middle), `"averageAngle"` turns a mark at an interval with
+the line over that stretch of it (smoother on a line of many short bends), `"rotate": false`
+keeps marks upright, and `"outline"` gives markers an outline as wide as the stroke.
+
 ### Reference scale
 
 Symbol and label sizes are set in points, and normally keep that size on screen at every scale.

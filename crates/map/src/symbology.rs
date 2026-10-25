@@ -251,11 +251,202 @@ pub struct LineStroke {
     /// Dashed: the pattern along the line, in points; `None` is a solid line.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de_dash")]
     pub dash: Option<Dash>,
+    /// Markers or hash marks along the line instead of the stroke: in the stroke's colour, the
+    /// width their outline's (a hash mark's line's), shifted sideways by its offset. Cap, join
+    /// and dash don't apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markers: Option<LineMarkers>,
 }
 
 impl Default for LineStroke {
     fn default() -> Self {
-        LineStroke { color: None, width: None, offset: 0.0, cap: LineCap::Round, join: LineJoin::Round, level: None, dash: None }
+        LineStroke {
+            color: None,
+            width: None,
+            offset: 0.0,
+            cap: LineCap::Round,
+            join: LineJoin::Round,
+            level: None,
+            dash: None,
+            markers: None,
+        }
+    }
+}
+
+/// The largest marker or hash mark along a line, in points.
+pub const MAX_LINE_MARKER_SIZE: f32 = 100.0;
+/// The shortest and longest interval between markers along a line, in points.
+pub const MIN_MARKER_INTERVAL: f32 = 0.5;
+pub const MAX_MARKER_INTERVAL: f32 = 10_000.0;
+
+/// Where a stroke's markers go on each part of a line, several places at once. Written to a
+/// project as their codes, `["first", "last"]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Placements(u8);
+
+impl Placements {
+    /// At every interval along the line, from its start.
+    pub const INTERVAL: Placements = Placements(1);
+    pub const VERTICES: Placements = Placements(1 << 1);
+    /// Every vertex but the first and the last.
+    pub const INNER_VERTICES: Placements = Placements(1 << 2);
+    pub const FIRST: Placements = Placements(1 << 3);
+    pub const LAST: Placements = Placements(1 << 4);
+    /// Halfway along the line.
+    pub const MIDDLE: Placements = Placements(1 << 5);
+    /// Halfway along each segment.
+    pub const SEGMENT_MIDDLES: Placements = Placements(1 << 6);
+    pub const NONE: Placements = Placements(0);
+
+    const CODES: [(Placements, &'static str); 7] = [
+        (Placements::INTERVAL, "interval"),
+        (Placements::VERTICES, "vertices"),
+        (Placements::INNER_VERTICES, "innerVertices"),
+        (Placements::FIRST, "first"),
+        (Placements::LAST, "last"),
+        (Placements::MIDDLE, "middle"),
+        (Placements::SEGMENT_MIDDLES, "segmentMiddles"),
+    ];
+
+    pub fn has(self, p: Placements) -> bool {
+        self.0 & p.0 != 0
+    }
+
+    pub fn with(self, p: Placements) -> Placements {
+        Placements(self.0 | p.0)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Its codes, in a fixed order.
+    pub fn codes(self) -> Vec<&'static str> {
+        Self::CODES.iter().filter(|(p, _)| self.has(*p)).map(|(_, c)| *c).collect()
+    }
+
+    /// The placement a code names ("first", "middle", …), whatever its case.
+    pub fn from_code(code: &str) -> Option<Placements> {
+        Self::CODES.iter().find(|(_, c)| c.eq_ignore_ascii_case(code.trim())).map(|(p, _)| *p)
+    }
+
+    /// Every code there is, for messages.
+    pub fn all_codes() -> String {
+        Self::CODES.iter().map(|(_, c)| format!("\"{c}\"")).collect::<Vec<_>>().join(", ")
+    }
+}
+
+impl Default for Placements {
+    fn default() -> Self {
+        Placements::INTERVAL
+    }
+}
+
+impl Serialize for Placements {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.codes().serialize(s)
+    }
+}
+
+/// Read from a project leniently: codes it doesn't know are left out, and none at all is the
+/// default (at every interval).
+impl<'de> Deserialize<'de> for Placements {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let codes: Vec<String> = Vec::deserialize(d)?;
+        let p = codes.iter().take(16).filter_map(|c| Placements::from_code(c)).fold(Placements::NONE, Placements::with);
+        Ok(if p.is_empty() { Placements::default() } else { p })
+    }
+}
+
+/// What a stroke draws along a line instead of a line: a marker, or a hash mark across it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LineMark {
+    Marker(Marker),
+    Hash,
+}
+
+impl Default for LineMark {
+    fn default() -> Self {
+        LineMark::Marker(Marker::Circle)
+    }
+}
+
+/// Markers or hash marks along a line (a [`LineStroke::markers`]), as QGIS's marker and hashed
+/// lines draw them. Lengths are in points.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LineMarkers {
+    #[serde(default)]
+    pub mark: LineMark,
+    /// A marker's size, or a hash mark's length.
+    #[serde(default = "LineMarkers::default_size")]
+    pub size: f32,
+    #[serde(default)]
+    pub at: Placements,
+    /// The distance between two markers placed at every interval.
+    #[serde(default = "LineMarkers::default_interval")]
+    pub interval: f32,
+    /// How far along the line the markers move: from its start (at every interval, the first
+    /// vertex), back from its end (the last vertex), or on from the middle.
+    #[serde(default)]
+    pub offset_along: f32,
+    /// Turned with the line, so a marker's top faces left of the line's direction; otherwise
+    /// upright.
+    #[serde(default = "LineMarkers::yes")]
+    pub rotate: bool,
+    /// The stretch of line, centred on a marker placed at an interval, whose direction it turns
+    /// with: smoother on a line of many short bends. 0 is the direction of the segment it sits on.
+    #[serde(default)]
+    pub average_angle: f32,
+    /// Turned further, in degrees clockwise. A hash mark at 0 crosses the line square.
+    #[serde(default)]
+    pub angle: f32,
+    /// A marker's outline colour; `None` draws none. Its width is the stroke's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Rgba>,
+}
+
+impl Default for LineMarkers {
+    fn default() -> Self {
+        LineMarkers {
+            mark: LineMark::default(),
+            size: Self::default_size(),
+            at: Placements::default(),
+            interval: Self::default_interval(),
+            offset_along: 0.0,
+            rotate: true,
+            average_angle: 0.0,
+            angle: 0.0,
+            outline: None,
+        }
+    }
+}
+
+impl LineMarkers {
+    fn default_size() -> f32 {
+        4.0
+    }
+
+    fn default_interval() -> f32 {
+        12.0
+    }
+
+    fn yes() -> bool {
+        true
+    }
+
+    /// Brought into range: a size from 0 to [`MAX_LINE_MARKER_SIZE`], an interval from
+    /// [`MIN_MARKER_INTERVAL`] to [`MAX_MARKER_INTERVAL`], an offset along the line and an
+    /// averaging stretch within the longest interval, an angle within a turn.
+    pub fn clamped(mut self) -> LineMarkers {
+        // Too large for an f32 (infinite once read) is the nearest bound, as a large value is.
+        let fit = |v: f32, lo: f32, hi: f32, or: f32| if v.is_nan() { or } else { v.clamp(lo, hi) };
+        self.size = fit(self.size, 0.0, MAX_LINE_MARKER_SIZE, Self::default_size());
+        self.interval = fit(self.interval, MIN_MARKER_INTERVAL, MAX_MARKER_INTERVAL, Self::default_interval());
+        self.offset_along = fit(self.offset_along, -MAX_MARKER_INTERVAL, MAX_MARKER_INTERVAL, 0.0);
+        self.average_angle = fit(self.average_angle, 0.0, MAX_MARKER_INTERVAL, 0.0);
+        self.angle = if self.angle.is_finite() { self.angle.rem_euclid(360.0) } else { 0.0 };
+        self
     }
 }
 
@@ -275,6 +466,7 @@ impl LineStroke {
     pub fn clamped(mut self) -> LineStroke {
         self.width = self.width.map(|w| if w.is_finite() { w.clamp(0.0, MAX_STROKE_WIDTH) } else { 1.0 });
         self.offset = if self.offset.is_finite() { self.offset.clamp(-MAX_STROKE_OFFSET, MAX_STROKE_OFFSET) } else { 0.0 };
+        self.markers = self.markers.map(LineMarkers::clamped);
         self
     }
 }
