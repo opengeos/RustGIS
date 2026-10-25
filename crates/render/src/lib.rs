@@ -723,6 +723,33 @@ impl Ctx<'_> {
     fn marker_runs(&self, parts: &[Vec<Coord>]) -> Vec<line_markers::Run> {
         let ppp = self.view.pixels_per_point;
         let mut runs = Vec::new();
+        if let Some(g) = &self.globe {
+            // On the globe, along the same bent, horizon-cut points as `globe_line` draws.
+            let h = g.horizon();
+            let px = |v: V3| {
+                let (x, y) = g.project(v);
+                (x * ppp, y * ppp)
+            };
+            for part in parts {
+                let mut run: Vec<(f64, f64)> = Vec::new();
+                let mut prev: Option<V3> = None;
+                for v in Self::globe_vectors(g, part) {
+                    let vis = v[2] > h;
+                    match prev {
+                        Some(p) if p[2] > h && !vis => {
+                            run.push(px(g.horizon_crossing(p, v)));
+                            runs.extend(line_markers::Run::new(std::mem::take(&mut run)));
+                        }
+                        Some(p) if p[2] <= h && vis => run.extend([px(g.horizon_crossing(p, v)), px(v)]),
+                        _ if vis => run.push(px(v)),
+                        _ => {}
+                    }
+                    prev = Some(v);
+                }
+                runs.extend(line_markers::Run::new(run));
+            }
+            return runs;
+        }
         for part in parts {
             let pts: Vec<Option<(f64, f64)>> = part.iter().map(|c| self.screen(*c).map(|(x, y)| (x * ppp, y * ppp))).collect();
             for run in pts.split(|p| p.is_none_or(|(x, y)| !x.is_finite() || !y.is_finite())) {
@@ -5787,6 +5814,29 @@ mod tests {
         let near = View { camera: Camera { res: 0.001, ..camera }, ..view };
         let r = render(&mut m, &near).unwrap();
         assert!((0..200).any(|x| r.pixmap.pixel(x, 100).unwrap().red() > 0), "marks show");
+    }
+
+    #[test]
+    fn markers_on_the_globe_follow_the_line_up_to_the_horizon() {
+        use rustgis_map::{LineMarkers, LineStroke};
+        // A line from lon -30 to lon 120 seen over lon 10: its far end is behind the globe, but
+        // the part up to the horizon shows, so its marks do.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        m.projection = rustgis_map::Projection::Globe;
+        let mut d = Dataset::new("rail", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-30.0, 0.0), Coord::new(120.0, 0.0)]])), vec![]);
+        let id = m.add_dataset(d);
+        let red = Rgba::rgb(255, 0, 0);
+        let squares =
+            LineMarkers { mark: rustgis_map::LineMark::Marker(Marker::Square), size: 6.0, interval: 20.0, ..LineMarkers::default() };
+        m.layer_mut(id).unwrap().line_strokes = vec![LineStroke { color: Some(red), markers: Some(squares), ..Default::default() }];
+        let camera = Camera { center: lonlat_to_merc(Coord::new(10.0, 0.0)), res: 40_000.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 400.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        let reds: Vec<u32> =
+            (0..400).filter(|x| (0..400).any(|y| r.pixmap.pixel(*x, y).is_some_and(|p| p.red() > 200 && p.green() < 60))).collect();
+        assert!(reds.len() > 20, "marks along the visible part: {reds:?}");
     }
 
     #[test]
