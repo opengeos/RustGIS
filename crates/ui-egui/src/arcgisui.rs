@@ -5,7 +5,6 @@
 
 use crate::RustGisApp;
 use crate::theme::Tokens;
-use egui::vec2;
 use rustgis_engine::render::rustgis_tiles::arcgis_auth;
 use serde_json::json;
 
@@ -86,7 +85,7 @@ fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
         ))
         .weak(),
     );
-    egui::Grid::new("arcgis_sign_in_form").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+    egui::Grid::new("arcgis_sign_in_form").num_columns(2).spacing(egui::vec2(10.0, 8.0)).show(ui, |ui| {
         let label = ui.label(tl!("Portal"));
         ui.add(egui::TextEdit::singleline(&mut app.ui.arcgis.portal).hint_text("https://myorg.maps.arcgis.com").desired_width(320.0))
             .labelled_by(label.id)
@@ -112,7 +111,7 @@ fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             if let Progress::Failed(e) = &progress {
                 ui.colored_label(t.red, e);
             }
-            if crate::widgets::dialog_button(ui, tl!("Sign in"), Some(t.accent), vec2(96.0, 28.0)).clicked() {
+            if crate::widgets::dialog_button(ui, tl!("Sign in"), Some(t.accent), egui::vec2(96.0, 28.0)).clicked() {
                 start(app);
             }
         }

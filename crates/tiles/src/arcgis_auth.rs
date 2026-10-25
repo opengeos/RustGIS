@@ -30,6 +30,7 @@ pub const PORT: u16 = 7290;
 /// The callback's path.
 pub const CALLBACK: &str = "/arcgis/callback";
 /// An access token is renewed this long before it expires (seconds).
+#[cfg(not(target_arch = "wasm32"))]
 const REFRESH_MARGIN: i64 = 60;
 /// The session asked for: two weeks (the longest ArcGIS gives), in minutes.
 const EXPIRATION_MINUTES: &str = "20160";
@@ -466,6 +467,7 @@ pub fn authorization(url: &str) -> Option<String> {
     (s.expires_at > now_secs()).then(|| format!("Bearer {}", s.access_token))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Whether the session covering `url` has a refresh token and its access token is about to expire.
 fn needs_renewal(url: &str) -> Option<(String, String, String)> {
     let all = sessions();
@@ -474,6 +476,7 @@ fn needs_renewal(url: &str) -> Option<(String, String, String)> {
     (s.expires_at - now_secs() <= REFRESH_MARGIN).then(|| (s.portal.clone(), s.client_id.clone(), refresh.clone()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Stores a renewed grant for `portal`, unless the session was signed out or replaced since.
 fn renewed(portal: &str, old_refresh: &str, grant: Grant) {
     let mut all = sessions();
@@ -486,6 +489,7 @@ fn renewed(portal: &str, old_refresh: &str, grant: Grant) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Drops a session whose refresh token was refused.
 fn expired(portal: &str, old_refresh: &str) {
     sessions().retain(|s| !(s.portal == portal && s.refresh_token.as_deref() == Some(old_refresh)));

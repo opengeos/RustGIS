@@ -54,6 +54,9 @@ pub const NETWORK: &[&str] = &[
     "nldi.basin",
     "nldi.sources",
     "nldi.navigate",
+    // A sign-in reaches the portal; a token is sent to the server it is given for.
+    "arcgis.signIn",
+    "arcgis.token",
 ];
 
 pub fn commands() -> Vec<C> {
