@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::accesskit::Role;
 use egui_kittest::kittest::Queryable;
-use rustgis_ui_egui::{FolderStore, RustGisApp, Services};
+use rustgis_ui_egui::{FolderStore, RecoveryStore, RustGisApp, Services};
 use serde_json::json;
 
 /// This run's copy and the one an earlier run left, as the folder store names them.
@@ -349,4 +349,23 @@ fn recover_returns_once_the_open_work_is_saved() {
     settle(&mut h);
     assert!(h.state().session.map().layer_by_name("Kept").is_some());
     assert!(h.query_by_label("Recover unsaved work?").is_none());
+}
+
+/// A copy that fails in the background wakes the interface (#896 review), so the failure is told
+/// on an idle window too, not at the next input.
+#[test]
+fn a_failed_copy_wakes_the_interface() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = TempDir::new("wake");
+    let recovery = dir.0.join("recovery");
+    let store = FolderStore::open(&recovery).unwrap();
+    // A folder where the copy goes: the write can't replace it.
+    std::fs::create_dir_all(recovery.join(LIVE).join("blocked")).unwrap();
+    let woken = std::sync::Arc::new(AtomicBool::new(false));
+    let flag = woken.clone();
+    store.set_wake(Box::new(move || flag.store(true, Ordering::SeqCst)));
+    store.write(rustgis_engine::sample::world_project(), rustgis_ui_egui::Recovery::default());
+    store.flush();
+    assert!(woken.load(Ordering::SeqCst), "woken after the failure");
+    assert!(store.take_error().is_some());
 }

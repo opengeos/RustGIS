@@ -64,6 +64,9 @@ pub trait RecoveryStore {
     fn adopt_pending(&self);
     /// Why the last copy couldn't be written, once.
     fn take_error(&self) -> Option<String>;
+    /// Gives the store a way to wake the interface when a copy fails in the background, so the
+    /// failure is told on an idle window too. A store that fails only when asked needs none.
+    fn set_wake(&self, _wake: Box<dyn Fn() + Send + Sync>) {}
 }
 
 /// The app's autosave state.
@@ -72,6 +75,9 @@ pub struct AutosaveState {
     pub(crate) minutes: u32,
     /// The session revision the last copy was made at, while one is kept.
     written: Option<u64>,
+    /// The last copy failed in the background: due again at the next interval, unchanged or not.
+    /// Kept apart from `written`, so a save still removes the earlier copy the failure left.
+    failed: bool,
     /// When the last copy was made.
     last: Option<Instant>,
     /// The copy an earlier run left, while the user hasn't recovered or discarded it.
@@ -86,6 +92,8 @@ pub struct AutosaveState {
     offer_error: Option<String>,
     /// The last write error told, so a failing folder isn't reported at every interval.
     told: Option<String>,
+    /// The store was given the interface's wake.
+    wake_set: bool,
 }
 
 impl Default for AutosaveState {
@@ -94,6 +102,7 @@ impl Default for AutosaveState {
         AutosaveState {
             minutes: DEFAULT_MINUTES,
             written: None,
+            failed: false,
             last: None,
             offer: None,
             more: 0,
@@ -101,6 +110,7 @@ impl Default for AutosaveState {
             later: false,
             offer_error: None,
             told: None,
+            wake_set: false,
         }
     }
 }
@@ -154,9 +164,14 @@ fn changed_since(r: &Recovery) -> bool {
 /// removed once the project has none (saved, or another one started).
 pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(store) = &app.services.recovery else { return };
+    if !app.autosave.wake_set {
+        let ctx = ctx.clone();
+        store.set_wake(Box::new(move || ctx.request_repaint()));
+        app.autosave.wake_set = true;
+    }
     if let Some(e) = store.take_error() {
-        // The copy that failed isn't kept: the work is due again, at the next interval.
-        app.autosave.written = None;
+        // The work is due again, at the next interval.
+        app.autosave.failed = true;
         if app.autosave.told.as_ref() != Some(&e) {
             app.autosave.told = Some(e.clone());
             let text = crate::i18n::fmt("Autosave couldn't keep a recovery copy: {error}", &[("error", &e)]);
@@ -167,9 +182,10 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
         if app.autosave.written.take().is_some() {
             store.clear();
         }
+        app.autosave.failed = false;
         return;
     }
-    if app.autosave.written == Some(app.session.revision) {
+    if app.autosave.written == Some(app.session.revision) && !app.autosave.failed {
         return;
     }
     let interval = Duration::from_secs(u64::from(app.autosave.minutes) * 60);
@@ -182,6 +198,7 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     store.write(app.session.project.clone(), about(app));
     app.autosave.written = Some(app.session.revision);
+    app.autosave.failed = false;
     app.autosave.last = Some(now);
 }
 
@@ -402,7 +419,12 @@ mod folder {
         /// The copies earlier runs left, newest first.
         waiting: Mutex<Vec<(PathBuf, Recovery)>>,
         error: Arc<Mutex<Option<String>>>,
+        /// Called by the background thread after a failure: the interface's repaint.
+        wake: Wake,
     }
+
+    /// The interface's wake, shared with the background thread; none until the app sets it.
+    type Wake = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
 
     impl FolderStore {
         /// Takes `dir` as the recovery folder for this run, which must be the only one using it
@@ -440,12 +462,13 @@ mod folder {
             }
             let (jobs, rx) = channel();
             let error: Arc<Mutex<Option<String>>> = Arc::default();
-            let (worker_dir, worker_error) = (dir.to_path_buf(), error.clone());
+            let wake: Wake = Arc::default();
+            let (worker_dir, worker_error, worker_wake) = (dir.to_path_buf(), error.clone(), wake.clone());
             std::thread::Builder::new()
                 .name("autosave".into())
-                .spawn(move || work(&worker_dir, &rx, &worker_error))
+                .spawn(move || work(&worker_dir, &rx, &worker_error, &worker_wake))
                 .map_err(|e| format!("could not start autosave: {e}"))?;
-            Ok(FolderStore { jobs: Mutex::new(jobs), waiting: Mutex::new(waiting), error })
+            Ok(FolderStore { jobs: Mutex::new(jobs), waiting: Mutex::new(waiting), error, wake })
         }
 
         /// Queues `job` for the background thread; one that stopped (it can't, short of a panic)
@@ -515,10 +538,13 @@ mod folder {
 
     /// The background thread: does what it is asked in order. A write followed by another is
     /// skipped: only the latest copy matters.
-    fn work(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>) {
+    fn work(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>, wake: &Wake) {
         let fail = |e: String| {
             log::warn!("autosave: {e}");
             *error.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+            if let Some(wake) = wake.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                wake();
+            }
         };
         let mut next = rx.recv().ok();
         while let Some(job) = next.take() {
@@ -639,6 +665,11 @@ mod folder {
         fn take_error(&self) -> Option<String> {
             self.error.lock().unwrap_or_else(|e| e.into_inner()).take()
         }
+
+        /// Kept for the background thread, which calls it after each failure.
+        fn set_wake(&self, wake: Box<dyn Fn() + Send + Sync>) {
+            *self.wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
+        }
     }
 }
 
@@ -654,17 +685,20 @@ mod tests {
     use super::{Recovery, RecoveryStore, kept_line, now_secs, tick};
     use crate::{RustGisApp, Services};
 
-    /// A store that counts the copies asked of it and fails the next one when told to.
+    /// A store that counts the copies and removals asked of it and fails the next copy when
+    /// told to.
     #[derive(Clone, Default)]
-    struct Counting(Rc<RefCell<(usize, Option<String>)>>);
+    struct Counting(Rc<RefCell<(usize, Option<String>, usize)>>);
 
     impl RecoveryStore for Counting {
         /// Counts the copy; a failure set by the test is reported as the worker's would be.
         fn write(&self, _: Project, _: Recovery) {
             self.0.borrow_mut().0 += 1;
         }
-        /// Nothing to remove.
-        fn clear(&self) {}
+        /// Counts the removal.
+        fn clear(&self) {
+            self.0.borrow_mut().2 += 1;
+        }
         /// Nothing is in flight.
         fn flush(&self) {}
         /// Nothing waits.
@@ -717,6 +751,15 @@ mod tests {
         let told = app.session.notices.len();
         tick(&mut app, &ctx);
         assert_eq!(app.session.notices.len(), told, "the same failure is told once");
+        // Saved after a failure (#896 review): the copy an earlier write left is still removed.
+        app.run(
+            "project.saveAs",
+            json!({"path": std::env::temp_dir().join(format!("rustgis-retry-{}.rgis", std::process::id())).display().to_string()}),
+        )
+        .unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(store.0.borrow().2, 1, "removed once saved");
+        let _ = std::fs::remove_file(std::env::temp_dir().join(format!("rustgis-retry-{}.rgis", std::process::id())));
     }
 
     /// The dialog's age reads as a whole sentence in every range: never "1 minutes ago".
