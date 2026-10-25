@@ -197,8 +197,9 @@ struct Renaming {
     pass: u64,
 }
 
-/// The pane's header for the chosen class (#858): its chooser, a row of what makes, renames,
-/// orders and removes classes (#722), and Visible.
+/// The pane's header for the chosen class (#858): its chooser, a row with New, Rename, Move Up,
+/// Move Down and Remove for it (#722), and Visible. Default, last in the list, can be renamed or
+/// hidden, but not removed or moved.
 fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let rename_key = egui::Id::unique("label_pane_rename");
     let owner = egui::Id::unique((layer_key(app, l), c.name));
@@ -207,6 +208,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) 
     let pass = ui.ctx().cumulative_pass_nr();
     let renaming = ui.data(|d| d.get_temp::<Renaming>(rename_key)).filter(|r| r.owner == owner && r.pass + 1 >= pass);
     ui.data_mut(|d| d.remove::<Renaming>(rename_key));
+    let editing = renaming.is_some();
     grid(ui, "class_pick", |ui| {
         let input_label = ui.label(tl!("Class"));
         match renaming {
@@ -217,64 +219,66 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) 
         }
         ui.end_row();
     });
-    if ui.horizontal(|ui| class_actions(app, ui, l, c, t)).inner {
-        let r = Renaming { owner, text: c.it.name.clone(), focused: false, pass };
-        ui.data_mut(|d| d.insert_temp(rename_key, r));
-    }
-    let mut visible = c.it.visible;
-    if ui.checkbox(&mut visible, tl!("Visible")).on_hover_text(tl!("A hidden class leaves its features unlabelled.")).changed() {
-        run(app, "labels.class.update", c.params(json!({"visible": visible})));
-    }
-}
-
-/// New, Rename, Move Up and Move Down for the chosen class, then Remove; whether Rename was
-/// clicked. Default, last in the list, can be renamed, but not removed or moved.
-fn class_actions(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) -> bool {
-    let count = extras(l).count();
-    let at = c.name.and_then(|n| extras(l).position(|k| k.name == n));
-    let full = l.labels.classes.len() >= MAX_LABEL_CLASSES;
-    let max = MAX_LABEL_CLASSES.to_string();
-    let new = ui
-        .add_enabled(!full, egui::Button::new(tl!("New")))
-        .on_hover_text(tl!("Add a class with this one's field, text symbol, placement and range."))
-        .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
-    if new.clicked() {
-        let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
-        if let Some(added) = run(app, "labels.class.add", p) {
-            choose(ui, app, l, added.get("class").and_then(Value::as_str));
-        }
-    }
-    let rename = ui.button(tl!("Rename")).clicked();
-    let up = at.filter(|i| *i > 0).map(|i| i - 1);
-    let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
-    for (icon, label, to) in [("up", "Move Up", up), ("down", "Move Down", down)] {
-        let moved = ui
-            .add_enabled_ui(to.is_some(), |ui| {
-                // Named for screen readers (and tests) by its label, as the Bookmarks pane's icons.
-                let r = crate::widgets::icon_button(ui, icon, tl!(label));
-                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, to.is_some(), tl!(label)));
-                r
-            })
-            .inner
-            .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
-        if moved.clicked() {
-            run(app, "labels.class.move", c.params(json!({"to": to})));
-        }
-    }
-    // At the far end and in red: it is the one that deletes, and its name is close to Rename's.
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let remove = ui
-            .add_enabled(at.is_some(), egui::Button::new(RichText::new(tl!("Remove")).color(t.red)))
-            .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."));
-        if remove.clicked() {
-            // Default chosen outright: a class added later by the removed one's name (an undo, a
-            // script) isn't chosen again by the name left behind.
-            if run(app, "labels.class.remove", c.params(json!({}))).is_some() {
-                choose(ui, app, l, None);
+    // Off while the class is renamed: a click on them ends the rename (the box loses focus), so
+    // they would act on the class by the name it had before.
+    ui.add_enabled_ui(!editing, |ui| {
+        let count = extras(l).count();
+        let at = c.name.and_then(|n| extras(l).position(|k| k.name == n));
+        ui.horizontal(|ui| {
+            let full = l.labels.classes.len() >= MAX_LABEL_CLASSES;
+            let max = MAX_LABEL_CLASSES.to_string();
+            let new = ui
+                .add_enabled(!full, egui::Button::new(tl!("New")))
+                .on_hover_text(tl!("Add a class with this one's field, text symbol, placement and range."))
+                .on_disabled_hover_text(crate::i18n::fmt("A layer keeps at most {max} label classes besides Default.", &[("max", &max)]));
+            if new.clicked() {
+                let p = named(json!({"name": new_name(&l.labels)}), "from", c.name);
+                if let Some(added) = run(app, "labels.class.add", p) {
+                    choose(ui, app, l, added.get("class").and_then(Value::as_str));
+                }
             }
+            if ui.button(tl!("Rename")).clicked() {
+                let r = Renaming { owner, text: c.it.name.clone(), focused: false, pass };
+                ui.data_mut(|d| d.insert_temp(rename_key, r));
+            }
+            let up = at.filter(|i| *i > 0).map(|i| i - 1);
+            let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
+            for (icon, label, to) in [("up", "Move Up", up), ("down", "Move Down", down)] {
+                let moved = ui
+                    .add_enabled_ui(to.is_some(), |ui| {
+                        // Named for screen readers (and tests) by its label, as the Bookmarks
+                        // pane's icons.
+                        let enabled = ui.is_enabled();
+                        let r = crate::widgets::icon_button(ui, icon, tl!(label));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tl!(label)));
+                        r
+                    })
+                    .inner
+                    .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
+                if moved.clicked() {
+                    run(app, "labels.class.move", c.params(json!({"to": to})));
+                }
+            }
+            // At the far end and in red: it is the one that deletes, and its name is close to
+            // Rename's.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let remove = ui
+                    .add_enabled(at.is_some(), egui::Button::new(RichText::new(tl!("Remove")).color(t.red)))
+                    .on_disabled_hover_text(tl!("Default can't be removed. You can rename or hide it."));
+                if remove.clicked() {
+                    // Default chosen outright: a class added later by the removed one's name (an
+                    // undo, a script) isn't chosen again by the name left behind.
+                    if run(app, "labels.class.remove", c.params(json!({}))).is_some() {
+                        choose(ui, app, l, None);
+                    }
+                }
+            });
+        });
+        let mut visible = c.it.visible;
+        if ui.checkbox(&mut visible, tl!("Visible")).on_hover_text(tl!("A hidden class leaves its features unlabelled.")).changed() {
+            run(app, "labels.class.update", c.params(json!({"visible": visible})));
         }
     });
-    rename
 }
 
 /// The box the chosen class is renamed in: Enter (or clicking away) renames it, Escape leaves it as
@@ -1256,6 +1260,9 @@ mod tests {
         assert_eq!(names(h.state()), ["Big", "Big 2", "Default"]);
         assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("already a label class")));
         assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_some(), "the box stays open");
+        for off in ["New", "Rename", "Move Up", "Move Down", "Remove", "Visible"] {
+            assert!(h.get_by_label(off).accesskit_node().is_disabled(), "{off} waits for the rename");
+        }
         h.key_press(egui::Key::Escape);
         h.run();
         assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none());
