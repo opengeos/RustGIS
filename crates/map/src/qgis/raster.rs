@@ -25,6 +25,18 @@ pub(super) fn read(node: Node, layer: &str, report: &mut Report) -> Option<Raste
     let pipe = child(node, "pipe")?;
     let r = child(pipe, "rasterrenderer")?;
     let kind = r.attribute("type").unwrap_or("unknown");
+    let notes = report.notes.len();
+    let style = renderer_style(node, pipe, r, kind, layer, report);
+    // A renderer dropped where nothing said why (a band that isn't a band number, a colour map
+    // too long for a ramp or with no finite value) is noted here.
+    if style.is_none() && report.notes.len() == notes {
+        report.approximated(layer, format!("its raster colouring ({kind} renderer), which RustGIS couldn't read, drawn by its default"));
+    }
+    style
+}
+
+/// [`read`]'s style from the renderer `r` in `pipe`, noting what it drops.
+fn renderer_style(node: Node, pipe: Node, r: Node, kind: &str, layer: &str, report: &mut Report) -> Option<RasterStyle> {
     let band = |k: &str| -> Option<usize> {
         let b = r.attribute(k)?.trim().parse::<usize>().ok()?;
         (1..=MAX_BAND).contains(&b).then(|| b - 1)

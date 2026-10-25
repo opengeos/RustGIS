@@ -689,6 +689,10 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
     let rivers = s.map().layer_by_name("Rivers").unwrap();
     assert_eq!((rivers.line_strokes.len(), rivers.transparency), (2, 50.0));
+    // A raster's style on a feature layer says its colouring is left out.
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="1"/></pipe></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("a raster's colouring"), "{out}");
     assert!(s.run("style.importQgis", &json!({"layer": "Rivers", "text": "<nonsense"})).is_err());
     // A style saved from another layer: classes and labels by fields Rivers hasn't are noted, and
     // the label class that has nothing to label from is switched off.
@@ -965,10 +969,12 @@ fn a_qgis_raster_style_colours_a_raster() {
         (&rustgis_map::raster::RasterRenderer::Rgb { red: 2, green: 1, blue: 0 }, 25.0, 50.0)
     );
     let before = st.clone();
-    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="5"/></pipe></qgis>"#;
+    // A style that reads a band the raster hasn't leaves it as it was, its opacity too.
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="5"/></pipe><layerOpacity>0.2</layerOpacity></qgis>"#;
     let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
     assert!(serde_json::to_string(&out["notes"]).unwrap().contains("band 5 of a raster with 3"), "{out}");
-    assert_eq!(s.map().layer_by_name("scene").unwrap().raster.as_ref().unwrap().style, before);
+    let l = s.map().layer_by_name("scene").unwrap();
+    assert_eq!((&l.raster.as_ref().unwrap().style, l.transparency), (&before, 50.0));
 }
 
 /// The parts of a large GeoTIFF the web app reads (#140), opened and kept in a project: a

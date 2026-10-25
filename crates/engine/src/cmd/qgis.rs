@@ -330,14 +330,22 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let style = qgis::read_style(&text, &name, &mut report)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
     if l.raster.is_some() {
+        // A style that doesn't fit leaves the raster as it was, its opacity and scale range too.
         if let Some(why) = l.raster.as_ref().and_then(|r| style.raster_misfit(r)) {
             report.skipped(&name, why);
-        } else if style.raster.is_none() && style.renderer.is_some() {
-            report
-                .skipped(&name, "a feature layer's symbols and labels, which a raster hasn't (only its opacity and scale range are taken)");
+        } else {
+            if style.raster.is_none() && style.renderer.is_some() {
+                report.skipped(
+                    &name,
+                    "a feature layer's symbols and labels, which a raster hasn't (only its opacity and scale range are taken)",
+                );
+            }
+            style.apply(l);
         }
-        style.apply(l);
     } else {
+        if style.raster.is_some() && style.renderer.is_none() {
+            report.skipped(&name, "a raster's colouring, which a feature layer hasn't (only its opacity and scale range are taken)");
+        }
         style.apply(l);
         check_fields(l, &name, &mut report);
     }

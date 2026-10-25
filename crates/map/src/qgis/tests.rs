@@ -529,8 +529,9 @@ fn raster_renderers_read_as_rustgis_raster_styles() {
     assert!(report.notes.iter().any(|n| n.text.contains("saturation")));
     let (s, report) = read(r#"<rasterrenderer type="contour" band="1"/>"#, "");
     assert!(s.raster.is_none() && report.notes.iter().any(|n| n.text.contains("contour")));
-    // Nonsense bands and values: nothing, without a crash.
+    // Nonsense bands and values: nothing, without a crash, and noted.
     for bad in [r#"<rasterrenderer type="singlebandgray" grayBand="0"/>"#, r#"<rasterrenderer type="paletted" band="99999999999"/>"#] {
-        assert!(read(bad, "").0.raster.is_none());
+        let (s, report) = read(bad, "");
+        assert!(s.raster.is_none() && report.notes.iter().any(|n| n.text.contains("couldn't read")), "{bad}: {report:?}");
     }
 }
