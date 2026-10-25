@@ -846,7 +846,12 @@ impl Ctx<'_> {
                     .iter()
                     .filter(|st| {
                         let (c, w) = st.resolve(s);
-                        (w > 0.0 || st.markers.is_some()) && c.a() > 0
+                        // A hollow marker shows by its outline alone.
+                        let outlined = w > 0.0
+                            && st
+                                .markers
+                                .is_some_and(|m| !matches!(m.mark, rustgis_map::LineMark::Hash) && m.outline.is_some_and(|o| o.a() > 0));
+                        (w > 0.0 || st.markers.is_some()) && (c.a() > 0 || outlined)
                     })
                     .map(|st| LineStroke {
                         color: Some(SELECTION),
