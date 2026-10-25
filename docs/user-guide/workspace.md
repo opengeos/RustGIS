@@ -48,9 +48,9 @@ deletes it. `ui.autosave` reports the interval and any copy waiting.
 
 Quitting doesn't ask about unsaved changes, and their copy is removed: save before you quit. A
 second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
-one's copy. Nor does RustGIS autosave when its settings folder can't lock files (some network
-or synced folders), where it can't tell a second copy apart. The browser app doesn't autosave yet; it warns before you leave a page with unsaved
-changes.
+one's copy; it says so as it starts. Nor does RustGIS autosave when its settings folder can't lock
+files (some network or synced folders), where it can't tell a second copy apart. The browser app
+doesn't autosave yet; it warns before you leave a page with unsaved changes.
 
 ### QGIS projects and styles
 

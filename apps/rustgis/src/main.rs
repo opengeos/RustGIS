@@ -164,24 +164,24 @@ mod running {
         locked: bool,
     }
 
-    /// Takes `<dir>/running` for this run: the marker (none when another copy holds it or the
-    /// folder can't be written) and whether the previous run didn't close cleanly.
-    pub fn start(dir: Option<&Path>) -> (Option<Marker>, bool) {
-        let Some(dir) = dir else { return (None, false) };
+    /// Takes `<dir>/running` for this run: the marker, or why there is none (another copy holds
+    /// it, or the folder can't be written), and whether the previous run didn't close cleanly.
+    pub fn start(dir: Option<&Path>) -> (Result<Marker, String>, bool) {
+        let Some(dir) = dir else { return (Err("this computer has no settings folder for RustGIS".into()), false) };
         let file = std::fs::create_dir_all(dir)
             .and_then(|_| OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("running")));
         let mut file = match file {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("no run marker in {} ({e}): an unclean exit won't be noticed", dir.display());
-                return (None, false);
+                return (Err(format!("the settings folder {} can't be written ({e})", dir.display())), false);
             }
         };
         let locked = match file.try_lock() {
             Ok(()) => true,
             Err(std::fs::TryLockError::WouldBlock) => {
                 log::info!("the run marker is held: another copy of RustGIS is running");
-                return (None, false);
+                return (Err("another copy of RustGIS is running, and only the first keeps a recovery copy".into()), false);
             }
             // The folder can't lock files (some network or FUSE folders): keep the marker unlocked,
             // so unclean exits are still noticed. Without a lock, copies running side by side share
@@ -208,7 +208,7 @@ mod running {
         if let Err(e) = marked {
             log::warn!("could not mark this run: {e}");
         }
-        (Some(Marker { file, locked }), unclean)
+        (Ok(Marker { file, locked }), unclean)
     }
 
     impl Marker {
@@ -346,13 +346,19 @@ fn main() -> eframe::Result {
     let mut services = prefs::services();
     // Autosave, in a recovery folder only the copy holding the run marker uses: a second copy
     // running alongside would offer, or overwrite, the first one's unsaved work.
-    let mut no_autosave = None;
-    if marker.as_ref().is_some_and(running::Marker::locked) {
-        match recovery_store(rustgis_engine::data::dirs::app_data_dir()) {
-            Ok(store) => services.recovery = Some(store),
-            Err(e) => no_autosave = Some(e),
-        }
-    }
+    // Without the marker to itself, a run can't tell whether another copy uses the folder: it
+    // doesn't autosave, and says why.
+    let no_autosave = match &marker {
+        Ok(m) if m.locked() => match recovery_store(rustgis_engine::data::dirs::app_data_dir()) {
+            Ok(store) => {
+                services.recovery = Some(store);
+                None
+            }
+            Err(e) => Some(e),
+        },
+        Ok(_) => Some("the settings folder can't lock files, so a second copy of RustGIS couldn't be told apart".into()),
+        Err(why) => Some(why.clone()),
+    };
     let mut app = app.with_services(services);
     // Settings › Start-up; `--sample` still opens the sample.
     let blank = if args.iter().any(|a| a == "--sample") { Some(false) } else { (!files.is_empty()).then_some(true) };
@@ -402,7 +408,7 @@ fn main() -> eframe::Result {
         setup.instance_descriptor.backends = backends(backend, env.as_deref(), cfg!(windows));
     }
     let options = eframe::NativeOptions { viewport, wgpu_options, ..Default::default() };
-    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker));
+    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker.ok()));
     let held = marker.clone();
     let result = eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App(app, held)))));
     running::close(&marker);
@@ -442,12 +448,13 @@ mod tests {
         // Removed however the test ends (declared first, so dropped after the markers).
         let _cleanup = TempDir(dir.clone());
         let (first, unclean) = running::start(Some(&dir));
-        assert!(first.is_some() && !unclean, "a first run");
+        assert!(first.is_ok() && !unclean, "a first run");
         // Held alone: autosave may use the recovery folder.
-        assert!(first.as_ref().is_some_and(running::Marker::locked));
+        assert!(first.as_ref().is_ok_and(running::Marker::locked));
         // Another copy running alongside can't take it, and doesn't count as a crash.
         let (second, unclean) = running::start(Some(&dir));
-        assert!(second.is_none() && !unclean);
+        // It says why, which the app shows as it starts without autosave.
+        assert!(second.as_ref().err().is_some_and(|why| why.contains("another copy")) && !unclean);
         // This run ends without closing (a crash): the next one notices, once it closes cleanly.
         drop(first);
         let (after_crash, unclean) = running::start(Some(&dir));

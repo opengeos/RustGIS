@@ -553,7 +553,8 @@ mod folder {
     }
 
     /// [`work`] with its writer. Each job runs guarded: a panic is told as a failure and the
-    /// thread goes on. A write followed by another is skipped, as only the latest copy matters, but kept until the next one is done: if that one fails (a project grown past the
+    /// thread goes on. A write followed by another is skipped, as only the latest copy matters,
+    /// but kept until the next one is done: if that one fails or panics (a project grown past the
     /// size a copy may have), the skipped one is written instead, before any later job, so the
     /// folder holds the newest copy that could be written.
     fn work_with(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>, wake: &Wake, write: WriteCopy) {
@@ -563,6 +564,11 @@ mod folder {
             if let Some(wake) = wake.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
                 wake();
             }
+        };
+        // A copy whose writing panics fails like any other, so the skipped one still stands in.
+        let write = |project: Project, about: &Recovery| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write(dir, project, about)))
+                .unwrap_or_else(|_| Err("writing the copy failed unexpectedly".into()))
         };
         let mut next = rx.recv().ok();
         let mut skipped: Option<(Box<Project>, Recovery)> = None;
@@ -586,9 +592,9 @@ mod folder {
             let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
                 Job::Write(project, about) => {
                     let earlier = skipped.take();
-                    if let Err(e) = write(dir, *project, &about) {
+                    if let Err(e) = write(*project, &about) {
                         if let Some((project, about)) = earlier
-                            && let Err(again) = write(dir, *project, &about)
+                            && let Err(again) = write(*project, &about)
                         {
                             log::warn!("autosave: the copy before it failed too: {again}");
                         }
@@ -762,6 +768,17 @@ mod folder {
             let error = Mutex::new(None);
             work_with(&dir, &rx, &error, &Arc::default(), boom_panics);
             assert!(std::fs::read_to_string(dir.join(LIVE)).unwrap().contains("\"after\""));
+            assert!(error.into_inner().unwrap().unwrap().contains("unexpectedly"));
+            // A copy skipped for one that panics is written instead (#896 review).
+            std::fs::remove_file(dir.join(LIVE)).unwrap();
+            let (tx, rx) = channel();
+            for job in [copy("older"), copy("boom")] {
+                tx.send(job).unwrap();
+            }
+            drop(tx);
+            let error = Mutex::new(None);
+            work_with(&dir, &rx, &error, &Arc::default(), boom_panics);
+            assert!(std::fs::read_to_string(dir.join(LIVE)).unwrap().contains("\"older\""));
             assert!(error.into_inner().unwrap().unwrap().contains("unexpectedly"));
             let _ = std::fs::remove_dir_all(&dir);
         }
