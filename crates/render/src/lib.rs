@@ -854,7 +854,8 @@ impl Ctx<'_> {
                         (w > 0.0 || st.markers.is_some()) && (c.a() > 0 || outlined)
                     })
                     .map(|st| LineStroke {
-                        color: Some(SELECTION),
+                        // A hollow marker's halo is its outline alone, so it stays hollow.
+                        color: Some(if st.markers.is_some() && st.resolve(s).0.a() == 0 { Rgba::new(0, 0, 0, 0) } else { SELECTION }),
                         width: Some(st.resolve(s).1.max(0.0) + 3.0),
                         // A marker's halo is its outline.
                         markers: st.markers.map(|m| rustgis_map::LineMarkers { outline: Some(SELECTION), ..m }),
