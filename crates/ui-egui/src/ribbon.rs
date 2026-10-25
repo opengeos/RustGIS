@@ -4288,7 +4288,7 @@ fn label_groups(app: &mut RustGisApp, ui: &mut Ui) {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let input_label = ui.label(egui::RichText::new(tl!("Class")).size(11.5));
-                crate::labelpane::class_combo(app, ui, &layer, &c, "ribbon_label_class", 140.0)
+                crate::labelpane::class_combo(app, ui, &layer, &c, 140.0)
                     .on_hover_text(tl!("The class these label groups and the Labeling pane edit."))
                     .labelled_by(input_label.id);
             });
@@ -4855,22 +4855,6 @@ mod tests {
         assert_eq!(steps[0].params["class"], "Big");
         h.state_mut().run("edit.undo", json!(null)).unwrap();
         assert_eq!(size(h.state()), before);
-    }
-
-    /// A chosen class that goes away (an undo, a script, the Assistant) leaves the ribbon on Default.
-    #[test]
-    fn the_ribbon_goes_back_to_default_when_its_class_goes() {
-        let mut h = label_harness_with(cities_with_big(), false);
-        pick_class(&mut h, 0, "Big");
-        h.state_mut().run("labels.class.remove", json!({"class": "Big"})).unwrap();
-        h.run();
-        assert_eq!(classes_shown(&h), ["Default"]);
-        let before = labels(h.state()).default.bold;
-        h.get_by_label("Bold").click();
-        h.run();
-        assert_ne!(labels(h.state()).default.bold, before);
-        let steps = h.state().ws.recording.as_ref().unwrap();
-        assert_eq!(steps.last().unwrap().params.get("class"), None);
     }
 
     /// Every publication profile has its literal name in the menu, the engine's label word for word

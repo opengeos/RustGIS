@@ -115,9 +115,10 @@ pub(crate) fn chosen<'a>(ui: &Ui, app: &RustGisApp, l: &'a Layer) -> Class<'a> {
     }
 }
 
-/// The class chooser, the pane's and the ribbon's: a class chosen in either is chosen in both.
-pub(crate) fn class_combo(app: &RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, id: &str, width: f32) -> egui::Response {
-    egui::ComboBox::from_id_salt(id)
+/// The class chooser, the pane's and the ribbon's: a class chosen in either is chosen in both. Its
+/// id is made within the parent `Ui`, so the two don't clash.
+pub(crate) fn class_combo(app: &RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, width: f32) -> egui::Response {
+    egui::ComboBox::from_id_salt("label_pane_class")
         .selected_text(shown(c))
         .width(width)
         .show_ui(ui, |ui| {
@@ -213,7 +214,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         match renaming {
             Some(r) => rename_box(app, ui, l, c, rename_key, input_label.id, r),
             None => {
-                class_combo(app, ui, l, c, "label_pane_class", 180.0).labelled_by(input_label.id);
+                class_combo(app, ui, l, c, 180.0).labelled_by(input_label.id);
             }
         }
         ui.end_row();
