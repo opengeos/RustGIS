@@ -243,18 +243,21 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) 
             }
             let up = at.filter(|i| *i > 0).map(|i| i - 1);
             let down = at.filter(|i| i + 1 < count).map(|i| i + 1);
-            for (icon, label, to) in [("up", "Move Up", up), ("down", "Move Down", down)] {
+            let moves = [
+                ("up", "Move Up", "Move up: labels of the classes listed first are placed first when they compete for room.", up),
+                ("down", "Move Down", "Move down: labels of the classes listed first are placed first when they compete for room.", down),
+            ];
+            for (icon, label, tip, to) in moves {
                 let moved = ui
                     .add_enabled_ui(to.is_some(), |ui| {
                         // Named for screen readers (and tests) by its label, as the Bookmarks
-                        // pane's icons.
+                        // pane's icons; its one tooltip says why the order matters.
                         let enabled = ui.is_enabled();
-                        let r = crate::widgets::icon_button(ui, icon, tl!(label));
+                        let r = crate::widgets::icon_button(ui, icon, tl!(tip));
                         r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tl!(label)));
                         r
                     })
-                    .inner
-                    .on_hover_text(tl!("Labels of the classes listed first are placed first when they compete for room."));
+                    .inner;
                 if moved.clicked() {
                     run(app, "labels.class.move", c.params(json!({"to": to})));
                 }
