@@ -71,7 +71,8 @@ password in a project never reaches the notes.
 A QGIS layer style (`.qml`) styles the selected layer the same way, a feature layer or a raster:
 **Import QGIS Style…** in the Symbology pane (`style.importQgis={"layer": "Roads", "path":
 "…/roads.qml"}`). A raster style that reads a band the raster hasn't is noted and leaves the
-raster as it was.
+raster as it was. On a raster still loading (a remote file), the bands can't be checked yet: the
+style is applied, noted as unchecked, and a band the file hasn't is drawn from its last band.
 
 RustGIS works out a map's scale with the OGC's 0.28 mm screen pixel, QGIS at 96 pixels to the
 inch, so the same view is a larger scale in QGIS; scales from QGIS (reference scales, visibility
