@@ -102,6 +102,25 @@ fn u32_at(b: &[u8], i: usize) -> Option<usize> {
     usize::try_from(u32::from_le_bytes([*s.first()?, *s.get(1)?, *s.get(2)?, *s.get(3)?])).ok()
 }
 
+fn u64_at(b: &[u8], i: usize) -> Option<usize> {
+    let s = b.get(i..i.checked_add(8)?)?;
+    usize::try_from(u64::from_le_bytes(s.try_into().ok()?)).ok()
+}
+
+/// The ZIP64 end record referenced by a valid locator just before `eocd`.
+fn zip64_end(bytes: &[u8], eocd: usize) -> Option<usize> {
+    let locator = eocd.checked_sub(20)?;
+    if u32_at(bytes, locator) != Some(0x0706_4B50)
+        || u32_at(bytes, add(&[locator, 4])?) != Some(0)
+        || u32_at(bytes, add(&[locator, 16])?) != Some(1)
+    {
+        return None;
+    }
+    let record = u64_at(bytes, add(&[locator, 8])?)?;
+    let size = u64_at(bytes, add(&[record, 4])?)?;
+    (u32_at(bytes, record) == Some(0x0606_4B50) && size >= 44 && add(&[record, 12, size]) == Some(locator)).then_some(record)
+}
+
 /// `a + b + …` of offsets read from the archive, `None` on overflow.
 fn add(parts: &[usize]) -> Option<usize> {
     parts.iter().try_fold(0usize, |acc, x| acc.checked_add(*x))
@@ -130,7 +149,7 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         .ok_or_else(bad)?;
     // ZIP64 puts its 20-byte locator immediately before the ordinary end record.
     // Its count may be a sentinel even when all individual entries fit plain ZIP.
-    let zip64_locator = eocd.checked_sub(20).and_then(|p| u32_at(bytes, p)) == Some(0x0706_4B50);
+    let zip64_locator = zip64_end(bytes, eocd).is_some();
     if zip64_locator
         || u32_at(bytes, add(&[eocd, 12]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
         || u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
@@ -286,5 +305,22 @@ mod tests {
         z[eocd + 12..eocd + 16].copy_from_slice(&(central_size as u32).to_le_bytes());
         assert!(read(&z).unwrap_err().contains("ZIP64"));
         assert!(read_matching(&z, |_| false).unwrap_err().contains("ZIP64"));
+    }
+
+    #[test]
+    fn entry_comment_with_zip64_locator_signature_is_plain_zip() {
+        let entries = vec![("a".to_string(), Vec::new())];
+        let mut z = write(&entries).unwrap();
+        let eocd = z.len() - 22;
+        let central = u32_at(&z, eocd + 16).unwrap();
+        z[central + 32..central + 34].copy_from_slice(&20u16.to_le_bytes());
+        let mut comment = vec![0; 20];
+        comment[..4].copy_from_slice(&0x0706_4B50u32.to_le_bytes());
+        // Even plausible disk fields do not make a comment into a locator.
+        comment[16..20].copy_from_slice(&1u32.to_le_bytes());
+        z.splice(eocd..eocd, comment);
+        let size = (eocd - central + 20) as u32;
+        z[eocd + 20 + 12..eocd + 20 + 16].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(read(&z).unwrap(), entries);
     }
 }
