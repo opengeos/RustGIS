@@ -552,8 +552,8 @@ mod folder {
         work_with(dir, rx, error, wake, write);
     }
 
-    /// [`work`] with its writer. A write followed by another is skipped, as only the latest copy
-    /// matters, but kept until the next one is done: if that one fails (a project grown past the
+    /// [`work`] with its writer. Each job runs guarded: a panic is told as a failure and the
+    /// thread goes on. A write followed by another is skipped, as only the latest copy matters, but kept until the next one is done: if that one fails (a project grown past the
     /// size a copy may have), the skipped one is written instead, before any later job, so the
     /// folder holds the newest copy that could be written.
     fn work_with(dir: &Path, rx: &Receiver<Job>, error: &Mutex<Option<String>>, wake: &Wake, write: WriteCopy) {
@@ -581,7 +581,9 @@ mod folder {
                     other => next = Some(other),
                 }
             }
-            match job {
+            // A panic in a job (serializing a hostile project, say) is told like a failure and the
+            // thread goes on: autosave must not stop without a word (see `Session::run`).
+            let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
                 Job::Write(project, about) => {
                     let earlier = skipped.take();
                     if let Err(e) = write(dir, *project, &about) {
@@ -603,6 +605,9 @@ mod folder {
                 Job::Flush(done) => {
                     let _ = done.send(());
                 }
+            }));
+            if done.is_err() {
+                fail("autosave failed unexpectedly; it goes on with the next copy".into());
             }
             if next.is_none() {
                 next = rx.recv().ok();
@@ -701,7 +706,7 @@ mod folder {
     }
 
     #[cfg(test)]
-    #[allow(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used, clippy::panic)]
     mod tests {
         use std::sync::mpsc::channel;
         use std::sync::{Arc, Mutex};
@@ -730,6 +735,35 @@ mod folder {
             let error = Mutex::new(None);
             work_with(dir, &rx, &error, &Arc::default(), newer_fails);
             (std::fs::read_to_string(dir.join(LIVE)).ok(), error.into_inner().unwrap())
+        }
+
+        /// Writes copies as the store does, except a project named "boom", whose copy panics.
+        fn boom_panics(dir: &std::path::Path, project: Project, about: &Recovery) -> Result<(), String> {
+            if project.name == "boom" {
+                panic!("a hostile project");
+            }
+            super::write(dir, project, about)
+        }
+
+        /// A job that panics is told as a failure and the thread goes on with the next one
+        /// (#896 review): autosave doesn't stop without a word.
+        #[test]
+        fn a_panicking_copy_is_told_and_the_next_one_still_written() {
+            let dir = std::env::temp_dir().join(format!("rustgis-autosave-panic-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let copy = |name: &str| Job::Write(Box::new(Project::new(name)), Recovery { name: name.into(), ..Recovery::default() });
+            let (tx, rx) = channel();
+            // A removal between keeps the two copies from being merged into one.
+            for job in [copy("boom"), Job::Clear, copy("after")] {
+                tx.send(job).unwrap();
+            }
+            drop(tx);
+            let error = Mutex::new(None);
+            work_with(&dir, &rx, &error, &Arc::default(), boom_panics);
+            assert!(std::fs::read_to_string(dir.join(LIVE)).unwrap().contains("\"after\""));
+            assert!(error.into_inner().unwrap().unwrap().contains("unexpectedly"));
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         /// A skipped copy is written when the newer one that replaced it fails (#896 review), and

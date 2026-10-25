@@ -48,7 +48,8 @@ deletes it. `ui.autosave` reports the interval and any copy waiting.
 
 Quitting doesn't ask about unsaved changes, and their copy is removed: save before you quit. A
 second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
-one's copy. The browser app doesn't autosave yet; it warns before you leave a page with unsaved
+one's copy. Nor does RustGIS autosave when its settings folder can't lock files (some network
+or synced folders), where it can't tell a second copy apart. The browser app doesn't autosave yet; it warns before you leave a page with unsaved
 changes.
 
 ### QGIS projects and styles
@@ -245,7 +246,7 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
   start keeps its own projection and view; the Projection and Extent settings apply to the sample
   and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample
   and says why. After a crash it starts with the sample too, in case the project is what crashed, and offers
-  back any [unsaved work](#autosave-and-recovery);
+  back the [recovery copy](#autosave-and-recovery) autosave kept of unsaved work, if any;
   starting `rustgis --sample` also skips the start-up project. The choices are remembered on this
   computer, or in this browser for the web app. Opening files from the command line starts a blank
   map.

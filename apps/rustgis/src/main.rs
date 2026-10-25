@@ -269,16 +269,12 @@ impl eframe::App for App {
     }
 }
 
-/// This run's recovery folder, `recovery` in the app-data folder (see `docs/installation.md`).
-fn recovery_store() -> Option<Box<dyn rustgis_ui_egui::RecoveryStore>> {
-    let dir = rustgis_engine::data::dirs::app_data_dir()?.join("recovery");
-    match rustgis_ui_egui::FolderStore::open(&dir) {
-        Ok(store) => Some(Box::new(store)),
-        Err(e) => {
-            log::warn!("no autosave: {e}");
-            None
-        }
-    }
+/// This run's recovery folder, `recovery` in the app-data folder `data` (see
+/// `docs/installation.md`), or why there is none: the app then starts without autosave and says so.
+fn recovery_store(data: Option<std::path::PathBuf>) -> Result<Box<dyn rustgis_ui_egui::RecoveryStore>, String> {
+    let dir = data.ok_or("this computer has no folder for RustGIS's app data")?.join("recovery");
+    let store = rustgis_ui_egui::FolderStore::open(&dir)?;
+    Ok(Box::new(store))
 }
 
 /// Opens the files named on the command line: a project or a project package as the project, any
@@ -350,8 +346,12 @@ fn main() -> eframe::Result {
     let mut services = prefs::services();
     // Autosave, in a recovery folder only the copy holding the run marker uses: a second copy
     // running alongside would offer, or overwrite, the first one's unsaved work.
+    let mut no_autosave = None;
     if marker.as_ref().is_some_and(running::Marker::locked) {
-        services.recovery = recovery_store();
+        match recovery_store(rustgis_engine::data::dirs::app_data_dir()) {
+            Ok(store) => services.recovery = Some(store),
+            Err(e) => no_autosave = Some(e),
+        }
     }
     let mut app = app.with_services(services);
     // Settings › Start-up; `--sample` still opens the sample.
@@ -366,6 +366,12 @@ fn main() -> eframe::Result {
             "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
             &[("path", &log.display().to_string())],
         );
+        app.session.notify(text, true);
+    }
+    if let Some(e) = no_autosave {
+        log::warn!("no autosave: {e}");
+        rustgis_ui_egui::i18n::set_current(app.chosen_lang());
+        let text = rustgis_ui_egui::i18n::fmt("Autosave is off: {error}", &[("error", &e)]);
         app.session.notify(text, true);
     }
     for e in plugin_errors {
@@ -476,6 +482,22 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(app.session.project.maps.len(), maps);
         assert!(app.session.path.is_none(), "a package opens unsaved, so Save asks where to write a project");
+    }
+
+    /// A recovery folder that can't be made (a file in its way) or no app-data folder at all gives
+    /// a reason, which the app shows as it starts without autosave (#896 review); a usable one
+    /// gives the store.
+    #[test]
+    fn a_recovery_folder_that_does_not_open_says_why() {
+        let dir = std::env::temp_dir().join(format!("rustgis-recovery-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _cleanup = TempDir(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("recovery"), "a file, not a folder").unwrap();
+        let blocked = super::recovery_store(Some(dir.clone())).err().unwrap();
+        assert!(blocked.contains("recovery"), "{blocked}");
+        assert!(super::recovery_store(None).err().unwrap().contains("app data"));
+        assert!(super::recovery_store(Some(dir.join("fresh"))).is_ok());
     }
 
     #[test]
