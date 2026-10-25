@@ -2,8 +2,8 @@
 //! from a layer's right-click menu (Labeling Properties…) or View › Windows › Labeling. The ribbon
 //! keeps its label groups; both run the same `labels.*` commands, so the pane holds no state of its
 //! own (it reads the layer each frame, as the Symbology pane does) and every change undoes. It
-//! edits one label class at a time, the one chosen in its Class section (#722); the ribbon edits
-//! Default.
+//! edits one label class at a time, the one chosen in its Class section (#722); the ribbon's label
+//! groups edit and choose the same one (#858).
 
 use egui::{RichText, Ui, vec2};
 use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, Labeling, MAX_LABEL_CLASSES, label_class_name};
@@ -41,9 +41,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if ui.checkbox(&mut on, tl!("Label features in this layer")).changed() {
         run(app, "labels.enable", json!({"on": on}));
     }
-    let name = chosen(ui, app, &l);
-    let it = name.as_deref().and_then(|n| l.labels.class(n)).unwrap_or(&l.labels.default);
-    let c = Class { it, name: name.as_deref() };
+    let c = chosen(ui, app, &l);
     class(app, ui, &l, &c, t);
     text_symbol(app, ui, &l, &c);
     position(app, ui, &l, &c);
@@ -51,23 +49,23 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     map_labeling(app, ui);
 }
 
-/// The label class the pane's sections show and edit (#722).
-struct Class<'a> {
-    it: &'a LabelClass,
+/// The label class the pane's sections and the ribbon's label groups show and edit (#722).
+pub(crate) struct Class<'a> {
+    pub(crate) it: &'a LabelClass,
     /// `None` for Default: the commands change it when they get no class, so a step recorded on
     /// it stays as it was before classes could be chosen.
-    name: Option<&'a str>,
+    pub(crate) name: Option<&'a str>,
 }
 
 impl Class<'_> {
     /// A command's parameters for this class.
-    fn params(&self, p: Value) -> Value {
+    pub(crate) fn params(&self, p: Value) -> Value {
         named(p, "class", self.name)
     }
 }
 
 /// `p` with `name` as its `key`, or as it is without one.
-fn named(mut p: Value, key: &str, name: Option<&str>) -> Value {
+pub(crate) fn named(mut p: Value, key: &str, name: Option<&str>) -> Value {
     if let (Some(n), Some(o)) = (name, p.as_object_mut()) {
         o.insert(key.into(), json!(n));
     }
@@ -75,7 +73,7 @@ fn named(mut p: Value, key: &str, name: Option<&str>) -> Value {
 }
 
 /// The class `name` names on `labels` to change: Default when none.
-fn class_mut<'a>(labels: &'a mut Labeling, name: Option<&str>) -> Option<&'a mut LabelClass> {
+pub(crate) fn class_mut<'a>(labels: &'a mut Labeling, name: Option<&str>) -> Option<&'a mut LabelClass> {
     match name {
         None => Some(&mut labels.default),
         Some(n) => labels.class_mut(n),
@@ -109,9 +107,31 @@ fn chosen_key(app: &RustGisApp, l: &Layer) -> egui::Id {
 
 /// The class chosen on `l`, by the name it has now; Default when none is, or when the one chosen
 /// went away (an undo, a script, the Assistant).
-fn chosen(ui: &Ui, app: &RustGisApp, l: &Layer) -> Option<String> {
-    let name = ui.data(|d| d.get_temp::<String>(chosen_key(app, l)))?;
-    extras(l).find(|c| c.name.eq_ignore_ascii_case(&name)).map(|c| c.name.clone())
+pub(crate) fn chosen<'a>(ui: &Ui, app: &RustGisApp, l: &'a Layer) -> Class<'a> {
+    let name = ui.data(|d| d.get_temp::<String>(chosen_key(app, l)));
+    match name.and_then(|n| extras(l).find(|c| c.name.eq_ignore_ascii_case(&n))) {
+        Some(it) => Class { it, name: Some(&it.name) },
+        None => Class { it: &l.labels.default, name: None },
+    }
+}
+
+/// The class chooser, the pane's and the ribbon's: a class chosen in either is chosen in both.
+pub(crate) fn class_combo(app: &RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, id: &str, width: f32) -> egui::Response {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(shown(c))
+        .width(width)
+        .show_ui(ui, |ui| {
+            for k in extras(l) {
+                if ui.selectable_label(c.name == Some(k.name.as_str()), &k.name).clicked() {
+                    choose(ui, app, l, Some(&k.name));
+                }
+            }
+            let default = Class { it: &l.labels.default, name: None };
+            if ui.selectable_label(c.name.is_none(), shown(&default)).clicked() {
+                choose(ui, app, l, None);
+            }
+        })
+        .response
 }
 
 fn choose(ui: &Ui, app: &RustGisApp, l: &Layer, name: Option<&str>) {
@@ -193,22 +213,7 @@ fn classes(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         match renaming {
             Some(r) => rename_box(app, ui, l, c, rename_key, input_label.id, r),
             None => {
-                egui::ComboBox::from_id_salt("label_pane_class")
-                    .selected_text(shown(c))
-                    .width(180.0)
-                    .show_ui(ui, |ui| {
-                        for k in extras(l) {
-                            if ui.selectable_label(c.name == Some(k.name.as_str()), &k.name).clicked() {
-                                choose(ui, app, l, Some(&k.name));
-                            }
-                        }
-                        let default = Class { it: &l.labels.default, name: None };
-                        if ui.selectable_label(c.name.is_none(), shown(&default)).clicked() {
-                            choose(ui, app, l, None);
-                        }
-                    })
-                    .response
-                    .labelled_by(input_label.id);
+                class_combo(app, ui, l, c, "label_pane_class", 180.0).labelled_by(input_label.id);
             }
         }
         ui.end_row();

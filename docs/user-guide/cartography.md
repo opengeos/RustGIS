@@ -289,7 +289,8 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   **Class** list chooses the class every section shows and edits; **New** adds one with the
   chosen class's field, text symbol, placement and range, listed before Default, and
   **Rename**, **Move Up** / **Move Down**, **Remove** and **Visible** act on the chosen class
-  (Default can be renamed or hidden, not moved or removed). The ribbon edits Default. By
+  (Default can be renamed or hidden, not moved or removed). The ribbon's label groups edit the
+  same chosen class, and **Style › Label Class › Class** chooses it as the pane's list does. By
   command, make them with
   `labels.class.add` (a new class copies Default's field, text symbol, placement and range, or
   those of the class named by `from`), then `labels.class.rename`, `labels.class.update` (`where` or `visible`),
