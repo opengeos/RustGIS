@@ -94,7 +94,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         };
         match s.run_part("map.projection", &json!({"type": code})) {
             Err(e) => report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator")),
-            Ok(_) if degrees.is_some_and(|g| !g.wgs84) => {
+            Ok(_) if degrees.is_some_and(|g| !g.wgs84 || !g.greenwich) => {
                 report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84"));
             }
             Ok(_) => {}
