@@ -1364,16 +1364,17 @@ enum JoinMatch {
 }
 
 impl JoinMatch {
+    /// A match option by name, in any case (as `param_applies` reads it); Intersects otherwise.
     fn parse(s: &str) -> Self {
-        match s {
-            "Contains" => JoinMatch::Contains,
-            "Within" => JoinMatch::Within,
-            "Have their center in" => JoinMatch::CentreIn,
-            "Largest overlap" => JoinMatch::LargestOverlap,
-            "Closest" => JoinMatch::Closest,
-            "Within a distance" => JoinMatch::WithinDistance,
-            _ => JoinMatch::Intersects,
-        }
+        const NAMED: &[(&str, JoinMatch)] = &[
+            ("Contains", JoinMatch::Contains),
+            ("Within", JoinMatch::Within),
+            ("Have their center in", JoinMatch::CentreIn),
+            ("Largest overlap", JoinMatch::LargestOverlap),
+            ("Closest", JoinMatch::Closest),
+            ("Within a distance", JoinMatch::WithinDistance),
+        ];
+        NAMED.iter().find(|(n, _)| n.eq_ignore_ascii_case(s.trim())).map_or(JoinMatch::Intersects, |(_, m)| *m)
     }
 }
 
@@ -1383,7 +1384,8 @@ fn ground_distance(t: &Geometry, t_geo: &geo::Geometry<f64>, j: &Geometry, j_geo
 }
 
 /// How much of a target lies in a join polygon: the ground area of a polygon's overlap, the ground
-/// length of a line's. Both are in Web Mercator, polygons oriented for the overlay.
+/// length of a line's. The geometries are in Web Mercator, polygons oriented for the overlay; the
+/// overlap found is measured on the ground, in longitude/latitude.
 fn overlap(t_geo: &geo::Geometry<f64>, j_geo: &geo::Geometry<f64>) -> f64 {
     match (t_geo, j_geo) {
         (geo::Geometry::MultiPolygon(t), geo::Geometry::MultiPolygon(j)) => {
@@ -2679,7 +2681,9 @@ mod tests {
         ];
         for t in TOOLS {
             for p in &junk {
-                let _ = crate::run(t.id, &m, p);
+                // A panic is caught and becomes this error, which would pass unnoticed.
+                let r = crate::run(t.id, &m, p);
+                assert!(!matches!(&r, Err(e) if e.ends_with("failed unexpectedly")), "{} panicked on {p}", t.id);
             }
         }
     }
@@ -3056,6 +3060,11 @@ mod tests {
             expected.sort_by(|a, b| key(a).total_cmp(&key(b)));
             assert_eq!(found, expected, "probe {row}");
         }
+
+        // A match option in any case, as the Tools pane reads it.
+        assert_eq!(JoinMatch::parse(" closest "), JoinMatch::Closest);
+        assert_eq!(JoinMatch::parse("HAVE THEIR CENTER IN"), JoinMatch::CentreIn);
+        assert_eq!(JoinMatch::parse("nonsense"), JoinMatch::Intersects);
 
         // A blank distance is none (as the Tools pane sends an empty box).
         assert!(crate::run("spatialJoin", &m, &serde_json::json!({"target": "homes", "join": "stops", "distance": " "})).is_ok());

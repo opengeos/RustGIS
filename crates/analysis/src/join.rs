@@ -277,7 +277,8 @@ pub fn parse_merge(join: &Dataset, v: Option<&Json>) -> Result<Vec<Merge>, Strin
             _ => true,
         };
         if !fits {
-            return Err(format!("merge rule '{rule_name}' needs a numeric field ('{name}' is not)"));
+            let needs = if matches!(rule, Rule::Min | Rule::Max) { "a numeric or text field" } else { "a numeric field" };
+            return Err(format!("merge rule '{rule_name}' needs {needs} ('{name}' is not)"));
         }
         if out.iter().any(|m| m.field == field) {
             return Err(format!("'{name}' has more than one merge rule"));
