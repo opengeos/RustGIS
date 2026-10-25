@@ -35,7 +35,9 @@ pub fn first_coord(g: &Geometry) -> Option<Coord> {
 /// in one centred between the pair found, where the plane is true near the answer however large
 /// the features are.
 pub fn distance_m(a: &Geometry, b: &Geometry) -> Option<f64> {
-    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(first_coord(a)?, first_coord(b)?, 0.5)), None)?;
+    // The features' first vertices are a pair of their points: the search starts from them.
+    let (fa, fb) = (first_coord(a)?, first_coord(b)?);
+    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(fa, fb, 0.5)), Some((fa, fb)))?;
     let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(p, q, 0.5)), Some((p, q))).unwrap_or((p, q));
     let d = haversine_m(p, q);
     d.is_finite().then_some(d)
