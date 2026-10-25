@@ -27,7 +27,7 @@ Its layers come in the layer tree's order, each from its file (GeoPackage, Shape
 GeoTIFF and the other formats RustGIS reads, relative paths from the project's folder), a CSV of
 points, XYZ tiles or a WMS layer, unchecked layers and groups hidden. The map takes the project's
 coordinate system and its saved view (or its layers' extent, when that view shows none of them),
-with no basemap and no graticule, as QGIS draws it. A project in degrees (EPSG:4326 and other
+with no basemap and no graticule, as QGIS draws it. A project in degrees (EPSG:4326 and other supported
 longitude/latitude systems) opens in the Equirectangular projection, the plate carrée QGIS draws
 it in. The import is one undo step.
 
