@@ -17,6 +17,7 @@
   <a href="https://plugins.rustgis.app"><img alt="Plugins" src="https://img.shields.io/badge/plugins-registry-7c3aed?style=flat-square"></a>
   <a href="https://pypi.org/project/rustgis/"><img alt="PyPI" src="https://img.shields.io/pypi/v/rustgis?style=flat-square&logo=python&logoColor=white&label=pypi"></a>
   <a href="https://colab.research.google.com/github/opengeos/RustGIS/blob/main/apps/rustgis-python/examples/getting-started.ipynb"><img alt="Open in Colab" src="https://colab.research.google.com/assets/colab-badge.svg"></a>
+  <a href="https://doi.org/10.5281/zenodo.23633281"><img alt="DOI" src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.23633281-1682d4?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -191,6 +192,16 @@ RustGIS is free and open source, and stays that way. If it is useful to you or y
 - [**Buy Me a Coffee**](https://buymeacoffee.com/giswqs): a quick one-off contribution, no account required.
 
 See the [Become a Sponsor](https://rustgis.app/sponsor/) page for what sponsorship supports and for other, free ways to help.
+
+## Citation
+
+If you use RustGIS in your work, please cite it. RustGIS is archived on [Zenodo](https://zenodo.org/), which mints a DOI for every release. The concept DOI below always resolves to the latest version.
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23633281.svg)](https://doi.org/10.5281/zenodo.23633281)
+
+> Wu, Q., Rincón Albarracín, J. G., Filho, E., Hofbauer, D., & Fitzgerald, M. (2026). RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data. Zenodo. <https://doi.org/10.5281/zenodo.23633281>
+
+You can also use GitHub's **"Cite this repository"** button (which reads [`CITATION.cff`](CITATION.cff)) to copy a ready-made APA or BibTeX entry. See the [How to Cite](https://rustgis.app/citation/) page for more formats.
 
 ## Star History
 
