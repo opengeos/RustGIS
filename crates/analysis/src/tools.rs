@@ -3146,6 +3146,22 @@ mod tests {
         let many = serde_json::json!({"target": "districts", "join": "permits", "operation": "Join one to many", "merge": [{"field": "units", "rule": "sum"}]});
         assert!(crate::run("spatialJoin", &m, &many).is_err());
 
+        // An integer field's sum takes a whole number held as a decimal, and skips one that isn't
+        // whole.
+        let mut mixed = m.0["permits"].clone();
+        mixed.features[1].attrs[0] = Value::Float(4.0);
+        mixed.features[2].attrs[0] = Value::Float(2.5);
+        let m_mixed = Map(HashMap::from([("districts".to_string(), m.0["districts"].clone()), ("permits".to_string(), mixed)]));
+        let summed = layer(
+            crate::run(
+                "spatialJoin",
+                &m_mixed,
+                &serde_json::json!({"target": "districts", "join": "permits", "merge": [{"field": "units", "rule": "sum"}]}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(at(&summed, "join_units"), Value::Int(6));
+
         // An integer sum past 64 bits is null, not wrapped.
         let mut big = m.0["permits"].clone();
         for f in &mut big.features {

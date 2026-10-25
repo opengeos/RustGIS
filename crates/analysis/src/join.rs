@@ -201,7 +201,7 @@ impl Merge {
 
     /// The matches' values (in match order) merged into one. Every rule but `first` and `last`
     /// skips nulls; with nothing left a numeric rule gives null, `count` zero and `join` "".
-    /// An integer sum too large for 64 bits is null.
+    /// An integer field's sum adds its whole numbers (one too large for 64 bits is null).
     pub fn apply(&self, ty: FieldType, values: &[&Value]) -> Value {
         let present = || values.iter().copied().filter(|v| !matches!(v, Value::Null));
         let numbers: Vec<f64> = present().filter_map(Value::as_f64).collect();
@@ -211,7 +211,12 @@ impl Merge {
             Rule::Count => Value::Int(i64::try_from(present().count()).unwrap_or(i64::MAX)),
             Rule::Join => Value::Text(present().map(ToString::to_string).collect::<Vec<_>>().join(&self.delimiter)),
             Rule::Sum if ty == FieldType::Integer => {
-                let ints: Vec<i64> = present().filter_map(|v| if let Value::Int(i) = v { Some(*i) } else { None }).collect();
+                // Whole numbers, however they are held (a whole decimal counts; 2.5 can't be one).
+                let whole = |v: &Value| match v {
+                    Value::Int(i) => Some(*i),
+                    v => v.as_f64().filter(|f| f.fract() == 0.0 && f.abs() < 9.2e18).map(|f| f as i64),
+                };
+                let ints: Vec<i64> = present().filter_map(whole).collect();
                 if ints.is_empty() {
                     return Value::Null;
                 }
