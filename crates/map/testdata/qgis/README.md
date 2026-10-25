@@ -14,15 +14,17 @@ no specification of these formats, so the corpus stands in for one: `every_corpu
 | `generated/data/` | The data those files use: `sample.gpkg` (layers `points`, `lines` and `polygons`, 9 made-up features each, fields `id`, `name`, `kind`, `value`, `angle`, `day`), `dem.tif` (3 bands of a linear surface), two CSVs, a GPX file | Apache-2.0 |
 | `generated/generate.py`, `scrub.py` | The generator, and the step that removes the user's name and absolute paths from what QGIS writes | Apache-2.0 |
 | `generated/types.txt` | The element types QGIS 4.2.3 knows (symbol layers, renderers, providers, label placements, callouts, annotation and layout items, paint effects): the checklist the corpus was made from. A few have no file yet: the single-colour raster renderer, and the text table, fixed table, elevation profile and chart layout items | Apache-2.0 |
-| `smv25/SMV25_CHLV95LN02.qgz` | The QGIS project swisstopo publishes with [Swiss Map Vector 25](https://www.swisstopo.admin.ch/en/national-map-swiss-map-vector-25) (the "Hilfsdateien" of the GeoPackage version, edition of July 2026), unchanged, zipped as a `.qgz`: 66 layers styled like the Swiss national map 1:25,000, with categorized renderers, dashes, markers along lines, font markers, pattern fills, rule-based labels, four rasters and a print layout. It serves only as a large, demanding real-world project: about 2,000 symbol layers, data-defined settings and rule-based labels, using a handful of QGIS's features heavily rather than many of them (the generated files cover the breadth). Its Swiss data isn't the goal | Source: Federal Office of Topography swisstopo. Free geodata of swisstopo ([OGD](https://www.swisstopo.admin.ch/en/free-geodata-ogd)): free use, the source must be given |
 
 ## Not included
 
-- **Data of SMV25.** The project reads `SMV25_CHLV95LN02.gpkg` and four rasters in
-  `SMV25_CHLV95LN02_RASTER/` beside it (about 760 MB). Download the GeoPackage version from
+- **The SMV25 project and its data.** The repository does not bundle third-party vendor styles.
+  For a large real-world project to test manually, download the GeoPackage version and its
+  QGIS project from
   [swisstopo](https://www.swisstopo.admin.ch/en/national-map-swiss-map-vector-25) (also on
   [opendata.swiss](https://opendata.swiss/en/dataset/swiss-map-vector-25-vektorielle-landeskarte-der-schweiz-1-25-000))
-  and unzip the `.qgz` beside it to open the whole map.
+  and place the project beside `SMV25_CHLV95LN02.gpkg` and the four rasters in
+  `SMV25_CHLV95LN02_RASTER/` (about 760 MB) to open the whole map. These external files are
+  outside the automated corpus test.
 - **The QGIS Training Manual's projects and styles**, which were part of the audit: they are
   GPL-2.0, so they live in [qgis/QGIS-Training-Data](https://github.com/qgis/QGIS-Training-Data)
   (`exercise_data/`, 36 `.qgs`, `.qgz` and `.qml` files from QGIS 1.8 to 3.x).

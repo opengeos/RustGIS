@@ -446,7 +446,7 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
         );
     });
     group(ui, "Add", |ui| {
-        big_menu(ui, app, "basemap", "Basemap", "Change the map's backdrop.", basemap_gallery);
+        big_form_menu(ui, app, "basemap", "Basemap", "Change the map's backdrop.", basemap_gallery);
         big_menu(ui, app, "add_data", "Add\nData", "Add GeoJSON, CSV or Shapefile data to the map.", |ui, app| {
             menu_item(ui, app, "", "Data…", "ui.addData", Value::Null);
             menu_item(ui, app, "", "Delimited Text…", "ui.addDelimited", Value::Null);
@@ -713,6 +713,7 @@ fn planet_basemaps(ui: &mut Ui, app: &mut RustGisApp) {
             let tip = tl!("Measure on this body, with one of its basemaps.");
             if ui.add(egui::Button::selectable(b.id == body.id, tl!(b.name))).on_hover_text(tip).clicked() {
                 let _ = app.run("map.body", json!({"name": b.id}));
+                ui.close();
             }
         }
     });
@@ -855,12 +856,15 @@ fn tile_layers(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
             }
             if ui.add_enabled(i > 0, egui::Button::new("▲").small()).on_hover_text(tl!("Move up")).clicked() {
                 action = Some(("map.setTiles", json!({"index": i, "move": "up"})));
+                ui.close();
             }
             if ui.add_enabled(i + 1 < tiles.len(), egui::Button::new("▼").small()).on_hover_text(tl!("Move down")).clicked() {
                 action = Some(("map.setTiles", json!({"index": i, "move": "down"})));
+                ui.close();
             }
             if crate::widgets::icon_button(ui, "close", tl!("Remove")).clicked() {
                 action = Some(("map.removeTiles", json!({"index": i})));
+                ui.close();
             }
         });
     }
@@ -875,9 +879,11 @@ fn tile_layers(ui: &mut Ui, app: &mut RustGisApp, t: &Tokens) {
         if !tiles.is_empty() && ui.button(tl!("Reload")).on_hover_text(tl!("Fetch the tiles and styles of the web layers again.")).clicked()
         {
             let _ = app.run("map.reloadWebLayers", json!({}));
+            ui.close();
         }
         if !tiles.is_empty() && ui.button(tl!("Remove All")).clicked() {
             let _ = app.run("map.removeTiles", json!({}));
+            ui.close();
         }
     });
 }
@@ -1846,7 +1852,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
         col(ui, |ui| {
             let (vig, edges, tilt, grain) = (v.effects.vignette, v.effects.edges, v.effects.tilt_shift, v.effects.grain);
             let stars = v.effects.stars;
-            small_menu(ui, app, "eye", "Visual Effect", "Vignette, edge outlines and the stars around the globe.", move |ui, app| {
+            small_form_menu(ui, app, "eye", "Visual Effect", "Vignette, edge outlines and the stars around the globe.", move |ui, app| {
                 if ui.checkbox(&mut vig.clone(), tl!("Vignette")).clicked() {
                     let _ = app.run("map.effects", json!({"vignette": !vig}));
                 }
@@ -1857,7 +1863,7 @@ fn view_tab(app: &mut RustGisApp, ui: &mut Ui) {
                     let _ = app.run("map.effects", json!({"stars": !stars}));
                 }
             });
-            small_menu(ui, app, "zoom_box", "Camera Effect", "Tilt-shift blur and film grain.", move |ui, app| {
+            small_form_menu(ui, app, "zoom_box", "Camera Effect", "Tilt-shift blur and film grain.", move |ui, app| {
                 if ui.checkbox(&mut tilt.clone(), tl!("Tilt-shift")).clicked() {
                     let _ = app.run("map.effects", json!({"tiltShift": !tilt}));
                 }
@@ -3195,7 +3201,7 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         let mut all: Vec<(String, String)> =
             TABS.iter().filter(|t| !FIXED_TABS.contains(*t)).map(|t| (t.to_string(), tl!(*t).to_string())).collect();
         all.extend(plugin_tabs(app));
-        big_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
+        big_form_menu(ui, app, "settings", "Ribbon", "Choose which tabs the ribbon shows.", move |ui, app| {
             for (tab, caption) in &all {
                 let mut on = !hidden.iter().any(|h| h == tab);
                 if ui.checkbox(&mut on, caption.as_str()).clicked() {
@@ -3204,7 +3210,7 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
             }
         });
         let qa = app.ui.quick_access.clone();
-        big_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
+        big_form_menu(ui, app, "command", "Quick\nAccess", "Choose extra buttons for the Quick Access Toolbar.", move |ui, app| {
             for (id, label) in QUICK {
                 let mut on = qa.iter().any(|c| c == id);
                 if ui.checkbox(&mut on, tl!(*label)).clicked() {
