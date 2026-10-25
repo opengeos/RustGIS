@@ -1063,13 +1063,14 @@ fn snap(s: &mut Session, p: &Json) -> CmdResult {
 
 /// Where a point at `c` (longitude/latitude) snaps to, and to what, if anywhere. Read-only, for
 /// drawing the snap marker without running a command (projected shapes are cached on the way).
+///
+/// Point features and MultiPoint members are vertex targets only, never edges or line ends.
+/// Vertices and line ends take priority over edges. Equal distances keep the original layer,
+/// row and member order.
 pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
     snap_except(s, c, None)
 }
 
-/// Point features and MultiPoint members are vertex targets only, never edges or line ends.
-/// Points and line ends take priority over edges. Equal distances keep the original layer,
-/// row and member order.
 /// [`snap_at`], leaving out one feature (layer id, row): a vertex being dragged doesn't snap to
 /// the shape it is changing.
 pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Option<(Coord, &'static str)> {
