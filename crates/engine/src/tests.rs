@@ -668,6 +668,9 @@ fn a_qgis_project_in_degrees_opens_in_equirectangular() {
 fn a_qgis_project_with_a_geographic_proj_string_keeps_its_saved_view() {
     for (crs, datum_note, saved_view) in [
         ("+proj=longlat +datum=WGS84", false, true),
+        ("+proj=latlong +datum=WGS84", false, true),
+        ("+proj=lonlat +datum=WGS84", false, true),
+        ("+proj=latlon +datum=WGS84", false, true),
         ("  +datum=WGS84 +proj=longlat +no_defs", false, true),
         ("+proj=longlat +datum=potsdam", true, true),
         ("+proj=longlat +datum=WGS84 +pm=paris", true, false),

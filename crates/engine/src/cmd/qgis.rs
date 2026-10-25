@@ -358,7 +358,7 @@ impl Geographic {
             rustgis_data::raster::crs::epsg_proj4(code)?
         };
         let has = |p: &str| def.split_whitespace().any(|t| t == p);
-        (has("+proj=longlat") || has("+proj=latlong")).then(|| Geographic {
+        ["+proj=longlat", "+proj=latlong", "+proj=lonlat", "+proj=latlon"].iter().any(|p| has(p)).then(|| Geographic {
             wgs84: has("+datum=WGS84") || has("+datum=NAD83") || has("+towgs84=0,0,0,0,0,0,0") || has("+towgs84=0,0,0"),
             // `+pm=` names a meridian or gives its offset in degrees (`0`, `0.0`: Greenwich).
             greenwich: def
