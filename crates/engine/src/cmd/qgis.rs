@@ -95,7 +95,8 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         match s.run_part("map.projection", &json!({"type": code})) {
             Err(e) => report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator")),
             Ok(_) if degrees.is_some_and(|g| !g.wgs84 || !g.greenwich) => {
-                report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84"));
+                let meridian = if degrees.is_some_and(|g| !g.greenwich) { ", its longitudes taken as from Greenwich" } else { "" };
+                report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84{meridian}"));
             }
             Ok(_) => {}
         }
@@ -344,7 +345,8 @@ struct Geographic {
 }
 
 impl Geographic {
-    /// `None` for a coordinate system that isn't in degrees, or isn't known.
+    /// `None` for a coordinate system that isn't in degrees, or isn't known: an `EPSG:` code,
+    /// `OGC:CRS84`, or a PROJ string (a project QGIS saved without an authority code).
     fn of(crs: &str) -> Option<Geographic> {
         if crs.eq_ignore_ascii_case("OGC:CRS84") {
             return Some(Geographic { wgs84: true, greenwich: true });
@@ -356,9 +358,13 @@ impl Geographic {
             rustgis_data::raster::crs::epsg_proj4(code)?
         };
         let has = |p: &str| def.split_whitespace().any(|t| t == p);
-        has("+proj=longlat").then(|| Geographic {
+        (has("+proj=longlat") || has("+proj=latlong")).then(|| Geographic {
             wgs84: has("+datum=WGS84") || has("+datum=NAD83") || has("+towgs84=0,0,0,0,0,0,0") || has("+towgs84=0,0,0"),
-            greenwich: !def.contains("+pm=") || has("+pm=greenwich") || has("+pm=0"),
+            // `+pm=` names a meridian or gives its offset in degrees (`0`, `0.0`: Greenwich).
+            greenwich: def
+                .split_whitespace()
+                .filter_map(|t| t.strip_prefix("+pm="))
+                .all(|pm| pm.eq_ignore_ascii_case("greenwich") || pm.parse::<f64>().is_ok_and(|d| d == 0.0)),
         })
     }
 }
