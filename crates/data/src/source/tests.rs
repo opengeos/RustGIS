@@ -443,8 +443,8 @@ fn export_sample() -> Dataset {
 #[test]
 fn writes_geopackage_geoparquet_and_shapefile() {
     let ds = export_sample();
-    let d = dir().join("export");
-    std::fs::create_dir_all(&d).unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let d = workspace.path();
     for ext in ["gpkg", "parquet", "shp", "fgb"] {
         let p = d.join(format!("parcels.{ext}"));
         let left_out = crate::io::write_path(&ds, &p).unwrap();
@@ -486,13 +486,109 @@ fn writes_geopackage_geoparquet_and_shapefile() {
             assert_eq!(b.features[0].id, 2);
         }
     }
-    // Written again over the old files.
+    // Single-file formats can replace their old exports, but GeoPackages may hold other tables.
     let mut fewer = ds.clone();
     fewer.features.truncate(1);
-    for ext in ["gpkg", "parquet", "shp"] {
+    for ext in ["parquet", "shp"] {
         let p = d.join(format!("parcels.{ext}"));
         crate::io::write_path(&fewer, &p).unwrap();
         assert_eq!(crate::io::read_path(&p).unwrap().0.features.len(), 1, "{ext}");
+    }
+}
+
+#[test]
+fn geopackage_export_preserves_existing_database_and_wal() {
+    let workspace = tempfile::tempdir().unwrap();
+    let path = workspace.path().join("county.gpkg");
+    let mut parcels = Dataset::new("parcels", GeometryType::Point, vec![]);
+    parcels.push(Some(Geometry::Point(Coord::new(1.0, 2.0))), vec![]);
+    crate::io::write_path(&parcels, &path).unwrap();
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         CREATE TABLE zoning (name TEXT);
+         INSERT INTO zoning VALUES ('residential');
+         INSERT INTO gpkg_contents (table_name, data_type, identifier) VALUES ('zoning', 'attributes', 'zoning');",
+    )
+    .unwrap();
+    let wal = workspace.path().join("county.gpkg-wal");
+    let before = std::fs::read(&path).unwrap();
+    let wal_before = std::fs::read(&wal).unwrap();
+    assert!(!wal_before.is_empty());
+    let mut permits = parcels.clone();
+    permits.name = "permits".into();
+    let result = crate::io::write_path(&permits, &path);
+    assert!(result.is_err(), "export must refuse to replace an existing GeoPackage");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+    let names: Vec<String> = conn
+        .prepare("SELECT table_name FROM gpkg_contents ORDER BY table_name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(names, ["parcels", "zoning"]);
+    assert_eq!(conn.query_row("SELECT name FROM zoning", [], |r| r.get::<_, String>(0)).unwrap(), "residential");
+    // A fresh filename still exports normally, including a round trip through the reader.
+    let fresh = workspace.path().join("permits.gpkg");
+    crate::io::write_path(&permits, &fresh).unwrap();
+    assert_eq!(crate::io::read_path(&fresh).unwrap().0.features.len(), 1);
+}
+
+#[test]
+fn geopackage_export_refuses_existing_entries_and_orphaned_journals() {
+    let workspace = tempfile::tempdir().unwrap();
+    let ds = Dataset::new("permits", GeometryType::Point, vec![]);
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let path = workspace.path().join("county.gpkg");
+        let entry = workspace.path().join(format!("county.gpkg{suffix}"));
+        std::fs::write(&entry, b"existing data").unwrap();
+        assert!(crate::io::write_path(&ds, &path).is_err());
+        assert_eq!(std::fs::read(&entry).unwrap(), b"existing data");
+        std::fs::remove_file(entry).unwrap();
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 0);
+    }
+    let path = workspace.path().join("directory.gpkg");
+    std::fs::create_dir(&path).unwrap();
+    assert!(crate::io::write_path(&ds, &path).is_err());
+    assert!(path.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn geopackage_export_uses_regular_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = tempfile::tempdir().unwrap();
+    let regular = workspace.path().join("regular");
+    std::fs::write(&regular, b"control").unwrap();
+    let path = workspace.path().join("permits.gpkg");
+    crate::io::write_path(&Dataset::new("permits", GeometryType::Point, vec![]), &path).unwrap();
+    // Compare with an ordinary file under the current umask, without changing process-wide state.
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), mode(&regular));
+}
+
+#[cfg(unix)]
+#[test]
+fn geopackage_export_preserves_destination_symlinks() {
+    let workspace = tempfile::tempdir().unwrap();
+    let ds = Dataset::new("permits", GeometryType::Point, vec![]);
+    let target = workspace.path().join("target.gpkg");
+    let path = workspace.path().join("county.gpkg");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    for exists in [false, true] {
+        if exists {
+            std::fs::write(&target, b"existing data").unwrap();
+        }
+        assert!(crate::io::write_path(&ds, &path).is_err());
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        if exists {
+            assert_eq!(std::fs::read(&target).unwrap(), b"existing data");
+        } else {
+            assert!(!target.exists());
+        }
     }
 }
 

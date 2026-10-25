@@ -76,7 +76,9 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
     the title and subtitle in light text across the top, the map in a light card and the footer
     in darker blocks with amber headings. `"accent"` (`#RRGGBB`) colours the band, the panel's
     tint, the headings and rules, and a poster's page (a deep brown, green or blue by default).
-    A figure leaves the style to its caption.
+    A figure leaves the style to its caption. In the menu, each sheet opens a list of the six
+    styles, each saying what it looks like, in its default accent (`"accent"` in the command
+    picks another).
   - Every element is an ordinary one, to move or restyle afterwards. The command returns element
     IDs for `layout.update`, and `warnings`. Running it again with another `profile` makes
     another layout of the same map.
@@ -200,7 +202,12 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
 - **Snap** starts on: a dragged or resized element snaps to the guides, the page's edges and centre, and
   the other elements' edges and centres, and the line it snapped to is highlighted. Hold Alt to
   place an element freely, or turn **Snap** off in the Page group.
-- **Export** writes PDF (every map series page by default, up to 500) or PNG of the current page;
+- **Export** writes PDF (every map series page by default, up to 500), or PNG or SVG of the current page.
+  In SVG each element is a group (an Inkscape layer) named after it: text stays text and rectangles,
+  ellipses and lines stay shapes, while map frames and the other surrounds are pictures at the export
+  resolution, so the page can be finished in a vector editor. SVG text uses the viewer's
+  serif or sans-serif font, so its alignment and line widths can differ from PNG/PDF and can
+  change when edited. Embedded pictures are clipped to their element boxes;
   `layout.export` accepts `dpi` and `"allPages": false` for just the current PDF
   page. **Print** opens the PDF in the system viewer on desktop; **Save Layout File** and
   **Import Layout** move layouts between projects (`.rgislayout`).

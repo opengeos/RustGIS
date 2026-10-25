@@ -128,6 +128,15 @@ pub fn read_matching_within(bytes: &[u8], want: impl Fn(&str) -> bool, budget: u
         .rev()
         .find(|&i| bytes.get(i..i.saturating_add(4)) == Some(&[0x50, 0x4B, 0x05, 0x06]))
         .ok_or_else(bad)?;
+    // ZIP64 puts its 20-byte locator immediately before the ordinary end record.
+    // Its count may be a sentinel even when all individual entries fit plain ZIP.
+    let zip64_locator = eocd.checked_sub(20).and_then(|p| u32_at(bytes, p)) == Some(0x0706_4B50);
+    if zip64_locator
+        || u32_at(bytes, add(&[eocd, 12]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
+        || u32_at(bytes, add(&[eocd, 16]).ok_or_else(bad)?) == Some(0xFFFF_FFFF)
+    {
+        return Err("the archive uses ZIP64, which can't be read yet".into());
+    }
     let count = u16_at(bytes, add(&[eocd, 10]).ok_or_else(bad)?).ok_or_else(bad)?;
     if count > MAX_ENTRIES {
         return Err(format!("the archive holds {count} entries; at most {MAX_ENTRIES} can be read"));
@@ -242,5 +251,40 @@ mod tests {
         let p = central(&offset64);
         offset64[p + 42..p + 46].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(read(&offset64).err().is_some_and(|e| e.contains("ZIP64")));
+    }
+
+    #[test]
+    fn plain_zip_entry_limit_is_read_but_zip64_count_is_rejected() {
+        let entries = vec![("a".to_string(), Vec::new()); MAX_ENTRIES];
+        let mut z = write(&entries).unwrap();
+        assert_eq!(read(&z).unwrap(), entries);
+
+        // Add one central entry referencing the same empty local entry, taking the
+        // count beyond plain ZIP. No entry needs ZIP64 sizes or offsets.
+        let eocd = z.len() - 22;
+        let central = u32_at(&z, eocd + 16).unwrap();
+        let extra = z[central..central + 47].to_vec();
+        z.splice(eocd..eocd, extra);
+        let zip64_offset = eocd + 47;
+        let central_size = (zip64_offset - central) as u64;
+        let mut end = Vec::new();
+        end.extend_from_slice(&0x0606_4B50u32.to_le_bytes());
+        end.extend_from_slice(&44u64.to_le_bytes());
+        end.extend_from_slice(&45u16.to_le_bytes());
+        end.extend_from_slice(&45u16.to_le_bytes());
+        end.extend_from_slice(&[0; 8]); // disk numbers
+        end.extend_from_slice(&65_536u64.to_le_bytes());
+        end.extend_from_slice(&65_536u64.to_le_bytes());
+        end.extend_from_slice(&central_size.to_le_bytes());
+        end.extend_from_slice(&(central as u64).to_le_bytes());
+        end.extend_from_slice(&0x0706_4B50u32.to_le_bytes());
+        end.extend_from_slice(&0u32.to_le_bytes());
+        end.extend_from_slice(&(zip64_offset as u64).to_le_bytes());
+        end.extend_from_slice(&1u32.to_le_bytes());
+        z.splice(zip64_offset..zip64_offset, end);
+        let eocd = z.len() - 22;
+        z[eocd + 12..eocd + 16].copy_from_slice(&(central_size as u32).to_le_bytes());
+        assert!(read(&z).unwrap_err().contains("ZIP64"));
+        assert!(read_matching(&z, |_| false).unwrap_err().contains("ZIP64"));
     }
 }

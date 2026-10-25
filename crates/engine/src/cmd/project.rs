@@ -28,7 +28,7 @@ pub fn commands() -> Vec<C> {
             .when(|s| if s.can_redo() { None } else { Some("nothing to redo") }),
         C::new("tool.set", "Set Map Tool", "Home › Navigate", set_tool)
             .view()
-            .params(r#"{"tool": "explore"|"select"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"editVertices"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
+            .params(r#"{"tool": "explore"|"select"|"selectPolygon"|"selectLasso"|"selectRadius"|"zoomIn"|"measure"|"measureArea"|"createPoint"|"createLine"|"createPolygon"|"editVertices"|"graphicPoint"|"graphicText"|"graphicLine"|"graphicCurve"|"graphicFreehand"|"graphicPolygon"|"graphicLasso"|"graphicRectangle"|"graphicCircle"|"graphicEllipse"|"graphicPicture"}"#),
         C::new("info.project", "Project Info", "Project", info).view().params(r#"{"nameFilter"?: string, "includeFields"?: bool}"#),
         C::new("info.commands", "List Commands", "Help", list).view(),
     ]
@@ -56,6 +56,10 @@ fn reset(s: &mut Session, p: Project) {
     s.history_from_file = s.project.gp_history.len();
     // Zarr layers that follow the time slider read the step it is at.
     super::zarr::follow_time(s);
+    // The sources that read an S3 bucket through a saved connection wait for it (or its choice):
+    // nothing of the new project is fetched before.
+    s.s3_pending.clear();
+    crate::s3_connections::resolve_project_s3(s);
 }
 
 fn new(s: &mut Session, p: &Value) -> CmdResult {

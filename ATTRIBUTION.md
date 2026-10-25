@@ -26,6 +26,10 @@ from Esri's [projection-engine-db-doc](https://github.com/Esri/projection-engine
 PROJ definitions by PROJ 9.7.1.
 The WKT2 test corpus (`crates/data/src/raster/wkt2_corpus.tsv`) is 60 of those EPSG and Esri
 coordinate systems written as WKT2 by PROJ 9.7.1, through pyproj 3.7.2.
+The ESRI datum test corpus (`crates/data/src/raster/esri_datum_corpus.tsv`) contains 13 EPSG
+coordinate systems written as ESRI WKT1 through pyproj 3.7.2; reference coordinates use PROJ
+with the bundled `crs-definitions` Helmert definitions. The OSGB36, Amersfoort and GGRS87 WKT2
+reference coordinates use those same transformations.
 
 The GeoLibre tool suite ([geolibre-rust](https://github.com/opengeos/geolibre-rust), MIT, built
 on [whitebox-wasm](https://github.com/opengeos/whitebox-wasm), MIT) is not part of RustGIS: the

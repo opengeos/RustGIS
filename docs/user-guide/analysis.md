@@ -2,11 +2,18 @@
 
 ## Selection and queries
 
-**Home › Select** picks features by clicking or dragging a box (Shift adds, Ctrl removes). It
-takes only features that are drawn, in selectable layers: a definition query or a display filter
-hiding a feature keeps it out, and a click picks the feature drawn on top among the selectable
-layers. **Select By Attributes** takes a SQL clause and checks it as you type; **Select By Location**
-picks features that touch another layer's features or lie within a search distance of them (or,
+**Home › Select** picks features by clicking or dragging a box. Open **Select options** to choose
+**Select by Polygon** (click vertices; click the first vertex or double-click to finish), **Select by
+Lasso** (drag a freehand outline), or **Select by Radius** (drag from the centre to set a distance). Shift adds to the
+selection; Ctrl/Cmd removes; Esc cancels an unfinished outline. Area tools use even-odd fill, so a
+self-crossing outline selects its alternating filled regions. Radius uses the Neighborhood Explorer's
+local Mercator distance and retained geographic prefilter; its outline and readout are approximate
+and some features near the outline may be excluded. The main Select button remains click/rectangle
+selection.
+All selection tools take only features that are drawn, in selectable layers: a definition query or
+a display filter hiding a feature keeps it out, and a click picks the feature drawn on top among the
+selectable layers. **Select By Attributes** takes a SQL clause and checks it as you type; **Select By
+Location** picks features that touch another layer's features or lie within a search distance of them (or,
 inverted, those that don't). Selected features draw in
 cyan and are highlighted in the attribute table, and the selection is synced both ways. Switch,
 clear or zoom to the selection, or make a new layer from it (**Make Layer From Selected
@@ -128,13 +135,46 @@ numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the 
 named by `output`, and `<output>_variance`.
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
-to `target` features in the same coordinate system. `match` is **Intersects** (default),
-**Contains** (target contains join) or **Within** (target lies within join).
-**Join one to one** (the default `operation`) copies the first matching feature's attributes,
-not their sum or mean; **Join one to many** makes a row for each match. Both add `join_count`,
-the total matches for that target, and prefix joined fields with `join_` (change `prefix` to
-override it). `keepAll` defaults to **Keep all**, leaving unmatched joined values null; choose
-**Keep only matching** to drop those targets. Selections in both layers are honoured.
+to `target` features. Layers may have different source coordinate systems: their geometry is
+stored in longitude/latitude before the join. `match` is one of:
+
+- **Intersects** (default), **Contains** (target contains join) or **Within** (target lies within
+  join).
+- **Have their center in**: the join features holding the target's interior point, the point
+  Feature To Point gives. A parcel a zone boundary crosses goes with the zone its point falls in.
+- **Largest overlap**: the one join polygon covering most of the target, by ground area for a
+  polygon target and ground length for a line. Polygons that only touch don't overlap. Equal
+  overlaps keep the join layer's order.
+- **Closest**: the one nearest join feature. A `distance` (in `units`, as for Buffer; Kilometers
+  by default) limits how far it looks, leaving targets with nothing that near unmatched; without
+  one, every target gets its nearest feature. Ties keep the join layer's order.
+- **Within a distance**: every join feature within `distance` (required), nearest first.
+
+Distances are on the ground, between the features' nearest points (edges and vertices alike),
+and are zero for features that intersect. `distanceField` names a field added for the distance
+to the joined feature, in `units`; it applies to **Closest** and **Within a distance** only, as
+`distance` does, and the Tools pane shows them only for those.
+
+**Join one to one** (the default `operation`) copies the first matching feature's attributes;
+**Join one to many** makes a row for each match. Both add `join_count`, the total matches for
+that target (one at most for Largest overlap and Closest), and prefix joined fields with `join_`
+(change `prefix` to override it). `keepAll` defaults to **Keep all**, leaving unmatched joined
+values null; choose **Keep only matching** to drop those targets. Selections in both layers are
+honoured.
+
+In a one-to-one join, `merge` combines the values of all the matches instead of taking the
+first: a list such as `[{"field": "units", "rule": "sum"}, {"field": "name", "rule": "join",
+"delimiter": "; "}]` naming join fields. The rules are `first` (the default for fields without a
+rule), `last`, `sum` and `mean` (numeric fields), `min` and `max` (numbers or text), `count` (the
+matches with a value) and `join` (the values as text, separated by `delimiter`, `, ` by default).
+Every rule but `first` and `last` skips empty values. A target without matches gets empty
+values, except a `count` of 0. `mean` writes a decimal field, `count` a whole number and `join`
+text. The `sum` of a whole-number field adds its whole numbers, and is empty when too large to
+hold. For example, the total units permitted in each district:
+
+```text
+gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
+```
 
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
@@ -296,7 +336,19 @@ help; there the help by the cursor is the tool's. A `task.addStep` line works th
 `"command": "` offers the commands, and its `"params"` that command's keys and help. For a
 command that takes them, `"layer": "` offers the map's layers, top first, each with its kind's
 icon and beside it what it holds; `"field": "` offers the fields of the layer the line names
-(before or after it), or of the active layer when it names none, with each field's type beside it. Accepting one writes its name
+(before or after it), or of the active layer when it names none, with each field's type beside it.
+So do the other keys a command describes as taking a field or fields, also inside their arrays
+(without the fields the array already lists):
+`"fields": ["` in `data.explore` (only the numeric ones, as it says), `"sort": "` in `report.new`,
+`"address": ["` in `layer.geocode` (the fields of its `"table"` when it names one).
+`"map": "`, `"layout": "` and `"table": "` offer the project's maps, layouts and standalone tables,
+with their layer counts, page sizes and row counts. `"class": "` offers the line's layer's label
+classes (or the active layer's), with each class's SQL clause, or **All features**. Default is
+included under its current name, except for commands that cannot remove or move it.
+In a `gp.run` line's `"params"`, a value offers what the tool's parameter takes, as the tool's
+form does: the layers of its kind (polygon, point, raster, vector; any layer, then the tables),
+the fields of the tool's input that it takes (numeric, holding coordinates), or its choices
+(`"units": "` offers `Kilometers`, `Meters`, …). Accepting one writes its name
 as the line's JSON needs it (`"Big \"lakes\""`). A `{` or `[`
 typed closes itself, the cursor inside, unless text follows it or it's in a string or a comment;
 so does a `"` where a string can start (after a space, `{`, `[`, `,` or `:`). A `}` or `]` typed
@@ -532,6 +584,35 @@ rustgis-cli run --cmd 'cube.reduce={"layers":["ndvi_2015","ndvi_2016","ndvi_2017
 rustgis-cli run --data cobertura_1985.tif --data cobertura_1986.tif --data cobertura_1987.tif --cmd 'cube.reduce={"layers":["cobertura_1985","cobertura_1986","cobertura_1987"],"stat":"changes"}'
 rustgis-cli run --cmd 'cube.reduce={"url":"https://data.inpe.br/bdc/stac/v1","collection":"mod13q1-6.1","asset":"NDVI","bbox":[-44.8,-7.5,-44.3,-7.0],"start":"2001","end":"2025","cellSize":1000,"stat":"mean","by":"year","minValid":0.5,"name":"NDVI"}' --save urucui.rgis
 ```
+
+## Zonal statistics and polygon clipping
+
+Open **Zonal Statistics** through Command Search, or choose it in the Workflows pane.
+
+Zonal Statistics uses the selected polygon features when the layer has a selection. It keeps
+original geometries and fields, and reports features with missing or rejected polygon parts.
+If any polygon part fails validation or transformation to WGS 84, the feature receives count 0 and null
+statistics. If a part subsequently fails projection onto the raster grid, it is omitted and reported;
+statistics cover the remaining valid parts. Large
+overlapping zones each require a separate pass over their raster window.
+
+For `raster.process` polygon clipping, `selectedOnly: true` requires a selection,
+`selectedOnly: false` uses every polygon, and omitting it uses the selection when present.
+The Process pane initially checks Selected only when the chosen layer has a selection, and sends
+the choice explicitly. Clipping and Zonal Statistics share
+polygon transformation rules so a failed hole cannot silently enlarge the sampled area.
+A malformed ring or a failed projection rejects its complete polygon part in all raster masking
+operations. Clipping skips invalid features and reports their count in the command result;
+its output bounds cover the valid polygons only.
+
+An empty band field or `bands: ""` selects band 1. The pane disables calculation when raster
+data is unavailable, shows the available band range for invalid band input, and indicates when
+only selected polygons will appear in the output. Both tools report parts omitted during raster-grid
+projection while retaining the valid parts.
+
+Field parameters in Dissolve, XY Table to Point, IDW, Kriging and Summary Statistics accept
+case-insensitive names. An exact spelling takes precedence; otherwise a name matching several
+fields is rejected as ambiguous. This prevents silently using the wrong field.
 
 ## Deep learning and hosted imagery
 

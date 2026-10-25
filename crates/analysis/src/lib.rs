@@ -14,17 +14,19 @@ pub mod convert;
 pub mod dggs;
 pub mod geodesic;
 pub mod georef;
+mod join;
 pub mod kriging;
 pub mod network;
 pub mod neural;
 pub mod rasterops;
+pub mod selection;
 pub mod tissot;
 mod tools;
 pub mod topology;
 pub mod trend;
 pub mod warp;
 
-pub use tools::{TOOLS, holds_coordinates, simplify_geometry};
+pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
 use serde_json::Value;

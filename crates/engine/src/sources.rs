@@ -61,6 +61,10 @@ impl Sources {
         s.favourites.truncate(MAX_KEPT);
         s.saved.truncate(MAX_KEPT);
         s.recent.truncate(MAX_RECENT);
+        // Preferences carry provenance, never authority from an earlier process's login.
+        crate::s3_connections::clear_bindings(
+            s.favourites.iter_mut().chain(&mut s.recent).chain(&mut s.saved).map(|source| &mut source.address),
+        );
         s
     }
 
@@ -157,7 +161,14 @@ pub fn clean(mut s: Source) -> Result<Source, String> {
         return Err(format!("unknown kind '{}' ({})", s.kind, KINDS.join(", ")));
     }
     s.address = redact(s.address.trim());
-    if s.address.is_empty() || s.address.len() > MAX_TEXT || s.address.chars().any(char::is_control) {
+    // Provenance has its own structural bound; it must not consume the destination's limit.
+    let (head, archive) = template_archive(&s.address).unwrap_or(("", s.address.as_str()));
+    let bounded = match rustgis_data::s3_address::parse(archive) {
+        Ok(Some(bound)) => head.len().saturating_add(bound.url.len()) <= MAX_TEXT,
+        Ok(None) => s.address.len() <= MAX_TEXT,
+        Err(_) => false,
+    };
+    if s.address.is_empty() || !bounded || s.address.chars().any(char::is_control) {
         return Err("a source needs an address (a path, web address or connection)".into());
     }
     s.name = s.name.trim().chars().filter(|c| !c.is_control()).take(200).collect();
@@ -315,11 +326,34 @@ pub fn redact_text(text: &str) -> String {
         .collect()
 }
 
+/// A PMTiles or COG tile template (`pmtiles:{z}/{x}/{y}@archive`, `cog:…@archive`): what comes
+/// before its archive (up to and with the first `@`), and the archive, whose address is the one
+/// that holds credentials and names a saved S3 connection.
+pub(crate) fn template_archive(address: &str) -> Option<(&str, &str)> {
+    use crate::render::rustgis_tiles::{cog, pmtiles};
+    let rest = [pmtiles::SCHEME, cog::SCHEME].iter().find_map(|s| address.strip_prefix(s))?;
+    let (_, archive) = rest.split_once('@')?;
+    let head = address.get(..address.len() - archive.len())?;
+    Some((head, archive))
+}
+
 /// An address without what would give someone else the user's access: the user and password of
 /// a web address, query parameters that are keys, tokens or signatures (a signed blob's SAS, an
 /// S3 presigned URL), and a PostgreSQL connection string's password. A MySQL, MariaDB or SQL Server
-/// address keeps its user (the one to connect as), never its password.
+/// address keeps its user (the one to connect as), never its password. An address read through a
+/// saved S3 connection is redacted inside (its inner address), and its length-prefixed form
+/// rebuilt; a tile template, in its archive.
 pub fn redact(address: &str) -> String {
+    if let Some((head, archive)) = template_archive(address)
+        && rustgis_data::s3_address::is_wrapper(archive)
+    {
+        return format!("{head}{}", redact(archive));
+    }
+    if let Ok(Some(b)) = rustgis_data::s3_address::parse(address)
+        && let Ok(rebuilt) = rustgis_data::s3_address::bind(b.binding, b.endpoint, &redact(b.url))
+    {
+        return rebuilt;
+    }
     if let Some((public, _)) = rustgis_data::source::myconn::split_password(address) {
         return public;
     }
@@ -486,6 +520,32 @@ fn build_library() -> Vec<(&'static str, Source)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_sources_never_reuse_a_previous_process_login_binding() {
+        let address = rustgis_data::s3_address::bind("0123456789abcdef", "https://s3.example.org", "s3://data/a.fgb").unwrap();
+        let source = Source { kind: "url".into(), name: "Saved".into(), address, extra: Value::Null };
+        let text = serde_json::json!({"favourites": [source.clone()], "saved": [source.clone()], "recent": [source]}).to_string();
+        let restored = Sources::from_json(&text);
+        for source in restored.favourites.iter().chain(&restored.saved).chain(&restored.recent) {
+            let bound = rustgis_data::s3_address::parse(&source.address).unwrap().unwrap();
+            assert_eq!(bound.binding, "");
+            assert_eq!(bound.endpoint, "https://s3.example.org");
+            assert_eq!(bound.url, "s3://data/a.fgb");
+        }
+    }
+
+    #[test]
+    fn a_saved_archive_still_bounds_its_template_head() {
+        let address = rustgis_data::s3_address::bind("", "", "s3://data/a.pmtiles").unwrap();
+        let source = Source {
+            kind: "url".into(),
+            name: "Huge template".into(),
+            address: format!("pmtiles:{}@{address}", "x".repeat(MAX_TEXT)),
+            extra: Value::Null,
+        };
+        assert!(clean(source).is_err());
+    }
 
     #[test]
     fn secrets_in_command_parameters_are_noticed() {

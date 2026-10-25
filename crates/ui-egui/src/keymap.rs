@@ -41,6 +41,9 @@ pub const CLIPBOARD: &[(&str, &str)] = &[("Mod+C", "edit.copy"), ("Mod+X", "edit
 pub const MAP_TOOLS: &[(&str, &str)] = &[
     ("explore", "Explore"),
     ("select", "Select"),
+    ("selectPolygon", "Select by Polygon"),
+    ("selectLasso", "Select by Lasso"),
+    ("selectRadius", "Select by Radius"),
     ("zoomIn", "Zoom In"),
     ("measure", "Measure Distance"),
     ("measureArea", "Measure Area"),

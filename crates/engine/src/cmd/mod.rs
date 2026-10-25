@@ -29,6 +29,7 @@ pub mod plugins;
 pub mod portals;
 pub mod presentation;
 pub mod project;
+pub mod qgis;
 pub mod raster;
 pub mod report;
 pub mod s3;
@@ -55,6 +56,7 @@ use crate::{CommandSpec, Session};
 pub fn all() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(project::commands());
+    v.extend(qgis::commands());
     v.extend(navigate::commands());
     v.extend(geocode::commands());
     v.extend(directions::commands());

@@ -320,10 +320,51 @@ pub fn similar(ds: &Dataset, row: usize, fields: &[usize], n: usize) -> Vec<(usi
     out
 }
 
+fn radius_scale(at: Coord) -> f64 {
+    1.0 / at.y.to_radians().cos().max(0.01)
+}
+
+fn radius_coord_supported(point: Coord) -> bool {
+    point.is_finite() && (-180.0..=180.0).contains(&point.x) && (-rustgis_geom::MAX_LAT..=rustgis_geom::MAX_LAT).contains(&point.y)
+}
+
+/// Local Mercator distance in metres, using the same centre-latitude correction as [`within`].
+///
+/// This is not a geodesic distance and does not include `within`'s legacy geographic
+/// bounding-box prefilter. Inputs must be canonical lon/lat within the Mercator domain.
+pub fn radius_distance_m(at: Coord, point: Coord) -> Option<f64> {
+    if !radius_coord_supported(at) || !radius_coord_supported(point) {
+        return None;
+    }
+    let center = rustgis_geom::lonlat_to_merc(at);
+    let point = rustgis_geom::lonlat_to_merc(point);
+    let dx = point.x - center.x;
+    let dy = point.y - center.y;
+    let distance = (dx.powi(2) + dy.powi(2)).sqrt() / radius_scale(at);
+    distance.is_finite().then_some(distance)
+}
+
+/// A point on the local distance-threshold outline, at an angle counterclockwise from east.
+///
+/// Radii must be positive and at most 5,000 km. Points outside the canonical Mercator
+/// domain are unsupported rather than wrapped or clamped. The outline is approximate:
+/// [`within`] additionally preserves its historical geographic bounding-box prefilter.
+pub fn radius_boundary_point(at: Coord, radius_m: f64, angle_rad: f64) -> Option<Coord> {
+    if !radius_coord_supported(at) || !radius_m.is_finite() || radius_m <= 0.0 || radius_m > 5_000_000.0 || !angle_rad.is_finite() {
+        return None;
+    }
+    let center = rustgis_geom::lonlat_to_merc(at);
+    let radius = radius_m * radius_scale(at);
+    let (sin, cos) = angle_rad.sin_cos();
+    let point = Coord::new(center.x + radius * cos, center.y + radius * sin);
+    let point = rustgis_geom::merc_to_lonlat(point);
+    radius_coord_supported(point).then_some(point)
+}
+
 /// Rows of `ds` whose geometry comes within `radius_m` of a point, with their distances.
 pub fn within(ds: &Dataset, rows: &[usize], at: Coord, radius_m: f64) -> Vec<(usize, f64)> {
     let m = rustgis_geom::lonlat_to_merc(at);
-    let k = 1.0 / at.y.to_radians().cos().max(0.01);
+    let k = radius_scale(at);
     let mut out: Vec<(usize, f64)> = rows
         .iter()
         .filter_map(|r| {
@@ -407,5 +448,118 @@ mod tests {
         assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
+    }
+
+    fn offset(at: Coord, x: f64, y: f64) -> Coord {
+        let m = rustgis_geom::lonlat_to_merc(at);
+        let scale = radius_scale(at);
+        rustgis_geom::merc_to_lonlat(Coord::new(m.x + x * scale, m.y + y * scale))
+    }
+
+    #[test]
+    fn radius_helpers_match_local_mercator_metric() {
+        let at = Coord::new(0.0, 60.0);
+        let m = rustgis_geom::lonlat_to_merc(at);
+        let east = rustgis_geom::merc_to_lonlat(Coord::new(m.x + 2000.0, m.y));
+        assert!((radius_distance_m(at, east).unwrap() - 1000.0).abs() < 1e-8);
+        assert_eq!(radius_distance_m(at, at), Some(0.0));
+        let boundary = radius_boundary_point(at, 1000.0, 0.0).unwrap();
+        assert!((rustgis_geom::lonlat_to_merc(boundary).x - m.x - 2000.0).abs() < 1e-8);
+        for latitude in [0.0, 60.0] {
+            let center = Coord::new(3.0, latitude);
+            for angle in [0.0, 0.5, 1.0, 2.0, 3.0, 4.5] {
+                let point = radius_boundary_point(center, 1000.0, angle).unwrap();
+                assert!((radius_distance_m(center, point).unwrap() - 1000.0).abs() < 1e-7);
+            }
+            let diagonal = offset(center, 600.0, 800.0);
+            let radius = radius_distance_m(center, diagonal).unwrap();
+            assert!((radius - 1000.0).abs() < 1e-7);
+            let mut ds = Dataset::new("boundary", GeometryType::Point, vec![]);
+            ds.push(Some(Geometry::Point(diagonal)), vec![]);
+            assert_eq!(within(&ds, &[0], center, radius), vec![(0, radius)]);
+        }
+    }
+
+    #[test]
+    fn radius_helpers_reject_unsupported_inputs_without_clamping() {
+        let center = Coord::new(0.0, 0.0);
+        for invalid in [
+            Coord::new(f64::NAN, 0.0),
+            Coord::new(0.0, f64::INFINITY),
+            Coord::new(181.0, 0.0),
+            Coord::new(-181.0, 0.0),
+            Coord::new(0.0, 86.0),
+            Coord::new(0.0, -86.0),
+        ] {
+            assert!(radius_distance_m(center, invalid).is_none());
+            assert!(radius_distance_m(invalid, center).is_none());
+            assert!(radius_boundary_point(invalid, 1000.0, 0.0).is_none());
+        }
+        for radius in [0.0, -1.0, 5_000_001.0, f64::NAN, f64::INFINITY] {
+            assert!(radius_boundary_point(center, radius, 0.0).is_none());
+        }
+        for angle in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(radius_boundary_point(center, 1000.0, angle).is_none());
+        }
+        assert!(radius_boundary_point(Coord::new(179.999, 0.0), 1000.0, 0.0).is_none());
+        assert!(radius_boundary_point(Coord::new(-179.999, 0.0), 1000.0, std::f64::consts::PI).is_none());
+        assert!(radius_boundary_point(Coord::new(0.0, 85.05), 1000.0, std::f64::consts::FRAC_PI_2).is_none());
+        assert!(radius_boundary_point(Coord::new(0.0, -85.05), 1000.0, -std::f64::consts::FRAC_PI_2).is_none());
+        assert!(radius_boundary_point(center, 5_000_000.0, 0.0).is_some());
+    }
+
+    #[test]
+    fn radius_geometry_distances_at_equator_and_high_latitude() {
+        for latitude in [0.0, 60.0] {
+            let center = Coord::new(0.0, latitude);
+            let point = |x, y| offset(center, x, y);
+            let square =
+                |half: f64| vec![point(-half, -half), point(half, -half), point(half, half), point(-half, half), point(-half, -half)];
+            let mut ds = Dataset::new("radius", GeometryType::Point, vec![]);
+            for geometry in [
+                Geometry::Point(center),
+                Geometry::Point(point(300.0, 400.0)),
+                Geometry::Point(point(660.0, 880.0)),
+                Geometry::Line(vec![vec![point(-2000.0, 0.0), point(2000.0, 0.0)]]),
+                Geometry::Polygon(vec![vec![square(2000.0)]]),
+                Geometry::Polygon(vec![vec![square(2000.0), square(1500.0)]]),
+                Geometry::MultiPoint(vec![point(4000.0, 4000.0), point(300.0, 400.0)]),
+                Geometry::Line(vec![vec![point(-2000.0, 1500.0), point(2000.0, 1500.0)]]),
+                Geometry::Polygon(vec![vec![vec![
+                    point(600.0, 600.0),
+                    point(800.0, 600.0),
+                    point(800.0, 800.0),
+                    point(600.0, 800.0),
+                    point(600.0, 600.0),
+                ]]]),
+            ] {
+                ds.push(Some(geometry), vec![]);
+            }
+            ds.push(None, vec![]);
+            let rows: Vec<_> = (0..ds.features.len()).collect();
+            let hits = within(&ds, &rows, center, 1000.0);
+            let mut selected: Vec<_> = hits.iter().map(|hit| hit.0).collect();
+            selected.sort_unstable();
+            assert_eq!(selected, vec![0, 1, 3, 4, 6, 8]);
+            for (row, distance) in hits {
+                let expected = match row {
+                    0 | 3 | 4 => 0.0,
+                    1 | 6 => 500.0,
+                    8 => (600.0_f64.powi(2) + 600.0_f64.powi(2)).sqrt(),
+                    _ => panic!("unexpected radius hit"),
+                };
+                assert!((distance - expected).abs() < 1e-7, "{latitude}: {row}: {distance}");
+            }
+        }
+    }
+
+    #[test]
+    fn radius_preserves_legacy_geographic_prefilter() {
+        let center = Coord::new(0.0, 60.0);
+        let point = Coord::new(0.0, 59.1);
+        assert!(radius_distance_m(center, point).unwrap() < 100_000.0);
+        let mut ds = Dataset::new("legacy prefilter", GeometryType::Point, vec![]);
+        ds.push(Some(Geometry::Point(point)), vec![]);
+        assert!(within(&ds, &[0], center, 100_000.0).is_empty());
     }
 }

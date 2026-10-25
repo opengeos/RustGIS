@@ -435,7 +435,7 @@ fn projected_bytes(ds: &Dataset, ext: &str, crs: Crs) -> Result<(Vec<u8>, usize)
 /// `.parquet`/`.geoparquet`, `.shp`, `.zip`, `.kml`, `.kmz` or `.gpx`); returns the number of features the
 /// format couldn't hold (FlatGeobuf, KML, GPX and Shapefile hold only features with geometry). A
 /// Shapefile is written as its `.shp`, `.shx`, `.dbf`, `.prj` and `.cpg` files (or zipped, to a
-/// `.zip`).
+/// `.zip`). GeoPackage exports require a new path and never replace an existing file.
 pub fn write_path(ds: &Dataset, path: &Path) -> Result<usize> {
     write_path_in(ds, path, Crs::LonLat)
 }
@@ -2397,6 +2397,27 @@ mod tests {
         assert!(rep.messages.iter().any(|m| m.contains("not longitude/latitude")), "{:?}", rep.messages);
         std::fs::remove_dir_all(&dir).ok();
     }
+    /// An ESRI .prj without an authority retains the national datum shift (issue #807).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shapefile_esri_national_datum() {
+        use shapefile::dbase::{Record, TableWriterBuilder};
+        let dir = tempfile::tempdir().unwrap();
+        let shp = dir.path().join("milan.shp");
+        {
+            let mut writer = shapefile::Writer::from_path(&shp, TableWriterBuilder::new()).unwrap();
+            writer
+                .write_shape_and_record(&shapefile::Point::new(1_514_881.490_594_152, 5_034_556.812_441_661), &Record::default())
+                .unwrap();
+        }
+        let row = include_str!("raster/esri_datum_corpus.tsv").lines().find(|l| l.starts_with("3003\t")).unwrap();
+        std::fs::write(shp.with_extension("prj"), row.split('\t').nth(5).unwrap()).unwrap();
+        let (ds, report) = read_path(&shp).unwrap();
+        let c = ds.features[0].geometry.as_ref().and_then(Geometry::label_point).unwrap();
+        assert!((c.x - 9.19).abs() < 1e-7 && (c.y - 45.4642).abs() < 1e-7, "{c:?}");
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    }
+
     /// Zipped Shapefiles are read from memory (the web app's way to open them), with their `.prj`,
     /// from folders inside the archive, beside other vector files; truncations are errors.
     #[test]

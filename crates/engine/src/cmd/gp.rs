@@ -15,6 +15,11 @@ pub fn commands() -> Vec<C> {
             .params(
                 r#"{"target": layer, "join": layer, "match"?: "Intersects" (default) | "Contains" | "Within", "operation"?: "Join one to one" (default) | "Join one to many", "keepAll"?: "Keep all" (default) | "Keep only matching", "prefix"?: "join_", "output"?: text}"#,
             ),
+        C::new("gp.zonalStats", "Zonal Statistics", "Analyze › Raster", zonal_stats)
+            .when(need_layers)
+            .params(
+                r#"{"raster": raster, "polygons": polygon layer, "bands"?: [1-based band numbers] or single band (default 1), "stats"?: ["mean", "min", "max", "sum", "count", "stddev"] or "all" (default "all"), "prefix"?: text, "output"?: text}"#,
+            ),
         C::new("gp.bufferPoint", "Buffer A Point", "Analyze › Geoprocessing", buffer_point).params(
             r#"{"lon": number, "lat": number, "distance": number, "units"?: "Kilometers" (default) | "Meters" | "Miles" | "Feet", "name"?: output}"#,
         ),
@@ -699,6 +704,11 @@ fn buffer_point(s: &mut Session, p: &Value) -> CmdResult {
 /// Joins attributes from another layer spatially: `target` receives attributes from `join`.
 fn spatial_join(s: &mut Session, p: &Value) -> CmdResult {
     run_tool(s, "spatialJoin", p)
+}
+
+/// Calculates raster summary statistics for polygon zones.
+fn zonal_stats(s: &mut Session, p: &Value) -> CmdResult {
+    run_tool(s, "zonalStats", p)
 }
 
 /// Runs a (built-in) tool and applies its result, as `gp.run` does.

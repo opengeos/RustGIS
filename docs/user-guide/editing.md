@@ -50,7 +50,9 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
 - **Snapping** (**Edit › Snapping**): new and dragged vertices snap to nearby vertices, edges and
   line ends of visible feature layers at the current scale (magenta marker; graphics and rasters
   are not targets). Vertices and ends take priority over edges within the tolerance. Snapping
-  starts off; its vertex, edge and end options start on. The tolerance is how near, in screen
+  starts off; its vertex, edge and end options start on. Both Point features and individual
+  MultiPoint members use the vertex option; they supply neither edges nor line ends. Dragging
+  a Point or MultiPoint member excludes its entire source feature. The tolerance is how near, in screen
   pixels, a vertex must come to snap (10 by default, 1 to 100):
   `edit.snapping={"on": true, "tolerancePx": 12, "edge": false}` (without `"on"` it toggles
   snapping, even when other options are supplied). `edit.snap={"lon":12.5,"lat":41.9}` queries

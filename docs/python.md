@@ -64,6 +64,32 @@ cities.to_geojson(selected=True)                    # only the selected features
 cities.clear_selection()                            # clears selections in every layer
 ```
 
+## PMTiles archives
+
+`Session.add_pmtiles` and `Map.add_pmtiles` add a raster or vector PMTiles archive by web
+address or local file path. `source_layers` chooses the vector source layers; `style` is an
+array of MapLibre style layers (or its JSON text), using the same
+[supported style properties](user-guide/maps.md#basemaps) as other vector tile layers. A custom
+style chooses what it draws through its own `source-layer` properties, overriding `source_layers`.
+Omit both for the archive's default look. Other `map.addTiles` parameters, such as `opacity`,
+can be passed as keyword arguments.
+
+```python
+s.add_pmtiles("https://example.org/atlas.pmtiles", name="Atlas")
+s.add_pmtiles(
+    "atlas.pmtiles", name="Water", source_layers=["water"],
+    style=[{
+        "id": "water", "type": "fill", "source-layer": "water",
+        "paint": {"fill-color": "#336699"},
+    }],
+)
+```
+
+The result gives the tile layer's name, kind and position; it is not a feature `Layer`.
+Web archives need a server supporting byte-range requests (and CORS for the notebook app).
+Local archives can be read by Python, but are not embedded in the notebook app: use a web
+address accessible to the browser to show one there.
+
 ## The app in a notebook
 
 `rustgis.Map` shows the RustGIS app (ribbon, panes, map) in the cell, kept in step with its
@@ -177,6 +203,9 @@ big = s.add_geopandas(gdf[gdf.pop_max > 5_000_000], name="Big cities")
 s["Cities"].to_geojson()                            # a FeatureCollection dict
 big.to_file("big-cities.gpkg", crs="EPSG:3857")     # GeoJSON, CSV, FlatGeobuf, GeoParquet, …
 ```
+
+GeoPackage exports through `Layer.to_file` or `share.exportLayer` require a new filename.
+An existing `.gpkg` is refused to preserve its tables; export does not append or replace tables.
 
 `add_geojson` also takes any object with `__geo_interface__` (a Shapely geometry, a GeoSeries).
 `add_data`, `add_geojson` and `add_geopandas` return a `Layer` for a single layer, a list for

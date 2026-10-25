@@ -20,6 +20,8 @@ fn secret_key_lower(k: &str) -> bool {
             | "key"
             | "access_key"
             | "accesskey"
+            | "access_key_id"
+            | "accesskeyid"
             | "secret"
             | "client_secret"
             | "password"
@@ -72,5 +74,24 @@ pub fn redact_query(address: &mut String) {
     if !kept.is_empty() {
         address.push('?');
         address.push_str(&kept);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_key_ids_and_their_secrets_are_secret_names() {
+        for k in ["accessKeyId", "access_key_id", "AccessKeyID", "secretAccessKey", "sessionToken", "X-Amz-Credential"] {
+            assert!(secret_key(k), "{k}");
+        }
+        for k in ["remember", "region", "buckets", "endpoint"] {
+            assert!(!secret_key(k), "{k}");
+        }
+        // In a query, the key id goes with the signature.
+        let mut a = "https://s3.example.org/b/k?accessKeyId=AKIDEXAMPLE&prefix=x".to_string();
+        redact_query(&mut a);
+        assert_eq!(a, "https://s3.example.org/b/k?prefix=x");
     }
 }

@@ -331,27 +331,41 @@ pub fn like(text: &str, pat: &str) -> bool {
     p.get(pi..).is_some_and(|rest| rest.iter().all(|c| *c == '%'))
 }
 
-/// Evaluates for one row.
+/// Evaluates for one row: whether the row matches.
 pub fn eval(e: &Expr, ds: &Dataset, row: usize) -> bool {
+    eval3(e, ds, row) == Some(true)
+}
+
+/// SQL's three-valued logic: `None` is "unknown", what a comparison with a null gives. `NOT`
+/// leaves it unknown, so `NOT (pop > 100)` doesn't match a row whose `pop` is null.
+fn eval3(e: &Expr, ds: &Dataset, row: usize) -> Option<bool> {
     match e {
-        Expr::And(a, b) => eval(a, ds, row) && eval(b, ds, row),
-        Expr::Or(a, b) => eval(a, ds, row) || eval(b, ds, row),
-        Expr::Not(a) => !eval(a, ds, row),
-        Expr::IsNull { field, negate } => ds.value(row, *field).is_null() != *negate,
+        Expr::And(a, b) => match (eval3(a, ds, row), eval3(b, ds, row)) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        },
+        Expr::Or(a, b) => match (eval3(a, ds, row), eval3(b, ds, row)) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        },
+        Expr::Not(a) => eval3(a, ds, row).map(|v| !v),
+        Expr::IsNull { field, negate } => Some(ds.value(row, *field).is_null() != *negate),
         Expr::Like { field, pattern, negate } => {
             let v = ds.value(row, *field);
-            !v.is_null() && like(&v.to_string(), pattern) != *negate
+            (!v.is_null()).then(|| like(&v.to_string(), pattern) != *negate)
         }
         Expr::In { field, values, negate } => {
             let v = ds.value(row, *field);
-            !v.is_null() && values.iter().any(|x| eq(v, x)) != *negate
+            (!v.is_null()).then(|| values.iter().any(|x| eq(v, x)) != *negate)
         }
         Expr::Cmp { field, op, lit } => {
             let v = ds.value(row, *field);
             if v.is_null() || lit.is_null() {
-                return false;
+                return None;
             }
-            match op {
+            Some(match op {
                 Op::Eq => eq(v, lit),
                 Op::Ne => !eq(v, lit),
                 _ => match v.partial_cmp(lit) {
@@ -364,7 +378,7 @@ pub fn eval(e: &Expr, ds: &Dataset, row: usize) -> bool {
                     },
                     None => false,
                 },
-            }
+            })
         }
     }
 }
@@ -400,6 +414,23 @@ mod tests {
         assert_eq!(select("name NOT IN ('Lyon')", &d).unwrap(), vec![0, 2, 3]);
         assert!(select("bogus = 1", &d).is_err());
         assert!(select("pop >", &d).is_err());
+    }
+
+    #[test]
+    fn nulls_are_unknown_not_false() {
+        let d = ds();
+        // Row 3 has no population: neither a comparison nor its negation matches it.
+        assert_eq!(select("pop > 300000", &d).unwrap(), vec![0, 1]);
+        assert_eq!(select("NOT pop > 300000", &d).unwrap(), vec![2]);
+        assert_eq!(select("NOT (pop > 300000 OR pop < 300000)", &d).unwrap(), Vec::<usize>::new());
+        assert_eq!(select("NOT (pop > 300000 AND name = 'Lyon')", &d).unwrap(), vec![0, 2, 3]);
+        // A false side settles AND, a true side settles OR, whatever the null side is.
+        assert_eq!(select("pop > 1 OR name = 'Nowhere'", &d).unwrap(), vec![0, 1, 2, 3]);
+        assert_eq!(select("NOT (pop > 1 AND name = 'Paris')", &d).unwrap(), vec![1, 2, 3]);
+        assert_eq!(select("NOT (pop > 1 AND name = 'Nowhere')", &d).unwrap(), vec![0, 1, 2]);
+        // IS NULL is never unknown.
+        assert_eq!(select("NOT pop IS NULL", &d).unwrap(), vec![0, 1, 2]);
+        assert_eq!(select("NOT name LIKE 'l%'", &d).unwrap(), vec![0, 3]);
     }
 
     #[test]

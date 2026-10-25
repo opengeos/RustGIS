@@ -26,10 +26,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: downloads-mirror
-  cancel-in-progress: true
-
 jobs:
   sync:
     name: Publish the latest release
@@ -39,6 +35,13 @@ jobs:
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.event == 'release' &&
         github.event.workflow_run.conclusion == 'success'))
+    # On the job, not the workflow: a run whose job the `if` skips (a pull request's Python
+    # package build, say) must not join the group, or it cancels the release's own sync in
+    # progress, as it did for v0.4.0. Queue instead of cancelling: each run reads the release's
+    # assets afresh, so the last one to finish mirrors them all.
+    concurrency:
+      group: downloads-mirror
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -53,14 +56,28 @@ jobs:
         id: release
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
-          WORKFLOW_TAG: ${{ github.event.workflow_run.head_branch }}
+        # Only a manual run names its tag. A release's build or the schedule mirrors the latest
+        # release, read now that the job holds the concurrency slot: a late event from an older
+        # release can replace a newer one's pending run, and must not publish its own tag.
         run: |
-          tag="${REQUESTED_TAG:-${WORKFLOW_TAG:-}}"
+          tag="${REQUESTED_TAG:-}"
           if [ -z "$tag" ]; then
-            if ! tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null)"; then
-              echo "::notice::No release yet: nothing to mirror."
-              exit 0
-            fi
+            # A 404 means no release yet; any other error is retried, then fails the sync so a
+            # stale mirror never passes for an up-to-date one.
+            for attempt in 1 2 3; do
+              if tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2> err.txt)"; then
+                break
+              fi
+              if grep -q 'HTTP 404' err.txt; then
+                echo "::notice::No release yet: nothing to mirror."
+                exit 0
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::Could not read the latest release: $(cat err.txt)"
+                exit 1
+              fi
+              sleep $((attempt * 10))
+            done
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 

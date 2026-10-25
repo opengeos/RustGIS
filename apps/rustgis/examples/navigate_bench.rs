@@ -78,7 +78,7 @@ impl eframe::App for Bench {
             // From the zoom's start, all of it, however long a frame took.
             let dt = (t - self.last_wheel.max(LOAD + PAN)).max(0.0);
             self.last_wheel = t;
-            let dir = if z < ZOOM / 3.0 || z >= 2.0 * ZOOM / 3.0 { -1.0 } else { 1.0 };
+            let dir = if !(ZOOM / 3.0..2.0 * ZOOM / 3.0).contains(&z) { -1.0 } else { 1.0 };
             input.events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, (dir * 600.0 * dt) as f32),

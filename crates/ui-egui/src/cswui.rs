@@ -99,14 +99,18 @@ pub fn poll(app: &mut RustGisApp) {
 pub fn form(app: &mut RustGisApp, ui: &mut egui::Ui, kinds: impl FnOnce(&mut RustGisApp, &mut egui::Ui)) {
     let mut go = false;
     egui::Grid::new("csw").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-        ui.label(tl!("Address"));
-        let r = ui.add(egui::TextEdit::singleline(&mut app.ui.csw.url).hint_text("https://…/csw").desired_width(420.0));
+        let input_label = ui.label(tl!("Address"));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut app.ui.csw.url).hint_text("https://…/csw").desired_width(420.0))
+            .labelled_by(input_label.id);
         go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.end_row();
         kinds(app, ui);
         ui.end_row();
-        ui.label(tl!("Words"));
-        let r = ui.add(egui::TextEdit::singleline(&mut app.ui.csw.query).hint_text(tl!("anywhere in the records")).desired_width(420.0));
+        let input_label = ui.label(tl!("Words"));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut app.ui.csw.query).hint_text(tl!("anywhere in the records")).desired_width(420.0))
+            .labelled_by(input_label.id);
         go |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.end_row();
         ui.label("");

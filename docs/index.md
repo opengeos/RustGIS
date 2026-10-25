@@ -28,22 +28,24 @@ Map operations are commands you can script from the command line, Python or the 
 
 -   **Your data, any source**
 
-    GeoJSON, Shapefile, GeoPackage, GeoParquet, GeoTIFF, LiDAR and Zarr; live PostGIS, MySQL,
-    MariaDB and SQL Server databases on the desktop; public data from STAC catalogs, Overture
-    Maps and open-data portals. Save and browse reusable data connections.
+    GeoJSON, Shapefile, GeoPackage, GeoParquet, GeoTIFF, LiDAR, Zarr and desktop File
+    Geodatabases; live PostGIS, MySQL, MariaDB and SQL Server databases on the desktop; public
+    data from STAC catalogs, Overture Maps and open-data portals. Save and browse reusable data
+    connections; open supported QGIS projects.
     [Data](user-guide/data.md) · [Web Data](user-guide/web-data.md) · [Formats](user-guide/data-formats.md)
 
 -   **Cartography and 3D**
 
-    Graduated colours, collision-aware labels, stacked line symbols, page layouts and map series;
-    a 3D globe, projection presets and supported EPSG/ESRI systems, terrain and extrusions,
-    and maps of the Moon, Mars and other worlds.
+    Graduated colours, curved line labels, stacked line symbols, publication layouts and map
+    series; a 3D globe, projection presets and supported EPSG/ESRI systems, terrain and
+    extrusions, and maps of the Moon, Mars and other worlds.
     [Cartography](user-guide/cartography.md) · [Maps](user-guide/maps.md) · [Layouts](user-guide/layouts.md)
 
 -   **Analysis**
 
     SQL selection, overlay and proximity tools, guided workflows, ModelBuilder, imagery tools,
-    data-cube time series and trends, and over 1,000 tools through the optional GeoLibre/Whitebox suite.
+    spatial join, kriging, zonal statistics, data-cube time series and trends, and over 1,000
+    tools through the optional GeoLibre/Whitebox suite.
     [Analysis](user-guide/analysis.md)
 
 -   **Editing**
@@ -55,14 +57,16 @@ Map operations are commands you can script from the command line, Python or the 
 -   **AI Assistant**
 
     Ask about your data or tell the map what to do. Choose a model provider or sign in with
-    ChatGPT; approve file, network and plugin operations before they run. Project edits are undoable.
+    ChatGPT; approve file, network and plugin operations before they run. Project edits are
+    undoable.
     [AI Assistant](user-guide/assistant.md)
 
 -   **Scriptable and extensible**
 
     `rustgis-cli` and the `rustgis` Python package run engine commands and render maps; MCP
-    connects AI agents to headless sessions or the open app. Plugins add tools, commands and
-    assistant skills, with sandboxed WebAssembly or desktop-only process runtimes.
+    connects AI agents to headless sessions or the open app. The Script pane completes
+    commands, parameters, layers and fields. Plugins add tools, commands and assistant skills,
+    with sandboxed WebAssembly or desktop-only process runtimes.
     [Command Line](cli.md) · [Python](python.md) · [MCP](mcp.md) · [Plugins](plugins.md)
 
 </div>

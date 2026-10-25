@@ -442,7 +442,7 @@ fn level(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, c: &Connection, node: &s
             });
         }
         Some(Err(Some(e))) => {
-            ui.label(RichText::new(e).small().color(t.red));
+            ui.label(RichText::new(crate::connectionui::translated(&e)).small().color(t.red));
             ui.horizontal(|ui| {
                 if ui.small_button(tl!("Retry")).clicked() {
                     app.ui.connection_tree.entries.remove(&key);
@@ -610,19 +610,14 @@ mod tests {
     type Harness = egui_kittest::Harness<'static, RustGisApp>;
 
     fn harness() -> Harness {
-        egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
-            .with_size(egui::vec2(1400.0, 860.0))
-            .with_max_steps(64)
-            .with_step_dt(0.05)
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let ctx = ui.ctx().clone();
-                    app.logic(&ctx);
-                    app.ui(ui);
-                },
-                RustGisApp::with_sample(),
-            )
+        egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 860.0)).with_max_steps(64).with_step_dt(0.05).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            RustGisApp::with_sample(),
+        )
     }
 
     /// Answers every request on a local port with `answer(request head)`: status and body.

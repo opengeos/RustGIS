@@ -4,6 +4,7 @@
 '{text}' isn't a scale: type one such as 1:12,345	'{text}' không phải là tỷ lệ: hãy nhập một tỷ lệ như 1:12,345
 (b4-b3)/(b4+b3)	(b4-b3)/(b4+b3)
 (filtered)	(đã lọc)
+({selected} of {total})	({selected} trên {total})
 + Add Stop	+ Thêm điểm dừng
 + Input	+ Đầu vào
 + New expression	+ Biểu thức mới
@@ -18,12 +19,14 @@
 3035, vn2000tm3	3035, vn2000tm3
 3D mesh	Lưới 3D
 <None>	<Không có>
+A .qgs or .qgz project as a map	Một dự án .qgs hoặc .qgz dưới dạng bản đồ
 A 3D globe seen from space.	Quả địa cầu 3D nhìn từ không gian.
 A blank map with a basemap	Bản đồ trống có bản đồ nền
 A call for the rustgis Python package	Lệnh gọi cho gói Python rustgis
 A catalogue's (CSW 2.0.2) address: search its records by words and, if you like, the map's area, then add the services and files they link to.	Địa chỉ của một danh mục (CSW 2.0.2): tìm các bản ghi của nó theo từ khóa và, nếu muốn, theo vùng bản đồ, rồi thêm các dịch vụ và tệp mà chúng liên kết tới.
 A ChatGPT plan or app usage limit was reached. Review Weekly usage before trying again.	Đã đạt giới hạn sử dụng của gói ChatGPT hoặc ứng dụng. Xem mức sử dụng hằng tuần trước khi thử lại.
 A ChatGPT sign-in can only be used with the OpenAI API.	Đăng nhập ChatGPT chỉ có thể dùng với API của OpenAI.
+A connection has this name: give this one another name to remember its keys.	Đã có một kết nối mang tên này: hãy đặt tên khác cho kết nối này để ghi nhớ khóa của nó.
 A country's administrative boundaries from geoBoundaries (CC BY 4.0): the country itself (ADM0), its first-level divisions (ADM1, such as states) and finer ones.	Ranh giới hành chính của một quốc gia từ geoBoundaries (CC BY 4.0): bản thân quốc gia (ADM0), các đơn vị cấp một (ADM1, như bang, tỉnh) và các cấp chi tiết hơn.
 A custom stretch is in this raster's own units: pick another stretch type to save it as the default.	Kiểu kéo giãn tùy chỉnh dùng đơn vị riêng của raster này: hãy chọn kiểu kéo giãn khác để lưu làm mặc định.
 A fast, free and open-source GIS written in pure Rust, for mapping, analyzing and sharing geospatial data on the desktop and in the browser.	Một GIS nhanh, miễn phí và mã nguồn mở viết bằng Rust thuần, để lập bản đồ, phân tích và chia sẻ dữ liệu không gian địa lý trên máy tính và trong trình duyệt.
@@ -31,23 +34,29 @@ A field (known once the model runs)	Một trường (biết được khi mô hì
 A flat scene centred on the view (azimuthal equidistant).	Cảnh phẳng có tâm là khung nhìn (phương vị đẳng cự).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Các bộ dữ liệu của một máy chủ GeoLens, đọc dưới dạng đối tượng (1.000 đối tượng đầu tiên của mỗi bộ).
 A globe scene.	Cảnh quả địa cầu.
+A hidden class leaves its features unlabelled.	Các đối tượng thuộc lớp nhãn bị ẩn sẽ không được gán nhãn.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Vĩ độ và kinh độ (40.7, -74.0 hoặc 40°42'N 74°0'W), một lớp, một dấu trang hoặc một giá trị trong bảng của lớp. Enter chọn hàng được tô sáng; Tìm địa điểm tra cứu văn bản như một địa điểm
+A layer keeps at most {max} label classes besides Default.	Mỗi lớp giữ tối đa {max} lớp nhãn ngoài lớp Mặc định.
 A layer the model reads	Một lớp mà mô hình đọc
 A line for the Script pane	Một dòng cho khung Script
 A magnifying lens that follows the pointer.	Kính lúp di chuyển theo con trỏ.
 A map, feature or coverage service's address: WMS, WMTS, WFS, WCS, OGC API Features or Tiles, or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer (or a services directory, to browse).	Địa chỉ của một dịch vụ bản đồ, đối tượng hoặc coverage: WMS, WMTS, WFS, WCS, OGC API Features hoặc Tiles, hoặc ArcGIS FeatureServer, MapServer, ImageServer hoặc VectorTileServer (hoặc một thư mục dịch vụ để duyệt).
 a name, or owner/name such as giswqs/geospatial	một tên, hoặc chủ sở hữu/tên như giswqs/geospatial
-A named endpoint you can reuse. Passwords and keys are kept until RustGIS closes, never saved.	Một điểm cuối có tên để dùng lại. Mật khẩu và khóa được giữ cho đến khi RustGIS đóng, không bao giờ được lưu.
+A named endpoint you can reuse. Keys and tokens are kept until RustGIS closes, never saved.	Một điểm cuối có tên mà bạn có thể dùng lại. Khóa và token được giữ cho đến khi RustGIS đóng, không bao giờ được lưu.
+A named endpoint you can reuse. Keys are kept until RustGIS closes unless you choose to remember them on this computer; the connection itself never keeps them.	Một điểm cuối có tên mà bạn có thể dùng lại. Khóa được giữ cho đến khi RustGIS đóng, trừ khi bạn chọn ghi nhớ chúng trên máy tính này; bản thân kết nối không bao giờ giữ chúng.
+A named endpoint you can reuse. Passwords last for this session unless you choose to remember them in this computer's password store.	Một điểm cuối có tên mà bạn có thể dùng lại. Mật khẩu chỉ dùng trong phiên này, trừ khi bạn chọn ghi nhớ chúng trong kho mật khẩu của máy tính này.
 A node cannot connect to itself.	Một nút không thể kết nối với chính nó.
 A notebook of text and command cells.	Sổ tay gồm các ô văn bản và ô lệnh.
-A password or token in the address was left out: connections never keep secrets.	Mật khẩu hoặc token trong địa chỉ đã bị bỏ qua: kết nối không bao giờ giữ thông tin bí mật.
+A password or token in the address was left out of the saved connection definition.	Mật khẩu hoặc token trong địa chỉ đã bị loại khỏi định nghĩa kết nối đã lưu.
 A place or an address	Một địa điểm hoặc địa chỉ
+A previously saved key is still kept unencrypted in the app's preferences until it can be moved to the system keychain.	Một khóa đã lưu trước đó vẫn được giữ không mã hóa trong tùy chọn của ứng dụng cho đến khi có thể chuyển sang chuỗi khóa hệ thống.
 A project keeps at least one map	Dự án luôn giữ ít nhất một bản đồ
 A projected coordinate system.	Một hệ tọa độ phép chiếu.
 A report listing the selected layer's records, page after page.	Báo cáo liệt kê các bản ghi của lớp được chọn, hết trang này đến trang khác.
 A result that only feeds other tools is removed once the model has run; add an output to keep it.	Kết quả chỉ làm đầu vào cho công cụ khác sẽ bị xóa sau khi mô hình chạy xong; hãy thêm một đầu ra để giữ lại.
 A result the model keeps, under a name	Một kết quả mà mô hình giữ lại, dưới một tên
 A rustgis-cli command, for a POSIX shell (macOS, Linux, WSL, Git Bash)	Một lệnh rustgis-cli, cho shell POSIX (macOS, Linux, WSL, Git Bash)
+A saved key could not be read. A key entered now will be kept for this session only.	Không thể đọc khóa đã lưu. Khóa nhập bây giờ sẽ chỉ được giữ trong phiên này.
 A service import or refresh is already running.	Đang nhập hoặc làm mới một dịch vụ.
 A service's layers stay in their service group.	Các lớp của một dịch vụ được giữ trong nhóm dịch vụ của chúng.
 A task holds at most 200 steps: stop recording to make it, then record the rest as another task.	Một nhiệm vụ chứa tối đa 200 bước: hãy dừng ghi để tạo nhiệm vụ, rồi ghi phần còn lại thành một nhiệm vụ khác.
@@ -77,6 +86,7 @@ Above Left	Trên trái
 Above Right	Trên phải
 Access key ID	ID khóa truy cập
 Accessibility	Trợ năng
+Accessing the system keychain…	Đang truy cập chuỗi khóa hệ thống…
 Account	Tài khoản
 Activate Map	Kích hoạt bản đồ
 Add	Thêm
@@ -84,10 +94,12 @@ Add\nData	Thêm\ndữ liệu
 Add ({n})	Thêm ({n})
 Add a bar chart of a layer's numeric field.	Thêm biểu đồ cột cho một trường số của lớp.
 Add a circle.	Thêm hình tròn.
+Add a class with this one's field, text symbol, placement and range.	Thêm lớp nhãn có cùng trường, ký hiệu văn bản, vị trí đặt và phạm vi với lớp nhãn này.
 Add a colorbar of a raster layer's colour scale in the map frame.	Thêm thanh màu thể hiện thang màu của một lớp raster vào khung bản đồ.
 Add a description.	Thêm mô tả.
 Add a field.	Thêm một trường.
 Add a file path	Thêm đường dẫn tệp
+Add a group…	Thêm nhóm…
 Add a legend of the map frame's layers.	Thêm chú giải cho các lớp của khung bản đồ.
 Add a map frame showing a map of the project.	Thêm khung bản đồ hiển thị một bản đồ của dự án.
 Add a new map to the project.	Thêm bản đồ mới vào dự án.
@@ -97,6 +109,7 @@ Add a page layout for printing and exporting the map.	Thêm bố cục trang đ�
 Add a page to the presentation.	Thêm một trang vào bản trình bày.
 Add a PNG or JPEG picture to the page.	Thêm ảnh PNG hoặc JPEG vào trang.
 Add a presentation file.	Thêm tệp bản trình bày.
+Add a raster and a polygon layer to calculate zonal statistics.	Thêm một lớp raster và một lớp vùng để tính thống kê theo vùng.
 Add a rectangle, to frame or highlight part of the page.	Thêm hình chữ nhật để đóng khung hoặc làm nổi bật một phần trang.
 Add a report file, or a report template for the selected layer.	Thêm tệp báo cáo, hoặc mẫu báo cáo cho lớp được chọn.
 Add a scale bar for the map frame.	Thêm thước tỷ lệ cho khung bản đồ.
@@ -223,6 +236,7 @@ ADM3	ADM3
 ADM4	ADM4
 ADM5	ADM5
 Administrative Boundaries	Ranh giới hành chính
+After	Sau
 After the event	Sau sự kiện
 Agent input exceeds the protocol line limit.	Đầu vào của tác tử vượt quá giới hạn dòng của giao thức.
 Agent input pipe closed.	Đường ống đầu vào của tác tử đã đóng.
@@ -256,6 +270,7 @@ Allow only certain combinations of values across fields.	Chỉ cho phép một s
 Allow such actions for this conversation	Cho phép các thao tác như vậy trong cuộc trò chuyện này
 Allow this action?	Cho phép thao tác này?
 Allow this agent's RustGIS action?	Cho phép thao tác RustGIS này của tác tử?
+Along lines	Dọc theo đường
 Along Selected Line	Dọc theo đường được chọn
 Alt+	Alt+
 Alternating bar	Thanh xen kẽ
@@ -286,6 +301,7 @@ Apply Style	Áp dụng kiểu
 Apply to layers	Áp dụng cho các lớp
 Apply to the selected layer	Áp dụng cho lớp được chọn
 Approve agents' actions without asking	Phê duyệt thao tác của tác tử mà không hỏi
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Chọn theo khoảng cách cục bộ gần đúng. Bộ lọc sơ bộ theo tọa độ địa lý vẫn được áp dụng có thể loại các đối tượng gần đường viền.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -310,6 +326,7 @@ Ask about your data, or tell the assistant what to do with the map.	Hỏi về d
 Asking NASA's CMR…	Đang hỏi CMR của NASA…
 Asking the catalog…	Đang hỏi danh mục…
 Asking the NLDI…	Đang hỏi NLDI…
+Asset	Tài nguyên
 Assistant settings	Cài đặt trợ lý
 At the end	Ở cuối
 At the start	Ở đầu
@@ -341,6 +358,7 @@ Back to tools	Quay lại công cụ
 Backdrop	Phông nền
 Band	Kênh
 Band Combination	Tổ hợp kênh
+Band must be a positive integer, list of bands, or 'all'.	Kênh phải là số nguyên dương, danh sách kênh hoặc 'all'.
 Band values at a point	Giá trị kênh tại một điểm
 Band {n}	Kênh {n}
 Bands	Kênh
@@ -349,6 +367,7 @@ Basemap	Bản đồ nền
 Basemaps	Bản đồ nền
 Basin from hydrolocation	Lưu vực từ vị trí thủy văn
 Bearing	Hướng
+Before	Trước
 Before the event	Trước sự kiện
 Below	Dưới
 Below 1:5,000,000 show everything; beyond it only what matches:	Dưới 1:5.000.000 hiển thị mọi thứ; vượt quá đó chỉ hiển thị những gì khớp:
@@ -394,6 +413,7 @@ Browser	Trình duyệt
 Browser\nPane	Ngăn\ntrình duyệt
 Browser View	Khung nhìn trình duyệt
 Bucket	Bucket
+Bucket {bucket} at {endpoint}	Bucket {bucket} tại {endpoint}
 Buckets	Bucket
 Buffer	Vùng đệm
 Buffer A Point	Vùng đệm một điểm
@@ -410,6 +430,7 @@ Bundle the project and its data into one file to share.	Đóng gói dự án và
 Bundle the visible layers, with simplified geometry for phones and tablets.	Đóng gói các lớp đang hiển thị, với hình học được đơn giản hóa cho điện thoại và máy tính bảng.
 By\nAttributes	Theo\nthuộc tính
 By\nLocation	Theo\nvị trí
+By layer	Theo lớp
 by {author}	bởi {author}
 By {field}	Theo {field}
 cached tiles	ô bản đồ đã lưu đệm
@@ -421,7 +442,10 @@ Calculate field values.	Tính giá trị trường.
 Calculate fields and enforce conditions on every edit.	Tính trường và áp đặt điều kiện cho mỗi lần chỉnh sửa.
 Calculate Geometry	Tính hình học
 Calculate Geometry Attributes	Tính thuộc tính hình học
+Calculate raster statistics per polygon	Tính thống kê raster cho từng vùng
+Calculate Statistics	Tính thống kê
 Calculated {rows} features	Đã tính {rows} đối tượng
+Calculates raster summary statistics for each polygon feature.	Tính thống kê tổng hợp raster cho từng đối tượng vùng.
 Calculation	Phép tính
 Camera	Máy ảnh
 Camera Effect	Hiệu ứng máy ảnh
@@ -438,6 +462,7 @@ Catalog	Danh mục
 catalog is a static STAC catalog's catalog.json or collection.json	catalog là tệp catalog.json hoặc collection.json của một danh mục STAC tĩnh
 Catalogue (CSW)	Danh mục (CSW)
 Catalogue search (CSW)	Tìm kiếm danh mục (CSW)
+Category	Danh mục
 Celestial Bodies	Thiên thể
 Celestial Body	Thiên thể
 Celestial body: {body}	Thiên thể: {body}
@@ -481,27 +506,41 @@ Choose a contrast stretch for the raster layer.	Chọn kiểu kéo giãn độ t
 Choose a country	Chọn một quốc gia
 Choose a delimited text file or a spreadsheet, then pick its columns.	Chọn một tệp văn bản phân tách hoặc một bảng tính, rồi chọn các cột của nó.
 Choose a destination	Chọn điểm đến
+Choose a field to apply this renderer:	Chọn một trường để áp dụng trình hiển thị này:
 choose a file first	hãy chọn một tệp trước
 Choose a layer…	Chọn một lớp…
 Choose a model.	Hãy chọn một mô hình.
 Choose a resampling type for the raster layer.	Chọn kiểu lấy mẫu lại cho lớp raster.
+Choose a saved S3 connection before opening this source.	Chọn một kết nối S3 đã lưu trước khi mở nguồn này.
 Choose a start	Chọn điểm xuất phát
 Choose a stop	Chọn điểm dừng
+Choose a zipped Shapefile, or pick its .shp and .dbf together.	Chọn một Shapefile nén ZIP, hoặc chọn cùng lúc tệp .shp và .dbf của nó.
 Choose an account	Chọn tài khoản
+Choose Connection	Chọn kết nối
+Choose Connection…	Chọn kết nối…
 Choose extra buttons for the Quick Access Toolbar.	Chọn các nút bổ sung cho thanh công cụ truy cập nhanh.
 Choose File…	Chọn tệp…
 Choose how the flat map lays out the Earth.	Chọn cách bản đồ phẳng thể hiện Trái Đất.
 Choose how the layer is drawn.	Chọn cách vẽ lớp.
 Choose how the raster is drawn.	Chọn cách vẽ raster.
+Choose polygon, lasso, or radius selection.	Chọn chế độ chọn theo vùng, lasso hoặc bán kính.
 Choose Project…	Chọn dự án…
+Choose S3 Connection	Chọn kết nối S3
+Choose S3 connection	Chọn kết nối S3
+Choose S3 connection…	Chọn kết nối S3…
 Choose the interface language.	Chọn ngôn ngữ giao diện.
+Choose the source coordinate system before importing	Chọn hệ tọa độ nguồn trước khi nhập
+Choose the source coordinate system before importing. It replaces a missing or incorrect .prj without changing the original file.	Chọn hệ tọa độ nguồn trước khi nhập. Nó thay thế tệp .prj bị thiếu hoặc sai mà không thay đổi tệp gốc.
 Choose which layers a click identifies.	Chọn các lớp mà một cú nhấp sẽ nhận dạng.
+Choose which saved connection to use for this database. This choice lasts for this session.	Chọn kết nối đã lưu sẽ dùng cho cơ sở dữ liệu này. Lựa chọn này có hiệu lực trong phiên này.
 Choose which tabs the ribbon shows.	Chọn các thẻ mà ribbon hiển thị.
 Circle	Hình tròn
 Circle Radius (km)	Bán kính vòng tròn (km)
 Class	Lớp
 Class color	Màu lớp phân loại
 Class Style	Kiểu lớp phân loại
+Class {n}	Lớp {n}
+Class {n} up to	Lớp {n} đến
 Classes	Lớp phân loại
 Classes from training polygons.	Các lớp từ vùng huấn luyện.
 Classic arrow	Mũi tên cổ điển
@@ -558,11 +597,14 @@ Click to place a point graphic.	Nhấp để đặt một đồ họa điểm.
 Click to select the node	Nhấp để chọn nút
 Click to select, double-click to add, right-click for more	Nhấp để chọn, nhấp đúp để thêm, nhấp chuột phải để xem thêm
 Click to switch between decimal degrees and DMS	Nhấp để chuyển giữa độ thập phân và DMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Nhấp các đỉnh · nhấp điểm đầu hoặc nhấp đúp để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Clip	Cắt
 Clip a raster to the view, or resample it.	Cắt raster theo khung nhìn hoặc lấy mẫu lại.
 Clip Features	Cắt đối tượng
 Clip or resample	Cắt hoặc lấy mẫu lại
 Clip To Map View	Cắt theo khung nhìn bản đồ
+Clip To Polygon	Cắt theo vùng
+Clip to polygon layer	Cắt theo lớp vùng
 Clipboard	Bảng nhớ tạm
 Close	Đóng
 Close (Esc)	Đóng (Esc)
@@ -678,6 +720,7 @@ Copy this run as code, or open it in its tool	Sao chép lần chạy này thành
 Corrections	Hiệu chỉnh
 Cost	Chi phí
 could not draw the map	không thể vẽ bản đồ
+could not start the keychain worker	không thể khởi động tiến trình chuỗi khóa
 Couldn't check for updates: {error}	Không thể kiểm tra cập nhật: {error}
 Couldn't download the font for {language}; pick the language again to retry.	Không thể tải phông chữ cho {language}; hãy chọn lại ngôn ngữ để thử lại.
 Couldn't load the plugin registry: {error}	Không thể tải kho plugin: {error}
@@ -707,13 +750,16 @@ Cross Section	Mặt cắt ngang
 Cross Section (2 clicks)	Mặt cắt ngang (2 lần nhấp)
 CSV	CSV
 Ctrl+	Ctrl+
+Ctrl+Enter	Ctrl+Enter
 Ctrl+K	Ctrl+K
 Ctrl+T	Ctrl+T
 Cumulative	Tích lũy
 Current date	Ngày hiện tại
 Current Project	Dự án hiện tại
+Current scale ({scale})	Tỷ lệ hiện tại ({scale})
 Current time	Giờ hiện tại
 Curve	Đường cong
+Curved	Cong
 Custom	Tùy chỉnh
 Custom Min/Max	Nhỏ nhất/Lớn nhất tùy chỉnh
 Customize	Tùy chỉnh
@@ -721,6 +767,10 @@ Cut	Cắt
 Cut a raster into web map tiles	Cắt raster thành ô bản đồ web
 Cut a raster into web map tiles (XYZ PNG) with a viewer page.	Cắt raster thành ô bản đồ web (XYZ PNG) kèm trang xem.
 Dark\nMode	Chế độ\ntối
+Dash	Nét đứt
+Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line.	Độ dài nét và khoảng hở tính bằng point, xen kẽ nhau, ví dụ 4 2. Để trống cho đường liền.
+Dash-dot	Gạch chấm
+Dashed	Nét đứt
 Data	Dữ liệu
 Data\nSources	Nguồn\ndữ liệu
 Data Design	Thiết kế dữ liệu
@@ -755,6 +805,9 @@ Deep Learning\nTools	Công cụ\nhọc sâu
 Deep Learning Package	Gói học sâu
 Deep Learning Tools	Công cụ học sâu
 Default	Mặc định
+Default can't be removed. You can rename or hide it.	Không thể xóa Mặc định. Bạn có thể đổi tên hoặc ẩn lớp nhãn này.
+Define Projection	Xác định phép chiếu
+Define Projection…	Xác định phép chiếu…
 Definition\nQuery	Truy vấn\nđịnh nghĩa
 Definition Query	Truy vấn định nghĩa
 Definition query	Truy vấn định nghĩa
@@ -791,6 +844,8 @@ Descending	Giảm dần
 Describing	Đang mô tả
 Description	Mô tả
 Desktop and command line only	Chỉ ứng dụng máy tính và dòng lệnh
+Destination	Điểm đến
+Destination key	Khóa điểm đến
 Details	Chi tiết
 Details of the selected layer.	Chi tiết của lớp được chọn.
 Deviations	Độ lệch
@@ -832,6 +887,7 @@ Do the step for me	Thực hiện bước này giúp tôi
 Documents	Documents
 Domains	Miền giá trị
 Done	Xong
+Dotted	Chấm chấm
 Double	Số thực
 Double-click	Nhấp đúp
 Double-click to add	Nhấp đúp để thêm
@@ -855,14 +911,17 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Kéo trong khun
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Kéo một hình chữ nhật, rồi chọn ảnh PNG hoặc JPEG để đặt vào đó.
 Drag a tool from the palette to start building, or add an input layer.	Kéo một công cụ từ bảng công cụ để bắt đầu xây dựng, hoặc thêm một lớp đầu vào.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Kéo một đỉnh để di chuyển · nhấp vào một cạnh để thêm đỉnh · Delete xóa đỉnh đang chọn
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Kéo một vùng · thả để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Drag from a node's right port to another node's left port to connect them.	Kéo từ cổng phải của một nút tới cổng trái của nút khác để kết nối chúng.
 Drag from the centre out	Kéo từ tâm ra ngoài
 Drag from the centre to draw a circle.	Kéo từ tâm để vẽ hình tròn.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Kéo từ tâm · thả để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Kéo bên trong khung bản đồ để di chuyển bản đồ và lăn chuột để thu phóng, thay vì di chuyển khung.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Kéo bên trong khung bản đồ để di chuyển bản đồ và lăn chuột để thu phóng, thay vì di chuyển khung. Esc để dừng.
 Drag the frame's outline · Esc to stop	Kéo đường viền của khung · Esc để dừng
 drag the picture's rectangle on the map first	hãy kéo hình chữ nhật của ảnh trên bản đồ trước
 Drag the selected features' vertices to move them, click an edge to add one, Delete to remove one.	Kéo các đỉnh của đối tượng được chọn để di chuyển chúng, nhấp vào một cạnh để thêm đỉnh, Delete để xóa một đỉnh.
+Drag to an input to connect	Kéo tới một đầu vào để kết nối
 Drag to draw	Kéo để vẽ
 Drag to draw a freehand line.	Kéo để vẽ đường tự do.
 Drag to draw a freehand polygon.	Kéo để vẽ vùng tự do.
@@ -913,6 +972,7 @@ e.g. 0, 255, -9999	ví dụ 0, 255, -9999
 e.g. continent = 'Europe'	vd. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	vd. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	vd. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Mỗi lớp nhãn gán nhãn cho các đối tượng khớp với mệnh đề riêng của nó, nên một đối tượng có thể nhận nhãn từ nhiều lớp nhãn.
 Each geoprocessing run becomes a step, chained by its outputs	Mỗi lần chạy xử lý không gian trở thành một bước, nối với nhau qua đầu ra
 Earth Index has no points in the view	Earth Index không có điểm nào trong khung nhìn
 Earth Search	Earth Search
@@ -987,6 +1047,7 @@ EPSG	EPSG
 EPSG code	Mã EPSG
 EPSG or ESRI code	Mã EPSG hoặc ESRI
 EPSG:	EPSG:
+EPSG:2263	EPSG:2263
 EPSG:4326	EPSG:4326
 Equal	Equal
 Equal Earth	Equal Earth
@@ -1145,6 +1206,7 @@ Finish Profile	Hoàn tất mặt cắt
 Finish Tool Run	Hoàn tất chạy công cụ
 Finished: {tool}	Đã xong: {tool}
 Firewall	Tường lửa
+First raster	Raster thứ nhất
 First standard parallel	Vĩ tuyến chuẩn thứ nhất
 First-Person	Góc nhìn thứ nhất
 First-Person Navigation	Điều hướng góc nhìn thứ nhất
@@ -1168,6 +1230,8 @@ Font	Phông chữ
 for a store that doesn't say	cho kho không ghi rõ
 Forest	Rừng
 Forget Earthdata Login Token	Quên token Earthdata Login
+Forget Saved Keys	Quên khóa đã lưu
+Forget Saved Password	Quên mật khẩu đã lưu
 Format	Định dạng
 Found: {names}. An agent works on this map through RustGIS's tools and with its own (web, scripts, files) in a folder of its own, kept in Documents › RustGIS › Agent work. It asks you before each action.	Đã tìm thấy: {names}. Tác tử làm việc trên bản đồ này bằng công cụ của RustGIS và công cụ riêng (web, script, tệp), trong thư mục riêng được lưu ở Tài liệu › RustGIS › Agent work. Nó sẽ hỏi bạn trước mỗi thao tác.
 Frame rate	Tốc độ khung hình
@@ -1188,6 +1252,7 @@ Full Extent	Toàn bộ phạm vi
 Full extent	Toàn bộ phạm vi
 Full lines	Đường liền
 Full size	Kích thước đầy đủ
+Function	Hàm
 Function Editor	Trình chỉnh sửa hàm
 Gamma	Gamma
 Gemini stopped the reply ({reason}).	Gemini đã dừng câu trả lời ({reason}).
@@ -1208,7 +1273,9 @@ GeoLens	GeoLens
 GeoLens…	GeoLens…
 GeoLibre	GeoLibre
 GeoLibre Tools	Công cụ GeoLibre
+Geometric Interval	Khoảng hình học
 Geometry	Hình học
+Geometry lost during import cannot be recovered here. Use Import Original File to choose its coordinate system before reading it. Streamed layers must first be loaded into memory.	Không thể khôi phục tại đây hình học bị mất khi nhập. Hãy dùng Nhập tệp gốc để chọn hệ tọa độ trước khi đọc tệp. Các lớp truyền phát phải được nạp vào bộ nhớ trước.
 GeoPackage	GeoPackage
 GeoParquet	GeoParquet
 Geoprocessing	Xử lý không gian
@@ -1349,10 +1416,16 @@ Import Deep Learning Package	Nhập gói học sâu
 Import Layout	Nhập bố cục
 Import Layout…	Nhập bố cục…
 Import Model	Nhập mô hình
+Import Original File…	Nhập tệp gốc…
 Import Package…	Nhập gói…
 Import Presentation	Nhập bản trình bày
+Import QGIS Project	Nhập dự án QGIS
+Import QGIS Style	Nhập kiểu QGIS
+Import QGIS Style…	Nhập kiểu QGIS…
 Import Report	Nhập báo cáo
 Import Service	Nhập dịch vụ
+Import Shapefile with Projection	Nhập Shapefile kèm phép chiếu
+Import Shapefile with Projection…	Nhập Shapefile kèm phép chiếu…
 Import Styles	Nhập kiểu
 Import Styles From…	Nhập kiểu từ…
 Import Task	Nhập nhiệm vụ
@@ -1366,6 +1439,7 @@ In Progress	Đang thực hiện
 in progress	đang thực hiện
 In project	Trong dự án
 In RustGIS, it can:	Trong RustGIS, nó có thể:
+In the browser, pick the .shp and .dbf together, with any sidecars, or pick a ZIP. The override applies to every Shapefile in the ZIP.	Trong trình duyệt, hãy chọn cùng lúc tệp .shp và .dbf cùng các tệp đi kèm, hoặc chọn một tệp ZIP. Thiết lập thay thế áp dụng cho mọi Shapefile trong ZIP.
 In use	Đang dùng
 Indexes	Chỉ mục
 Indices	Chỉ số
@@ -1377,6 +1451,7 @@ Input Features	Đối tượng đầu vào
 Input Layer	Lớp đầu vào
 Input Points	Điểm đầu vào
 Input Polygons	Vùng đầu vào
+Input Raster	Raster đầu vào
 Input Rows	Hàng đầu vào
 Input Summary Features	Đối tượng tổng hợp đầu vào
 Input Table	Bảng đầu vào
@@ -1407,8 +1482,11 @@ Interpolates a 2-band raster surface (Prediction and Variance) from point featur
 Interpolates a raster surface from feature values by inverse distance weighting, as QGIS does.	Nội suy bề mặt raster từ giá trị của đối tượng bằng phương pháp trọng số khoảng cách nghịch đảo, giống như QGIS.
 Interpolation	Nội suy
 Interpolation Attribute	Thuộc tính nội suy
+Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Diễn giải tọa độ gốc của lớp theo hệ tọa độ này. Điều này thay đổi vị trí lớp được vẽ; tệp nguồn không thay đổi.
 Interval	Khoảng
 invalid child id	id tiến trình con không hợp lệ
+Invalid selection outline · draw a smaller area	Đường viền chọn không hợp lệ · vẽ vùng nhỏ hơn
+Invalid selection outline · draw a smaller radius	Đường viền chọn không hợp lệ · vẽ bán kính nhỏ hơn
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
@@ -1455,10 +1533,14 @@ Keep this endpoint under Data Sources › Connections, without its password or k
 Keep this result	Giữ kết quả này
 Keep Tool	Giữ công cụ
 Keep value	Giữ giá trị
+Keeps the access key ID and secret access key in this computer's credential store, never in the connection or the project.	Giữ ID khóa truy cập và khóa truy cập bí mật trong kho thông tin xác thực của máy tính này, không bao giờ trong kết nối hay dự án.
 Key	Key
 Keyboard Shortcuts	Phím tắt
 Keyboard shortcuts.	Phím tắt.
+Keys are available for this session but were not remembered on this computer.	Khóa có sẵn trong phiên này nhưng không được ghi nhớ trên máy tính này.
+Keys are kept for this session only: there is no credential store to remember them in here.	Khóa chỉ được giữ trong phiên này: ở đây không có kho thông tin xác thực để ghi nhớ chúng.
 Keys from	Khóa lấy từ
+Keys were saved for this connection, but there is no credential store here to read them from.	Khóa đã được lưu cho kết nối này, nhưng ở đây không có kho thông tin xác thực để đọc chúng.
 Kilometers	Kilômét
 kind is required	cần có kind
 KML	KML
@@ -1468,6 +1550,8 @@ Label Class	Lớp nhãn
 Label Distance Range	Phạm vi khoảng cách nhãn
 Label features in this layer	Gán nhãn đối tượng trong lớp này
 Label Field	Trường nhãn
+Label font	Phông chữ nhãn
+Label Fonts	Phông chữ nhãn
 Label only the features that match.	Chỉ gán nhãn các đối tượng khớp.
 Label Placement	Vị trí đặt nhãn
 Label Range	Phạm vi nhãn
@@ -1480,6 +1564,7 @@ Labels	Nhãn
 labels are drawn for feature layers, not rasters	nhãn được vẽ cho lớp đối tượng, không cho raster
 Labels are drawn for feature layers, not rasters.	Nhãn được vẽ cho lớp đối tượng, không cho raster.
 Labels are off for this layer: the clause applies once they are on.	Nhãn của lớp này đang tắt: mệnh đề sẽ áp dụng khi nhãn được bật.
+Labels of the classes listed first are placed first when they compete for room.	Nhãn của các lớp đứng trước trong danh sách được đặt trước khi không đủ chỗ.
 Lagoon	Đầm phá
 Lambert Conformal Conic	Hình nón đồng góc Lambert
 Lambert Cylindrical Equal Area	Phép chiếu trụ đồng diện tích Lambert
@@ -1518,6 +1603,7 @@ Layout: {kind}	Bố cục: {kind}
 Layouts	Bố cục
 Learn	Học
 Learning\nResources	Tài nguyên\nhọc tập
+Leave the keys blank to log in with the keys saved on this computer, or type others, then Save.	Để trống khóa để đăng nhập bằng khóa đã lưu trên máy tính này, hoặc nhập khóa khác, rồi bấm Lưu.
 Left	Trái
 Legend	Chú giải
 Legend label. Clear it to show the value again.	Nhãn chú giải. Xóa nhãn để hiện lại giá trị.
@@ -1600,7 +1686,9 @@ Locked: unlock it in the Format pane to move or change it	Đã khóa: hãy mở 
 Log In to Connection	Đăng nhập kết nối
 Log In to {name}…	Đăng nhập {name}…
 Log In…	Đăng nhập…
+Logged in for this session	Đã đăng nhập trong phiên này
 Long	Số nguyên dài
+Long dash	Nét đứt dài
 Longitude	Kinh độ
 Longitude (X)	Kinh độ (X)
 Look for {name}, outlined on the ribbon.	Tìm {name}, được viền nổi bật trên ribbon.
@@ -1619,6 +1707,7 @@ Manage Bookmarks	Quản lý dấu trang
 Manage Edits	Quản lý chỉnh sửa
 Manage Templates	Quản lý mẫu
 Mann–Kendall	Mann–Kendall
+Manual	Thủ công
 Map	Bản đồ
 Map\nFrame	Khung\nbản đồ
 Map (the current view)	Bản đồ (khung nhìn hiện tại)
@@ -1732,6 +1821,7 @@ Months	Tháng
 Months are numbers from 1 to 12 (12, 1, 2 for December to February)	Tháng là số từ 1 đến 12 (12, 1, 2 cho tháng Mười Hai đến tháng Hai)
 More	Thêm nữa
 More basemaps:	Thêm bản đồ nền:
+More than one saved connection could read these buckets. Choose the one that reads each; the project's sources that read it stay closed until you do.	Có nhiều kết nối đã lưu có thể đọc các bucket này. Hãy chọn kết nối đọc từng bucket; các nguồn của dự án đọc bucket đó sẽ đóng cho đến khi bạn chọn.
 Mosaic images into an orthomosaic	Khảm ảnh thành ảnh trực giao
 Mosaic Rasters	Khảm raster
 Mosaic the visible rasters into an orthomosaic.	Khảm các raster đang hiển thị thành ảnh trực giao.
@@ -1840,6 +1930,7 @@ No datasets match.	Không có bộ dữ liệu nào khớp.
 No datasets with data RustGIS can add	Không có bộ dữ liệu nào chứa dữ liệu RustGIS có thể thêm
 no date in the name	không có ngày trong tên
 No edits since the project was saved	Không có chỉnh sửa nào từ lần lưu dự án gần nhất
+No features are selected in this layer.	Không có đối tượng nào được chọn trong lớp này.
 No field of this layer holds dates.	Không có trường nào của lớp này chứa ngày.
 No Fill	Không tô
 No geometry to calculate	Không có hình học để tính
@@ -1848,6 +1939,7 @@ no home folder	không có thư mục home
 no layer	không có lớp
 No layer has a field of dates.	Không có lớp nào có trường ngày.
 no layer has a field of dates: add one that has, or a tile layer whose address has a date (map.addTiles)	không có lớp nào có trường ngày: hãy thêm một lớp có trường đó, hoặc một lớp ô bản đồ có ngày trong địa chỉ (map.addTiles)
+No layer selected	Chưa chọn lớp nào
 No layers match	Không có lớp nào khớp
 No layers match your search.	Không có lớp nào khớp với tìm kiếm của bạn.
 No mask	Không có mặt nạ
@@ -1860,20 +1952,24 @@ No place matches that address.	Không có địa điểm nào khớp với đị
 No plugin panel is open.	Không có bảng điều khiển plugin nào đang mở.
 No plugins are installed. Browse the plugin registry, or install a .rgplugin file.	Chưa cài đặt plugin nào. Hãy duyệt kho plugin hoặc cài đặt một tệp .rgplugin.
 No plugins match.	Không có plugin nào phù hợp.
+No polygon layer available in the map.	Bản đồ không có lớp vùng nào.
 No Pop-ups	Không có cửa sổ bật lên
 No presentations yet. Publish › New Presentation starts one.	Chưa có bản trình bày nào. Xuất bản › Bản trình bày mới tạo một bản trình bày.
 No products	Không có sản phẩm
 No project opened or saved yet	Chưa mở hoặc lưu dự án nào
+No project sources are waiting for an S3 connection.	Không có nguồn nào của dự án đang chờ kết nối S3.
 No properties	Không có thuộc tính
 No relationships (Data Design › Relationships)	Không có quan hệ (Thiết kế dữ liệu › Quan hệ)
 No relationships yet	Chưa có quan hệ nào
 No reports yet. Publish › New Report lists the selected layer's records.	Chưa có báo cáo nào. Xuất bản › Báo cáo mới liệt kê các bản ghi của lớp đã chọn.
 no row	không có hàng
+No saved S3 keys. Enter accessKeyId and secretAccessKey.	Không có khóa S3 đã lưu. Hãy nhập accessKeyId và secretAccessKey.
 No serif font is installed, so this text is drawn in the sans-serif	Chưa cài phông chữ có chân, nên văn bản này được vẽ bằng phông không chân
 no service or file links	không có liên kết dịch vụ hay tệp
 No services match your search.	Không có dịch vụ nào khớp với tìm kiếm của bạn.
 No standalone tables	Không có bảng độc lập
 No styles yet	Chưa có kiểu nào
+no system keychain in this build	bản dựng này không có chuỗi khóa hệ thống
 No tasks yet. Record one, or make one from your geoprocessing history with Analyze › Task.	Chưa có nhiệm vụ nào. Hãy ghi một nhiệm vụ, hoặc tạo từ lịch sử xử lý không gian bằng Phân tích › Nhiệm vụ.
 no text graphic there	không có đồ họa văn bản ở đó
 No tools match your search.	Không có công cụ nào khớp với tìm kiếm của bạn.
@@ -1941,6 +2037,7 @@ One page per feature of an index layer.	Mỗi đối tượng của lớp chỉ 
 One per line: code=name	Mỗi dòng một mục: mã=tên
 One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.	Một nét, từ ký hiệu. Thêm nét để tạo viền bọc, đường song song và độ lệch.
 Only features matching this expression draw in {layer}.	Chỉ các đối tượng khớp biểu thức này được vẽ trong {layer}.
+Only selected polygons will be included in the output.	Chỉ các vùng được chọn mới có trong kết quả.
 Only where the map is	Chỉ trong vùng bản đồ
 Opacity	Độ mờ đục
 Open	Mở
@@ -2001,6 +2098,7 @@ OpenStreetMap's public server	Máy chủ công khai của OpenStreetMap
 OpenStreetMap, Esri, USGS, NASA and more, from the plugin registry.	OpenStreetMap, Esri, USGS, NASA và nhiều hơn nữa, từ kho plugin.
 OpenStreetMap…	OpenStreetMap…
 Open…	Mở…
+Optional	Không bắt buộc
 Optional. Shift+Enter starts a new line.	Không bắt buộc. Shift+Enter để xuống dòng.
 Options	Tùy chọn
 OR	OR
@@ -2011,10 +2109,11 @@ Or run, for Claude Code or Codex:	Hoặc chạy, cho Claude Code hoặc Codex:
 ORDER BY	ORDER BY
 Ordinary Kriging	Kriging thông thường
 Orientation	Hướng
+Origin	Điểm xuất phát
+Origin key	Khóa điểm xuất phát
 Ortho Mapping	Lập bản đồ trực giao
 Other	Khác
 Other Data	Dữ liệu khác
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Các lớp nhãn khác trên lớp này (tạo bằng lệnh): {n}. Mỗi lớp nhãn gán nhãn cho các đối tượng khớp với mệnh đề riêng của nó, nên một đối tượng có thể nhận nhãn từ nhiều lớp nhãn.
 Out Beyond	Khi thu nhỏ hơn
 Outline	Viền
 Outline another frame's extent in this map frame.	Vẽ đường bao phạm vi của một khung khác trong khung bản đồ này.
@@ -2023,6 +2122,7 @@ Outline width	Độ rộng viền
 Outlines {frame}	Viền {frame}
 OUTPUT	ĐẦU RA
 Output	Đầu ra
+output layer name	tên lớp đầu ra
 Output Name	Tên đầu ra
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools that run in the browser, from a one-time download of about 25 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình chạy trong trình duyệt, chỉ cần tải một lần khoảng 25 MB.
 Over 1,000 raster, vector, LiDAR, hydrology and terrain tools, from an optional download of about 20 MB.	Hơn 1.000 công cụ raster, vector, LiDAR, thủy văn và địa hình, qua một bản tải tùy chọn khoảng 20 MB.
@@ -2062,6 +2162,7 @@ Pan with the mouse, zoom with the wheel and click features to see their attribut
 Pan/Zoom\nMap	Di chuyển/\nthu phóng
 Pane Sets	Bộ ngăn
 Paper	Giấy
+Parallel	Song song
 Parent folder	Thư mục cha
 parks, bike lanes, flood zones…	công viên, làn xe đạp, vùng ngập lụt…
 Password	Mật khẩu
@@ -2077,7 +2178,9 @@ Paste Special (as a new layer)	Dán đặc biệt (thành lớp mới)
 paste your key	dán khóa của bạn
 Pause	Tạm dừng
 Pause.	Tạm dừng.
+PDF	PDF
 PDF or PNG	PDF hoặc PNG
+PDF, PNG or SVG	PDF, PNG hoặc SVG
 Percent Clip	Cắt theo phần trăm
 Perceptually Uniform	Đồng đều về cảm nhận
 Performance	Hiệu năng
@@ -2138,10 +2241,12 @@ Polar, conformal: Antarctica and the Southern Ocean.	Vùng cực, đồng góc: 
 Polar, conformal: the Arctic and the northern lands.	Vùng cực, đồng góc: Bắc Cực và các vùng đất phía bắc.
 Polygon	Vùng
 Polygon (draw)	Vùng (vẽ)
+Polygon layer	Lớp vùng
 Polygons	Vùng
 Polyline	Đường gấp khúc
 Pop-up Mode	Chế độ cửa sổ bật lên
 pop_max > 1000000	pop_max > 1000000
+Popular datasets…	Bộ dữ liệu phổ biến…
 Populated Places	Khu dân cư
 Portal	Cổng thông tin
 Portolan	Portolan
@@ -2152,6 +2257,7 @@ PostgreSQL/PostGIS	PostgreSQL/PostGIS
 Postprocessing	Hậu xử lý
 power 2	lũy thừa 2
 Precision 6 (OSRM, Valhalla)	Độ chính xác 6 (OSRM, Valhalla)
+Prefix	Tiền tố
 Prepare	Chuẩn bị
 Prepare every layer's geometry for this projection.	Chuẩn bị hình học của mọi lớp cho phép chiếu này.
 Prepare Plugin Environment	Chuẩn bị môi trường plugin
@@ -2193,6 +2299,7 @@ Project templates: start projects from a saved setup.	Mẫu dự án: bắt đ�
 project's path is required	cần có path của project
 Projection	Phép chiếu
 Projections	Các phép chiếu
+Projects (RustGIS, QGIS)	Dự án (RustGIS, QGIS)
 Properties	Thuộc tính
 Property	Thuộc tính
 Proportional Symbols	Ký hiệu tỷ lệ
@@ -2211,6 +2318,9 @@ Python environment failed: {error}	Môi trường Python thất bại: {error}
 Python environment not prepared	Môi trường Python chưa được chuẩn bị
 Python environment ready	Môi trường Python đã sẵn sàng
 Python script	Script Python
+QGIS layer style	Kiểu lớp QGIS
+QGIS project	Dự án QGIS
+QGIS Project…	Dự án QGIS…
 Qualitative	Định tính
 Quantile	Phân vị
 Query files, web addresses and databases with DuckDB Spatial; add results to the map.	Truy vấn tệp, địa chỉ web và cơ sở dữ liệu bằng DuckDB Spatial; thêm kết quả vào bản đồ.
@@ -2220,6 +2330,7 @@ Quick actions	Thao tác nhanh
 Quick Analysis	Phân tích nhanh
 radius km	bán kính km
 radius m	bán kính m
+Radius {distance} (approximate)	Bán kính {distance} (gần đúng)
 Rain	Mưa
 Raise polygons by a height or a field.	Nâng các vùng theo một chiều cao hoặc một trường.
 Raise Priority	Tăng ưu tiên
@@ -2231,10 +2342,13 @@ Raster	Raster
 Raster\nAnalysis	Phân tích\nraster
 Raster\nInformation	Thông tin\nraster
 Raster Data	Dữ liệu raster
+Raster data is unavailable.	Dữ liệu raster không khả dụng.
 Raster Effects	Hiệu ứng raster
 Raster Functions	Hàm raster
+Raster has bands 1 to {count}.	Raster có các kênh từ 1 đến {count}.
 Raster Information	Thông tin raster
 Raster Layer	Lớp raster
+Raster layer	Lớp raster
 Raster tiles (XYZ)	Ô raster (XYZ)
 Raster · {w} × {h} · {n} bands · {renderer}	Raster · {w} × {h} · {n} kênh · {renderer}
 Read and write files on this computer	Đọc và ghi tệp trên máy tính này
@@ -2245,9 +2359,11 @@ Reading a granule's files needs an Earthdata Login token, which works for every 
 Reading the catalog: {n} documents read, {m} items found…	Đang đọc danh mục: đã đọc {n} tài liệu, tìm thấy {m} mục…
 Reading the catalog…	Đang đọc danh mục…
 Reading the embeddings…	Đang đọc embedding…
+Reading the installed fonts…	Đang đọc các phông chữ đã cài…
 Reading the store… ({n} files to go)	Đang đọc kho… (còn {n} tệp)
 Reading the tileset of	Đang đọc bộ ô bản đồ của
 Reading {n} of Overture's {ty} files where the map is: {attribution}	Đang đọc {n} tệp {ty} của Overture trong vùng bản đồ: {attribution}
+Reading {url} page by page…	Đang đọc {url} từng trang…
 Reading {url}…	Đang đọc {url}…
 Reads and writes files	Đọc và ghi tệp
 Reads the map	Đọc bản đồ
@@ -2264,6 +2380,8 @@ Redo (Ctrl+Y)	Làm lại (Ctrl+Y)
 Redo the change you undid.	Làm lại thay đổi bạn đã hoàn tác.
 Redo {action}	Làm lại {action}
 Red–Blue	Đỏ–Xanh lam
+Reference Scale	Tỷ lệ tham chiếu
+Reference scale	Tỷ lệ tham chiếu
 Refine the search to see {n} more	Thu hẹp tìm kiếm để xem thêm {n}
 Refresh	Làm mới
 Refresh every connection's lists	Làm mới danh sách của mọi kết nối
@@ -2283,6 +2401,7 @@ Relationships	Quan hệ
 Release	Bản phát hành
 Reload	Tải lại
 Reload Web Layers	Tải lại lớp web
+Remember on this computer	Ghi nhớ trên máy tính này
 Remember the key on this computer	Ghi nhớ khóa trên máy tính này
 Remove	Gỡ bỏ
 Remove All	Gỡ tất cả
@@ -2373,9 +2492,11 @@ roundabout turn	rẽ tại vòng xuyến
 Routes (name, surface, length)	Tuyến đường (tên, mặt đường, chiều dài)
 Routes by Valhalla (FOSSGIS) on OpenStreetMap data. Travel times don't include live traffic.	Tuyến đường do Valhalla (FOSSGIS) tính trên dữ liệu OpenStreetMap. Thời gian di chuyển không tính giao thông thời gian thực.
 Rows	Hàng
+Rule	Quy tắc
 Rule name	Tên quy tắc
 Rulers	Thước
 Run	Chạy
+Run #{n} ({secs} s)	Lần chạy #{n} ({secs} giây)
 Run a query whose result has a geometry column	Hãy chạy một truy vấn có kết quả chứa cột hình học
 Run All	Chạy tất cả
 Run All Steps	Chạy tất cả các bước
@@ -2390,12 +2511,14 @@ Run Script	Chạy script
 Run SQL Query	Chạy truy vấn SQL
 Run Task	Chạy nhiệm vụ
 Run the model	Chạy mô hình
+Run the script ({keys})	Chạy script ({keys})
 Run Tool	Chạy công cụ
 Run {name}	Chạy {name}
 Running the query for the map…	Đang chạy truy vấn cho bản đồ…
 Running…	Đang chạy…
 RustGIS	RustGIS
 RustGIS bookmarks	Dấu trang RustGIS
+RustGIS could not confirm that any previously saved key was deleted from the system keychain.	RustGIS không thể xác nhận rằng các khóa đã lưu trước đó đã bị xóa khỏi chuỗi khóa hệ thống.
 RustGIS couldn't reach the server.	RustGIS không thể kết nối tới máy chủ.
 RustGIS deep learning package	Gói học sâu RustGIS
 RustGIS didn't close properly last time, so it started with the World Atlas instead of your start-up project. Open the project from the Project menu when you're ready.	Lần trước RustGIS không đóng đúng cách, vì vậy nó đã khởi động với World Atlas thay vì dự án khởi động của bạn. Hãy mở dự án từ menu Dự án khi bạn sẵn sàng.
@@ -2482,8 +2605,15 @@ Saved	Đã lưu
 Saved as the connection {name}	Đã lưu thành kết nối {name}
 Saved as the default style for new single-band rasters.	Đã lưu làm kiểu mặc định cho các raster một băng mới.
 Saved connection	Kết nối đã lưu
-Saved keys are kept unencrypted in the app's preferences (in the browser's storage on the web).	Khóa đã lưu được giữ không mã hóa trong tùy chọn của ứng dụng (trong bộ nhớ của trình duyệt trên web).
+Saved keys	Khóa đã lưu
+Saved keys are kept unencrypted in the browser's storage.	Khóa đã lưu được giữ không mã hóa trong bộ nhớ của trình duyệt.
+Saved keys unavailable	Khóa đã lưu không khả dụng
+Saved keys: leave the keys blank to log in with those this computer keeps.	Khóa đã lưu: để trống khóa để đăng nhập bằng khóa mà máy tính này giữ.
 Saved models	Mô hình đã lưu
+Saved password	Mật khẩu đã lưu
+Saved S3 keys are unavailable. Enter the keys for this session.	Khóa S3 đã lưu không khả dụng. Hãy nhập khóa cho phiên này.
+Saved S3 keys could not be forgotten. The connection was not changed.	Không thể quên khóa S3 đã lưu. Kết nối không bị thay đổi.
+Saved S3 keys could not be used. Enter the keys again.	Không thể dùng khóa S3 đã lưu. Hãy nhập lại khóa.
 Saved symbology: apply it to the selected layer, or save the layer's.	Ký hiệu đã lưu: áp dụng cho lớp được chọn, hoặc lưu ký hiệu của lớp.
 Saved View	Khung nhìn đã lưu
 Saved {name}	Đã lưu {name}
@@ -2513,6 +2643,7 @@ Search commands — e.g. buffer, basemap, labels	Tìm lệnh — vd. buffer, bas
 Search datasets, e.g. GEDI biomass	Tìm bộ dữ liệu, ví dụ GEDI biomass
 Search Distance	Khoảng cách tìm kiếm
 Search every command and its parameters	Tìm mọi lệnh và tham số của chúng
+Search fonts	Tìm phông chữ
 Search layers (e.g. temperature)	Tìm lớp (ví dụ temperature)
 Search layers, places, lat/lon…	Tìm lớp, địa điểm, vĩ độ/kinh độ…
 Search layers…	Tìm lớp…
@@ -2538,6 +2669,7 @@ Searching…	Đang tìm…
 Searching… try again in a moment.	Đang tìm… hãy thử lại sau giây lát.
 Seasonal Mann–Kendall	Mann–Kendall theo mùa
 Seasons a year	Số mùa mỗi năm
+Second raster	Raster thứ hai
 Second standard parallel	Vĩ tuyến chuẩn thứ hai
 Seconds	Giây
 Secret access key	Khóa truy cập bí mật
@@ -2552,6 +2684,7 @@ Select (click)	Chọn (nhấp)
 Select (rectangle)	Chọn (hình chữ nhật)
 Select a direction…	Chọn một hướng…
 Select a feature layer in the Layers pane	Chọn một lớp đối tượng trong ngăn Lớp
+Select a field	Chọn một trường
 Select a layer in Layers to style it.	Chọn một lớp trong Lớp để tạo kiểu cho nó.
 Select a layer in the Layers pane	Chọn một lớp trong ngăn Lớp
 select a layer in the Layers pane first	hãy chọn một lớp trong ngăn Lớp trước
@@ -2562,6 +2695,9 @@ Select an element to format it.	Chọn một phần tử để định dạng.
 Select By\nAttributes	Chọn theo\nthuộc tính
 Select By\nLocation	Chọn theo\nvị trí
 Select By Attributes	Chọn theo thuộc tính
+Select by Lasso	Chọn bằng Lasso
+Select by Polygon	Chọn theo vùng
+Select by Radius	Chọn theo bán kính
 Select every feature.	Chọn mọi đối tượng.
 Select features by their spatial relationship.	Chọn đối tượng theo quan hệ không gian.
 Select features that intersect another layer.	Chọn đối tượng giao với lớp khác.
@@ -2570,6 +2706,7 @@ Select Layer	Chọn lớp
 Select Layer By Attribute	Chọn lớp theo thuộc tính
 Select Layer By Location	Chọn lớp theo vị trí
 Select one text on the map, or a layout element, to format it.	Chọn một văn bản trên bản đồ, hoặc một phần tử bố cục, để định dạng.
+Select options	Tùy chọn chọn
 Select Related	Chọn liên quan
 Select Rows	Chọn hàng
 Select rows with a SQL expression.	Chọn hàng bằng biểu thức SQL.
@@ -2585,6 +2722,8 @@ Selected only	Chỉ mục đã chọn
 Selected records only	Chỉ các bản ghi được chọn
 Selecting Features	Chọn đối tượng
 Selection	Vùng chọn
+Selection outline is outside the supported map surface; draw a smaller area.	Đường viền chọn nằm ngoài bề mặt bản đồ được hỗ trợ; hãy vẽ vùng nhỏ hơn.
+Selection outline is too complex; draw a simpler area.	Đường viền chọn quá phức tạp; hãy vẽ vùng đơn giản hơn.
 Selection Type	Kiểu chọn
 Selects features that intersect features in another layer.	Chọn các đối tượng giao với đối tượng trong lớp khác.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Chọn đối tượng bằng mệnh đề WHERE SQL, vd. pop_est > 1000000.
@@ -2733,18 +2872,26 @@ Snap Point	Điểm bắt dính
 Snapping	Bắt dính
 Snow	Tuyết
 Socrata	Socrata
+Solid	Liền
+Some of the project's S3 sources wait for you to choose the saved connection that reads them	Một số nguồn S3 của dự án đang chờ bạn chọn kết nối đã lưu để đọc chúng
+Sort	Sắp xếp
+Sort: {field}	Sắp xếp: {field}
 Source	Nguồn
 Source Cooperative	Source Cooperative
 Source Cooperative…	Source Cooperative…
+Source coordinate system	Hệ tọa độ nguồn
+Source coordinate system is required	Cần có hệ tọa độ nguồn
 South	Nam
 South Polar Stereographic	Phép chiếu nổi cực Nam
 Spatial Join	Nối không gian
 Speaker notes	Ghi chú người trình bày
 Spectral Analysis	Phân tích phổ
 Spectral indices	Chỉ số phổ
+Speed	Tốc độ
 Speed Display	Hiển thị tốc độ
 Split	Chia tách
 Split (click the line)	Chia tách (nhấp vào đường)
+Split the widest class	Chia lớp rộng nhất
 SQL	SQL
 SQL Pane	Ngăn SQL
 SQL queries run through DuckDB, a program the desktop app calls: open this project in the desktop app to query it.	Truy vấn SQL chạy qua DuckDB, một chương trình mà ứng dụng máy tính gọi: hãy mở dự án này trong ứng dụng máy tính để truy vấn.
@@ -2839,6 +2986,7 @@ Strokes	Các nét
 Strokes for	Nét cho
 Style	Kiểu
 Style Items	Mục kiểu
+Style this layer as a QGIS layer style file (.qml) does	Tạo kiểu cho lớp này theo tệp kiểu lớp QGIS (.qml)
 Style › Drawing	Kiểu › Vẽ
 Styles	Kiểu
 Subreport	Báo cáo con
@@ -2847,6 +2995,7 @@ Subtypes	Kiểu con
 Subtypes, one per line: code=name	Kiểu con, mỗi dòng một kiểu: mã=tên
 Suitability Modeler	Trình mô hình hóa mức độ phù hợp
 Summarise	Tổng hợp
+Summarise a Data Cube over Time	Tổng hợp khối dữ liệu theo thời gian
 Summarise over time	Tổng hợp theo thời gian
 Summarise the conversation so far, so a long chat stays within the model's context	Tóm tắt cuộc trò chuyện đến giờ để cuộc trò chuyện dài vẫn nằm trong ngữ cảnh của mô hình
 Summarise Zarr Over Time	Tổng hợp Zarr theo thời gian
@@ -2883,6 +3032,7 @@ Table or layer	Bảng hoặc lớp
 Tables	Bảng
 Tags	Thẻ
 Take the data in view offline, to edit and sync back later.	Lấy dữ liệu trong khung nhìn để dùng ngoại tuyến, chỉnh sửa và đồng bộ lại sau.
+Take this bound out	Bỏ ngưỡng này
 Target Features	Đối tượng đích
 Target Records	Bản ghi đích
 Task	Nhiệm vụ
@@ -2892,6 +3042,8 @@ Tasks	Nhiệm vụ
 Tasks: guided steps that each run a command.	Nhiệm vụ: các bước có hướng dẫn, mỗi bước chạy một lệnh.
 Template name	Tên mẫu
 Templates	Mẫu
+Temporary credentials (with a session token) are kept for this session only.	Thông tin xác thực tạm thời (có token phiên) chỉ được giữ trong phiên này.
+Temporary credentials are session-only. Previously saved keys are unchanged.	Thông tin xác thực tạm thời chỉ dùng trong phiên. Các khóa đã lưu trước đó không thay đổi.
 Tennessee GIS	Tennessee GIS
 Tennessee GIS…	Tennessee GIS…
 Tennessee's public GIS data (Tennessee GeoData, geodata.tn.gov): property boundaries, transportation, health, hydrology and more.	Dữ liệu GIS công khai của Tennessee (Tennessee GeoData, geodata.tn.gov): ranh giới thửa đất, giao thông, y tế, thủy văn và hơn thế.
@@ -2902,6 +3054,7 @@ Testing…	Đang kiểm tra…
 Text	Văn bản
 Text Symbol	Ký hiệu văn bản
 That connection would create a loop.	Kết nối đó sẽ tạo thành một vòng lặp.
+The active project or map changed; reopen Define Projection for the intended layer.	Dự án hoặc bản đồ đang hoạt động đã thay đổi; hãy mở lại Xác định phép chiếu cho lớp mong muốn.
 The address fields are empty in every row.	Các trường địa chỉ đều trống ở mọi hàng.
 The answer isn't UTF-8 text	Phản hồi không phải văn bản UTF-8
 the answer isn't UTF-8 text	phản hồi không phải văn bản UTF-8
@@ -2911,6 +3064,7 @@ The assistant wants to run this, and {why}:	Trợ lý muốn chạy thao tác sa
 The Basemaps plugin's tab of public basemaps.	Thẻ bản đồ nền công khai của plugin Bản đồ nền.
 the capture failed unexpectedly	chụp thất bại ngoài dự kiến
 The connection failed; trying again in {seconds} s.	Kết nối thất bại; thử lại sau {seconds} giây.
+the connection has no id	kết nối không có id
 The country list couldn't be read ({e}): type a country's code	Không đọc được danh sách quốc gia ({e}): hãy nhập mã quốc gia
 The current elevation stays in effect while you edit inputs. Click Apply elevation to apply the value and units.	Độ cao hiện tại vẫn có hiệu lực trong khi bạn sửa đầu vào. Nhấp Áp dụng độ cao để áp dụng giá trị và đơn vị.
 The dataset has nothing RustGIS can add	Bộ dữ liệu không có gì RustGIS có thể thêm
@@ -2924,6 +3078,11 @@ The flowtrace didn't answer: the whole flowline nearest the point is shown.	Flow
 The installed GeoLibre runner lists no tools.	Trình chạy GeoLibre đã cài đặt không liệt kê công cụ nào.
 The job covers the map view	Tác vụ bao phủ khung nhìn bản đồ
 The key is kept for this session only.	Khóa chỉ được giữ trong phiên này.
+The key is kept for this session only; it has not been remembered.	Khóa chỉ được giữ trong phiên này; nó chưa được ghi nhớ.
+The key is saved in the system keychain.	Khóa đã được lưu trong chuỗi khóa hệ thống.
+the keychain backend stopped unexpectedly	phần phụ trợ chuỗi khóa dừng bất ngờ
+the keychain worker stopped	tiến trình chuỗi khóa đã dừng
+The keys saved on this computer were forgotten; a login in this session keeps working.	Đã quên các khóa lưu trên máy tính này; phiên đăng nhập hiện tại vẫn tiếp tục hoạt động.
 The layer shows the step the time slider is at, and turns the slider on over the variable's dates.	Lớp hiển thị bước mà thanh trượt thời gian đang ở, và bật thanh trượt trên các ngày của biến.
 The layer's file couldn't be read: {error}	Không thể đọc tệp của lớp: {error}
 The layer's strokes	Nét của lớp
@@ -2947,6 +3106,7 @@ The National Map	The National Map
 The National Map…	The National Map…
 the NLDI's answer isn't UTF-8 text	phản hồi của NLDI không phải văn bản UTF-8
 the page is too large to draw	trang quá lớn để vẽ
+The password was refused. Type a password to try again.	Mật khẩu bị từ chối. Hãy nhập mật khẩu để thử lại.
 the picture is too large to show	ảnh quá lớn để hiển thị
 the picture is too large to show, or isn't one	ảnh quá lớn để hiển thị, hoặc không phải ảnh
 The places leave this device for the public Valhalla server at {server}, run by FOSSGIS. Don't continue if your project is bound by data privacy or data sovereignty rules.	Các địa điểm sẽ rời khỏi thiết bị này để tới máy chủ Valhalla công cộng tại {server} do FOSSGIS vận hành. Đừng tiếp tục nếu dự án của bạn phải tuân theo quy định về quyền riêng tư hoặc chủ quyền dữ liệu.
@@ -2961,7 +3121,7 @@ The provider's content filter stopped the reply.	Bộ lọc nội dung của nh�
 The public server is free and shared by many: it answers light use, and may ask you to wait.	Máy chủ công cộng miễn phí và được nhiều người dùng chung: nó phục vụ nhu cầu nhẹ và có thể yêu cầu bạn chờ.
 The range is two numbers, low and high (0, 0.9)	Khoảng là hai số, thấp và cao (0, 0.9)
 The raster's data couldn't be read.	Không thể đọc dữ liệu của raster.
-The raster's data couldn't be read: {path}	Không thể đọc dữ liệu của raster: {path}
+The raster's data couldn't be read: {error}	Không thể đọc dữ liệu của raster: {error}
 the release isn't known	không rõ bản phát hành
 The reply reached its length limit.	Câu trả lời đã đạt giới hạn độ dài.
 The reply stopped before completion; no actions were run.	Phản hồi dừng trước khi hoàn tất; không có thao tác nào được thực hiện.
@@ -2969,7 +3129,10 @@ The reply stopped early ({reason}).	Câu trả lời dừng sớm ({reason}).
 the report export failed unexpectedly	xuất báo cáo thất bại ngoài dự kiến
 The request failed.	Yêu cầu thất bại.
 The result wired into this output is added to the map under this name.	Kết quả nối vào đầu ra này được thêm vào bản đồ dưới tên này.
+The saved password could not be used. Type a password to try again; check Remember on this computer to replace the saved password.	Không thể dùng mật khẩu đã lưu. Hãy nhập mật khẩu để thử lại; đánh dấu Ghi nhớ trên máy tính này để thay thế mật khẩu đã lưu.
+The saved S3 connection no longer matches this source.	Kết nối S3 đã lưu không còn khớp với nguồn này.
 The saved sign-in changed. Select your account again.	Thông tin đăng nhập đã lưu đã thay đổi. Hãy chọn lại tài khoản.
+The scale the layer's symbol and label sizes are set for. At other scales they grow and shrink with the map, as on paper.	Tỷ lệ mà kích thước ký hiệu và nhãn của lớp được đặt theo. Ở các tỷ lệ khác, chúng phóng to và thu nhỏ theo bản đồ, như trên giấy.
 The server had a problem answering.	Máy chủ gặp sự cố khi phản hồi.
 The server is limiting requests.	Máy chủ đang giới hạn yêu cầu.
 The server refused the request.	Máy chủ đã từ chối yêu cầu.
@@ -2990,6 +3153,9 @@ the store is gone	kho không còn nữa
 The summary couldn't start: {error}	Không thể bắt đầu tổng hợp: {error}
 The summary failed unexpectedly	Tổng hợp thất bại ngoài dự kiến
 The summary finished after another project was opened, so it wasn't added	Tổng hợp hoàn tất sau khi một dự án khác được mở, nên không được thêm
+The system keychain could not complete the request.	Chuỗi khóa hệ thống không thể hoàn tất yêu cầu.
+The system keychain is locked or access was refused.	Chuỗi khóa hệ thống đang bị khóa hoặc quyền truy cập bị từ chối.
+The system keychain is unavailable.	Chuỗi khóa hệ thống không khả dụng.
 The task's steps changed, so the step being edited was closed: edit it again.	Các bước của nhiệm vụ đã thay đổi nên bước đang sửa đã bị đóng: hãy sửa lại.
 the time slider is off	thanh trượt thời gian đang tắt
 The token expires on {date}.	Token hết hạn vào {date}.
@@ -3017,6 +3183,8 @@ This ChatGPT account was already saved. Next time, choose it in the list instead
 This class is drawn with the layer's strokes. Changing them here gives it its own.	Lớp này được vẽ bằng nét của lớp bản đồ. Thay đổi ở đây sẽ tạo nét riêng cho nó.
 This class is hidden, so it labels nothing.	Lớp này đang ẩn, nên không gán nhãn gì.
 This clause no longer reads, so no feature is labelled: {error}	Mệnh đề này không còn đọc được, nên không đối tượng nào được gán nhãn: {error}
+This computer keeps keys for this connection: leave the keys blank to log in with them.	Máy tính này giữ khóa cho kết nối này: để trống khóa để đăng nhập bằng chúng.
+This computer keeps this connection's keys: logging in reads them.	Máy tính này giữ khóa của kết nối này: khi đăng nhập sẽ đọc chúng.
 This map has no layers yet.	Bản đồ này chưa có lớp nào.
 This map's thumbnail, from an image.	Ảnh thu nhỏ của bản đồ này, từ một ảnh.
 This map's thumbnail, from the view.	Ảnh thu nhỏ của bản đồ này, từ khung nhìn.
@@ -3026,7 +3194,7 @@ This request has no one-time allow option.	Yêu cầu này không có tùy chọ
 This request uses an unsupported capability. Check the parameter and change the request.	Yêu cầu này dùng tính năng không được hỗ trợ. Kiểm tra tham số và sửa yêu cầu.
 This result is kept	Kết quả này được giữ lại
 This run has no tool form to open	Lần chạy này không có biểu mẫu công cụ để mở
-This session only (optional)	Chỉ trong phiên này (tùy chọn)
+This S3 connection choice is no longer available.	Lựa chọn kết nối S3 này không còn khả dụng.
 This step	Bước này
 This step names no tool to show.	Bước này không nêu công cụ nào để chỉ ra.
 Thumbnail	Ảnh thu nhỏ
@@ -3035,6 +3203,7 @@ Ticks	Vạch chia
 Ticks only	Chỉ vạch chia
 Tile archive	Kho ô bản đồ
 Tile Archive File…	Tệp kho ô bản đồ…
+Tile layer has changed; search again	Lớp ô bản đồ đã thay đổi; hãy tìm lại
 Tile Layer Properties	Thuộc tính lớp ô bản đồ
 Tile Layers	Lớp ô bản đồ
 Tilt Map	Nghiêng bản đồ
@@ -3084,6 +3253,7 @@ Train a neural network on training polygons and classify every pixel.	Huấn luy
 Train And Classify	Huấn luyện và phân loại
 Train Deep Learning Model	Huấn luyện mô hình học sâu
 Trained models	Mô hình đã huấn luyện
+Training polygons	Vùng huấn luyện
 Transparency	Độ trong suốt
 Traverse	Đường chuyền
 Trend Analysis	Phân tích xu hướng
@@ -3107,8 +3277,10 @@ type a longitude and latitude, or click the map	nhập kinh độ và vĩ độ,
 Type a scale, such as 1:12,345, 12345 or 25k, and press Enter	Nhập một tỷ lệ, như 1:12,345, 12345 hoặc 25k, rồi nhấn Enter
 Type an address or coordinates and press Enter, or click the map.	Nhập địa chỉ hoặc tọa độ rồi nhấn Enter, hoặc nhấp vào bản đồ.
 Type numbers separated by commas	Nhập các số cách nhau bằng dấu phẩy
+Type the access key ID and the secret access key to remember them on this computer.	Nhập ID khóa truy cập và khóa truy cập bí mật để ghi nhớ chúng trên máy tính này.
 Type the keys to log in for this session, then Save.	Nhập khóa để đăng nhập cho phiên này, rồi Lưu.
-Type the password or keys to log in for this session, then Save.	Nhập mật khẩu hoặc khóa để đăng nhập cho phiên này, rồi Lưu.
+Type the password to remember it on this computer.	Nhập mật khẩu để ghi nhớ nó trên máy tính này.
+Type the password, then Save. Remember on this computer is optional.	Nhập mật khẩu, rồi bấm Lưu. Ghi nhớ trên máy tính này là tùy chọn.
 Typed below	Nhập bên dưới
 UM	UM
 Unavailable: {reason}	Không khả dụng: {reason}
@@ -3129,6 +3301,7 @@ Unit	Đơn vị
 United States	Hoa Kỳ
 Units	Đơn vị
 Units per step	Số đơn vị mỗi bước
+unknown (an older project)	không rõ (dự án cũ hơn)
 UNKNOWN TOOL	CÔNG CỤ KHÔNG XÁC ĐỊNH
 Unload the GeoLibre tools and stop loading them when RustGIS starts.	Gỡ tải các công cụ GeoLibre và không tải chúng khi RustGIS khởi động nữa.
 Unsaved changes	Thay đổi chưa lưu
@@ -3156,6 +3329,7 @@ USA Contiguous Albers Equal Area	Albers đồng diện tích Hoa Kỳ lục đ�
 Use	Dùng
 Use a Single Stroke	Dùng một nét duy nhất
 Use another account	Dùng tài khoản khác
+Use Connection	Dùng kết nối
 Use Current View	Dùng khung nhìn hiện tại
 Use each feature's line color	Dùng màu đường của từng đối tượng
 Use each feature's line width	Dùng độ rộng đường của từng đối tượng
@@ -3286,6 +3460,7 @@ WMTS	WMTS
 Words	Từ khóa
 words in the name	từ trong tên
 words to keep to (optional)	từ cần giới hạn (tùy chọn)
+Workflow	Quy trình
 Workflow Manager	Trình quản lý quy trình
 Workflows	Quy trình
 Working	Đang làm việc
@@ -3331,6 +3506,8 @@ Z factor	Hệ số Z
 Zarr	Zarr
 Zarr Variables	Biến Zarr
 Zarr…	Zarr…
+Zonal Statistics	Thống kê theo vùng
+Zone Polygons	Vùng phân khu
 Zoom	Thu phóng
 Zoom about the pointer	Thu phóng quanh con trỏ
 Zoom Box	Thu phóng hộp
@@ -3381,5 +3558,6 @@ Zoom: the map's zoom level, as web maps count it. Bearing: the direction the top
 © OpenStreetMap contributors	© Những người đóng góp OpenStreetMap
 ±, dequantised	±, đã giải lượng tử hóa
 — fps	— fps
+⌘+Enter	⌘+Enter
 ⌘K	⌘K
 ▶ Simulate	▶ Mô phỏng

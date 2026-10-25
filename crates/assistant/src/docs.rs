@@ -46,6 +46,7 @@ pub const PAGES: &[Page] = pages![
     "architecture.md",
     "contributing.md",
     "acknowledgements.md",
+    "citation.md",
     "sponsor.md",
     "privacy.md",
 ];

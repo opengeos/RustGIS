@@ -186,6 +186,9 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
             "project.new" | "project.open" | "project.openText" | "project.sample" | "project.fromTemplate" => {
                 "it replaces the open project".into()
             }
+            // Whether given a path, text or data: the project names the files and web addresses
+            // its layers are added from.
+            "project.importQgis" => "it adds the files and web addresses a QGIS project names".into(),
             _ => "it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)".into(),
         });
     }

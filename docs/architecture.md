@@ -25,6 +25,13 @@ description, an `enabled` check and a `run` function. The ribbon, keyboard short
 search, CLI and Python dispatch engine commands through `Session::run`. UI-only commands
 (`ui.*`) live in `crates/ui-egui/src/lib.rs`; engine commands never open dialogs.
 
+The UI exports `big_split_menu` for a large ribbon control with independent, accessible primary
+and alternatives buttons. Pass the primary command id and parameters separately from the menu
+closure; menu choices run their own commands and never replace the primary action. The primary's
+enabled state comes from its command, while `menu_enabled` controls the arrow independently. Use
+`ui.push_id` when placing repeated controls whose order can change. Keep whole-button dropdowns
+for choices without a clear everyday default.
+
 Mutating commands snapshot the project for undo and restore it on an error or escaped panic.
 View-only commands do not take undo snapshots. Undo and rollback cover project state, not
 external effects such as files already written.
@@ -63,6 +70,10 @@ browser and the CLI, where callers keep a secret for the session only, as before
   reads, writes and deletions on a worker. An existing keychain key takes precedence over a
   legacy preference. The preference is removed only after a successful read of that key or a
   successful migration write; new API keys are never written to desktop preferences.
+- **S3 request snapshots.** The registry lock protects selection of the exact live login and
+  the requested bucket's explicit-grant status. Copy only that login and grant boolean, not
+  the grant list; parse and validate addresses and prepare signatures outside the lock.
+  Keychain calls and network I/O never run under the registry lock.
 - **macOS.** The system asks again for access when the app's code signature changes, which
   happens with unsigned or re-signed builds.
 - **Tests.** Use `MemorySecrets`, and `MemorySecrets::failing(..)` for error paths. The desktop

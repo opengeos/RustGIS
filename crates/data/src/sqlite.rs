@@ -685,6 +685,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn page_end_overflow_returns_an_error() {
+        let db = Db { bytes: Vec::<u8>::new(), page_size: usize::MAX, usable: 480, pages: 2 };
+        assert_eq!(db.page(2).unwrap_err(), bad("page offset"));
+    }
+
+    #[test]
     fn create_table_columns() {
         let (cols, pk) = parse_create_table(
             r#"CREATE TABLE "my ""t""" ( fid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, "geom" MULTIPOLYGON CHECK (CAST(1 AS INT) > 0), [name] TEXT(80) DEFAULT 'a,b', `n` DOUBLE PRECISION, -- note

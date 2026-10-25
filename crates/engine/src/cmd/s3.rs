@@ -80,6 +80,18 @@ fn credentials(p: &Value) -> Result<(Option<Credentials>, Option<String>, Option
 }
 
 pub(super) fn connect(_s: &mut Session, p: &Value) -> CmdResult {
+    install(p, None)
+}
+
+/// The login of the saved connection `id`, made live under this session's runtime token
+/// `binding` in one step (see `rustgis_tiles::s3::connect_saved`): it signs only the addresses
+/// that name the binding, never one found by its bucket or host. Takes the same parameters as
+/// `s3.connect`.
+pub(super) fn connect_saved(_s: &mut Session, p: &Value, binding: &str, id: &str) -> CmdResult {
+    install(p, Some((binding, id)))
+}
+
+fn install(p: &Value, saved: Option<(&str, &str)>) -> CmdResult {
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("default").to_string();
     let endpoint = ps(p, "endpoint").map(str::trim).filter(|e| !e.is_empty()).map(str::to_string);
     let (creds, region, profile_endpoint, source) = credentials(p)?;
@@ -106,7 +118,10 @@ pub(super) fn connect(_s: &mut Session, p: &Value) -> CmdResult {
         buckets,
         credentials: creds,
     };
-    s3::connect(c.clone())?;
+    match saved {
+        Some((binding, id)) => s3::connect_saved(c.clone(), binding, id)?,
+        None => s3::connect(c.clone())?,
+    }
     let c = s3::connection(&c.name).unwrap_or(c);
     let mut out = c.public();
     out["credentials"] = json!(source);
@@ -155,6 +170,11 @@ pub(super) fn list(_s: &mut Session, p: &Value) -> CmdResult {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let fetch = |url: &str| crate::render::rustgis_tiles::cache::download_blocking(url);
+        // A saved connection's login signs only the addresses that name it.
+        let through = |c: &s3::Connection, url: String| match s3::binding_of(&c.name) {
+            Some(binding) => s3::bound_url(&binding, &url),
+            None => Ok(url),
+        };
         let Some(bucket) = bucket else {
             // A connection's buckets (ListBuckets needs its credentials).
             let c = named
@@ -163,18 +183,26 @@ pub(super) fn list(_s: &mut Session, p: &Value) -> CmdResult {
             if c.credentials.is_none() {
                 return Err(format!("'{}' is anonymous: listing its buckets needs credentials; give a bucket", c.name));
             }
-            let buckets = s3::parse_buckets(&fetch(&s3::buckets_url(&c))?)?;
+            let buckets = s3::parse_buckets(&fetch(&through(&c, s3::buckets_url(&c))?)?)?;
             return Ok(json!({"connection": c.name, "buckets": buckets}));
         };
         // A bucket listed through a connection is served by it from then on (its objects are read
         // with its keys); otherwise the bucket's own connection, if any, or anonymously.
         if let Some(c) = &named {
-            s3::grant(&c.name, &bucket);
+            match s3::binding_of(&c.name) {
+                Some(binding) => s3::grant_saved(&binding, &bucket)?,
+                None => s3::grant(&c.name, &bucket),
+            }
         }
         let conn = named.or_else(|| s3::for_bucket(&bucket));
         let (mut prefixes, mut objects, mut token, mut pages) = (Vec::new(), Vec::new(), None::<String>, 0);
         loop {
-            let page = s3::parse_list(&fetch(&s3::list_url(&bucket, &prefix, token.as_deref(), conn.as_ref()))?)?;
+            let url = s3::list_url(&bucket, &prefix, token.as_deref(), conn.as_ref());
+            let url = match &conn {
+                Some(c) => through(c, url)?,
+                None => url,
+            };
+            let page = s3::parse_list(&fetch(&url)?)?;
             prefixes.extend(page.prefixes);
             objects.extend(page.objects);
             pages += 1;
@@ -186,11 +214,19 @@ pub(super) fn list(_s: &mut Session, p: &Value) -> CmdResult {
         let more = token.is_some() || prefixes.len() + objects.len() > limit;
         prefixes.truncate(limit);
         objects.truncate(limit.saturating_sub(prefixes.len()));
+        // What a saved connection lists is added through it: its objects' addresses name it.
+        let address = |key: &str| {
+            let url = format!("s3://{bucket}/{key}");
+            match conn.as_ref().map(|c| through(c, url.clone())) {
+                Some(Ok(bound)) => bound,
+                _ => url,
+            }
+        };
         Ok(json!({
             "bucket": bucket,
             "prefix": prefix,
             "prefixes": prefixes,
-            "objects": objects.iter().map(|o| json!({"key": o.key, "size": o.size, "modified": o.modified, "url": format!("s3://{bucket}/{}", o.key)})).collect::<Vec<_>>(),
+            "objects": objects.iter().map(|o| json!({"key": o.key, "size": o.size, "modified": o.modified, "url": address(&o.key)})).collect::<Vec<_>>(),
             "truncated": more,
         }))
     }

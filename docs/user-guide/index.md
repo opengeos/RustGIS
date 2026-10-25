@@ -117,6 +117,10 @@ ribbon, arrows at its ends scroll it.
 
 The tabs stay the same whatever is selected: Style and Data act on the layer selected in Layers.
 
+Menus with checkboxes stay open while you change options: stack or show web basemaps, combine
+Visual and Camera Effects, or customize Ribbon tabs and Quick Access buttons. Click outside
+the menu to dismiss it. The time slider's Layers menu likewise stays open while binding layers.
+
 ## Projects
 
 A project (`.rgis`) holds maps, layouts, reports, presentations, notebooks, styles, tasks and

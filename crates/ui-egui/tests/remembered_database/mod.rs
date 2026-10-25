@@ -83,6 +83,9 @@ fn remembered_database_failed_store_has_visible_notice() {
 
 #[test]
 fn remembered_database_chooser_cancel_selection_and_project_scope() {
+    // Its own database: passwords for an address are remembered process-wide, and one the other
+    // tests leave for the shared address would open the project without asking which to use.
+    const ADDRESS: &str = "postgres:host=127.0.0.1 port=1 dbname=ui_remembered_chooser user=smoke sslmode=disable";
     let store = Arc::new(MemorySecrets::new());
     let mut seed = with_store(store.clone());
     for name in ["First database", "Second database"] {

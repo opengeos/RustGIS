@@ -41,8 +41,23 @@ pub const FORMAT: u32 = 1;
 /// Largest project file read (512 MiB).
 const MAX_BYTES: u64 = 512 << 20;
 
-/// The address a saved file keeps. Only web addresses can contain layer credentials.
+/// The address a saved file keeps. Only web addresses can contain layer credentials. A tile
+/// template (`pmtiles:…@archive`, `cog:…@archive`) is judged by its archive, and an address read
+/// through a saved S3 connection by the address it wraps, the wrapper rebuilt around it (its
+/// binding and endpoint are provenance, not secrets); a COG's look after either is kept.
 fn saved_address(address: &str) -> Option<String> {
+    use rustgis_data::s3_address;
+    if let Some((head, archive)) = crate::sources::template_archive(address) {
+        let (file, look) = split_look(archive);
+        return saved_address(file).map(|saved| format!("{head}{saved}{look}"));
+    }
+    if s3_address::is_wrapper(address) {
+        let (file, look) = split_look(address);
+        // One that doesn't parse stays as it is (and blocked): it names no connection.
+        let b = s3_address::parse(file).ok().flatten()?;
+        let inner = saved_address(b.url)?;
+        return s3_address::bind(b.binding, b.endpoint, &inner).ok().map(|saved| format!("{saved}{look}"));
+    }
     let inner = address.strip_prefix(crate::render::rustgis_tiles::s3::ANONYMOUS).unwrap_or(address);
     let (protocol, _) = inner.split_once("://")?;
     if !["http", "https", "s3"].iter().any(|s| protocol.eq_ignore_ascii_case(s)) {
@@ -57,6 +72,12 @@ fn saved_address(address: &str) -> Option<String> {
     let mut out = format!("{scheme}://{rest}");
     rustgis_data::source::credentials::redact_query(&mut out);
     (out != address).then_some(out)
+}
+
+/// A COG address without its look (`…#bands=…`), and the look as written.
+fn split_look(address: &str) -> (&str, &str) {
+    let file = crate::render::rustgis_tiles::cog::split(address).0;
+    (file, address.get(file.len()..).unwrap_or(""))
 }
 
 /// Strips layer credentials, keeping originals in the visitor's order for the caller to restore.
@@ -583,15 +604,20 @@ impl Project {
                 }
                 if let Some(rl) = &mut l.raster
                     && rl.data.is_none()
+                    && !rl.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)
                     && let Err(e) = rl.reload()
                 {
                     log::warn!("{}: {e}", l.name);
                 }
-                // A streamed layer's features are read again from its source.
+                // A streamed layer's features are read again from its source. One read from an S3
+                // bucket waits for [`crate::s3_connections::resolve_project_s3`], which opens it
+                // with the saved connection that is to read it (or, with none to choose, as
+                // before): reading a project fetches nothing with another session's keys.
                 if let Some(src) = &mut l.source {
                     l.dataset.windowed = true;
                     if !src.is_open()
                         && src.error.is_none()
+                        && !src.path.as_deref().is_some_and(crate::s3_connections::is_s3_backed)
                         && let Err(e) = src.open()
                     {
                         log::warn!("{}: {e}", l.name);
@@ -690,6 +716,9 @@ impl Project {
         if restore {
             p.restore_addresses(text);
         }
+        // A binding is this computer's runtime token for a login: one in a file is no authority
+        // to use any login here.
+        crate::s3_connections::clear_bindings(p.addresses_mut());
         p.normalize();
         Ok(p)
     }

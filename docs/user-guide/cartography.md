@@ -18,8 +18,15 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval or quantile. If no field is chosen, the current renderer's field is kept when it is
-  numeric; otherwise the first numeric field is used. If the layer has no numeric field, or the
+  interval, quantile, geometric interval or standard deviation. Geometric interval makes class
+  widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
+  below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
+  101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
+  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  class** adds one, and the field's largest value closes the last class. If no field is
+  chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
+  field is used. If the layer has no numeric field, or the
   switch fails for another reason, the pane shows why and keeps the current renderer. When numeric
   fields exist, a field picker lets you try another one; the error stays visible if a retry fails.
   A problem no field can fix, such as a definition query that keeps no features, needs fixing
@@ -228,30 +235,44 @@ it unchanged.
 
 ## Labeling
 
-The **Labeling pane** brings together the Default label class's field, SQL clause, text symbol,
-placement and visibility limits, plus the map-wide label display controls. Open it for a
-feature layer with Layers › right-click › **Labeling Properties…**, **View › Windows › Labeling**,
-or **Style › Labels › Properties**. It runs the same commands as the ribbon, so each setting
-change undoes on its own (a dragged size or a colour pick is one step). Additional label classes
-are managed with commands, as described below.
+The **Labeling pane** brings together the label classes and the chosen class's field, SQL
+clause, text symbol, placement and visibility limits, plus the map-wide label display controls.
+Open it for a feature layer with Layers › right-click › **Labeling Properties…**, **View ›
+Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as the
+ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
+Label classes are described below.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
-  colour, halo and bold (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+  colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+  › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
+  italic take the family's own bold and italic faces where it has them. The family is saved by
+  its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
+  font there (the pane shows it as not installed), and in the browser, which reads no installed
+  fonts (`labels.style={"layer": "Rivers", "font": "Liberation Serif"}`; `labels.fonts` lists the
+  installed families, `{"font": ""}` goes back to the label font).
 - **SQL**: label only the features that match a SQL clause (the language of definition
   queries), such as `pop_max > 5000000`. In the Labeling pane, Class › **SQL** › **New
   expression**: write the clause (the field and operator buttons add to it), **Check** says
   whether it reads and how many of the features the layer draws at the map's scale match
   (after its definition query, display filters and time window), and **Apply** sets it in one
-  undo step; **Clear** removes the Default class's clause, leaving other classes unchanged
+  undo step; **Clear** removes the chosen class's clause, leaving other classes unchanged
   (`labels.class.update={"layer": "Cities", "where": "pop_max > 5000000"}`).
 - **Visibility Range**: draw labels only between two scales (Out Beyond / In Beyond), or between
   two viewing distances (Closest / Farthest). Clear Limits removes all four.
 - **Placement**: automatic (above points, centred on lines and polygons), centred, or one of
   eight positions around the feature (`labels.placement={"layer": "Cities", "position":
-  "aboveRight"}`).
+  "aboveRight"}`). Lines can be labelled **along** them (Position › Along lines): **Parallel**
+  sets the text straight, turned to the line's direction across it; **Curved** turns each
+  character with the line where it bends. Both sit at the middle of the line's longest stretch
+  in view, centred on the line and kept upright, and may run past its ends by about a letter; a
+  line too short for its text, or (curved) one bending more than 25° from one character to the
+  next, is left unlabelled. A text over 200 characters long is set straight rather than
+  curved. Points and polygons with these placements are labelled as automatic
+  (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
 - **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
@@ -264,7 +285,13 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   labels, use clauses that do not overlap: `pop_max > 5000000` for Large cities and
   `pop_max <= 5000000` for Default. Classes are placed in list order, Default last; a hidden
   class or one outside its visibility range labels nothing without excluding features from
-  other classes. There can be up to 64 classes besides Default. Make them with
+  other classes. There can be up to 64 classes besides Default. In the Labeling pane, the
+  **Class** list chooses the class every section shows and edits; **New** adds one with the
+  chosen class's field, text symbol, placement and range, listed before Default, and
+  **Rename**, **Move Up** / **Move Down**, **Remove** and **Visible** act on the chosen class
+  (Default can be renamed or hidden, not moved or removed). The ribbon's label groups edit the
+  same chosen class, and **Style › Label Class › Class** chooses it as the pane's list does. By
+  command, make them with
   `labels.class.add` (a new class copies Default's field, text symbol, placement and range, or
   those of the class named by `from`), then `labels.class.rename`, `labels.class.update` (`where` or `visible`),
   `labels.class.move` (`to`: 0 first), `labels.class.remove` and `labels.class.clear` (removes

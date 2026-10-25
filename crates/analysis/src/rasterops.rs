@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, Transformer};
 use rustgis_geom::{Coord, Extent};
 
 /// The no-data value written by these operations.
@@ -523,24 +523,227 @@ pub fn zonal_means(r: &Raster, bands: &[usize], rings: &[Vec<Coord>]) -> Option<
     (n > 0).then(|| (sums.into_iter().map(|s| s / n as f64).collect(), n))
 }
 
+/// An error encountered while validating or transforming a polygon geometry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PolygonTransformError {
+    EmptyPolygon,
+    InvalidExterior(String),
+    InvalidHole { index: usize, reason: String },
+}
+
+impl std::fmt::Display for PolygonTransformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPolygon => write!(f, "polygon has no rings"),
+            Self::InvalidExterior(r) => write!(f, "exterior ring is invalid: {r}"),
+            Self::InvalidHole { index, reason } => write!(f, "hole {index} is invalid: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PolygonTransformError {}
+
+/// Transforms a single polygon's rings (exterior ring + optional holes) to WGS 84 lon/lat coordinates.
+///
+/// - The exterior ring must have at least 3 points and all points must project successfully.
+/// - Every interior ring (hole) must have at least 3 points and all points must project successfully.
+/// - If any hole fails or is invalid, the entire polygon is rejected with an error rather than
+///   silently discarding the hole or altering the polygon geometry.
+pub fn transform_polygon_to_lonlat(rings: &[Vec<Coord>], tr: Option<&Transformer>) -> Result<Vec<Vec<Coord>>, PolygonTransformError> {
+    let exterior = rings.first().ok_or(PolygonTransformError::EmptyPolygon)?;
+    let mut ext_lonlat = Vec::with_capacity(exterior.len());
+    for &c in exterior {
+        if !c.is_finite() {
+            return Err(PolygonTransformError::InvalidExterior("non-finite coordinate".into()));
+        }
+        let ll = match tr {
+            Some(t) => t.to_lonlat(c).ok_or_else(|| PolygonTransformError::InvalidExterior("coordinate transformation failed".into()))?,
+            None => c,
+        };
+        if !ll.is_finite() {
+            return Err(PolygonTransformError::InvalidExterior("transformed coordinate is non-finite".into()));
+        }
+        ext_lonlat.push(ll);
+    }
+    if ext_lonlat.len() < 3 {
+        return Err(PolygonTransformError::InvalidExterior("fewer than 3 vertices".into()));
+    }
+
+    let mut out_rings = vec![ext_lonlat];
+    for (idx, hole) in rings.iter().skip(1).enumerate() {
+        let hole_num = idx + 1;
+        let mut hole_lonlat = Vec::with_capacity(hole.len());
+        for &c in hole {
+            if !c.is_finite() {
+                return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "non-finite coordinate".into() });
+            }
+            let ll = match tr {
+                Some(t) => t.to_lonlat(c).ok_or_else(|| PolygonTransformError::InvalidHole {
+                    index: hole_num,
+                    reason: "coordinate transformation failed".into(),
+                })?,
+                None => c,
+            };
+            if !ll.is_finite() {
+                return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "transformed coordinate is non-finite".into() });
+            }
+            hole_lonlat.push(ll);
+        }
+        if hole_lonlat.len() < 3 {
+            return Err(PolygonTransformError::InvalidHole { index: hole_num, reason: "fewer than 3 vertices".into() });
+        }
+        out_rings.push(hole_lonlat);
+    }
+
+    Ok(out_rings)
+}
+
+/// Transforms and validates all polygon parts of a (multi-)polygon feature to WGS 84 lon/lat coordinates.
+pub fn transform_feature_polygons_to_lonlat(
+    polys: &[Vec<Vec<Coord>>],
+    tr: Option<&Transformer>,
+) -> Result<Vec<Vec<Vec<Coord>>>, PolygonTransformError> {
+    if polys.is_empty() {
+        return Err(PolygonTransformError::EmptyPolygon);
+    }
+    let mut out = Vec::with_capacity(polys.len());
+    for (part_idx, rings) in polys.iter().enumerate() {
+        let valid_poly = transform_polygon_to_lonlat(rings, tr).map_err(|e| match e {
+            PolygonTransformError::InvalidHole { index, reason } => {
+                PolygonTransformError::InvalidHole { index, reason: format!("part {part_idx}: {reason}") }
+            }
+            PolygonTransformError::InvalidExterior(reason) => PolygonTransformError::InvalidExterior(format!("part {part_idx}: {reason}")),
+            other => other,
+        })?;
+        out.push(valid_poly);
+    }
+    Ok(out)
+}
+
+/// Validates a 1-based band number and returns its 0-based index.
+pub(crate) fn band_from_f64(value: f64, total_bands: usize) -> Result<usize, String> {
+    if !value.is_finite() {
+        return Err("band number must be a finite number".into());
+    }
+    if value <= 0.0 {
+        return Err("band numbers must be positive (1-based)".into());
+    }
+    if value.fract() != 0.0 {
+        return Err("band numbers must be integers, not decimals".into());
+    }
+    // Check before casting, including on wasm32, where huge values would saturate.
+    if value > total_bands as f64 || value >= usize::MAX as f64 {
+        return Err(format!("band index {value} is invalid: raster has bands 1 to {total_bands}"));
+    }
+    Ok(value as usize - 1)
+}
+
+/// Parses a band specification string into 0-based band indices.
+///
+/// Supported inputs:
+/// - `""` (empty string): defaults to band 1 (`vec![0]`)
+/// - `"all"`: all bands `0..total_bands`
+/// - comma, semicolon, or space-separated list of 1-based band numbers: `"1, 2, 3"`, `"[1, 2]"`, etc.
+///
+/// Validates that:
+/// - Every entry is a valid, finite positive integer.
+/// - Decimals (e.g. `"1.5"`), negative numbers (e.g. `"-1"`), zero (`"0"`), non-numeric (e.g. `"abc"`),
+///   or non-finite values (e.g. `"NaN"`, `"Infinity"`) are strictly rejected.
+/// - Every band number is within `1..=total_bands`.
+/// - Empty parts (such as `"1,,2"` or `","`) are rejected.
+pub fn parse_bands_str(s: &str, total_bands: usize) -> Result<Vec<usize>, String> {
+    if total_bands == 0 {
+        return Err("raster has no bands".into());
+    }
+    let txt = s.trim();
+    if txt.is_empty() {
+        return Ok(vec![0]);
+    }
+    if txt.eq_ignore_ascii_case("all") {
+        return Ok((0..total_bands).collect());
+    }
+    let clean = txt.trim_matches(|c| c == '[' || c == ']');
+    if clean.trim().is_empty() {
+        return Err("band selection cannot be empty brackets".into());
+    }
+    let mut out = Vec::new();
+    for part in clean.split([',', ';']) {
+        let part = part.trim().trim_matches('"').trim();
+        if part.is_empty() {
+            return Err("band selection contains an empty band entry".into());
+        }
+        for subpart in part.split_whitespace() {
+            let subpart = subpart.trim();
+            if subpart.is_empty() {
+                continue;
+            }
+            if subpart.eq_ignore_ascii_case("all") {
+                for b in 0..total_bands {
+                    if !out.contains(&b) {
+                        out.push(b);
+                    }
+                }
+                continue;
+            }
+            let f: f64 = subpart.parse().map_err(|_| format!("invalid band number '{subpart}'"))?;
+            let b_idx = band_from_f64(f, total_bands)?;
+            if !out.contains(&b_idx) {
+                out.push(b_idx);
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("no valid band numbers found in input".into());
+    }
+    Ok(out)
+}
+
+/// Projects a complete ring to the raster grid without dropping failed vertices.
+fn project_ring(r: &Raster, ring: &[Coord]) -> Option<Vec<(f64, f64)>> {
+    if ring.len() < 3 {
+        return None;
+    }
+    let tr = r.transformer();
+    ring.iter()
+        .map(|&c| {
+            if !c.is_finite() {
+                return None;
+            }
+            let pt = r.transform.to_pixel(tr.from_lonlat(c)?);
+            (pt.0.is_finite() && pt.1.is_finite()).then_some(pt)
+        })
+        .collect()
+}
+
 /// The cells of `r` whose centres fall inside any of `polygons` (each an exterior ring and its
 /// holes, in longitude/latitude): the column and row window around the polygons, clamped to the
 /// raster, and a row-major mask over it. `None` when no cell centre falls inside.
 ///
 /// The rings are projected onto the raster's own grid once and filled by scanline, so a large
 /// raster costs a pass over the polygon edges per row rather than a point test per cell.
+/// A malformed ring or a failed projection rejects the entire polygon part, including its holes.
 pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u32>, Range<u32>, Vec<bool>)> {
-    let tr = r.transformer();
+    polygon_mask_with_failures(r, polygons, &mut Vec::new())
+}
+
+/// Builds a polygon mask and appends the zero-based indices of rejected parts to `failed_parts`.
+/// Valid parts are retained even if another part cannot be projected onto the raster grid.
+pub fn polygon_mask_with_failures(
+    r: &Raster,
+    polygons: &[Vec<Vec<Coord>>],
+    failed_parts: &mut Vec<usize>,
+) -> Option<(Range<u32>, Range<u32>, Vec<bool>)> {
     let projected: Vec<Vec<Vec<(f64, f64)>>> = polygons
         .iter()
-        .map(|rings| {
-            rings
-                .iter()
-                .map(|ring| ring.iter().filter_map(|c| tr.from_lonlat(*c)).map(|w| r.transform.to_pixel(w)).collect::<Vec<_>>())
-                .filter(|ring| ring.len() >= 3)
-                .collect::<Vec<_>>()
+        .enumerate()
+        .filter_map(|(index, rings)| {
+            // Reject a complete part if any ring fails, so a lost hole cannot enlarge it.
+            let part = if rings.is_empty() { None } else { rings.iter().map(|ring| project_ring(r, ring)).collect::<Option<Vec<_>>>() };
+            if part.is_none() {
+                failed_parts.push(index);
+            }
+            part
         })
-        .filter(|rings| !rings.is_empty())
         .collect();
     let (mut c0, mut r0, mut c1, mut r1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for &(x, y) in projected.iter().flatten().flatten() {
@@ -599,6 +802,151 @@ pub fn polygon_mask(r: &Raster, polygons: &[Vec<Vec<Coord>>]) -> Option<(Range<u
     let cols = cols.start + tc0 as u32..cols.start + tc1 as u32;
     let rows = rows.start + tr0 as u32..rows.start + tr1 as u32;
     Some((cols, rows, trimmed))
+}
+
+/// Summary statistics of raster cells within a zone.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneStats {
+    /// Number of valid raster cells inside the zone.
+    pub count: usize,
+    /// Arithmetic sum of valid raster cells inside the zone.
+    pub sum: Option<f64>,
+    /// Arithmetic mean of valid raster cells inside the zone.
+    pub mean: Option<f64>,
+    /// Minimum value among valid raster cells inside the zone.
+    pub min: Option<f64>,
+    /// Maximum value among valid raster cells inside the zone.
+    pub max: Option<f64>,
+    /// Population standard deviation of valid raster cells inside the zone: sqrt(sum((x - mean)^2) / n).
+    pub stddev: Option<f64>,
+}
+
+/// Numerically stable online accumulator using Welford's algorithm.
+#[derive(Clone, Debug)]
+pub struct Accumulator {
+    count: usize,
+    sum: f64,
+    min: f64,
+    max: f64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Default for Accumulator {
+    /// Constructs an empty accumulator with `min = INFINITY` and `max = NEG_INFINITY`.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Accumulator {
+    /// Constructs a new empty accumulator with `min = INFINITY` and `max = NEG_INFINITY`.
+    pub fn new() -> Self {
+        Self { count: 0, sum: 0.0, min: f64::INFINITY, max: f64::NEG_INFINITY, mean: 0.0, m2: 0.0 }
+    }
+
+    /// Feeds a valid finite measurement into the accumulator, updating count, sum, extrema,
+    /// and running mean / variance using Welford's algorithm. Non-finite values are ignored.
+    pub fn add(&mut self, val: f64) {
+        if !val.is_finite() {
+            return;
+        }
+        self.count += 1;
+        self.sum += val;
+        if val < self.min {
+            self.min = val;
+        }
+        if val > self.max {
+            self.max = val;
+        }
+        let delta = val - self.mean;
+        self.mean += delta / (self.count as f64);
+        let delta2 = val - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    /// Number of valid finite samples accumulated so far.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Computes and returns the accumulated [`ZoneStats`].
+    ///
+    /// If no valid values were added (`count == 0`), returns `ZoneStats::default()`
+    /// where `count` is 0 and all statistical metrics are `None`.
+    pub fn stats(&self) -> ZoneStats {
+        if self.count == 0 {
+            ZoneStats::default()
+        } else {
+            let variance = (self.m2 / (self.count as f64)).max(0.0);
+            ZoneStats {
+                count: self.count,
+                sum: Some(self.sum),
+                mean: Some(self.mean),
+                min: Some(self.min),
+                max: Some(self.max),
+                stddev: Some(variance.sqrt()),
+            }
+        }
+    }
+}
+
+/// Computes summary statistics (count, sum, mean, min, max, stddev) for each requested band
+/// over the raster cells whose centres fall inside `polygons` (exterior ring and holes in WGS 84 lon/lat).
+///
+/// Returns one `ZoneStats` per requested band. Cells with NoData, NaN, or non-finite values are
+/// excluded. If no valid cells fall inside the polygon or if the polygon is outside the raster extent,
+/// returns `ZoneStats` with `count = 0` and all numeric statistics set to `None`.
+pub fn zonal_statistics(r: &Raster, bands: &[usize], polygons: &[Vec<Vec<Coord>>]) -> Result<Vec<ZoneStats>, String> {
+    zonal_statistics_with_failures(r, bands, polygons, &mut Vec::new())
+}
+
+/// Computes zonal statistics, appending raster-side projection failures as zero-based part indices.
+pub(crate) fn zonal_statistics_with_failures(
+    r: &Raster,
+    bands: &[usize],
+    polygons: &[Vec<Vec<Coord>>],
+    failed_parts: &mut Vec<usize>,
+) -> Result<Vec<ZoneStats>, String> {
+    r.require_coordinates()?;
+    for &b in bands {
+        if b >= r.band_count() {
+            return Err(format!("band index {} is out of range: {} has {} bands", b + 1, r.name, r.band_count()));
+        }
+    }
+    if bands.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some((cols, rows, mask)) = polygon_mask_with_failures(r, polygons, failed_parts) else {
+        return Ok(vec![ZoneStats::default(); bands.len()]);
+    };
+
+    let w = (cols.end - cols.start) as usize;
+    let mut accs: Vec<Accumulator> = (0..bands.len()).map(|_| Accumulator::new()).collect();
+
+    for (ri, row) in rows.enumerate() {
+        let line_offset = ri * w;
+        let line = match mask.get(line_offset..line_offset + w) {
+            Some(l) => l,
+            None => continue,
+        };
+        for (ci, &inside) in line.iter().enumerate() {
+            if !inside {
+                continue;
+            }
+            let col = cols.start + ci as u32;
+            for (acc_idx, &band) in bands.iter().enumerate() {
+                if let Some(v) = r.value(band, col as i64, row as i64)
+                    && let Some(acc) = accs.get_mut(acc_idx)
+                {
+                    acc.add(f64::from(v));
+                }
+            }
+        }
+    }
+
+    Ok(accs.into_iter().map(|acc| acc.stats()).collect())
 }
 
 /// A tiny arithmetic expression over band values.
@@ -733,6 +1081,27 @@ mod tests {
         assert!(polygon_mask(&r, &[vec![sq(0.0051, 0.0051, 0.0052, 0.0052)]]).is_none());
     }
 
+    /// A failed hole drops only its containing part and reports that part, even with no mask.
+    #[test]
+    fn polygon_mask_reports_rejected_parts_and_retains_valid_parts() {
+        let r = ramp();
+        let valid = vec![vec![Coord::new(0.0, 0.0), Coord::new(0.002, 0.0), Coord::new(0.002, 0.002), Coord::new(0.0, 0.002)]];
+        let mut invalid = valid.clone();
+        invalid.push(vec![Coord::new(f64::NAN, 0.0); 3]);
+        let polys = vec![invalid.clone(), valid.clone()];
+        let mut failures = Vec::new();
+        let mask = polygon_mask_with_failures(&r, &polys, &mut failures);
+        assert_eq!(mask, polygon_mask(&r, &[valid]));
+        assert_eq!(failures, vec![0]);
+        failures.clear();
+        let stats = zonal_statistics_with_failures(&r, &[0], &polys, &mut failures).unwrap();
+        assert_eq!(stats[0].count, 4);
+        assert_eq!(failures, vec![0]);
+        failures.clear();
+        assert!(polygon_mask_with_failures(&r, &[invalid], &mut failures).is_none());
+        assert_eq!(failures, vec![0]);
+    }
+
     #[test]
     fn terrain_math_and_classes() {
         let r = ramp();
@@ -784,5 +1153,330 @@ mod tests {
         let p = profile(&r, 0, &[Coord::new(0.0005, 0.01), Coord::new(0.0195, 0.01)], 20);
         assert_eq!(p.len(), 20);
         assert!(p.last().and_then(|x| x.2).unwrap_or(0.0) > p[0].2.unwrap_or(0.0) + 150.0);
+    }
+
+    #[test]
+    fn accumulator_exact_math_and_numerical_stability() {
+        // 1. Exact math on [10.0, 20.0, 30.0, 40.0]
+        let mut acc = Accumulator::new();
+        for &x in &[10.0, 20.0, 30.0, 40.0] {
+            acc.add(x);
+        }
+        let st = acc.stats();
+        assert_eq!(st.count, 4);
+        assert_eq!(st.sum, Some(100.0));
+        assert_eq!(st.mean, Some(25.0));
+        assert_eq!(st.min, Some(10.0));
+        assert_eq!(st.max, Some(40.0));
+        let expected_stddev = 125.0f64.sqrt(); // sqrt(500 / 4)
+        assert!((st.stddev.unwrap() - expected_stddev).abs() < 1e-12);
+
+        // 2. Empty accumulator
+        let empty_st = Accumulator::new().stats();
+        assert_eq!(empty_st.count, 0);
+        assert_eq!(empty_st.sum, None);
+        assert_eq!(empty_st.mean, None);
+        assert_eq!(empty_st.min, None);
+        assert_eq!(empty_st.max, None);
+        assert_eq!(empty_st.stddev, None);
+
+        // 3. Single value
+        let mut single_acc = Accumulator::new();
+        single_acc.add(42.5);
+        let single_st = single_acc.stats();
+        assert_eq!(single_st.count, 1);
+        assert_eq!(single_st.sum, Some(42.5));
+        assert_eq!(single_st.mean, Some(42.5));
+        assert_eq!(single_st.min, Some(42.5));
+        assert_eq!(single_st.max, Some(42.5));
+        assert_eq!(single_st.stddev, Some(0.0));
+
+        // 4. Constant values
+        let mut const_acc = Accumulator::new();
+        for _ in 0..100 {
+            const_acc.add(7.0);
+        }
+        let const_st = const_acc.stats();
+        assert_eq!(const_st.count, 100);
+        assert_eq!(const_st.mean, Some(7.0));
+        assert_eq!(const_st.stddev, Some(0.0));
+
+        // 5. Large magnitude values (Welford's algorithm avoids catastrophic cancellation)
+        let base = 1e12;
+        let mut large_acc = Accumulator::new();
+        for &x in &[base + 1.0, base + 2.0, base + 3.0, base + 4.0] {
+            large_acc.add(x);
+        }
+        let large_st = large_acc.stats();
+        assert_eq!(large_st.count, 4);
+        assert_eq!(large_st.mean, Some(base + 2.5));
+        let std_large = large_st.stddev.unwrap();
+        // Variance of [1, 2, 3, 4] is 1.25, stddev is sqrt(1.25) = 1.118033988749895
+        assert!((std_large - 1.25f64.sqrt()).abs() < 1e-10, "large magnitude precision: {std_large}");
+
+        // 6. Non-finite values (NaN and inf) are rejected
+        let mut defensive_acc = Accumulator::new();
+        defensive_acc.add(10.0);
+        defensive_acc.add(f64::NAN);
+        defensive_acc.add(f64::INFINITY);
+        defensive_acc.add(f64::NEG_INFINITY);
+        defensive_acc.add(20.0);
+        let def_st = defensive_acc.stats();
+        assert_eq!(def_st.count, 2);
+        assert_eq!(def_st.sum, Some(30.0));
+        assert_eq!(def_st.mean, Some(15.0));
+    }
+
+    #[test]
+    fn accumulator_default_and_new_consistency_and_extrema() {
+        // default() and new() produce identical initial empty state
+        let d = Accumulator::default();
+        let n = Accumulator::new();
+        assert_eq!(d.count(), 0);
+        assert_eq!(n.count(), 0);
+        assert_eq!(d.stats(), ZoneStats::default());
+        assert_eq!(n.stats(), ZoneStats::default());
+
+        // Negative-only values: min must be -30, max must be -10 (not 0.0)
+        let mut neg_acc = Accumulator::default();
+        neg_acc.add(-30.0);
+        neg_acc.add(-20.0);
+        neg_acc.add(-10.0);
+        let neg_st = neg_acc.stats();
+        assert_eq!(neg_st.count, 3);
+        assert_eq!(neg_st.min, Some(-30.0));
+        assert_eq!(neg_st.max, Some(-10.0));
+        assert_eq!(neg_st.sum, Some(-60.0));
+        assert_eq!(neg_st.mean, Some(-20.0));
+
+        // Positive-only values: min must be 10 (not 0.0), max must be 30
+        let mut pos_acc = Accumulator::default();
+        pos_acc.add(10.0);
+        pos_acc.add(20.0);
+        pos_acc.add(30.0);
+        let pos_st = pos_acc.stats();
+        assert_eq!(pos_st.count, 3);
+        assert_eq!(pos_st.min, Some(10.0));
+        assert_eq!(pos_st.max, Some(30.0));
+
+        // Mixed positive and negative values
+        let mut mixed_acc = Accumulator::default();
+        mixed_acc.add(-5.0);
+        mixed_acc.add(5.0);
+        let mixed_st = mixed_acc.stats();
+        assert_eq!(mixed_st.count, 2);
+        assert_eq!(mixed_st.min, Some(-5.0));
+        assert_eq!(mixed_st.max, Some(5.0));
+        assert_eq!(mixed_st.sum, Some(0.0));
+        assert_eq!(mixed_st.mean, Some(0.0));
+    }
+
+    #[test]
+    fn zonal_statistics_known_cells_nodata_and_holes() {
+        let r = ramp(); // 20x20 raster, band 0: (i % 20) * 10, band 1: i / 20.
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+
+        // 1. Single known cell: col 5, row 5.
+        // origin_x = 0.0, origin_y = 0.02, pixel_width = 0.001, pixel_height = -0.001
+        // col 5 x in [0.005, 0.006], centre at 0.0055.
+        // row 5 y in [0.014, 0.015], centre at 0.0145.
+        let cell_poly = vec![vec![sq(0.005, 0.014, 0.006, 0.015)]];
+        let stats = zonal_statistics(&r, &[0, 1], &cell_poly).unwrap();
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].count, 1);
+        assert_eq!(stats[0].sum, Some(50.0)); // col 5 * 10 = 50
+        assert_eq!(stats[0].mean, Some(50.0));
+        assert_eq!(stats[0].min, Some(50.0));
+        assert_eq!(stats[0].max, Some(50.0));
+        assert_eq!(stats[0].stddev, Some(0.0));
+
+        assert_eq!(stats[1].count, 1);
+        assert_eq!(stats[1].sum, Some(5.0)); // row 5 = 5
+        assert_eq!(stats[1].mean, Some(5.0));
+        assert_eq!(stats[1].stddev, Some(0.0));
+
+        // 2. Polygon outside raster: empty zone result
+        let outside_poly = vec![vec![sq(1.0, 1.0, 2.0, 2.0)]];
+        let outside_stats = zonal_statistics(&r, &[0], &outside_poly).unwrap();
+        assert_eq!(outside_stats.len(), 1);
+        assert_eq!(outside_stats[0], ZoneStats::default());
+
+        // 3. Polygon with holes
+        let poly_with_hole = vec![vec![sq(0.005, 0.005, 0.015, 0.015), sq(0.009, 0.009, 0.011, 0.011)]];
+        let hole_stats = zonal_statistics(&r, &[0], &poly_with_hole).unwrap();
+        // 100 cells - 4 hole cells = 96 cells
+        assert_eq!(hole_stats[0].count, 96);
+        assert!(hole_stats[0].sum.is_some());
+        assert!(hole_stats[0].mean.is_some());
+
+        // 4. MultiPolygon
+        let multipoly = vec![
+            vec![sq(0.001, 0.018, 0.003, 0.019)], // 2 cells
+            vec![sq(0.005, 0.018, 0.007, 0.019)], // 2 cells
+        ];
+        let multi_stats = zonal_statistics(&r, &[0], &multipoly).unwrap();
+        assert_eq!(multi_stats[0].count, 4);
+
+        // 5. NoData handling: create a raster with NoData values
+        let (w, h) = (4u32, 4u32);
+        // cells:
+        // [ 10,   20, -9999,   40 ]
+        // [ 50,  NaN,   70,   80 ]
+        // [ -9999, -9999, -9999, -9999 ]
+        // [ 130, 140, 150, 160 ]
+        let data: Vec<f32> =
+            vec![10.0, 20.0, -9999.0, 40.0, 50.0, f32::NAN, 70.0, 80.0, -9999.0, -9999.0, -9999.0, -9999.0, 130.0, 140.0, 150.0, 160.0];
+        let gt = GeoTransform { origin_x: 0.0, origin_y: 4.0, pixel_width: 1.0, pixel_height: -1.0 };
+        let r_nodata = Raster::new("nd", w, h, vec![data], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+
+        // Zone covering entire row 0: cells are 10, 20, -9999 (NoData), 40
+        // Valid values: 10, 20, 40 (count = 3, sum = 70, mean = 70/3, min = 10, max = 40)
+        let row0_poly = vec![vec![sq(0.0, 3.0, 4.0, 4.0)]];
+        let r0_stats = zonal_statistics(&r_nodata, &[0], &row0_poly).unwrap();
+        assert_eq!(r0_stats[0].count, 3);
+        assert_eq!(r0_stats[0].sum, Some(70.0));
+        assert_eq!(r0_stats[0].min, Some(10.0));
+        assert_eq!(r0_stats[0].max, Some(40.0));
+        assert!((r0_stats[0].mean.unwrap() - 70.0 / 3.0).abs() < 1e-10);
+
+        // Zone covering row 2 where ALL cells are NoData (-9999)
+        let row2_poly = vec![vec![sq(0.0, 1.0, 4.0, 2.0)]];
+        let r2_stats = zonal_statistics(&r_nodata, &[0], &row2_poly).unwrap();
+        assert_eq!(r2_stats[0].count, 0);
+        assert_eq!(r2_stats[0].sum, None);
+        assert_eq!(r2_stats[0].mean, None);
+        assert_eq!(r2_stats[0].min, None);
+        assert_eq!(r2_stats[0].max, None);
+        assert_eq!(r2_stats[0].stddev, None);
+
+        // 6. Invalid band index returns Err
+        assert!(zonal_statistics(&r, &[99], &cell_poly).is_err());
+
+        // 7. Invalid exterior ring (< 3 points) with surviving hole does NOT promote hole to exterior
+        let bad_ext_with_hole = vec![vec![
+            vec![Coord::new(0.005, 0.005), Coord::new(0.015, 0.015)], // only 2 points!
+            sq(0.009, 0.009, 0.011, 0.011),                           // 5 points (hole)
+        ]];
+        let bad_ext_stats = zonal_statistics(&r, &[0], &bad_ext_with_hole).unwrap();
+        assert_eq!(bad_ext_stats[0], ZoneStats::default());
+        assert!(polygon_mask(&r, &bad_ext_with_hole).is_none());
+
+        // 8. Exterior ring with non-finite/unprojectable coordinate is rejected
+        let nan_ext_with_hole = vec![vec![
+            vec![Coord::new(f64::NAN, 0.005), Coord::new(0.015, 0.005), Coord::new(0.015, 0.015), Coord::new(f64::NAN, 0.005)],
+            sq(0.009, 0.009, 0.011, 0.011),
+        ]];
+        let nan_ext_stats = zonal_statistics(&r, &[0], &nan_ext_with_hole).unwrap();
+        assert_eq!(nan_ext_stats[0], ZoneStats::default());
+        assert!(polygon_mask(&r, &nan_ext_with_hole).is_none());
+
+        // 9. Polygon with defective hole (< 3 vertices or non-finite) is rejected rather than silently discarding the hole
+        let bad_hole_poly = vec![vec![
+            sq(0.005, 0.005, 0.015, 0.015),                           // valid exterior (5 points)
+            vec![Coord::new(0.009, 0.009), Coord::new(0.011, 0.011)], // invalid hole: only 2 points!
+        ]];
+        assert!(polygon_mask(&r, &bad_hole_poly).is_none(), "polygon with defective hole must be rejected");
+        let bad_hole_stats = zonal_statistics(&r, &[0], &bad_hole_poly).unwrap();
+        assert_eq!(bad_hole_stats[0], ZoneStats::default());
+
+        let nan_hole_poly = vec![vec![
+            sq(0.005, 0.005, 0.015, 0.015),
+            vec![Coord::new(f64::NAN, 0.009), Coord::new(0.011, 0.009), Coord::new(0.011, 0.011), Coord::new(f64::NAN, 0.009)],
+        ]];
+        assert!(polygon_mask(&r, &nan_hole_poly).is_none(), "polygon with non-finite hole must be rejected");
+    }
+
+    #[test]
+    fn polygon_transformation_and_hole_validation_semantics() {
+        let sq = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+        let ext = sq(0.0, 0.0, 10.0, 10.0);
+        let hole1 = sq(2.0, 2.0, 4.0, 4.0);
+        let hole2 = sq(6.0, 6.0, 8.0, 8.0);
+
+        // Valid exterior and valid holes
+        let valid_poly = vec![ext.clone(), hole1.clone(), hole2.clone()];
+        let res = transform_polygon_to_lonlat(&valid_poly, None).unwrap();
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].len(), ext.len());
+        assert_eq!(res[1].len(), hole1.len());
+        assert_eq!(res[2].len(), hole2.len());
+
+        // Empty polygon
+        let empty_poly: Vec<Vec<Coord>> = Vec::new();
+        assert_eq!(transform_polygon_to_lonlat(&empty_poly, None), Err(PolygonTransformError::EmptyPolygon));
+
+        // Invalid exterior: fewer than 3 vertices
+        let bad_ext = vec![vec![Coord::new(0.0, 0.0), Coord::new(1.0, 1.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&bad_ext, None), Err(PolygonTransformError::InvalidExterior(_))));
+
+        // Invalid exterior: non-finite coordinate
+        let nan_ext = vec![vec![Coord::new(0.0, 0.0), Coord::new(f64::NAN, 1.0), Coord::new(2.0, 2.0), Coord::new(0.0, 0.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&nan_ext, None), Err(PolygonTransformError::InvalidExterior(_))));
+
+        // Invalid hole 1: fewer than 3 vertices
+        let bad_hole = vec![ext.clone(), vec![Coord::new(2.0, 2.0), Coord::new(3.0, 3.0)]];
+        assert_eq!(
+            transform_polygon_to_lonlat(&bad_hole, None),
+            Err(PolygonTransformError::InvalidHole { index: 1, reason: "fewer than 3 vertices".into() })
+        );
+
+        // Invalid hole 2: non-finite coordinate
+        let nan_hole = vec![ext.clone(), hole1.clone(), vec![Coord::new(6.0, 6.0), Coord::new(f64::INFINITY, 8.0), Coord::new(8.0, 8.0)]];
+        assert!(matches!(transform_polygon_to_lonlat(&nan_hole, None), Err(PolygonTransformError::InvalidHole { index: 2, .. })));
+
+        // Multipart features
+        let multi_valid = vec![vec![ext.clone(), hole1.clone()], vec![sq(20.0, 20.0, 30.0, 30.0)]];
+        let multi_res = transform_feature_polygons_to_lonlat(&multi_valid, None).unwrap();
+        assert_eq!(multi_res.len(), 2);
+        assert_eq!(multi_res[0].len(), 2);
+        assert_eq!(multi_res[1].len(), 1);
+
+        // Multipart with failing part
+        let multi_bad = vec![vec![ext.clone()], vec![vec![Coord::new(1.0, 1.0)]]];
+        assert!(transform_feature_polygons_to_lonlat(&multi_bad, None).is_err());
+    }
+
+    #[test]
+    fn parse_bands_str_validation_and_boundaries() {
+        let total = 3usize;
+
+        // Valid formats
+        assert_eq!(parse_bands_str("", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("   ", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("all", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("ALL", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("1", total).unwrap(), vec![0]);
+        assert_eq!(parse_bands_str("3", total).unwrap(), vec![2]); // boundary: total_bands
+        assert_eq!(parse_bands_str("1, 2", total).unwrap(), vec![0, 1]);
+        assert_eq!(parse_bands_str("[1, 2, 3]", total).unwrap(), vec![0, 1, 2]);
+        assert_eq!(parse_bands_str("1; 3", total).unwrap(), vec![0, 2]);
+        assert_eq!(parse_bands_str(" 1   2 ", total).unwrap(), vec![0, 1]);
+
+        // De-duplication
+        assert_eq!(parse_bands_str("1, 1, 2, 2, 3", total).unwrap(), vec![0, 1, 2]);
+
+        // Boundary violations and negative
+        assert!(parse_bands_str("0", total).is_err(), "0 is invalid (1-based)");
+        assert!(parse_bands_str("-1", total).is_err(), "negative band is invalid");
+        assert!(parse_bands_str("4", total).is_err(), "out of range band is invalid");
+        assert!(parse_bands_str("999", total).is_err(), "out of range band is invalid");
+
+        // Decimals and non-finite
+        assert!(parse_bands_str("1.5", total).is_err(), "decimal band is invalid");
+        assert_eq!(parse_bands_str("1.0", total).unwrap(), vec![0]); // 1.0 has fract == 0.0
+        assert!(parse_bands_str("NaN", total).is_err(), "NaN is invalid");
+        assert!(parse_bands_str("Infinity", total).is_err(), "Infinity is invalid");
+
+        // Malformed strings
+        assert!(parse_bands_str("abc", total).is_err(), "non-numeric string is invalid");
+        assert!(parse_bands_str("[]", total).is_err(), "empty brackets are invalid");
+        assert!(parse_bands_str("[   ]", total).is_err(), "whitespace brackets are invalid");
+        assert!(parse_bands_str("1,,2", total).is_err(), "empty item between commas is invalid");
+        assert!(parse_bands_str(",", total).is_err(), "standalone comma is invalid");
+        assert!(parse_bands_str(";", total).is_err(), "standalone semicolon is invalid");
     }
 }

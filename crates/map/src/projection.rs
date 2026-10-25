@@ -792,6 +792,53 @@ impl Flat {
         }
     }
 
+    /// Rejects a selection outline that leaves the projection or crosses its wrapping edge.
+    /// Unlike feature projection, selection paths must never be cut or silently clamped.
+    pub fn validate_selection_path(&self, points: &[Coord]) -> Result<(), String> {
+        for &c in points {
+            if !c.is_finite() || !(-180.0..=180.0).contains(&c.x) || !(-90.0..=90.0).contains(&c.y) {
+                return Err("Selection outline contains an invalid longitude or latitude.".into());
+            }
+            if matches!(self, Flat::Mercator) && c.y.abs() > rustgis_geom::MAX_LAT {
+                return Err("Selection outline exceeds the Web Mercator latitude range.".into());
+            }
+            if !self.forward_checked(c).is_some_and(|p| p.is_finite()) {
+                return Err("Selection outline is outside the active projection.".into());
+            }
+        }
+        let edge = match self {
+            Flat::Mercator => None,
+            Flat::Custom(p) => match p.edge() {
+                Some(edge) => Some(edge),
+                None => return Ok(()),
+            },
+        };
+        let east = edge.map_or(180.0, |e| e.lon);
+        let west = east - 360.0;
+        let normalize = |lon: f64| (lon - west).rem_euclid(360.0) + west;
+        for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len()) {
+            let (a_lon, b_lon) = (normalize(a.x), normalize(b.x));
+            if (a_lon - b_lon).abs() > 180.0 {
+                return Err("Selection outline crosses the active projection's wrap seam.".into());
+            }
+            let mut margin = edge.map_or(0.0, |e| e.stray_at(a.y).max(e.stray_at(b.y)));
+            if let Some(edge) = edge {
+                let (south, north) = (a.y.min(b.y), a.y.max(b.y));
+                for i in 0..EDGE_SAMPLES {
+                    let lat = -90.0 + EDGE_STEP * i as f64;
+                    if lat >= south && lat <= north {
+                        margin = margin.max(edge.stray_at(lat));
+                    }
+                }
+            }
+            margin += 1e-9;
+            if a_lon <= west + margin || a_lon >= east - margin || b_lon <= west + margin || b_lon >= east - margin {
+                return Err("Selection outline is too close to the active projection's wrap seam.".into());
+            }
+        }
+        Ok(())
+    }
+
     /// A longitude/latitude geometry in map coordinates, for drawing. Under a world projection it
     /// is first cut along the map's edge, so a feature across it (Russia under a 90°W central
     /// meridian) is drawn on both sides rather than as a band across the map (#209). Points the
@@ -868,6 +915,46 @@ impl Flat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_paths_reject_clamps_seams_and_unprojectable_points() {
+        let mercator = Flat::Mercator;
+        assert!(mercator.validate_selection_path(&[Coord::new(0.0, 0.0)]).is_ok());
+        for points in [
+            vec![Coord::new(179.0, 0.0), Coord::new(-179.0, 1.0)],
+            vec![Coord::new(-180.0, 0.0)],
+            vec![Coord::new(180.0, 0.0)],
+            vec![Coord::new(0.0, rustgis_geom::MAX_LAT + 0.01)],
+            vec![Coord::new(181.0, 0.0)],
+            vec![Coord::new(f64::NAN, 0.0)],
+        ] {
+            assert!(mercator.validate_selection_path(&points).is_err(), "{points:?}");
+        }
+        // A small raw-longitude jump still crosses the shifted projection's edge at 30°W.
+        let shifted = Flat::Custom(std::sync::Arc::new(Projector::new("robinson +lon_0=150").unwrap()));
+        assert!(shifted.validate_selection_path(&[Coord::new(-35.0, 5.0), Coord::new(-25.0, 15.0)]).is_err());
+        // Conversely, the geographic antimeridian is not this projection's seam.
+        assert!(shifted.validate_selection_path(&[Coord::new(175.0, 5.0), Coord::new(-175.0, 15.0)]).is_ok());
+        // Include the closing edge: each preceding edge is short, but the last wraps.
+        assert!(mercator.validate_selection_path(&[Coord::new(-170.0, 0.0), Coord::new(0.0, 1.0), Coord::new(170.0, 0.0)]).is_err());
+        let regional = Flat::Custom(std::sync::Arc::new(Projector::new("EPSG:32631").unwrap()));
+        assert!(regional.validate_selection_path(&[Coord::new(3.0, 50.0), Coord::new(4.0, 51.0)]).is_ok());
+        assert!(regional.validate_selection_path(&[Coord::new(100.0, 0.0)]).is_err());
+    }
+
+    #[test]
+    fn selection_paths_use_intervening_edge_stray_samples() {
+        let projector = Projector::new("robinson").unwrap();
+        let mut strays = [0.0; EDGE_SAMPLES];
+        strays[EQUATOR] = 5.0;
+        projector.edge.set(Edge { lon: 180.0, strays }).unwrap();
+        let flat = Flat::Custom(std::sync::Arc::new(projector));
+        // Both endpoints individually clear the seam, but the segment crosses a latitude where
+        // a datum-shifted edge may stray farther inland.
+        assert!(flat.validate_selection_path(&[Coord::new(178.0, -10.0)]).is_ok());
+        assert!(flat.validate_selection_path(&[Coord::new(178.0, 10.0)]).is_ok());
+        assert!(flat.validate_selection_path(&[Coord::new(178.0, -10.0), Coord::new(178.0, 10.0)]).is_err());
+    }
 
     /// Presets with parameters (opengeos/RustGIS#517): read strictly, written one way, and drawn
     /// where they say, against pyproj 3.7.1 (PROJ 9.5.1).

@@ -131,8 +131,9 @@ fn record_row(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal_wrapped(|ui| match app.ws.recording.as_ref().map(Vec::len) {
         Some(n) => {
             ui.label(egui::RichText::new("●").color(t.red));
-            ui.label(crate::i18n::fmt("Recording: {n} steps", &[("n", &n.to_string())]));
-            ui.add(egui::TextEdit::singleline(&mut app.ws.record_name).hint_text(tl!("Task name")).desired_width(150.0));
+            let input_label = ui.label(crate::i18n::fmt("Recording: {n} steps", &[("n", &n.to_string())]));
+            ui.add(egui::TextEdit::singleline(&mut app.ws.record_name).hint_text(tl!("Task name")).desired_width(150.0))
+                .labelled_by(input_label.id);
             if ui.button(tl!("Stop Recording")).on_hover_text(tl!("Make a task of the steps recorded")).clicked() {
                 let name = app.ws.record_name.clone();
                 run(app, "ui.taskRecord", json!({"name": name}));
@@ -181,7 +182,9 @@ pub fn tasks(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         app.ws.task_edit = None;
                     }
                 }
-            });
+            })
+            .response
+            .on_hover_text(tl!("Task"));
         // Leaving edit mode drops a step's unsaved edit, which would come back stale.
         if ui.checkbox(&mut app.ws.task_editing, tl!("Edit Steps")).changed() && !app.ws.task_editing {
             app.ws.task_edit = None;
@@ -365,11 +368,15 @@ pub fn profile(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.label(egui::RichText::new(tl!("Add an elevation raster first.")).weak());
         return;
     }
-    egui::ComboBox::from_id_salt("prof_layer").selected_text(app.ws.profile_layer.as_str()).show_ui(ui, |ui| {
-        for r in &rasters {
-            ui.selectable_value(&mut app.ws.profile_layer, r.clone(), r.as_str());
-        }
-    });
+    egui::ComboBox::from_id_salt("prof_layer")
+        .selected_text(app.ws.profile_layer.as_str())
+        .show_ui(ui, |ui| {
+            for r in &rasters {
+                ui.selectable_value(&mut app.ws.profile_layer, r.clone(), r.as_str());
+            }
+        })
+        .response
+        .on_hover_text(tl!("Layer"));
     ui.horizontal_wrapped(|ui| {
         for (label, purpose, n) in [
             ("Create (click points)", "p_create", 100),
@@ -406,11 +413,16 @@ pub fn profile(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if !lines.contains(&app.ws.profile_lines) {
             app.ws.profile_lines = lines.first().cloned().unwrap_or_default();
         }
-        egui::ComboBox::from_id_salt("prof_lines").selected_text(app.ws.profile_lines.as_str()).width(120.0).show_ui(ui, |ui| {
-            for l in &lines {
-                ui.selectable_value(&mut app.ws.profile_lines, l.clone(), l.as_str());
-            }
-        });
+        egui::ComboBox::from_id_salt("prof_lines")
+            .selected_text(app.ws.profile_lines.as_str())
+            .width(120.0)
+            .show_ui(ui, |ui| {
+                for l in &lines {
+                    ui.selectable_value(&mut app.ws.profile_lines, l.clone(), l.as_str());
+                }
+            })
+            .response
+            .on_hover_text(tl!("Layer"));
         if ui.button(tl!("Along Selected Line")).clicked() {
             app.ws.profile = run(app, "profile.alongLine", json!({"layer": layer, "lines": app.ws.profile_lines}));
         }
@@ -547,26 +559,33 @@ fn summarise(app: &mut RustGisApp, ui: &mut Ui) {
             app.ws.reduce_stat = "mean".into();
         }
         egui::Grid::new("reduce_grid").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-            ui.label(tl!("Statistic"));
-            egui::ComboBox::from_id_salt("reduce_stat").selected_text(app.ws.reduce_stat.as_str()).show_ui(ui, |ui| {
-                for st in ["mean", "min", "max", "sum", "std", "count", "countAbove"] {
-                    ui.selectable_value(&mut app.ws.reduce_stat, st.to_string(), st);
-                }
-            });
+            let input_label = ui.label(tl!("Statistic"));
+            egui::ComboBox::from_id_salt("reduce_stat")
+                .selected_text(app.ws.reduce_stat.as_str())
+                .show_ui(ui, |ui| {
+                    for st in ["mean", "min", "max", "sum", "std", "count", "countAbove"] {
+                        ui.selectable_value(&mut app.ws.reduce_stat, st.to_string(), st);
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
             ui.end_row();
             if app.ws.reduce_stat == "countAbove" {
-                ui.label(tl!("Above"));
-                ui.add(egui::DragValue::new(&mut app.ws.reduce_above).speed(0.5));
+                let input_label = ui.label(tl!("Above"));
+                ui.add(egui::DragValue::new(&mut app.ws.reduce_above).speed(0.5)).labelled_by(input_label.id);
                 ui.end_row();
             }
-            ui.label(tl!("From"));
-            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_start).hint_text("1991-01-01").desired_width(110.0));
+            let input_label = ui.label(tl!("From"));
+            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_start).hint_text("1991-01-01").desired_width(110.0))
+                .labelled_by(input_label.id);
             ui.end_row();
-            ui.label(tl!("To"));
-            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_end).hint_text("2020-12-31").desired_width(110.0));
+            let input_label = ui.label(tl!("To"));
+            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_end).hint_text("2020-12-31").desired_width(110.0))
+                .labelled_by(input_label.id);
             ui.end_row();
-            ui.label(tl!("Months"));
-            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_months).hint_text("12, 1, 2").desired_width(110.0));
+            let input_label = ui.label(tl!("Months"));
+            ui.add(egui::TextEdit::singleline(&mut app.ws.reduce_months).hint_text("12, 1, 2").desired_width(110.0))
+                .labelled_by(input_label.id);
             ui.end_row();
         });
         if ui.button(tl!("Summarise")).clicked() {
@@ -644,11 +663,15 @@ pub fn time_series(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if !layers.contains(&app.ws.series_layer) {
         app.ws.series_layer = layers.first().cloned().unwrap_or_default();
     }
-    egui::ComboBox::from_id_salt("series_layer").selected_text(app.ws.series_layer.as_str()).show_ui(ui, |ui| {
-        for l in &layers {
-            ui.selectable_value(&mut app.ws.series_layer, l.clone(), l.as_str());
-        }
-    });
+    egui::ComboBox::from_id_salt("series_layer")
+        .selected_text(app.ws.series_layer.as_str())
+        .show_ui(ui, |ui| {
+            for l in &layers {
+                ui.selectable_value(&mut app.ws.series_layer, l.clone(), l.as_str());
+            }
+        })
+        .response
+        .on_hover_text(tl!("Layer"));
     ui.horizontal_wrapped(|ui| {
         let active = app.workflow.pick.as_ref().is_some_and(|p| p.purpose == "ts_point");
         if ui.selectable_label(active, tl!("Pick a Point")).clicked() {
@@ -1053,17 +1076,13 @@ mod tests {
         app.workflow.pick =
             Some(crate::analysispane::Pick { purpose: "ts_point", needed: 1, points: vec![rustgis_engine::geom::Coord::new(1.0, 30.0)] });
         // Without the interface fonts (`theme::install_fonts`) egui's faces have no "●".
-        let mut h = egui_kittest::Harness::builder()
-            .allow_missing_glyphs()
-            .with_accessibility_check(false)
-            .with_size(egui::vec2(420.0, 600.0))
-            .build_ui_state(
-                |ui, app: &mut RustGisApp| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    time_series(app, ui, &t);
-                },
-                app,
-            );
+        let mut h = egui_kittest::Harness::builder().allow_missing_glyphs().with_size(egui::vec2(420.0, 600.0)).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let t = crate::theme::Tokens::get(ui.ctx());
+                time_series(app, ui, &t);
+            },
+            app,
+        );
         h.run_steps(3);
         assert_eq!(h.state().ws.series_layer, "air");
         assert_eq!(h.state().ws.series.len(), 1);

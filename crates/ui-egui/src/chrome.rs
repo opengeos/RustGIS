@@ -688,6 +688,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.addUrl" => Command("ui.addUrl"),
         "service.add" | "service.import" => Command("ui.addService"),
         "connection.new" => Command("ui.connection"),
+        "connection.resolveS3" => Command("ui.s3Connections"),
         "layer.addSql" => Pane(RightPane::Sql),
         "layer.addDatabase" => Dialog("addDatabase"),
         "layer.addZarr" => Command("ui.addZarr"),
@@ -714,6 +715,8 @@ fn search_action(id: &str) -> Option<SearchAction> {
         }
         "style.add" => OpenItem("styles"),
         "style.import" => OpenItem("importStyles"),
+        "style.importQgis" => OpenItem("qgisStyle"),
+        "project.importQgis" => OpenItem("qgisProject"),
         "style.save" => SaveItem("styles"),
         "ramp.add" => OpenItem("ramps"),
         "ramp.save" => SaveItem("ramps"),
@@ -1199,7 +1202,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let mut app = RustGisApp::with_sample();
         app.run("labels.style", serde_json::json!({"layer": "Cities", "size": 20})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_accessibility_check(false).with_size(vec2(500.0, 700.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(
             |ui, app: &mut RustGisApp| {
                 let ctx = ui.ctx().clone();
                 shortcuts(app, &ctx);

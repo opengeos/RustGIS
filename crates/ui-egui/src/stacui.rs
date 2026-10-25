@@ -741,7 +741,9 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                             api_changed = true;
                         }
                     }
-                });
+                })
+                .response
+                .on_hover_text(tl!("Catalog"));
             // A catalog typed in is browsed with Browse, from its top.
             if ui.add(egui::TextEdit::singleline(&mut st.api).desired_width(ui.available_width().max(80.0))).changed() {
                 drop_listing(st);
@@ -755,19 +757,26 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                 // Its text is cut to the room left beside Browse.
                 let w = (ui.available_width() - 110.0).max(120.0);
                 ui.allocate_ui(vec2(w, 30.0), |ui| {
-                    egui::ComboBox::from_id_salt("stac_node").truncate().selected_text(shown).width(w).height(360.0).show_ui(ui, |ui| {
-                        for (i, (title, _)) in st.trail.iter().enumerate() {
-                            let title = if title.is_empty() { tl!("all of it").to_string() } else { title.clone() };
-                            if ui.selectable_label(false, format!("↑ {title}")).clicked() {
-                                go_up = Some(i);
+                    egui::ComboBox::from_id_salt("stac_node")
+                        .truncate()
+                        .selected_text(shown)
+                        .width(w)
+                        .height(360.0)
+                        .show_ui(ui, |ui| {
+                            for (i, (title, _)) in st.trail.iter().enumerate() {
+                                let title = if title.is_empty() { tl!("all of it").to_string() } else { title.clone() };
+                                if ui.selectable_label(false, format!("↑ {title}")).clicked() {
+                                    go_up = Some(i);
+                                }
                             }
-                        }
-                        for c in &st.children {
-                            if ui.selectable_label(false, &c.title).on_hover_text(&c.url).clicked() {
-                                go_to = Some((c.title.clone(), c.url.clone()));
+                            for c in &st.children {
+                                if ui.selectable_label(false, &c.title).on_hover_text(&c.url).clicked() {
+                                    go_to = Some((c.title.clone(), c.url.clone()));
+                                }
                             }
-                        }
-                    });
+                        })
+                        .response
+                        .on_hover_text(tl!("Catalog"));
                 });
                 list = ui.add_enabled(!busy, egui::Button::new(tl!("Browse"))).clicked();
             });
@@ -785,16 +794,20 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     let shown = if st.collection.is_empty() { tl!("any").to_string() } else { st.collection.clone() };
                     let w = (ui.available_width() - 110.0).max(100.0);
                     ui.allocate_ui(vec2(w, 30.0), |ui| {
-                        egui::ComboBox::from_id_salt("stac_collection").truncate().selected_text(shown).width(w).height(320.0).show_ui(
-                            ui,
-                            |ui| {
+                        egui::ComboBox::from_id_salt("stac_collection")
+                            .truncate()
+                            .selected_text(shown)
+                            .width(w)
+                            .height(320.0)
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut st.collection, String::new(), tl!("any"));
                                 for (id, title) in &st.collections {
                                     let label = if title.is_empty() { id.clone() } else { format!("{id} — {title}") };
                                     ui.selectable_value(&mut st.collection, id.clone(), label);
                                 }
-                            },
-                        );
+                            })
+                            .response
+                            .on_hover_text(tl!("Collection"));
                     });
                 }
                 list = ui.add_enabled(!busy, egui::Button::new(tl!("Collections"))).clicked();
@@ -808,12 +821,14 @@ pub fn dialog(app: &mut RustGisApp, ui: &mut egui::Ui) {
                     .hint_text("2024-06-01")
                     .desired_width(((ui.available_width() - 30.0) / 2.0).clamp(70.0, 110.0)),
             );
-            ui.label("–");
-            ui.add(egui::TextEdit::singleline(&mut st.to).hint_text("2024-06-30").desired_width(ui.available_width().clamp(70.0, 110.0)));
+            let input_label = ui.label("–");
+            ui.add(egui::TextEdit::singleline(&mut st.to).hint_text("2024-06-30").desired_width(ui.available_width().clamp(70.0, 110.0)))
+                .labelled_by(input_label.id);
         });
         ui.end_row();
-        ui.label(tl!("Most cloud cover (%)"));
-        ui.add(egui::TextEdit::singleline(&mut st.max_cloud).hint_text(tl!("any")).desired_width(ui.available_width().clamp(70.0, 110.0)));
+        let input_label = ui.label(tl!("Most cloud cover (%)"));
+        ui.add(egui::TextEdit::singleline(&mut st.max_cloud).hint_text(tl!("any")).desired_width(ui.available_width().clamp(70.0, 110.0)))
+            .labelled_by(input_label.id);
         ui.end_row();
         if is_static && (st.preset == Some(Preset::Vantor) || !st.phase.is_empty()) {
             ui.label(tl!("Phase"));
@@ -913,11 +928,16 @@ fn cube_row(app: &mut RustGisApp, ui: &mut egui::Ui, busy: bool) {
     }
     let mut add = false;
     ui.horizontal_wrapped(|ui| {
-        egui::ComboBox::from_id_salt("stac_cube_asset").selected_text(st.cube_asset.as_str()).width(110.0).show_ui(ui, |ui| {
-            for k in &keys {
-                ui.selectable_value(&mut st.cube_asset, k.clone(), k.as_str());
-            }
-        });
+        egui::ComboBox::from_id_salt("stac_cube_asset")
+            .selected_text(st.cube_asset.as_str())
+            .width(110.0)
+            .show_ui(ui, |ui| {
+                for k in &keys {
+                    ui.selectable_value(&mut st.cube_asset, k.clone(), k.as_str());
+                }
+            })
+            .response
+            .on_hover_text(tl!("Asset"));
         ui.add(egui::TextEdit::singleline(&mut st.cube_range).hint_text(tl!("range: 0, 0.9")).desired_width(90.0)).on_hover_text(tl!(
             "The values shown from black to white, the same for every date and tile (the band's own units). Empty: each file's own stretch."
         ));
@@ -1073,12 +1093,18 @@ fn results(app: &mut RustGisApp, ui: &mut egui::Ui) {
                                 zoom = Some(i);
                             }
                             if let Some(key) = st.chosen.get_mut(i) {
-                                egui::ComboBox::from_id_salt(("stac_asset", i)).selected_text(key.clone()).width(90.0).show_ui(ui, |ui| {
-                                    for a in &item.assets {
-                                        let label = if a.title.is_empty() { a.key.clone() } else { format!("{} — {}", a.key, a.title) };
-                                        ui.selectable_value(key, a.key.clone(), label);
-                                    }
-                                });
+                                egui::ComboBox::from_id_salt(("stac_asset", i))
+                                    .selected_text(key.clone())
+                                    .width(90.0)
+                                    .show_ui(ui, |ui| {
+                                        for a in &item.assets {
+                                            let label =
+                                                if a.title.is_empty() { a.key.clone() } else { format!("{} — {}", a.key, a.title) };
+                                            ui.selectable_value(key, a.key.clone(), label);
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(tl!("Asset"));
                             }
                             if ui.button(tl!("Add")).clicked() {
                                 add = Some(i);
@@ -1205,7 +1231,6 @@ mod tests {
         app.ui.stac.api = "https://one.example/stac".into();
         app.ui.stac.waiting = Some((Asked::Collections("https://one.example/stac".into()), Slot::default()));
         let mut h = egui_kittest::Harness::builder()
-            .with_accessibility_check(false)
             .with_size(egui::vec2(900.0, 700.0))
             .build_ui_state(|ui, app: &mut RustGisApp| dialog(app, ui), app);
         h.step();

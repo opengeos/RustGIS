@@ -9,7 +9,7 @@ by `cargo xtask notices`.
 Apache License 2.0
 Used by: a5, ab_glyph, ab_glyph_rasterizer, accesskit, accesskit_atspi_common, accesskit_consumer,
 accesskit_macos, accesskit_unix, accesskit_windows, accesskit_winit, aes, ahash, allocator-api2,
-approx, arc-swap, arrayvec, as-raw-xcb-connection, async-channel, async-executor, async-io,
+approx, arboard, arc-swap, arrayvec, as-raw-xcb-connection, async-channel, async-executor, async-io,
 async-lock, async-process, async-recursion, async-signal, async-task, async-trait, atomic-waker,
 atspi, atspi-common, atspi-proxies, autocfg, aws-lc-sys, base64, bit-set, bit-vec, bitflags,
 block-buffer, block-padding, blocking, btoi, bufstream, bumpalo, bytemuck, bytemuck_derive, cbc, cc,
@@ -20,20 +20,20 @@ crossbeam-epoch, crossbeam-queue, crossbeam-utils, crypto-common, ctutils, der, 
 derive_utils, digest, dispatch2, displaydoc, document-features, downcast-rs, dunce, ecolor, eframe,
 egui, egui-wgpu, egui-winit, egui_extras, either, emath, encoding_rs, enum-map, enum-map-derive,
 epaint, equivalent, errno, euclid, event-listener, event-listener-strategy, fastrand, fdeflate,
-fearless_simd, filetime, find-msvc-tools, flagset, flatbuffers, flate2, form_urlencoded,
-futures-lite, futures-timer, geo, geo-traits, geo-types, geozero, gethostname, gif, gl_generator,
-glow, guillotiere, half, hash32, hashbrown, hashlink, heapless, heck, hkdf, hmac, httparse,
-hybrid-array, i_overlay, idna, idna_adapter, image, image-webp, indexmap, inout, io-enum, itertools,
-itoa, jobserver, js-sys, khronos-egl, khronos_api, kurbo, laz, lazy_static, leb128fmt, libc,
-linebender_resource_handle, linux-raw-sys, litrs, lock_api, log, lyon, lyon_algorithms, lyon_geom,
-lyon_path, lyon_tessellation, md-5, md5, miniz_oxide, multiversion_no_op, mysql, mysql_common, naga,
-naga-types, named_pipe, nohash-hasher, num, num-bigint, num-complex, num-conv, num-integer,
-num-iter, num-rational, num-traits, objc2-app-kit, objc2-core-foundation, objc2-core-graphics,
-objc2-metal, objc2-quartz-core, objc2-system-configuration, once_cell, openssl-probe,
-ordered-stream, owned_ttf_parser, parking, parking_lot, parking_lot_core, parquet, peniko,
-percent-encoding, pin-project, pin-project-internal, pin-project-lite, piper, pkg-config, png,
-polling, pollster, polycool, postgres, postgres-protocol, postgres-types, presser, proc-macro2,
-profiling, proj4rs, proj4rs-geodesic, pyo3, pyo3-build-config, pyo3-ffi, pyo3-macros,
+fearless_simd, filetime, find-msvc-tools, fixedbitset, flagset, flatbuffers, flate2,
+form_urlencoded, futures-lite, futures-timer, geo, geo-traits, geo-types, geozero, gethostname, gif,
+gl_generator, glow, guillotiere, half, hash32, hashbrown, hashlink, heapless, heck, hkdf, hmac,
+httparse, hybrid-array, i_overlay, idna, idna_adapter, image, image-webp, indexmap, inout, io-enum,
+itertools, itoa, jobserver, js-sys, khronos-egl, khronos_api, kurbo, laz, lazy_static, leb128fmt,
+libc, linebender_resource_handle, linux-raw-sys, litrs, lock_api, log, lyon, lyon_algorithms,
+lyon_geom, lyon_path, lyon_tessellation, md-5, md5, miniz_oxide, multiversion_no_op, mysql,
+mysql_common, naga, naga-types, named_pipe, nohash-hasher, num, num-bigint, num-complex, num-conv,
+num-integer, num-iter, num-rational, num-traits, objc2-app-kit, objc2-core-foundation,
+objc2-core-graphics, objc2-metal, objc2-quartz-core, objc2-system-configuration, once_cell,
+openssl-probe, ordered-stream, owned_ttf_parser, parking, parking_lot, parking_lot_core, parquet,
+peniko, percent-encoding, petgraph, pin-project, pin-project-internal, pin-project-lite, piper,
+pkg-config, png, polling, pollster, polycool, postgres, postgres-protocol, postgres-types, presser,
+proc-macro2, profiling, proj4rs, proj4rs-geodesic, pyo3, pyo3-build-config, pyo3-ffi, pyo3-macros,
 pyo3-macros-backend, quote, rand, range-alloc, raw-window-handle, raw-window-metal, rayon,
 rayon-core, regex, regex-automata, regex-syntax, renderdoc-sys, ring, robust, roxmltree, rstar,
 rustc-hash, rustc_version, rustix, rustls, rustls-native-certs, rustls-pemfile, rustversion, ryu,
@@ -48,7 +48,8 @@ vello_common, vello_cpu, version_check, wasm-bindgen, wasm-bindgen-futures, wasm
 wasm-bindgen-macro-support, wasm-bindgen-shared, wasm-encoder, wasmi, wasmi_collections, wasmi_core,
 wasmi_ir, wasmparser, wast, wat, web-sys, weezl, wgpu, wgpu-core, wgpu-core-deps-apple,
 wgpu-core-deps-wasm, wgpu-core-deps-windows-linux-android, wgpu-hal, wgpu-naga-bridge, wgpu-types,
-whoami, winauth, wkt, x11rb, x11rb-protocol, x509-cert, xattr, zeroize, zune-core, zune-jpeg
+whoami, winauth, wkt, wl-clipboard-rs, x11rb, x11rb-protocol, x509-cert, xattr, zeroize, zune-core,
+zune-jpeg
 ====================================================================================================
 
                                  Apache License
@@ -8084,6 +8085,35 @@ AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
 OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ====================================================================================================
+Boost Software License 1.0
+Used by: clipboard-win, error-code
+====================================================================================================
+
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of the software and accompanying documentation covered by
+this license (the "Software") to use, reproduce, display, distribute,
+execute, and transmit the Software, and to prepare derivative works of the
+Software, and to permit third-parties to whom the Software is furnished to
+do so, all subject to the following:
+
+The copyright notices in the Software and this entire statement, including
+the above license grant, this restriction and the following disclaimer,
+must be included in all copies of the Software, in whole or in part, and
+all derivative works of the Software, unless such copies or derivative
+works are solely in the form of machine-executable object code generated by
+a source language processor.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+====================================================================================================
 Community Data License Agreement Permissive 2.0
 Used by: webpki-roots
 ====================================================================================================
@@ -9677,6 +9707,32 @@ THE SOFTWARE.
 
 ====================================================================================================
 MIT License
+Used by: nom
+====================================================================================================
+
+Copyright (c) 2014-2019 Geoffroy Couprie
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+====================================================================================================
+MIT License
 Used by: ordered-float
 ====================================================================================================
 
@@ -9705,6 +9761,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+====================================================================================================
+MIT License
+Used by: os_pipe
+====================================================================================================
+
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
 ====================================================================================================
 MIT License
@@ -9994,6 +10075,31 @@ DEALINGS IN THE SOFTWARE.
 
 ====================================================================================================
 MIT License
+Used by: smithay-clipboard
+====================================================================================================
+
+Copyright (c) 2018 Lucas Timmins & Victor Berger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+====================================================================================================
+MIT License
 Used by: spin, tracing-core, zip
 ====================================================================================================
 
@@ -10198,6 +10304,33 @@ DEALINGS IN THE SOFTWARE.
 
 ====================================================================================================
 MIT License
+Used by: tree_magic_mini
+====================================================================================================
+
+MIT License
+
+Copyright (c) 2017 Aaron Hancock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+====================================================================================================
+MIT License
 Used by: twox-hash
 ====================================================================================================
 
@@ -10279,8 +10412,9 @@ SOFTWARE.
 
 ====================================================================================================
 MIT License
-Used by: wayland-backend, wayland-client, wayland-cursor, wayland-protocols, wayland-protocols-plasma,
-wayland-protocols-wlr, wayland-scanner, wayland-sys
+Used by: wayland-backend, wayland-client, wayland-cursor, wayland-protocols, wayland-protocols-experimental,
+wayland-protocols-misc, wayland-protocols-plasma, wayland-protocols-wlr, wayland-scanner,
+wayland-sys
 ====================================================================================================
 
 Copyright (c) 2015 Elinor Berger
