@@ -949,6 +949,28 @@ fn with_raster() -> Session {
     s
 }
 
+/// A QGIS raster style colours a raster layer; one reading a band the raster hasn't is noted and
+/// leaves it as it was.
+#[test]
+fn a_qgis_raster_style_colours_a_raster() {
+    let mut s = with_raster();
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="multibandcolor" redBand="3" greenBand="2" blueBand="1" opacity="0.5"/>
+        <brightnesscontrast brightness="0" contrast="25" gamma="1"/></pipe></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert_eq!(out["notes"], json!([]));
+    let l = s.map().layer_by_name("scene").unwrap();
+    let st = &l.raster.as_ref().unwrap().style;
+    assert_eq!(
+        (&st.renderer, st.contrast, l.transparency),
+        (&rustgis_map::raster::RasterRenderer::Rgb { red: 2, green: 1, blue: 0 }, 25.0, 50.0)
+    );
+    let before = st.clone();
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="5"/></pipe></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("band 5 of a raster with 3"), "{out}");
+    assert_eq!(s.map().layer_by_name("scene").unwrap().raster.as_ref().unwrap().style, before);
+}
+
 /// The parts of a large GeoTIFF the web app reads (#140), opened and kept in a project: a
 /// cloud-optimised file read a part at a time, as `parts.rs` reads a picked file.
 #[test]
