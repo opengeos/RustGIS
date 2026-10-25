@@ -1067,6 +1067,9 @@ pub fn snap_at(s: &mut Session, c: Coord) -> Option<(Coord, &'static str)> {
     snap_except(s, c, None)
 }
 
+/// Point features and MultiPoint members are vertex targets only, never edges or line ends.
+/// Points and line ends take priority over edges. Equal distances keep the original layer,
+/// row and member order.
 /// [`snap_at`], leaving out one feature (layer id, row): a vertex being dragged doesn't snap to
 /// the shape it is changing.
 pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Option<(Coord, &'static str)> {
@@ -1102,8 +1105,15 @@ pub fn snap_except(s: &mut Session, c: Coord, skip: Option<(u32, usize)>) -> Opt
                 Geometry::Polygon(polys) => polys.iter().flatten().collect(),
                 _ => Vec::new(),
             };
-            if let Geometry::Point(pt) = g {
-                consider((pt.x - m.x).powi(2) + (pt.y - m.y).powi(2), *pt, "vertex");
+            if sn.vertex {
+                let points: &[Coord] = match g {
+                    Geometry::Point(pt) => std::slice::from_ref(pt),
+                    Geometry::MultiPoint(points) => points,
+                    _ => &[],
+                };
+                for pt in points {
+                    consider((pt.x - m.x).powi(2) + (pt.y - m.y).powi(2), *pt, "vertex");
+                }
             }
             for path in paths {
                 if sn.end && matches!(g, Geometry::Line(_)) {
