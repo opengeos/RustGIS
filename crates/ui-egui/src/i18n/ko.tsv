@@ -34,7 +34,9 @@ A field (known once the model runs)	필드(모델을 실행한 후에 알 수 �
 A flat scene centred on the view (azimuthal equidistant).	뷰를 중심으로 한 평면 장면(방위 정거도법).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens 서버의 데이터 세트를 피처로 읽습니다(각각 처음 1,000개).
 A globe scene.	지구본 장면.
+A hidden class leaves its features unlabelled.	숨긴 클래스의 피처에는 라벨이 표시되지 않습니다.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	위도와 경도(40.7, -74.0 또는 40°42'N 74°0'W), 레이어, 북마크 또는 레이어 테이블의 값. Enter는 강조 표시된 행을 선택하고, 장소 검색은 텍스트를 장소로 찾습니다
+A layer keeps at most {max} label classes besides Default.	레이어에는 기본값 외에 최대 {max}개의 라벨 클래스를 유지할 수 있습니다.
 A layer the model reads	모델이 읽는 레이어
 A line for the Script pane	스크립트 창용 한 줄
 A magnifying lens that follows the pointer.	포인터를 따라 움직이는 돋보기.
@@ -92,6 +94,7 @@ Add\nData	데이터\n추가
 Add ({n})	추가({n})
 Add a bar chart of a layer's numeric field.	레이어의 숫자 필드로 막대 차트를 추가합니다.
 Add a circle.	원을 추가합니다.
+Add a class with this one's field, text symbol, placement and range.	이 클래스의 필드, 텍스트 심볼, 배치 및 범위를 사용하는 클래스를 추가합니다.
 Add a colorbar of a raster layer's colour scale in the map frame.	맵 프레임에 있는 래스터 레이어 색상 척도의 컬러바를 추가합니다.
 Add a description.	설명을 추가합니다.
 Add a field.	필드를 추가합니다.
@@ -298,6 +301,7 @@ Apply Style	스타일 적용
 Apply to layers	레이어에 적용
 Apply to the selected layer	선택한 레이어에 적용
 Approve agents' actions without asking	에이전트 작업을 묻지 않고 승인
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	근사 지역 거리를 기준으로 선택합니다. 계속 적용되는 지리적 사전 필터로 인해 윤곽선 근처의 피처가 제외될 수 있습니다.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS 포털
@@ -519,6 +523,7 @@ Choose File…	파일 선택…
 Choose how the flat map lays out the Earth.	평면 지도가 지구를 표현하는 방식을 선택합니다.
 Choose how the layer is drawn.	레이어를 그리는 방식을 선택합니다.
 Choose how the raster is drawn.	래스터를 그리는 방법을 선택합니다.
+Choose polygon, lasso, or radius selection.	폴리곤, 올가미 또는 반경 선택을 고릅니다.
 Choose Project…	프로젝트 선택…
 Choose S3 Connection	S3 연결 선택
 Choose S3 connection	S3 연결 선택
@@ -534,6 +539,7 @@ Circle Radius (km)	원 반경(km)
 Class	클래스
 Class color	클래스 색상
 Class Style	클래스 스타일
+Class {n}	클래스 {n}
 Class {n} up to	클래스 {n} 상한
 Classes	클래스
 Classes from training polygons.	훈련 폴리곤으로 클래스를 만듭니다.
@@ -591,6 +597,7 @@ Click to place a point graphic.	클릭하여 포인트 그래픽을 배치합니
 Click to select the node	클릭하여 노드 선택
 Click to select, double-click to add, right-click for more	클릭하면 선택, 두 번 클릭하면 추가, 마우스 오른쪽 버튼을 클릭하면 추가 작업
 Click to switch between decimal degrees and DMS	클릭하여 십진수 도와 도분초(DMS) 간 전환
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	정점 클릭 · 시작점 클릭 또는 두 번 클릭하여 선택 · Shift로 추가 · Ctrl/Cmd로 제거 · Esc로 취소
 Clip	자르기
 Clip a raster to the view, or resample it.	래스터를 뷰에 맞춰 자르거나 리샘플링합니다.
 Clip Features	피처 자르기
@@ -798,6 +805,7 @@ Deep Learning\nTools	딥러닝\n도구
 Deep Learning Package	딥러닝 패키지
 Deep Learning Tools	딥러닝 도구
 Default	기본값
+Default can't be removed. You can rename or hide it.	기본값은 제거할 수 없습니다. 이름을 바꾸거나 숨길 수 있습니다.
 Define Projection	투영 정의
 Define Projection…	투영 정의…
 Definition\nQuery	정의\n쿼리
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	맵 프레임�
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	사각형을 드래그한 다음 그 안에 배치할 PNG 또는 JPEG 이미지를 선택합니다.
 Drag a tool from the palette to start building, or add an input layer.	팔레트에서 도구를 끌어 만들기 시작하거나 입력 레이어를 추가하세요.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	버텍스를 드래그하여 이동 · 가장자리를 클릭하여 버텍스 추가 · Delete로 선택한 버텍스 삭제
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	영역 드래그 · 놓아서 선택 · Shift로 추가 · Ctrl/Cmd로 제거 · Esc로 취소
 Drag from a node's right port to another node's left port to connect them.	노드의 오른쪽 포트에서 다른 노드의 왼쪽 포트로 끌어 연결합니다.
 Drag from the centre out	중심에서 바깥으로 드래그
 Drag from the centre to draw a circle.	중심에서 드래그하여 원을 그립니다.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	중심에서 드래그 · 놓아서 선택 · Shift로 추가 · Ctrl/Cmd로 제거 · Esc로 취소
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	맵 프레임을 옮기는 대신 프레임 안을 드래그하여 지도를 이동하고 휠을 돌려 확대/축소합니다.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	맵 프레임을 옮기는 대신 프레임 안을 드래그하여 지도를 이동하고 휠을 돌려 확대/축소합니다. Esc로 중지합니다.
 Drag the frame's outline · Esc to stop	프레임의 외곽선 드래그 · Esc로 중지
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	예: 0, 255, -9999
 e.g. continent = 'Europe'	예: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	예: pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	예: pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	각 클래스는 자체 절과 일치하는 피처에 라벨을 표시하므로 하나의 피처가 여러 클래스의 라벨을 받을 수 있습니다.
 Each geoprocessing run becomes a step, chained by its outputs	각 지오프로세싱 실행이 하나의 단계가 되어 출력으로 연결됩니다
 Earth Index has no points in the view	Earth Index에 뷰 안의 포인트가 없습니다
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	보간 속성
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	레이어의 기본 좌표를 이 좌표계로 해석합니다. 그려지는 위치가 바뀌며 원본 파일은 변경되지 않습니다.
 Interval	간격
 invalid child id	잘못된 자식 프로세스 ID
+Invalid selection outline · draw a smaller area	잘못된 선택 윤곽선 · 더 작은 영역을 그리세요
+Invalid selection outline · draw a smaller radius	잘못된 선택 윤곽선 · 더 작은 반경으로 그리세요
 Invalid: {error}	유효하지 않음: {error}
 Invert	반전
 Invert color scheme	색상표 반전
@@ -1551,6 +1564,7 @@ Labels	라벨
 labels are drawn for feature layers, not rasters	라벨은 래스터가 아닌 피처 레이어에 그려집니다
 Labels are drawn for feature layers, not rasters.	라벨은 래스터가 아닌 피처 레이어에 그려집니다.
 Labels are off for this layer: the clause applies once they are on.	이 레이어의 라벨이 꺼져 있습니다. 라벨을 켜면 절이 적용됩니다.
+Labels of the classes listed first are placed first when they compete for room.	배치 공간이 겹치면 목록의 앞쪽 클래스 라벨이 먼저 배치됩니다.
 Lagoon	라군
 Lambert Conformal Conic	램버트 정각 원추도법
 Lambert Cylindrical Equal Area	램버트 원통 정적도법
@@ -2100,7 +2114,6 @@ Origin key	출발지 키
 Ortho Mapping	정사 매핑
 Other	기타
 Other Data	기타 데이터
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	이 레이어의 다른 라벨 클래스(명령으로 생성): {n}. 각 클래스는 자체 절과 일치하는 피처에 라벨을 표시하므로, 한 피처에 여러 클래스의 라벨이 붙을 수 있습니다.
 Out Beyond	다음보다 축소 시
 Outline	외곽선
 Outline another frame's extent in this map frame.	이 맵 프레임에 다른 프레임의 범위를 외곽선으로 표시합니다.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	선택하여 붙여넣기(새 레이어로)
 paste your key	키를 붙여넣으세요
 Pause	일시 중지
 Pause.	일시 중지합니다.
+PDF	PDF
 PDF or PNG	PDF 또는 PNG
+PDF, PNG or SVG	PDF, PNG 또는 SVG
 Percent Clip	백분율 클립
 Perceptually Uniform	지각적 균일
 Performance	성능
@@ -2315,6 +2330,7 @@ Quick actions	빠른 작업
 Quick Analysis	빠른 분석
 radius km	반경 km
 radius m	반경 m
+Radius {distance} (approximate)	반경 {distance}(근사)
 Rain	비
 Raise polygons by a height or a field.	높이 또는 필드 값으로 폴리곤을 돌출시킵니다.
 Raise Priority	우선순위 높이기
@@ -2679,6 +2695,9 @@ Select an element to format it.	서식을 지정할 요소를 선택하세요.
 Select By\nAttributes	속성으로\n선택
 Select By\nLocation	위치로\n선택
 Select By Attributes	속성으로 선택
+Select by Lasso	올가미로 선택
+Select by Polygon	폴리곤으로 선택
+Select by Radius	반경으로 선택
 Select every feature.	모든 피처를 선택합니다.
 Select features by their spatial relationship.	공간 관계로 피처를 선택합니다.
 Select features that intersect another layer.	다른 레이어와 교차하는 피처를 선택합니다.
@@ -2687,6 +2706,7 @@ Select Layer	레이어 선택
 Select Layer By Attribute	속성으로 레이어 선택
 Select Layer By Location	위치로 레이어 선택
 Select one text on the map, or a layout element, to format it.	서식을 지정하려면 지도의 텍스트 하나 또는 레이아웃 요소 하나를 선택하세요.
+Select options	선택 옵션
 Select Related	관련 항목 선택
 Select Rows	행 선택
 Select rows with a SQL expression.	SQL 표현식으로 행을 선택합니다.
@@ -2702,6 +2722,8 @@ Selected only	선택한 항목만
 Selected records only	선택한 레코드만
 Selecting Features	피처 선택
 Selection	선택
+Selection outline is outside the supported map surface; draw a smaller area.	선택 윤곽선이 지원되는 지도 영역 밖에 있습니다. 더 작은 영역을 그리세요.
+Selection outline is too complex; draw a simpler area.	선택 윤곽선이 너무 복잡합니다. 더 단순한 영역을 그리세요.
 Selection Type	선택 유형
 Selects features that intersect features in another layer.	다른 레이어의 피처와 교차하는 피처를 선택합니다.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL WHERE 절로 피처를 선택합니다. 예: pop_est > 1000000.

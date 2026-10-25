@@ -34,7 +34,9 @@ A field (known once the model runs)	フィールド (モデルの実行後に判
 A flat scene centred on the view (azimuthal equidistant).	ビューを中心とした平面シーン (正距方位図法)。
 A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens サーバーのデータセットをフィーチャとして読み込みます (各データセットの最初の 1,000 件)。
 A globe scene.	地球儀シーン。
+A hidden class leaves its features unlabelled.	非表示のクラスに属するフィーチャにはラベルが付きません。
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	緯度経度 (40.7, -74.0 または 40°42'N 74°0'W)、レイヤー、ブックマーク、またはレイヤーのテーブル内の値。Enter で強調表示された行を選択し、[場所を検索] でテキストを場所として検索します
+A layer keeps at most {max} label classes besides Default.	レイヤーには「既定」のほかに最大 {max} 個のラベル クラスを保持できます。
 A layer the model reads	モデルが読み込むレイヤー
 A line for the Script pane	スクリプト ウィンドウ用の 1 行
 A magnifying lens that follows the pointer.	ポインターに追従する拡大鏡。
@@ -92,6 +94,7 @@ Add\nData	データの\n追加
 Add ({n})	追加 ({n})
 Add a bar chart of a layer's numeric field.	レイヤーの数値フィールドの棒グラフを追加します。
 Add a circle.	円を追加します。
+Add a class with this one's field, text symbol, placement and range.	このクラスのフィールド、テキスト シンボル、配置、範囲を引き継いだクラスを追加します。
 Add a colorbar of a raster layer's colour scale in the map frame.	マップ フレーム内のラスター レイヤーのカラー スケールを示すカラーバーを追加します。
 Add a description.	説明を追加します。
 Add a field.	フィールドを追加します。
@@ -298,6 +301,7 @@ Apply Style	スタイルの適用
 Apply to layers	レイヤーに適用
 Apply to the selected layer	選択したレイヤーに適用
 Approve agents' actions without asking	エージェントの操作を確認なしで承認する
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	ローカル距離の近似による選択です。引き続き適用される地理的な事前フィルターにより、輪郭付近のフィーチャが除外される場合があります。
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS ポータル
@@ -519,6 +523,7 @@ Choose File…	ファイルを選択…
 Choose how the flat map lays out the Earth.	平面マップで地球をどのように表すかを選択します。
 Choose how the layer is drawn.	レイヤーの描画方法を選択します。
 Choose how the raster is drawn.	ラスターの描画方法を選択します。
+Choose polygon, lasso, or radius selection.	ポリゴン、投げ縄、または半径による選択を選びます。
 Choose Project…	プロジェクトを選択…
 Choose S3 Connection	S3 接続を選択
 Choose S3 connection	S3 接続を選択
@@ -534,6 +539,7 @@ Circle Radius (km)	円の半径 (km)
 Class	クラス
 Class color	クラスの色
 Class Style	クラス スタイル
+Class {n}	クラス {n}
 Class {n} up to	クラス {n} の上限
 Classes	クラス
 Classes from training polygons.	トレーニング ポリゴンからのクラス。
@@ -591,6 +597,7 @@ Click to place a point graphic.	クリックしてポイント グラフィッ�
 Click to select the node	クリックしてノードを選択
 Click to select, double-click to add, right-click for more	クリックで選択、ダブルクリックで追加、右クリックでその他の操作
 Click to switch between decimal degrees and DMS	クリックで十進経緯度と度分秒を切り替え
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	頂点をクリック · 始点をクリックまたはダブルクリックで選択 · Shift で追加 · Ctrl/Cmd で削除 · Esc でキャンセル
 Clip	クリップ
 Clip a raster to the view, or resample it.	ラスターをビューでクリップするか、リサンプリングします。
 Clip Features	フィーチャのクリップ
@@ -798,6 +805,7 @@ Deep Learning\nTools	ディープ ラーニング\nツール
 Deep Learning Package	ディープ ラーニング パッケージ
 Deep Learning Tools	ディープ ラーニング ツール
 Default	既定
+Default can't be removed. You can rename or hide it.	「既定」は削除できません。名前の変更や非表示は可能です。
 Define Projection	投影法を定義
 Define Projection…	投影法を定義…
 Definition\nQuery	定義\nクエリ
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	マップ フ�
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	四角形をドラッグし、そこに配置する PNG または JPEG 画像を選択します。
 Drag a tool from the palette to start building, or add an input layer.	パレットからツールをドラッグして作成を開始するか、入力レイヤーを追加してください。
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	頂点をドラッグして移動 · エッジをクリックで頂点を追加 · Delete で選択した頂点を削除
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	領域をドラッグ · 離して選択 · Shift で追加 · Ctrl/Cmd で削除 · Esc でキャンセル
 Drag from a node's right port to another node's left port to connect them.	ノードの右ポートから別のノードの左ポートへドラッグして接続します。
 Drag from the centre out	中心から外側へドラッグ
 Drag from the centre to draw a circle.	中心からドラッグして円を描画します。
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	中心からドラッグ · 離して選択 · Shift で追加 · Ctrl/Cmd で削除 · Esc でキャンセル
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	マップ フレームを移動する代わりに、フレーム内をドラッグしてマップを画面移動し、ホイールを回してズームします。
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	マップ フレームを移動する代わりに、フレーム内をドラッグしてマップを画面移動し、ホイールを回してズームします。Esc で停止します。
 Drag the frame's outline · Esc to stop	フレームの輪郭をドラッグ · Esc で停止
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	例: 0, 255, -9999
 e.g. continent = 'Europe'	例: continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	例: pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	例: pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	各クラスは自身の句に一致するフィーチャにラベルを付けるため、1 つのフィーチャに複数のクラスからラベルが付くことがあります。
 Each geoprocessing run becomes a step, chained by its outputs	各ジオプロセシングの実行がステップになり、出力によって連結されます
 Earth Index has no points in the view	Earth Index のポイントがビュー内にありません
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	内挿属性
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	レイヤーのネイティブ座標をこの座標系で解釈します。描画される位置が変わりますが、ソース ファイルは変更されません。
 Interval	間隔
 invalid child id	子プロセス ID が無効です
+Invalid selection outline · draw a smaller area	選択範囲の輪郭が無効です · より小さな領域を描画してください
+Invalid selection outline · draw a smaller radius	選択範囲の輪郭が無効です · より小さな半径で描画してください
 Invalid: {error}	無効：{error}
 Invert	反転
 Invert color scheme	配色を反転
@@ -1551,6 +1564,7 @@ Labels	ラベル
 labels are drawn for feature layers, not rasters	ラベルはラスターではなくフィーチャ レイヤーに対して描画されます
 Labels are drawn for feature layers, not rasters.	ラベルはラスターではなくフィーチャ レイヤーに対して描画されます。
 Labels are off for this layer: the clause applies once they are on.	このレイヤーのラベルはオフです: ラベルをオンにすると句が適用されます。
+Labels of the classes listed first are placed first when they compete for room.	配置場所が競合する場合、リストの上にあるクラスのラベルが先に配置されます。
 Lagoon	ラグーン
 Lambert Conformal Conic	ランベルト正角円錐図法
 Lambert Cylindrical Equal Area	ランベルト正積円筒図法
@@ -2100,7 +2114,6 @@ Origin key	出発地キー
 Ortho Mapping	オルソ マッピング
 Other	その他
 Other Data	その他のデータ
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	このレイヤー上のその他のラベル クラス (コマンドで作成): {n}。各クラスは自身の句に一致するフィーチャにラベルを付けるため、1 つのフィーチャに複数のクラスからラベルが付くことがあります。
 Out Beyond	縮小の限界
 Outline	アウトライン
 Outline another frame's extent in this map frame.	このマップ フレームに別のフレームの範囲の輪郭を表示します。
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	形式を選択して貼り付け（新しいレ�
 paste your key	キーを貼り付け
 Pause	一時停止
 Pause.	一時停止します。
+PDF	PDF
 PDF or PNG	PDF または PNG
+PDF, PNG or SVG	PDF、PNG または SVG
 Percent Clip	パーセント クリップ
 Perceptually Uniform	知覚的に均等
 Performance	パフォーマンス
@@ -2315,6 +2330,7 @@ Quick actions	クイック アクション
 Quick Analysis	クイック解析
 radius km	半径 km
 radius m	半径 m
+Radius {distance} (approximate)	半径 {distance}（近似）
 Rain	雨
 Raise polygons by a height or a field.	高さまたはフィールドでポリゴンを押し上げます。
 Raise Priority	優先度を上げる
@@ -2679,6 +2695,9 @@ Select an element to format it.	書式を設定するエレメントを選択し
 Select By\nAttributes	属性検索\nで選択
 Select By\nLocation	空間検索\nで選択
 Select By Attributes	属性検索で選択
+Select by Lasso	投げ縄で選択
+Select by Polygon	ポリゴンで選択
+Select by Radius	半径で選択
 Select every feature.	すべてのフィーチャを選択します。
 Select features by their spatial relationship.	空間的な関係でフィーチャを選択します。
 Select features that intersect another layer.	別のレイヤーと交差するフィーチャを選択します。
@@ -2687,6 +2706,7 @@ Select Layer	レイヤーの選択
 Select Layer By Attribute	属性検索によるレイヤーの選択
 Select Layer By Location	空間検索によるレイヤーの選択
 Select one text on the map, or a layout element, to format it.	書式を設定するには、マップ上のテキストまたはレイアウト エレメントを 1 つ選択してください。
+Select options	選択オプション
 Select Related	関連レコードの選択
 Select Rows	行の選択
 Select rows with a SQL expression.	SQL 式で行を選択します。
@@ -2702,6 +2722,8 @@ Selected only	選択のみ
 Selected records only	選択したレコードのみ
 Selecting Features	フィーチャの選択
 Selection	選択
+Selection outline is outside the supported map surface; draw a smaller area.	選択範囲の輪郭がサポートされるマップ領域の外にあります。より小さな領域を描画してください。
+Selection outline is too complex; draw a simpler area.	選択範囲の輪郭が複雑すぎます。より単純な領域を描画してください。
 Selection Type	選択タイプ
 Selects features that intersect features in another layer.	別のレイヤーのフィーチャと交差するフィーチャを選択します。
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL の WHERE 句でフィーチャを選択します。例: pop_est > 1000000。

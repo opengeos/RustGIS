@@ -34,7 +34,9 @@ A field (known once the model runs)	একটি ফিল্ড (মডেল �
 A flat scene centred on the view (azimuthal equidistant).	দৃশ্যকে কেন্দ্র করে সমতল দৃশ্য (azimuthal equidistant)।
 A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens সার্ভারের ডেটাসেট, feature হিসেবে পড়া হয় (প্রতিটির প্রথম ১,০০০টি)।
 A globe scene.	একটি গ্লোব দৃশ্য।
+A hidden class leaves its features unlabelled.	লুকানো শ্রেণির ফিচারগুলোতে লেবেল দেখানো হয় না।
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	অক্ষাংশ ও দ্রাঘিমাংশ (40.7, -74.0 অথবা 40°42'N 74°0'W), একটি layer, bookmark অথবা layer-এর টেবিলের কোনো মান। Enter চাপলে হাইলাইট করা সারি বেছে নেওয়া হয়; Search places লেখাটিকে স্থানের নাম হিসেবে খোঁজে
+A layer keeps at most {max} label classes besides Default.	ডিফল্ট ছাড়া একটি লেয়ারে সর্বোচ্চ {max}টি লেবেল শ্রেণি থাকতে পারে।
 A layer the model reads	মডেল যে layer পড়ে
 A line for the Script pane	Script প্যানেলের জন্য একটি লাইন
 A magnifying lens that follows the pointer.	পয়েন্টারকে অনুসরণ করে এমন একটি বিবর্ধক কাচ।
@@ -92,6 +94,7 @@ Add\nData	যোগ করুন\nডেটা
 Add ({n})	যোগ করুন ({n})
 Add a bar chart of a layer's numeric field.	একটি layer-এর সংখ্যাসূচক field-এর bar chart যোগ করুন।
 Add a circle.	একটি বৃত্ত যোগ করুন।
+Add a class with this one's field, text symbol, placement and range.	এই শ্রেণির ফিল্ড, পাঠ্য প্রতীক, অবস্থান নির্ধারণ ও পরিসর দিয়ে একটি শ্রেণি যোগ করুন।
 Add a colorbar of a raster layer's colour scale in the map frame.	মানচিত্রের frame-এ raster layer-এর রঙের স্কেলের colorbar যোগ করুন।
 Add a description.	একটি বর্ণনা যোগ করুন।
 Add a field.	একটি field যোগ করুন।
@@ -298,6 +301,7 @@ Apply Style	Style প্রয়োগ করুন
 Apply to layers	layer-গুলোতে প্রয়োগ করুন
 Apply to the selected layer	নির্বাচিত layer-এ প্রয়োগ করুন
 Approve agents' actions without asking	না জিজ্ঞেস করে agent-এর কাজ অনুমোদন করুন
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	আনুমানিক স্থানীয় দূরত্ব অনুযায়ী নির্বাচন। বজায় রাখা ভৌগোলিক প্রাথমিক ফিল্টার সীমানার কাছের ফিচার বাদ দিতে পারে।
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS পোর্টাল
@@ -519,6 +523,7 @@ Choose File…	ফাইল বেছে নিন…
 Choose how the flat map lays out the Earth.	সমতল মানচিত্রে পৃথিবী কীভাবে উপস্থাপিত হবে তা বেছে নিন।
 Choose how the layer is drawn.	layer কীভাবে আঁকা হবে তা বেছে নিন।
 Choose how the raster is drawn.	raster কীভাবে আঁকা হবে তা বেছে নিন।
+Choose polygon, lasso, or radius selection.	বহুভুজ, ল্যাসো বা ব্যাসার্ধ দিয়ে নির্বাচন বেছে নিন।
 Choose Project…	প্রজেক্ট বেছে নিন…
 Choose S3 Connection	S3 সংযোগ বেছে নিন
 Choose S3 connection	S3 সংযোগ বেছে নিন
@@ -534,6 +539,7 @@ Circle Radius (km)	বৃত্তের ব্যাসার্ধ (km)
 Class	শ্রেণি
 Class color	শ্রেণির রং
 Class Style	শ্রেণির style
+Class {n}	শ্রেণি {n}
 Class {n} up to	শ্রেণি {n}, সর্বোচ্চ
 Classes	শ্রেণিসমূহ
 Classes from training polygons.	training polygon থেকে শ্রেণিসমূহ।
@@ -591,6 +597,7 @@ Click to place a point graphic.	বিন্দু-গ্রাফিক বস�
 Click to select the node	node নির্বাচন করতে ক্লিক করুন
 Click to select, double-click to add, right-click for more	নির্বাচন করতে একবার ক্লিক, যোগ করতে ডাবল-ক্লিক, আরও বিকল্পের জন্য ডান-ক্লিক
 Click to switch between decimal degrees and DMS	দশমিক ডিগ্রি ও DMS-এর মধ্যে বদলাতে ক্লিক করুন
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	শীর্ষবিন্দুতে ক্লিক করুন · নির্বাচন করতে শুরুর বিন্দুতে ক্লিক বা ডাবল-ক্লিক করুন · Shift যোগ করে · Ctrl/Cmd সরায় · Esc বাতিল করে
 Clip	ক্লিপ
 Clip a raster to the view, or resample it.	দৃশ্যমান অংশে raster clip করুন অথবা resample করুন।
 Clip Features	Feature clip করুন
@@ -798,6 +805,7 @@ Deep Learning\nTools	ডিপ লার্নিং\nটুলস
 Deep Learning Package	Deep Learning প্যাকেজ
 Deep Learning Tools	Deep Learning টুল
 Default	ডিফল্ট
+Default can't be removed. You can rename or hide it.	ডিফল্ট সরানো যায় না। এর নাম বদলাতে বা একে লুকাতে পারেন।
 Define Projection	অভিক্ষেপ নির্ধারণ
 Define Projection…	অভিক্ষেপ নির্ধারণ…
 Definition\nQuery	সংজ্ঞা\nQuery
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	মানচি
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	একটি আয়তক্ষেত্র টানুন, তারপর তার মধ্যে বসানোর জন্য PNG বা JPEG ছবি বেছে নিন।
 Drag a tool from the palette to start building, or add an input layer.	তৈরি শুরু করতে palette থেকে tool টেনে আনুন, অথবা একটি input layer যোগ করুন।
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	vertex সরাতে টানুন · যোগ করতে edge-এ ক্লিক করুন · Delete নির্বাচিত vertex সরিয়ে দেয়
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	একটি এলাকা টেনে আঁকুন · নির্বাচন করতে ছেড়ে দিন · Shift যোগ করে · Ctrl/Cmd সরায় · Esc বাতিল করে
 Drag from a node's right port to another node's left port to connect them.	সংযুক্ত করতে একটি node-এর ডান port থেকে অন্য node-এর বাম port-এ টানুন।
 Drag from the centre out	কেন্দ্র থেকে বাইরের দিকে টানুন
 Drag from the centre to draw a circle.	বৃত্ত আঁকতে কেন্দ্র থেকে টানুন।
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	কেন্দ্র থেকে টানুন · নির্বাচন করতে ছেড়ে দিন · Shift যোগ করে · Ctrl/Cmd সরায় · Esc বাতিল করে
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	frame সরানোর বদলে তার ভেতরে টেনে মানচিত্র pan করুন এবং wheel ঘুরিয়ে zoom করুন।
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	frame সরানোর বদলে তার ভেতরে টেনে মানচিত্র pan করুন এবং wheel ঘুরিয়ে zoom করুন। Esc থামায়।
 Drag the frame's outline · Esc to stop	frame-এর সীমানা টানুন · থামতে Esc
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	যেমন 0, 255, -9999
 e.g. continent = 'Europe'	যেমন continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	যেমন pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	যেমন pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	প্রতিটি শ্রেণি নিজের শর্তের সঙ্গে মেলা ফিচারে লেবেল দেয়, তাই একটি ফিচার একাধিক শ্রেণি থেকে লেবেল পেতে পারে।
 Each geoprocessing run becomes a step, chained by its outputs	প্রতিটি geoprocessing run একটি ধাপে পরিণত হয়, output দিয়ে ধাপগুলো যুক্ত থাকে
 Earth Index has no points in the view	দৃশ্যে Earth Index-এর কোনো বিন্দু নেই
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	ইন্টারপোলেশন অ্যাট্�
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Layer-এর নিজস্ব স্থানাঙ্ক এই স্থানাঙ্ক ব্যবস্থায় ব্যাখ্যা করুন। এতে এটি কোথায় আঁকা হয় তা বদলায়; উৎস file অপরিবর্তিত থাকে।
 Interval	ব্যবধান
 invalid child id	child process-এর ID অবৈধ
+Invalid selection outline · draw a smaller area	নির্বাচনের সীমানা অবৈধ · আরও ছোট এলাকা আঁকুন
+Invalid selection outline · draw a smaller radius	নির্বাচনের সীমানা অবৈধ · আরও ছোট ব্যাসার্ধ আঁকুন
 Invalid: {error}	অবৈধ: {error}
 Invert	উল্টান
 Invert color scheme	রঙের scheme উল্টান
@@ -1551,6 +1564,7 @@ Labels	Label
 labels are drawn for feature layers, not rasters	label raster-এ নয়, feature layer-এ আঁকা হয়
 Labels are drawn for feature layers, not rasters.	Label raster-এ নয়, feature layer-এ আঁকা হয়।
 Labels are off for this layer: the clause applies once they are on.	এই layer-এর label বন্ধ আছে: চালু করলে clause প্রয়োগ হবে।
+Labels of the classes listed first are placed first when they compete for room.	জায়গার জন্য প্রতিযোগিতা হলে তালিকার প্রথম দিকের শ্রেণির লেবেল আগে বসানো হয়।
 Lagoon	লেগুন
 Lambert Conformal Conic	Lambert Conformal Conic
 Lambert Cylindrical Equal Area	Lambert Cylindrical Equal Area
@@ -2100,7 +2114,6 @@ Origin key	উৎপত্তির key
 Ortho Mapping	অর্থো ম্যাপিং
 Other	অন্যান্য
 Other Data	অন্যান্য ডেটা
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	এই layer-এ আরও label class আছে (command দিয়ে তৈরি): {n}। প্রতিটি নিজের clause-এর সঙ্গে মেলা feature-এ label দেয়, তাই একটি feature একাধিক label পেতে পারে।
 Out Beyond	বাইরের দিকে
 Outline	আউটলাইন
 Outline another frame's extent in this map frame.	এই map frame-এ অন্য frame-এর extent-এর outline দেখান।
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	বিশেষভাবে পেস্ট (ন�
 paste your key	আপনার key পেস্ট করুন
 Pause	বিরতি
 Pause.	বিরতি।
+PDF	PDF
 PDF or PNG	PDF বা PNG
+PDF, PNG or SVG	PDF, PNG বা SVG
 Percent Clip	শতাংশ clip
 Perceptually Uniform	অনুভূতিগতভাবে সমান
 Performance	কর্মক্ষমতা
@@ -2315,6 +2330,7 @@ Quick actions	দ্রুত কাজ
 Quick Analysis	দ্রুত বিশ্লেষণ
 radius km	ব্যাসার্ধ km
 radius m	ব্যাসার্ধ m
+Radius {distance} (approximate)	ব্যাসার্ধ {distance} (আনুমানিক)
 Rain	বৃষ্টি
 Raise polygons by a height or a field.	উচ্চতা বা field value দিয়ে polygon উঁচু করুন।
 Raise Priority	অগ্রাধিকার বাড়ান
@@ -2679,6 +2695,9 @@ Select an element to format it.	Format করতে একটি element নি�
 Select By\nAttributes	অ্যাট্রিবিউট অনুসারে\nনির্বাচন
 Select By\nLocation	অবস্থান অনুসারে\nনির্বাচন
 Select By Attributes	Attribute অনুসারে নির্বাচন
+Select by Lasso	ল্যাসো দিয়ে নির্বাচন
+Select by Polygon	বহুভুজ দিয়ে নির্বাচন
+Select by Radius	ব্যাসার্ধ দিয়ে নির্বাচন
 Select every feature.	প্রতিটি feature নির্বাচন করুন।
 Select features by their spatial relationship.	স্থানিক সম্পর্ক অনুযায়ী feature নির্বাচন করুন।
 Select features that intersect another layer.	অন্য layer-কে intersect করে এমন feature নির্বাচন করুন।
@@ -2687,6 +2706,7 @@ Select Layer	Layer নির্বাচন করুন
 Select Layer By Attribute	Attribute অনুযায়ী layer নির্বাচন
 Select Layer By Location	অবস্থান অনুযায়ী layer নির্বাচন
 Select one text on the map, or a layout element, to format it.	Format করতে মানচিত্রের একটি text বা layout element নির্বাচন করুন।
+Select options	নির্বাচনের বিকল্প
 Select Related	সম্পর্কিত নির্বাচন করুন
 Select Rows	সারি নির্বাচন করুন
 Select rows with a SQL expression.	SQL expression দিয়ে সারি নির্বাচন করুন।
@@ -2702,6 +2722,8 @@ Selected only	শুধু নির্বাচিত
 Selected records only	শুধু নির্বাচিত record
 Selecting Features	Feature নির্বাচন
 Selection	নির্বাচন
+Selection outline is outside the supported map surface; draw a smaller area.	নির্বাচনের সীমানা সমর্থিত মানচিত্র পৃষ্ঠের বাইরে; আরও ছোট এলাকা আঁকুন।
+Selection outline is too complex; draw a simpler area.	নির্বাচনের সীমানা অত্যন্ত জটিল; আরও সরল এলাকা আঁকুন।
 Selection Type	নির্বাচনের ধরন
 Selects features that intersect features in another layer.	অন্য layer-এর feature-কে intersect করে এমন feature নির্বাচন করে।
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	SQL where clause দিয়ে feature নির্বাচন করে, যেমন pop_est > 1000000।

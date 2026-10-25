@@ -34,7 +34,9 @@ A field (known once the model runs)	Bir alan (model çalışınca belli olur)
 A flat scene centred on the view (azimuthal equidistant).	Görünümün ortasında düz bir sahne (azimutal eşit uzaklık).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Bir GeoLens sunucusunun veri kümeleri, detay olarak okunur (her birinin ilk 1.000'i).
 A globe scene.	Bir küre sahnesi.
+A hidden class leaves its features unlabelled.	Gizli bir sınıfın detayları etiketsiz kalır.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Bir enlem ve boylam (40.7, -74.0 veya 40°42'N 74°0'W), bir katman, bir yer imi veya bir katman tablosundaki bir değer. Enter vurgulanan satırı seçer; Yer ara metni bir yer olarak arar
+A layer keeps at most {max} label classes besides Default.	Bir katman, Varsayılan dışında en fazla {max} etiket sınıfı içerebilir.
 A layer the model reads	Modelin okuduğu bir katman
 A line for the Script pane	Betik bölmesi için bir satır
 A magnifying lens that follows the pointer.	İşaretçiyi izleyen bir büyüteç.
@@ -92,6 +94,7 @@ Add\nData	Veri\nEkle
 Add ({n})	Ekle ({n})
 Add a bar chart of a layer's numeric field.	Bir katmanın sayısal alanından çubuk grafik ekle.
 Add a circle.	Bir daire ekle.
+Add a class with this one's field, text symbol, placement and range.	Bu sınıfın alanı, metin simgesi, yerleşimi ve aralığıyla bir sınıf ekleyin.
 Add a colorbar of a raster layer's colour scale in the map frame.	Harita çerçevesine bir raster katmanının renk ölçeği için renk çubuğu ekle.
 Add a description.	Bir açıklama ekleyin.
 Add a field.	Bir alan ekle.
@@ -298,6 +301,7 @@ Apply Style	Stili Uygula
 Apply to layers	Katmanlara uygula
 Apply to the selected layer	Seçili katmana uygula
 Approve agents' actions without asking	Ajanların işlemlerini sormadan onayla
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Yaklaşık yerel mesafeye göre seçim. Korunan coğrafi ön filtre, sınırın yakınındaki detayları dışarıda bırakabilir.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	Dosya Seç…
 Choose how the flat map lays out the Earth.	Düz haritanın Dünya'yı nasıl gösterdiğini seçin.
 Choose how the layer is drawn.	Katmanın nasıl çizileceğini seç.
 Choose how the raster is drawn.	Rasterin nasıl çizileceğini seçin.
+Choose polygon, lasso, or radius selection.	Poligon, kement veya yarıçapla seçimi seçin.
 Choose Project…	Proje seç…
 Choose S3 Connection	S3 Bağlantısı Seç
 Choose S3 connection	S3 bağlantısı seç
@@ -534,6 +539,7 @@ Circle Radius (km)	Daire Yarıçapı (km)
 Class	Sınıf
 Class color	Sınıf rengi
 Class Style	Sınıf Stili
+Class {n}	Sınıf {n}
 Class {n} up to	Sınıf {n} üst sınırı
 Classes	Sınıflar
 Classes from training polygons.	Eğitim poligonlarından sınıflar.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Nokta grafiği yerleştirmek için tıklayın.
 Click to select the node	Düğümü seçmek için tıklayın
 Click to select, double-click to add, right-click for more	Seçmek için tıklayın, eklemek için çift tıklayın, daha fazlası için sağ tıklayın
 Click to switch between decimal degrees and DMS	Ondalık derece ile DMS arasında geçiş için tıklayın
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Köşelere tıklayın · seçmek için başlangıca tıklayın veya çift tıklayın · Shift ekler · Ctrl/Cmd çıkarır · Esc iptal eder
 Clip	Kırp
 Clip a raster to the view, or resample it.	Bir rasteri görünüme kırp veya yeniden örnekle.
 Clip Features	Detayları Kırp
@@ -798,6 +805,7 @@ Deep Learning\nTools	Derin Öğrenme\nAraçları
 Deep Learning Package	Derin Öğrenme Paketi
 Deep Learning Tools	Derin Öğrenme Araçları
 Default	Varsayılan
+Default can't be removed. You can rename or hide it.	Varsayılan kaldırılamaz. Yeniden adlandırabilir veya gizleyebilirsiniz.
 Define Projection	Projeksiyon Tanımla
 Define Projection…	Projeksiyon Tanımla…
 Definition\nQuery	Tanım\nSorgusu
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Haritasını ka
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Bir dikdörtgen sürükleyin, ardından içine yerleştirilecek PNG veya JPEG resmi seçin.
 Drag a tool from the palette to start building, or add an input layer.	Oluşturmaya başlamak için paletten bir araç sürükleyin veya bir girdi katmanı ekleyin.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Taşımak için bir köşeyi sürükleyin · köşe eklemek için bir kenara tıklayın · Delete seçili köşeyi kaldırır
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Bir alan çizin · seçmek için bırakın · Shift ekler · Ctrl/Cmd çıkarır · Esc iptal eder
 Drag from a node's right port to another node's left port to connect them.	Bağlamak için bir düğümün sağ bağlantı noktasından diğer düğümün sol bağlantı noktasına sürükleyin.
 Drag from the centre out	Merkezden dışa doğru sürükleyin
 Drag from the centre to draw a circle.	Daire çizmek için merkezden sürükleyin.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Merkezden sürükleyin · seçmek için bırakın · Shift ekler · Ctrl/Cmd çıkarır · Esc iptal eder
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Harita çerçevelerini taşımak yerine, haritalarını kaydırmak için içlerinde sürükleyin ve yakınlaştırmak için tekerleği çevirin.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Harita çerçevelerini taşımak yerine, haritalarını kaydırmak için içlerinde sürükleyin ve yakınlaştırmak için tekerleği çevirin. Esc durdurur.
 Drag the frame's outline · Esc to stop	Çerçevenin dış çizgisini sürükleyin · durdurmak için Esc
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	ör. 0, 255, -9999
 e.g. continent = 'Europe'	örn. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	örn. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	örn. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Her sınıf kendi koşuluyla eşleşen detayları etiketler, bu nedenle bir detay birden fazla sınıftan etiket alabilir.
 Each geoprocessing run becomes a step, chained by its outputs	Her coğrafi işleme çalıştırması, çıktılarıyla zincirlenen bir adım olur
 Earth Index has no points in the view	Earth Index'in görünümde noktası yok
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Enterpolasyon Özniteliği
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Katmanın yerel koordinatlarını bu koordinat sisteminde yorumla. Bu, çizildiği yeri değiştirir; kaynak dosya değişmez.
 Interval	Aralık
 invalid child id	geçersiz alt süreç kimliği
+Invalid selection outline · draw a smaller area	Geçersiz seçim sınırı · daha küçük bir alan çizin
+Invalid selection outline · draw a smaller radius	Geçersiz seçim sınırı · daha küçük bir yarıçap çizin
 Invalid: {error}	Geçersiz: {error}
 Invert	Ters Çevir
 Invert color scheme	Renk şemasını ters çevir
@@ -1551,6 +1564,7 @@ Labels	Etiketler
 labels are drawn for feature layers, not rasters	etiketler rasterlar için değil, detay katmanları için çizilir
 Labels are drawn for feature layers, not rasters.	Etiketler rasterlar için değil, detay katmanları için çizilir.
 Labels are off for this layer: the clause applies once they are on.	Bu katmanda etiketler kapalı: yan tümce, etiketler açıldığında uygulanır.
+Labels of the classes listed first are placed first when they compete for room.	Yer için yarıştıklarında, listede önce gelen sınıfların etiketleri önce yerleştirilir.
 Lagoon	Lagün
 Lambert Conformal Conic	Lambert Konform Konik
 Lambert Cylindrical Equal Area	Lambert Silindirik Eşalan
@@ -2100,7 +2114,6 @@ Origin key	Başlangıç anahtarı
 Ortho Mapping	Orto Haritalama
 Other	Diğer
 Other Data	Diğer Veriler
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Bu katmandaki diğer etiket sınıfları (komutlarla oluşturulmuş): {n}. Her biri kendi yan tümcesinin eşleştiği detayları etiketler, bu nedenle bir detay birden fazla sınıftan etiket alabilir.
 Out Beyond	Ötesinde Kapalı
 Outline	Dış Çizgi
 Outline another frame's extent in this map frame.	Bu harita çerçevesinde başka bir çerçevenin kapsamını çiz.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Özel Yapıştır (yeni katman olarak)
 paste your key	anahtarınızı yapıştırın
 Pause	Duraklat
 Pause.	Duraklat.
+PDF	PDF
 PDF or PNG	PDF veya PNG
+PDF, PNG or SVG	PDF, PNG veya SVG
 Percent Clip	Yüzde Kırpma
 Perceptually Uniform	Algısal Olarak Tekdüze
 Performance	Performans
@@ -2315,6 +2330,7 @@ Quick actions	Hızlı işlemler
 Quick Analysis	Hızlı Analiz
 radius km	yarıçap km
 radius m	yarıçap m
+Radius {distance} (approximate)	Yarıçap {distance} (yaklaşık)
 Rain	Yağmur
 Raise polygons by a height or a field.	Poligonları bir yükseklik veya alana göre yükselt.
 Raise Priority	Önceliği Yükselt
@@ -2679,6 +2695,9 @@ Select an element to format it.	Biçimlendirmek için bir öğe seçin.
 Select By\nAttributes	Özniteliğe\nGöre Seç
 Select By\nLocation	Konuma\nGöre Seç
 Select By Attributes	Özniteliğe Göre Seç
+Select by Lasso	Kementle Seç
+Select by Polygon	Poligonla Seç
+Select by Radius	Yarıçapla Seç
 Select every feature.	Tüm detayları seç.
 Select features by their spatial relationship.	Detayları mekânsal ilişkilerine göre seç.
 Select features that intersect another layer.	Başka bir katmanla kesişen detayları seç.
@@ -2687,6 +2706,7 @@ Select Layer	Katman Seç
 Select Layer By Attribute	Katmanı Özniteliğe Göre Seç
 Select Layer By Location	Katmanı Konuma Göre Seç
 Select one text on the map, or a layout element, to format it.	Biçimlendirmek için haritada bir metin veya bir sayfa düzeni öğesi seçin.
+Select options	Seçim seçenekleri
 Select Related	İlişkilileri Seç
 Select Rows	Satır Seç
 Select rows with a SQL expression.	Satırları bir SQL ifadesiyle seç.
@@ -2702,6 +2722,8 @@ Selected only	Yalnızca seçililer
 Selected records only	Yalnızca seçili kayıtlar
 Selecting Features	Detay Seçimi
 Selection	Seçim
+Selection outline is outside the supported map surface; draw a smaller area.	Seçim sınırı desteklenen harita yüzeyinin dışında; daha küçük bir alan çizin.
+Selection outline is too complex; draw a simpler area.	Seçim sınırı çok karmaşık; daha basit bir alan çizin.
 Selection Type	Seçim Türü
 Selects features that intersect features in another layer.	Başka bir katmandaki detaylarla kesişen detayları seçer.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Detayları bir SQL where yan tümcesiyle seçer, örn. pop_est > 1000000.

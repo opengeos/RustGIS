@@ -34,7 +34,9 @@ A field (known once the model runs)	Een veld (bekend zodra het model draait)
 A flat scene centred on the view (azimuthal equidistant).	Een vlakke scène gecentreerd op de weergave (azimutaal equidistant).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	De datasets van een GeoLens-server, gelezen als objecten (de eerste 1.000 van elk).
 A globe scene.	Een wereldbolscène.
+A hidden class leaves its features unlabelled.	Een verborgen klasse laat haar objecten zonder label.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Een breedte- en lengtegraad (40.7, -74.0 of 40°42'N 74°0'W), een laag, een bladwijzer of een waarde in de tabel van een laag. Enter kiest de gemarkeerde rij; Plaatsen zoeken zoekt de tekst op als plaats
+A layer keeps at most {max} label classes besides Default.	Een laag bevat naast Standaard maximaal {max} labelklassen.
 A layer the model reads	Een laag die het model leest
 A line for the Script pane	Een regel voor het scriptvenster
 A magnifying lens that follows the pointer.	Een vergrootglas dat de aanwijzer volgt.
@@ -92,6 +94,7 @@ Add\nData	Gegevens\ntoevoegen
 Add ({n})	Toevoegen ({n})
 Add a bar chart of a layer's numeric field.	Een staafdiagram van een numeriek veld van een laag toevoegen.
 Add a circle.	Een cirkel toevoegen.
+Add a class with this one's field, text symbol, placement and range.	Een klasse toevoegen met het veld, tekstsymbool, de plaatsing en het bereik van deze klasse.
 Add a colorbar of a raster layer's colour scale in the map frame.	Een kleurenbalk van de kleurschaal van een rasterlaag aan het kaartkader toevoegen.
 Add a description.	Een beschrijving toevoegen.
 Add a field.	Een veld toevoegen.
@@ -298,6 +301,7 @@ Apply Style	Stijl toepassen
 Apply to layers	Op lagen toepassen
 Apply to the selected layer	Toepassen op de geselecteerde laag
 Approve agents' actions without asking	Acties van agents goedkeuren zonder te vragen
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Benaderende selectie op lokale afstand. Het behouden geografische voorfilter kan objecten nabij de omtrek uitsluiten.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS-portal
@@ -519,6 +523,7 @@ Choose File…	Bestand kiezen…
 Choose how the flat map lays out the Earth.	Kiezen hoe de platte kaart de aarde weergeeft.
 Choose how the layer is drawn.	Kiezen hoe de laag wordt getekend.
 Choose how the raster is drawn.	Kies hoe het raster wordt getekend.
+Choose polygon, lasso, or radius selection.	Kies selectie met polygoon, lasso of straal.
 Choose Project…	Project kiezen…
 Choose S3 Connection	S3-verbinding kiezen
 Choose S3 connection	S3-verbinding kiezen
@@ -534,6 +539,7 @@ Circle Radius (km)	Cirkelstraal (km)
 Class	Klasse
 Class color	Klassekleur
 Class Style	Stijl per klasse
+Class {n}	Klasse {n}
 Class {n} up to	Klasse {n} tot
 Classes	Klassen
 Classes from training polygons.	Klassen uit trainingspolygonen.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Klik om een puntelement te plaatsen.
 Click to select the node	Klik om het knooppunt te selecteren
 Click to select, double-click to add, right-click for more	Klik om te selecteren, dubbelklik om toe te voegen, rechtsklik voor meer
 Click to switch between decimal degrees and DMS	Klik om te wisselen tussen decimale graden en GMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Klik op hoekpunten · klik op het beginpunt of dubbelklik om te selecteren · Shift voegt toe · Ctrl/Cmd verwijdert · Esc annuleert
 Clip	Clippen
 Clip a raster to the view, or resample it.	Een raster clippen tot de weergave, of het herbemonsteren.
 Clip Features	Objecten clippen
@@ -798,6 +805,7 @@ Deep Learning\nTools	Deep learning-\ngereedschappen
 Deep Learning Package	Deep learning-pakket
 Deep Learning Tools	Deep learning-gereedschappen
 Default	Standaard
+Default can't be removed. You can rename or hide it.	Standaard kan niet worden verwijderd. Je kunt deze klasse hernoemen of verbergen.
 Define Projection	Projectie definiëren
 Define Projection…	Projectie definiëren…
 Definition\nQuery	Definitie-\nquery
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Sleep in een ka
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Sleep een rechthoek en kies dan een PNG- of JPEG-afbeelding om erin te plaatsen.
 Drag a tool from the palette to start building, or add an input layer.	Sleep een gereedschap uit het palet om te beginnen, of voeg een invoerlaag toe.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Sleep een hoekpunt om het te verplaatsen · klik op een rand om er een toe te voegen · Delete verwijdert het gekozen hoekpunt
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Sleep een gebied · laat los om te selecteren · Shift voegt toe · Ctrl/Cmd verwijdert · Esc annuleert
 Drag from a node's right port to another node's left port to connect them.	Sleep van de rechterpoort van een knooppunt naar de linkerpoort van een ander knooppunt om ze te verbinden.
 Drag from the centre out	Sleep vanuit het midden naar buiten
 Drag from the centre to draw a circle.	Sleep vanuit het midden om een cirkel te tekenen.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Sleep vanuit het middelpunt · laat los om te selecteren · Shift voegt toe · Ctrl/Cmd verwijdert · Esc annuleert
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Binnen kaartkaders slepen om hun kaarten te pannen en scrollen om te zoomen, in plaats van de kaders te verplaatsen.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Binnen kaartkaders slepen om hun kaarten te pannen en scrollen om te zoomen, in plaats van de kaders te verplaatsen. Esc stopt.
 Drag the frame's outline · Esc to stop	Sleep de omtrek van het kader · Esc om te stoppen
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	bv. 0, 255, -9999
 e.g. continent = 'Europe'	bijv. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	bijv. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	bijv. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Elke klasse labelt de objecten waarop haar eigen clausule past, dus een object kan een label van meer dan één klasse krijgen.
 Each geoprocessing run becomes a step, chained by its outputs	Elke geoverwerkingsrun wordt een stap, gekoppeld via de uitvoer
 Earth Index has no points in the view	Earth Index heeft geen punten in de weergave
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Interpolatieattribuut
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	De oorspronkelijke coördinaten van de laag in dit coördinatensysteem interpreteren. Dit verandert waar de laag wordt getekend; het bronbestand blijft ongewijzigd.
 Interval	Interval
 invalid child id	ongeldige id van onderliggend proces
+Invalid selection outline · draw a smaller area	Ongeldige selectieomtrek · teken een kleiner gebied
+Invalid selection outline · draw a smaller radius	Ongeldige selectieomtrek · teken een kleinere straal
 Invalid: {error}	Ongeldig: {error}
 Invert	Omkeren
 Invert color scheme	Kleurenschema omkeren
@@ -1551,6 +1564,7 @@ Labels	Labels
 labels are drawn for feature layers, not rasters	labels worden getekend voor objectlagen, niet voor rasters
 Labels are drawn for feature layers, not rasters.	Labels worden getekend voor objectlagen, niet voor rasters.
 Labels are off for this layer: the clause applies once they are on.	Labels staan uit voor deze laag: de clausule geldt zodra ze aan staan.
+Labels of the classes listed first are placed first when they compete for room.	Labels van de klassen die bovenaan staan worden eerst geplaatst als er onvoldoende ruimte is.
 Lagoon	Lagune
 Lambert Conformal Conic	Lambert conforme kegelprojectie
 Lambert Cylindrical Equal Area	Lambert cilindrisch oppervlaktegetrouw
@@ -2100,7 +2114,6 @@ Origin key	Herkomstsleutel
 Ortho Mapping	Orthokartering
 Other	Overig
 Other Data	Overige gegevens
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Andere labelklassen op deze laag (gemaakt met opdrachten): {n}. Elke klasse labelt de objecten waarop haar eigen clausule past, dus een object kan een label van meer dan één klasse krijgen.
 Out Beyond	Uitgezoomd voorbij
 Outline	Omtrek
 Outline another frame's extent in this map frame.	Het bereik van een ander kader in dit kaartkader omlijnen.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Plakken speciaal (als nieuwe laag)
 paste your key	plak je sleutel
 Pause	Pauzeren
 Pause.	Pauzeren.
+PDF	PDF
 PDF or PNG	PDF of PNG
+PDF, PNG or SVG	PDF, PNG of SVG
 Percent Clip	Percentage afkappen
 Perceptually Uniform	Perceptueel uniform
 Performance	Prestaties
@@ -2315,6 +2330,7 @@ Quick actions	Snelle acties
 Quick Analysis	Snelle analyse
 radius km	straal km
 radius m	straal m
+Radius {distance} (approximate)	Straal {distance} (bij benadering)
 Rain	Regen
 Raise polygons by a height or a field.	Polygonen verhogen met een hoogte of een veld.
 Raise Priority	Prioriteit verhogen
@@ -2679,6 +2695,9 @@ Select an element to format it.	Selecteer een element om het op te maken.
 Select By\nAttributes	Selecteren op\nattributen
 Select By\nLocation	Selecteren op\nlocatie
 Select By Attributes	Selecteren op attributen
+Select by Lasso	Selecteren met lasso
+Select by Polygon	Selecteren met polygoon
+Select by Radius	Selecteren op straal
 Select every feature.	Elk object selecteren.
 Select features by their spatial relationship.	Objecten selecteren op hun ruimtelijke relatie.
 Select features that intersect another layer.	Objecten selecteren die een andere laag snijden.
@@ -2687,6 +2706,7 @@ Select Layer	Laag selecteren
 Select Layer By Attribute	Laag selecteren op attribuut
 Select Layer By Location	Laag selecteren op locatie
 Select one text on the map, or a layout element, to format it.	Selecteer een tekst op de kaart, of een lay-outelement, om het op te maken.
+Select options	Selectieopties
 Select Related	Gerelateerde selecteren
 Select Rows	Rijen selecteren
 Select rows with a SQL expression.	Rijen selecteren met een SQL-expressie.
@@ -2702,6 +2722,8 @@ Selected only	Alleen geselecteerde
 Selected records only	Alleen geselecteerde records
 Selecting Features	Objecten selecteren
 Selection	Selectie
+Selection outline is outside the supported map surface; draw a smaller area.	De selectieomtrek valt buiten het ondersteunde kaartoppervlak; teken een kleiner gebied.
+Selection outline is too complex; draw a simpler area.	De selectieomtrek is te complex; teken een eenvoudiger gebied.
 Selection Type	Selectietype
 Selects features that intersect features in another layer.	Selecteert objecten die objecten in een andere laag snijden.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecteert objecten met een SQL-where-clausule, bijv. pop_est > 1000000.

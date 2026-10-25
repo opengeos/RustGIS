@@ -34,7 +34,9 @@ A field (known once the model runs)	Поле (известно после зап
 A flat scene centred on the view (azimuthal equidistant).	Плоская сцена с центром в виде (азимутальная равнопромежуточная).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Наборы данных сервера GeoLens, читаемые как объекты (первые 1000 из каждого).
 A globe scene.	Сцена-глобус.
+A hidden class leaves its features unlabelled.	Объекты скрытого класса остаются без подписей.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Широта и долгота (40.7, -74.0 или 40°42'N 74°0'W), слой, закладка или значение в таблице слоя. Enter выбирает выделенную строку; «Поиск мест» ищет текст как место
+A layer keeps at most {max} label classes besides Default.	Слой может содержать не более {max} классов подписей помимо класса «По умолчанию».
 A layer the model reads	Слой, который читает модель
 A line for the Script pane	Строка для панели скриптов
 A magnifying lens that follows the pointer.	Увеличительная лупа, следующая за указателем.
@@ -92,6 +94,7 @@ Add\nData	Добавить\nданные
 Add ({n})	Добавить ({n})
 Add a bar chart of a layer's numeric field.	Добавить столбчатую диаграмму числового поля слоя.
 Add a circle.	Добавить круг.
+Add a class with this one's field, text symbol, placement and range.	Добавить класс с полем, текстовым символом, размещением и диапазоном этого класса.
 Add a colorbar of a raster layer's colour scale in the map frame.	Добавить во фрейм карты цветовую шкалу растрового слоя.
 Add a description.	Добавьте описание.
 Add a field.	Добавить поле.
@@ -298,6 +301,7 @@ Apply Style	Применить стиль
 Apply to layers	Применить к слоям
 Apply to the selected layer	Применить к выбранному слою
 Approve agents' actions without asking	Одобрять действия агентов без вопросов
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Приблизительная выборка по локальному расстоянию. Сохраняющийся географический предварительный фильтр может исключать объекты вблизи контура.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	Выбрать файл…
 Choose how the flat map lays out the Earth.	Выбрать, как плоская карта отображает Землю.
 Choose how the layer is drawn.	Выбрать способ отображения слоя.
 Choose how the raster is drawn.	Выберите способ отрисовки растра.
+Choose polygon, lasso, or radius selection.	Выберите выделение полигоном, лассо или по радиусу.
 Choose Project…	Выбрать проект…
 Choose S3 Connection	Выбрать подключение S3
 Choose S3 connection	Выбрать подключение S3
@@ -534,6 +539,7 @@ Circle Radius (km)	Радиус круга (км)
 Class	Класс
 Class color	Цвет класса
 Class Style	Стиль классов
+Class {n}	Класс {n}
 Class {n} up to	Класс {n} до
 Classes	Классы
 Classes from training polygons.	Классы по обучающим полигонам.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Щёлкните, чтобы разместит�
 Click to select the node	Щёлкните, чтобы выбрать узел
 Click to select, double-click to add, right-click for more	Щелчок — выбрать, двойной щелчок — добавить, правый щелчок — другие действия
 Click to switch between decimal degrees and DMS	Щёлкните для переключения между десятичными градусами и ГМС
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Щёлкайте вершины · щёлкните начало или дважды щёлкните для выборки · Shift добавляет · Ctrl/Cmd убирает · Esc отменяет
 Clip	Обрезать
 Clip a raster to the view, or resample it.	Обрезать растр по виду или передискретизировать его.
 Clip Features	Обрезать объекты
@@ -798,6 +805,7 @@ Deep Learning\nTools	Инструменты\nглуб. обучения
 Deep Learning Package	Пакет глубокого обучения
 Deep Learning Tools	Инструменты глубокого обучения
 Default	По умолчанию
+Default can't be removed. You can rename or hide it.	Класс «По умолчанию» нельзя удалить. Его можно переименовать или скрыть.
 Define Projection	Определить проекцию
 Define Projection…	Определить проекцию…
 Definition\nQuery	Запрос\nопределения
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Перетас�
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Растяните прямоугольник, затем выберите изображение PNG или JPEG для размещения в нём.
 Drag a tool from the palette to start building, or add an input layer.	Перетащите инструмент из палитры, чтобы начать построение, или добавьте входной слой.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Перетащите вершину, чтобы переместить её · щёлкните ребро, чтобы добавить вершину · Delete удаляет выбранную вершину
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Протяните область · отпустите для выборки · Shift добавляет · Ctrl/Cmd убирает · Esc отменяет
 Drag from a node's right port to another node's left port to connect them.	Перетащите от правого порта узла к левому порту другого узла, чтобы соединить их.
 Drag from the centre out	Тяните от центра наружу
 Drag from the centre to draw a circle.	Тяните от центра, чтобы нарисовать круг.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Тяните от центра · отпустите для выборки · Shift добавляет · Ctrl/Cmd убирает · Esc отменяет
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Перетаскивайте внутри фреймов карт, чтобы панорамировать их карты, и вращайте колесо, чтобы масштабировать их, а не перемещать сами фреймы.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Перетаскивайте внутри фреймов карт, чтобы панорамировать их карты, и вращайте колесо, чтобы масштабировать их, а не перемещать сами фреймы. Esc завершает режим.
 Drag the frame's outline · Esc to stop	Обведите контур фрейма · Esc для остановки
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	напр. 0, 255, -9999
 e.g. continent = 'Europe'	напр. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	напр. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	например, pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Каждый класс подписывает объекты, соответствующие его условию, поэтому один объект может получить подписи от нескольких классов.
 Each geoprocessing run becomes a step, chained by its outputs	Каждый запуск геообработки становится шагом, связанным через свои результаты
 Earth Index has no points in the view	В Earth Index нет точек в этом виде
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Атрибут интерполяции
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Интерпретировать исходные координаты слоя в этой системе координат. Это меняет место отрисовки; исходный файл не изменяется.
 Interval	Интервал
 invalid child id	недопустимый идентификатор дочернего процесса
+Invalid selection outline · draw a smaller area	Недопустимый контур выборки · нарисуйте меньшую область
+Invalid selection outline · draw a smaller radius	Недопустимый контур выборки · нарисуйте меньший радиус
 Invalid: {error}	Недопустимо: {error}
 Invert	Инвертировать
 Invert color scheme	Инвертировать цветовую схему
@@ -1551,6 +1564,7 @@ Labels	Подписи
 labels are drawn for feature layers, not rasters	подписи отрисовываются для векторных слоёв, а не для растров
 Labels are drawn for feature layers, not rasters.	Подписи отрисовываются для векторных слоёв, а не для растров.
 Labels are off for this layer: the clause applies once they are on.	Подписи этого слоя выключены: условие применится после их включения.
+Labels of the classes listed first are placed first when they compete for room.	При нехватке места первыми размещаются подписи классов, стоящих выше в списке.
 Lagoon	Лагуна
 Lambert Conformal Conic	Равноугольная коническая Ламберта
 Lambert Cylindrical Equal Area	Равновеликая цилиндрическая Ламберта
@@ -2100,7 +2114,6 @@ Origin key	Ключ начала
 Ortho Mapping	Ортотрансформирование
 Other	Другое
 Other Data	Другие данные
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Другие классы подписей этого слоя (созданные командами): {n}. Каждый подписывает объекты, подходящие под его условие, поэтому объект может получить подписи от нескольких классов.
 Out Beyond	Выкл. за пределами
 Outline	Контур
 Outline another frame's extent in this map frame.	Обвести экстент другого фрейма в этом фрейме карты.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Специальная вставка (как н�
 paste your key	вставьте ключ
 Pause	Приостановить
 Pause.	Пауза.
+PDF	PDF
 PDF or PNG	PDF или PNG
+PDF, PNG or SVG	PDF, PNG или SVG
 Percent Clip	Процентное отсечение
 Perceptually Uniform	Перцептивно однородные
 Performance	Производительность
@@ -2315,6 +2330,7 @@ Quick actions	Быстрые действия
 Quick Analysis	Быстрый анализ
 radius km	радиус, км
 radius m	радиус, м
+Radius {distance} (approximate)	Радиус {distance} (приблизительно)
 Rain	Дождь
 Raise polygons by a height or a field.	Поднять полигоны на высоту или по полю.
 Raise Priority	Повысить приоритет
@@ -2679,6 +2695,9 @@ Select an element to format it.	Выберите элемент, чтобы от
 Select By\nAttributes	Выбрать по\nатрибутам
 Select By\nLocation	Выбрать по\nрасположению
 Select By Attributes	Выбрать по атрибутам
+Select by Lasso	Выбрать лассо
+Select by Polygon	Выбрать полигоном
+Select by Radius	Выбрать по радиусу
 Select every feature.	Выбрать все объекты.
 Select features by their spatial relationship.	Выбрать объекты по их пространственному отношению.
 Select features that intersect another layer.	Выбрать объекты, пересекающие другой слой.
@@ -2687,6 +2706,7 @@ Select Layer	Выбрать слой
 Select Layer By Attribute	Выбрать в слое по атрибуту
 Select Layer By Location	Выбрать в слое по расположению
 Select one text on the map, or a layout element, to format it.	Выберите один текст на карте или элемент макета, чтобы отформатировать его.
+Select options	Параметры выборки
 Select Related	Выбрать связанные
 Select Rows	Выбрать строки
 Select rows with a SQL expression.	Выбрать строки с помощью выражения SQL.
@@ -2702,6 +2722,8 @@ Selected only	Только выбранные
 Selected records only	Только выбранные записи
 Selecting Features	Выбор объектов
 Selection	Выборка
+Selection outline is outside the supported map surface; draw a smaller area.	Контур выборки выходит за пределы поддерживаемой поверхности карты; нарисуйте меньшую область.
+Selection outline is too complex; draw a simpler area.	Контур выборки слишком сложен; нарисуйте более простую область.
 Selection Type	Тип выборки
 Selects features that intersect features in another layer.	Выбирает объекты, пересекающие объекты другого слоя.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Выбирает объекты с помощью SQL-условия WHERE, напр. pop_est > 1000000.

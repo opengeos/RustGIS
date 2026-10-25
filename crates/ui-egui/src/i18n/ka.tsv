@@ -34,7 +34,9 @@ A field (known once the model runs)	ველი (ცნობილი გა�
 A flat scene centred on the view (azimuthal equidistant).	ბრტყელი სცენა ხედზე ცენტრირებული (აზიმუტული ტოლმანძილიანი).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens სერვერის მონაცემთა ნაკრებები, წაკითხული ობიექტებად (თითოეულის პირველი 1000).
 A globe scene.	გლობუსის სცენა.
+A hidden class leaves its features unlabelled.	დამალული კლასის ობიექტები წარწერების გარეშე რჩება.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	განედი და გრძედი (40.7, -74.0 ან 40°42'N 74°0'W), ფენა, სანიშნე ან მნიშვნელობა ფენის ცხრილში. Enter ირჩევს მონიშნულ სტრიქონს; „ადგილების ძიება“ ეძებს ტექსტს როგორც ადგილს
+A layer keeps at most {max} label classes besides Default.	ფენას ნაგულისხმევი კლასის გარდა მაქსიმუმ {max} წარწერის კლასი შეიძლება ჰქონდეს.
 A layer the model reads	ფენა, რომელსაც მოდელი კითხულობს
 A line for the Script pane	სტრიქონი სკრიპტის პანელისთვის
 A magnifying lens that follows the pointer.	გამადიდებელი შუშა, რომელიც კურსორს მიჰყვება.
@@ -92,6 +94,7 @@ Add\nData	მონაცემების\nდამატება
 Add ({n})	დამატება ({n})
 Add a bar chart of a layer's numeric field.	ფენის რიცხვითი ველის სვეტოვანი დიაგრამის დამატება.
 Add a circle.	წრის დამატება.
+Add a class with this one's field, text symbol, placement and range.	დაამატეთ კლასი ამ კლასის ველით, ტექსტის სიმბოლოთი, განთავსებითა და დიაპაზონით.
 Add a colorbar of a raster layer's colour scale in the map frame.	რასტრული ფენის ფერთა შკალის ფერთა ზოლის დამატება რუკის ჩარჩოში.
 Add a description.	დაამატეთ აღწერა.
 Add a field.	ველის დამატება.
@@ -298,6 +301,7 @@ Apply Style	სტილის გამოყენება
 Apply to layers	ფენებზე გამოყენება
 Apply to the selected layer	არჩეულ ფენაზე გამოყენება
 Approve agents' actions without asking	აგენტების მოქმედებების დამტკიცება შეკითხვის გარეშე
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	მონიშვნა მიახლოებითი ადგილობრივი მანძილით. შენარჩუნებულმა გეოგრაფიულმა წინასწარმა ფილტრმა შეიძლება კონტურთან ახლოს მდებარე ობიექტები გამორიცხოს.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	ფაილის არჩევა…
 Choose how the flat map lays out the Earth.	აირჩიეთ, როგორ გაშალოს ბრტყელმა რუკამ დედამიწა.
 Choose how the layer is drawn.	აირჩიეთ, როგორ დაიხატოს ფენა.
 Choose how the raster is drawn.	აირჩიეთ, როგორ დაიხატოს რასტრი.
+Choose polygon, lasso, or radius selection.	აირჩიეთ მონიშვნა პოლიგონით, ლასოთი ან რადიუსით.
 Choose Project…	პროექტის არჩევა…
 Choose S3 Connection	S3 კავშირის არჩევა
 Choose S3 connection	S3 კავშირის არჩევა
@@ -534,6 +539,7 @@ Circle Radius (km)	წრის რადიუსი (კმ)
 Class	კლასი
 Class color	კლასის ფერი
 Class Style	კლასის სტილი
+Class {n}	კლასი {n}
 Class {n} up to	კლასი {n} — მდე
 Classes	კლასები
 Classes from training polygons.	კლასები სასწავლო პოლიგონებიდან.
@@ -591,6 +597,7 @@ Click to place a point graphic.	დააწკაპუნეთ წერტ�
 Click to select the node	დააწკაპუნეთ კვანძის ასარჩევად
 Click to select, double-click to add, right-click for more	დაწკაპუნება: მონიშვნა, ორმაგი დაწკაპუნება: დამატება, მარჯვენა დაწკაპუნება: მეტი
 Click to switch between decimal degrees and DMS	დააწკაპუნეთ ათწილადი გრადუსებისა და DMS-ის გადასართავად
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	დააწკაპუნეთ წვეროებზე · მოსანიშნად დააწკაპუნეთ საწყის წერტილზე ან ორჯერ დააწკაპუნეთ · Shift ამატებს · Ctrl/Cmd აშორებს · Esc აუქმებს
 Clip	მოჭრა
 Clip a raster to the view, or resample it.	რასტრის მოჭრა ხედზე ან მისი რესემპლირება.
 Clip Features	ობიექტების მოჭრა
@@ -798,6 +805,7 @@ Deep Learning\nTools	ღრმა სწავლების\nხელსა�
 Deep Learning Package	ღრმა სწავლების პაკეტი
 Deep Learning Tools	ღრმა სწავლების ხელსაწყოები
 Default	ნაგულისხმევი
+Default can't be removed. You can rename or hide it.	ნაგულისხმევი კლასის წაშლა შეუძლებელია. შეგიძლიათ გადაარქვათ სახელი ან დამალოთ.
 Define Projection	პროექციის განსაზღვრა
 Define Projection…	პროექციის განსაზღვრა…
 Definition\nQuery	განსაზღვრის\nმოთხოვნა
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	გადაა
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	გაავლეთ მართკუთხედი, შემდეგ აირჩიეთ მასში განსათავსებელი PNG ან JPEG სურათი.
 Drag a tool from the palette to start building, or add an input layer.	აგების დასაწყებად გადმოიტანეთ ხელსაწყო პალიტრიდან ან დაამატეთ შემავალი ფენა.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	გადასაადგილებლად გადაათრიეთ წვერო · წვეროს დასამატებლად დააწკაპუნეთ წიბოზე · Delete შლის არჩეულ წვეროს
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	გადაათრიეთ არის დასახაზად · მოსანიშნად გაუშვით · Shift ამატებს · Ctrl/Cmd აშორებს · Esc აუქმებს
 Drag from a node's right port to another node's left port to connect them.	დასაკავშირებლად გადაათრიეთ კვანძის მარჯვენა პორტიდან სხვა კვანძის მარცხენა პორტამდე.
 Drag from the centre out	გადაათრიეთ ცენტრიდან გარეთ
 Drag from the centre to draw a circle.	გადაათრიეთ ცენტრიდან წრის დასახატად.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	გადაათრიეთ ცენტრიდან · მოსანიშნად გაუშვით · Shift ამატებს · Ctrl/Cmd აშორებს · Esc აუქმებს
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	რუკის ჩარჩოებში გადათრევით მათი რუკების გადაწევა და ბორბლით მასშტაბირება, ჩარჩოების გადაადგილების ნაცვლად.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	რუკის ჩარჩოებში გადათრევით მათი რუკების გადაწევა და ბორბლით მასშტაბირება, ჩარჩოების გადაადგილების ნაცვლად. Esc აჩერებს.
 Drag the frame's outline · Esc to stop	გადაათრიეთ ჩარჩოს კონტური · შესაჩერებლად Esc
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	მაგ. 0, 255, -9999
 e.g. continent = 'Europe'	მაგ. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	მაგ. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	მაგ. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	თითოეული კლასი აწერს წარწერას იმ ობიექტებს, რომლებსაც მისი პირობა შეესაბამება, ამიტომ ობიექტმა შეიძლება წარწერა ერთზე მეტი კლასიდან მიიღოს.
 Each geoprocessing run becomes a step, chained by its outputs	გეოდამუშავების ყოველი გაშვება ხდება საფეხური და ერთმანეთს გამოსავლებით უკავშირდება
 Earth Index has no points in the view	Earth Index-ს ამ ხედში წერტილები არ აქვს
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	ინტერპოლაციის ატრიბ�
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	ფენის საკუთარი კოორდინატების ინტერპრეტაცია ამ კოორდინატთა სისტემაში. ეს ცვლის მისი დახატვის ადგილს; წყაროს ფაილი უცვლელი რჩება.
 Interval	ინტერვალი
 invalid child id	შვილობილი პროცესის არასწორი id
+Invalid selection outline · draw a smaller area	მონიშვნის კონტური არასწორია · დახაზეთ უფრო მცირე არე
+Invalid selection outline · draw a smaller radius	მონიშვნის კონტური არასწორია · დახაზეთ უფრო მცირე რადიუსი
 Invalid: {error}	არასწორია: {error}
 Invert	ინვერსია
 Invert color scheme	ფერთა სქემის ინვერსია
@@ -1551,6 +1564,7 @@ Labels	წარწერები
 labels are drawn for feature layers, not rasters	წარწერები იხატება ვექტორული ფენებისთვის და არა რასტრებისთვის
 Labels are drawn for feature layers, not rasters.	წარწერები იხატება ვექტორული ფენებისთვის და არა რასტრებისთვის.
 Labels are off for this layer: the clause applies once they are on.	ამ ფენის წარწერები გამორთულია: პირობა მათი ჩართვის შემდეგ ამოქმედდება.
+Labels of the classes listed first are placed first when they compete for room.	ადგილისთვის კონკურენციისას სიაში პირველი კლასების წარწერები პირველ რიგში განთავსდება.
 Lagoon	ლაგუნა
 Lambert Conformal Conic	ლამბერტის კონფორმული კონუსური
 Lambert Cylindrical Equal Area	ლამბერტის ცილინდრული ტოლფართობიანი
@@ -2100,7 +2114,6 @@ Origin key	საწყისი გასაღები
 Ortho Mapping	ორთოგრაფიული რუკების შედგენა
 Other	სხვა
 Other Data	სხვა მონაცემები
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	ამ ფენის სხვა წარწერის კლასები (შექმნილი ბრძანებებით): {n}. თითოეული აწერს წარწერას იმ ობიექტებს, რომლებსაც მისი პირობა შეესაბამება, ამიტომ ობიექტმა შეიძლება წარწერა ერთზე მეტი კლასიდან მიიღოს.
 Out Beyond	შორს, ამ ზღვარს მიღმა
 Outline	კონტური
 Outline another frame's extent in this map frame.	სხვა ჩარჩოს ფარგლების კონტურის დახატვა ამ რუკის ჩარჩოში.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	სპეციალური ჩასმა (�
 paste your key	ჩასვით თქვენი გასაღები
 Pause	პაუზა
 Pause.	პაუზა.
+PDF	PDF
 PDF or PNG	PDF ან PNG
+PDF, PNG or SVG	PDF, PNG ან SVG
 Percent Clip	პროცენტული მოჭრა
 Perceptually Uniform	აღქმით თანაბარი
 Performance	წარმადობა
@@ -2315,6 +2330,7 @@ Quick actions	სწრაფი მოქმედებები
 Quick Analysis	სწრაფი ანალიზი
 radius km	რადიუსი კმ
 radius m	რადიუსი მ
+Radius {distance} (approximate)	რადიუსი {distance} (მიახლოებითი)
 Rain	წვიმა
 Raise polygons by a height or a field.	პოლიგონების ამოწევა სიმაღლით ან ველით.
 Raise Priority	პრიორიტეტის აწევა
@@ -2679,6 +2695,9 @@ Select an element to format it.	დასაფორმატებლად �
 Select By\nAttributes	მონიშვნა\nატრიბუტებით
 Select By\nLocation	მონიშვნა\nადგილმდებარეობით
 Select By Attributes	მონიშვნა ატრიბუტებით
+Select by Lasso	მონიშვნა ლასოთი
+Select by Polygon	მონიშვნა პოლიგონით
+Select by Radius	მონიშვნა რადიუსით
 Select every feature.	ყველა ობიექტის მონიშვნა.
 Select features by their spatial relationship.	ობიექტების მონიშვნა სივრცითი კავშირით.
 Select features that intersect another layer.	იმ ობიექტების მონიშვნა, რომლებიც სხვა ფენას კვეთს.
@@ -2687,6 +2706,7 @@ Select Layer	ფენის არჩევა
 Select Layer By Attribute	ფენის არჩევა ატრიბუტით
 Select Layer By Location	ფენის არჩევა ადგილმდებარეობით
 Select one text on the map, or a layout element, to format it.	დასაფორმატებლად აირჩიეთ ერთი ტექსტი რუკაზე ან განლაგების ელემენტი.
+Select options	მონიშვნის პარამეტრები
 Select Related	დაკავშირებულის მონიშვნა
 Select Rows	სტრიქონების მონიშვნა
 Select rows with a SQL expression.	სტრიქონების მონიშვნა SQL გამოსახულებით.
@@ -2702,6 +2722,8 @@ Selected only	მხოლოდ მონიშნული
 Selected records only	მხოლოდ მონიშნული ჩანაწერები
 Selecting Features	ობიექტების მონიშვნა
 Selection	მონიშვნა
+Selection outline is outside the supported map surface; draw a smaller area.	მონიშვნის კონტური მხარდაჭერილი რუკის ზედაპირის გარეთაა; დახაზეთ უფრო მცირე არე.
+Selection outline is too complex; draw a simpler area.	მონიშვნის კონტური ზედმეტად რთულია; დახაზეთ უფრო მარტივი არე.
 Selection Type	მონიშვნის ტიპი
 Selects features that intersect features in another layer.	ობიექტების მონიშვნა, რომლებიც სხვა ფენის ობიექტებს კვეთს.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	ობიექტების მონიშვნა SQL where პირობით, მაგ. pop_est > 1000000.

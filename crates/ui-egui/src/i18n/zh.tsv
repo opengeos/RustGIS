@@ -34,7 +34,9 @@ A field (known once the model runs)	字段（模型运行后才可知）
 A flat scene centred on the view (azimuthal equidistant).	以视图为中心的平面场景（方位等距投影）。
 A GeoLens server's datasets, read as features (the first 1,000 of each).	GeoLens 服务器的数据集，读取为要素（每个数据集前 1,000 个）。
 A globe scene.	地球仪场景。
+A hidden class leaves its features unlabelled.	隐藏的标注类不会为其要素添加标注。
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	纬度和经度（40.7, -74.0 或 40°42'N 74°0'W）、图层、书签或图层表中的值。按 Enter 选择高亮行；“搜索地点”将文本作为地点查找
+A layer keeps at most {max} label classes besides Default.	除“默认”外，一个图层最多可保留 {max} 个标注类。
 A layer the model reads	模型读取的图层
 A line for the Script pane	用于脚本窗格的一行命令
 A magnifying lens that follows the pointer.	跟随指针的放大镜。
@@ -92,6 +94,7 @@ Add\nData	添加\n数据
 Add ({n})	添加 ({n})
 Add a bar chart of a layer's numeric field.	添加图层数值字段的条形图。
 Add a circle.	添加圆形。
+Add a class with this one's field, text symbol, placement and range.	添加一个沿用此类的字段、文本符号、放置方式和范围的标注类。
 Add a colorbar of a raster layer's colour scale in the map frame.	为地图框中某个栅格图层的色阶添加色带图例。
 Add a description.	添加描述。
 Add a field.	添加字段。
@@ -298,6 +301,7 @@ Apply Style	应用样式
 Apply to layers	应用到图层
 Apply to the selected layer	应用于所选图层
 Approve agents' actions without asking	无需询问即批准智能体的操作
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	基于局部近似距离进行选择。保留的地理预筛选可能会排除轮廓附近的要素。
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS 门户
@@ -519,6 +523,7 @@ Choose File…	选择文件…
 Choose how the flat map lays out the Earth.	选择平面地图如何展示地球。
 Choose how the layer is drawn.	选择图层的绘制方式。
 Choose how the raster is drawn.	选择栅格的绘制方式。
+Choose polygon, lasso, or radius selection.	选择多边形、套索或半径选择方式。
 Choose Project…	选择工程…
 Choose S3 Connection	选择 S3 连接
 Choose S3 connection	选择 S3 连接
@@ -534,6 +539,7 @@ Circle Radius (km)	圆半径（km）
 Class	类
 Class color	类颜色
 Class Style	类样式
+Class {n}	类 {n}
 Class {n} up to	类 {n} 上限
 Classes	分类
 Classes from training polygons.	根据训练多边形生成类别。
@@ -591,6 +597,7 @@ Click to place a point graphic.	单击放置点图形。
 Click to select the node	单击以选择节点
 Click to select, double-click to add, right-click for more	单击选择，双击添加，右键单击查看更多
 Click to switch between decimal degrees and DMS	单击在十进制度和度分秒之间切换
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	单击折点 · 单击起点或双击以选择 · Shift 添加 · Ctrl/Cmd 移除 · Esc 取消
 Clip	裁剪
 Clip a raster to the view, or resample it.	将栅格裁剪到视图，或对其重采样。
 Clip Features	裁剪要素
@@ -798,6 +805,7 @@ Deep Learning\nTools	深度学习\n工具
 Deep Learning Package	深度学习包
 Deep Learning Tools	深度学习工具
 Default	默认
+Default can't be removed. You can rename or hide it.	无法移除“默认”。您可以将其重命名或隐藏。
 Define Projection	定义投影
 Define Projection…	定义投影…
 Definition\nQuery	定义\n查询
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	拖动地图框
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	拖动矩形，然后选择要放入其中的 PNG 或 JPEG 图像。
 Drag a tool from the palette to start building, or add an input layer.	从工具面板拖动一个工具开始构建，或添加输入图层。
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	拖动折点以移动 · 单击边可添加折点 · Delete 删除所选折点
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	拖动区域 · 松开以选择 · Shift 添加 · Ctrl/Cmd 移除 · Esc 取消
 Drag from a node's right port to another node's left port to connect them.	从一个节点的右端口拖到另一个节点的左端口即可连接它们。
 Drag from the centre out	从中心向外拖动
 Drag from the centre to draw a circle.	从中心拖动绘制圆。
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	从中心拖动 · 松开以选择 · Shift 添加 · Ctrl/Cmd 移除 · Esc 取消
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	在地图框内拖动以平移其地图，滚动滚轮以缩放地图，而不是移动地图框。
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	在地图框内拖动以平移其地图，滚动滚轮以缩放地图，而不是移动地图框。按 Esc 停止。
 Drag the frame's outline · Esc to stop	拖动图框轮廓 · Esc 停止
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	例如 0, 255, -9999
 e.g. continent = 'Europe'	例如 continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	例如 pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	例如 pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	每个标注类标注其自身子句匹配的要素，因此一个要素可能从多个标注类获得标注。
 Each geoprocessing run becomes a step, chained by its outputs	每次地理处理运行成为一个步骤，按其输出串联
 Earth Index has no points in the view	Earth Index 在视图中没有点
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	插值属性
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	以此坐标系解释图层的原生坐标。这会改变其绘制位置；源文件保持不变。
 Interval	间隔
 invalid child id	子进程 ID 无效
+Invalid selection outline · draw a smaller area	选择轮廓无效 · 请绘制更小的区域
+Invalid selection outline · draw a smaller radius	选择轮廓无效 · 请绘制更小的半径
 Invalid: {error}	无效：{error}
 Invert	反转
 Invert color scheme	反转配色方案
@@ -1551,6 +1564,7 @@ Labels	标注
 labels are drawn for feature layers, not rasters	标注只为要素图层绘制，不为栅格绘制
 Labels are drawn for feature layers, not rasters.	标注只为要素图层绘制，不为栅格绘制。
 Labels are off for this layer: the clause applies once they are on.	此图层的标注已关闭：开启后子句才会生效。
+Labels of the classes listed first are placed first when they compete for room.	当放置空间发生冲突时，列表中靠前的标注类将优先放置标注。
 Lagoon	泻湖
 Lambert Conformal Conic	兰伯特等角圆锥投影
 Lambert Cylindrical Equal Area	兰伯特等积圆柱投影
@@ -2100,7 +2114,6 @@ Origin key	起点键
 Ortho Mapping	正射制图
 Other	其他
 Other Data	其他数据
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	此图层上的其他标注类（通过命令创建）：{n}。每个标注类标注其自身子句匹配的要素，因此一个要素可能从多个标注类获得标注。
 Out Beyond	缩小超过
 Outline	轮廓
 Outline another frame's extent in this map frame.	在此地图框中勾勒另一个地图框的范围。
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	选择性粘贴（作为新图层）
 paste your key	粘贴您的密钥
 Pause	暂停
 Pause.	暂停。
+PDF	PDF
 PDF or PNG	PDF 或 PNG
+PDF, PNG or SVG	PDF、PNG 或 SVG
 Percent Clip	百分比截断
 Perceptually Uniform	感知均匀
 Performance	性能
@@ -2315,6 +2330,7 @@ Quick actions	快速操作
 Quick Analysis	快速分析
 radius km	半径 km
 radius m	半径 m
+Radius {distance} (approximate)	半径 {distance}（近似）
 Rain	雨
 Raise polygons by a height or a field.	按高度或字段抬升多边形。
 Raise Priority	提高优先级
@@ -2679,6 +2695,9 @@ Select an element to format it.	选择一个元素以设置其格式。
 Select By\nAttributes	按属性\n选择
 Select By\nLocation	按位置\n选择
 Select By Attributes	按属性选择
+Select by Lasso	按套索选择
+Select by Polygon	按多边形选择
+Select by Radius	按半径选择
 Select every feature.	选择所有要素。
 Select features by their spatial relationship.	按空间关系选择要素。
 Select features that intersect another layer.	选择与另一图层相交的要素。
@@ -2687,6 +2706,7 @@ Select Layer	选择图层
 Select Layer By Attribute	按属性选择图层
 Select Layer By Location	按位置选择图层
 Select one text on the map, or a layout element, to format it.	选择地图上的一个文本或一个布局元素以设置其格式。
+Select options	选择选项
 Select Related	选择相关
 Select Rows	选择行
 Select rows with a SQL expression.	使用 SQL 表达式选择行。
@@ -2702,6 +2722,8 @@ Selected only	仅所选
 Selected records only	仅所选记录
 Selecting Features	选择要素
 Selection	选择
+Selection outline is outside the supported map surface; draw a smaller area.	选择轮廓超出支持的地图表面范围；请绘制更小的区域。
+Selection outline is too complex; draw a simpler area.	选择轮廓过于复杂；请绘制更简单的区域。
 Selection Type	选择类型
 Selects features that intersect features in another layer.	选择与另一图层中要素相交的要素。
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	使用 SQL where 子句选择要素，例如 pop_est > 1000000。

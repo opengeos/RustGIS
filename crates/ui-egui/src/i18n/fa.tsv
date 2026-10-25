@@ -34,7 +34,9 @@ A field (known once the model runs)	یک فیلد (پس از اجرای مدل �
 A flat scene centred on the view (azimuthal equidistant).	یک صحنهٔ تخت با مرکز روی نما (سمتی هم‌فاصله).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	داده‌های یک سرور GeoLens، به‌عنوان عناصر خوانده می‌شوند (اولین ۱٬۰۰۰ مورد از هر کدام).
 A globe scene.	یک صحنه کره‌ای.
+A hidden class leaves its features unlabelled.	عناصر کلاس پنهان بدون برچسب می‌مانند.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	عرض و طول جغرافیایی (۴۰.۷، -۷۴.۰ یا ۴۰°۴۲'ش ۷۴°۰'غ)، یک لایه، یک نشانک یا یک مقدار در جدول لایه. Enter سطر برجسته را انتخاب می‌کند؛ جستجوی مکان‌ها متن را به‌عنوان یک مکان جستجو می‌کند.
+A layer keeps at most {max} label classes besides Default.	هر لایه علاوه بر پیش‌فرض، حداکثر {max} کلاس برچسب دارد.
 A layer the model reads	یک لایه که مدل آن را می‌خواند
 A line for the Script pane	یک خط برای پنل Script
 A magnifying lens that follows the pointer.	یک لنز بزرگنمایی که نشانگر را دنبال می‌کند.
@@ -92,6 +94,7 @@ Add\nData	افزودن\nداده
 Add ({n})	افزودن ({n})
 Add a bar chart of a layer's numeric field.	افزودن نمودار میله‌ای از یک فیلد عددی لایه
 Add a circle.	افزودن دایره.
+Add a class with this one's field, text symbol, placement and range.	کلاسی با فیلد، نماد متن، جای‌گذاری و بازهٔ این کلاس اضافه کنید.
 Add a colorbar of a raster layer's colour scale in the map frame.	افزودن نوار رنگی از مقیاس رنگی یک لایه‌ی رستری در قاب نقشه
 Add a description.	افزودن توضیح
 Add a field.	افزودن فیلد
@@ -298,6 +301,7 @@ Apply Style	اعمال سبک
 Apply to layers	اعمال بر روی لایه‌ها
 Apply to the selected layer	اعمال بر روی لایه‌ی انتخاب شده
 Approve agents' actions without asking	تأیید اقدام‌های ایجنت‌ها بدون پرسیدن
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	انتخاب تقریبی بر اساس فاصلهٔ محلی. پیش‌فیلتر جغرافیایی حفظ‌شده ممکن است عناصر نزدیک مرز را حذف کند.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	انتخاب فایل…
 Choose how the flat map lays out the Earth.	انتخاب کنید نقشه تخت، زمین را چگونه بچیند.
 Choose how the layer is drawn.	انتخاب کنید لایه چگونه ترسیم شود.
 Choose how the raster is drawn.	انتخاب کنید رستر چگونه ترسیم شود.
+Choose polygon, lasso, or radius selection.	انتخاب با چندضلعی، لاسو یا شعاع را برگزینید.
 Choose Project…	انتخاب پروژه…
 Choose S3 Connection	انتخاب اتصال S3
 Choose S3 connection	انتخاب اتصال S3
@@ -534,6 +539,7 @@ Circle Radius (km)	شعاع دایره (کیلومتر)
 Class	کلاس
 Class color	رنگ کلاس
 Class Style	سبک کلاس
+Class {n}	کلاس {n}
 Class {n} up to	کلاس {n} تا
 Classes	کلاس‌ها
 Classes from training polygons.	کلاس‌ها از چندضلعی‌های آموزشی.
@@ -591,6 +597,7 @@ Click to place a point graphic.	کلیک برای قرار دادن یک گرا�
 Click to select the node	کلیک برای انتخاب گره
 Click to select, double-click to add, right-click for more	کلیک برای انتخاب، دوبار کلیک برای افزودن، کلیک راست برای گزینه‌های بیشتر
 Click to switch between decimal degrees and DMS	کلیک برای سوئیچ بین درجه اعشاری و DMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	روی رأس‌ها کلیک کنید · برای انتخاب روی نقطهٔ آغاز کلیک یا دوبار کلیک کنید · Shift اضافه می‌کند · Ctrl/Cmd حذف می‌کند · Esc لغو می‌کند
 Clip	برش
 Clip a raster to the view, or resample it.	برش رستر به نما، یا بازنمونه‌برداری آن.
 Clip Features	برش عناصر
@@ -798,6 +805,7 @@ Deep Learning\nTools	ابزارهای\nیادگیری عمیق
 Deep Learning Package	بسته یادگیری عمیق
 Deep Learning Tools	ابزارهای یادگیری عمیق
 Default	پیش‌فرض
+Default can't be removed. You can rename or hide it.	پیش‌فرض را نمی‌توان حذف کرد. می‌توانید نام آن را تغییر دهید یا پنهانش کنید.
 Define Projection	تعریف تصویر نقشه
 Define Projection…	تعریف تصویر نقشه…
 Definition\nQuery	پرسش\nتعریف
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	قاب نقشه
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	یک مستطیل بکشید، سپس تصویری PNG یا JPEG برای قرار دادن در آن انتخاب کنید.
 Drag a tool from the palette to start building, or add an input layer.	ابزاری را از پالت بکشید تا ساختار را شروع کنید یا یک لایه ورودی اضافه کنید.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	یک رأس را بکشید تا آن را جابه‌جا کنید · روی یک لبه کلیک کنید تا یک رأس جدید اضافه شود · حذف، رأس انتخاب‌شده را حذف می‌کند.
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	ناحیه‌ای را بکشید · برای انتخاب رها کنید · Shift اضافه می‌کند · Ctrl/Cmd حذف می‌کند · Esc لغو می‌کند
 Drag from a node's right port to another node's left port to connect them.	از پورت راست گره به پورت چپ گره دیگر بکشید تا آن‌ها را به هم متصل کنید.
 Drag from the centre out	از مرکز به بیرون بکشید
 Drag from the centre to draw a circle.	از مرکز به بیرون بکشید تا دایره بکشید.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	از مرکز بکشید · برای انتخاب رها کنید · Shift اضافه می‌کند · Ctrl/Cmd حذف می‌کند · Esc لغو می‌کند
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	در داخل قاب‌های نقشه بکشید تا نقشه‌های آن‌ها را جابه‌جا کنید و چرخ موشی را بچرخانید تا آن‌ها را بزرگنمایی کنید، به جای اینکه آن‌ها را جابه‌جا کنید.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	در داخل قاب‌های نقشه بکشید تا نقشه‌های آن‌ها را جابه‌جا کنید و چرخ موشی را بچرخانید تا آن‌ها را بزرگنمایی کنید، به جای اینکه آن‌ها را جابه‌جا کنید. Esc برای توقف.
 Drag the frame's outline · Esc to stop	ح outline قاب را بکشید · Esc برای توقف
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	مثلاً 0، 255، -9999
 e.g. continent = 'Europe'	مثلاً continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	مثلاً pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	مثلاً pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	هر کلاس عناصری را برچسب می‌زند که با بند خودش مطابقت دارند، پس یک عنصر ممکن است از بیش از یک کلاس برچسب بگیرد.
 Each geoprocessing run becomes a step, chained by its outputs	هر اجرای زمین‌پردازش یک گام می‌شود که با خروجی‌هایش به هم زنجیر می‌شوند
 Earth Index has no points in the view	در این نما هیچ نقطه‌ای از Earth Index نیست
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	ویژگی درون‌یابی
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	مختصات بومی لایه را در این سیستم مختصات تفسیر کنید. این کار محل ترسیم آن را تغییر می‌دهد؛ فایل منبع تغییر نمی‌کند.
 Interval	بازه
 invalid child id	شناسه فرزند نامعتبر
+Invalid selection outline · draw a smaller area	مرز انتخاب نامعتبر است · ناحیهٔ کوچک‌تری رسم کنید
+Invalid selection outline · draw a smaller radius	مرز انتخاب نامعتبر است · شعاع کوچک‌تری رسم کنید
 Invalid: {error}	نامعتبر: {error}
 Invert	وارونه‌کردن
 Invert color scheme	وارونه‌کردن طرح رنگ
@@ -1551,6 +1564,7 @@ Labels	برچسب‌ها
 labels are drawn for feature layers, not rasters	برچسب‌ها برای لایه‌های عناصر ترسیم می‌شوند، نه رسترها
 Labels are drawn for feature layers, not rasters.	برچسب‌ها برای لایه‌های عناصر ترسیم می‌شوند، نه رسترها.
 Labels are off for this layer: the clause applies once they are on.	برچسب‌های این لایه خاموش است: بند پس از روشن‌شدن آن‌ها اعمال می‌شود.
+Labels of the classes listed first are placed first when they compete for room.	هنگام رقابت برای فضا، برچسب کلاس‌هایی که در ابتدای فهرست هستند زودتر جای‌گذاری می‌شود.
 Lagoon	تالاب
 Lambert Conformal Conic	لامبرت هم‌شکل مخروطی
 Lambert Cylindrical Equal Area	لامبرت استوانه‌ای هم‌مساحت
@@ -2100,7 +2114,6 @@ Origin key	کلید مبدأ
 Ortho Mapping	ارثومپینگ
 Other	سایر
 Other Data	داده‌های دیگر
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	کلاس‌های برچسب دیگر این لایه (ساخته‌شده با دستورها): {n}. هر کدام عناصری را برچسب می‌زند که با بند خودش مطابقت دارند، پس یک عنصر ممکن است از بیش از یک کلاس برچسب بگیرد.
 Out Beyond	دورتر از
 Outline	خط دور
 Outline another frame's extent in this map frame.	گستره قاب دیگر را در این قاب نقشه خط‌بندی می‌کند.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	چسباندن ویژه (به‌عنوان لای
 paste your key	کلید خود را بچسبانید
 Pause	توقف موقت
 Pause.	توقف موقت.
+PDF	PDF
 PDF or PNG	قالب PDF یا PNG
+PDF, PNG or SVG	PDF، PNG یا SVG
 Percent Clip	برش درصدی
 Perceptually Uniform	ادراکی یکنواخت
 Performance	کارایی
@@ -2315,6 +2330,7 @@ Quick actions	اقدام‌های سریع
 Quick Analysis	تحلیل سریع
 radius km	شعاع km
 radius m	شعاع m
+Radius {distance} (approximate)	شعاع {distance} (تقریبی)
 Rain	باران
 Raise polygons by a height or a field.	برجسته‌کردن چندضلعی‌ها با یک ارتفاع یا یک فیلد.
 Raise Priority	افزایش اولویت
@@ -2679,6 +2695,9 @@ Select an element to format it.	عنصری انتخاب کنید تا قالب�
 Select By\nAttributes	انتخاب با\nویژگی ها
 Select By\nLocation	انتخاب با\nموقعیت
 Select By Attributes	انتخاب با ویژگی ها
+Select by Lasso	انتخاب با لاسو
+Select by Polygon	انتخاب با چندضلعی
+Select by Radius	انتخاب با شعاع
 Select every feature.	انتخاب همه عناصر.
 Select features by their spatial relationship.	انتخاب عناصر بر اساس رابطه فضایی‌شان.
 Select features that intersect another layer.	انتخاب عناصری که لایه دیگری را قطع می‌کنند.
@@ -2687,6 +2706,7 @@ Select Layer	انتخاب لایه
 Select Layer By Attribute	انتخاب لایه با ویژگی
 Select Layer By Location	انتخاب لایه با موقعیت
 Select one text on the map, or a layout element, to format it.	یکی از متن‌های روی نقشه، یا یک عنصر صفحه‌آرایی را انتخاب کنید تا قالب‌بندی شود.
+Select options	گزینه‌های انتخاب
 Select Related	انتخاب مرتبط‌ها
 Select Rows	انتخاب ردیف‌ها
 Select rows with a SQL expression.	انتخاب ردیف‌ها با یک عبارت SQL.
@@ -2702,6 +2722,8 @@ Selected only	فقط انتخاب‌شده‌ها
 Selected records only	فقط رکوردهای انتخاب‌شده
 Selecting Features	در حال انتخاب عناصر
 Selection	انتخاب
+Selection outline is outside the supported map surface; draw a smaller area.	مرز انتخاب خارج از سطح پشتیبانی‌شدهٔ نقشه است؛ ناحیهٔ کوچک‌تری رسم کنید.
+Selection outline is too complex; draw a simpler area.	مرز انتخاب بیش از حد پیچیده است؛ ناحیهٔ ساده‌تری رسم کنید.
 Selection Type	نوع انتخاب
 Selects features that intersect features in another layer.	عنصرهایی را انتخاب می‌کند که عناصر لایه دیگری را قطع می‌کنند.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	عناصر را با یک بند where از SQL انتخاب می‌کند، مثلاً pop_est > 1000000.

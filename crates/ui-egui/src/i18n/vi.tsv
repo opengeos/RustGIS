@@ -34,7 +34,9 @@ A field (known once the model runs)	Một trường (biết được khi mô hì
 A flat scene centred on the view (azimuthal equidistant).	Cảnh phẳng có tâm là khung nhìn (phương vị đẳng cự).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Các bộ dữ liệu của một máy chủ GeoLens, đọc dưới dạng đối tượng (1.000 đối tượng đầu tiên của mỗi bộ).
 A globe scene.	Cảnh quả địa cầu.
+A hidden class leaves its features unlabelled.	Các đối tượng thuộc lớp nhãn bị ẩn sẽ không được gán nhãn.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Vĩ độ và kinh độ (40.7, -74.0 hoặc 40°42'N 74°0'W), một lớp, một dấu trang hoặc một giá trị trong bảng của lớp. Enter chọn hàng được tô sáng; Tìm địa điểm tra cứu văn bản như một địa điểm
+A layer keeps at most {max} label classes besides Default.	Mỗi lớp giữ tối đa {max} lớp nhãn ngoài lớp Mặc định.
 A layer the model reads	Một lớp mà mô hình đọc
 A line for the Script pane	Một dòng cho khung Script
 A magnifying lens that follows the pointer.	Kính lúp di chuyển theo con trỏ.
@@ -92,6 +94,7 @@ Add\nData	Thêm\ndữ liệu
 Add ({n})	Thêm ({n})
 Add a bar chart of a layer's numeric field.	Thêm biểu đồ cột cho một trường số của lớp.
 Add a circle.	Thêm hình tròn.
+Add a class with this one's field, text symbol, placement and range.	Thêm lớp nhãn có cùng trường, ký hiệu văn bản, vị trí đặt và phạm vi với lớp nhãn này.
 Add a colorbar of a raster layer's colour scale in the map frame.	Thêm thanh màu thể hiện thang màu của một lớp raster vào khung bản đồ.
 Add a description.	Thêm mô tả.
 Add a field.	Thêm một trường.
@@ -298,6 +301,7 @@ Apply Style	Áp dụng kiểu
 Apply to layers	Áp dụng cho các lớp
 Apply to the selected layer	Áp dụng cho lớp được chọn
 Approve agents' actions without asking	Phê duyệt thao tác của tác tử mà không hỏi
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Chọn theo khoảng cách cục bộ gần đúng. Bộ lọc sơ bộ theo tọa độ địa lý vẫn được áp dụng có thể loại các đối tượng gần đường viền.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	Chọn tệp…
 Choose how the flat map lays out the Earth.	Chọn cách bản đồ phẳng thể hiện Trái Đất.
 Choose how the layer is drawn.	Chọn cách vẽ lớp.
 Choose how the raster is drawn.	Chọn cách vẽ raster.
+Choose polygon, lasso, or radius selection.	Chọn chế độ chọn theo vùng, lasso hoặc bán kính.
 Choose Project…	Chọn dự án…
 Choose S3 Connection	Chọn kết nối S3
 Choose S3 connection	Chọn kết nối S3
@@ -534,6 +539,7 @@ Circle Radius (km)	Bán kính vòng tròn (km)
 Class	Lớp
 Class color	Màu lớp phân loại
 Class Style	Kiểu lớp phân loại
+Class {n}	Lớp {n}
 Class {n} up to	Lớp {n} đến
 Classes	Lớp phân loại
 Classes from training polygons.	Các lớp từ vùng huấn luyện.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Nhấp để đặt một đồ họa điểm.
 Click to select the node	Nhấp để chọn nút
 Click to select, double-click to add, right-click for more	Nhấp để chọn, nhấp đúp để thêm, nhấp chuột phải để xem thêm
 Click to switch between decimal degrees and DMS	Nhấp để chuyển giữa độ thập phân và DMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Nhấp các đỉnh · nhấp điểm đầu hoặc nhấp đúp để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Clip	Cắt
 Clip a raster to the view, or resample it.	Cắt raster theo khung nhìn hoặc lấy mẫu lại.
 Clip Features	Cắt đối tượng
@@ -798,6 +805,7 @@ Deep Learning\nTools	Công cụ\nhọc sâu
 Deep Learning Package	Gói học sâu
 Deep Learning Tools	Công cụ học sâu
 Default	Mặc định
+Default can't be removed. You can rename or hide it.	Không thể xóa Mặc định. Bạn có thể đổi tên hoặc ẩn lớp nhãn này.
 Define Projection	Xác định phép chiếu
 Define Projection…	Xác định phép chiếu…
 Definition\nQuery	Truy vấn\nđịnh nghĩa
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Kéo trong khun
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Kéo một hình chữ nhật, rồi chọn ảnh PNG hoặc JPEG để đặt vào đó.
 Drag a tool from the palette to start building, or add an input layer.	Kéo một công cụ từ bảng công cụ để bắt đầu xây dựng, hoặc thêm một lớp đầu vào.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Kéo một đỉnh để di chuyển · nhấp vào một cạnh để thêm đỉnh · Delete xóa đỉnh đang chọn
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Kéo một vùng · thả để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Drag from a node's right port to another node's left port to connect them.	Kéo từ cổng phải của một nút tới cổng trái của nút khác để kết nối chúng.
 Drag from the centre out	Kéo từ tâm ra ngoài
 Drag from the centre to draw a circle.	Kéo từ tâm để vẽ hình tròn.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Kéo từ tâm · thả để chọn · Shift thêm · Ctrl/Cmd bỏ · Esc hủy
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Kéo bên trong khung bản đồ để di chuyển bản đồ và lăn chuột để thu phóng, thay vì di chuyển khung.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Kéo bên trong khung bản đồ để di chuyển bản đồ và lăn chuột để thu phóng, thay vì di chuyển khung. Esc để dừng.
 Drag the frame's outline · Esc to stop	Kéo đường viền của khung · Esc để dừng
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	ví dụ 0, 255, -9999
 e.g. continent = 'Europe'	vd. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	vd. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	vd. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Mỗi lớp nhãn gán nhãn cho các đối tượng khớp với mệnh đề riêng của nó, nên một đối tượng có thể nhận nhãn từ nhiều lớp nhãn.
 Each geoprocessing run becomes a step, chained by its outputs	Mỗi lần chạy xử lý không gian trở thành một bước, nối với nhau qua đầu ra
 Earth Index has no points in the view	Earth Index không có điểm nào trong khung nhìn
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Thuộc tính nội suy
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Diễn giải tọa độ gốc của lớp theo hệ tọa độ này. Điều này thay đổi vị trí lớp được vẽ; tệp nguồn không thay đổi.
 Interval	Khoảng
 invalid child id	id tiến trình con không hợp lệ
+Invalid selection outline · draw a smaller area	Đường viền chọn không hợp lệ · vẽ vùng nhỏ hơn
+Invalid selection outline · draw a smaller radius	Đường viền chọn không hợp lệ · vẽ bán kính nhỏ hơn
 Invalid: {error}	Không hợp lệ: {error}
 Invert	Đảo ngược
 Invert color scheme	Đảo ngược bảng màu
@@ -1551,6 +1564,7 @@ Labels	Nhãn
 labels are drawn for feature layers, not rasters	nhãn được vẽ cho lớp đối tượng, không cho raster
 Labels are drawn for feature layers, not rasters.	Nhãn được vẽ cho lớp đối tượng, không cho raster.
 Labels are off for this layer: the clause applies once they are on.	Nhãn của lớp này đang tắt: mệnh đề sẽ áp dụng khi nhãn được bật.
+Labels of the classes listed first are placed first when they compete for room.	Nhãn của các lớp đứng trước trong danh sách được đặt trước khi không đủ chỗ.
 Lagoon	Đầm phá
 Lambert Conformal Conic	Hình nón đồng góc Lambert
 Lambert Cylindrical Equal Area	Phép chiếu trụ đồng diện tích Lambert
@@ -2100,7 +2114,6 @@ Origin key	Khóa điểm xuất phát
 Ortho Mapping	Lập bản đồ trực giao
 Other	Khác
 Other Data	Dữ liệu khác
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Các lớp nhãn khác trên lớp này (tạo bằng lệnh): {n}. Mỗi lớp nhãn gán nhãn cho các đối tượng khớp với mệnh đề riêng của nó, nên một đối tượng có thể nhận nhãn từ nhiều lớp nhãn.
 Out Beyond	Khi thu nhỏ hơn
 Outline	Viền
 Outline another frame's extent in this map frame.	Vẽ đường bao phạm vi của một khung khác trong khung bản đồ này.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Dán đặc biệt (thành lớp mới)
 paste your key	dán khóa của bạn
 Pause	Tạm dừng
 Pause.	Tạm dừng.
+PDF	PDF
 PDF or PNG	PDF hoặc PNG
+PDF, PNG or SVG	PDF, PNG hoặc SVG
 Percent Clip	Cắt theo phần trăm
 Perceptually Uniform	Đồng đều về cảm nhận
 Performance	Hiệu năng
@@ -2315,6 +2330,7 @@ Quick actions	Thao tác nhanh
 Quick Analysis	Phân tích nhanh
 radius km	bán kính km
 radius m	bán kính m
+Radius {distance} (approximate)	Bán kính {distance} (gần đúng)
 Rain	Mưa
 Raise polygons by a height or a field.	Nâng các vùng theo một chiều cao hoặc một trường.
 Raise Priority	Tăng ưu tiên
@@ -2679,6 +2695,9 @@ Select an element to format it.	Chọn một phần tử để định dạng.
 Select By\nAttributes	Chọn theo\nthuộc tính
 Select By\nLocation	Chọn theo\nvị trí
 Select By Attributes	Chọn theo thuộc tính
+Select by Lasso	Chọn bằng Lasso
+Select by Polygon	Chọn theo vùng
+Select by Radius	Chọn theo bán kính
 Select every feature.	Chọn mọi đối tượng.
 Select features by their spatial relationship.	Chọn đối tượng theo quan hệ không gian.
 Select features that intersect another layer.	Chọn đối tượng giao với lớp khác.
@@ -2687,6 +2706,7 @@ Select Layer	Chọn lớp
 Select Layer By Attribute	Chọn lớp theo thuộc tính
 Select Layer By Location	Chọn lớp theo vị trí
 Select one text on the map, or a layout element, to format it.	Chọn một văn bản trên bản đồ, hoặc một phần tử bố cục, để định dạng.
+Select options	Tùy chọn chọn
 Select Related	Chọn liên quan
 Select Rows	Chọn hàng
 Select rows with a SQL expression.	Chọn hàng bằng biểu thức SQL.
@@ -2702,6 +2722,8 @@ Selected only	Chỉ mục đã chọn
 Selected records only	Chỉ các bản ghi được chọn
 Selecting Features	Chọn đối tượng
 Selection	Vùng chọn
+Selection outline is outside the supported map surface; draw a smaller area.	Đường viền chọn nằm ngoài bề mặt bản đồ được hỗ trợ; hãy vẽ vùng nhỏ hơn.
+Selection outline is too complex; draw a simpler area.	Đường viền chọn quá phức tạp; hãy vẽ vùng đơn giản hơn.
 Selection Type	Kiểu chọn
 Selects features that intersect features in another layer.	Chọn các đối tượng giao với đối tượng trong lớp khác.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Chọn đối tượng bằng mệnh đề WHERE SQL, vd. pop_est > 1000000.

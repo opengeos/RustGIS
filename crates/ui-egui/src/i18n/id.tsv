@@ -34,7 +34,9 @@ A field (known once the model runs)	Sebuah kolom (diketahui setelah model dijala
 A flat scene centred on the view (azimuthal equidistant).	Scene datar yang berpusat pada tampilan (azimutal ekuidistan).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Dataset dari server GeoLens, dibaca sebagai fitur (1.000 pertama dari masing-masing).
 A globe scene.	Scene globe.
+A hidden class leaves its features unlabelled.	Kelas yang disembunyikan membuat fiturnya tidak berlabel.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Lintang dan bujur (40.7, -74.0 atau 40°42'N 74°0'W), layer, penanda, atau nilai di tabel layer. Enter memilih baris yang disorot; Cari tempat mencari teks sebagai tempat
+A layer keeps at most {max} label classes besides Default.	Satu layer menyimpan paling banyak {max} kelas label selain Bawaan.
 A layer the model reads	Layer yang dibaca model
 A line for the Script pane	Satu baris untuk panel Skrip
 A magnifying lens that follows the pointer.	Lensa pembesar yang mengikuti penunjuk.
@@ -92,6 +94,7 @@ Add\nData	Tambah\nData
 Add ({n})	Tambah ({n})
 Add a bar chart of a layer's numeric field.	Tambahkan diagram batang dari kolom numerik suatu layer.
 Add a circle.	Tambahkan lingkaran.
+Add a class with this one's field, text symbol, placement and range.	Tambahkan kelas dengan kolom, simbol teks, penempatan, dan rentang yang sama dengan kelas ini.
 Add a colorbar of a raster layer's colour scale in the map frame.	Tambahkan bilah warna dari skala warna layer raster di bingkai peta.
 Add a description.	Tambahkan deskripsi.
 Add a field.	Tambahkan kolom.
@@ -298,6 +301,7 @@ Apply Style	Terapkan Gaya
 Apply to layers	Terapkan ke layer
 Apply to the selected layer	Terapkan pada layer terpilih
 Approve agents' actions without asking	Setujui tindakan agen tanpa bertanya
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Pemilihan berdasarkan perkiraan jarak lokal. Prafilter geografis yang tetap diterapkan dapat mengecualikan fitur di dekat garis tepi.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	ArcGIS Portal
@@ -519,6 +523,7 @@ Choose File…	Pilih File…
 Choose how the flat map lays out the Earth.	Pilih cara peta datar menampilkan Bumi.
 Choose how the layer is drawn.	Pilih cara layer digambar.
 Choose how the raster is drawn.	Pilih cara raster digambar.
+Choose polygon, lasso, or radius selection.	Pilih pemilihan dengan poligon, laso, atau radius.
 Choose Project…	Pilih proyek…
 Choose S3 Connection	Pilih Koneksi S3
 Choose S3 connection	Pilih koneksi S3
@@ -534,6 +539,7 @@ Circle Radius (km)	Radius Lingkaran (km)
 Class	Kelas
 Class color	Warna kelas
 Class Style	Gaya Kelas
+Class {n}	Kelas {n}
 Class {n} up to	Kelas {n} hingga
 Classes	Kelas
 Classes from training polygons.	Kelas dari poligon pelatihan.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Klik untuk menempatkan grafik titik.
 Click to select the node	Klik untuk memilih node
 Click to select, double-click to add, right-click for more	Klik untuk memilih, klik ganda untuk menambahkan, klik kanan untuk opsi lain
 Click to switch between decimal degrees and DMS	Klik untuk beralih antara derajat desimal dan DMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Klik verteks · klik titik awal atau klik ganda untuk memilih · Shift menambah · Ctrl/Cmd mengurangi · Esc membatalkan
 Clip	Potong (Clip)
 Clip a raster to the view, or resample it.	Potong raster ke tampilan, atau lakukan resampling.
 Clip Features	Potong Fitur
@@ -798,6 +805,7 @@ Deep Learning\nTools	Alat Deep\nLearning
 Deep Learning Package	Paket Deep Learning
 Deep Learning Tools	Alat Deep Learning
 Default	Bawaan
+Default can't be removed. You can rename or hide it.	Bawaan tidak dapat dihapus. Anda dapat mengganti nama atau menyembunyikannya.
 Define Projection	Tentukan Proyeksi
 Define Projection…	Tentukan Proyeksi…
 Definition\nQuery	Kueri\nDefinisi
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Seret bingkai p
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Seret persegi panjang, lalu pilih gambar PNG atau JPEG untuk ditempatkan di dalamnya.
 Drag a tool from the palette to start building, or add an input layer.	Seret alat dari palet untuk mulai membangun, atau tambahkan layer masukan.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Seret verteks untuk memindahkannya · klik tepi untuk menambah verteks · Delete menghapus verteks yang dipilih
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Seret area · lepaskan untuk memilih · Shift menambah · Ctrl/Cmd mengurangi · Esc membatalkan
 Drag from a node's right port to another node's left port to connect them.	Seret dari port kanan suatu node ke port kiri node lain untuk menghubungkannya.
 Drag from the centre out	Seret dari pusat ke luar
 Drag from the centre to draw a circle.	Seret dari pusat untuk menggambar lingkaran.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Seret dari pusat · lepaskan untuk memilih · Shift menambah · Ctrl/Cmd mengurangi · Esc membatalkan
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Seret di dalam bingkai peta untuk menggeser petanya dan putar roda untuk zoom, alih-alih memindahkan bingkainya.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Seret di dalam bingkai peta untuk menggeser petanya dan putar roda untuk zoom, alih-alih memindahkan bingkainya. Esc untuk berhenti.
 Drag the frame's outline · Esc to stop	Seret garis tepi bingkai · Esc untuk berhenti
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	mis. 0, 255, -9999
 e.g. continent = 'Europe'	mis. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	mis. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	mis. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Setiap kelas memberi label pada fitur yang cocok dengan klausanya sendiri, sehingga satu fitur bisa mendapat label dari lebih dari satu kelas.
 Each geoprocessing run becomes a step, chained by its outputs	Setiap proses geoprosesing menjadi satu langkah, dirangkai melalui keluarannya
 Earth Index has no points in the view	Earth Index tidak memiliki titik di tampilan
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Atribut Interpolasi
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Tafsirkan koordinat asli layer dalam sistem koordinat ini. Ini mengubah posisi gambarnya; file sumber tidak berubah.
 Interval	Interval
 invalid child id	id proses anak tidak valid
+Invalid selection outline · draw a smaller area	Garis tepi pilihan tidak valid · gambar area yang lebih kecil
+Invalid selection outline · draw a smaller radius	Garis tepi pilihan tidak valid · gambar radius yang lebih kecil
 Invalid: {error}	Tidak valid: {error}
 Invert	Balik
 Invert color scheme	Balik skema warna
@@ -1551,6 +1564,7 @@ Labels	Label
 labels are drawn for feature layers, not rasters	label digambar untuk layer fitur, bukan raster
 Labels are drawn for feature layers, not rasters.	Label digambar untuk layer fitur, bukan raster.
 Labels are off for this layer: the clause applies once they are on.	Label untuk layer ini nonaktif: klausa berlaku setelah label diaktifkan.
+Labels of the classes listed first are placed first when they compete for room.	Label kelas yang tercantum lebih awal ditempatkan lebih dahulu saat berebut ruang.
 Lagoon	Laguna
 Lambert Conformal Conic	Kerucut Konformal Lambert
 Lambert Cylindrical Equal Area	Silinder Luas Sama Lambert
@@ -2100,7 +2114,6 @@ Origin key	Kunci asal
 Ortho Mapping	Pemetaan Orto
 Other	Lainnya
 Other Data	Data Lainnya
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Kelas label lain di layer ini (dibuat dengan perintah): {n}. Masing-masing memberi label pada fitur yang cocok dengan klausanya sendiri, sehingga satu fitur bisa mendapat label dari lebih dari satu kelas.
 Out Beyond	Perkecil Melewati
 Outline	Garis tepi
 Outline another frame's extent in this map frame.	Gambar garis cakupan bingkai lain di bingkai peta ini.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Tempel Khusus (sebagai layer baru)
 paste your key	tempel kunci Anda
 Pause	Jeda
 Pause.	Jeda.
+PDF	PDF
 PDF or PNG	PDF atau PNG
+PDF, PNG or SVG	PDF, PNG atau SVG
 Percent Clip	Potong Persen
 Perceptually Uniform	Seragam secara Persepsi
 Performance	Performa
@@ -2315,6 +2330,7 @@ Quick actions	Tindakan cepat
 Quick Analysis	Analisis Cepat
 radius km	radius km
 radius m	radius m
+Radius {distance} (approximate)	Radius {distance} (perkiraan)
 Rain	Hujan
 Raise polygons by a height or a field.	Tinggikan poligon dengan nilai tinggi atau kolom.
 Raise Priority	Naikkan Prioritas
@@ -2679,6 +2695,9 @@ Select an element to format it.	Pilih elemen untuk memformatnya.
 Select By\nAttributes	Pilih Menurut\nAtribut
 Select By\nLocation	Pilih Menurut\nLokasi
 Select By Attributes	Pilih Menurut Atribut
+Select by Lasso	Pilih Menurut Laso
+Select by Polygon	Pilih Menurut Poligon
+Select by Radius	Pilih Menurut Radius
 Select every feature.	Pilih semua fitur.
 Select features by their spatial relationship.	Pilih fitur berdasarkan hubungan spasialnya.
 Select features that intersect another layer.	Pilih fitur yang berpotongan dengan layer lain.
@@ -2687,6 +2706,7 @@ Select Layer	Pilih Layer
 Select Layer By Attribute	Pilih Layer Menurut Atribut
 Select Layer By Location	Pilih Layer Menurut Lokasi
 Select one text on the map, or a layout element, to format it.	Pilih satu teks di peta, atau elemen tata letak, untuk memformatnya.
+Select options	Opsi pemilihan
 Select Related	Pilih yang Terkait
 Select Rows	Pilih Baris
 Select rows with a SQL expression.	Pilih baris dengan ekspresi SQL.
@@ -2702,6 +2722,8 @@ Selected only	Hanya yang terpilih
 Selected records only	Hanya rekaman terpilih
 Selecting Features	Memilih Fitur
 Selection	Seleksi
+Selection outline is outside the supported map surface; draw a smaller area.	Garis tepi pilihan berada di luar permukaan peta yang didukung; gambar area yang lebih kecil.
+Selection outline is too complex; draw a simpler area.	Garis tepi pilihan terlalu rumit; gambar area yang lebih sederhana.
 Selection Type	Tipe Seleksi
 Selects features that intersect features in another layer.	Memilih fitur yang berpotongan dengan fitur di layer lain.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Memilih fitur dengan klausa SQL where, mis. pop_est > 1000000.

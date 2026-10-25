@@ -34,7 +34,9 @@ A field (known once the model runs)	Un campo (se conoce cuando se ejecuta el mod
 A flat scene centred on the view (azimuthal equidistant).	Una escena plana centrada en la vista (acimutal equidistante).
 A GeoLens server's datasets, read as features (the first 1,000 of each).	Los conjuntos de datos de un servidor GeoLens, leídos como entidades (los primeros 1000 de cada uno).
 A globe scene.	Una escena de globo.
+A hidden class leaves its features unlabelled.	Una clase oculta deja sus entidades sin etiquetar.
 A latitude and longitude (40.7, -74.0 or 40°42'N 74°0'W), a layer, a bookmark or a value in a layer's table. Enter picks the highlighted row; Search places looks the text up as a place	Una latitud y longitud (40.7, -74.0 o 40°42'N 74°0'W), una capa, un marcador o un valor de la tabla de una capa. Enter elige la fila resaltada; Buscar lugares busca el texto como un lugar
+A layer keeps at most {max} label classes besides Default.	Una capa admite como máximo {max} clases de etiqueta además de Predeterminado.
 A layer the model reads	Una capa que lee el modelo
 A line for the Script pane	Una línea para el panel Script
 A magnifying lens that follows the pointer.	Una lupa que sigue al puntero.
@@ -92,6 +94,7 @@ Add\nData	Añadir\ndatos
 Add ({n})	Añadir ({n})
 Add a bar chart of a layer's numeric field.	Añadir un gráfico de barras de un campo numérico de una capa.
 Add a circle.	Añadir un círculo.
+Add a class with this one's field, text symbol, placement and range.	Añadir una clase con el campo, símbolo de texto, ubicación y rango de esta clase.
 Add a colorbar of a raster layer's colour scale in the map frame.	Añadir una barra de colores con la escala de colores de una capa ráster en el marco de mapa.
 Add a description.	Añadir una descripción.
 Add a field.	Añadir un campo.
@@ -298,6 +301,7 @@ Apply Style	Aplicar estilo
 Apply to layers	Aplicar a capas
 Apply to the selected layer	Aplicar a la capa seleccionada
 Approve agents' actions without asking	Aprobar las acciones de los agentes sin preguntar
+Approximate local-distance selection. The retained geographic prefilter can exclude features near the outline.	Selección aproximada por distancia local. El prefiltro geográfico conservado puede excluir entidades cercanas al contorno.
 ArcGIS	ArcGIS
 ArcGIS Hub	ArcGIS Hub
 ArcGIS Portal	Portal de ArcGIS
@@ -519,6 +523,7 @@ Choose File…	Elegir archivo…
 Choose how the flat map lays out the Earth.	Elegir cómo el mapa plano representa la Tierra.
 Choose how the layer is drawn.	Elegir cómo se dibuja la capa.
 Choose how the raster is drawn.	Elegir cómo se dibuja el ráster.
+Choose polygon, lasso, or radius selection.	Elija selección por polígono, lazo o radio.
 Choose Project…	Elegir proyecto…
 Choose S3 Connection	Elegir conexión S3
 Choose S3 connection	Elegir conexión S3
@@ -534,6 +539,7 @@ Circle Radius (km)	Radio del círculo (km)
 Class	Clase
 Class color	Color de la clase
 Class Style	Estilo de clase
+Class {n}	Clase {n}
 Class {n} up to	Clase {n} hasta
 Classes	Clases
 Classes from training polygons.	Clases a partir de polígonos de entrenamiento.
@@ -591,6 +597,7 @@ Click to place a point graphic.	Haga clic para colocar un gráfico de punto.
 Click to select the node	Haga clic para seleccionar el nodo
 Click to select, double-click to add, right-click for more	Clic para seleccionar, doble clic para añadir, clic derecho para más opciones
 Click to switch between decimal degrees and DMS	Haga clic para alternar entre grados decimales y GMS
+Click vertices · click the start or double-click to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Haga clic en los vértices · haga clic en el inicio o doble clic para seleccionar · Shift añade · Ctrl/Cmd elimina · Esc cancela
 Clip	Recortar
 Clip a raster to the view, or resample it.	Recortar un ráster a la vista, o remuestrearlo.
 Clip Features	Recortar entidades
@@ -798,6 +805,7 @@ Deep Learning\nTools	Herramientas de\naprendizaje profundo
 Deep Learning Package	Paquete de aprendizaje profundo
 Deep Learning Tools	Herramientas de aprendizaje profundo
 Default	Predeterminado
+Default can't be removed. You can rename or hide it.	Predeterminado no se puede eliminar. Puede cambiarle el nombre u ocultarlo.
 Define Projection	Definir proyección
 Define Projection…	Definir proyección…
 Definition\nQuery	Consulta de\ndefinición
@@ -903,9 +911,11 @@ Drag a map frame to pan its map, wheel to zoom it · Esc to stop	Arrastre un mar
 Drag a rectangle, then pick a PNG or JPEG image to place in it.	Arrastre un rectángulo y luego elija una imagen PNG o JPEG para colocarla en él.
 Drag a tool from the palette to start building, or add an input layer.	Arrastre una herramienta desde la paleta para empezar a construir, o añada una capa de entrada.
 Drag a vertex to move it · click an edge to add one · Delete removes the chosen vertex	Arrastre un vértice para moverlo · haga clic en un borde para añadir uno · Supr quita el vértice elegido
+Drag an area · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Arrastre un área · suelte para seleccionar · Shift añade · Ctrl/Cmd elimina · Esc cancela
 Drag from a node's right port to another node's left port to connect them.	Arrastre desde el puerto derecho de un nodo hasta el puerto izquierdo de otro nodo para conectarlos.
 Drag from the centre out	Arrastre desde el centro hacia fuera
 Drag from the centre to draw a circle.	Arrastre desde el centro para dibujar un círculo.
+Drag from the centre · release to select · Shift adds · Ctrl/Cmd removes · Esc cancels	Arrastre desde el centro · suelte para seleccionar · Shift añade · Ctrl/Cmd elimina · Esc cancela
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them.	Arrastrar dentro de los marcos de mapa para desplazar sus mapas y girar la rueda para hacer zoom, en lugar de mover los marcos.
 Drag inside map frames to pan their maps and turn the wheel to zoom them, instead of moving them. Esc stops.	Arrastrar dentro de los marcos de mapa para desplazar sus mapas y girar la rueda para hacer zoom, en lugar de mover los marcos. Esc termina.
 Drag the frame's outline · Esc to stop	Arrastre el contorno del marco · Esc para detener
@@ -962,6 +972,7 @@ e.g. 0, 255, -9999	p. ej. 0, 255, -9999
 e.g. continent = 'Europe'	p. ej. continent = 'Europe'
 e.g. pop_est > 100000000 AND continent = 'Asia'	p. ej. pop_est > 100000000 AND continent = 'Asia'
 e.g. pop_max > 1000000	p. ej. pop_max > 1000000
+Each class labels the features its own clause matches, so a feature can get a label from more than one.	Cada clase etiqueta las entidades que coinciden con su propia cláusula, así que una entidad puede recibir etiquetas de más de una clase.
 Each geoprocessing run becomes a step, chained by its outputs	Cada ejecución de geoprocesamiento se convierte en un paso, encadenado por sus salidas
 Earth Index has no points in the view	Earth Index no tiene puntos en la vista
 Earth Search	Earth Search
@@ -1474,6 +1485,8 @@ Interpolation Attribute	Atributo de interpolación
 Interpret the layer's native coordinates in this coordinate system. This changes where it draws; the source file is unchanged.	Interpretar las coordenadas nativas de la capa en este sistema de coordenadas. Esto cambia dónde se dibuja; el archivo de origen no se modifica.
 Interval	Intervalo
 invalid child id	id de hijo no válido
+Invalid selection outline · draw a smaller area	Contorno de selección no válido · dibuje un área más pequeña
+Invalid selection outline · draw a smaller radius	Contorno de selección no válido · dibuje un radio menor
 Invalid: {error}	No válida: {error}
 Invert	Invertir
 Invert color scheme	Invertir esquema de color
@@ -1551,6 +1564,7 @@ Labels	Etiquetas
 labels are drawn for feature layers, not rasters	las etiquetas se dibujan para capas de entidades, no para rásteres
 Labels are drawn for feature layers, not rasters.	Las etiquetas se dibujan para capas de entidades, no para rásteres.
 Labels are off for this layer: the clause applies once they are on.	Las etiquetas están desactivadas en esta capa: la cláusula se aplica cuando se activen.
+Labels of the classes listed first are placed first when they compete for room.	Las etiquetas de las clases que aparecen primero se colocan primero cuando compiten por espacio.
 Lagoon	Laguna
 Lambert Conformal Conic	Cónica conforme de Lambert
 Lambert Cylindrical Equal Area	Cilíndrica de áreas iguales de Lambert
@@ -2100,7 +2114,6 @@ Origin key	Clave de origen
 Ortho Mapping	Ortocartografía
 Other	Otro
 Other Data	Otros datos
-Other label classes on this layer (made with commands): {n}. Each labels the features its own clause matches, so a feature can get a label from more than one.	Otras clases de etiqueta en esta capa (creadas con comandos): {n}. Cada una etiqueta las entidades que coinciden con su propia cláusula, así que una entidad puede recibir etiquetas de más de una.
 Out Beyond	Límite al alejar
 Outline	Contorno
 Outline another frame's extent in this map frame.	Delinear la extensión de otro marco en este marco de mapa.
@@ -2165,7 +2178,9 @@ Paste Special (as a new layer)	Pegado especial (como capa nueva)
 paste your key	pegue su clave
 Pause	Pausar
 Pause.	Pausar.
+PDF	PDF
 PDF or PNG	PDF o PNG
+PDF, PNG or SVG	PDF, PNG o SVG
 Percent Clip	Recorte porcentual
 Perceptually Uniform	Perceptualmente uniformes
 Performance	Rendimiento
@@ -2315,6 +2330,7 @@ Quick actions	Acciones rápidas
 Quick Analysis	Análisis rápido
 radius km	radio km
 radius m	radio m
+Radius {distance} (approximate)	Radio {distance} (aproximado)
 Rain	Lluvia
 Raise polygons by a height or a field.	Elevar polígonos según una altura o un campo.
 Raise Priority	Subir prioridad
@@ -2679,6 +2695,9 @@ Select an element to format it.	Seleccione un elemento para darle formato.
 Select By\nAttributes	Seleccionar por\natributos
 Select By\nLocation	Seleccionar por\nubicación
 Select By Attributes	Seleccionar por atributos
+Select by Lasso	Seleccionar por lazo
+Select by Polygon	Seleccionar por polígono
+Select by Radius	Seleccionar por radio
 Select every feature.	Seleccionar todas las entidades.
 Select features by their spatial relationship.	Seleccionar entidades por su relación espacial.
 Select features that intersect another layer.	Seleccionar entidades que intersecan otra capa.
@@ -2687,6 +2706,7 @@ Select Layer	Seleccionar capa
 Select Layer By Attribute	Seleccionar capa por atributo
 Select Layer By Location	Seleccionar capa por ubicación
 Select one text on the map, or a layout element, to format it.	Seleccione un texto en el mapa, o un elemento del diseño, para darle formato.
+Select options	Opciones de selección
 Select Related	Seleccionar relacionados
 Select Rows	Seleccionar filas
 Select rows with a SQL expression.	Seleccionar filas con una expresión SQL.
@@ -2702,6 +2722,8 @@ Selected only	Solo seleccionadas
 Selected records only	Solo los registros seleccionados
 Selecting Features	Selección de entidades
 Selection	Selección
+Selection outline is outside the supported map surface; draw a smaller area.	El contorno de selección está fuera de la superficie de mapa admitida; dibuje un área más pequeña.
+Selection outline is too complex; draw a simpler area.	El contorno de selección es demasiado complejo; dibuje un área más sencilla.
 Selection Type	Tipo de selección
 Selects features that intersect features in another layer.	Selecciona las entidades que intersecan entidades de otra capa.
 Selects features with a SQL where clause, e.g. pop_est > 1000000.	Selecciona entidades con una cláusula WHERE de SQL, p. ej. pop_est > 1000000.
