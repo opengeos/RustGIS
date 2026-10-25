@@ -626,14 +626,24 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
 #[test]
 fn a_qgis_project_in_degrees_opens_in_equirectangular() {
     // QGIS draws a project in degrees as plate carrée, longitude and latitude as x and y.
+    // A PROJ string goes where QGIS keeps it for a system without an authority code.
     let qgs = |crs: &str| {
+        let tag = if crs.starts_with('+') { "proj4" } else { "authid" };
         format!(
-            r#"<qgis version="3.10.0"><title>World</title><projectCrs><spatialrefsys><authid>{crs}</authid></spatialrefsys></projectCrs>
+            r#"<qgis version="3.10.0"><title>World</title><projectCrs><spatialrefsys><{tag}>{crs}</{tag}></spatialrefsys></projectCrs>
   <mapcanvas name="theMapCanvas"><extent><xmin>5</xmin><ymin>45</ymin><xmax>15</xmax><ymax>50</ymax></extent></mapcanvas><projectlayers/></qgis>"#
         )
     };
     let mut s = world();
-    for (crs, datum_note) in [("EPSG:4326", false), ("EPSG:4258", false), ("OGC:CRS84", false), ("EPSG:4314", true)] {
+    for (crs, datum_note) in [
+        ("EPSG:4326", false),
+        ("EPSG:4258", false),
+        ("OGC:CRS84", false),
+        ("EPSG:4314", true),
+        // Saved without an authority code: its PROJ string.
+        ("+proj=longlat +datum=WGS84 +no_defs", false),
+        ("+proj=longlat +ellps=bessel +towgs84=598.1,73.7,418.2,0.202,0.045,-2.455,6.7 +no_defs", true),
+    ] {
         let out = s.run("project.importQgis", &json!({"text": qgs(crs)})).unwrap();
         assert_eq!(s.map().projection.code(), "equirectangular", "{crs}");
         let text = serde_json::to_string(&out["notes"]).unwrap();
@@ -646,7 +656,8 @@ fn a_qgis_project_in_degrees_opens_in_equirectangular() {
     // Longitudes from Paris (in grads): drawn the same way, the view left to the data.
     let out = s.run("project.importQgis", &json!({"text": qgs("EPSG:4807")})).unwrap();
     assert_eq!(s.map().projection.code(), "equirectangular");
-    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("on WGS 84"));
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("on WGS 84") && text.contains("from Greenwich"), "{text}");
     // A projected one keeps its own projection.
     s.run("project.importQgis", &json!({"text": qgs("EPSG:2056").replace("<xmin>5</xmin>", "<xmin>2600000</xmin>")})).unwrap();
     assert_eq!(s.map().projection.code(), "EPSG:2056");
