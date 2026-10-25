@@ -1378,6 +1378,9 @@ impl JoinMatch {
     }
 }
 
+/// The least distance Closest's first search reaches, in metres.
+const MIN_REACH_M: f64 = 10.0;
+
 /// The ground distance between two features in metres: zero when they intersect.
 fn ground_distance(t: &Geometry, t_geo: &geo::Geometry<f64>, j: &Geometry, j_geo: &geo::Geometry<f64>) -> Option<f64> {
     if t_geo.intersects(j_geo) { Some(0.0) } else { crate::join::distance_m(t, j) }
@@ -1648,9 +1651,14 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                         // Closest: searches widening from about a grid cell, doubling until one
                         // finds a feature within its distance (no nearer one can lie outside it),
                         // up to the search distance. Without an index, one search of everything.
+                        // (A grid of coincident features has cells of no size: the first search
+                        // reaches at least `MIN_REACH_M`.)
                         _ => {
-                            let mut reach =
-                                if use_grid { cell_w.max(cell_h).to_radians() * rustgis_geom::EARTH_RADIUS_M } else { f64::INFINITY };
+                            let mut reach = if use_grid {
+                                (cell_w.max(cell_h).to_radians() * rustgis_geom::EARTH_RADIUS_M).max(MIN_REACH_M)
+                            } else {
+                                f64::INFINITY
+                            };
                             loop {
                                 let r = limit.map_or(reach, |l| reach.min(l));
                                 // A search reaching a pole or across the antimeridian looks at every
@@ -3060,6 +3068,24 @@ mod tests {
             expected.sort_by(|a, b| key(a).total_cmp(&key(b)));
             assert_eq!(found, expected, "probe {row}");
         }
+
+        // Join features all at one spot make a grid of cells of no size; Closest still finds them.
+        let mut piled = Dataset::new("piled", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
+        for i in 0..20 {
+            piled.push(point(1.0, 1.0), vec![Value::Int(i)]);
+        }
+        let m4 = Map(HashMap::from([("piled".to_string(), piled), ("homes".to_string(), m.0["homes"].clone())]));
+        let near_pile = layer(
+            crate::run(
+                "spatialJoin",
+                &m4,
+                &serde_json::json!({"target": "homes", "join": "piled", "match": "Closest", "units": "Meters", "distanceField": "d"}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(near_pile.value(0, near_pile.field_index("join_i").unwrap()), &Value::Int(0));
+        let d = num_at(&near_pile, 0, "d").unwrap();
+        assert!((d - hav((0.004, 0.0), (1.0, 1.0))).abs() < 1e-6 * d, "{d}");
 
         // A match option in any case, as the Tools pane reads it.
         assert_eq!(JoinMatch::parse(" closest "), JoinMatch::Closest);

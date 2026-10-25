@@ -10,11 +10,18 @@ use rustgis_data::{Coord, Dataset, FieldType, Geometry, Value};
 use rustgis_geom::{Aeqd, EARTH_RADIUS_M, Extent, geodesic_interpolate, geodesic_length_m, geodesic_ring_area_m2, haversine_m};
 use serde_json::Value as Json;
 
-/// The first coordinate of a geometry: a point on it, for an upper bound on distances.
+/// Whether a coordinate is a place on the Earth in lon/lat: finite, with a latitude of ±90° at most
+/// and a longitude within 540° of the meridian (a shape across the antimeridian goes past 180°).
+/// Distances leave other coordinates out, as places they can't measure from.
+fn on_earth(c: &Coord) -> bool {
+    c.is_finite() && c.x.abs() <= 540.0 && c.y.abs() <= 90.0
+}
+
+/// The first coordinate of a geometry that is a place on the Earth.
 pub fn first_coord(g: &Geometry) -> Option<Coord> {
     let mut first = None;
     g.for_each_coord(|c| {
-        if first.is_none() && c.is_finite() {
+        if first.is_none() && on_earth(&c) {
             first = Some(c);
         }
     });
@@ -28,23 +35,36 @@ pub fn first_coord(g: &Geometry) -> Option<Coord> {
 /// in one centred between the pair found, where the plane is true near the answer however large
 /// the features are.
 pub fn distance_m(a: &Geometry, b: &Geometry) -> Option<f64> {
-    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(first_coord(a)?, first_coord(b)?, 0.5)))?;
-    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(p, q, 0.5))).unwrap_or((p, q));
+    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(first_coord(a)?, first_coord(b)?, 0.5)), None)?;
+    let (p, q) = nearest_pair(a, b, &Aeqd::new(geodesic_interpolate(p, q, 0.5)), Some((p, q))).unwrap_or((p, q));
     let d = haversine_m(p, q);
     d.is_finite().then_some(d)
 }
 
 /// The nearest points of two geometries (lon/lat) as found in `plane`: a point of `a`, one of `b`.
-fn nearest_pair(a: &Geometry, b: &Geometry, plane: &Aeqd) -> Option<(Coord, Coord)> {
+/// `seed`, a pair already found, starts the search, so pairs no nearer than it are skipped.
+fn nearest_pair(a: &Geometry, b: &Geometry, plane: &Aeqd, seed: Option<(Coord, Coord)>) -> Option<(Coord, Coord)> {
     let boxed = |segs: Vec<(Coord, Coord)>| -> Vec<((Coord, Coord), [f64; 4])> {
         segs.into_iter().map(|(s, e)| ((s, e), [s.x.min(e.x), s.y.min(e.y), s.x.max(e.x), s.y.max(e.y)])).collect()
     };
-    let (sa, sb) = (boxed(segments(a, plane)), boxed(segments(b, plane)));
+    let sa = boxed(segments(a, plane));
+    // `b`'s edges by their west end, so the edges past one of `a`'s by more than the best distance
+    // so far end the search for it.
+    let mut sb = boxed(segments(b, plane));
+    sb.sort_by(|x, y| x.1[0].total_cmp(&y.1[0]));
+    let mut best: Option<(f64, Coord, Coord)> = seed
+        .map(|(p, q)| {
+            let (p, q) = (plane.forward(p), plane.forward(q));
+            ((p.x - q.x).hypot(p.y - q.y), p, q)
+        })
+        .filter(|(d, _, _)| d.is_finite());
     // Two segments that don't cross are nearest at an end of one of them. A pair whose boxes are
     // already farther apart than the best pair so far can't hold a nearer one.
-    let mut best: Option<(f64, Coord, Coord)> = None;
     for &((a0, a1), ba) in &sa {
         for &((b0, b1), bb) in &sb {
+            if best.is_some_and(|(d, _, _)| bb[0] - ba[2] >= d) {
+                break;
+            }
             let gap = (bb[0] - ba[2]).max(ba[0] - bb[2]).max(0.0).hypot((bb[1] - ba[3]).max(ba[1] - bb[3]).max(0.0));
             if best.is_some_and(|(d, _, _)| gap >= d) {
                 continue;
@@ -53,7 +73,8 @@ fn nearest_pair(a: &Geometry, b: &Geometry, plane: &Aeqd) -> Option<(Coord, Coor
                 [(a0, closest_on(a0, b0, b1)), (a1, closest_on(a1, b0, b1)), (closest_on(b0, a0, a1), b0), (closest_on(b1, a0, a1), b1)]
             {
                 let d = (p.x - q.x).hypot(p.y - q.y);
-                if best.is_none_or(|(b, _, _)| d < b) {
+                // An absurd coordinate can project to nothing finite: it never stands as the best.
+                if d.is_finite() && best.is_none_or(|(b, _, _)| d < b) {
                     best = Some((d, p, q));
                 }
             }
@@ -67,7 +88,7 @@ fn nearest_pair(a: &Geometry, b: &Geometry, plane: &Aeqd) -> Option<(Coord, Coor
 fn segments(g: &Geometry, plane: &Aeqd) -> Vec<(Coord, Coord)> {
     let mut out = Vec::new();
     let mut path = |pts: &[Coord], closed: bool| {
-        let v: Vec<Coord> = pts.iter().filter(|c| c.is_finite()).map(|c| plane.forward(*c)).collect();
+        let v: Vec<Coord> = pts.iter().filter(|c| on_earth(c)).map(|c| plane.forward(*c)).collect();
         match v.as_slice() {
             [] => {}
             [only] => out.push((*only, *only)),
@@ -337,6 +358,20 @@ mod tests {
     }
 
     #[test]
+    fn an_absurd_coordinate_does_not_hide_a_real_one() {
+        // A finite longitude far out of range projects to nothing finite; the real point beside it
+        // is still measured, whichever comes first.
+        // With the plane centred near f64::MAX, a longitude of -f64::MAX is infinitely far from it.
+        let (origin, near) = (Coord::new(0.0, 0.0), Coord::new(0.001, 0.0));
+        let a = Geometry::MultiPoint(vec![Coord::new(f64::MAX, 0.0), origin]);
+        for pts in [vec![Coord::new(-f64::MAX, 0.0), near], vec![near, Coord::new(-f64::MAX, 0.0)]] {
+            let d = distance_m(&a, &Geometry::MultiPoint(pts.clone()));
+            let truth = haversine_m(origin, near);
+            assert!(d.is_some_and(|d| (d - truth).abs() < 1e-6 * truth), "{pts:?}: {d:?} vs {truth}");
+        }
+    }
+
+    #[test]
     fn distances_are_true_far_from_the_features_first_vertices() {
         // A line 90° of longitude long at 60°N, measured from beside its far end: the nearest
         // points are about 4,500 km from the line's first vertex.
@@ -346,6 +381,15 @@ mod tests {
             let truth = brute(p, &line);
             assert!((d - truth).abs() < 1e-4 * truth, "{p:?}: {d} vs {truth}");
         }
+        // Between two large features: lines 90° long, overlapping in longitude only at their far
+        // ends, and a polygon's far side from a line beside it.
+        let (a, b): (Vec<Coord>, Vec<Coord>) = (
+            (0..=90).map(|x| Coord::new(f64::from(x), 60.0)).collect(),
+            (80..=170).map(|x| Coord::new(f64::from(x) + 0.5, 61.0 + f64::from(x - 80) * 0.01)).collect(),
+        );
+        let d = distance_m(&Geometry::Line(vec![a.clone()]), &Geometry::Line(vec![b.clone()])).unwrap();
+        let truth = a.iter().map(|p| brute(*p, &b)).chain(b.iter().map(|p| brute(*p, &a))).fold(f64::INFINITY, f64::min);
+        assert!((d - truth).abs() < 1e-4 * truth, "lines: {d} vs {truth}");
         // A polygon's far side, from outside it.
         let mut ring: Vec<Coord> = (-80..=80).map(|x| Coord::new(f64::from(x), 50.0)).collect();
         ring.extend((-80..=80).rev().map(|x| Coord::new(f64::from(x), 70.0)));
@@ -354,5 +398,9 @@ mod tests {
         let d = distance_m(&Geometry::Point(p), &Geometry::Polygon(vec![vec![ring.clone()]])).unwrap();
         let truth = brute(p, &ring);
         assert!((d - truth).abs() < 1e-4 * truth, "{d} vs {truth}");
+        let road: Vec<Coord> = (40..=82).map(|x| Coord::new(f64::from(x), 48.5 + f64::from(x - 40) * 0.01)).collect();
+        let d = distance_m(&Geometry::Line(vec![road.clone()]), &Geometry::Polygon(vec![vec![ring.clone()]])).unwrap();
+        let truth = road.iter().map(|p| brute(*p, &ring)).chain(ring.iter().map(|p| brute(*p, &road))).fold(f64::INFINITY, f64::min);
+        assert!((d - truth).abs() < 1e-4 * truth, "line to polygon: {d} vs {truth}");
     }
 }
