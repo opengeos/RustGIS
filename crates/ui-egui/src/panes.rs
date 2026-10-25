@@ -4242,11 +4242,9 @@ fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
     }
 }
 
-/// The Strokes section of a line layer's symbology: strokes stacked in one symbol, each with
-/// its own colour, width, sideways offset, cap and join. Listed top first, as they are seen. A
-/// layer with classes can stack strokes for one class of its own, picked at the top.
 /// A stroke's markers along the editor's preview line, from `x.0` to `x.1` at `y`, scaled by `k`:
-/// markers as dots (squares as squares), hash marks as ticks, `w` wide.
+/// markers as dots (squares as squares), hash marks as ticks, `w` wide. A sketch, not the map's
+/// drawing: other shapes and outlines aren't shown, and inner placements are marked at the middle.
 fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: egui::Color32, w: f32) {
     let mut xs = Vec::new();
     if m.at.has(Placements::INTERVAL) {
@@ -4354,6 +4352,9 @@ fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: L
     ui.end_row();
 }
 
+/// The Strokes section of a line layer's symbology: strokes stacked in one symbol, each with
+/// its own colour, width, sideways offset, cap and join. Listed top first, as they are seen. A
+/// layer with classes can stack strokes for one class of its own, picked at the top.
 fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer, t: &Tokens) {
     let classes = stroke_classes(&l.renderer);
     let picked_id = egui::Id::unique(("stroke_class", l.id));
