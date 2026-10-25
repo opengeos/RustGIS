@@ -367,7 +367,11 @@ impl Geographic {
         let has = |p: &str| def.split_whitespace().any(|t| t == p);
         (has("+proj=longlat") || has("+proj=latlong")).then(|| Geographic {
             wgs84: has("+datum=WGS84") || has("+datum=NAD83") || has("+towgs84=0,0,0,0,0,0,0") || has("+towgs84=0,0,0"),
-            greenwich: !def.contains("+pm=") || has("+pm=greenwich") || has("+pm=0"),
+            // `+pm=` names a meridian or gives its offset in degrees (`0`, `0.0`: Greenwich).
+            greenwich: def
+                .split_whitespace()
+                .filter_map(|t| t.strip_prefix("+pm="))
+                .all(|pm| pm.eq_ignore_ascii_case("greenwich") || pm.parse::<f64>().is_ok_and(|d| d == 0.0)),
         })
     }
 }

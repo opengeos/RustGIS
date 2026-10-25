@@ -642,6 +642,7 @@ fn a_qgis_project_in_degrees_opens_in_equirectangular() {
         ("EPSG:4314", true),
         // Saved without an authority code: its PROJ string.
         ("+proj=longlat +datum=WGS84 +no_defs", false),
+        ("+proj=longlat +datum=WGS84 +pm=0.0 +no_defs", false),
         ("+proj=longlat +ellps=bessel +towgs84=598.1,73.7,418.2,0.202,0.045,-2.455,6.7 +no_defs", true),
     ] {
         let out = s.run("project.importQgis", &json!({"text": qgs(crs)})).unwrap();
