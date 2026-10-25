@@ -5819,13 +5819,14 @@ mod tests {
     #[test]
     fn markers_on_the_globe_follow_the_line_up_to_the_horizon() {
         use rustgis_map::{LineMarkers, LineStroke};
-        // A line from lon -30 to lon 120 seen over lon 10: its far end is behind the globe, but
-        // the part up to the horizon shows, so its marks do.
+        // A line from lon -120 over lon 10 to lon 120, seen over lon 10: both its ends are behind
+        // the globe, its middle vertex alone shows, yet the parts up to the horizon on either side
+        // show too, so their marks do.
         let mut m = Map::new("Map");
         m.basemap = rustgis_map::Basemap::Blank;
         m.projection = rustgis_map::Projection::Globe;
         let mut d = Dataset::new("rail", GeometryType::Polyline, vec![]);
-        d.push(Some(Geometry::Line(vec![vec![Coord::new(-30.0, 0.0), Coord::new(120.0, 0.0)]])), vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-120.0, 0.0), Coord::new(10.0, 0.0), Coord::new(120.0, 0.0)]])), vec![]);
         let id = m.add_dataset(d);
         let red = Rgba::rgb(255, 0, 0);
         let squares =
@@ -5837,6 +5838,8 @@ mod tests {
         let reds: Vec<u32> =
             (0..400).filter(|x| (0..400).any(|y| r.pixmap.pixel(*x, y).is_some_and(|p| p.red() > 200 && p.green() < 60))).collect();
         assert!(reds.len() > 20, "marks along the visible part: {reds:?}");
+        // On both sides of the middle, from the horizon in.
+        assert!(reds.iter().any(|x| *x < 150) && reds.iter().any(|x| *x > 250), "{reds:?}");
     }
 
     #[test]
