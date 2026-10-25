@@ -153,6 +153,9 @@ pub struct TileLayer {
     /// No date of `time_urls` falls in the slider's window: the layer draws nothing for now.
     #[serde(skip)]
     pub time_hidden: bool,
+    /// Why the archive can't be read (a moved file, or a relative path with no project folder): it draws nothing.
+    #[serde(skip)]
+    pub error: Option<String>,
 }
 
 /// The most dates a tile layer lists (as the time slider steps through at most).
@@ -220,6 +223,12 @@ fn is_normal(b: &crate::effects::Blend) -> bool {
 pub const MAX_ZOOM: u8 = 24;
 
 impl TileLayer {
+    /// The local archive that Repair Data Source replaces.
+    pub fn archive_file(&self) -> Option<&str> {
+        (matches!(self.kind, TileKind::PmTiles | TileKind::MbTiles) && is_local_archive(&self.url) && !self.url.starts_with(UPLOAD))
+            .then_some(self.url.as_str())
+    }
+
     pub fn new(name: impl Into<String>, kind: TileKind, url: impl Into<String>) -> TileLayer {
         TileLayer {
             name: name.into(),
@@ -243,13 +252,14 @@ impl TileLayer {
             time_at: 0.0,
             time_urls: Vec::new(),
             time_hidden: false,
+            error: None,
         }
     }
 
     /// Whether the layer draws now: shown, and with a date in the time slider's window when it
     /// follows one.
     pub fn draws(&self) -> bool {
-        self.visible && !self.time_hidden
+        self.visible && !self.time_hidden && self.error.is_none()
     }
 
     /// Checks the address and brings the numbers into range, after reading one from a project
@@ -272,7 +282,9 @@ impl TileLayer {
                 return Err("an uploaded MBTiles file needs a name".into());
             }
         } else if local {
-            check_path(&self.url, if self.kind == TileKind::MbTiles { "mbtiles" } else { "pmtiles" })?;
+            if self.error.is_none() {
+                check_path(&self.url, if self.kind == TileKind::MbTiles { "mbtiles" } else { "pmtiles" })?;
+            }
         } else {
             check_url(&self.url)?;
         }

@@ -624,6 +624,73 @@ fn rivers_are_labelled_along_their_lines_in_italics() {
 }
 
 #[test]
+fn a_qgis_project_in_degrees_opens_in_equirectangular() {
+    // QGIS draws a project in degrees as plate carrée, longitude and latitude as x and y.
+    // A PROJ string goes where QGIS keeps it for a system without an authority code.
+    let qgs = |crs: &str| {
+        let tag = if crs.starts_with('+') { "proj4" } else { "authid" };
+        format!(
+            r#"<qgis version="3.10.0"><title>World</title><projectCrs><spatialrefsys><{tag}>{crs}</{tag}></spatialrefsys></projectCrs>
+  <mapcanvas name="theMapCanvas"><extent><xmin>5</xmin><ymin>45</ymin><xmax>15</xmax><ymax>50</ymax></extent></mapcanvas><projectlayers/></qgis>"#
+        )
+    };
+    let mut s = world();
+    for (crs, datum_note) in [
+        ("EPSG:4326", false),
+        ("EPSG:4258", false),
+        ("OGC:CRS84", false),
+        ("EPSG:4314", true),
+        // Saved without an authority code: its PROJ string.
+        ("+proj=longlat +datum=WGS84 +no_defs", false),
+        ("+proj=longlat +datum=WGS84 +pm=0.0 +no_defs", false),
+        ("+proj=longlat +ellps=bessel +towgs84=598.1,73.7,418.2,0.202,0.045,-2.455,6.7 +no_defs", true),
+    ] {
+        let out = s.run("project.importQgis", &json!({"text": qgs(crs)})).unwrap();
+        assert_eq!(s.map().projection.code(), "equirectangular", "{crs}");
+        let text = serde_json::to_string(&out["notes"]).unwrap();
+        assert!(!text.contains("Web Mercator"), "{crs}: {text}");
+        assert_eq!(text.contains("drawn in Equirectangular on WGS 84"), datum_note, "{crs}: {text}");
+        // The saved view, read in degrees.
+        let c = s.map().to_lonlat(s.map().camera.center).unwrap();
+        assert!((c.x - 10.0).abs() < 0.5 && (c.y - 47.5).abs() < 0.5, "{crs}: {c:?}");
+    }
+    // Longitudes from Paris (in grads): drawn the same way, the view left to the data.
+    let out = s.run("project.importQgis", &json!({"text": qgs("EPSG:4807")})).unwrap();
+    assert_eq!(s.map().projection.code(), "equirectangular");
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("on WGS 84") && text.contains("from Greenwich"), "{text}");
+    // A projected one keeps its own projection.
+    s.run("project.importQgis", &json!({"text": qgs("EPSG:2056").replace("<xmin>5</xmin>", "<xmin>2600000</xmin>")})).unwrap();
+    assert_eq!(s.map().projection.code(), "EPSG:2056");
+}
+
+#[test]
+fn a_qgis_project_with_a_geographic_proj_string_keeps_its_saved_view() {
+    for (crs, datum_note, saved_view) in [
+        ("+proj=longlat +datum=WGS84", false, true),
+        ("+proj=latlong +datum=WGS84", false, true),
+        ("+proj=lonlat +datum=WGS84", false, true),
+        ("+proj=latlon +datum=WGS84", false, true),
+        ("  +datum=WGS84 +proj=longlat +no_defs", false, true),
+        ("+proj=longlat +datum=potsdam", true, true),
+        ("+proj=longlat +datum=WGS84 +pm=paris", true, false),
+    ] {
+        let text = format!(
+            r#"<qgis><projectCrs><spatialrefsys><authid></authid><proj4>{crs}</proj4></spatialrefsys></projectCrs>
+<mapcanvas><extent><xmin>5</xmin><ymin>45</ymin><xmax>15</xmax><ymax>50</ymax></extent></mapcanvas><projectlayers/></qgis>"#
+        );
+        let mut s = world();
+        let out = s.run("project.importQgis", &json!({"text": text})).unwrap();
+        assert_eq!(s.map().projection.code(), "equirectangular", "{crs}");
+        let notes = serde_json::to_string(&out["notes"]).unwrap();
+        assert!(!notes.contains("Web Mercator"), "{crs}: {notes}");
+        assert_eq!(notes.contains("drawn in Equirectangular on WGS 84"), datum_note, "{crs}: {notes}");
+        let c = s.map().to_lonlat(s.map().camera.center).unwrap();
+        assert_eq!((c.x - 10.0).abs() < 0.5 && (c.y - 47.5).abs() < 0.5, saved_view, "{crs}: {c:?}");
+    }
+}
+
+#[test]
 fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let dir = std::env::temp_dir().join(format!("rustgis-qgis-{}", std::process::id()));
     std::fs::create_dir_all(dir.join("data")).unwrap();
@@ -689,6 +756,10 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
     let rivers = s.map().layer_by_name("Rivers").unwrap();
     assert_eq!((rivers.line_strokes.len(), rivers.transparency), (2, 50.0));
+    // A raster's style on a feature layer says its colouring is left out.
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="1"/></pipe></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "Rivers", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("a raster's colouring"), "{out}");
     assert!(s.run("style.importQgis", &json!({"layer": "Rivers", "text": "<nonsense"})).is_err());
     // A style saved from another layer: classes and labels by fields Rivers hasn't are noted, and
     // the label class that has nothing to label from is switched off.
@@ -715,6 +786,11 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let t = s.map().tiles.iter().find(|t| t.name == "Tiles").unwrap();
     assert!(t.overlay);
     assert_eq!(t.blend, rustgis_map::effects::Blend::Multiply);
+    // A layer of no provider (QGIS's annotation layer) is noted by its kind.
+    let qgs = r#"<qgis version="3.42.0"><title>Notes</title><projectlayers><maplayer type="annotation"><id>a</id><layername>Notes</layername></maplayer></projectlayers></qgis>"#;
+    let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("doesn't read QGIS's annotation layers"), "{text}");
     // A project given as text with no folder: a relative path is noted, not looked for in the
     // working directory.
     let rel = r#"<qgis version="3.42.0"><projectlayers><maplayer type="vector"><id>a</id><datasource>./data/roads.geojson</datasource><layername>Rel</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#;
@@ -942,6 +1018,35 @@ fn with_raster() -> Session {
     let mut s = world();
     s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": utm_tiff_b64()})).unwrap();
     s
+}
+
+/// A QGIS raster style colours a raster layer; one reading a band the raster hasn't is noted and
+/// leaves it as it was.
+#[test]
+fn a_qgis_raster_style_colours_a_raster() {
+    let mut s = with_raster();
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="multibandcolor" redBand="3" greenBand="2" blueBand="1" opacity="0.5"/>
+        <brightnesscontrast brightness="0" contrast="25" gamma="1"/></pipe></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert_eq!(out["notes"], json!([]));
+    let l = s.map().layer_by_name("scene").unwrap();
+    let st = &l.raster.as_ref().unwrap().style;
+    assert_eq!(
+        (&st.renderer, st.contrast, l.transparency),
+        (&rustgis_map::raster::RasterRenderer::Rgb { red: 2, green: 1, blue: 0 }, 25.0, 50.0)
+    );
+    let before = st.clone();
+    // A style that reads a band the raster hasn't leaves it as it was, its opacity too.
+    let qml = r#"<qgis version="4.2.3" layerType="Raster"><pipe><rasterrenderer type="singlebandgray" grayBand="5"/></pipe><layerOpacity>0.2</layerOpacity></qgis>"#;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("band 5 of a raster with 3"), "{out}");
+    let l = s.map().layer_by_name("scene").unwrap();
+    assert_eq!((&l.raster.as_ref().unwrap().style, l.transparency), (&before, 50.0));
+    // Pixels not there yet (a remote raster still loading): applied, and noted as unchecked.
+    let id = s.map().layer_by_name("scene").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().raster.as_mut().unwrap().data = None;
+    let out = s.run("style.importQgis", &json!({"layer": "scene", "text": qml})).unwrap();
+    assert!(serde_json::to_string(&out["notes"]).unwrap().contains("before the raster's bands could be checked"), "{out}");
 }
 
 /// The parts of a large GeoTIFF the web app reads (#140), opened and kept in a project: a
@@ -3507,6 +3612,17 @@ fn publication_layouts_fit_their_pages() {
         assert!(e.contains(said), "{p}: {e}");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Each sheet style the New Layout menu offers is one `layout.publication` takes, by its name.
+#[test]
+fn every_publication_style_in_the_menu_is_taken() {
+    let mut s = world();
+    for (style, _) in crate::cmd::layout::PUBLICATION_STYLES {
+        let r =
+            s.run("layout.publication", &json!({"extent": [-46.8, -11.6, -38.5, -2.2], "profile": "a4-portrait", "style": style})).unwrap();
+        assert_eq!(r["style"], *style);
+    }
 }
 
 /// A publication sheet's style (#682): `classic` (the default) as before; `banner` the title and
@@ -9173,6 +9289,160 @@ fn a_stac_data_cube_on_the_time_slider() {
     assert_eq!((s.map().tiles.len(), s.map().layers.len()), (tiles, layers));
 }
 
+/// The data cube catalog (#683): its entries listed by theme, area and words; one opened as typing
+/// its values into `stac.addCube` would (its collection, band, range and cloud cap filled in, its
+/// last full year by default), or into `layer.addZarr` following the slider; `cube.trend` and
+/// `cube.reduce` taking one by `"cube"`; wrong requests refused before anything is added.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_catalog_entry_opens_as_its_command_would() {
+    use crate::render::rustgis_tiles::cubes;
+    let mut s = Session::new(Project::default());
+    let ids = |r: &Value| r["cubes"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let all = s.run("cube.catalog", &json!({})).unwrap();
+    assert_eq!(all["count"].as_u64(), Some(cubes::built_in().len() as u64));
+    assert_eq!(all["themes"].as_array().map(Vec::len), Some(cubes::THEMES.len()));
+    // MODIS over Piauí: the Brazil Data Cube's NDVI and EVI, each as the list holds it.
+    let modis = s.run("cube.catalog", &json!({"theme": "vegetation", "bbox": [-46, -11, -40, -2.5], "query": "MODIS"})).unwrap();
+    assert_eq!(ids(&modis), ["bdc-mod13q1-ndvi", "bdc-mod13q1-evi"]);
+    assert_eq!(modis["cubes"][0]["collection"], "mod13q1-6.1");
+    assert_eq!(modis["cubes"][0]["range"], json!([0.0, 0.9]));
+    // No area given is anywhere, not the map's extent.
+    assert!(!ids(&s.run("cube.catalog", &json!({"query": "era5"})).unwrap()).is_empty());
+    // A filter of another kind is refused, not dropped (which would list every entry).
+    for bad in
+        [json!({"theme": "forests"}), json!({"theme": ["water"]}), json!({"query": 5}), json!({"bbox": [1, 2]}), json!({"bbox": "here"})]
+    {
+        assert!(s.run("cube.catalog", &bad).is_err(), "{bad}");
+    }
+    assert!(crate::cmd::tiles::NETWORK.contains(&"cube.open"), "a plugin needs the network permission to open a cube");
+    // A Zarr entry reaches as layer.addZarr does (a plugin needs files and network); the catalog
+    // itself is built in.
+    use crate::cmd::plugins::{Reach, reaches};
+    let spec = |id: &str| crate::cmd::all().into_iter().find(|c| c.id == id).unwrap();
+    assert_eq!(reaches(&spec("cube.open"), &json!({"id": "bdc-mod13q1-ndvi"})), Some(Reach::Network));
+    assert_eq!(reaches(&spec("cube.open"), &json!({"id": "era5-2m-temperature"})), Some(Reach::Files));
+    assert_eq!(reaches(&spec("cube.catalog"), &json!({"query": "ndvi"})), None);
+
+    // An entry over a local STAC API: opened, it makes the cube stac.addCube makes from its values.
+    let (cog, _) = serve_ranges(rustgis_data::raster::cog::example(512, 256));
+    let item = |id: &str, date: &str| {
+        format!(
+            r#"{{"type": "Feature", "id": "{id}", "collection": "cube", "bbox": [10, 45, 11, 46], "geometry": null,
+               "properties": {{"datetime": "{date}T00:00:00Z", "bdc:tiles": ["T1"]}},
+               "assets": {{"NDVI": {{"href": "{cog}/{id}.tif", "eo:bands": [{{"scale": 0.0001}}]}}}}}}"#
+        )
+    };
+    let features = [item("a1", "2024-01-01"), item("a2", "2024-01-17")].join(",");
+    let base = serve_routes(vec![("/v1/search", format!(r#"{{"type": "FeatureCollection", "features": [{features}]}}"#))], 6);
+    let mut entry = cubes::find("bdc-mod13q1-ndvi").unwrap().clone();
+    entry.url = format!("{base}/v1");
+    entry.source = cubes::Source::Stac { collection: "cube".into(), asset: "NDVI".into() };
+    entry.bbox = [0.0, 40.0, 20.0, 50.0];
+    entry.start = "2023-05-01".into();
+    entry.end = Some("2024-12-31".into());
+    let area = json!({"bbox": [10, 45, 11, 46]});
+    let mut by_entry = Session::new(Project::default());
+    let r = crate::cmd::cube_catalog::open_entry(&mut by_entry, &entry, &area).unwrap();
+    // By default, the entry's last full year: 2024, as it ended that year.
+    assert_eq!(
+        (r["cube"].as_str(), r["start"].as_str(), r["end"].as_str()),
+        (Some("bdc-mod13q1-ndvi"), Some("2024-01-01"), Some("2024-12-31"))
+    );
+    assert_eq!((r["dates"].as_u64(), r["layers"].as_u64()), (Some(2), Some(1)), "{r}");
+    let mut typed = Session::new(Project::default());
+    typed
+        .run(
+            "stac.addCube",
+            &json!({"url": entry.url, "collection": "cube", "asset": "NDVI", "bbox": [10, 45, 11, 46], "start": "2024-01-01", "end": "2024-12-31", "range": [0, 0.9]}),
+        )
+        .unwrap();
+    let urls = |s: &Session| s.map().tiles.iter().map(|t| t.time_urls.clone()).collect::<Vec<_>>();
+    assert_eq!(urls(&by_entry), urls(&typed), "the same files, the entry's range in stored values");
+    assert!(urls(&by_entry)[0].iter().all(|(_, u)| u.ends_with("#range=0,9000")));
+    // As one step: undone, the cube goes.
+    by_entry.run("edit.undo", &Value::Null).unwrap();
+    assert!(by_entry.map().tiles.is_empty());
+    // A range and a name given take the entry's place.
+    let r =
+        crate::cmd::cube_catalog::open_entry(&mut by_entry, &entry, &json!({"bbox": [10, 45, 11, 46], "range": [0, 0.5], "name": "NDVI"}))
+            .unwrap();
+    assert_eq!(r["layers"], 1);
+    assert!(by_entry.map().tiles[0].time_urls.iter().all(|(_, u)| u.ends_with("#range=0,5000")));
+    assert_eq!(by_entry.map().tiles[0].name, "NDVI");
+    // Refused before anything is added: an area the entry has no data in, a period outside its
+    // dates, one end of the period alone.
+    let tiles = by_entry.map().tiles.len();
+    for (bad, why) in [
+        (json!({"bbox": [100, 0, 101, 1]}), "has data in"),
+        (json!({"bbox": [10, 45, 11, 46], "start": "2020-01-01", "end": "2022"}), "runs from 2023-05-01 to 2024-12-31"),
+        (json!({"bbox": [10, 45, 11, 46], "start": "2025-01-01", "end": "2025-03-01"}), "runs from"),
+        (json!({"bbox": [10, 45, 11, 46], "start": "2024-01-01"}), "together"),
+    ] {
+        let e = crate::cmd::cube_catalog::open_entry(&mut by_entry, &entry, &bad).unwrap_err();
+        assert!(e.contains(why), "{bad}: {e}");
+    }
+    assert_eq!(by_entry.map().tiles.len(), tiles);
+
+    // A Zarr entry: its variable following the slider over the period, named after the entry.
+    let (dir, path) = zarr_store_over_time("catalog");
+    let mut zarr = cubes::find("era5-2m-temperature").unwrap().clone();
+    zarr.url = path;
+    zarr.start = "2001-01-01".into();
+    zarr.source = cubes::Source::Zarr { variable: "t".into() };
+    let mut z = Session::new(Project::default());
+    let r =
+        crate::cmd::cube_catalog::open_entry(&mut z, &zarr, &json!({"start": "2001-01-15", "end": "2001-12-31", "bbox": "view"})).unwrap();
+    let layer = z.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(layer.name, zarr.name);
+    assert!(r["note"].as_str().unwrap().contains("read whole"), "{r}");
+    assert_eq!(z.run("time.info", &Value::Null).unwrap()["steps"], 2, "the two steps in the period");
+    // An end given as a year reaches its last moment, as for a STAC entry: all three steps of 2001.
+    let mut year = Session::new(Project::default());
+    crate::cmd::cube_catalog::open_entry(&mut year, &zarr, &json!({"start": "2001-01-01", "end": "2001"})).unwrap();
+    assert_eq!(year.run("time.info", &Value::Null).unwrap()["steps"], 3);
+    // A STAC entry's key is refused first, before a period outside the entry's dates.
+    for k in ["range", "maxCloud"] {
+        let e = crate::cmd::cube_catalog::open_entry(&mut z, &zarr, &json!({k: 1, "start": "1990", "end": "1990"})).unwrap_err();
+        assert!(e.contains("STAC entry's"), "{e}");
+    }
+    // An area given for a Zarr entry is checked, as for a STAC entry.
+    let mut far = zarr.clone();
+    far.bbox = [0.0, 0.0, 1.0, 1.0];
+    let e = crate::cmd::cube_catalog::open_entry(&mut z, &far, &json!({"bbox": [100, 0, 101, 1]})).unwrap_err();
+    assert!(e.contains("has data in"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
+
+    // cube.open by id: an unknown one, none.
+    assert!(s.run("cube.open", &json!({"id": "nothing"})).unwrap_err().contains("cube.catalog"));
+    assert!(s.run("cube.open", &json!({})).is_err());
+
+    // cube.trend and cube.reduce take an entry by "cube": its values filled in, a cell size or
+    // cloud cap given kept; data named alongside it refused.
+    let p = json!({"cube": "bdc-s2-16d-ndvi", "cellSize": 100, "start": "2020"});
+    let q = crate::cmd::cube_catalog::with_entry(&p).unwrap();
+    assert_eq!(
+        (q["url"].as_str(), q["collection"].as_str(), q["asset"].as_str(), q["cellSize"].as_f64(), q["start"].as_str(), q.get("cube")),
+        (Some("https://data.inpe.br/bdc/stac/v1/"), Some("S2-16D-2"), Some("NDVI"), Some(100.0), Some("2020"), None)
+    );
+    let p = json!({"cube": "earth-search-s2-nir"});
+    let q = crate::cmd::cube_catalog::with_entry(&p).unwrap();
+    assert_eq!((q["cellSize"].as_f64(), q["maxCloud"].as_f64()), (Some(10.0), Some(20.0)));
+    let p = json!({"cube": "era5-soil-moisture"});
+    let q = crate::cmd::cube_catalog::with_entry(&p).unwrap();
+    assert_eq!(q["variable"], "volumetric_soil_water_layer_1");
+    assert!(q.get("collection").is_none() && q.get("cellSize").is_none());
+    for (cmd, extra) in [("cube.trend", json!({})), ("cube.reduce", json!({"stat": "mean"}))] {
+        for k in ["layer", "url", "collection"] {
+            let mut p = json!({"cube": "bdc-mod13q1-ndvi", k: "x"});
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let e = s.run(cmd, &p).unwrap_err();
+            assert!(e.contains(&format!("leave out {k}")), "{cmd} {k}: {e}");
+        }
+        assert!(s.run(cmd, &json!({"cube": "nothing", "stat": "mean"})).unwrap_err().contains("cube.catalog"));
+    }
+}
+
 /// A search's `"bbox": "view"` is the map's view in any case or spacing, as the trend and the data
 /// cube read it; any other text is refused, never read as no area at all.
 #[test]
@@ -10012,12 +10282,7 @@ fn a_trend_over_a_data_cube() {
     let r = s.run("cube.trend", &json!({"path": gap, "variable": "t", "test": "original"})).unwrap();
     assert!(value(&s, &r["layers"][0], 0) > 1000.0, "{}", value(&s, &r["layers"][0], 0));
     let _ = std::fs::remove_dir_all(gap_dir);
-    // Refused: too few layers, no dates, dates of another length, unknown options, another grid.
-    let other = Raster::new("ndvi_2030-01-01", 3, 3, vec![vec![0.0; 9]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
-    let bytes = geotiff::write(&other, 0).unwrap();
-    crate::cmd::raster::add_raster(&mut s, "ndvi_2030-01-01", rustgis_map::RasterLayer::from_bytes(other, "o.tif", bytes)).unwrap();
-    let mut mixed = names.clone();
-    mixed.push("ndvi_2030-01-01".into());
+    // Refused: too few layers, no dates, dates of another length, unknown options.
     for bad in [
         json!({"layers": &names[..3]}),
         json!({"layers": names, "dates": ["2001", "2002"]}),
@@ -10025,7 +10290,6 @@ fn a_trend_over_a_data_cube() {
         json!({"layers": names, "alpha": 0.7}),
         json!({"layers": names, "per": "week"}),
         json!({"layers": names, "start": "2030"}),
-        json!({"layers": mixed}),
         json!({"layer": names[0]}),
     ] {
         assert!(s.run("cube.trend", &bad).is_err(), "{bad}");
@@ -10086,6 +10350,238 @@ fn a_trend_over_a_data_cube() {
         assert!((slope - want).abs() < want * 0.05, "{per}: {slope}");
         assert!(value(&s, &r["layers"][2], 0) < 0.01, "{per}: significant");
     }
+}
+
+/// A multi-band Float32 GeoTIFF in longitude/latitude, its bands' values interleaved, as GDAL
+/// writes it: `descriptions` in its GDAL_METADATA tag when given, and -9999 for no-data.
+#[cfg(not(target_arch = "wasm32"))]
+fn multiband_tiff(w: u32, h: u32, bands: &[Vec<f32>], origin: (f64, f64), px: f64, descriptions: Option<&[String]>) -> Vec<u8> {
+    let n = bands.len() as u16;
+    let mut out = vec![b'I', b'I', 42, 0, 0, 0, 0, 0];
+    for p in 0..(w * h) as usize {
+        for b in bands {
+            out.extend(b[p].to_le_bytes());
+        }
+    }
+    let bytes = out.len() as u32 - 8;
+    let shorts = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let longs = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let doubles = |v: &[f64]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let ascii = |s: &str| s.bytes().chain([0]).collect::<Vec<u8>>();
+    let mut e: Vec<(u16, u16, u32, Vec<u8>)> = vec![
+        (256, 4, 1, longs(&[w])),
+        (257, 4, 1, longs(&[h])),
+        (258, 3, u32::from(n), shorts(&vec![32; n as usize])),
+        (259, 3, 1, shorts(&[1])),
+        (262, 3, 1, shorts(&[1])),
+        (273, 4, 1, longs(&[8])),
+        (277, 3, 1, shorts(&[n])),
+        (278, 4, 1, longs(&[h])),
+        (279, 4, 1, longs(&[bytes])),
+        (284, 3, 1, shorts(&[1])),
+        (339, 3, u32::from(n), shorts(&vec![3; n as usize])),
+        (33550, 12, 3, doubles(&[px, px, 0.0])),
+        (33922, 12, 6, doubles(&[0.0, 0.0, 0.0, origin.0, origin.1, 0.0])),
+        (34735, 3, 12, shorts(&[1, 1, 0, 2, 1024, 0, 1, 2, 2048, 0, 1, 4326])),
+    ];
+    if let Some(d) = descriptions {
+        let items: String =
+            d.iter().enumerate().map(|(k, d)| format!(r#"<Item name="DESCRIPTION" sample="{k}" role="description">{d}</Item>"#)).collect();
+        let xml = ascii(&format!("<GDALMetadata>{items}</GDALMetadata>"));
+        e.push((42112, 2, xml.len() as u32, xml));
+    }
+    let nodata = ascii("-9999");
+    e.push((42113, 2, nodata.len() as u32, nodata));
+    let ifd_at = out.len() + out.len() % 2;
+    out.resize(ifd_at, 0);
+    let values_at = ifd_at + 2 + 12 * e.len() + 4;
+    let mut values: Vec<u8> = Vec::new();
+    let mut dir = (e.len() as u16).to_le_bytes().to_vec();
+    for (tag, ty, count, bytes) in &mut e {
+        dir.extend(tag.to_le_bytes());
+        dir.extend(ty.to_le_bytes());
+        dir.extend(count.to_le_bytes());
+        if bytes.len() <= 4 {
+            bytes.resize(4, 0);
+            dir.extend(bytes.iter());
+        } else {
+            dir.extend(((values_at + values.len()) as u32).to_le_bytes());
+            values.extend(bytes.iter());
+            // Each value on a word boundary.
+            if values.len() % 2 == 1 {
+                values.push(0);
+            }
+        }
+    }
+    out[4..8].copy_from_slice(&(ifd_at as u32).to_le_bytes());
+    out.extend(dir);
+    out.extend([0; 4]);
+    out.extend(values);
+    out
+}
+
+/// A trend over GeoTIFF files (#579, step 3): a stack of files dated by their names (ISO and MODIS
+/// dates), two of them on other grids, resampled onto the first's; and a multi-band file, a date a
+/// band, dated by the band descriptions GDAL writes in it or by the dates given. The cells with a
+/// planted trend have a significant slope; the noisy ones have a slope but no significant one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_trend_over_stacked_and_multiband_geotiffs() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster, geotiff};
+    let mut s = Session::new(Project::default());
+    let dir = std::env::temp_dir().join(format!("rustgis-cube-files-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (x0, y0, px) = (-56.0, -12.0, 0.01);
+    // Twelve years on a grid of 4 × 2 cells: 0 and 5 rise 0.02 a year, 3 and 7 fall 0.01 a year,
+    // 1, 2 and 6 are noise (the same noise turned over or around, never significant), and 4 has
+    // three values only, the file's no-data value on the other dates.
+    let noise = [0.03, -0.02, 0.05, -0.04, 0.01, 0.0, -0.05, 0.04, -0.01, 0.02, -0.03, 0.03];
+    let cells = |k: usize| -> Vec<f32> {
+        let rise = 0.3 + 0.02 * k as f32;
+        let fall = 0.8 - 0.01 * k as f32;
+        let wobble = (0.001 * noise[k]) as f32;
+        vec![
+            rise + wobble,
+            0.5 + noise[k] as f32,
+            0.5 - noise[k] as f32,
+            fall - wobble,
+            if k < 3 { 0.4 } else { -9999.0 },
+            rise - wobble,
+            0.5 + noise[11 - k] as f32,
+            fall + wobble,
+        ]
+    };
+    let years: Vec<i32> = (2013..2025).collect();
+    let mut names = Vec::new();
+    for (k, y) in years.iter().enumerate() {
+        // Named by a date, or as MODIS names its files (1 July is day 182, 183 in a leap year).
+        let name = if k % 2 == 0 { format!("ndvi_{y}-07-01") } else { format!("MOD13Q1.A{y}{}", if y % 4 == 0 { 183 } else { 182 }) };
+        let v = cells(k);
+        let (w, h, gt, data) = match k {
+            // Cells half as wide: each value four times.
+            5 => {
+                let fine = (0..32).map(|i| v[(i / 16) * 4 + (i % 8) / 2]).collect();
+                (8, 4, GeoTransform { origin_x: x0, origin_y: y0, pixel_width: px / 2.0, pixel_height: -px / 2.0 }, fine)
+            }
+            // A larger area, the grid's cells two columns and a row in from its corner.
+            8 => {
+                let inside = |i: usize| (2..6).contains(&(i % 7)) && (1..3).contains(&(i / 7));
+                let wide = (0..28).map(|i| if inside(i) { v[(i / 7 - 1) * 4 + i % 7 - 2] } else { 9.0 }).collect();
+                (7, 4, GeoTransform { origin_x: x0 - 2.0 * px, origin_y: y0 + px, pixel_width: px, pixel_height: -px }, wide)
+            }
+            _ => (4, 2, GeoTransform { origin_x: x0, origin_y: y0, pixel_width: px, pixel_height: -px }, v),
+        };
+        let r = Raster::new(&name, w, h, vec![data], gt, Crs::LonLat, Some(-9999.0), ColorHint::Gray, "Float32").unwrap();
+        let path = dir.join(format!("{name}.tif"));
+        std::fs::write(&path, geotiff::write(&r, 0).unwrap()).unwrap();
+        s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+        names.push(name);
+    }
+    let band = |s: &Session, id: &Value| {
+        s.map().layer(id.as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap().bands[0].data.clone()
+    };
+    // The planted trends are found; the noise, and the cell with three values, are left empty.
+    let found = |s: &Session, r: &Value| {
+        let (slope, p, significant) = (band(s, &r["layers"][0]), band(s, &r["layers"][2]), band(s, &r["layers"][3]));
+        for (cell, want) in [(0, 0.02), (5, 0.02), (3, -0.01), (7, -0.01)] {
+            assert!((significant[cell] - want).abs() < 1e-3, "cell {cell}: {} (p {})", significant[cell], p[cell]);
+        }
+        for cell in [1, 2, 6] {
+            assert!(slope[cell].is_finite() && p[cell] > 0.05 && significant[cell].is_nan(), "cell {cell}: p {}", p[cell]);
+        }
+        assert!(slope[4].is_nan() && significant[4].is_nan());
+    };
+    let r = s.run("cube.trend", &json!({"layers": names})).unwrap();
+    assert_eq!(r["dates"], 12, "{r}");
+    found(&s, &r);
+    let name = |s: &Session, id: &Value| s.map().layer(id.as_u64().unwrap() as u32).unwrap().name.clone();
+    assert_eq!(name(&s, &r["layers"][0]), "ndvi 2013-07-01–2024-07-01 Sen slope per year");
+    // Every date counts in every cell, the two resampled ones included, and cell 4 has its three;
+    // the larger file's cells outside the grid are left out.
+    let count = s.run("cube.reduce", &json!({"layers": names, "stat": "count"})).unwrap();
+    assert_eq!(band(&s, &count["layers"][0]), [12.0, 12.0, 12.0, 12.0, 3.0, 12.0, 12.0, 12.0]);
+    let max = s.run("cube.reduce", &json!({"layers": names, "stat": "max"})).unwrap();
+    assert!(band(&s, &max["layers"][0]).iter().all(|v| *v < 1.0), "{:?}", band(&s, &max["layers"][0]));
+    // The first layer listed gives the grid: listed first, the finer file gives its 8 × 4 cells.
+    let mut fine_first = names.clone();
+    fine_first.swap(0, 5);
+    let r = s.run("cube.trend", &json!({"layers": fine_first, "name": "fine"})).unwrap();
+    let fine = s.map().layer(r["layers"][0].as_u64().unwrap() as u32).unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((fine.width, fine.height), (8, 4));
+    // A scan not yet georeferenced, on another grid, can't be resampled: refused before the run.
+    let placed = Raster::new(
+        "scan",
+        3,
+        3,
+        vec![vec![0.5; 9]],
+        GeoTransform { origin_x: x0, origin_y: y0, pixel_width: px, pixel_height: -px },
+        Crs::LonLat,
+        None,
+        ColorHint::Gray,
+        "Float32",
+    )
+    .unwrap();
+    let bytes = geotiff::write(&placed, 0).unwrap();
+    let mut scan = placed;
+    scan.georeferenced = false;
+    crate::cmd::raster::add_raster(&mut s, "scan_2030-07-01", rustgis_map::RasterLayer::from_bytes(scan, "scan.tif", bytes)).unwrap();
+    let mut with_scan = names.clone();
+    with_scan.push("scan_2030-07-01".into());
+    let e = s.run("cube.trend", &json!({"layers": with_scan})).unwrap_err();
+    assert!(e.contains("no coordinates"), "{e}");
+    // A layer away from the first's area would give its date no value: refused.
+    let gt_away = GeoTransform { origin_x: x0 + 10.0, origin_y: y0, pixel_width: px, pixel_height: -px };
+    let away = Raster::new("away_2030-07-01", 3, 3, vec![vec![0.5; 9]], gt_away, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&away, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "away_2030-07-01", rustgis_map::RasterLayer::from_bytes(away, "away.tif", bytes)).unwrap();
+    let mut with_away = names.clone();
+    with_away.push("away_2030-07-01".into());
+    let e = s.run("cube.trend", &json!({"layers": with_away})).unwrap_err();
+    assert!(e.contains("outside the first layer's area"), "{e}");
+    // A layer in another coordinate system (Web Mercator, 500 m cells) over the grid is resampled
+    // onto it too, through longitude/latitude: every cell gets its date.
+    let merc = |lon: f64, lat: f64| {
+        (6_378_137.0 * lon.to_radians(), 6_378_137.0 * (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().ln())
+    };
+    let (mx, my) = merc(x0 - 0.05, y0 + 0.03);
+    let gt_merc = GeoTransform { origin_x: mx, origin_y: my, pixel_width: 500.0, pixel_height: -500.0 };
+    let m =
+        Raster::new("merc_2030-07-01", 40, 40, vec![vec![0.5; 1600]], gt_merc, Crs::WebMercator, None, ColorHint::Gray, "Float32").unwrap();
+    let bytes = geotiff::write(&m, 0).unwrap();
+    crate::cmd::raster::add_raster(&mut s, "merc_2030-07-01", rustgis_map::RasterLayer::from_bytes(m, "merc.tif", bytes)).unwrap();
+    let mut with_merc = names.clone();
+    with_merc.push("merc_2030-07-01".into());
+    let count = s.run("cube.reduce", &json!({"layers": with_merc, "stat": "count", "name": "merc"})).unwrap();
+    assert_eq!(band(&s, &count["layers"][0]), [13.0, 13.0, 13.0, 13.0, 4.0, 13.0, 13.0, 13.0]);
+    // A multi-band file, a date a band, its bands named by the descriptions in it.
+    let bands: Vec<Vec<f32>> = (0..12).map(cells).collect();
+    let described: Vec<String> = years.iter().map(|y| format!("NDVI {y}-07-01")).collect();
+    let path = dir.join("ndvi_bands.tif");
+    std::fs::write(&path, multiband_tiff(4, 2, &bands, (x0, y0), px, Some(&described))).unwrap();
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    let file = s.map().layer_by_name("ndvi_bands").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((file.bands.len(), file.bands[0].name.as_str()), (12, "NDVI 2013-07-01"));
+    let r = s.run("cube.trend", &json!({"layer": "ndvi_bands"})).unwrap();
+    assert_eq!(r["dates"], 12, "{r}");
+    found(&s, &r);
+    // An `.aux.xml` next to the file names the bands it describes, the file's own tag the others.
+    let path = dir.join("ndvi_side.tif");
+    std::fs::write(&path, multiband_tiff(4, 2, &bands, (x0, y0), px, Some(&described))).unwrap();
+    let sidecar = r#"<PAMDataset><PAMRasterBand band="1"><Description>NDVI 2012-07-01</Description></PAMRasterBand></PAMDataset>"#;
+    std::fs::write(dir.join("ndvi_side.tif.aux.xml"), sidecar).unwrap();
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    let side = s.map().layer_by_name("ndvi_side").unwrap().raster.as_ref().unwrap().data.clone().unwrap();
+    assert_eq!((side.bands[0].name.as_str(), side.bands[1].name.as_str()), ("NDVI 2012-07-01", "NDVI 2014-07-01"));
+    // Without descriptions, the dates are given.
+    let path = dir.join("ndvi_plain.tif");
+    std::fs::write(&path, multiband_tiff(4, 2, &bands, (x0, y0), px, None)).unwrap();
+    s.run("layer.addData", &json!({"path": path.display().to_string()})).unwrap();
+    let e = s.run("cube.trend", &json!({"layer": "ndvi_plain"})).unwrap_err();
+    assert!(e.contains("give \"dates\""), "{e}");
+    let typed: Vec<String> = years.iter().map(|y| format!("{y}-07-01")).collect();
+    let r = s.run("cube.trend", &json!({"layer": "ndvi_plain", "dates": typed, "name": "typed"})).unwrap();
+    found(&s, &r);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 /// A data cube summarised over time (#579): each statistic over a stack of layers, a year or a
@@ -14805,6 +15301,32 @@ fn a_layer_drops_into_and_out_of_a_group_at_a_place() {
 }
 
 #[test]
+fn a_layer_drops_at_the_end_with_explicit_null_before() {
+    for in_group in [false, true] {
+        let mut s = world();
+        let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+        let g = s.run("group.add", &json!({"name": "Water", "layers": ["Rivers", "Lakes"]})).unwrap()["group"].clone();
+        let group = if in_group { g } else { Value::Null };
+        let original = names(&s);
+        // Omitting before keeps the nearest-end behavior used by the group's context menu.
+        s.run("layer.group", &json!({"layer": "Cities", "group": group})).unwrap();
+        assert_eq!(names(&s), original);
+        let members = s.map().groups[0].children.clone();
+        let depth = s.undo_depth();
+        s.run("layer.group", &json!({"layer": "Cities", "group": group, "before": null})).unwrap();
+        let expected = if in_group { ["Rivers", "Lakes", "Cities", "Countries"] } else { ["Rivers", "Lakes", "Countries", "Cities"] };
+        assert_eq!(names(&s), expected);
+        assert_eq!(s.undo_depth(), depth + 1);
+        s.run("edit.undo", &Value::Null).unwrap();
+        assert_eq!(names(&s), original);
+        assert_eq!(s.map().groups[0].children, members);
+        s.run("edit.redo", &Value::Null).unwrap();
+        assert_eq!(names(&s), expected);
+        assert!(s.run("layer.group", &json!({"layer": ["Cities", "Countries"], "group": group, "before": null})).is_err());
+    }
+}
+
+#[test]
 fn a_moved_group_never_lands_inside_another() {
     let mut s = world();
     let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
@@ -14995,7 +15517,7 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
     let e_empty = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "EmptyPoly"})).unwrap_err();
     assert!(e_empty.to_string().contains("has no features"), "{e_empty}");
 
-    // A polygon layer in a projected CRS (UTM) reprojects and clips accurately.
+    // A polygon layer with UTM source metadata still stores lon/lat geometry.
     let mut proj_ds = rustgis_data::Dataset::new("CityProj", rustgis_data::GeometryType::Polygon, vec![]);
     proj_ds.crs = Some(utm);
     let utm_ring = [
@@ -15004,7 +15526,8 @@ fn dem_tiles_mosaic_clip_by_polygon_share_a_stretch_and_report_overviews() {
         rustgis_geom::Coord::new(361_500.0, 5_699_500.0),
         rustgis_geom::Coord::new(360_500.0, 5_700_000.0),
     ];
-    proj_ds.push(Some(rustgis_data::Geometry::Polygon(vec![vec![utm_ring.to_vec()]])), vec![]);
+    let lonlat_ring = utm_ring.into_iter().map(|c| tr.to_lonlat(c).unwrap()).collect();
+    proj_ds.push(Some(rustgis_data::Geometry::Polygon(vec![vec![lonlat_ring]])), vec![]);
     s.map_mut().add_layer(rustgis_map::Layer::new(0, proj_ds));
     let v_proj = s.run("raster.process", &json!({"layer": "dem", "operation": "clip", "polygon": "CityProj"})).unwrap();
     let c_proj = raster(&s, &v_proj);
@@ -15967,6 +16490,71 @@ fn scans_have_no_coordinates_to_give_away() {
 }
 
 #[test]
+fn raster_tools_read_projected_zone_files_without_reprojecting_twice() {
+    use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+    use rustgis_data::{Dataset, Geometry, GeometryType, Value};
+    let dir = std::env::temp_dir().join(format!("rustgis-zonal-crs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new(Project::default());
+    let gt = GeoTransform { origin_x: 622_000.0, origin_y: 5_164_000.0, pixel_width: 100.0, pixel_height: -100.0 };
+    let tr = Crs::Epsg(25832).transformer().unwrap();
+    let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+    let ring = [(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0), (1.0, 1.0)]
+        .into_iter()
+        .map(|(x, y)| tr.to_lonlat(gt.to_world(x, y)).unwrap())
+        .collect();
+    zones.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, zones));
+    let nw = tr.to_lonlat(gt.to_world(0.0, 0.0)).unwrap();
+    let se = tr.to_lonlat(gt.to_world(4.0, 4.0)).unwrap();
+    let geographic = GeoTransform { origin_x: nw.x, origin_y: nw.y, pixel_width: (se.x - nw.x) / 4.0, pixel_height: (se.y - nw.y) / 4.0 };
+    for (name, transform, crs) in [("utm", gt, Crs::Epsg(25832)), ("geographic", geographic, Crs::LonLat)] {
+        let raster =
+            Raster::new(name, 4, 4, vec![(1..=16).map(|v| v as f32).collect()], transform, crs, None, ColorHint::Gray, "Float32").unwrap();
+        s.map_mut().add_raster(name, rustgis_map::RasterLayer::from_path(raster, format!("{name}.tif")));
+    }
+    for epsg in [4326, 25832, 32632, 3003, 3857] {
+        for ext in ["gpkg", "shp"] {
+            let path = dir.join(format!("zones_{epsg}.{ext}")).display().to_string();
+            s.run("share.exportLayer", &json!({"layer": "zones", "path": path, "crs": format!("EPSG:{epsg}")})).unwrap();
+            let loaded = s.run("layer.addData", &json!({"path": path, "name": "loaded_zones"})).unwrap()["layer"].clone();
+            let input = s.map().layer(loaded.as_u64().unwrap() as u32).unwrap().dataset.clone();
+            assert_eq!(input.crs.map(|c| c.label()).unwrap_or_else(|| "EPSG:4326".into()), format!("EPSG:{epsg}"), "{ext}");
+            assert!(input.extent().contains(tr.to_lonlat(gt.to_world(2.0, 2.0)).unwrap()), "{epsg}, {ext}: {:?}", input.extent());
+            for raster in ["utm", "geographic"] {
+                let depth = s.undo_depth();
+                s.run(
+                    "gp.run",
+                    &json!({"tool": "zonalStats", "params": {"raster": raster, "polygons": "loaded_zones", "output": "stats"}}),
+                )
+                .unwrap();
+                let out = &s.map().layer_by_name("stats").unwrap().dataset;
+                for (stat, expected) in [("count", Value::Int(4)), ("mean", Value::Float(8.5)), ("sum", Value::Float(34.0))] {
+                    let field = out.field_index(&format!("{raster}_{stat}")).unwrap();
+                    assert_eq!(out.value(0, field), &expected, "EPSG:{epsg}, {ext}, {raster}, {stat}");
+                }
+                assert_eq!(out.features[0].geometry, input.features[0].geometry);
+                assert_eq!(out.crs, input.crs);
+                assert_eq!(s.undo_depth(), depth + 1);
+                assert!(s.undo());
+                assert!(s.map().layer_by_name("stats").is_none());
+                assert!(s.redo());
+                assert!(s.map().layer_by_name("stats").is_some());
+                assert!(s.undo());
+                s.run("raster.process", &json!({"layer": raster, "operation": "clip", "polygon": "loaded_zones", "name": "clipped"}))
+                    .unwrap();
+                let clipped = s.map().layer_by_name("clipped").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
+                assert_eq!((clipped.width, clipped.height, clipped.bands[0].stats.count), (2, 2, 4), "{epsg}, {ext}, {raster}");
+                assert_eq!(clipped.bands[0].data.iter().sum::<f32>(), 34.0, "{epsg}, {ext}, {raster}");
+                assert!(s.undo());
+            }
+            s.run("layer.remove", &json!({"layer": loaded})).unwrap();
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn gp_zonal_stats_end_to_end_and_undo() {
     use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
     use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
@@ -16066,13 +16654,10 @@ fn gp_zonal_stats_end_to_end_and_undo() {
     assert!(run_layer.dataset.field_index("dem_count").is_some());
     assert!(run_layer.dataset.field_index("dem_min").is_none());
 
-    // Projected CRS (WebMercator) reprojection end-to-end
-    let merc_tr = Crs::WebMercator.transformer().unwrap();
-    let mp0 = merc_tr.from_lonlat(Coord::new(1.0, 7.0)).unwrap();
-    let mp1 = merc_tr.from_lonlat(Coord::new(3.0, 9.0)).unwrap();
+    // Loaded WebMercator data already uses longitude/latitude geometry.
     let mut merc_ds = Dataset::new("merc_districts", GeometryType::Polygon, vec![Field::new("code", FieldType::Text)]);
     merc_ds.crs = Some(Crs::WebMercator);
-    merc_ds.push(Some(sq(mp0.x, mp0.y, mp1.x, mp1.y)), vec![Value::Text("M1".into())]);
+    merc_ds.push(Some(sq(1.0, 7.0, 3.0, 9.0)), vec![Value::Text("M1".into())]);
     s.map_mut().add_layer(rustgis_map::Layer::new(0, merc_ds));
 
     let merc_res = s.run(

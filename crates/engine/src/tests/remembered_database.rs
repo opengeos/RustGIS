@@ -38,7 +38,7 @@ fn remembered_database_opt_in_lifetime_and_identity() {
     assert_eq!(duplicate["remembered"], false);
     assert_eq!(duplicate["loggedIn"], false);
     assert!(!s.connections.to_json().contains("sentinel"));
-    assert!(!s.project.saved_text().unwrap().0.contains("sentinel"));
+    assert!(!s.project.saved_text(None).unwrap().0.contains("sentinel"));
     s.run("connection.forgetPassword", &json!({"id":id})).unwrap();
     assert_eq!(store.load(&format!("connection/{id}")).unwrap(), None);
     assert!(s.database_logins.has_session_password(&id));

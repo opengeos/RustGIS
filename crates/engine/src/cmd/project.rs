@@ -93,7 +93,7 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
             if bytes.len() as u64 > MAX_PACKAGE {
                 return Err("the package is too large".into());
             }
-            Project::from_import_json(&super::items::package_text(&bytes)?)
+            Project::from_import_json(&super::items::package_text(&bytes)?, None)
         } else {
             Project::load(&path)
         }
@@ -120,7 +120,7 @@ fn open(s: &mut Session, p: &Value) -> CmdResult {
 fn open_text(s: &mut Session, p: &Value) -> CmdResult {
     let text = super::ps(p, "text").ok_or("text is required")?;
     super::connections::clear_active();
-    let proj = if super::b(p, "package").unwrap_or(false) { Project::from_import_json(text) } else { Project::from_json(text) };
+    let proj = if super::b(p, "package").unwrap_or(false) { Project::from_import_json(text, None) } else { Project::from_json(text) };
     let proj = match proj {
         Ok(proj) => proj,
         Err(error) => {

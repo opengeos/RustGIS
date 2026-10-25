@@ -247,6 +247,8 @@ impl<'de> Deserialize<'de> for Features {
 }
 
 /// A feature class: a named table of features sharing a schema and geometry type.
+/// Geometry coordinates are always WGS 84 longitude/latitude, including datasets created by
+/// tools and plugins. Projected source coordinates must be normalized before insertion.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Dataset {
     pub name: String,

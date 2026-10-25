@@ -336,7 +336,7 @@ Shapefiles. The source files and their `.prj` sidecars are never rewritten by ei
 
 | File | Extension | Notes |
 | --- | --- | --- |
-| Project | `.rgis` (older `.rgisx` open too) | Saves streamed layers' file paths, not their features; a browser upload is kept inside. |
+| Project | `.rgis` (older `.rgisx` open too) | Saves streamed layers' local file paths relative to the project, not their features; a browser upload is kept inside. |
 | Map, layer, style, color ramp, template, task, bookmark and layout files | `.rgismap`, `.rgislyr`, `.rgisstyle`, `.rgisramp`, `.rgistemplate`, `.rgistask`, `.rgisbookmarks`, `.rgislayout` | See [Project items](data.md#project-items). |
 | Project package | `.rgispkg` | Everything, rasters included. |
 | Plugin | `.rgplugin` | See [Plugins](../plugins.md). |

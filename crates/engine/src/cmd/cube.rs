@@ -4,8 +4,9 @@
 //! A [`TimeCube`] gives its dates and the slice at each one. The sources:
 //! - a Zarr variable with a time dimension (#554), read a slice at a time;
 //! - a stack of raster layers, each a date (from the `dates` given, or found in the layer's name
-//!   or file);
-//! - a raster layer of several bands, each a date (from `dates`, or the bands' names).
+//!   or file), those on another grid than the first's resampled onto it as they are read;
+//! - a raster layer of several bands, each a date (from `dates`, or the bands' names: the
+//!   descriptions GDAL writes in the file or its `.aux.xml`).
 //!
 //! `cube.trend` reads the slices into one block, cell by date, and works out each cell's trend
 //! with [`rustgis_analysis::trend`]: Sen's slope and the modified Mann–Kendall test.
@@ -15,6 +16,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use rustgis_analysis::rasterops;
 use rustgis_analysis::trend::{self, Test};
 use rustgis_data::raster::{self, Raster};
 use serde_json::{Value, json};
@@ -24,10 +26,10 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
     vec![C::new("cube.trend", "Trend Analysis", "Analyze › Image Analysis", trend_cmd).params(
-        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer (or "path" | "url", "variable", "index", "crs" as for zarr.reduce) or a raster of several bands, a date each (default: the active layer) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "url"?: the collection's STAC API (as for stac.addCube), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default: that overview's pixels as stored) | "average" (each cell the mean of the full images' pixels in it, which reads them), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "start"?, "end"?: dates (a whole number from 1000 to 9999 is a year; an end given as a year or a month takes all of it), "months"?: [1–12] (one season across years), "test"?: "hamedRao" (default) | "yueWang" | "seasonal" | "original", "seasons"?: parts of a year for the seasonal test (default 12), "alpha"?: 0.05 (above 0, below 0.5), "minValid"?: dates a cell needs (default: half of them, at least 4; the seasonal test also needs 4 in seasons of two or more), "per"?: "year" (default) | "decade", "name"?: text, "ran"?: (internal: a trend the app has worked out)} → four raster layers: Sen's slope, the test's Z and p-value, and the slope where p < alpha"#,
+        r#"{"cube"?: an entry of cube.catalog (its STAC API, collection, band, cell size and cloud cap, or its Zarr store and variable) | "layers"?: [raster layers, a date each; one on another grid is resampled (nearest) onto the first's] | "layer"?: a Zarr layer (or "path" | "url", "variable", "index", "crs" as for zarr.reduce) or a raster of several bands, a date each (default: the active layer) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "url"?: the collection's STAC API (as for stac.addCube), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default: that overview's pixels as stored) | "average" (each cell the mean of the full images' pixels in it, which reads them), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "start"?, "end"?: dates (a whole number from 1000 to 9999 is a year; an end given as a year or a month takes all of it), "months"?: [1–12] (one season across years), "test"?: "hamedRao" (default) | "yueWang" | "seasonal" | "original", "seasons"?: parts of a year for the seasonal test (default 12), "alpha"?: 0.05 (above 0, below 0.5), "minValid"?: dates a cell needs (default: half of them, at least 4; the seasonal test also needs 4 in seasons of two or more), "per"?: "year" (default) | "decade", "name"?: text, "ran"?: (internal: a trend the app has worked out)} → four raster layers: Sen's slope, the test's Z and p-value, and the slope where p < alpha"#,
     ),
     C::new("cube.reduce", "Summarise a Data Cube over Time", "Analyze › Image Analysis", reduce_cmd).params(
-        r#"{"layers"?: [raster layers, a date each] | "layer"?: a Zarr layer or a raster of several bands, a date each (default: the active layer) | "path"?: a Zarr store's folder | "url"?: a Zarr store's address, or a STAC collection's API (as for stac.addCube) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "variable"?, "index"?, "crs"?: a Zarr variable's (as for zarr.reduce), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default) | "average" (as for cube.trend), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "stat": "mean"|"min"|"max"|"sum"|"std" (the population standard deviation, n)|"count"|"countAbove"|"mode" or "majority" (a categorical cube's most frequent class; the least of those tied)|"modeCount" (how many dates had the mode)|"variety" (how many classes)|"changes" (how many times the class changed from one valued date to the next)|"longestRun" (the class of the longest run of dates in one class; the least of those tied)|"longestRunLength" (how many dates that run lasted)|"frequency" (a layer for each class met: its count of dates)|"countIn" (how many dates in the classes given), "above"?: number (countAbove's threshold), "classes"?: [whole numbers 0–255, at most 256] (countIn's classes), "by"?: "all" (default: one layer) | "year" (a layer for each calendar year) | "month" (a layer for each month of the year, across years), "start"?, "end"?: dates (as for cube.trend), "months"?: [1–12] (a season across years), "minValid"?: 0–1 (a cell with a smaller share of its group's dates is left empty; default 0), "name"?: text} → raster layers of the statistic, one for each group (frequency: one for each class of each group)"#,
+        r#"{"cube"?: an entry of cube.catalog (as for cube.trend) | "layers"?: [raster layers, a date each; one on another grid is resampled (nearest) onto the first's] | "layer"?: a Zarr layer or a raster of several bands, a date each (default: the active layer) | "path"?: a Zarr store's folder | "url"?: a Zarr store's address, or a STAC collection's API (as for stac.addCube) | "collection": a STAC collection (desktop; read in place over an area, in pieces when large; with url, asset, bbox, maxCloud, cellSize and resampling below, and "start", "end"), "variable"?, "index"?, "crs"?: a Zarr variable's (as for zarr.reduce), "asset"?: the collection's band, such as NDVI, "bbox"?: [w, s, e, n] | "view" (the collection's area), "maxCloud"?: a collection's cloud cover cap, "cellSize"?: a collection's cell size in the files' units (the overview level nearest it is read), "resampling"?: "nearest" (default) | "average" (as for cube.trend), "band"?: 1-based (a stack's band), "dates"?: [dates] (a stack's or the bands' dates, in their order; default: read from the layers' names or files, or the bands' names), "stat": "mean"|"min"|"max"|"sum"|"std" (the population standard deviation, n)|"count"|"countAbove"|"mode" or "majority" (a categorical cube's most frequent class; the least of those tied)|"modeCount" (how many dates had the mode)|"variety" (how many classes)|"changes" (how many times the class changed from one valued date to the next)|"longestRun" (the class of the longest run of dates in one class; the least of those tied)|"longestRunLength" (how many dates that run lasted)|"frequency" (a layer for each class met: its count of dates)|"countIn" (how many dates in the classes given), "above"?: number (countAbove's threshold), "classes"?: [whole numbers 0–255, at most 256] (countIn's classes), "by"?: "all" (default: one layer) | "year" (a layer for each calendar year) | "month" (a layer for each month of the year, across years), "start"?, "end"?: dates (as for cube.trend), "months"?: [1–12] (a season across years), "minValid"?: 0–1 (a cell with a smaller share of its group's dates is left empty; default 0), "name"?: text} → raster layers of the statistic, one for each group (frequency: one for each class of each group)"#,
     )]
 }
 
@@ -100,6 +102,10 @@ pub struct Stack {
     items: Vec<(f64, Arc<Raster>, usize)>,
     dates: Vec<f64>,
     label: String,
+    /// The grid the slices are put on, for a stack of layers on more than one: the first layer's.
+    /// Each slice on another is resampled onto it (nearest neighbour, as Raster Functions ›
+    /// Resample does) as it is read, so only one is held at a time.
+    grid: Option<Arc<Raster>>,
 }
 
 impl Stack {
@@ -107,7 +113,7 @@ impl Stack {
     fn new(mut items: Vec<(f64, Arc<Raster>, usize)>, label: String) -> Stack {
         items.sort_by(|a, b| a.0.total_cmp(&b.0));
         let dates = items.iter().map(|i| i.0).collect();
-        Stack { items, dates, label }
+        Stack { items, dates, label, grid: None }
     }
 }
 
@@ -116,10 +122,22 @@ impl TimeCube for Stack {
         &self.dates
     }
     fn slice(&self, i: usize) -> Result<Option<(Arc<Raster>, usize)>, String> {
-        self.items.get(i).map(|(_, r, b)| Some((r.clone(), *b))).ok_or_else(|| format!("no date {i}"))
+        let (_, r, b) = self.items.get(i).ok_or_else(|| format!("no date {i}"))?;
+        match &self.grid {
+            Some(g) if !one_grid(g, r) => {
+                let values = rasterops::resample_to(r, *b, g)?;
+                Ok(Some((Arc::new(rasterops::derive(g, &r.name, vec![values])?), 0)))
+            }
+            _ => Ok(Some((r.clone(), *b))),
+        }
     }
     fn label(&self) -> String {
         self.label.clone()
+    }
+    /// The grid the slices are put on, known before any is read (or resampled).
+    fn size(&self) -> Option<(usize, usize)> {
+        let g = self.grid.as_ref().or_else(|| self.items.first().map(|(_, r, _)| r))?;
+        Some((g.width as usize, g.height as usize))
     }
 }
 
@@ -269,6 +287,9 @@ pub fn cube_from(s: &Session, p: &Value, needs: Needs) -> Result<Box<dyn TimeCub
         let band = band_index(p)?;
         let mut items = Vec::with_capacity(list.len());
         let mut label = String::new();
+        // The first layer's grid, which the others are put on.
+        let mut first: Option<Arc<Raster>> = None;
+        let mut grids = false;
         for (k, v) in list.iter().enumerate() {
             let id = s.layer_id(&json!({ "layer": v }))?;
             let l = s.map().layer(id).ok_or("no such layer")?;
@@ -276,22 +297,28 @@ pub fn cube_from(s: &Session, p: &Value, needs: Needs) -> Result<Box<dyn TimeCub
             if band >= r.bands.len() {
                 return Err(format!("{} has {} bands", l.name, r.bands.len()));
             }
-            // The file's own name, not its folders' (`/data/2020/ndvi_a.tif` would date them all).
-            let file = l
-                .raster
-                .as_ref()
-                .and_then(|r| r.path.as_deref())
-                .and_then(|f| std::path::Path::new(f).file_name())
-                .map(|f| f.to_string_lossy().into_owned())
-                .unwrap_or_default();
             let date = match &dates {
                 Some(d) => d.get(k).copied().ok_or("dates has a date for each layer, in their order")?,
-                None => date_in_text(&l.name)
-                    .or_else(|| date_in_text(&file))
+                None => date_of(&l.name, l.raster.as_ref().and_then(|r| r.path.as_deref()))
                     .ok_or_else(|| format!("no date in the name of {}: give \"dates\"", l.name))?,
             };
             if label.is_empty() {
                 label = l.name.clone();
+            }
+            // A layer on another grid is resampled through longitude/latitude, so both need
+            // coordinates (a scan not yet georeferenced has none).
+            match &first {
+                None => first = Some(r.clone()),
+                Some(g) if !one_grid(g, &r) => {
+                    g.require_coordinates()?;
+                    r.require_coordinates()?;
+                    // One that misses the first's area entirely would be a date with no value.
+                    if !g.extent().intersects(&r.extent()) {
+                        return Err(format!("{} lies outside the first layer's area, whose grid the stack is put on", l.name));
+                    }
+                    grids = true;
+                }
+                Some(_) => {}
             }
             // One layer a date: two on a day would count as two ordered values in the test.
             if items.iter().any(|(d, ..): &(f64, _, usize)| *d == date) {
@@ -303,7 +330,9 @@ pub fn cube_from(s: &Session, p: &Value, needs: Needs) -> Result<Box<dyn TimeCub
             }
             items.push((date, r, band));
         }
-        return Ok(Box::new(Stack::new(items, common_label(&label))));
+        let mut stack = Stack::new(items, common_label(&label));
+        stack.grid = first.filter(|_| grids);
+        return Ok(Box::new(stack));
     }
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
     // A STAC collection's band, read from its files over an area (#579): named by its collection.
@@ -373,6 +402,22 @@ pub fn cube_from(s: &Session, p: &Value, needs: Needs) -> Result<Box<dyn TimeCub
         items.push((date, r.clone(), b));
     }
     Ok(Box::new(Stack::new(items, l.name.clone())))
+}
+
+/// A stack's layer's date when no `dates` are given: the one in its name, or else in its file's
+/// own name, not its folders' (`/data/2020/ndvi_a.tif` would date them all).
+fn date_of(name: &str, path: Option<&str>) -> Option<f64> {
+    date_in_text(name).or_else(|| {
+        let file = std::path::Path::new(path?).file_name()?;
+        date_in_text(&file.to_string_lossy())
+    })
+}
+
+/// The date a stack takes raster layer `layer` at when no `dates` are given, for the Workflows
+/// pane's list of layers.
+pub fn layer_date(s: &Session, layer: &str) -> Option<f64> {
+    let l = s.map().layer(s.layer_id(&json!({ "layer": layer })).ok()?)?;
+    date_of(&l.name, l.raster.as_ref().and_then(|r| r.path.as_deref()))
 }
 
 fn band_index(p: &Value) -> Result<usize, String> {
@@ -549,9 +594,14 @@ impl TrendRun {
                 format!("{cells} cells × {n} dates is too long a run: take a smaller area, a coarser cell size or fewer dates{how}")
             })
         };
-        // A cube that knows its size is refused before it reads anything.
+        // A cube that knows its size is refused before it reads anything; one read whole (a stack,
+        // whose slices may be resampled) by its values too, which a cube read in pieces checks
+        // piece by piece.
         let whole = self.cube.size().map(|(w, h)| w.saturating_mul(h));
         if let Some(e) = whole.and_then(too_long) {
+            return Err(e);
+        }
+        if let Some(e) = whole.filter(|_| self.cube.pieces() <= 1).and_then(|cells| too_many_values(cells, n)) {
             return Err(e);
         }
         let need = self.min_valid.unwrap_or((n / 2).max(trend::MIN_VALUES)).max(trend::MIN_VALUES);
@@ -628,11 +678,8 @@ impl TrendRun {
             match &grid {
                 None => {
                     cells = vals.len();
-                    let values = (cells as u64).saturating_mul(n as u64);
-                    if values > MAX_VALUES {
-                        return Err(format!(
-                            "{cells} cells × {n} dates is {values} values, more than {MAX_VALUES}: take a smaller area or fewer dates"
-                        ));
+                    if let Some(e) = too_many_values(cells, n) {
+                        return Err(e);
                     }
                     if let Some(e) = too_long.and_then(|f| f(cells)) {
                         return Err(e);
@@ -737,6 +784,13 @@ impl TrendRun {
     }
 }
 
+/// Why a block of `cells` × `n` dates is too large to read at once ([`MAX_VALUES`]), if it is.
+fn too_many_values(cells: usize, n: usize) -> Option<String> {
+    let values = (cells as u64).saturating_mul(n as u64);
+    (values > MAX_VALUES)
+        .then(|| format!("{cells} cells × {n} dates is {values} values, more than {MAX_VALUES}: take a smaller area or fewer dates"))
+}
+
 /// Reads piece `piece` of each of `steps`' slices and hands it to `place` with its place among the
 /// steps: in their order when read one at a time, as they come when the cube's
 /// [`TimeCube::readers`] read several at once. `cancel` stops it between slices.
@@ -802,9 +856,15 @@ fn read_slices(
     Ok(())
 }
 
+/// Whether rasters `a` and `b` are on one grid: the same size and coordinate system, and
+/// [`same_grid`].
+fn one_grid(a: &Raster, b: &Raster) -> bool {
+    (a.width, a.height, a.crs) == (b.width, b.height, b.crs) && same_grid(&a.transform, &b.transform)
+}
+
 /// Refuses slice `r`, at date `i`, when it isn't on the grid of the run's first slice `g`.
 fn off_grid(cube: &dyn TimeCube, i: usize, g: &Raster, r: &Raster) -> Result<(), String> {
-    if (g.width, g.height, g.crs) == (r.width, r.height, r.crs) && same_grid(&g.transform, &r.transform) {
+    if one_grid(g, r) {
         return Ok(());
     }
     Err(format!(
@@ -858,6 +918,8 @@ impl Stitch {
 
 /// Prepares `cube.trend`: the cube, the dates, the test and its options checked.
 pub fn trend_start(s: &Session, p: &Value) -> Result<TrendRun, String> {
+    let merged = super::cube_catalog::with_entry(p)?;
+    let p: &Value = &merged;
     // Read for the seasonal test only: another test leaves it alone, whatever it holds.
     let seasonal = ps(p, "test").and_then(|t| Test::parse(t, 12)).is_some_and(|t| matches!(t, Test::Seasonal(_)));
     let seasons = match p.get("seasons").filter(|v| seasonal && !v.is_null()) {
@@ -1670,6 +1732,8 @@ fn stack_columns(outs: &mut Columns, mask: &[f32], columns: Columns, piece_mask:
 /// Prepares `cube.reduce`: the cube, the statistic, and the dates of the period (and months)
 /// asked for, in their groups.
 pub fn reduce_start(s: &Session, p: &Value) -> Result<ReduceRun, String> {
+    let merged = super::cube_catalog::with_entry(p)?;
+    let p: &Value = &merged;
     let stat = Stat::parse(p)?;
     let min_share = min_share(p)?;
     let by = match ps(p, "by").map(str::trim) {
@@ -1767,6 +1831,11 @@ mod tests {
         assert_eq!(super::date_in_text("NDVI 2015"), day("2015-01-01"));
         assert_eq!(super::date_in_text("ndvi_v2015"), None);
         assert_eq!(super::date_in_text("MOD13Q1.A2024153"), day("2024-06-01"));
+        // A layer renamed keeps its file's date; a folder's doesn't date it.
+        assert_eq!(super::date_of("Sorriso NDVI", Some("/data/MOD13Q1.A2024153.tif")), day("2024-06-01"));
+        assert_eq!(super::date_of("ndvi_2015-06-01", Some("/data/MOD13Q1.A2024153.tif")), day("2015-06-01"));
+        assert_eq!(super::date_of("ndvi", Some("/data/2020/ndvi_a.tif")), None);
+        assert_eq!(super::date_of("ndvi", None), None);
     }
 
     /// A long run's thread that panics gives an error naming the command and the cause, and its
@@ -1793,6 +1862,24 @@ mod tests {
         let half = GeoTransform { origin_x: -60.125, ..a };
         assert!(super::same_grid(&a, &hair));
         assert!(!super::same_grid(&a, &half));
+    }
+
+    /// A stack knows its size before any slice is read: the grid it is put on when its layers' grids
+    /// differ, whatever the earliest date's layer is; its first date's otherwise.
+    #[test]
+    fn a_stack_knows_its_size_before_reading() {
+        use super::TimeCube;
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        use std::sync::Arc;
+        let gt = GeoTransform { origin_x: -56.0, origin_y: -12.0, pixel_width: 0.01, pixel_height: -0.01 };
+        let raster = |w: u32, h: u32| {
+            Arc::new(Raster::new("r", w, h, vec![vec![0.0; (w * h) as usize]], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap())
+        };
+        let (grid, early) = (raster(3, 2), raster(6, 4));
+        let mut stack = super::Stack::new(vec![(2.0, grid.clone(), 0), (1.0, early, 0)], "r".into());
+        assert_eq!(stack.size(), Some((6, 4)), "one grid: the first date's");
+        stack.grid = Some(grid);
+        assert_eq!(stack.size(), Some((3, 2)), "the grid the slices are put on");
     }
 
     /// Several readers place a cube's slices as they are read; in order, one reads them, in the

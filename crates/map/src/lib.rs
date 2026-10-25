@@ -11,6 +11,7 @@ pub mod graphics;
 pub mod layout;
 pub mod lod;
 pub mod palette;
+pub mod paths;
 pub mod planets;
 pub mod presentation;
 pub mod projection;
@@ -199,6 +200,80 @@ fn yes() -> bool {
 }
 
 impl Layer {
+    /// Local linked paths, followed by the dataset's record-only provenance.
+    pub fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
+        let Layer { dataset, source, raster, .. } = self;
+        let mut paths = Vec::new();
+        if let Some(src) = source {
+            if let Some(g) = &mut src.gdal {
+                paths.push((&mut g.path, false));
+            } else if let Some(d) = &mut src.duckdb {
+                if let Some(p) = &mut d.database {
+                    paths.push((p, false));
+                }
+            } else if src.embedded.is_none()
+                && src.postgis.is_none()
+                && src.mysql.is_none()
+                && src.sqlserver.is_none()
+                && let Some(p) = &mut src.path
+            {
+                paths.push((p, false));
+            }
+        }
+        if let Some(r) = raster {
+            if r.embedded.is_none()
+                && let Some(p) = &mut r.path
+            {
+                paths.push((p, false));
+            }
+            if let Some(z) = &mut r.time_zarr {
+                paths.push((&mut z.store, false));
+            }
+        }
+        if let Some(p) = &mut dataset.source {
+            paths.push((p, true));
+        }
+        paths.retain(|(p, _)| paths::is_local(p));
+        paths
+    }
+
+    /// The original local file replaced by Repair Data Source.
+    pub fn linked_file(&self) -> Option<&str> {
+        let p = if let Some(r) = &self.raster {
+            if r.embedded.is_some() {
+                return None;
+            }
+            r.time_zarr.as_ref().map(|z| z.store.as_str()).or(r.path.as_deref())
+        } else {
+            self.source.as_ref().and_then(source::SourceLayer::linked_file)
+        };
+        p.filter(|p| paths::is_local(p))
+    }
+
+    /// The dataset within the linked container.
+    pub fn linked_table(&self) -> Option<&str> {
+        self.raster.as_ref().and_then(|r| r.subdataset.as_deref()).or_else(|| {
+            self.source.as_ref().and_then(|s| {
+                s.table
+                    .as_deref()
+                    .or_else(|| s.gdal.as_ref().map(|g| g.layer.as_str()))
+                    .or_else(|| s.duckdb.as_ref().and_then(|d| d.table.as_deref()))
+            })
+        })
+    }
+
+    /// Installs a fresh source without changing the layer's identity or configuration.
+    pub fn replace_source(&mut self, src: source::SourceLayer) {
+        self.selection.clear();
+        if let Some(info) = src.info() {
+            self.dataset.fields = info.fields.clone();
+            self.dataset.crs = info.coordinate_system();
+        }
+        self.dataset.source = src.linked_file().map(String::from);
+        self.source = Some(src);
+        self.install(Vec::new());
+    }
+
     /// The dataset, streamed, raster and time-following Zarr addresses used to read this layer
     /// again, in that order. Local paths are included; database origins stay password-free.
     pub fn addresses_mut(&mut self) -> impl Iterator<Item = &mut String> {
@@ -919,6 +994,20 @@ pub struct LabelDisplay {
 }
 
 impl Map {
+    /// All local linked files and record-only provenance in serialization order.
+    pub fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
+        let mut paths = Vec::new();
+        for tile in &mut self.tiles {
+            if tile.archive_file().is_some() {
+                paths.push((&mut tile.url, false));
+            }
+        }
+        for layer in &mut self.layers {
+            paths.extend(layer.file_paths_mut());
+        }
+        paths
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Map {
             name: name.into(),

@@ -449,6 +449,9 @@ pub(crate) fn kept_slice(key: &str) -> Option<std::sync::Arc<raster::Raster>> {
 /// Step `i` of a following layer's variable, read from its store (no slice kept).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_slice(zt: &ZarrTime, i: usize) -> Result<Option<raster::Raster>, String> {
+    if rustgis_map::paths::is_project_relative(&zt.store) {
+        return Err(rustgis_map::paths::unknown_folder(&zt.store));
+    }
     let sel = zt.selection(i);
     let crs = zt.crs.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let read = if is_web(&zt.store) {
@@ -471,6 +474,29 @@ pub(crate) fn read_slice(zt: &ZarrTime, i: usize) -> Result<Option<raster::Raste
         Err(rustgis_data::DataError::NoChunks(_)) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Reopens the same time-following variable from a replacement local store.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn relink_following(s: &Session, rl: &RasterLayer, full: &str) -> Result<RasterLayer, String> {
+    let zt = rl.time_zarr.as_ref().ok_or("the raster has no time-following variable")?;
+    let store = zarr::read_metadata(Path::new(full)).map_err(|e| format!("{full}: {e}"))?;
+    if !store.variables().iter().any(|v| v.path == zt.variable) {
+        return Err(format!("{full} has no variable '{}': choose the store the layer was added from", zt.variable));
+    }
+    let mut zt = ZarrTime { store: full.into(), shown: None, ..zt.clone() };
+    zt.repair();
+    let window = s.map().time.as_ref().map(rustgis_map::time::TimeSlider::window);
+    let want = zt.step_for(window);
+    let i = want.unwrap_or(0);
+    let r = read_step(&zt, i, slice_key(&zt, i))?;
+    zt.shown = want;
+    let mut new = rl.clone();
+    new.path = Some(full.into());
+    new.data = want.map(|_| r);
+    new.error = None;
+    new.time_zarr = Some(zt);
+    Ok(new)
 }
 
 /// Layers that follow the time slider read the step it shows, in every map: the last of their

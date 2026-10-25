@@ -681,6 +681,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "map.basemap" => Dialog("basemap"),
         "map.body" => Dialog("body"),
         "map.addTiles" => Dialog("addTiles"),
+        "map.repairTiles" => Dialog("repairTiles"),
         "bookmark.add" => Dialog("bookmark"),
         "bookmark.import" => OpenItem("bookmarks"),
         "bookmark.save" => SaveItem("bookmarks"),
@@ -700,6 +701,7 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.geocode" => Dialog("geocode"),
         "layer.rename" => Dialog("renameLayer"),
         "layer.defineProjection" => Dialog("defineProjection"),
+        "layer.repairSource" => Dialog("repairSource"),
         "ui.importShapefile" => Dialog("addShapefile"),
         "layer.definitionQuery" => Dialog("definitionQuery"),
         "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.ramp" => {

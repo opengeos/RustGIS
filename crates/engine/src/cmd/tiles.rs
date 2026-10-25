@@ -29,6 +29,8 @@ pub const NETWORK: &[&str] = &[
     "stac.search",
     "stac.addAsset",
     "stac.addCube",
+    // From the catalog entry's address (a Zarr entry also as `layer.addZarr`: plugins.rs).
+    "cube.open",
     "map.findPlace",
     "layer.geocode",
     "osm.download",
@@ -133,7 +135,7 @@ pub(crate) fn list(s: &Session, redact: bool) -> Value {
             .enumerate()
             .map(|(i, t)| {
                 let url = if redact { crate::sources::redact(&t.url) } else { t.url.clone() };
-                json!({"index": i, "name": t.name, "id": t.id, "kind": t.kind.code(), "url": url, "visible": t.visible,
+                json!({"index": i, "name": t.name, "id": t.id, "kind": t.kind.code(), "url": url, "visible": t.visible, "error": t.error,
                     "opacity": t.opacity, "blend": t.blend.code(), "overlay": t.overlay, "attribution": t.attribution, "minZoom": t.min_zoom, "maxZoom": t.max_zoom})
             })
             .collect(),
@@ -408,7 +410,7 @@ fn follow_archive(s: &mut Session, t: &TileLayer, wait: web_time::Duration) -> b
 }
 
 /// The tile layer a command names by `index`, `name` or `id`.
-fn find(s: &Session, p: &Value) -> Result<Option<usize>, String> {
+pub(crate) fn find(s: &Session, p: &Value) -> Result<Option<usize>, String> {
     let tiles = &s.map().tiles;
     if let Some(i) = f(p, "index") {
         let i = (i >= 0.0 && i.fract() == 0.0).then_some(i as usize).filter(|i| *i < tiles.len());

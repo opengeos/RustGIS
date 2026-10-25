@@ -56,12 +56,10 @@ Correct, robust and recoverable, with the foundations other themes stand on.
 - Reloading files changed on disk.
 - Autosave and crash recovery in the browser: reopen unsaved work after a crash. The desktop app
   has them ([#873](https://github.com/opengeos/RustGIS/issues/873)).
-- Projects that survive a move: data paths kept relative to the project, and Repair Data Source
-  for a file that moved or was renamed.
 - Signed Windows builds (no SmartScreen warning), then in-place updates; settings an
   administrator can fix for a managed install (no AI Assistant, plugins or web services).
-- Extend the OS keychain secret store to service connections (database passwords, S3 keys and
-  AI provider keys can already be remembered).
+- Extend the OS keychain secret store to service connections (database passwords, S3 keys,
+  AI provider keys and the ChatGPT sign-in's tokens are already kept there).
 - Overlay tools beside Clip and Erase: intersect, union, identity and near _(open)_.
 - Spatial Join by distance, closest, centre in and largest overlap, with merge rules (sum, mean,
   first…) for one-to-one joins ([#851](https://github.com/opengeos/RustGIS/issues/851)).
@@ -171,6 +169,8 @@ Open questions rather than plans; discuss before building.
 - AI segmentation and detection (SAM, ONNX models).
 
 ## Done
+- Projects that survive a move: local data paths relative to the project and undoable Repair
+  Data Source for layers and tile archives ([#879](https://github.com/opengeos/RustGIS/issues/879)).
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly, installable with offline start, opened with a project or data by its
   web address), 18 interface languages; a ribbon laid out in the order of the work (Home, Data,
@@ -235,7 +235,8 @@ Open questions rather than plans; discuss before building.
   documentation built in.
 - The AI Assistant's skills, subagents and ACP clients; MCP over HTTP, an audited loopback
   relay and a file bridge, which let external AI clients drive the app. Database passwords, S3
-  keys and AI provider keys optionally remembered in the desktop OS keychain.
+  keys and AI provider keys optionally remembered in the desktop OS keychain, where the ChatGPT
+  sign-in keeps its tokens.
 - Sandboxed WebAssembly plugins with a registry at plugins.rustgis.app; process plugins that
   run as programs (with Python environments RustGIS makes), in the background with progress and
   Cancel.

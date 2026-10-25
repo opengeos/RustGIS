@@ -4,7 +4,7 @@
 //! so undo, attribute rules and the edit counts work as for any other edit.
 
 use egui::{Color32, Painter, Pos2, Rect, Stroke, vec2};
-use rustgis_engine::data::{Geometry, VertexId};
+use rustgis_engine::data::{Feature, Geometry, VertexId};
 use rustgis_engine::geom::Coord;
 use serde_json::json;
 
@@ -32,6 +32,56 @@ pub struct VertexDrag {
     pub at: Coord,
     /// Whether `at` snapped to a feature (the overlay marks it).
     pub snapped: bool,
+}
+
+/// The source of a held gesture, kept separately from its copyable preview. A weak row identity
+/// detects any mutable row access, including edits without `touch_geometry`, without retaining
+/// the rows or copying the geometry. A different project, map slot or map name also invalidates
+/// it: a duplicated map can share rows and later occupy the original map's slot.
+pub(crate) struct DragOwner {
+    project: u64,
+    map: usize,
+    map_name: String,
+    rows: std::sync::Weak<Vec<Feature>>,
+}
+
+impl DragOwner {
+    /// Captures the selected source's allocation, not a global revision: styling or moving the
+    /// camera can change the session revision without changing the gesture's source.
+    fn capture(app: &RustGisApp, d: VertexDrag) -> Option<Self> {
+        let map = app.session.map();
+        let layer = map.layer(d.layer)?;
+        Some(Self {
+            project: app.session.opened,
+            map: app.session.project.active_map,
+            map_name: map.name.clone(),
+            rows: layer.dataset.features.allocation_key(),
+        })
+    }
+
+    /// A gesture is usable only in its original context while its source is still an editable
+    /// target. Any row edit in that layer cancels conservatively; styles and camera changes do not.
+    fn matches(&self, app: &RustGisApp, d: VertexDrag) -> bool {
+        let map = app.session.map();
+        self.project == app.session.opened
+            && self.map == app.session.project.active_map
+            && self.map_name == map.name
+            && app.session.tool == rustgis_engine::Tool::EditVertices
+            && map.layer(d.layer).is_some_and(|l| self.rows.ptr_eq(&l.dataset.features.allocation_key()))
+            && targets(app).iter().any(|(l, r, g)| *l == d.layer && *r == d.row && g.vertex(d.vertex).is_some())
+    }
+}
+
+/// Drops a stale preview and its pending pointer release before either can act on new source
+/// rows. This also runs when a map is shown without pointer movement; cancellation creates no edit.
+pub(crate) fn cancel_stale_drag(app: &mut RustGisApp) {
+    let Some(d) = app.map.vertex_drag else {
+        app.map.vertex_drag_owner = None;
+        return;
+    };
+    if !app.map.vertex_drag_owner.as_ref().is_some_and(|owner| owner.matches(app, d)) {
+        app.map.cancel_vertex_drag();
+    }
 }
 
 /// What is under the pointer.
@@ -124,13 +174,16 @@ fn handle_at(app: &RustGisApp, rect: Rect, p: Pos2) -> Option<Handle> {
     best.map(|(_, h)| h)
 }
 
-/// A press at `origin` starts dragging the vertex or midpoint there, if there is one.
+/// A press at `origin` starts dragging the vertex or midpoint there, capturing the source rows
+/// and map context before previewing. A later source change cancels rather than retargets it.
 pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
     let drag = match handle_at(app, rect, origin) {
         Some(Handle::Vertex(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: false, at, snapped: false },
         Some(Handle::Edge(layer, row, vertex, at)) => VertexDrag { layer, row, vertex, insert: true, at, snapped: false },
         None => return false,
     };
+    let Some(owner) = DragOwner::capture(app, drag) else { return false };
+    app.map.vertex_drag_owner = Some(owner);
     app.map.vertex = (!drag.insert).then_some((drag.layer, drag.row, drag.vertex));
     app.map.vertex_drag = Some(drag);
     true
@@ -138,8 +191,10 @@ pub fn drag_start(app: &mut RustGisApp, rect: Rect, origin: Pos2) -> bool {
 
 /// A dragged line/polygon vertex follows the pointer, excluding itself and its incident edges.
 /// Point/multipoint moves keep whole-feature exclusion. An insertion also excludes its whole
-/// feature, so its source edge cannot become a target.
+/// feature, so its source edge cannot become a target. Stale source ownership cancels first,
+/// even when this pointer position cannot be projected.
 pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
+    cancel_stale_drag(app);
     let Some(c) = screen_to_lonlat(app, rect, p) else { return };
     let Some(d) = app.map.vertex_drag else { return };
     // Asked directly, not as a command: commands mark the map changed, redrawing it every frame.
@@ -154,9 +209,13 @@ pub fn drag_to(app: &mut RustGisApp, rect: Rect, p: Pos2) {
     }
 }
 
-/// Letting go commits the move or insertion as one edit.
+/// Letting go commits a still-owned move or insertion as one edit. A queued release after a
+/// source/context change is discarded, preserving the current geometry and undo/redo history.
 pub fn drag_stop(app: &mut RustGisApp) {
+    // Cancellation also drops the pending Vertex pointer action, swallowing a stale release.
+    cancel_stale_drag(app);
     let Some(d) = app.map.vertex_drag.take() else { return };
+    app.map.vertex_drag_owner = None;
     // A vertex let go where it was is no edit (and no undo step).
     let at_start = targets(app).iter().any(|(l, r, g)| {
         *l == d.layer && *r == d.row && g.vertex(d.vertex).is_some_and(|c| (c.x - d.at.x).abs() < 1e-9 && (c.y - d.at.y).abs() < 1e-9)
@@ -166,6 +225,8 @@ pub fn drag_stop(app: &mut RustGisApp) {
     }
 }
 
+/// Sends one move or insertion through the existing command contract, then chooses the result.
+/// Held drags check ownership before reaching here; edge clicks commit immediately.
 fn commit(app: &mut RustGisApp, d: VertexDrag) {
     let action = if d.insert { "insert" } else { "move" };
     let p = json!({

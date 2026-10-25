@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: "RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data"
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+abstract: "RustGIS is a fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data, native on Windows, macOS and Linux, and in the web browser."
+authors:
+  - given-names: Qiusheng
+    family-names: Wu
+    email: giswqs@gmail.com
+    affiliation: "University of Tennessee, Knoxville, USA"
+    orcid: "https://orcid.org/0000-0001-5437-4073"
+  - given-names: José Gregorio
+    family-names: Rincón Albarracín
+  - given-names: Elpidio
+    family-names: Filho
+  - given-names: Daniel
+    family-names: Hofbauer
+  - given-names: Mavrick
+    family-names: Fitzgerald
+  - given-names: Dominik
+    family-names: Strebel
+version: 0.4.0
+date-released: 2026-10-25
+doi: "10.5281/zenodo.23633281"
+repository-code: "https://github.com/opengeos/RustGIS"
+url: "https://rustgis.app"
+license: Apache-2.0
+keywords:
+  - GIS
+  - geospatial
+  - Rust
+  - WebAssembly
+  - mapping
+  - spatial analysis

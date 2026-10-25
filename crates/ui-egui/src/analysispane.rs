@@ -72,6 +72,9 @@ pub struct TrendForm {
     pub end: String,
     pub months: String,
     pub min_valid: String,
+    /// The dates typed, a layer's (or band's) each in their order; empty to read them from the
+    /// names.
+    pub dates: String,
     #[cfg(not(target_arch = "wasm32"))]
     pub running: Option<Trending>,
 }
@@ -929,10 +932,15 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
     if f.test.is_empty() {
         (f.test, f.seasons, f.alpha) = ("hamedRao".into(), 12, "0.05".into());
     }
+    let was_stack = f.stack;
     ui.horizontal(|ui| {
         ui.radio_value(&mut f.stack, true, tl!("Layers, a date each"));
         ui.radio_value(&mut f.stack, false, tl!("One layer: a Zarr variable or a raster's bands"));
     });
+    // Dates typed for one kind of series don't carry over to the other.
+    if f.stack != was_stack {
+        f.dates.clear();
+    }
     if f.stack {
         f.ticked.retain(|n| rasters.contains(n));
         ui.horizontal(|ui| {
@@ -946,7 +954,7 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
         egui::ScrollArea::vertical().id_salt("trend_layers").max_height(160.0).show(ui, |ui| {
             for n in rasters {
                 let mut on = f.ticked.contains(n);
-                let date = rustgis_engine::cmd::cube::date_in_text(n)
+                let date = rustgis_engine::cmd::cube::layer_date(&app.session, n)
                     .map_or_else(|| tl!("no date in the name").to_string(), |d| rustgis_engine::data::time::format(d, "YYYY-MM-DD"));
                 if ui.checkbox(&mut on, format!("{n}  ({date})")).changed() {
                     if on {
@@ -962,6 +970,9 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
     }
     let f = &mut app.workflow.trend;
     egui::Grid::new("trend_grid").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        let input_label = ui.label(tl!("Dates"));
+        ui.add(egui::TextEdit::singleline(&mut f.dates).hint_text(tl!("from the names")).desired_width(240.0)).labelled_by(input_label.id);
+        ui.end_row();
         let input_label = ui.label(tl!("Test"));
         let tests = [
             ("hamedRao", "Modified Mann–Kendall (Hamed & Rao)"),
@@ -1018,7 +1029,10 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
     }
     let mut p = json!({"test": f.test, "per": if f.decade { "decade" } else { "year" }});
     if f.stack {
-        p["layers"] = json!(f.ticked);
+        // In the list's order, not the order they were ticked: the dates typed go with them in
+        // that order, and the first gives the grid.
+        let ticked: Vec<&String> = rasters.iter().filter(|n| f.ticked.contains(n)).collect();
+        p["layers"] = json!(ticked);
     } else {
         p["layer"] = json!(app.workflow.layer);
     }
@@ -1045,6 +1059,18 @@ fn trend(app: &mut RustGisApp, ui: &mut Ui, rasters: &[String]) {
         if !v.trim().is_empty() {
             p[k] = json!(v.trim());
         }
+    }
+    // Dates typed, a layer's or band's each in their order, apart by commas or semicolons (a date
+    // can hold a space before its time): checked by the command, which says which it can't read.
+    let parts: Vec<&str> = f.dates.split([',', ';']).map(str::trim).collect();
+    // An empty one before the last would move the dates after it onto other layers; a comma at
+    // the end is let be.
+    if parts.iter().rev().skip(1).any(|d| d.is_empty()) {
+        bad = Some(tl!("A date is missing between two commas").to_string());
+    }
+    let dates: Vec<&str> = parts.into_iter().filter(|d| !d.is_empty()).collect();
+    if !dates.is_empty() {
+        p["dates"] = json!(dates);
     }
     let typed: Vec<&str> = f.months.split([',', ' ']).map(str::trim).filter(|m| !m.is_empty()).collect();
     let months: Vec<Value> = typed.iter().filter_map(|m| m.parse::<u64>().ok()).map(|m| json!(m)).collect();

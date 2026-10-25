@@ -7,7 +7,7 @@ use rustgis_geom::{Coord, Extent};
 use rustgis_map::qgis::{self, NoteKind, Report, Source};
 use serde_json::{Value, json};
 
-use super::{need_feature_layer, ps};
+use super::{need_layer, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
 pub fn commands() -> Vec<C> {
@@ -15,7 +15,7 @@ pub fn commands() -> Vec<C> {
         C::new("project.importQgis", "Import QGIS Project", "Project › Import", import_project).params(
             r#"{"path"?: "*.qgs|*.qgz", "text"?: "a .qgs file's text", "data"?: "a .qgs or .qgz file, base64", "dir"?: "the folder its relative paths start from (default: the file's)"} → the layers added and notes on what wasn't carried over"#,
         ),
-        C::new("style.importQgis", "Import QGIS Style", "Style › Styles", import_style).when(need_feature_layer).params(
+        C::new("style.importQgis", "Import QGIS Style", "Style › Styles", import_style).when(need_layer).params(
             r#"{"layer"?, "path"?: "*.qml", "text"?: "a .qml file's text", "data"?: "a .qml file, base64"} → notes on what wasn't carried over"#,
         ),
     ]
@@ -84,13 +84,21 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let m = s.map_mut();
     m.basemap = rustgis_map::Basemap::Blank;
     m.graticule = false;
+    let degrees = project.crs.as_deref().and_then(Geographic::of);
     if let Some(crs) = &project.crs {
         let code = match crs.as_str() {
             "EPSG:3857" | "EPSG:900913" => "mercator",
+            // QGIS draws a project in degrees as plate carrée: longitude and latitude as x and y.
+            _ if degrees.is_some() => "equirectangular",
             other => other,
         };
-        if let Err(e) = s.run_part("map.projection", &json!({"type": code})) {
-            report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator"));
+        match s.run_part("map.projection", &json!({"type": code})) {
+            Err(e) => report.approximated("", format!("the project's coordinate system {crs} ({e}), drawn in Web Mercator")),
+            Ok(_) if degrees.is_some_and(|g| !g.wgs84 || !g.greenwich) => {
+                let meridian = if degrees.is_some_and(|g| !g.greenwich) { ", its longitudes taken as from Greenwich" } else { "" };
+                report.approximated("", format!("the project's coordinate system {crs}, drawn in Equirectangular on WGS 84{meridian}"));
+            }
+            Ok(_) => {}
         }
     }
     // Bottom first, so each is added on top of the ones below it.
@@ -102,7 +110,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             Err(e) => report.skipped(&layer.name, format!("the layer: {e}")),
         }
     }
-    go_to_view(s, &project);
+    go_to_view(s, &project, degrees);
     let notes: Vec<Value> = report.notes.iter().map(note_json).collect();
     if !report.notes.is_empty() {
         let left = report.notes.iter().filter(|n| n.kind == NoteKind::Skipped).count();
@@ -188,7 +196,9 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
             return Ok(None);
         }
         Source::Other { provider } => {
-            report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {provider} sources"));
+            // A layer of no provider (an annotation layer, a group layer) is told by its kind.
+            let what = if provider.is_empty() { format!("{} layers", layer.kind) } else { format!("{provider} sources") };
+            report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {what}"));
             return Ok(None);
         }
     }
@@ -196,20 +206,13 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
     let Some(l) = s.map_mut().layer_mut(id) else { return Err("the layer wasn't added".into()) };
     let added_name = l.name.clone();
     l.visible = layer.visible;
-    if l.is_raster() {
-        // A raster takes its opacity, visibility and scale range; its colouring is noted.
-        let st = &layer.style;
-        let t = st.transparency;
-        let (min, max) = (st.min_scale, st.max_scale);
-        if let Some(t) = t {
-            l.transparency = t;
+    if l.raster.is_some() {
+        // A raster takes its opacity, blending, scale range and colouring (when its bands are
+        // there).
+        if let Some(why) = l.raster.as_ref().and_then(|r| layer.style.raster_misfit(r)) {
+            report.skipped(name, why);
         }
-        if let Some(m) = min {
-            l.min_scale = m;
-        }
-        if let Some(m) = max {
-            l.max_scale = m;
-        }
+        layer.style.apply(l);
         return Ok(Some(added_name));
     }
     layer.style.apply(l);
@@ -307,12 +310,21 @@ pub(crate) fn web_settings(s: &mut Session, added: &Value, before: Option<u32>, 
 }
 
 /// Goes to the project's saved view, or to its layers when that view shows none of them.
-fn go_to_view(s: &mut Session, project: &qgis::Project) {
+fn go_to_view(s: &mut Session, project: &qgis::Project, degrees: Option<Geographic>) {
     let data = s.map().full_extent();
-    let saved = project.extent.and_then(|[x0, y0, x1, y1]| {
-        let m = s.map();
-        let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| m.to_lonlat(Coord::new(x, y)));
-        corners.iter().flatten().fold(None, |e: Option<Extent>, c| Some(e.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y))))
+    let saved = project.extent.and_then(|[x0, y0, x1, y1]| match degrees {
+        // In degrees already (from Greenwich: the view of a project on another prime meridian
+        // is left to its data).
+        Some(g) if g.greenwich => Some(Extent::new(x0.max(-180.0), y0.max(-90.0), x1.min(180.0), y1.min(90.0))).filter(|e| !e.is_empty()),
+        Some(_) => None,
+        None => {
+            let m = s.map();
+            let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)].map(|(x, y)| m.to_lonlat(Coord::new(x, y)));
+            corners
+                .iter()
+                .flatten()
+                .fold(None, |e: Option<Extent>, c| Some(e.unwrap_or(Extent::EMPTY).union(&Extent::new(c.x, c.y, c.x, c.y))))
+        }
     });
     let target = match saved {
         Some(e) if !e.is_empty() && (data.is_empty() || e.intersects(&data)) => e,
@@ -320,6 +332,40 @@ fn go_to_view(s: &mut Session, project: &qgis::Project) {
     };
     if !target.is_empty() {
         s.zoom_to(&target);
+    }
+}
+
+/// A coordinate system in degrees (EPSG:4326, ETRS89, NAD83, …), which QGIS draws as plate carrée.
+#[derive(Clone, Copy, Debug)]
+struct Geographic {
+    /// On WGS 84, or a datum PROJ takes as the same (no shift to WGS 84).
+    wgs84: bool,
+    /// Longitudes from Greenwich (not from another prime meridian, such as Paris's).
+    greenwich: bool,
+}
+
+impl Geographic {
+    /// `None` for a coordinate system that isn't in degrees, or isn't known: an `EPSG:` code,
+    /// `OGC:CRS84`, or a PROJ string (a project QGIS saved without an authority code).
+    fn of(crs: &str) -> Option<Geographic> {
+        if crs.eq_ignore_ascii_case("OGC:CRS84") {
+            return Some(Geographic { wgs84: true, greenwich: true });
+        }
+        let def = if crs.trim_start().starts_with('+') {
+            crs
+        } else {
+            let code = crs.strip_prefix("EPSG:")?.trim().parse::<u16>().ok()?;
+            rustgis_data::raster::crs::epsg_proj4(code)?
+        };
+        let has = |p: &str| def.split_whitespace().any(|t| t == p);
+        ["+proj=longlat", "+proj=latlong", "+proj=lonlat", "+proj=latlon"].iter().any(|p| has(p)).then(|| Geographic {
+            wgs84: has("+datum=WGS84") || has("+datum=NAD83") || has("+towgs84=0,0,0,0,0,0,0") || has("+towgs84=0,0,0"),
+            // `+pm=` names a meridian or gives its offset in degrees (`0`, `0.0`: Greenwich).
+            greenwich: def
+                .split_whitespace()
+                .filter_map(|t| t.strip_prefix("+pm="))
+                .all(|pm| pm.eq_ignore_ascii_case("greenwich") || pm.parse::<f64>().is_ok_and(|d| d == 0.0)),
+        })
     }
 }
 
@@ -334,7 +380,33 @@ fn import_style(s: &mut Session, p: &Value) -> CmdResult {
     let mut report = Report::default();
     let style = qgis::read_style(&text, &name, &mut report)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-    style.apply(l);
-    check_fields(l, &name, &mut report);
+    if l.raster.is_some() {
+        // A style that doesn't fit leaves the raster as it was, its opacity and scale range too.
+        if let Some(why) = l.raster.as_ref().and_then(|r| style.raster_misfit(r)) {
+            report.skipped(&name, why);
+        } else {
+            // Pixels still on their way (a remote raster) can't be checked: the style is applied,
+            // and a band it reads that the file hasn't is drawn from the file's last band.
+            if style.raster.is_some() && l.raster.as_ref().is_some_and(|r| r.data.is_none()) {
+                report.approximated(
+                    &name,
+                    "its raster colouring, applied before the raster's bands could be checked (a band the file hasn't is drawn from its last)",
+                );
+            }
+            if style.raster.is_none() && style.renderer.is_some() {
+                report.skipped(
+                    &name,
+                    "a feature layer's symbols and labels, which a raster hasn't (only its opacity and scale range are taken)",
+                );
+            }
+            style.apply(l);
+        }
+    } else {
+        if style.raster.is_some() && style.renderer.is_none() {
+            report.skipped(&name, "a raster's colouring, which a feature layer hasn't (only its opacity and scale range are taken)");
+        }
+        style.apply(l);
+        check_fields(l, &name, &mut report);
+    }
     Ok(json!({"notes": report.notes.iter().map(note_json).collect::<Vec<_>>()}))
 }

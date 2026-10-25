@@ -731,6 +731,8 @@ pub fn context(s: &Session) -> String {
         }
         if !t.visible {
             line.push_str(", hidden");
+        } else if let Some(e) = &t.error {
+            line.push_str(&format!(", unavailable: {e}"));
         } else if !t.draws() {
             line.push_str(", hidden by the time slider (no date in its window)");
         }

@@ -40,6 +40,7 @@ nav = [
   { "Architecture" = "architecture.md" },
   { "Contributing" = "contributing.md" },
   { "Acknowledgements" = "acknowledgements.md" },
+  { "How to Cite" = "citation.md" },
   { "Sponsor" = "sponsor.md" },
   { "Privacy" = "privacy.md" },
   { "Report Issues" = "https://github.com/opengeos/RustGIS/issues" },
