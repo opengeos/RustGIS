@@ -33,9 +33,6 @@ comment on its issue or pull request and open a draft pull request early.
 - GPU map: vector tiles and labels on the GPU tile layer
   ([#635](https://github.com/opengeos/RustGIS/issues/635),
   [#596](https://github.com/opengeos/RustGIS/issues/596)).
-- Labeling pane: label classes managed in the pane, query editor, more options
-  ([#618](https://github.com/opengeos/RustGIS/issues/618),
-  [#722](https://github.com/opengeos/RustGIS/issues/722)).
 - Georeferencer: side-by-side window, transform picker, more formats
   ([#609](https://github.com/opengeos/RustGIS/issues/609)).
 
@@ -43,13 +40,13 @@ comment on its issue or pull request and open a draft pull request early.
 
 ### Fixes and quick wins
 The bugs users hit, the docs and a few quick wins: good first pull requests.
-- Robustness: the Windows 11 start-up failure
-  ([#375](https://github.com/opengeos/RustGIS/issues/375)), Control-click menus on macOS
+- Robustness: Control-click menus on macOS
   ([#707](https://github.com/opengeos/RustGIS/issues/707)), Load Off-Map Data
   ([#661](https://github.com/opengeos/RustGIS/issues/661)).
 - A pass over the user guide, the comparison pages and the README against what the app does
-  today (vertex editing, spatial join and kriging are listed as missing or undocumented; some
-  pages still say 16 languages).
+  today (no page says layout PDFs are pictures of each page; the built-in tool count), and short
+  task tutorials for newcomers: buffer, select and export a list; edit a layer and save the
+  result; a print layout _(open)_.
 
 ### Solid ground
 Correct, robust and recoverable, with the foundations other themes stand on.
@@ -58,12 +55,18 @@ Correct, robust and recoverable, with the foundations other themes stand on.
   ([#730](https://github.com/opengeos/RustGIS/issues/730)) is one case. _Coordinate first._
 - Reloading files changed on disk.
 - Autosave and crash recovery: reopen unsaved work after a crash.
-- Signed Windows builds (no SmartScreen warning), then in-place updates.
+- Projects that survive a move: data paths kept relative to the project, and Repair Data Source
+  for a file that moved or was renamed.
+- Signed Windows builds (no SmartScreen warning), then in-place updates; settings an
+  administrator can fix for a managed install (no AI Assistant, plugins or web services).
 - Extend the OS keychain secret store to service connections (database passwords, S3 keys and
   AI provider keys can already be remembered).
 - Overlay tools beside Clip and Erase: intersect, union, identity and near _(open)_.
+- Spatial Join by distance, closest, centre in and largest overlap, with merge rules (sum, mean,
+  first…) for one-to-one joins ([#851](https://github.com/opengeos/RustGIS/issues/851)).
 - Vector tools, each writing a new layer: join field (a one-off attribute join), merge (append
-  layers), extract vertices, points along lines, check and fix geometry _(open)_.
+  layers), extract vertices, points along lines, check and fix geometry _(open)_; summary fields
+  (sum, mean, first…) on Dissolve and Summarize Within _(open)_.
 - Batch runs: one tool over many layers or a folder of files.
 
 ### Expressions and cartography
@@ -82,28 +85,45 @@ labels, definition queries, display filters, pop-ups and symbol properties. On t
 And alongside it:
 - Kernel density (heat map) as a tool and as a renderer; point clustering.
 - SVG and PNG markers, fill patterns and a symbol library.
-- A legend and colour bar on the map.
+- A legend and colour bar on the map. In layouts, legend entries reordered, renamed and set in
+  columns; several values grouped into one unique-value class.
+- Layouts and reports exported as vector PDF, with text and map frames as vectors (each page is
+  one picture today).
+- Map series at a fixed scale, with the current feature highlighted and its attributes in the
+  page's text.
 - Extend QGIS QML style import beyond the supported renderers; add SLD styles.
 - A histogram for raster stretches; raster attribute tables.
 
 ### Data at the source
 - Write edits back to GeoPackage and PostGIS (edits stay in the project today). _Coordinate
   first._
+- A date and date-time field type, read and written as dates (they are text today)
+  ([#853](https://github.com/opengeos/RustGIS/issues/853)). _Coordinate first_ (it changes
+  `FieldType`).
+- Editable standalone tables (they are read-only today).
+- Export into an existing GeoPackage as an added or replaced table, leaving its other tables
+  ([#852](https://github.com/opengeos/RustGIS/issues/852); export refuses an existing file today).
+- Polygon editing: cut a polygon, reshape and trace _(open)_; then shared edges, where moving one
+  boundary moves its neighbour's too.
 - Editor tracking fields (created/edited by and at).
 - Attribute table columns: rename, hide and reorder _(open)_.
 - Persistent attribute joins and virtual fields. _Coordinate first_ (they change `Feature`).
 - Attribute forms: widgets, constraints and conditional visibility, on top of domains and
   subtypes.
+- Coded-value domains and subtypes read from File Geodatabases (their codes show raw today).
 - Layer metadata, exported as STAC items.
-- ArcGIS sign-in (OAuth) and a Portal browser, once the secret store (Solid ground) exists.
+- ArcGIS sign-in (OAuth) and a Portal browser, once the secret store (Solid ground) exists; Esri
+  JSON for services that don't offer GeoJSON.
 
 ### Analysis
 - Routing: isochrones, service areas and an origin–destination matrix (today shortest path over
   a line layer).
 - Hot-spot statistics (Getis-Ord Gi\*), and emerging hot spots on the time slider.
 - Charts linked to the selection: histogram, scatter, bar and box plots of a layer's fields.
-- Reverse geocoding; a DEM downloader so viewshed works without a loaded elevation raster
-  _(open)_.
+- Tabulate intersection: one layer's counts and totals shared out to another by area overlap,
+  once intersect exists.
+- Reverse geocoding, and the US Census geocoder beside Nominatim and Photon; a DEM downloader so
+  viewshed works without a loaded elevation raster _(open)_.
 
 ### 3D scenes, first steps
 - Phases 1–2 of [#726](https://github.com/opengeos/RustGIS/issues/726): Z coordinates kept from
@@ -188,10 +208,10 @@ Open questions rather than plans; discuss before building.
   gallery (OpenFreeMap, USGS Imagery), worldviews.
 - Cartography: single, unique values, graduated colours (natural breaks, equal interval,
   quantile, geometric interval, standard deviation, manual) and proportional symbols; layer
-  groups; label classes with SQL queries, straight and curved line placement, installed font
-  families and annotation; stacked and dashed line strokes, symbol levels, reference scales,
-  polygon outlines without fill; custom colour ramps (and QGIS, GDAL and GMT palette files);
-  masking, display filters, blend modes, aggregation, extrusion; graphics.
+  groups; label classes with SQL queries, managed in the Labeling pane; straight and curved line
+  placement, installed font families and annotation; stacked and dashed line strokes, symbol
+  levels, reference scales, polygon outlines without fill; custom colour ramps (and QGIS, GDAL
+  and GMT palette files); masking, display filters, blend modes, aggregation, extrusion; graphics.
 - Editing: create, move, rotate, scale, merge, split, explode, vertex editing; snapping,
   templates, elevation, topology; domains, subtypes, attribute rules, contingent values,
   relationships, archiving.
