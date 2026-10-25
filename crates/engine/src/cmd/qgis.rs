@@ -188,7 +188,9 @@ fn add_layer(s: &mut Session, layer: &qgis::ProjectLayer, has_dir: bool, report:
             return Ok(None);
         }
         Source::Other { provider } => {
-            report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {provider} sources"));
+            // A layer of no provider (an annotation layer, a group layer) is told by its kind.
+            let what = if provider.is_empty() { format!("{} layers", layer.kind) } else { format!("{provider} sources") };
+            report.skipped(name, format!("the layer: RustGIS doesn't read QGIS's {what}"));
             return Ok(None);
         }
     }

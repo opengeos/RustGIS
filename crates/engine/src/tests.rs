@@ -715,6 +715,11 @@ fn a_qgis_project_opens_as_a_map_and_a_qgis_style_styles_a_layer() {
     let t = s.map().tiles.iter().find(|t| t.name == "Tiles").unwrap();
     assert!(t.overlay);
     assert_eq!(t.blend, rustgis_map::effects::Blend::Multiply);
+    // A layer of no provider (QGIS's annotation layer) is noted by its kind.
+    let qgs = r#"<qgis version="3.42.0"><title>Notes</title><projectlayers><maplayer type="annotation"><id>a</id><layername>Notes</layername></maplayer></projectlayers></qgis>"#;
+    let out = s.run("project.importQgis", &json!({"text": qgs})).unwrap();
+    let text = serde_json::to_string(&out["notes"]).unwrap();
+    assert!(text.contains("doesn't read QGIS's annotation layers"), "{text}");
     // A project given as text with no folder: a relative path is noted, not looked for in the
     // working directory.
     let rel = r#"<qgis version="3.42.0"><projectlayers><maplayer type="vector"><id>a</id><datasource>./data/roads.geojson</datasource><layername>Rel</layername><provider>ogr</provider></maplayer></projectlayers></qgis>"#;

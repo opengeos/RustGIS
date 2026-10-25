@@ -36,8 +36,8 @@ Each layer keeps its look:
   rule-based where every rule picks values of one field (an else rule the rest); point cluster,
   displacement and other renderers that wrap one are drawn by the one inside.
 - **Symbols**: simple fills, lines and markers with their colours, widths in any unit, offsets,
-  caps, joins and the symbol's opacity; a line's simple lines as stacked strokes, its rendering
-  passes as their levels when the renderer draws in symbol levels.
+  caps, joins, dashes and the symbol's opacity; a line's simple lines as stacked strokes, its
+  rendering passes as their levels when the renderer draws in symbol levels.
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Labels**: simple and rule-based, each rule a label class whose SQL clause is its filter and
@@ -46,14 +46,20 @@ Each layer keeps its look:
   font), its buffer as a halo, its placement (Parallel and Curved along lines,
   around and over points) and its scale range.
 
+Projects and styles from QGIS 1 and 2 read too: their legend gives the layers' order, and the
+older names of the same settings are read.
+
 QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
 approximated (pattern fills drawn as a tint of their colour, font and SVG markers as circles,
-dashed lines solid, values outside a graduated renderer's ranges in its first or last class,
-file options such as `layerid` that RustGIS doesn't read) and what was skipped (marker lines,
-data-defined settings, labels from expressions, raster colouring, PostGIS, WFS and other sources
-RustGIS doesn't read). A database password in a project never reaches the notes.
+dashed polygon outlines solid, label halos in RustGIS's own colour and width, label offsets and
+wrapping, values outside a graduated renderer's ranges in its first or last class, file options
+such as `layerid` that RustGIS doesn't read) and what was skipped (marker lines, data-defined
+settings, draw effects, label callouts, labels from expressions, raster colouring, PostGIS, WFS
+and other sources RustGIS doesn't read, diagrams, joins, virtual fields, a layer's other styles,
+and the project's print layouts, annotations, bookmarks, map themes and relations). A database
+password in a project never reaches the notes.
 
 A QGIS layer style (`.qml`) styles the selected layer the same way: **Import QGIS Style…** in
 the Symbology pane (`style.importQgis={"layer": "Roads", "path": "…/roads.qml"}`).
