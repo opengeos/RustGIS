@@ -570,7 +570,7 @@ def csv(kind):
 def gpx():
     path = os.path.join(OUT, "data", "waypoints.gpx")
     with open(path, "w") as fh:
-        fh.write('<?xml version="1.0"?><gpx version="1.1" creator="corpus" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="47.5" lon="8.73"><name>A</name></wpt></gpx>')
+        fh.write('<?xml version="1.0"?><gpx version="1.1" creator="corpus" xmlns="http://www.topografix.com/GPX/1/1"><wpt lat="47.5" lon="8.73"><name>A</name></wpt></gpx>\n')
     return path
 
 
