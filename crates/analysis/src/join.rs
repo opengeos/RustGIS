@@ -88,16 +88,21 @@ fn nearest_pair(a: &Geometry, b: &Geometry, plane: &Aeqd, seed: Option<(Coord, C
 fn segments(g: &Geometry, plane: &Aeqd) -> Vec<(Coord, Coord)> {
     let mut out = Vec::new();
     let mut path = |pts: &[Coord], closed: bool| {
-        let v: Vec<Coord> = pts.iter().filter(|c| on_earth(c)).map(|c| plane.forward(*c)).collect();
-        match v.as_slice() {
-            [] => {}
-            [only] => out.push((*only, *only)),
-            _ => {
-                out.extend(v.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))));
-                if let (true, Some(first), Some(last)) = (closed, v.first(), v.last())
-                    && first != last
-                {
-                    out.push((*last, *first));
+        // A coordinate left out ends a run: no edge joins the runs on either side of it, and a
+        // ring missing one isn't closed across the gap.
+        let whole = pts.iter().all(on_earth);
+        for run in pts.split(|c| !on_earth(c)).filter(|r| !r.is_empty()) {
+            let v: Vec<Coord> = run.iter().map(|c| plane.forward(*c)).collect();
+            match v.as_slice() {
+                [] => {}
+                [only] => out.push((*only, *only)),
+                _ => {
+                    out.extend(v.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))));
+                    if let (true, Some(first), Some(last)) = (closed && whole, v.first(), v.last())
+                        && first != last
+                    {
+                        out.push((*last, *first));
+                    }
                 }
             }
         }
@@ -355,6 +360,26 @@ mod tests {
         // 2^63 is one past i64::MAX: not a whole number the field holds, so it's left out.
         assert_eq!(sum.apply(FieldType::Integer, &[&past_max, &Value::Int(3)]), Value::Int(3));
         assert_eq!(sum.apply(FieldType::Integer, &[&Value::Float(2.5)]), Value::Null);
+    }
+
+    #[test]
+    fn a_left_out_coordinate_does_not_join_its_neighbours() {
+        // The line goes north to a coordinate that is no place, and back: no edge runs straight
+        // between the two real vertices, past the point between them.
+        let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(600.0, 80.0), Coord::new(10.0, 0.0)]]);
+        let d = distance_m(&Geometry::Point(Coord::new(5.0, 0.0)), &line).unwrap();
+        let truth = haversine_m(Coord::new(5.0, 0.0), Coord::new(0.0, 0.0));
+        assert!((d - truth).abs() < 1e-6 * truth, "{d} vs {truth}");
+        // Nor does a ring close across the gap.
+        let ring = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(10.0, 0.0),
+            Coord::new(f64::NAN, 5.0),
+            Coord::new(0.0, 10.0),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        let d = distance_m(&Geometry::Point(Coord::new(5.0, 5.2)), &ring).unwrap();
+        assert!(d > 400_000.0, "{d}");
     }
 
     #[test]

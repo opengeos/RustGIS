@@ -1633,14 +1633,20 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                             None => (0..join_geoms.len()).collect(),
                         };
                         let mut near = Vec::new();
+                        // Closest wants only the nearest: a feature that can't be as near as the
+                        // nearest so far isn't measured.
+                        let mut bound = reach;
                         for idx in looked {
                             let Some(j) = at(idx) else { continue };
-                            if !crate::join::may_be_within(&t_ext, &j.ext, reach) {
+                            if !crate::join::may_be_within(&t_ext, &j.ext, bound) {
                                 continue;
                             }
                             let d = *measured.entry(idx).or_insert_with(|| ground_distance(tg, &t_geo, j.geom, &j.geo));
                             if let Some(d) = d.filter(|d| *d <= reach * (1.0 + 1e-9) + 1e-6) {
                                 near.push((j.row, d));
+                                if mode == JoinMatch::Closest {
+                                    bound = bound.min(d);
+                                }
                             }
                         }
                         near
