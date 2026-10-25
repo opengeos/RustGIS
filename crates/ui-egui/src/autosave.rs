@@ -154,12 +154,14 @@ fn changed_since(r: &Recovery) -> bool {
 /// removed once the project has none (saved, or another one started).
 pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
     let Some(store) = &app.services.recovery else { return };
-    if let Some(e) = store.take_error()
-        && app.autosave.told.as_ref() != Some(&e)
-    {
-        app.autosave.told = Some(e.clone());
-        let text = crate::i18n::fmt("Autosave couldn't keep a recovery copy: {error}", &[("error", &e)]);
-        app.session.notify(text, true);
+    if let Some(e) = store.take_error() {
+        // The copy that failed isn't kept: the work is due again, at the next interval.
+        app.autosave.written = None;
+        if app.autosave.told.as_ref() != Some(&e) {
+            app.autosave.told = Some(e.clone());
+            let text = crate::i18n::fmt("Autosave couldn't keep a recovery copy: {error}", &[("error", &e)]);
+            app.session.notify(text, true);
+        }
     }
     if app.autosave.minutes == 0 || !app.session.dirty {
         if app.autosave.written.take().is_some() {
@@ -263,7 +265,8 @@ fn kept_line(name: &str, then: u64) -> String {
     let secs = now_secs().saturating_sub(then);
     let (template, n) = match secs {
         0..60 => ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept less than a minute ago.", 0),
-        60..7_200 => {
+        60..120 => ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept a minute ago.", 1),
+        120..7_200 => {
             ("RustGIS didn't close properly last time. A copy of {name} with unsaved changes was kept {n} minutes ago.", secs / 60)
         }
         7_200..172_800 => {
@@ -307,13 +310,24 @@ pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
         if app.autosave.more > 0 {
             ui.label(crate::i18n::fmt("Older copies waiting: {n}.", &[("n", &app.autosave.more.to_string())]));
         }
+        // Recovering replaces the open project: not one with unsaved work of its own (an edit
+        // made before answering). Recover comes back once that work is saved.
+        let blocked = app.session.dirty;
+        if blocked {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tl!("The open project has unsaved changes: save them, then recover this copy.")).color(t.text_dim),
+            );
+        }
         if let Some(e) = &app.autosave.offer_error {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(crate::i18n::fmt("It didn't open: {error}", &[("error", e)])).color(t.red));
         }
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            // A copy that didn't open isn't offered again; Discard and Later remain.
             if app.autosave.offer_error.is_none()
+                && !blocked
                 && crate::widgets::dialog_button(ui, tl!("Recover"), Some(t.accent), vec2(84.0, 28.0)).clicked()
             {
                 decision = Some("recover");
@@ -625,5 +639,100 @@ mod folder {
         fn take_error(&self) -> Option<String> {
             self.error.lock().unwrap_or_else(|e| e.into_inner()).take()
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use rustgis_engine::{Project, Session};
+    use serde_json::json;
+
+    use super::{Recovery, RecoveryStore, kept_line, now_secs, tick};
+    use crate::{RustGisApp, Services};
+
+    /// A store that counts the copies asked of it and fails the next one when told to.
+    #[derive(Clone, Default)]
+    struct Counting(Rc<RefCell<(usize, Option<String>)>>);
+
+    impl RecoveryStore for Counting {
+        /// Counts the copy; a failure set by the test is reported as the worker's would be.
+        fn write(&self, _: Project, _: Recovery) {
+            self.0.borrow_mut().0 += 1;
+        }
+        /// Nothing to remove.
+        fn clear(&self) {}
+        /// Nothing is in flight.
+        fn flush(&self) {}
+        /// Nothing waits.
+        fn pending(&self) -> Option<Recovery> {
+            None
+        }
+        /// Nothing waits.
+        fn waiting(&self) -> usize {
+            0
+        }
+        /// Nothing waits.
+        fn read_pending(&self) -> Result<String, String> {
+            Err("none".into())
+        }
+        /// Nothing waits.
+        fn discard_pending(&self) {}
+        /// Nothing waits.
+        fn adopt_pending(&self) {}
+        /// The failure set by the test, once.
+        fn take_error(&self) -> Option<String> {
+            self.0.borrow_mut().1.take()
+        }
+    }
+
+    /// A copy that failed in the background (#896 review) is made again at the next interval,
+    /// though the project hasn't changed since, and the failure is told once.
+    #[test]
+    fn a_failed_copy_is_retried() {
+        let store = Counting::default();
+        let mut app = RustGisApp::new(Session::new(Project::default()))
+            .with_services(Services { recovery: Some(Box::new(store.clone())), ..Default::default() });
+        let ctx = egui::Context::default();
+        app.run("layer.template", json!({"template": "points", "name": "Unsaved"})).unwrap();
+        tick(&mut app, &ctx);
+        assert_eq!(store.0.borrow().0, 1);
+        // Unchanged: nothing more, even once the interval has passed.
+        app.autosave.last = None;
+        tick(&mut app, &ctx);
+        assert_eq!(store.0.borrow().0, 1);
+        // The write failed: told, and made again once the interval has passed.
+        app.autosave.last = Some(web_time::Instant::now());
+        store.0.borrow_mut().1 = Some("disk full".into());
+        tick(&mut app, &ctx);
+        assert!(app.session.notices.iter().any(|n| n.error && n.text.contains("disk full")));
+        assert_eq!(store.0.borrow().0, 1, "not before the interval");
+        app.autosave.last = None;
+        tick(&mut app, &ctx);
+        assert_eq!(store.0.borrow().0, 2);
+        store.0.borrow_mut().1 = Some("disk full".into());
+        let told = app.session.notices.len();
+        tick(&mut app, &ctx);
+        assert_eq!(app.session.notices.len(), told, "the same failure is told once");
+    }
+
+    /// The dialog's age reads as a whole sentence in every range: never "1 minutes ago".
+    #[test]
+    fn the_copy_s_age_reads_naturally() {
+        let now = now_secs();
+        for (ago, says) in [
+            (5, "less than a minute ago"),
+            (90, "a minute ago"),
+            (150, "2 minutes ago"),
+            (3 * 3_600, "3 hours ago"),
+            (3 * 86_400, "3 days ago"),
+        ] {
+            let line = kept_line("Parcels", now - ago);
+            assert!(line.contains(says) && line.contains("Parcels"), "{ago}: {line}");
+        }
+        assert!(!kept_line("Parcels", now - 61).contains("1 minutes"));
     }
 }

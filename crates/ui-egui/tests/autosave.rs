@@ -325,3 +325,28 @@ fn recovery_commands_take_junk_parameters() {
     assert!(h.state().session.map().layer_by_name("Kept").is_some());
     settle(&mut h);
 }
+
+/// Work done before answering the dialog (#896 review): Recover waits until it is saved, rather
+/// than failing and going for the rest of the session, and then recovers the copy.
+#[test]
+fn recover_returns_once_the_open_work_is_saved() {
+    let dir = TempDir::new("blocked");
+    let prefs = Prefs::default();
+    let mut h = launch(&dir.0, &prefs);
+    edit(&mut h, "Kept");
+    settle(&mut h);
+    drop(h);
+    let mut h = launch(&dir.0, &prefs);
+    edit(&mut h, "Meanwhile");
+    frames(&mut h, 2);
+    h.get_by_label("The open project has unsaved changes: save them, then recover this copy.");
+    assert!(h.query_by_role_and_label(Role::Button, "Recover").is_none());
+    let saved = dir.0.join("Meanwhile.rgis");
+    h.state_mut().run("project.saveAs", json!({"path": saved.display().to_string()})).unwrap();
+    frames(&mut h, 2);
+    assert!(h.query_by_label_contains("unsaved changes: save them").is_none());
+    h.get_by_role_and_label(Role::Button, "Recover").click();
+    settle(&mut h);
+    assert!(h.state().session.map().layer_by_name("Kept").is_some());
+    assert!(h.query_by_label("Recover unsaved work?").is_none());
+}
