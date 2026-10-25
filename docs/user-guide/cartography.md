@@ -299,7 +299,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
   apply to the whole map, so they are on the ribbon (View › Labeling), not in the pane.
-- **Convert** (View › Labeling, or Layers › right-click › **Convert to Annotation**) turns a
+- **Convert** (View › Labeling, or Layers › right-click › **Convert To Annotation**) turns a
   layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
 - **Label classes** label different features differently, such as large cities in larger text.

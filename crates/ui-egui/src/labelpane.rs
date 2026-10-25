@@ -419,12 +419,26 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let fields = &l.dataset.fields;
     let key = layer_key(app, l).with("label_pane_field_filter");
     let mut filter = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
-    if fields.len() > FIELD_ROWS {
+    // Only while its box shows: one kept from when the layer had more fields would hide some, with
+    // no box to clear it in.
+    let needle = if fields.len() > FIELD_ROWS {
         crate::widgets::search_field(ui, &mut filter, tl!("Filter fields"));
         ui.data_mut(|d| d.insert_temp(key, filter.clone()));
-    }
-    let needle = filter.to_lowercase();
+        filter.to_lowercase()
+    } else {
+        String::new()
+    };
     let cur = &c.it.field;
+    // The class's field scrolls into view when the layer, the class or the field changes, for a
+    // few passes (a pass that egui discards drops its scroll request), not on every frame, so the
+    // list still scrolls by hand.
+    let seen_key = egui::Id::unique("label_pane_field_seen");
+    let now = egui::Id::unique((layer_key(app, l), c.name, cur.as_str())).value();
+    let (seen, scrolls): (u64, u8) = ui.data(|d| d.get_temp(seen_key)).unwrap_or_default();
+    let scrolls = if seen == now { scrolls } else { 0 };
+    if scrolls < 3 {
+        ui.data_mut(|d| d.insert_temp(seen_key, (now, scrolls + 1)));
+    }
     let frame = egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(CornerRadius::same(4));
     frame.inner_margin(egui::Margin::same(4)).show(ui, |ui| {
         let area = egui::ScrollArea::vertical().id_salt("label_pane_fields").max_height(FIELD_ROWS as f32 * 22.0);
@@ -433,7 +447,11 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
             for f in fields.iter().filter(|f| f.name.to_lowercase().contains(&needle)) {
                 let on = f.name == *cur;
                 let row = egui::Button::selectable(on, &f.name).min_size(vec2(ui.available_width(), 20.0));
-                if ui.add(row).clicked() && !on {
+                let resp = ui.add(row);
+                if on && scrolls < 3 {
+                    resp.scroll_to_me(None);
+                }
+                if resp.clicked() && !on {
                     run(app, "labels.field", c.params(json!({"field": f.name})));
                 }
             }
@@ -803,7 +821,7 @@ mod tests {
         h.query_all_by_role_and_label(Role::Button, "pop_max").next().unwrap().click();
         h.run();
         assert_eq!(h.state().session.map().layer_by_name("Cities").unwrap().labels.default.field, "pop_max");
-        assert!(h.query_by_role(Role::MultilineTextInput).is_some(), "the SQL query is beside the fields");
+        assert!(h.query_by_label("+ New expression").is_some(), "the SQL query is beside the fields");
     }
 
     #[test]

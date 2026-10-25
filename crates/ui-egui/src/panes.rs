@@ -1890,7 +1890,7 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     // A layer's action, so with the layer's (#858); the Labeling pane keeps the class settings.
     if !l.is_raster()
-        && ui.button(tl!("Convert to Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked()
+        && ui.button(tl!("Convert To Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked()
     {
         if let Err(e) = app.run("labels.convert", json!({"layer": l.id})) {
             app.session.notify(e, true);
@@ -6141,5 +6141,20 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.revision, rev, "the menu ran a command on every frame");
+    }
+
+    /// A feature layer's menu converts its labels into an annotation layer (#858), as View ›
+    /// Labeling › Convert does, by the command's name.
+    #[test]
+    fn the_layer_menu_converts_labels_to_annotation() {
+        let app = RustGisApp::with_sample();
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        h.step();
+        h.get_by_label("Convert To Annotation").click();
+        h.step();
+        let map = h.state().session.map();
+        assert!(map.layer_by_name("Cities Annotation").is_some(), "no annotation layer");
+        assert!(!map.layer_by_name("Cities").unwrap().labels.enabled, "the layer's own labels give way to it");
     }
 }
