@@ -62,10 +62,22 @@ jobs:
         run: |
           tag="${REQUESTED_TAG:-}"
           if [ -z "$tag" ]; then
-            if ! tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>/dev/null)"; then
-              echo "::notice::No release yet: nothing to mirror."
-              exit 0
-            fi
+            # A 404 means no release yet; any other error is retried, then fails the sync so a
+            # stale mirror never passes for an up-to-date one.
+            for attempt in 1 2 3; do
+              if tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2> err.txt)"; then
+                break
+              fi
+              if grep -q 'HTTP 404' err.txt; then
+                echo "::notice::No release yet: nothing to mirror."
+                exit 0
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "::error::Could not read the latest release: $(cat err.txt)"
+                exit 1
+              fi
+              sleep $((attempt * 10))
+            done
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
