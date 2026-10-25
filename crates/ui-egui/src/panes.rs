@@ -1888,6 +1888,15 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
         }
         ui.close();
     }
+    // A layer's action, so with the layer's (#858); the Labeling pane keeps the class settings.
+    if !l.is_raster()
+        && ui.button(tl!("Convert to Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked()
+    {
+        if let Err(e) = app.run("labels.convert", json!({"layer": l.id})) {
+            app.session.notify(e, true);
+        }
+        ui.close();
+    }
     if l.is_streamed() && ui.button(tl!("Load All Features")).clicked() {
         let _ = app.run("layer.loadAll", json!({"layer": l.id}));
         ui.close();
