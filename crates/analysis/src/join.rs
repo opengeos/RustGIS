@@ -84,6 +84,23 @@ fn closest_on(p: Coord, a: Coord, b: Coord) -> Coord {
     Coord::new(a.x + t * dx, a.y + t * dy)
 }
 
+/// How far apart, in degrees of latitude and of longitude, two points within `metres` of each
+/// other can be when one is no further than `lat` degrees from the equator. The longitude is
+/// `None` when they can reach a pole, so any longitudes can be that close. Two points whose
+/// longitudes differ by Δλ, both no further from the equator than φ, are at least
+/// 2R·asin(cos φ·sin(Δλ/2)) apart.
+fn spread(lat: f64, metres: f64) -> (f64, Option<f64>) {
+    // A little slack, so a feature exactly at the distance isn't ruled out by rounding.
+    let r = (metres.max(0.0) * (1.0 + 1e-9) + 1e-3) / EARTH_RADIUS_M;
+    let dlat = r.to_degrees();
+    let phi = (lat.abs() + dlat).to_radians();
+    let reach = (r / 2.0).min(std::f64::consts::FRAC_PI_2).sin() / phi.cos();
+    if phi >= std::f64::consts::FRAC_PI_2 || reach.is_nan() || reach >= 1.0 {
+        return (dlat, None);
+    }
+    (dlat, Some((2.0 * reach.asin()).to_degrees()))
+}
+
 /// Whether a feature within the lon/lat extent `b` may lie within `metres` of one within `a`:
 /// `false` only when every pair of points of the two extents is farther apart than that, at the
 /// poles and across the antimeridian too.
@@ -91,22 +108,25 @@ pub fn may_be_within(a: &Extent, b: &Extent, metres: f64) -> bool {
     if a.is_empty() || b.is_empty() {
         return false;
     }
-    // A little slack, so a feature exactly at the distance isn't ruled out by rounding.
-    let r = (metres.max(0.0) * (1.0 + 1e-9) + 1e-3) / EARTH_RADIUS_M;
-    let dlat = r.to_degrees();
+    let (dlat, dlon) = spread(a.min_y.abs().max(a.max_y.abs()), metres);
     let lat_gap = (b.min_y - a.max_y).max(a.min_y - b.max_y).max(0.0);
     if lat_gap > dlat {
         return false;
     }
-    // Two points whose longitudes differ by Δλ, both no further from the equator than φ, are at
-    // least 2R·asin(cos φ·sin(Δλ/2)) apart.
-    let phi = (a.min_y.abs().max(a.max_y.abs()) + dlat).to_radians();
-    let reach = (r / 2.0).min(std::f64::consts::FRAC_PI_2).sin() / phi.cos();
-    if phi >= std::f64::consts::FRAC_PI_2 || reach.is_nan() || reach >= 1.0 {
-        return true;
+    dlon.is_none_or(|dlon| lon_gap(a, b) <= dlon)
+}
+
+/// The lon/lat extent that holds every point within `metres` of `ext`, for looking features up in
+/// an index. `None` when that reaches a pole or crosses the antimeridian, where only looking at
+/// every feature is sure to find them.
+pub fn search_box(ext: &Extent, metres: f64) -> Option<Extent> {
+    if ext.is_empty() || !metres.is_finite() {
+        return None;
     }
-    let dlon = (2.0 * reach.asin()).to_degrees();
-    lon_gap(a, b) <= dlon
+    let (dlat, dlon) = spread(ext.min_y.abs().max(ext.max_y.abs()), metres);
+    let dlon = dlon?;
+    let (x0, x1) = (ext.min_x - dlon, ext.max_x + dlon);
+    (x0 >= -180.0 && x1 <= 180.0).then(|| Extent::new(x0, ext.min_y - dlat, x1, ext.max_y + dlat))
 }
 
 /// The gap in longitude between two extents (degrees), the short way round.

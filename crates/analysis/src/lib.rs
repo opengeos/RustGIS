@@ -26,7 +26,7 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
-pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, simplify_geometry, zonal_bands};
+pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
 use serde_json::Value;
@@ -286,21 +286,6 @@ pub fn tool(id: &str) -> Option<&'static ToolSpec> {
 /// The runner for external tools; never called (external specs carry the runner's id).
 pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, String> {
     Err("this tool runs through the external suite".into())
-}
-
-/// Whether a tool's parameter applies, given the values of the others (`value` gives one's
-/// value as text, empty when unset, which stands for its default). The Tools pane hides and leaves
-/// out one that doesn't. Spatial Join's search distance, units and distance field apply only to the
-/// match options that measure distances, its merge rules only to one-to-one joins.
-pub fn param_applies(tool: &str, param: &str, value: &dyn Fn(&str) -> String) -> bool {
-    match (tool, param) {
-        ("spatialJoin", "distance" | "units" | "distanceField") => {
-            let m = value("match");
-            tools::DISTANCE_MATCHES.iter().any(|d| d.eq_ignore_ascii_case(m.trim()))
-        }
-        ("spatialJoin", "merge") => !value("operation").trim().eq_ignore_ascii_case("Join one to many"),
-        _ => true,
-    }
 }
 
 /// A tool's parameters with defaults filled in, or an error naming a missing required one.

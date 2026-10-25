@@ -140,7 +140,7 @@ stored in longitude/latitude before the join. `match` is one of:
 
 - **Intersects** (default), **Contains** (target contains join) or **Within** (target lies within
   join).
-- **Have their centre in**: the join features holding the target's interior point, the point
+- **Have their center in**: the join features holding the target's interior point, the point
   Feature To Point gives. A parcel a zone boundary crosses goes with the zone its point falls in.
 - **Largest overlap**: the one join polygon covering most of the target, by ground area for a
   polygon target and ground length for a line. Polygons that only touch don't overlap. Equal
@@ -167,7 +167,7 @@ first: a list such as `[{"field": "units", "rule": "sum"}, {"field": "name", "ru
 "delimiter": "; "}]` naming join fields. The rules are `first` (the default for fields without a
 rule), `last`, `sum` and `mean` (numeric fields), `min` and `max` (numbers or text), `count` (the
 matches with a value) and `join` (the values as text, separated by `delimiter`, `, ` by default).
-Every rule but `first` and `last` skips empty values. `mean` writes a decimal field, `count` a
+Every rule but `first` and `last` skips empty values. A target without matches gets empty values, except a `count` of 0. `mean` writes a decimal field, `count` a
 whole number and `join` text; a whole-number `sum` too large to hold is empty. For example, the
 total units permitted in each district:
 

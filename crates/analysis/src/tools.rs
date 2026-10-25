@@ -13,9 +13,9 @@ use crate::{Inputs, Output, OutputLayer, ParamKind as K, ParamSpec as P, ToolRes
 const UNITS: &[&str] = &["Kilometers", "Meters", "Miles", "Feet"];
 const KRIGING_MODELS: &[&str] = &["Spherical", "Exponential", "Gaussian"];
 const MATCH_OPTIONS: &[&str] =
-    &["Intersects", "Contains", "Within", "Have their centre in", "Largest overlap", "Closest", "Within a distance"];
+    &["Intersects", "Contains", "Within", "Have their center in", "Largest overlap", "Closest", "Within a distance"];
 /// The match options that measure a distance, for which `distance`, `units` and `distanceField` apply.
-pub(crate) const DISTANCE_MATCHES: &[&str] = &["Closest", "Within a distance"];
+const DISTANCE_MATCHES: &[&str] = &["Closest", "Within a distance"];
 const JOIN_OPERATIONS: &[&str] = &["Join one to one", "Join one to many"];
 const TARGET_RECORDS: &[&str] = &["Keep all", "Keep only matching"];
 
@@ -355,7 +355,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Choice(MATCH_OPTIONS),
                 required: false,
                 default: "\"Intersects\"",
-                help: "The spatial relationship between target and join features. Have their centre in uses the point Feature To Point gives; Largest overlap joins the polygon covering most of a polygon (by area) or line (by length); Closest joins the nearest feature; Within a distance joins those within the search distance, nearest first.",
+                help: "The spatial relationship between target and join features. Have their center in uses the point Feature To Point gives; Largest overlap joins the polygon covering most of a polygon (by area) or line (by length); Closest joins the nearest feature; Within a distance joins those within the search distance, nearest first.",
             },
             P {
                 name: "distance",
@@ -1332,6 +1332,21 @@ fn extent_contains(a: &Extent, b: &Extent) -> bool {
     !a.is_empty() && !b.is_empty() && a.min_x <= b.min_x && a.max_x >= b.max_x && a.min_y <= b.min_y && a.max_y >= b.max_y
 }
 
+/// Whether a tool's parameter applies, given the values of the others (`value` gives one's
+/// value as text, empty when unset, which stands for its default). The Tools pane hides and leaves
+/// out one that doesn't. Spatial Join's search distance, units and distance field apply only to the
+/// match options that measure distances, its merge rules only to one-to-one joins.
+pub fn param_applies(tool: &str, param: &str, value: &dyn Fn(&str) -> String) -> bool {
+    match (tool, param) {
+        ("spatialJoin", "distance" | "units" | "distanceField") => {
+            let m = value("match");
+            DISTANCE_MATCHES.iter().any(|d| d.eq_ignore_ascii_case(m.trim()))
+        }
+        ("spatialJoin", "merge") => !value("operation").trim().eq_ignore_ascii_case("Join one to many"),
+        _ => true,
+    }
+}
+
 /// How Spatial Join matches a target feature to join features.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum JoinMatch {
@@ -1353,7 +1368,7 @@ impl JoinMatch {
         match s {
             "Contains" => JoinMatch::Contains,
             "Within" => JoinMatch::Within,
-            "Have their centre in" => JoinMatch::CentreIn,
+            "Have their center in" => JoinMatch::CentreIn,
             "Largest overlap" => JoinMatch::LargestOverlap,
             "Closest" => JoinMatch::Closest,
             "Within a distance" => JoinMatch::WithinDistance,
@@ -1455,7 +1470,6 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         ext: Extent,
         geo: geo::Geometry<f64>,
         geom: &'a Geometry,
-        first: Option<Coord>,
     }
     let mut join_geoms: Vec<JoinGeom<'_>> = Vec::with_capacity(join_rows.len());
     for &jr in &join_rows {
@@ -1463,7 +1477,7 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             && let Some(g) = f.geometry.as_ref()
         {
             let geo = if mode == JoinMatch::LargestOverlap { oriented(g) } else { to_geo(g) };
-            join_geoms.push(JoinGeom { row: jr, ext: g.extent(), geo, geom: g, first: crate::join::first_coord(g) });
+            join_geoms.push(JoinGeom { row: jr, ext: g.extent(), geo, geom: g });
         }
     }
 
@@ -1606,40 +1620,56 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                     matches.extend(best.map(|(row, _)| (row, None)));
                 }
                 JoinMatch::Closest | JoinMatch::WithinDistance => {
-                    // Nothing is nearer than the nearest of the join features' first points, so
-                    // only features that may lie within that (or the search distance) are measured.
-                    let t_first = crate::join::first_coord(tg);
-                    let reach = match (mode, t_first) {
-                        (JoinMatch::WithinDistance, _) => limit,
-                        (_, Some(tc)) => {
-                            let nearest = join_geoms
-                                .iter()
-                                .filter_map(|j| j.first)
-                                .map(|jc| rustgis_geom::haversine_m(tc, jc))
-                                .fold(f64::INFINITY, f64::min);
-                            let r = limit.map_or(nearest, |l| l.min(nearest));
-                            r.is_finite().then_some(r)
-                        }
-                        _ => None,
-                    };
-                    if let Some(reach) = reach {
-                        let mut near: Vec<(usize, f64)> = Vec::new();
-                        for j in &join_geoms {
+                    // The join features within `reach` metres, in join order, measured once each.
+                    let mut measured: std::collections::HashMap<usize, Option<f64>> = std::collections::HashMap::new();
+                    let mut within = |reach: f64| -> Vec<(usize, f64)> {
+                        let looked = match crate::join::search_box(&t_ext, reach) {
+                            Some(b) => candidates(&b),
+                            None => (0..join_geoms.len()).collect(),
+                        };
+                        let mut near = Vec::new();
+                        for idx in looked {
+                            let Some(j) = at(idx) else { continue };
                             if !crate::join::may_be_within(&t_ext, &j.ext, reach) {
                                 continue;
                             }
-                            let Some(d) = ground_distance(tg, &t_geo, j.geom, &j.geo) else { continue };
-                            if limit.is_none_or(|l| d <= l * (1.0 + 1e-9) + 1e-6) {
+                            let d = *measured.entry(idx).or_insert_with(|| ground_distance(tg, &t_geo, j.geom, &j.geo));
+                            if let Some(d) = d.filter(|d| *d <= reach * (1.0 + 1e-9) + 1e-6) {
                                 near.push((j.row, d));
                             }
                         }
-                        // Nearest first; equal distances keep the join order.
-                        near.sort_by(|a, b| a.1.total_cmp(&b.1));
-                        if mode == JoinMatch::Closest {
-                            near.truncate(1);
+                        near
+                    };
+                    let mut near = match (mode, limit) {
+                        (JoinMatch::WithinDistance, Some(l)) => within(l),
+                        (JoinMatch::WithinDistance, None) => Vec::new(),
+                        // Closest: searches widening from about a grid cell, doubling until one
+                        // finds a feature within its distance (no nearer one can lie outside it),
+                        // up to the search distance. Without an index, one search of everything.
+                        _ => {
+                            let mut reach =
+                                if use_grid { cell_w.max(cell_h).to_radians() * rustgis_geom::EARTH_RADIUS_M } else { f64::INFINITY };
+                            loop {
+                                let r = limit.map_or(reach, |l| reach.min(l));
+                                // A search reaching a pole or across the antimeridian looks at every
+                                // feature anyway: it measures them out to the search distance.
+                                if crate::join::search_box(&t_ext, r).is_none() {
+                                    break within(limit.unwrap_or(f64::INFINITY));
+                                }
+                                let found = within(r);
+                                if !found.is_empty() || limit.is_some_and(|l| r >= l) {
+                                    break found;
+                                }
+                                reach *= 2.0;
+                            }
                         }
-                        matches.extend(near.into_iter().map(|(row, d)| (row, Some(d))));
+                    };
+                    // Nearest first; equal distances keep the join order.
+                    near.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    if mode == JoinMatch::Closest {
+                        near.truncate(1);
                     }
+                    matches.extend(near.into_iter().map(|(row, d)| (row, Some(d))));
                 }
             }
         }
@@ -1670,7 +1700,13 @@ fn spatial_join(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
         if m_count == 0 {
             if keep_all {
-                push_row(0, None, None);
+                // A count of no matches is 0; every other value is null.
+                let counted = |ji: &usize| merges.iter().any(|m| m.field == *ji && m.rule == crate::join::Rule::Count);
+                let none = merges
+                    .iter()
+                    .any(|m| m.rule == crate::join::Rule::Count)
+                    .then(|| join_field_indices.iter().map(|ji| if counted(ji) { Value::Int(0) } else { Value::Null }).collect());
+                push_row(0, none, None);
             }
         } else if op_many {
             for &(jr, d) in &matches {
@@ -2639,7 +2675,7 @@ mod tests {
             serde_json::json!({"target": "pts", "join": "polys", "match": "Closest", "distance": -1, "merge": 5, "distanceField": 3}),
             serde_json::json!({"target": "polys", "join": "pts", "match": "Within a distance", "distance": 1e308, "units": "Feet", "merge": "[{\"field\": 7}]"}),
             serde_json::json!({"target": "pts", "join": "polys", "match": "Largest overlap", "merge": [{"field": "k", "rule": "sum"}, null, "x"]}),
-            serde_json::json!({"target": "polys", "join": "polys", "match": "Have their centre in", "merge": [{"field": "k", "rule": "join", "delimiter": null}], "distanceField": ""}),
+            serde_json::json!({"target": "polys", "join": "polys", "match": "Have their center in", "merge": [{"field": "k", "rule": "join", "delimiter": null}], "distanceField": ""}),
         ];
         for t in TOOLS {
             for p in &junk {
@@ -2876,8 +2912,8 @@ mod tests {
             // first road, 0.3 of 0.4 in B for the second.
             let roads = run(serde_json::json!({"target": "roads", "join": "zones", "match": "Largest overlap"}));
             assert_eq!((zone(&roads, 0).as_deref(), zone(&roads, 1).as_deref()), (Some("A"), Some("B")));
-            // Have their centre in uses Feature To Point's point.
-            let centre = run(serde_json::json!({"target": "parcels", "join": "zones", "match": "Have their centre in"}));
+            // Have their center in uses Feature To Point's point.
+            let centre = run(serde_json::json!({"target": "parcels", "join": "zones", "match": "Have their center in"}));
             let points = layer(crate::run("featureToPoint", &m, &serde_json::json!({"input": "parcels"})).unwrap());
             let pm = Map(HashMap::from([("pp".to_string(), points), ("zones".to_string(), m.0["zones"].clone())]));
             let via_points = layer(crate::run("spatialJoin", &pm, &serde_json::json!({"target": "pp", "join": "zones"})).unwrap());
@@ -2979,6 +3015,48 @@ mod tests {
         ] {
             assert!(crate::run("spatialJoin", &m, &bad).is_err(), "{bad}");
         }
+        // Enough stops for the grid index: Closest widens its search until it finds one, and agrees
+        // with measuring them all, near the stops, far from them and across the antimeridian.
+        let mut many = Dataset::new("many", GeometryType::Point, vec![Field::new("i", FieldType::Integer)]);
+        for i in 0..40 {
+            let x = if i == 39 { 179.5 } else { f64::from(i) * 0.5 };
+            many.push(point(x, (f64::from(i) * 0.37).sin()), vec![Value::Int(i64::from(i))]);
+        }
+        let mut probes = Dataset::new("probes", GeometryType::Point, vec![]);
+        let spots = [(3.1, 0.2), (19.6, -0.8), (60.0, 0.0), (-179.8, 0.5), (10.0, 45.0), (5.0, -89.0)];
+        for (x, y) in spots {
+            probes.push(point(x, y), vec![]);
+        }
+        let brute = |x: f64, y: f64| {
+            let d = |f: &rustgis_data::Feature| match &f.geometry {
+                Some(Geometry::Point(c)) => rustgis_geom::haversine_m(Coord::new(x, y), *c),
+                _ => f64::INFINITY,
+            };
+            let best = many.features.iter().min_by(|a, b| d(a).total_cmp(&d(b))).map(|f| f.attrs[0].clone());
+            let within: Vec<Value> = many.features.iter().filter(|f| d(f) <= 600_000.0).map(|f| f.attrs[0].clone()).collect();
+            (best, within)
+        };
+        let m3 = Map(HashMap::from([("many".to_string(), many.clone()), ("probes".to_string(), probes)]));
+        let run3 = |params: serde_json::Value| layer(crate::run("spatialJoin", &m3, &params).unwrap_or_else(|e| panic!("{e}")));
+        let closest = run3(serde_json::json!({"target": "probes", "join": "many", "match": "Closest"}));
+        let wide = run3(
+            serde_json::json!({"target": "probes", "join": "many", "match": "Within a distance", "distance": 600, "operation": "Join one to many"}),
+        );
+        for (row, (x, y)) in spots.iter().enumerate() {
+            let (best, within) = brute(*x, *y);
+            assert_eq!(Some(closest.value(row, closest.field_index("join_i").unwrap()).clone()), best, "probe {row}");
+            let mut found: Vec<Value> = (0..wide.features.len())
+                .filter(|r| wide.features[*r].geometry == m3.0["probes"].features[row].geometry)
+                .map(|r| wide.value(r, wide.field_index("join_i").unwrap()).clone())
+                .filter(|v| *v != Value::Null)
+                .collect();
+            let mut expected = within;
+            let key = |v: &Value| v.as_f64().unwrap_or(f64::NAN);
+            found.sort_by(|a, b| key(a).total_cmp(&key(b)));
+            expected.sort_by(|a, b| key(a).total_cmp(&key(b)));
+            assert_eq!(found, expected, "probe {row}");
+        }
+
         // A blank distance is none (as the Tools pane sends an empty box).
         assert!(crate::run("spatialJoin", &m, &serde_json::json!({"target": "homes", "join": "stops", "distance": " "})).is_ok());
     }
@@ -3018,8 +3096,11 @@ mod tests {
             (ty(&a, "join_units"), ty(&a, "join_value"), ty(&a, "join_name")),
             (FieldType::Integer, FieldType::Double, FieldType::Text)
         );
-        // An unmatched target has nulls, as without rules.
+        // An unmatched target has nulls, as without rules, but no matches count 0.
         assert_eq!(a.value(1, a.field_index("join_units").unwrap()), &Value::Null);
+        let counted = ok(serde_json::json!([{"field": "name", "rule": "count"}, {"field": "units", "rule": "sum"}]));
+        assert_eq!(counted.value(1, counted.field_index("join_name").unwrap()), &Value::Int(0));
+        assert_eq!(counted.value(1, counted.field_index("join_units").unwrap()), &Value::Null);
 
         // Given as text, as the Tools pane sends it; field and rule names in any case.
         let b = ok(serde_json::json!(
