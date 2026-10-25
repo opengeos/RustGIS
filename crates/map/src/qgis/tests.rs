@@ -453,6 +453,8 @@ fn every_corpus_file_reads() {
         let mut report = Report::default();
         let project = read_project(&text, &dir, &mut report).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(!project.layers.is_empty(), "{}: no layers", path.display());
+        // The PostGIS and SQL Server projects' made-up password reaches neither the layers nor the notes.
+        assert!(!format!("{project:?} {report:?}").contains("secret"), "{}: the password came through", path.display());
         if path.ends_with("SMV25_CHLV95LN02.qgz") {
             assert_eq!(project.layers.len(), 66);
             assert_eq!(project.crs.as_deref(), Some("EPSG:2056"));
