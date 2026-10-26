@@ -473,7 +473,7 @@ pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
     ds.crs = info.coordinate_system();
     // A streamed Shapefile skips unconvertible shapes rather than retaining empty geometry.
     // Once materialized, it must still direct CRS repairs back to the original file.
-    ds.crs_incomplete = info.format == "Shapefile" && batch.skipped > 0;
+    ds.crs_incomplete = (info.format == "Shapefile" || (info.format == "GeoJSON" && ds.crs.is_some())) && batch.skipped > 0;
     ds.features = batch.features.into();
     let mut report = ReadReport { skipped: batch.skipped, messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect() };
     if !batch.complete {
@@ -539,6 +539,21 @@ impl Reproject {
             },
         };
         Reproject { crs: if t.is_some() { crs } else { Crs::LonLat }, t }
+    }
+
+    /// From a coordinate system already known to convert (`None` for longitude/latitude).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn known(found: Option<(Crs, Transformer)>) -> Reproject {
+        match found {
+            Some((crs, t)) => Reproject { crs, t: Some(t) },
+            None => Reproject { crs: Crs::LonLat, t: None },
+        }
+    }
+
+    /// What converts to longitude/latitude (`None` when coordinates are taken as they are).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn transformer(&self) -> Option<&Transformer> {
+        self.t.as_ref()
     }
 
     /// Whether coordinates are taken as they are.
