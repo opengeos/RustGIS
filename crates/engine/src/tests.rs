@@ -2,6 +2,9 @@ use serde_json::{Value, json};
 
 use crate::{Project, Session, sample};
 
+#[path = "tests/task_reentry.rs"]
+mod task_reentry;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "tests/remembered_database.rs"]
 mod remembered_database;

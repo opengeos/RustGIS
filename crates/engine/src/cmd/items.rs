@@ -664,8 +664,22 @@ fn task_mut<'a>(s: &'a mut Session, p: &Value) -> Result<&'a mut Task, String> {
     }
 }
 
-/// Runs a task's steps (or one of them), stopping at the first that fails.
+/// Runs a task without allowing its steps to re-enter tasks indirectly through scripts or
+/// notebooks. Clear the session marker on errors and caught panics as well as success.
 fn run_task(s: &mut Session, p: &Value) -> CmdResult {
+    if s.task_running {
+        return Err("a task is already running (a step can't run tasks, even through a script or notebook)".into());
+    }
+    s.task_running = true;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_task_steps(s, p)))
+        .unwrap_or_else(|_| Err("the task failed unexpectedly".into()));
+    s.task_running = false;
+    result
+}
+
+/// Executes the selected task steps inside the caller's transaction and re-entry guard,
+/// retaining the existing direct task ban and imported-task restrictions.
+fn run_task_steps(s: &mut Session, p: &Value) -> CmdResult {
     let t = task_ref(s, p)?.clone();
     // `"step": null` runs them all, as no step does.
     let steps: Vec<(usize, TaskStep)> = match p.get("step").filter(|v| !v.is_null()) {
