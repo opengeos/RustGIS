@@ -104,6 +104,11 @@ fn field_of(attr: &str, layer: &str, report: &mut Report) -> Option<String> {
     None
 }
 
+/// A switched-off class (`render="false"`): it draws nothing.
+fn switched_off() -> Converted {
+    Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None }
+}
+
 type SymbolOf<'a> = dyn Fn(Option<&str>, &mut Report) -> Option<Converted> + 'a;
 
 fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: &SymbolOf) {
@@ -120,10 +125,13 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     let mut other = symbol::hidden();
     let mut other_strokes = Vec::new();
     for cat in &cats {
-        let Some(mut c) = sym(cat.attribute("symbol"), report) else { continue };
-        if cat.attribute("render") == Some("false") {
-            c = Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None };
-        }
+        // A switched-off class draws nothing; its symbol isn't read (its field would turn the rest).
+        let c = if cat.attribute("render") == Some("false") {
+            switched_off()
+        } else {
+            let Some(c) = sym(cat.attribute("symbol"), report) else { continue };
+            c
+        };
         // A category of several values (QGIS's merged categories) lists them as <val>s, or as a
         // list <Option>.
         let mut values: Vec<String> = cat
@@ -172,10 +180,12 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     for rg in child(r, "ranges").map(|c| c.children().filter(|n| n.has_tag_name("range")).collect::<Vec<_>>()).unwrap_or_default() {
         let num = |k: &str| rg.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
         let (Some(lower), Some(upper)) = (num("lower"), num("upper")) else { continue };
-        let Some(mut c) = sym(rg.attribute("symbol"), report) else { continue };
-        if rg.attribute("render") == Some("false") {
-            c = Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None };
-        }
+        let c = if rg.attribute("render") == Some("false") {
+            switched_off()
+        } else {
+            let Some(c) = sym(rg.attribute("symbol"), report) else { continue };
+            c
+        };
         ranges.push((lower, upper, c, rg.attribute("label").map(str::to_string)));
         if ranges.len() >= MAX_CLASSES {
             report.skipped(layer, format!("ranges past the first {MAX_CLASSES}"));

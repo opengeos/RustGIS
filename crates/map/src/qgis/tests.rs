@@ -776,6 +776,12 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
     let s = read_style(&qml, "Signs", &mut report).unwrap();
     assert_eq!(s.marker_rotation.flatten().map(|r| r.field), Some("WINKEL".into()));
     assert!(turned(&report), "{:?}", report.notes);
+    // A switched-off class's field turns nothing: the shown one's does, and nothing is said.
+    let qml = qml.replace(r#"label="Antenne" render="true""#, r#"label="Antenne" render="false""#).replace("WINKEL", "W2");
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation.flatten().map(|r| r.field), Some("RICHTUNG".into()));
+    assert!(!turned(&report), "{:?}", report.notes);
 
     // QGIS 2's `dd_properties` are still noted.
     let old = r#"<qgis version="2.18.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">

@@ -3105,11 +3105,16 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
                         // A point's marks, shifted from it, may show while the point is off the view.
                         let marked_in = || {
-                            globe.is_none() && matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) && {
-                                let (sym, strokes) = layer.style(row);
-                                let r = f64::from(point_marks::reach(&sym, strokes)) * view.camera.res;
-                                !strokes.is_empty() && Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
+                            if globe.is_some() || !matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+                                return false;
                             }
+                            let (sym, strokes) = layer.style(row);
+                            if strokes.is_empty() {
+                                return false;
+                            }
+                            // In the layer's pixels (`ctx` is scaled by its size factor).
+                            let r = f64::from(point_marks::reach(&sym, strokes) * ctx.ppp) * map_per_px;
+                            Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
                         };
                         if rows.get(row) != Some(&true) || !(visible(&e) || marked_in()) {
                             continue;
@@ -5859,6 +5864,13 @@ mod tests {
         let left = View { camera: Camera { center: Coord::new(camera.center.x + 120.0 * camera.res, camera.center.y), ..camera }, ..view };
         let r = render(&mut m, &left).unwrap();
         assert!(is_red(&r, 10, 100), "a mark shifted into the view");
+        // At twice its reference scale's size: the point 60 px left, its mark 60 px right of it.
+        let far = View { camera: Camera { center: Coord::new(camera.center.x + 160.0 * camera.res, camera.center.y), ..camera }, ..view };
+        let scale = m.ground_res_at(&far.camera) / rustgis_geom::PIXEL_M;
+        m.layer_mut(id).unwrap().reference_scale = Some(2.0 * scale);
+        let r = render(&mut m, &far).unwrap();
+        assert!(is_red(&r, 4, 100), "an enlarged mark shifted into the view");
+        m.layer_mut(id).unwrap().reference_scale = None;
         m.layer_mut(id).unwrap().marker_rotation = Some(MarkerRotation { field: "a".into(), counterclockwise: false });
         let r = render(&mut m, &view).unwrap();
         assert!(is_red(&r, 100, 130) && !is_red(&r, 130, 100), "turned to below it");
