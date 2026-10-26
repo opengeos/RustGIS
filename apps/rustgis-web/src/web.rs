@@ -605,6 +605,11 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     if prepared.signed || arcgis.is_some() {
         init.set_redirect(web_sys::RequestRedirect::Error);
     }
+    // The token's address goes nowhere else: no referrer from it, no cookies with it.
+    if arcgis.is_some() {
+        init.set_referrer_policy(web_sys::ReferrerPolicy::NoReferrer);
+        init.set_credentials(web_sys::RequestCredentials::Omit);
+    }
     let promise = window.fetch_with_str_and_init(request, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.

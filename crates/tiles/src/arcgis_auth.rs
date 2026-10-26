@@ -443,7 +443,8 @@ pub fn add_token(url: &str, token: &str) -> Result<String, String> {
 }
 
 /// A service's address with its `token` parameter taken out and kept ([`add_token`]): the token
-/// then goes, in a header, to every request to that server (the service's layers, its tiles and
+/// then goes (in a header on the desktop, as the request's `token` parameter in the browser) to
+/// every request to that server (the service's layers, its tiles and
 /// its feature pages), and the address kept in the project has no token in it.
 pub fn adopt_url_token(url: &str) -> Result<String, String> {
     let Some((base, query)) = url.split_once('?') else { return Ok(url.to_string()) };
@@ -507,9 +508,18 @@ pub fn with_token(url: &str) -> Option<String> {
         let s = all.get(covering(&all, url)?)?;
         (s.expires_at > now_secs()).then(|| s.access_token.clone())?
     };
+    with_token_value(url, &token)
+}
+
+/// `url` with `token` as its `token` parameter; `None` when it carries one already (the user's).
+pub fn with_token_value(url: &str, token: &str) -> Option<String> {
+    let query = url.split('#').next().unwrap_or(url).split_once('?').map_or("", |(_, q)| q);
+    if query.split('&').any(|kv| kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case("token"))) {
+        return None;
+    }
     let (base, fragment) = url.split_once('#').map_or((url, None), |(b, f)| (b, Some(f)));
     let joint = if base.contains('?') { if base.ends_with('?') || base.ends_with('&') { "" } else { "&" } } else { "?" };
-    let mut out = format!("{base}{joint}token={}", encode(&token));
+    let mut out = format!("{base}{joint}token={}", encode(token));
     if let Some(f) = fragment {
         out.push('#');
         out.push_str(f);

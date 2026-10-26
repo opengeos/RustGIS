@@ -57,9 +57,9 @@ async fn sleep(ms: i32) {
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
-/// A request to the portal: a form POSTed, or a GET with the token. Never redirected, never with
-/// the page's cookies.
-async fn request(url: &str, form: Option<&str>, token: Option<&str>) -> Result<Vec<u8>, String> {
+/// A request to the portal: a form POSTed, or a GET. Never redirected, never with the page's
+/// cookies.
+async fn request(url: &str, form: Option<&str>) -> Result<Vec<u8>, String> {
     let window = web_sys::window().ok_or("no window")?;
     let init = web_sys::RequestInit::new();
     init.set_redirect(web_sys::RequestRedirect::Error);
@@ -70,9 +70,6 @@ async fn request(url: &str, form: Option<&str>, token: Option<&str>) -> Result<V
         init.set_method("POST");
         headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(err)?;
         init.set_body(&wasm_bindgen::JsValue::from_str(body));
-    }
-    if let Some(t) = token {
-        headers.set("X-Esri-Authorization", &format!("Bearer {t}")).map_err(err)?;
     }
     init.set_headers(&headers);
     // A portal that never answers is given up, so a sign-in or a renewal can't hang for good.
@@ -163,8 +160,13 @@ async fn finish(flow: &arcgis_auth::WebSignIn, popup: &web_sys::Window) -> Resul
             break step?;
         }
     };
-    let grant = arcgis_auth::parse_grant(&request(&endpoint, Some(&body), None).await?, js_sys::Date::now() as i64 / 1000)?;
-    let discovered = request(&arcgis_auth::discovery_url(&flow.portal), None, Some(&grant.access_token)).await.ok();
+    let grant = arcgis_auth::parse_grant(&request(&endpoint, Some(&body)).await?, js_sys::Date::now() as i64 / 1000)?;
+    // The token as the request's parameter, like the fetcher's: a header's CORS preflight can be refused.
+    let discovery = arcgis_auth::with_token_value(&arcgis_auth::discovery_url(&flow.portal), &grant.access_token);
+    let discovered = match discovery {
+        Some(url) => request(&url, None).await.map_err(|e| log::warn!("{}: couldn't read what the sign-in covers: {e}", flow.portal)).ok(),
+        None => None,
+    };
     let scopes = arcgis_auth::discovered_scopes(&flow.portal, discovered.as_deref());
     let username = grant.username.clone();
     arcgis_auth::sign_in(&flow.portal, &flow.client_id, grant, scopes);
@@ -189,6 +191,6 @@ pub async fn renew_if_due(url: &str) {
     }
     RENEWING.set(true);
     let _renewing = Renewing;
-    let answer = request(&r.endpoint, Some(&r.body), None).await;
+    let answer = request(&r.endpoint, Some(&r.body)).await;
     arcgis_auth::renewal_done(&r, answer.as_deref().map_err(String::clone));
 }

@@ -162,6 +162,8 @@ fn a_server_token_wins_over_a_portal_sign_in() {
         Some("https://both.example.org/server/rest/services/A/MapServer/tile/1/0/0?token=server-token#x")
     );
     assert_eq!(with_token("https://elsewhere.example.org/server/rest/services"), None);
+    // An address with a token of its own keeps it, alone.
+    assert_eq!(with_token("https://both.example.org/server/rest/services/A/MapServer?token=users"), None);
     sign_out(Some(portal));
     sign_out(Some("https://both.example.org/server"));
     // A token for the portal's own address sits beside its sign-in, never replacing it.

@@ -8369,7 +8369,7 @@ fn service_times_and_directories() {
 }
 
 /// A secured ArcGIS service given by an address with `?token=…` (#914): the token is kept for its
-/// server and sent, in a header, to the addresses built from the service's document (its tiles,
+/// server and sent, as the request's credential, to the addresses built from the service's document (its tiles,
 /// its layers' queries), and no address the session lists or keeps carries it.
 #[test]
 fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
