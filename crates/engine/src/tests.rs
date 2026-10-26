@@ -1635,6 +1635,9 @@ fn hostile_params_never_panic() {
     let junk = [
         Value::Null,
         json!({}),
+        // Shared vertex moves: valid row/destination, hostile node addresses and coordinate types.
+        json!({"layer":"Countries","row":0,"part":u64::MAX,"ring":-1,"index":[],"lon":12,"lat":45}),
+        json!({"layer":"Countries","row":0,"part":0,"ring":0,"index":0,"lon":{},"lat":1e300}),
         json!({"layer": 99999, "path": "/nonexistent/x.geojson", "name": "", "where": "((", "tool": "buffer", "params": 7}),
         json!({"layer": "Countries", "row": 1e30, "field": "nope", "value": [1], "scale": -1, "lon": 1e300, "lat": "x", "classes": 1e9, "type": "graduated"}),
         json!({"layer": "Cities", "rows": [1, 99999999], "geometry": {"type": "Polygon", "coordinates": [[]]}, "width": 1e9, "height": -3, "expression": "'"}),

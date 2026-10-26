@@ -1781,6 +1781,7 @@ impl RustGisApp {
         }
     }
 
+    /// Dispatches UI-only commands; transient tool switches do not dirty or persist the project.
     fn run_ui(&mut self, id: &str, p: &Value) -> Result<Value, String> {
         // A pane's command toggles it; `{"close": true}` closes it, in view or not (a tab's ✕),
         // whatever else the command is given (SQL to run, a question to ask).
@@ -1983,6 +1984,18 @@ impl RustGisApp {
                 if let Some(save) = &self.services.save_pref {
                     save("measurement_units", if imperial { "imperial" } else { "metric" });
                 }
+            }
+            "ui.moveSharedVertices" => {
+                let on = match p.get("on") {
+                    None => !self.map.move_shared_vertices,
+                    Some(Value::Bool(on)) => *on,
+                    _ => return Err(tl!("Shared vertices must be on or off").into()),
+                };
+                if on != self.map.move_shared_vertices {
+                    self.map.cancel_vertex_drag();
+                    self.map.move_shared_vertices = on;
+                }
+                return Ok(serde_json::json!({"on": on}));
             }
             "ui.map.gpu" => {
                 self.map.gpu_enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!self.map.gpu_enabled);

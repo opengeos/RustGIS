@@ -12,6 +12,7 @@ use serde_json::{Value as Json, json};
 use super::{b, f, need_feature_layer, ps};
 use crate::{CmdResult, CommandSpec as C, Session};
 
+mod shared_vertex;
 mod snap_vertex;
 
 /// One edited feature: its state before (none for an insert) and its row after (none for a
@@ -208,6 +209,8 @@ pub(crate) fn apply(s: &mut Session, id: u32, changes: Vec<Change>) -> Result<()
     Ok(())
 }
 
+/// Registers data-design and editing commands, including opt-in exact-coordinate polygon moves.
+/// Feature edits share `apply` for rules, archives and counts inside the session transaction.
 pub fn commands() -> Vec<C> {
     vec![
         // Data design.
@@ -361,6 +364,9 @@ pub fn commands() -> Vec<C> {
             r#"{"layer"?, "row": number, "action": "move"|"insert"|"delete", "part"?: number, "ring"?: number, "index": number (insert: the vertex the new one follows), "lon"?, "lat"?}"#,
         ),
         C::new("edit.merge", "Merge", "Edit › Features › Modify", merge).when(need_editable_selection),
+        C::new("edit.moveSharedVertex", "Move Shared Vertex", "Edit › Features › Modify", shared_vertex::run).when(need_editable).params(
+            r#"{"layer"?, "row": number, "part"?: number, "ring"?: number, "index": number, "lon": degrees, "lat": degrees}"#,
+        ),
         C::new("edit.explode", "Explode", "Edit › Features › Modify", explode).when(need_editable_selection),
         C::new("edit.split", "Split", "Edit › Features › Modify", split).when(need_editable_selection).params(r#"{"lon", "lat"}"#),
         C::new("edit.traverse", "Traverse", "Edit › Features › Modify", traverse).when(need_editable).params(

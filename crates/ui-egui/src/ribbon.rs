@@ -2334,6 +2334,7 @@ fn active_layer(app: &RustGisApp) -> Option<&rustgis_engine::map::Layer> {
     app.session.active_layer.and_then(|id| app.session.map().layer(id))
 }
 
+/// Keeps edit commands and transient vertex modes together, with deeper settings in Editing.
 fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
     let editing = app.session.map().editing.clone();
     let pane = app.ui.right == Some(RightPane::Editing);
@@ -2428,6 +2429,18 @@ fn edit_tab(app: &mut RustGisApp, ui: &mut Ui) {
             pane,
             false,
         );
+        col(ui, |ui| {
+            small(
+                ui,
+                app,
+                "vertices",
+                "Shared Vertices",
+                "Move polygon vertices stored at the same coordinate in this layer, including point-only contacts.",
+                "ui.moveSharedVertices",
+                Value::Null,
+                app.map.move_shared_vertices,
+            );
+        });
     });
     group(ui, "Tools", |ui| {
         big_menu(ui, app, "tools", "Editor\nTools", "Every editing tool.", |ui, app| {
