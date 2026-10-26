@@ -6,8 +6,9 @@
 
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{
-    ArrowStyle, CoordFormat, ElementKind, Grid, GridStyle, Layout, LineHead, MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_SCALE_DIVISIONS,
-    MAX_TICK_MM, Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TickSide, frame_camera, line_angle, line_length,
+    ArrowStyle, CoordFormat, ElementKind, Grid, GridStyle, Layout, LineHead, MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH,
+    MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TickSide, frame_camera,
+    line_angle, line_length,
 };
 use serde_json::{Value, json};
 
@@ -1070,7 +1071,7 @@ fn zoom_frame(app: &mut RustGisApp, layout: &Layout, li: usize, id: u32, k: f64,
     let ElementKind::MapFrame { map, center, scale, bearing, pitch, .. } = &e.kind else { return };
     let Some(m) = app.session.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(map)) else { return };
     let cam = frame_camera(m, *center, *scale, *bearing, *pitch);
-    let new_scale = (scale * k).clamp(100.0, 1e10);
+    let new_scale = (scale * k).clamp(MIN_FRAME_SCALE, MAX_FRAME_SCALE);
     // A turned or tilted frame zooms as the map view does, about the anchor.
     if cam.bearing != 0.0 || cam.pitch != 0.0 {
         let (w, h) = (e.w * PT_PER_MM, e.h * PT_PER_MM);
@@ -1482,11 +1483,13 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
                         let input_label = ui.label(tl!("Scale 1:"));
                         let mut sc = *scale;
                         let speed = sc * 0.01;
+                        // Below 1:10, tenths: 1:0.5 is a frame at 2:1 (#902).
+                        let decimals = if sc < 10.0 { 1 } else { 0 };
                         let drag = Dragged::lend(ui, drag_key("scale"), &mut sc);
                         let r = ui
-                            .add(egui::DragValue::new(&mut sc).range(100.0..=1e10).speed(speed).max_decimals(0))
+                            .add(egui::DragValue::new(&mut sc).range(MIN_FRAME_SCALE..=MAX_FRAME_SCALE).speed(speed).max_decimals(decimals))
                             .labelled_by(input_label.id);
-                        if drag.settled(ui, &r, &mut sc) && (sc - scale).abs() > 0.5 {
+                        if drag.settled(ui, &r, &mut sc) && (sc / scale - 1.0).abs() > 1e-3 {
                             update(app, json!({"scale": sc}));
                         }
                         ui.end_row();

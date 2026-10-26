@@ -46,14 +46,23 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
                 .collect()
         })
         .unwrap_or_default();
-    let sym = |name: Option<&str>, report: &mut Report| -> Option<Converted> {
-        symbols.get(name?).map(|n| symbol::read(*n, reference, layer, report))
+    // The first symbol turned by a field turns the layer's markers.
+    let rotation = std::cell::RefCell::new(None);
+    let turned = symbols.values().any(|n| symbol::turns_by_field(*n));
+    let read = |n: Node, report: &mut Report| {
+        let c = symbol::read(n, reference, turned, layer, report);
+        if let (Some(r), Ok(mut had)) = (&c.rotation, rotation.try_borrow_mut())
+            && *had.get_or_insert_with(|| r.clone()) != *r
+        {
+            report.approximated(layer, "marker layers turned by different fields, all turned by the first");
+        }
+        c
     };
+    let sym = |name: Option<&str>, report: &mut Report| -> Option<Converted> { symbols.get(name?).map(|n| read(*n, report)) };
     let kind = r.attribute("type").unwrap_or_default();
     match kind {
         "singleSymbol" => {
-            let Some(c) = sym(Some("0"), report).or_else(|| symbols.values().next().map(|n| symbol::read(*n, reference, layer, report)))
-            else {
+            let Some(c) = sym(Some("0"), report).or_else(|| symbols.values().next().map(|n| read(*n, report))) else {
                 return;
             };
             style.line_strokes = Some(if c.stacked() { c.strokes.clone() } else { Vec::new() });
@@ -75,6 +84,12 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
         "heatmapRenderer" => report.skipped(layer, "its heatmap renderer"),
         other => report.skipped(layer, format!("its {other} renderer")),
     }
+    // A renderer read here (not by the one inside a wrapper) says whether its markers turn.
+    let wrapper =
+        matches!(kind, "pointCluster" | "pointDisplacement" | "invertedPolygonRenderer" | "mergedFeatureRenderer" | "25dRenderer");
+    if style.renderer.is_some() && !wrapper {
+        style.marker_rotation = Some(rotation.try_borrow().ok().and_then(|r| r.clone()));
+    }
 }
 
 /// A renderer's classifying attribute as a field: `name` or `"name"`; `None` for an expression.
@@ -87,6 +102,11 @@ fn field_of(attr: &str, layer: &str, report: &mut Report) -> Option<String> {
     }
     report.skipped(layer, format!("classes by the expression `{a}` (only by a field)"));
     None
+}
+
+/// A switched-off class (`render="false"`): it draws nothing.
+fn switched_off() -> Converted {
+    Converted { symbol: symbol::hidden(), strokes: Vec::new(), rotation: None }
 }
 
 type SymbolOf<'a> = dyn Fn(Option<&str>, &mut Report) -> Option<Converted> + 'a;
@@ -105,10 +125,13 @@ fn categorized(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym
     let mut other = symbol::hidden();
     let mut other_strokes = Vec::new();
     for cat in &cats {
-        let Some(mut c) = sym(cat.attribute("symbol"), report) else { continue };
-        if cat.attribute("render") == Some("false") {
-            c = Converted { symbol: symbol::hidden(), strokes: Vec::new() };
-        }
+        // A switched-off class draws nothing; its symbol isn't read (its field would turn the rest).
+        let c = if cat.attribute("render") == Some("false") {
+            switched_off()
+        } else {
+            let Some(c) = sym(cat.attribute("symbol"), report) else { continue };
+            c
+        };
         // A category of several values (QGIS's merged categories) lists them as <val>s, or as a
         // list <Option>.
         let mut values: Vec<String> = cat
@@ -157,10 +180,12 @@ fn graduated(r: Node, layer: &str, style: &mut Style, report: &mut Report, sym: 
     for rg in child(r, "ranges").map(|c| c.children().filter(|n| n.has_tag_name("range")).collect::<Vec<_>>()).unwrap_or_default() {
         let num = |k: &str| rg.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
         let (Some(lower), Some(upper)) = (num("lower"), num("upper")) else { continue };
-        let Some(mut c) = sym(rg.attribute("symbol"), report) else { continue };
-        if rg.attribute("render") == Some("false") {
-            c = Converted { symbol: symbol::hidden(), strokes: Vec::new() };
-        }
+        let c = if rg.attribute("render") == Some("false") {
+            switched_off()
+        } else {
+            let Some(c) = sym(rg.attribute("symbol"), report) else { continue };
+            c
+        };
         ranges.push((lower, upper, c, rg.attribute("label").map(str::to_string)));
         if ranges.len() >= MAX_CLASSES {
             report.skipped(layer, format!("ranges past the first {MAX_CLASSES}"));

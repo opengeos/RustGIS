@@ -19,6 +19,39 @@ Saved layer addresses omit passwords, access keys, tokens and signatures. The op
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
 connection again or add it again with credentials.
 
+### Autosave and recovery
+
+The desktop app keeps a recovery copy of unsaved work. While the project has changes that aren't
+saved, it writes a copy every few minutes (5 by default), and only when something changed since
+the last one. Choose how often, or turn it off, in **Settings › Autosave**
+(`ui.autosave={"minutes": 10}`; `0` is off). The copy is written in the background, so a large
+project doesn't hold up the app. It leaves out layer passwords, keys and tokens, as a saved project
+does. It is kept in the `recovery` folder of the app's
+[data folder](../installation.md#settings-data-and-cache-folders), not beside your project.
+Saving, opening or starting another project, and quitting RustGIS remove it.
+
+If RustGIS crashes, is closed by the system or loses power, the next launch asks **Recover unsaved
+work?** and says how old the copy is.
+
+- **Recover** opens the work unsaved, under its file's name, so **Save** writes it back to that
+  file. RustGIS warns you if the file was changed after the copy was made. A project that was never
+  saved stays untitled, and **Save** asks where to write it.
+- **Discard** deletes the copy.
+- **Later** keeps the copy for the next launch.
+
+If RustGIS crashes again before you decide, neither copy replaces the other. Up to five are kept
+and offered newest first, one per launch once you recover one. Recovering never replaces a project
+that has unsaved changes of its own: save it first.
+
+The same choices are commands: `ui.recover` opens the copy, and `ui.recover={"discard": true}`
+deletes it. `ui.autosave` reports the interval and any copy waiting.
+
+Quitting doesn't ask about unsaved changes, and their copy is removed: save before you quit. A
+second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
+one's copy; it says so as it starts. Nor does RustGIS autosave when its settings folder can't lock
+files (some network or synced folders), where it can't tell a second copy apart. The browser app
+doesn't autosave yet; it warns before you leave a page with unsaved changes.
+
 ### QGIS projects and styles
 
 A QGIS project (`.qgs`, or a `.qgz` archive) opens as a new map of the current project: **Open**
@@ -42,7 +75,9 @@ Each layer keeps its look:
   rendering passes as their levels when the renderer draws in symbol levels; marker and hashed
   lines as strokes of markers or hash marks, at their places (intervals, vertices, the ends, the
   middle), turned with the line, their markers' offsets and angles kept; font markers as
-  characters of their font, on points and along lines.
+  characters of their font, on points and along lines; a marker symbol of several layers, or one
+  shifted, turned or anchored off its centre, as a point's marks; a marker angle taken from a
+  field (`"field"` or `- "field"`) as the layer's rotation field.
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
@@ -66,7 +101,7 @@ near as it can, or left out, and said: the import's notes list, layer by layer, 
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos in RustGIS's own colour and width, label offsets and
 wrapping, values outside a graduated renderer's ranges in its first or last class, file options
-such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, data-defined
+such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS
 and other sources RustGIS doesn't read, diagrams, joins, virtual fields, a layer's other styles,
@@ -117,12 +152,11 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Pane Sets** (View › Workspace) save the left pane, open right-hand pane tabs, active pane
   and ribbon tab and bring them back. The **Workflow Manager** tracks jobs (new, in progress,
   on hold, done) with the area each covers.
-- **Connections** (Home › Add Data › **Connections…**) opens the Data Sources pane on its saved
-  connections; it only ever opens the pane, so it is safe to choose when the pane is already open
-  (**View › Windows › Data Sources** still shows or hides it). **Add Data › New Connection** lists
-  each kind of connection (PostgreSQL/PostGIS, MySQL/MariaDB and SQL Server are left out in the web
-  app) and opens its form. Saved connections are listed in the pane, not in the menu. Command
-  Search finds **Connections…** by name.
+- **Data Sources** (Home › Add › **Data Sources**) opens the Data Sources pane; **View › Windows ›
+  Data Sources** still shows or hides it. **Home › Add › Add Data › New Connection** lists each
+  kind of connection (PostgreSQL/PostGIS, MySQL/MariaDB and SQL Server are left out in the web
+  app) and opens its form. Saved connections are listed in the pane, not in the Add Data menu.
+  Command Search finds the pane as **Data Sources**.
 - **Tasks** (Analyze › Tasks, or View › Tasks) steps through a task's instructions: read the current step and do it
   yourself, with **Show Me** to find where, or click **Run** to have it done.
     - **Show Me** points at the step's command:
@@ -180,8 +214,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
       cloud-optimised GeoTIFF a file per date with `layer.addUrl`, giving its `start` and `end`.
       For example NASA GIBS daily MODIS imagery:
       `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
-    - A Zarr variable added with **Follow the time slider** (Add Data › Zarr…) shows the step the
-      slider is at; see [Zarr stores](data.md#zarr-stores).
+    - A Zarr variable added with **Follow the time slider** (Home › Add › Add Data › Zarr…) shows
+      the step the slider is at; see [Zarr stores](data.md#zarr-stores).
     - From scripts: `time.bind` (`"layer"`, `"field"`, `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`), `time.set` (the
       window: `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`, `"speed"`, `"loop"`,
       `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes
@@ -206,6 +240,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Language**: **Settings › Language** switches the interface among
   [19 languages](../i18n.md) and chooses the [worldview](maps.md#worldview) of the built-in
   borders.
+- **Autosave**: **Settings › Autosave** sets how often the desktop app keeps a
+  [recovery copy](#autosave-and-recovery) of unsaved work, or turns it off.
 - **Start-up**: **Settings › Start-up** sets what RustGIS opens with: **Start With** the World Atlas
   sample or a blank map, or, in the desktop app, **Last Project** (the `.rgis` project last opened
   or saved) or **Choose Project…** (one you pick once), the **Projection** the map opens in (a
@@ -213,7 +249,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
   full extent, or **Use Current View** to keep the view you are looking at). A project opened at
   start keeps its own projection and view; the Projection and Extent settings apply to the sample
   and a blank map. If the project no longer opens (moved or deleted), RustGIS starts with the sample
-  and says why. After a crash it starts with the sample too, in case the project is what crashed;
+  and says why. After a crash it starts with the sample too, in case the project is what crashed, and offers
+  back the [recovery copy](#autosave-and-recovery) autosave kept of unsaved work, if any;
   starting `rustgis --sample` also skips the start-up project. The choices are remembered on this
   computer, or in this browser for the web app. Opening files from the command line starts a blank
   map.

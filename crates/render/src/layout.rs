@@ -382,9 +382,7 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
     // A layout with a decimal comma prints its scale with points between thousands: put in first,
     // so a page or layout name holding "{scale}" isn't read as the token.
     let t = match scale {
-        Some(scale) if layout.decimal_comma => {
-            t.replace("{scale}", &format!("1:{}", decimal(rustgis_map::graphics::thousands(scale), true)))
-        }
+        Some(scale) if layout.decimal_comma => t.replace("{scale}", &decimal(rustgis_map::graphics::scale_ratio(scale), true)),
         _ => t.to_string(),
     };
     let t = t

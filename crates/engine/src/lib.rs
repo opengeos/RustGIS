@@ -538,6 +538,9 @@ pub struct Session {
     /// Tasks made in this session (lower-cased names). Others came from files, and their steps
     /// may not touch files when run.
     pub trusted_tasks: std::collections::HashSet<String>,
+    /// A task is executing: its steps may not start another task, even through scripts.
+    /// Kept across project replacement until the active call returns; never part of undo.
+    pub(crate) task_running: bool,
     /// Models made in this session (lower-cased names); the steps of others may not touch files.
     pub trusted_models: std::collections::HashSet<String>,
     /// What the last model run did, node by node (`model::RunReport`), kept even when the run
@@ -600,7 +603,7 @@ pub struct Session {
     /// them (it keeps nothing between calls). Not saved with the project: a plugin's state
     /// command reads what it needs from the map when the panel opens.
     pub plugin_panels: std::collections::BTreeMap<String, rustgis_plugins::PanelState>,
-    /// Data downloads of this project under way (Add Data › From URL), by id.
+    /// Data downloads of this project under way (Home › Add › Add Data › From URL), by id.
     downloading: Vec<u64>,
     /// Downloads that landed, waiting for `layer.addDownload`.
     pub(crate) downloaded: Vec<(u64, Vec<u8>)>,
@@ -725,6 +728,7 @@ impl Session {
             keep_tool: false,
             active_layout: None,
             trusted_tasks: Default::default(),
+            task_running: false,
             trusted_models: Default::default(),
             model_run: None,
             project_starts: 0,

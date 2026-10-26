@@ -54,7 +54,8 @@ Correct, robust and recoverable, with the foundations other themes stand on.
   GDA94↔GDA2020 and OSGB36, and a notice whenever a layer is read without its shift; GDA94
   ([#730](https://github.com/opengeos/RustGIS/issues/730)) is one case. _Coordinate first._
 - Reloading files changed on disk.
-- Autosave and crash recovery: reopen unsaved work after a crash.
+- Autosave and crash recovery in the browser: reopen unsaved work after a crash. The desktop app
+  has them ([#873](https://github.com/opengeos/RustGIS/issues/873)).
 - Signed Windows builds (no SmartScreen warning), then in-place updates; settings an
   administrator can fix for a managed install (no AI Assistant, plugins or web services).
 - Extend the OS keychain secret store to service connections (database passwords, S3 keys,
@@ -102,7 +103,9 @@ And alongside it:
 - Export into an existing GeoPackage as an added or replaced table, leaving its other tables
   ([#852](https://github.com/opengeos/RustGIS/issues/852); export refuses an existing file today).
 - Polygon editing: cut a polygon, reshape and trace _(open)_; then shared edges, where moving one
-  boundary moves its neighbour's too.
+  boundary moves its neighbour's too. Coincident polygon vertices can already move together
+  with Shared Vertices (`edit.moveSharedVertex`); different vertex densities and linked
+  insertion/deletion remain open.
 - Editor tracking fields (created/edited by and at).
 - Attribute table columns: rename, hide and reorder _(open)_.
 - Persistent attribute joins and virtual fields. _Coordinate first_ (they change `Feature`).
@@ -173,7 +176,8 @@ Open questions rather than plans; discuss before building.
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly, installable with offline start, opened with a project or data by its
   web address), 18 interface languages; a ribbon laid out in the order of the work (Home, Data,
-  Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates.
+  Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates, autosave and
+  crash recovery in the desktop app.
 - Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Excel
   and OpenDocument spreadsheets, GeoRSS, LandXML, encoded polylines, Shapefile (zipped too,
   with the coordinate system in its `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ

@@ -39,7 +39,7 @@ pub fn open_command(path: &str) -> &'static str {
 /// Format version written to files.
 pub const FORMAT: u32 = 1;
 /// Largest project file read (512 MiB).
-const MAX_BYTES: u64 = 512 << 20;
+pub const MAX_BYTES: u64 = 512 << 20;
 
 /// The address a saved file keeps. Only web addresses can contain layer credentials. A tile
 /// template (`pmtiles:…@archive`, `cog:…@archive`) is judged by its archive, and an address read
@@ -761,6 +761,22 @@ impl Project {
             kept.push(Written { len, hash, was });
         }
         text.map(|text| (text, n))
+    }
+
+    /// The project as an autosaved recovery copy keeps it: its text without passwords, keys, tokens
+    /// or signatures in layer addresses, from a copy of the project (autosave writes it off the
+    /// interface thread). Unlike [`Self::saved_text`], local file paths stay as the open project
+    /// holds them, absolute: the copy lives in the app's recovery folder and is opened from there,
+    /// not from the project's folder. Nor is it remembered as a file this process wrote, so
+    /// frequent copies can't push the user's own saves out of the snapshots that restore secrets.
+    /// Text too large to open again is refused.
+    pub fn recovery_text(mut self) -> Result<String, String> {
+        strip_addresses(self.addresses_mut());
+        let text = serde_json::to_string(&self).map_err(|e| e.to_string())?;
+        if text.len() as u64 > MAX_BYTES {
+            return Err("the project is too large to keep a recovery copy".into());
+        }
+        Ok(text)
     }
 
     fn restore_addresses(&mut self, text: &str) {

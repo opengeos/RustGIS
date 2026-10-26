@@ -1,0 +1,616 @@
+{
+ "about": "Answers from GEOS; regenerate with `uv run generate.py` (see its header).",
+ "shapely": "2.1.2",
+ "geos": "3.13.1",
+ "pyproj": "3.7.2",
+ "proj": "9.5.1",
+ "cases": [
+  {
+   "name": "clip polygons",
+   "tool": "clip",
+   "params": {
+    "input": "parcels",
+    "clip": "zones"
+   },
+   "expect": {
+    "features": "expected/clip_parcels.geojson"
+   }
+  },
+  {
+   "name": "clip lines",
+   "tool": "clip",
+   "params": {
+    "input": "roads",
+    "clip": "zones"
+   },
+   "expect": {
+    "features": "expected/clip_roads.geojson"
+   }
+  },
+  {
+   "name": "clip points",
+   "tool": "clip",
+   "params": {
+    "input": "points",
+    "clip": "zones"
+   },
+   "expect": {
+    "ids": [
+     "b",
+     "d",
+     "e",
+     "j"
+    ]
+   }
+  },
+  {
+   "name": "erase",
+   "tool": "erase",
+   "params": {
+    "input": "parcels",
+    "erase": "zones"
+   },
+   "expect": {
+    "features": "expected/erase_parcels.geojson"
+   }
+  },
+  {
+   "name": "dissolve by field",
+   "tool": "dissolve",
+   "params": {
+    "input": "parcels",
+    "field": "code"
+   },
+   "expect": {
+    "features": "expected/dissolve_code.geojson",
+    "key": "code",
+    "counts": {
+     "A": 3,
+     "B": 2,
+     "C": 2,
+     "D": 1
+    }
+   }
+  },
+  {
+   "name": "dissolve all",
+   "tool": "dissolve",
+   "params": {
+    "input": "parcels"
+   },
+   "expect": {
+    "features": "expected/dissolve_all.geojson",
+    "key": null
+   }
+  },
+  {
+   "name": "convex hull of each",
+   "tool": "convexHull",
+   "params": {
+    "input": "parcels",
+    "group": "None"
+   },
+   "expect": {
+    "features": "expected/hull_each.geojson"
+   }
+  },
+  {
+   "name": "convex hull of all",
+   "tool": "convexHull",
+   "params": {
+    "input": "parcels",
+    "group": "All"
+   },
+   "expect": {
+    "features": "expected/hull_all.geojson",
+    "key": null
+   }
+  },
+  {
+   "name": "select parcels by zones",
+   "tool": "selectByLocation",
+   "params": {
+    "input": "parcels",
+    "select": "zones"
+   },
+   "expect": {
+    "ids": [
+     "P1",
+     "P2",
+     "P3",
+     "P4",
+     "P6",
+     "P8"
+    ]
+   }
+  },
+  {
+   "name": "select parcels by zones, inverted",
+   "tool": "selectByLocation",
+   "params": {
+    "input": "parcels",
+    "select": "zones",
+    "invert": "Yes"
+   },
+   "expect": {
+    "ids": [
+     "P5",
+     "P7"
+    ]
+   }
+  },
+  {
+   "name": "select roads by parcels",
+   "tool": "selectByLocation",
+   "params": {
+    "input": "roads",
+    "select": "parcels"
+   },
+   "expect": {
+    "ids": [
+     "r1",
+     "r2",
+     "r4",
+     "r6"
+    ]
+   }
+  },
+  {
+   "name": "select points by parcels",
+   "tool": "selectByLocation",
+   "params": {
+    "input": "points",
+    "select": "parcels"
+   },
+   "expect": {
+    "ids": [
+     "a",
+     "b",
+     "c",
+     "e",
+     "g",
+     "h",
+     "i",
+     "j"
+    ]
+   }
+  },
+  {
+   "name": "select roads by zones",
+   "tool": "selectByLocation",
+   "params": {
+    "input": "roads",
+    "select": "zones"
+   },
+   "expect": {
+    "ids": [
+     "r1",
+     "r2",
+     "r3",
+     "r6"
+    ]
+   }
+  },
+  {
+   "name": "summarize within",
+   "tool": "countPoints",
+   "params": {
+    "polygons": "parcels",
+    "points": "points"
+   },
+   "expect": {
+    "field": "point_count",
+    "values": {
+     "P1": 3,
+     "P2": 2,
+     "P3": 2,
+     "P4": 0,
+     "P5": 2,
+     "P6": 1,
+     "P7": 1,
+     "P8": 1
+    }
+   }
+  },
+  {
+   "name": "join intersects",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "parcels",
+    "join": "zones",
+    "match": "Intersects",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "P1",
+      "Z1"
+     ],
+     [
+      "P2",
+      "Z1"
+     ],
+     [
+      "P2",
+      "Z6"
+     ],
+     [
+      "P3",
+      "Z1"
+     ],
+     [
+      "P3",
+      "Z4"
+     ],
+     [
+      "P3",
+      "Z6"
+     ],
+     [
+      "P4",
+      "Z2"
+     ],
+     [
+      "P5",
+      null
+     ],
+     [
+      "P6",
+      "Z1"
+     ],
+     [
+      "P7",
+      null
+     ],
+     [
+      "P8",
+      "Z5"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join contains",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "parcels",
+    "join": "points",
+    "match": "Contains",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "P1",
+      "a"
+     ],
+     [
+      "P2",
+      null
+     ],
+     [
+      "P3",
+      null
+     ],
+     [
+      "P4",
+      null
+     ],
+     [
+      "P5",
+      "g"
+     ],
+     [
+      "P5",
+      "h"
+     ],
+     [
+      "P6",
+      "c"
+     ],
+     [
+      "P7",
+      null
+     ],
+     [
+      "P8",
+      "j"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join within",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "points",
+    "join": "parcels",
+    "match": "Within",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "a",
+      "P1"
+     ],
+     [
+      "b",
+      null
+     ],
+     [
+      "c",
+      "P6"
+     ],
+     [
+      "d",
+      null
+     ],
+     [
+      "e",
+      null
+     ],
+     [
+      "f",
+      null
+     ],
+     [
+      "g",
+      "P5"
+     ],
+     [
+      "h",
+      "P5"
+     ],
+     [
+      "i",
+      null
+     ],
+     [
+      "j",
+      "P8"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join roads intersect parcels",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "roads",
+    "join": "parcels",
+    "match": "Intersects",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "r1",
+      "P1"
+     ],
+     [
+      "r1",
+      "P2"
+     ],
+     [
+      "r1",
+      "P6"
+     ],
+     [
+      "r2",
+      "P1"
+     ],
+     [
+      "r2",
+      "P2"
+     ],
+     [
+      "r2",
+      "P6"
+     ],
+     [
+      "r3",
+      null
+     ],
+     [
+      "r4",
+      "P3"
+     ],
+     [
+      "r4",
+      "P5"
+     ],
+     [
+      "r5",
+      null
+     ],
+     [
+      "r6",
+      "P8"
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join closest",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "points",
+    "join": "parcels",
+    "match": "Closest",
+    "units": "Meters",
+    "distanceField": "dist",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "a",
+      "P1",
+      0.0
+     ],
+     [
+      "b",
+      "P1",
+      0.0
+     ],
+     [
+      "c",
+      "P1",
+      0.0
+     ],
+     [
+      "d",
+      "P3",
+      9617.286477596233
+     ],
+     [
+      "e",
+      "P3",
+      0.0
+     ],
+     [
+      "f",
+      "P5",
+      191772.8154582311
+     ],
+     [
+      "g",
+      "P5",
+      0.0
+     ],
+     [
+      "h",
+      "P5",
+      0.0
+     ],
+     [
+      "i",
+      "P3",
+      0.0
+     ],
+     [
+      "j",
+      "P8",
+      0.0
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join within a distance",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "stations",
+    "join": "roads",
+    "match": "Within a distance",
+    "distance": 30000.0,
+    "units": "Meters",
+    "distanceField": "dist",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "s1",
+      "r2",
+      20563.88085989103
+     ],
+     [
+      "s1",
+      "r1",
+      27947.80972153128
+     ],
+     [
+      "s2",
+      null,
+      null
+     ]
+    ]
+   }
+  },
+  {
+   "name": "join points within a distance",
+   "tool": "spatialJoin",
+   "params": {
+    "target": "points",
+    "join": "roads",
+    "match": "Within a distance",
+    "distance": 30000.0,
+    "units": "Meters",
+    "distanceField": "dist",
+    "operation": "Join one to many"
+   },
+   "expect": {
+    "pairs": [
+     [
+      "a",
+      "r1",
+      14015.746772213406
+     ],
+     [
+      "a",
+      "r2",
+      28983.146568103246
+     ],
+     [
+      "b",
+      "r2",
+      0.0
+     ],
+     [
+      "b",
+      "r1",
+      14084.263048419794
+     ],
+     [
+      "c",
+      "r2",
+      6947.529600616946
+     ],
+     [
+      "c",
+      "r1",
+      27599.770334571844
+     ],
+     [
+      "d",
+      "r3",
+      5.612923586871125
+     ],
+     [
+      "e",
+      "r3",
+      7906.554524361339
+     ],
+     [
+      "f",
+      null,
+      null
+     ],
+     [
+      "g",
+      null,
+      null
+     ],
+     [
+      "h",
+      null,
+      null
+     ],
+     [
+      "i",
+      "r4",
+      27790.741782081575
+     ],
+     [
+      "j",
+      "r6",
+      6730.820161190676
+     ]
+    ]
+   }
+  }
+ ]
+}

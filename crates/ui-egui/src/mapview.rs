@@ -147,6 +147,8 @@ pub struct MapView {
     pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
+    /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
+    pub move_shared_vertices: bool,
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
@@ -243,6 +245,7 @@ impl Default for MapView {
             vertex: None,
             vertex_drag: None,
             vertex_drag_owner: None,
+            move_shared_vertices: false,
             magnifier: false,
             popup: None,
             popup_rev: 0,
@@ -421,7 +424,7 @@ fn animate(app: &mut RustGisApp, ui: &mut Ui) {
     let e = t.min(1.0);
     let s = e * e * (3.0 - 2.0 * e);
     let c = Coord::new(a.center.x + (b.center.x - a.center.x) * s, a.center.y + (b.center.y - a.center.y) * s);
-    let sc = (a.scale.max(1.0).ln() + (b.scale.max(1.0).ln() - a.scale.max(1.0).ln()) * s).exp();
+    let sc = rustgis_engine::map::camera::scale_between(a.scale, b.scale, s);
     let m = app.session.map_mut();
     if let Some(mc) = m.to_map(c) {
         m.camera.center = mc;

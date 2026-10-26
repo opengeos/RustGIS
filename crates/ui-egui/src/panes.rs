@@ -3673,7 +3673,11 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             legend_list(app, ui, &l, t);
         }
     }
-    if g == GeometryType::Polyline && !l.graphics {
+    if g == GeometryType::Point && !l.graphics {
+        ui.add_space(8.0);
+        marker_rotation_row(app, ui, &l);
+    }
+    if matches!(g, GeometryType::Polyline | GeometryType::Point) && !l.graphics {
         ui.add_space(8.0);
         line_strokes_editor(app, ui, &l, t);
     }
@@ -4394,7 +4398,16 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
 
 /// The stroke editor's rows for a stroke of markers or hash marks (`st`, its markers `m`): the
 /// shape, its size, where it goes and how far apart, and whether it turns with the line.
-fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: LineMarkers, set: &impl Fn(&mut RustGisApp, LineStroke)) {
+#[allow(clippy::too_many_arguments)]
+fn marker_rows(
+    app: &mut RustGisApp,
+    ui: &mut Ui,
+    i: usize,
+    st: LineStroke,
+    m: LineMarkers,
+    points: bool,
+    set: &impl Fn(&mut RustGisApp, LineStroke),
+) {
     let with = |m: LineMarkers| LineStroke { markers: Some(m), ..st };
     if let LineMark::Marker(shape) = m.mark {
         let input_label = ui.label(tl!("Shape"));
@@ -4431,30 +4444,42 @@ fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: L
         set(app, with(LineMarkers { size, ..m }));
     }
     ui.end_row();
-    let input_label = ui.label(tl!("Place"));
-    let places = marker_places();
-    let shown =
-        places.iter().find(|(_, p)| *p == m.at).map_or_else(|| tl!("Several places").to_string(), |(label, _)| tl!(label).to_string());
-    egui::ComboBox::from_id_salt(("stroke_marker_place", i))
-        .selected_text(shown)
-        .show_ui(ui, |ui| {
-            for (label, p) in places {
-                if ui.selectable_label(p == m.at, tl!(label)).clicked() {
-                    set(app, with(LineMarkers { at: p, ..m }));
-                }
-            }
-        })
-        .response
-        .labelled_by(input_label.id);
-    ui.end_row();
-    if m.at.has(Placements::INTERVAL) {
-        let input_label = ui.label(tl!("Interval"));
-        let mut interval = m.interval;
-        let drag = egui::DragValue::new(&mut interval).range(MIN_MARKER_INTERVAL..=MAX_MARKER_INTERVAL).speed(0.2).suffix(" pt");
-        if ui.add(drag).on_hover_text(tl!("The distance between two marks along the line")).labelled_by(input_label.id).changed() {
-            set(app, with(LineMarkers { interval, ..m }));
+    // A point's mark sits at the point, shifted right (and down, by the stroke's offset).
+    if points {
+        let input_label = ui.label(tl!("Offset right"));
+        let mut along = m.offset_along;
+        let drag = egui::DragValue::new(&mut along).range(-MAX_STROKE_OFFSET..=MAX_STROKE_OFFSET).speed(0.05).suffix(" pt");
+        if ui.add(drag).on_hover_text(tl!("Shifts the mark right of the point (left when negative)")).labelled_by(input_label.id).changed()
+        {
+            set(app, with(LineMarkers { offset_along: along, ..m }));
         }
         ui.end_row();
+    } else {
+        let input_label = ui.label(tl!("Place"));
+        let places = marker_places();
+        let shown =
+            places.iter().find(|(_, p)| *p == m.at).map_or_else(|| tl!("Several places").to_string(), |(label, _)| tl!(label).to_string());
+        egui::ComboBox::from_id_salt(("stroke_marker_place", i))
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                for (label, p) in places {
+                    if ui.selectable_label(p == m.at, tl!(label)).clicked() {
+                        set(app, with(LineMarkers { at: p, ..m }));
+                    }
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
+        ui.end_row();
+        if m.at.has(Placements::INTERVAL) {
+            let input_label = ui.label(tl!("Interval"));
+            let mut interval = m.interval;
+            let drag = egui::DragValue::new(&mut interval).range(MIN_MARKER_INTERVAL..=MAX_MARKER_INTERVAL).speed(0.2).suffix(" pt");
+            if ui.add(drag).on_hover_text(tl!("The distance between two marks along the line")).labelled_by(input_label.id).changed() {
+                set(app, with(LineMarkers { interval, ..m }));
+            }
+            ui.end_row();
+        }
     }
     ui.label(tl!("Angle"));
     ui.horizontal(|ui| {
@@ -4465,17 +4490,88 @@ fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: L
             set(app, with(LineMarkers { angle, ..m }));
         }
         let mut rotate = m.rotate;
-        if ui.checkbox(&mut rotate, tl!("With the line")).on_hover_text(tl!("Turn each mark with the line's direction")).changed() {
+        let (label, tip) = if points {
+            (tl!("With the field"), tl!("Turn the mark by the layer's rotation field, its offset with it"))
+        } else {
+            (tl!("With the line"), tl!("Turn each mark with the line's direction"))
+        };
+        if ui.checkbox(&mut rotate, label).on_hover_text(tip).changed() {
             set(app, with(LineMarkers { rotate, ..m }));
         }
     });
     ui.end_row();
 }
 
+/// A point symbol's marker as a mark (the first of a point layer's marks): its shape, size, fill and
+/// outline, taking its colours from the symbol.
+fn symbol_mark(s: &Symbol) -> LineStroke {
+    let outline = (s.stroke_width > 0.0 && s.stroke.a() > 0).then_some(s.stroke);
+    let m = LineMarkers { mark: LineMark::Marker(s.marker), size: s.size, outline, at: Placements::FIRST, ..LineMarkers::default() };
+    LineStroke { markers: Some(m), ..LineStroke::default() }
+}
+
+/// A point layer's marks at the middle of `r`, bottom first, shifted as they are on the map (their
+/// offsets turned with their angles).
+fn marks_preview(ui: &Ui, r: Rect, strokes: &[LineStroke], base: &Symbol) {
+    let shown: Vec<LineStroke> = if strokes.is_empty() { vec![symbol_mark(base)] } else { strokes.to_vec() };
+    let reach = shown.iter().filter_map(|st| st.markers.map(|m| m.offset_along.hypot(st.offset) + m.size / 2.0)).fold(1.0_f32, f32::max);
+    let k = (18.0 / reach).min(1.0);
+    for st in &shown {
+        let Some(m) = st.markers else { continue };
+        let (c, w) = st.resolve(base);
+        // A mark of no colour of its own takes the symbol's fill.
+        let c = if st.color.is_none() { base.fill } else { c };
+        let (sin, cos) = m.angle.to_radians().sin_cos();
+        let (ox, oy) = (m.offset_along * k, st.offset * k);
+        let at = r.center() + vec2(ox * cos - oy * sin, ox * sin + oy * cos);
+        let one = LineMarkers { at: Placements::FIRST, ..m };
+        marker_preview(ui, &one, (at.x, at.x), at.y, k, c32(c), (w * k).max(0.5));
+    }
+}
+
+/// The field a point layer's markers turn by (`layer.markerRotation`): none, or one of its number
+/// fields, its angles clockwise or counterclockwise.
+fn marker_rotation_row(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer) {
+    let cur = l.marker_rotation.as_ref();
+    ui.horizontal(|ui| {
+        let input_label = ui.label(tl!("Rotation"));
+        let shown = cur.map_or_else(|| tl!("None").to_string(), |r| r.field.clone());
+        egui::ComboBox::from_id_salt(("marker_rotation", l.id))
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(cur.is_none(), tl!("None")).clicked() && cur.is_some() {
+                    let _ = app.run("layer.markerRotation", json!({"field": null}));
+                }
+                for f in l.dataset.fields.iter().filter(|f| f.ty.is_numeric()) {
+                    let on = cur.is_some_and(|r| r.field == f.name);
+                    if ui.selectable_label(on, &f.name).clicked() && !on {
+                        let ccw = cur.is_some_and(|r| r.counterclockwise);
+                        let _ = app.run("layer.markerRotation", json!({"field": f.name, "counterclockwise": ccw}));
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tl!("Turn each point's marker by the angle in a field, in degrees"))
+            .labelled_by(input_label.id);
+        if let Some(r) = cur {
+            let mut ccw = r.counterclockwise;
+            if ui
+                .checkbox(&mut ccw, tl!("Counterclockwise"))
+                .on_hover_text(tl!("The angles run counterclockwise, as in mathematics"))
+                .changed()
+            {
+                let _ = app.run("layer.markerRotation", json!({"field": r.field, "counterclockwise": ccw}));
+            }
+        }
+    });
+}
+
 /// The Strokes section of a line layer's symbology: strokes stacked in one symbol, each with
 /// its own colour, width, sideways offset, cap and join. Listed top first, as they are seen. A
-/// layer with classes can stack strokes for one class of its own, picked at the top.
+/// layer with classes can stack strokes for one class of its own, picked at the top. A point
+/// layer's are its Marks: markers stacked at the point, each shifted and turned.
 fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::map::Layer, t: &Tokens) {
+    let points = l.geometry_type() == GeometryType::Point;
     let classes = stroke_classes(&l.renderer);
     let picked_id = egui::Id::unique(("stroke_class", l.id));
     // The class being edited, while the renderer still has it; `None` is the layer's own strokes.
@@ -4494,20 +4590,28 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
     egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Strokes")).font(semibold(12.5)));
+            ui.label(egui::RichText::new(if points { tl!("Marks") } else { tl!("Strokes") }).font(semibold(12.5)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let add = ui.add_enabled(strokes.len() < MAX_STROKES, egui::Button::new(tl!("Add Stroke")).small());
-                if add.on_hover_text(tl!("Stack another stroke on top")).clicked() {
+                let (label, tip) = if points {
+                    (tl!("Add Mark"), tl!("Stack another marker on top"))
+                } else {
+                    (tl!("Add Stroke"), tl!("Stack another stroke on top"))
+                };
+                let add = ui.add_enabled(strokes.len() < MAX_STROKES, egui::Button::new(label).small());
+                if add.on_hover_text(tip).clicked() {
                     let mut next = strokes.clone();
-                    // The first stroke stands for the symbol's own; later ones copy the top one.
-                    next.push(strokes.last().copied().unwrap_or_default());
+                    // The first stroke stands for the symbol's own; later ones copy the top one. A
+                    // point's first mark is its symbol's marker.
+                    let first = if points { symbol_mark(&base) } else { LineStroke::default() };
+                    next.push(strokes.last().copied().unwrap_or(first));
                     set_strokes(app, class, &next);
                 }
             });
         });
         if !classes.is_empty() {
             ui.horizontal(|ui| {
-                let input_label = ui.label(egui::RichText::new(tl!("Strokes for")).size(11.5).color(t.text_dim));
+                let input_label =
+                    ui.label(egui::RichText::new(if points { tl!("Marks for") } else { tl!("Strokes for") }).size(11.5).color(t.text_dim));
                 let name = |c: Option<&ClassRef>| match c.and_then(|c| classes.iter().find(|(k, ..)| k == c)) {
                     Some((_, label, _)) => label.clone(),
                     None => tl!("All classes").to_string(),
@@ -4531,7 +4635,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     .labelled_by(input_label.id);
             });
         }
-        if l.has_strokes() {
+        if l.has_strokes() && !points {
             let mut on = l.stroke_levels;
             let tip = tl!("Draw every feature's strokes of one level before the next, so casings join under the cores where lines meet");
             if ui.checkbox(&mut on, tl!("Draw strokes in levels")).on_hover_text(tip).changed() {
@@ -4541,6 +4645,9 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         // The composed symbol along a line drawn left to right: a positive offset shows below it.
         let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
         ui.painter().rect_filled(r, CornerRadius::same(4), t.ribbon);
+        if points {
+            marks_preview(ui, r, &strokes, &base);
+        }
         let mut preview: Vec<LineStroke> = if strokes.is_empty() { vec![LineStroke::default()] } else { strokes.clone() };
         // In levels, a stroke shows over the lower levels' (ties keep their stack order), as the map has it.
         if l.stroke_levels {
@@ -4555,7 +4662,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         let k = (18.0 / reach).min(1.0);
         let (x0, x1) = (r.min.x + 14.0, r.max.x - 14.0);
         let cap_pad = |st: &LineStroke, w: f32| if st.cap == LineCap::Butt { 0.0 } else { w / 2.0 };
-        for st in &preview {
+        for st in preview.iter().filter(|_| !points) {
             let (c, w) = st.resolve(&base);
             let w = (w * k).max(0.5);
             let y = r.center().y + st.offset * k;
@@ -4594,21 +4701,33 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
         }
         // The line's direction.
         let (ay, ax) = (r.max.y - 6.0, r.max.x - 8.0);
-        ui.painter().line_segment([pos2(ax - 10.0, ay), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
-        ui.painter().line_segment([pos2(ax - 3.0, ay - 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
-        ui.painter().line_segment([pos2(ax - 3.0, ay + 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+        if points {
+            // (A point has none.)
+        } else {
+            ui.painter().line_segment([pos2(ax - 10.0, ay), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+            ui.painter().line_segment([pos2(ax - 3.0, ay - 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+            ui.painter().line_segment([pos2(ax - 3.0, ay + 3.0), pos2(ax, ay)], Stroke::new(1.0, t.text_dim));
+        }
         if borrowed {
             ui.label(
-                egui::RichText::new(tl!("This class is drawn with the layer's strokes. Changing them here gives it its own."))
-                    .size(11.5)
-                    .color(t.text_dim),
+                egui::RichText::new(if points {
+                    tl!("This class is drawn with the layer's marks. Changing them here gives it its own.")
+                } else {
+                    tl!("This class is drawn with the layer's strokes. Changing them here gives it its own.")
+                })
+                .size(11.5)
+                .color(t.text_dim),
             );
         }
         if strokes.is_empty() {
             ui.label(
-                egui::RichText::new(tl!("One stroke, from the symbol. Add strokes for casings, parallel lines and offsets."))
-                    .size(11.5)
-                    .color(t.text_dim),
+                egui::RichText::new(if points {
+                    tl!("One marker, from the symbol. Add marks to stack markers, or to shift or turn them.")
+                } else {
+                    tl!("One stroke, from the symbol. Add strokes for casings, parallel lines and offsets.")
+                })
+                .size(11.5)
+                .color(t.text_dim),
             );
             return;
         }
@@ -4618,7 +4737,7 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             ui.add_space(4.0);
             ui.separator();
             ui.horizontal(|ui| {
-                let title = crate::i18n::fmt("Stroke {n}", &[("n", &(n - i).to_string())]);
+                let title = crate::i18n::fmt(if points { "Mark {n}" } else { "Stroke {n}" }, &[("n", &(n - i).to_string())]);
                 ui.label(egui::RichText::new(title).size(11.5).color(t.text_dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, "close", tl!("Remove")).clicked() {
@@ -4647,32 +4766,35 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             };
             egui::Grid::new(("stroke_grid", i)).num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 let (c, w) = st.resolve(&base);
-                let input_label = ui.label(tl!("Draw"));
-                let kind = |st: &LineStroke| match st.markers.map(|m| m.mark) {
-                    None => tl!("Line"),
-                    Some(LineMark::Hash) => tl!("Hash marks"),
-                    Some(LineMark::Marker(_)) => tl!("Markers"),
-                };
-                egui::ComboBox::from_id_salt(("stroke_draw", i))
-                    .selected_text(kind(&st))
-                    .show_ui(ui, |ui| {
-                        let line = LineStroke { markers: None, ..st };
-                        let markers = LineStroke {
-                            markers: Some(LineMarkers { mark: LineMark::Marker(Marker::Circle), ..st.markers.unwrap_or_default() }),
-                            ..st
-                        };
-                        let hash =
-                            LineStroke { markers: Some(LineMarkers { mark: LineMark::Hash, ..st.markers.unwrap_or_default() }), ..st };
-                        for option in [line, markers, hash] {
-                            if ui.selectable_label(kind(&option) == kind(&st), kind(&option)).clicked() && kind(&option) != kind(&st) {
-                                set(app, option);
+                // A point's marks are markers.
+                if !points {
+                    let input_label = ui.label(tl!("Draw"));
+                    let kind = |st: &LineStroke| match st.markers.map(|m| m.mark) {
+                        None => tl!("Line"),
+                        Some(LineMark::Hash) => tl!("Hash marks"),
+                        Some(LineMark::Marker(_)) => tl!("Markers"),
+                    };
+                    egui::ComboBox::from_id_salt(("stroke_draw", i))
+                        .selected_text(kind(&st))
+                        .show_ui(ui, |ui| {
+                            let line = LineStroke { markers: None, ..st };
+                            let markers = LineStroke {
+                                markers: Some(LineMarkers { mark: LineMark::Marker(Marker::Circle), ..st.markers.unwrap_or_default() }),
+                                ..st
+                            };
+                            let hash =
+                                LineStroke { markers: Some(LineMarkers { mark: LineMark::Hash, ..st.markers.unwrap_or_default() }), ..st };
+                            for option in [line, markers, hash] {
+                                if ui.selectable_label(kind(&option) == kind(&st), kind(&option)).clicked() && kind(&option) != kind(&st) {
+                                    set(app, option);
+                                }
                             }
-                        }
-                    })
-                    .response
-                    .on_hover_text(tl!("A line, or markers or hash marks along it"))
-                    .labelled_by(input_label.id);
-                ui.end_row();
+                        })
+                        .response
+                        .on_hover_text(tl!("A line, or markers or hash marks along it"))
+                        .labelled_by(input_label.id);
+                    ui.end_row();
+                }
                 ui.label(tl!("Color"));
                 ui.horizontal(|ui| {
                     let mut cc = c32(c);
@@ -4698,19 +4820,20 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     }
                 });
                 ui.end_row();
-                ui.label(tl!("Offset"));
+                ui.label(if points { tl!("Offset down") } else { tl!("Offset") });
                 let mut off = st.offset;
                 let drag = egui::DragValue::new(&mut off).range(-MAX_STROKE_OFFSET..=MAX_STROKE_OFFSET).speed(0.05).suffix(" pt");
-                if ui
-                    .add(drag)
-                    .on_hover_text(tl!("Shifts the stroke sideways: positive to the right of the line's direction, negative to the left"))
-                    .changed()
-                {
+                let tip = if points {
+                    tl!("Shifts the mark below the point (above when negative)")
+                } else {
+                    tl!("Shifts the stroke sideways: positive to the right of the line's direction, negative to the left")
+                };
+                if ui.add(drag).on_hover_text(tip).changed() {
                     set(app, LineStroke { offset: off, ..st });
                 }
                 ui.end_row();
                 if let Some(m) = st.markers {
-                    marker_rows(app, ui, i, st, m, &set);
+                    marker_rows(app, ui, i, st, m, points, &set);
                 } else {
                     let input_label = ui.label(tl!("Cap"));
                     egui::ComboBox::from_id_salt(("stroke_cap", i))

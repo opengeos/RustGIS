@@ -44,6 +44,21 @@ draws a circle, so the point still shows. By command:
 layer.marker={"layer":"Peaks","char":"▲","font":"DejaVu Sans","size":12}
 ```
 
+**Rotation** turns each point's marker by the angle in a number field, in degrees clockwise
+(**Counterclockwise** for angles as mathematics counts them), as wind arrows or the signs of a
+topographic map turn. **Marks** stack several markers at a point, bottom first, in place of the
+symbol's: a white disc under a sign, say, so it reads on any background. Each mark has its own
+colour, outline, shape, size and angle, and is shifted right (**Offset right**) and down
+(**Offset down**); its offset turns with its angle, as QGIS turns it. **With the field** turns a
+mark by the rotation field too, or keeps it still. A layer with classes can have marks for one
+class of its own, as line strokes can. By command, `layer.markerRotation` and the point layer's
+strokes of markers:
+
+```text
+layer.markerRotation={"layer":"Signs","field":"angle","counterclockwise":true}
+layer.lineStrokes={"layer":"Signs","strokes":[{"color":"#FFFFFF","markers":{"mark":"circle","size":14}},{"color":"#000000","markers":{"mark":"character","char":"▲","size":10,"offsetAlong":0}}]}
+```
+
 Pick a colour scheme from the pane's swatches, listed in groups: **Perceptually Uniform** (Viridis,
 Plasma, Inferno, Magma, Cividis, Batlow and Aurora: even steps in lightness, so they read in
 greyscale and for colour-blind viewers), **Sequential**, **Diverging** (Red–Blue, Vik, Roma,

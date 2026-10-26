@@ -166,7 +166,7 @@ pub fn expand(text: &str, v: &TokenValues) -> String {
         let token = tail.find('}').and_then(|j| tail.get(..=j)).unwrap_or("");
         let value = match token {
             "{map}" => Some(v.map.clone()),
-            "{scale}" => Some(format!("1:{}", thousands(v.scale))),
+            "{scale}" => Some(scale_ratio(v.scale)),
             "{date}" => Some(date.clone()),
             "{time}" => Some(time.clone()),
             "{crs}" => Some(v.crs.clone()),
@@ -187,6 +187,18 @@ pub fn expand(text: &str, v: &TokenValues) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// A scale denominator as a ratio: `1:12,345`, or `2:1` and `2.5:1` once the map is larger than
+/// life.
+pub fn scale_ratio(scale: f64) -> String {
+    // `max` reads NaN as 0: no scale is 1:0, as `thousands` shows nothing below it.
+    if scale.is_nan() || scale <= 0.0 || scale >= 1.0 {
+        return format!("1:{}", thousands(scale.max(0.0)));
+    }
+    let times = 1.0 / scale;
+    let times = if times < 10.0 { format!("{times:.1}") } else { thousands(times) };
+    format!("{}:1", times.strip_suffix(".0").unwrap_or(&times))
 }
 
 /// `v` rounded, its thousands apart with commas (`6,300,000`).
@@ -238,5 +250,21 @@ mod tests {
         assert_eq!(expand("plain", &v), "plain");
         let named = TokenValues { map: "{date}".into(), ..v };
         assert_eq!(expand("{map} {nope} {", &named), "{date} {nope} {");
+    }
+
+    #[test]
+    fn scales_larger_than_life_read_as_ratios() {
+        assert_eq!(scale_ratio(20.0), "1:20");
+        assert_eq!(scale_ratio(1.4), "1:1");
+        // Just under 1:1 (a scale set to 1, back from metres per pixel), still 1:1.
+        assert_eq!(scale_ratio(0.999_999), "1:1");
+        assert_eq!(scale_ratio(0.7), "1.4:1");
+        assert_eq!(scale_ratio(0.5), "2:1");
+        assert_eq!(scale_ratio(0.04), "25:1");
+        assert_eq!(scale_ratio(0.0005), "2,000:1");
+        for nothing in [0.0, -3.0, f64::NAN, f64::NEG_INFINITY] {
+            assert_eq!(scale_ratio(nothing), "1:0", "{nothing}");
+        }
+        assert_eq!(scale_ratio(f64::INFINITY), "1:1,000,000,000,000,000");
     }
 }

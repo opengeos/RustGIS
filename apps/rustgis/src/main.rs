@@ -158,26 +158,30 @@ mod running {
     use std::path::Path;
 
     /// The marker, held while this run lasts.
-    pub struct Marker(File);
+    pub struct Marker {
+        file: File,
+        /// This run has it to itself: no other copy can take it while this one runs.
+        locked: bool,
+    }
 
-    /// Takes `<dir>/running` for this run: the marker (none when another copy holds it or the
-    /// folder can't be written) and whether the previous run didn't close cleanly.
-    pub fn start(dir: Option<&Path>) -> (Option<Marker>, bool) {
-        let Some(dir) = dir else { return (None, false) };
+    /// Takes `<dir>/running` for this run: the marker, or why there is none (another copy holds
+    /// it, or the folder can't be written), and whether the previous run didn't close cleanly.
+    pub fn start(dir: Option<&Path>) -> (Result<Marker, String>, bool) {
+        let Some(dir) = dir else { return (Err("this computer has no settings folder for RustGIS".into()), false) };
         let file = std::fs::create_dir_all(dir)
             .and_then(|_| OpenOptions::new().read(true).write(true).create(true).truncate(false).open(dir.join("running")));
         let mut file = match file {
             Ok(f) => f,
             Err(e) => {
                 log::warn!("no run marker in {} ({e}): an unclean exit won't be noticed", dir.display());
-                return (None, false);
+                return (Err(format!("the settings folder {} can't be written ({e})", dir.display())), false);
             }
         };
-        match file.try_lock() {
-            Ok(()) => {}
+        let locked = match file.try_lock() {
+            Ok(()) => true,
             Err(std::fs::TryLockError::WouldBlock) => {
                 log::info!("the run marker is held: another copy of RustGIS is running");
-                return (None, false);
+                return (Err("another copy of RustGIS is running, and only the first keeps a recovery copy".into()), false);
             }
             // The folder can't lock files (some network or FUSE folders): keep the marker unlocked,
             // so unclean exits are still noticed. Without a lock, copies running side by side share
@@ -187,8 +191,9 @@ mod running {
             // and a marker nobody clears would make every later launch look unclean.
             Err(std::fs::TryLockError::Error(e)) => {
                 log::warn!("could not lock the run marker ({e}): a second copy running alongside will look like an unclean exit");
+                false
             }
-        }
+        };
         // A clean exit leaves the marker empty: anything in it (whatever it reads as) means the
         // last run didn't close, and so does a marker that can't be read.
         let mut bytes = Vec::new();
@@ -199,17 +204,27 @@ mod running {
                 true
             }
         };
-        let marked = file.set_len(0).and_then(|_| file.rewind()).and_then(|_| file.write_all(b"running")).and_then(|_| file.flush());
+        // Written over what is there, then cut to its length: a write that fails leaves the old
+        // content, so a marker that was set never reads as a clean exit.
+        const RUNNING: &[u8] = b"running";
+        let marked =
+            file.rewind().and_then(|_| file.write_all(RUNNING)).and_then(|_| file.set_len(RUNNING.len() as u64)).and_then(|_| file.flush());
         if let Err(e) = marked {
             log::warn!("could not mark this run: {e}");
         }
-        (Some(Marker(file)), unclean)
+        (Ok(Marker { file, locked }), unclean)
     }
 
     impl Marker {
+        /// Whether no other copy can hold the marker while this run lasts: only then is the
+        /// recovery folder this run's alone.
+        pub fn locked(&self) -> bool {
+            self.locked
+        }
+
         /// A clean exit: the next launch starts as usual. Dropping the file releases the lock.
         pub fn close(self) {
-            if let Err(e) = self.0.set_len(0) {
+            if let Err(e) = self.file.set_len(0) {
                 log::warn!("could not clear the run marker: {e}");
             }
         }
@@ -253,8 +268,17 @@ impl eframe::App for App {
     /// Every way eframe closes the app comes here, Cmd+Q on macOS included, which may not
     /// return from `run_native`: the run ended cleanly.
     fn on_exit(&mut self) {
+        self.0.end_autosave();
         running::close(&self.1);
     }
+}
+
+/// This run's recovery folder, `recovery` in the app-data folder `data` (see
+/// `docs/installation.md`), or why there is none: the app then starts without autosave and says so.
+fn recovery_store(data: Option<std::path::PathBuf>) -> Result<Box<dyn rustgis_ui_egui::RecoveryStore>, String> {
+    let dir = data.ok_or("this computer has no folder for RustGIS's app data")?.join("recovery");
+    let store = rustgis_ui_egui::FolderStore::open(&dir)?;
+    Ok(Box::new(store))
 }
 
 /// Opens the files named on the command line: a project or a project package as the project, any
@@ -323,7 +347,23 @@ fn main() -> eframe::Result {
     } else {
         RustGisApp::new(Session::new(Project::default()))
     };
-    let mut app = app.with_services(prefs::services());
+    let mut services = prefs::services();
+    // Autosave, in a recovery folder only the copy holding the run marker uses: a second copy
+    // running alongside would offer, or overwrite, the first one's unsaved work.
+    // Without the marker to itself, a run can't tell whether another copy uses the folder: it
+    // doesn't autosave, and says why.
+    let no_autosave = match &marker {
+        Ok(m) if m.locked() => match recovery_store(rustgis_engine::data::dirs::app_data_dir()) {
+            Ok(store) => {
+                services.recovery = Some(store);
+                None
+            }
+            Err(e) => Some(e),
+        },
+        Ok(_) => Some("the settings folder can't lock files, so a second copy of RustGIS couldn't be told apart".into()),
+        Err(why) => Some(why.clone()),
+    };
+    let mut app = app.with_services(services);
     // Settings › Start-up; `--sample` still opens the sample.
     let blank = if args.iter().any(|a| a == "--sample") { Some(false) } else { (!files.is_empty()).then_some(true) };
     if let Err(e) = app.start(&rustgis_ui_egui::Start { blank, after_crash: unclean, ..Default::default() }) {
@@ -336,6 +376,12 @@ fn main() -> eframe::Result {
             "RustGIS ran into an internal error last time. The details are in {path}; please attach them to a bug report.",
             &[("path", &log.display().to_string())],
         );
+        app.session.notify(text, true);
+    }
+    if let Some(e) = no_autosave {
+        log::warn!("no autosave: {e}");
+        rustgis_ui_egui::i18n::set_current(app.chosen_lang());
+        let text = rustgis_ui_egui::i18n::fmt("Autosave is off: {error}", &[("error", &e)]);
         app.session.notify(text, true);
     }
     for e in plugin_errors {
@@ -366,7 +412,7 @@ fn main() -> eframe::Result {
         setup.instance_descriptor.backends = backends(backend, env.as_deref(), cfg!(windows));
     }
     let options = eframe::NativeOptions { viewport, wgpu_options, ..Default::default() };
-    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker));
+    let marker: running::Shared = std::sync::Arc::new(std::sync::Mutex::new(marker.ok()));
     let held = marker.clone();
     let result = eframe::run_native("RustGIS", options, Box::new(move |_cc| Ok(Box::new(App(app, held)))));
     running::close(&marker);
@@ -406,10 +452,13 @@ mod tests {
         // Removed however the test ends (declared first, so dropped after the markers).
         let _cleanup = TempDir(dir.clone());
         let (first, unclean) = running::start(Some(&dir));
-        assert!(first.is_some() && !unclean, "a first run");
+        assert!(first.is_ok() && !unclean, "a first run");
+        // Held alone: autosave may use the recovery folder.
+        assert!(first.as_ref().is_ok_and(running::Marker::locked));
         // Another copy running alongside can't take it, and doesn't count as a crash.
         let (second, unclean) = running::start(Some(&dir));
-        assert!(second.is_none() && !unclean);
+        // It says why, which the app shows as it starts without autosave.
+        assert!(second.as_ref().err().is_some_and(|why| why.contains("another copy")) && !unclean);
         // This run ends without closing (a crash): the next one notices, once it closes cleanly.
         drop(first);
         let (after_crash, unclean) = running::start(Some(&dir));
@@ -444,6 +493,22 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(app.session.project.maps.len(), maps);
         assert!(app.session.path.is_none(), "a package opens unsaved, so Save asks where to write a project");
+    }
+
+    /// A recovery folder that can't be made (a file in its way) or no app-data folder at all gives
+    /// a reason, which the app shows as it starts without autosave; a usable one
+    /// gives the store.
+    #[test]
+    fn a_recovery_folder_that_does_not_open_says_why() {
+        let dir = std::env::temp_dir().join(format!("rustgis-recovery-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _cleanup = TempDir(dir.clone());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("recovery"), "a file, not a folder").unwrap();
+        let blocked = super::recovery_store(Some(dir.clone())).err().unwrap();
+        assert!(blocked.contains("recovery"), "{blocked}");
+        assert!(super::recovery_store(None).err().unwrap().contains("app data"));
+        assert!(super::recovery_store(Some(dir.join("fresh"))).is_ok());
     }
 
     #[test]

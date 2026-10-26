@@ -161,7 +161,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let title = match which {
         "selectByAttributes" => "Select By Attributes",
-        "goToXY" => "Go To XY",
+        "goToXY" => "By Coordinates",
         "bookmark" => "New Bookmark",
         "addField" => "Add Field",
         "calculateField" => "Calculate Field",
@@ -177,7 +177,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "layerTemplate" => "Layer Template",
         "addPolyline" => "Add Encoded Polyline",
         "addCsv" => "Add Delimited Text",
-        "findPlace" => "Find Place",
+        "findPlace" => "By Place or Address",
         "geocode" => "Geocode Addresses",
         "addUrl" => "Add Data From URL",
         "addService" => "Add From Service",
@@ -828,6 +828,11 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                     ui.label(egui::RichText::new(tl!("YYYY-MM-DD, for the layers that change with time")).small().weak());
                 });
             }
+            // Feature layers come whole, or only the features crossing the map's view.
+            if !grouped && layers.iter().any(|l| l["offer"]["type"] == "features") {
+                ui.checkbox(&mut browse.area, tl!("Only the map's area"))
+                    .on_hover_text(tl!("Feature layers: ask the service only for the features that cross the map's view"));
+            }
             if grouped && layers.iter().any(|l| l["offer"]["type"] == "features") {
                 ui.horizontal(|ui| {
                     ui.label(tl!("Name"));
@@ -929,7 +934,12 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let title = l.get("title").and_then(Value::as_str).unwrap_or(name).to_string();
         // Features are downloaded in the background, as From URL… does; map layers are added now.
         let time = app.ui.service_browse.time.trim().to_string();
-        match crate::serviceui::add_layer(app, &src, &l, &time, true) {
+        // The view's area, for a feature layer only: a map layer never asks for one, so an
+        // unknown view can't stop it.
+        let features = l["offer"]["type"] == "features";
+        let area =
+            (features && app.ui.service_browse.area).then(|| rustgis_engine::cmd::catalogs::area(&app.session, &Value::Null)).transpose();
+        match area.and_then(|area| crate::serviceui::add_layer(app, &src, &l, &time, area, true)) {
             Ok(m) => app.dialogs.info = Some(format!("{m} {title}")),
             Err(e) => app.dialogs.error = Some(e),
         }

@@ -90,8 +90,9 @@ is reorganised, is an interim exception: record it in the issue that tracks the 
   appears: ribbon, panes and Command Search. Do not give one tool different names, or expose
   one setting as two differently named toggles.
 - **Labels say what happens.** Name a control for what it does, not for a similar feature
-  elsewhere. Go To XY pans to coordinates; “Locate” would suggest it also finds addresses, as
-  Find Place does. End a label with “…” when it opens a dialog or file picker that asks for input.
+  elsewhere. A coordinates-only action should say “By Coordinates”; the “Locate” menu covers
+  both coordinates and place/address search. End a label with “…” when it opens a dialog or
+  file picker that asks for input.
 - **Keep a route to every feature.** Removing a ribbon control must not remove access to its
   action. Name and check the remaining route, including for UI-only actions.
 

@@ -12,7 +12,8 @@ are shortcuts for the common ones, and ``Layer`` wraps one layer of the map.
 >>> s.save("atlas.rgis")
 
 In Jupyter, ``rustgis.Map`` shows the RustGIS app in the cell, in step with its session
-(``pip install "rustgis[jupyter]"``).
+(``pip install "rustgis[jupyter]"``); in a Qt application, ``rustgis.qt.MapWidget`` does
+(``pip install "rustgis[qt]"``).
 """
 
 from __future__ import annotations

@@ -40,6 +40,18 @@ m                                                 # pan, edit, style there...
 m.info()["center"]                                # ...and read it back here
 ```
 
+In a Qt application, `rustgis.qt.MapWidget` is the same app in a widget (`pip install "rustgis[qt]"`):
+
+```python
+from rustgis.qt import MapWidget                  # before the QApplication
+from PySide6.QtWidgets import QApplication
+
+app = QApplication([])
+w = MapWidget(sample=True)                        # w["Countries"].style(...) and so on
+w.show()
+app.exec()
+```
+
 Every action in RustGIS is a command with an id, the same ids the ribbon, `rustgis-cli` and the
 AI Assistant use: `Session.commands()` lists them with their parameters, `Session.describe(id)`
 shows one, and `Session.run` runs any of them. See the [Python guide](https://rustgis.app/python/) and the
