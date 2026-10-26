@@ -169,6 +169,12 @@ pub fn extent_to_merc(e: &Extent) -> Extent {
 
 /// Great-circle distance between two lon/lat points (metres).
 pub fn haversine_m(a: Coord, b: Coord) -> f64 {
+    // A non-finite coordinate is no place on the Earth: no distance is defined, and one that
+    // pretends otherwise measured a corrupt file's vertex as a quarter of the globe (#937) or, as
+    // `0.0`, slid it inside every radius comparison. NaN keeps sums and panels visibly broken.
+    if !a.is_finite() || !b.is_finite() {
+        return f64::NAN;
+    }
     let (la1, la2) = (a.y.to_radians(), b.y.to_radians());
     let dlat = la2 - la1;
     let dlon = (b.x - a.x).to_radians();
@@ -335,6 +341,11 @@ pub fn nice_distance(d: f64) -> f64 {
 pub fn format_distance(m: f64) -> String {
     // Each unit is picked, and shown, by the value rounded as it shows: formatting alone rounds
     // halves to even.
+    if !m.is_finite() {
+        // A distance that isn't finite isn't a distance (a corrupt geometry can make one): an em
+        // dash, never "NaN km", which the router's formatter also avoids.
+        return "–".into();
+    }
     let (mm, cm) = ((m * 1000.0).round(), (m * 100.0).round());
     if m != 0.0 && mm == 0.0 {
         // Under half a millimetre, which the closest zoom spreads over pixels: tenths, then a
@@ -357,11 +368,19 @@ pub fn format_distance(m: f64) -> String {
 
 /// Formats an area in square metres as `km²` or `m²`.
 pub fn format_area(m2: f64) -> String {
+    // See `format_distance`.
+    if !m2.is_finite() {
+        return "–".into();
+    }
     if m2.round() < 1.0e6 { format!("{m2:.0} m²") } else { format!("{:.1} km²", m2 / 1.0e6) }
 }
 
 /// Formats a lon/lat pair in decimal degrees with hemispheres: `12.345° E 45.678° N`.
 pub fn format_lonlat(c: Coord) -> String {
+    // See `format_distance`.
+    if !c.is_finite() {
+        return "–".into();
+    }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
     format!("{:.4}° {ew}  {:.4}° {ns}", c.x.abs(), c.y.abs())
@@ -375,6 +394,10 @@ pub fn format_dms(c: Coord) -> String {
         let m = ((tenths % 36_000.0) / 600.0).floor();
         let s = (tenths % 600.0) / 10.0;
         format!("{d:.0}°{m:02.0}′{s:04.1}″")
+    }
+    // See `format_distance`.
+    if !c.is_finite() {
+        return "–".into();
     }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
@@ -392,6 +415,41 @@ mod tests {
             let back = merc_to_lonlat(m);
             assert!((back.x - x).abs() < 1e-9 && (back.y - y).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn a_non_finite_coordinate_is_no_distance_no_area_and_no_place() {
+        // A NaN vertex once measured as a quarter of the Earth's circumference (π·R = 20 015 114
+        // m) through `h.sqrt().min(1.0)`: `f64::min` ignores NaN. It must be no distance at all, so
+        // sums and panels stay visibly broken and comparisons exclude it (NaN <= r is false).
+        let nan = f64::NAN;
+        let origin = Coord::new(0.0, 0.0);
+        for near in [Coord::new(nan, 0.0), Coord::new(0.0, nan), Coord::new(f64::INFINITY, 0.0)] {
+            assert!(haversine_m(origin, near).is_nan());
+            assert!(geodesic_length_m(&[origin, near, origin]).is_nan());
+        }
+        // A finite edge next to a broken one keeps measuring, through its own points.
+        assert!((geodesic_length_m(&[origin, Coord::new(1.0, 0.0)]) - 111_195.080).abs() < 0.01);
+        // Ring area: a NaN absorbing match on the older behaviour, then anything broken.
+        assert!(geodesic_ring_area_m2(&[origin, Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(nan, 1.0)]).is_nan());
+        assert!(geodesic_ring_area_m2(&[origin, Coord::new(1.0, 0.0), Coord::new(1.0, f64::INFINITY)]).is_nan());
+        // Heading away from a broken place is no place either.
+        assert!(geodesic_destination(Coord::new(10.0, 50.0), 90.0, f64::NAN).x.is_nan());
+    }
+
+    #[test]
+    fn non_finite_measures_show_a_dash_not_nan() {
+        for broken in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_distance(broken), "–");
+            assert_eq!(format_area(broken), "–");
+        }
+        assert_eq!(format_lonlat(Coord::new(f64::NAN, f64::NAN)), "–");
+        assert_eq!(format_dms(Coord::new(f64::NAN, 50.0)), "–");
+        // The finite cases still format as before.
+        assert_eq!(format_distance(850.0), "850 m");
+        assert_eq!(format_distance(12_500.0), "12.5 km");
+        assert_eq!(format_area(2_500_000.0), "2.5 km²");
+        assert_eq!(format_lonlat(Coord::new(-12.3456, 45.6789)), "12.3456° W  45.6789° N");
     }
 
     #[test]
