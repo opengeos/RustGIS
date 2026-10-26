@@ -1,5 +1,5 @@
-//! L6: the RustGIS desktop front end, built around a ribbon (Home, Data, Style, Edit, Analyze,
-//! View, Publish), the Layers and Browser panes, a Tools pane, the map view, the
+//! L6: the RustGIS desktop front end, built around a ribbon (Home, Data, Style, Labeling, Edit,
+//! Analyze, View, Publish), the Layers and Browser panes, a Tools pane, the map view, the
 //! attribute table and the status bar.
 //!
 //! The UI is thin: it reads [`Session`] state and runs commands by id ([`RustGisApp::run`]).

@@ -462,7 +462,7 @@ fn every_tab_pane_and_dialog_renders() {
     for _ in 0..4 {
         h.step();
     }
-    for tab in ["Home", "Data", "Style", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"] {
+    for tab in ["Home", "Data", "Style", "Labeling", "Edit", "Analyze", "View", "Publish", "Plugins", "Settings", "Help"] {
         h.state_mut().ui.tab = tab.into();
         h.run();
     }
@@ -1236,7 +1236,14 @@ fn show_me_points_at_where_a_steps_command_is() {
 #[test]
 fn old_and_unknown_tab_names_open_a_current_tab() {
     let mut h = harness();
-    for (asked, opened) in [("Imagery", "Analyze"), ("Feature Layer", "Style"), ("Share", "Publish"), ("Map", "Home"), ("nope", "Home")] {
+    for (asked, opened) in [
+        ("Imagery", "Analyze"),
+        ("Feature Layer", "Style"),
+        ("Labeling", "Labeling"),
+        ("Share", "Publish"),
+        ("Map", "Home"),
+        ("nope", "Home"),
+    ] {
         let _ = h.state_mut().run("ui.tab", json!({"tab": asked}));
         assert_eq!(h.state().ui.tab, opened, "{asked}");
         h.step();

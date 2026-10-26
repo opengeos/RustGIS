@@ -332,7 +332,11 @@ pub fn nice_distance(d: f64) -> f64 {
 
 /// Formats a distance in metres as `0.2 mm` / `5 mm` / `20 cm` / `850 m` / `12.5 km`: under a
 /// metre in centimetres or millimetres, so a scale bar on a site plan (#902) doesn't read `0 m`.
+/// Non-finite values display as `—`.
 pub fn format_distance(m: f64) -> String {
+    if !m.is_finite() {
+        return "—".to_string();
+    }
     // Each unit is picked, and shown, by the value rounded as it shows: formatting alone rounds
     // halves to even.
     let (mm, cm) = ((m * 1000.0).round(), (m * 100.0).round());
@@ -355,19 +359,26 @@ pub fn format_distance(m: f64) -> String {
     }
 }
 
-/// Formats an area in square metres as `km²` or `m²`.
+/// Formats an area in square metres as `km²` or `m²`; `—` for non-finite values.
 pub fn format_area(m2: f64) -> String {
+    if !m2.is_finite() {
+        return "—".to_string();
+    }
     if m2.round() < 1.0e6 { format!("{m2:.0} m²") } else { format!("{:.1} km²", m2 / 1.0e6) }
 }
 
 /// Formats a lon/lat pair in decimal degrees with hemispheres: `12.345° E 45.678° N`.
+/// Displays `—` if either coordinate is non-finite.
 pub fn format_lonlat(c: Coord) -> String {
+    if !c.is_finite() {
+        return "—".to_string();
+    }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
     format!("{:.4}° {ew}  {:.4}° {ns}", c.x.abs(), c.y.abs())
 }
 
-/// Formats a lon/lat pair as degrees-minutes-seconds.
+/// Formats a lon/lat pair as degrees-minutes-seconds; `—` if either coordinate is non-finite.
 pub fn format_dms(c: Coord) -> String {
     fn dms(v: f64) -> String {
         let tenths = (v.abs() * 36_000.0).round();
@@ -375,6 +386,9 @@ pub fn format_dms(c: Coord) -> String {
         let m = ((tenths % 36_000.0) / 600.0).floor();
         let s = (tenths % 600.0) / 10.0;
         format!("{d:.0}°{m:02.0}′{s:04.1}″")
+    }
+    if !c.is_finite() {
+        return "—".to_string();
     }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
@@ -489,6 +503,21 @@ mod tests {
     fn haversine_paris_london() {
         let d = haversine_m(Coord::new(2.3522, 48.8566), Coord::new(-0.1276, 51.5072));
         assert!((d - 343_500.0).abs() < 2_000.0, "{d}");
+    }
+
+    #[test]
+    fn nonfinite_measurements_display_as_unavailable() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_distance(value), "—");
+            assert_eq!(format_area(value), "—");
+            for coord in [Coord::new(value, 50.0), Coord::new(12.0, value), Coord::new(value, value)] {
+                assert_eq!(format_lonlat(coord), "—");
+                assert_eq!(format_dms(coord), "—");
+            }
+        }
+        assert_eq!(format_area(0.0), "0 m²");
+        assert_eq!(format_lonlat(Coord::new(-12.5, 45.25)), "12.5000° W  45.2500° N");
+        assert_eq!(format_lonlat(Coord::new(0.0, 0.0)), "0.0000° E  0.0000° N");
     }
 
     #[test]

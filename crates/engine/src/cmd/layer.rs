@@ -308,13 +308,13 @@ pub fn commands() -> Vec<C> {
         }).params(r#"{"layer"?, "on"?: bool (toggles when omitted)}"#)
         .view()
         .when(need_layer),
-        C::new("labels.enable", "Label", "Style › Labels", |s, p| {
+        C::new("labels.enable", "Label", "Labeling › Labels", |s, p| {
             let on = b(p, "on");
             with(s, p, |l| l.labels.enabled = on.unwrap_or(!l.labels.enabled))
         })
         .when(need_feature_layer)
         .params(r#"{"layer"?, "on"?: bool}"#),
-        C::new("labels.field", "Label Field", "Style › Label Class", |s, p| {
+        C::new("labels.field", "Label Field", "Labeling › Label Class", |s, p| {
             let name = s_req(p, "field")?.to_string();
             let id = s.layer_id(p)?;
             let fname = s.map().layer(id).and_then(|l| l.dataset.field_index(&name).and_then(|i| l.dataset.fields.get(i)).map(|f| f.name.clone()));
@@ -326,7 +326,7 @@ pub fn commands() -> Vec<C> {
             })
         }).params(r#"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "field": name}"#)
         .when(need_feature_layer),
-        C::new("labels.style", "Text Symbol", "Style › Text Symbol", |s, p| {
+        C::new("labels.style", "Text Symbol", "Labeling › Text Symbol", |s, p| {
             let size = f(p, "size").map(|v| v.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32);
             let color = s.get_color(p, "color")?;
             let (halo, bold, italic) = (b(p, "halo"), b(p, "bold"), b(p, "italic"));
