@@ -30,11 +30,16 @@ pub const PORT: u16 = 7290;
 /// The callback's path.
 pub const CALLBACK: &str = "/arcgis/callback";
 /// An access token is renewed this long before it expires (seconds).
-#[cfg(not(target_arch = "wasm32"))]
 const REFRESH_MARGIN: i64 = 60;
 /// After the portal couldn't be reached for a renewal, how long until it is tried again (seconds).
-#[cfg(not(target_arch = "wasm32"))]
 const RETRY_RENEWAL: i64 = 30;
+/// RustGIS's own OAuth app on ArcGIS Online, used when no client id is given for an ArcGIS Online
+/// portal (an Enterprise portal registers its own). Its redirect URLs are the desktop's
+/// [`redirect_uri`] for [`PORT`] and the web app's callback page (`oauth-callback.html`) at
+/// https://web.rustgis.app and `trunk serve`'s http://127.0.0.1:8772. A client id isn't a secret.
+pub const DEFAULT_CLIENT_ID: &str = "nD2lKYqFqsaddfuD";
+/// The web app's callback page, next to its index.
+pub const WEB_CALLBACK: &str = "oauth-callback.html";
 /// The session asked for: two weeks (the longest ArcGIS gives), in minutes.
 const EXPIRATION_MINUTES: &str = "20160";
 /// The longest token kept (ArcGIS's are a few hundred characters).
@@ -352,8 +357,6 @@ struct Session {
     refresh_token: Option<String>,
     scopes: Vec<Scope>,
     /// Unix seconds before which a renewal isn't tried again (after the portal couldn't be reached).
-    /// The browser doesn't renew.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     retry_at: i64,
 }
 
@@ -483,42 +486,137 @@ pub fn authorization(url: &str) -> Option<String> {
     (s.expires_at > now_secs()).then(|| format!("Bearer {}", s.access_token))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Whether the session covering `url` has a refresh token and its access token is about to expire.
-fn needs_renewal(url: &str) -> Option<(String, String, String)> {
+/// A renewal to send: the token request renewing the session covering an address.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Renewal {
+    pub portal: String,
+    /// The token endpoint, and the form to POST to it.
+    pub endpoint: String,
+    pub body: String,
+    refresh: String,
+}
+
+/// The renewal the session covering `url` needs: it has a refresh token, its access token is
+/// about to expire, and its portal wasn't just found unreachable.
+pub fn renewal_due(url: &str) -> Option<Renewal> {
     let all = sessions();
     let s = all.get(covering(&all, url)?)?;
     let refresh = s.refresh_token.as_ref()?;
     let now = now_secs();
-    (s.expires_at - now <= REFRESH_MARGIN && now >= s.retry_at).then(|| (s.portal.clone(), s.client_id.clone(), refresh.clone()))
+    (s.expires_at - now <= REFRESH_MARGIN && now >= s.retry_at).then(|| Renewal {
+        portal: s.portal.clone(),
+        endpoint: endpoint(&s.portal, "token"),
+        body: refresh_body(&s.client_id, refresh),
+        refresh: refresh.clone(),
+    })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Stores a renewed grant for `portal`, unless the session was signed out or replaced since.
-fn renewed(portal: &str, old_refresh: &str, grant: Grant) {
+/// Lands a renewal's answer: a new access token is kept; a refusal ends the session; an
+/// unreachable portal (`Err`) keeps it and holds off renewing for a while. Nothing changes for a
+/// session signed out or replaced since.
+pub fn renewal_done(r: &Renewal, answer: Result<&[u8], String>) {
     let mut all = sessions();
-    if let Some(s) = all.iter_mut().find(|s| s.portal == portal && s.refresh_token.as_deref() == Some(old_refresh)) {
-        s.access_token = grant.access_token;
-        s.expires_at = grant.expires_at;
-        if grant.refresh_token.is_some() {
-            s.refresh_token = grant.refresh_token;
+    let Some(i) = all.iter().position(|s| s.portal == r.portal && s.refresh_token.as_deref() == Some(r.refresh.as_str())) else { return };
+    match answer.map(|body| parse_grant(body, now_secs())) {
+        Ok(Ok(grant)) => {
+            if let Some(s) = all.get_mut(i) {
+                s.access_token = grant.access_token;
+                s.expires_at = grant.expires_at;
+                if grant.refresh_token.is_some() {
+                    s.refresh_token = grant.refresh_token;
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            log::warn!("{}: the ArcGIS sign-in ended: {e}", r.portal);
+            all.remove(i);
+        }
+        Err(e) => {
+            log::warn!("{}: couldn't renew the ArcGIS sign-in: {e}", r.portal);
+            if let Some(s) = all.get_mut(i) {
+                s.retry_at = now_secs() + RETRY_RENEWAL;
+            }
         }
     }
 }
 
-/// Holds off renewing `portal`'s session for a while: its portal couldn't be reached, and each
-/// request it covers would otherwise wait on another attempt.
-#[cfg(not(target_arch = "wasm32"))]
-fn postpone(portal: &str, old_refresh: &str) {
-    if let Some(s) = sessions().iter_mut().find(|s| s.portal == portal && s.refresh_token.as_deref() == Some(old_refresh)) {
-        s.retry_at = now_secs() + RETRY_RENEWAL;
+/// The client id a sign-in to `portal` uses: the one given, else RustGIS's own for ArcGIS Online.
+pub fn client_id_for(portal: &str, given: &str) -> Option<String> {
+    let given = given.trim();
+    if !given.is_empty() {
+        return Some(given.to_string());
+    }
+    is_online(portal).then(|| DEFAULT_CLIENT_ID.to_string())
+}
+
+/// The document telling what a portal's token covers: `portals/self` for ArcGIS Online (its
+/// organization's id), `portals/self/servers` for ArcGIS Enterprise (its federated servers).
+pub fn discovery_url(portal: &str) -> String {
+    if is_online(portal) {
+        format!("{portal}/sharing/rest/portals/self?f=json")
+    } else {
+        format!("{portal}/sharing/rest/portals/self/servers?f=json")
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// Drops a session whose refresh token was refused.
-fn expired(portal: &str, old_refresh: &str) {
-    sessions().retain(|s| !(s.portal == portal && s.refresh_token.as_deref() == Some(old_refresh)));
+/// What a portal's token covers, from its [`discovery_url`] answer (`None` when it couldn't be
+/// read: the portal's own host then).
+pub fn discovered_scopes(portal: &str, answer: Option<&[u8]>) -> Vec<Scope> {
+    if is_online(portal) {
+        scopes_for(portal, answer.and_then(parse_org).as_deref(), &[])
+    } else {
+        scopes_for(portal, None, &answer.map(parse_servers).unwrap_or_default())
+    }
+}
+
+/// A browser sign-in's start: the page to open, the redirect its callback page has, and what
+/// finishing needs. `verifier` and `state` are random (the browser's crypto).
+pub struct WebSignIn {
+    pub url: String,
+    pub portal: String,
+    pub client_id: String,
+    pub redirect: String,
+    verifier: String,
+    state: String,
+}
+
+/// Starts a sign-in in the browser, whose app's callback page is `redirect`.
+pub fn web_sign_in(portal: &str, client_id: &str, redirect: &str, verifier: &str, state: &str) -> Result<WebSignIn, String> {
+    let portal = portal_base(portal)?;
+    let client_id = client_id_for(&portal, client_id)
+        .filter(|c| valid_client_id(c))
+        .ok_or("give the OAuth client id of an app registered on the portal (Content › New item › Developer credentials)")?;
+    let url = authorize_url(&portal, &client_id, redirect, &pkce_challenge(verifier), state);
+    Ok(WebSignIn { url, portal, client_id, redirect: redirect.to_string(), verifier: verifier.to_string(), state: state.to_string() })
+}
+
+impl WebSignIn {
+    /// The token request (endpoint and form) for the callback page's address, once it holds the
+    /// portal's answer: `None` while it doesn't (still signing in), an error for a refusal or a
+    /// callback that isn't this sign-in's.
+    pub fn exchange(&self, callback: &str) -> Option<Result<(String, String), String>> {
+        let (page, query) = callback.split_once('?')?;
+        if page != self.redirect {
+            return None;
+        }
+        let params = query_params(query.split('#').next().unwrap_or(query));
+        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap_or("");
+        if params.iter().filter(|(k, _)| k == "state").count() != 1 || get("state") != self.state {
+            return Some(Err("the sign-in's answer isn't this sign-in's (try again)".into()));
+        }
+        if !get("error").is_empty() {
+            return Some(Err(if get("error") == "access_denied" {
+                "the sign-in was declined".into()
+            } else {
+                format!("the portal said {}", get("error"))
+            }));
+        }
+        let code = get("code");
+        if code.is_empty() {
+            return Some(Err("the portal gave no authorization code".into()));
+        }
+        Some(Ok((endpoint(&self.portal, "token"), exchange_body(&self.client_id, code, &self.redirect, &self.verifier))))
+    }
 }
 
 /// What may be shown about a session: never its tokens.
@@ -693,7 +791,8 @@ mod native {
     /// browser. The session is kept when the browser comes back ([`progress`] tells).
     pub fn start_sign_in(portal: &str, client_id: &str, port: u16) -> Result<String, String> {
         let portal = super::portal_base(portal)?;
-        let client_id = client_id.trim();
+        let client_id = super::client_id_for(&portal, client_id).unwrap_or_default();
+        let client_id = client_id.as_str();
         if !super::valid_client_id(client_id) {
             return Err("give the OAuth client id of an app registered on the portal (Content › New item › Developer credentials)".into());
         }
@@ -847,38 +946,20 @@ mod native {
     /// What a portal's token covers: its organization's id (ArcGIS Online) or its federated
     /// servers (ArcGIS Enterprise). What can't be read leaves the portal's own host.
     fn discover(portal: &str, token: &str) -> Vec<super::Scope> {
-        if super::is_online(portal) {
-            let org = get_json(&format!("{portal}/sharing/rest/portals/self?f=json"), token).ok().and_then(|b| super::parse_org(&b));
-            super::scopes_for(portal, org.as_deref(), &[])
-        } else {
-            let servers = get_json(&format!("{portal}/sharing/rest/portals/self/servers?f=json"), token)
-                .map(|b| super::parse_servers(&b))
-                .unwrap_or_default();
-            super::scopes_for(portal, None, &servers)
-        }
+        let answer = get_json(&super::discovery_url(portal), token).ok();
+        super::discovered_scopes(portal, answer.as_deref())
     }
 
     /// Like [`authorization`](super::authorization), renewing the access token first when it is
     /// about to expire. A refused renewal ends the session; an unreachable portal keeps it.
     pub fn authorization_fresh(url: &str) -> Option<String> {
-        if let Some((portal, client_id, refresh)) = super::needs_renewal(url) {
+        if super::renewal_due(url).is_some() {
             // One renewal at a time: the others wait for it, then find the token fresh.
             static RENEWING: Mutex<()> = Mutex::new(());
             let _one = RENEWING.lock().unwrap_or_else(|e| e.into_inner());
-            if super::needs_renewal(url).is_some() {
-                match post_form(&super::endpoint(&portal, "token"), &super::refresh_body(&client_id, &refresh)) {
-                    Ok(body) => match super::parse_grant(&body, super::now_secs()) {
-                        Ok(grant) => super::renewed(&portal, &refresh, grant),
-                        Err(e) => {
-                            log::warn!("{portal}: the ArcGIS sign-in ended: {e}");
-                            super::expired(&portal, &refresh);
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!("{portal}: couldn't renew the ArcGIS sign-in: {e}");
-                        super::postpone(&portal, &refresh);
-                    }
-                }
+            if let Some(r) = super::renewal_due(url) {
+                let answer = post_form(&r.endpoint, &r.body);
+                super::renewal_done(&r, answer.as_deref().map_err(String::clone));
             }
         }
         super::authorization(url)

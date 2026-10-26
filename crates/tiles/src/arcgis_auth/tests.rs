@@ -178,5 +178,51 @@ fn hints_for_refusals() {
 #[test]
 fn a_sign_in_refuses_bad_input_before_listening() {
     assert!(start_sign_in("http://gis.example.org/portal", "abc", 0).is_err());
-    assert!(start_sign_in("", "", 0).unwrap_err().contains("client id"));
+    // An Enterprise portal registers its own app: no default.
+    assert!(start_sign_in("https://gis.example.org/portal", "", 0).unwrap_err().contains("client id"));
+}
+
+#[test]
+fn arcgis_online_has_a_default_client_id() {
+    assert_eq!(client_id_for(ONLINE, "").as_deref(), Some(DEFAULT_CLIENT_ID));
+    assert_eq!(client_id_for("https://myorg.maps.arcgis.com", " ").as_deref(), Some(DEFAULT_CLIENT_ID));
+    assert_eq!(client_id_for("https://myorg.maps.arcgis.com", "mine").as_deref(), Some("mine"));
+    assert_eq!(client_id_for("https://gis.example.org/portal", ""), None);
+}
+
+#[test]
+fn a_browser_sign_in_reads_its_callback_page() {
+    let redirect = "https://web.rustgis.app/oauth-callback.html";
+    let w = web_sign_in("https://myorg.maps.arcgis.com", "", redirect, "verifier", "st8").unwrap();
+    assert!(w.url.starts_with("https://myorg.maps.arcgis.com/sharing/rest/oauth2/authorize?client_id=nD2lKYqFqsaddfuD&"));
+    assert!(w.url.contains("redirect_uri=https%3A%2F%2Fweb.rustgis.app%2Foauth-callback.html"));
+    // Still on the portal's pages, or blank: not yet.
+    assert!(w.exchange("about:blank").is_none() && w.exchange(redirect).is_none());
+    assert!(w.exchange("https://evil.example/oauth-callback.html?code=c&state=st8").is_none());
+    let (endpoint, body) = w.exchange(&format!("{redirect}?code=the%2Fcode&state=st8")).unwrap().unwrap();
+    assert_eq!(endpoint, "https://www.arcgis.com/sharing/rest/oauth2/token");
+    assert!(body.contains("code=the%2Fcode") && body.contains("code_verifier=verifier") && body.contains("client_id=nD2lKYqFqsaddfuD"));
+    assert!(w.exchange(&format!("{redirect}?code=c&state=other")).unwrap().is_err());
+    assert!(w.exchange(&format!("{redirect}?error=access_denied&state=st8")).unwrap().unwrap_err().contains("declined"));
+    assert!(web_sign_in("https://gis.example.org/portal", "", redirect, "v", "s").is_err());
+}
+
+#[test]
+fn renewals_land_or_end_the_session() {
+    let portal = "https://renew.example.org/portal";
+    let url = "https://renew.example.org/server/rest/services/A/MapServer";
+    sign_in(portal, "client", grant("old", now_secs() + 10), scopes_for(portal, None, &[]));
+    let r = renewal_due(url).unwrap();
+    assert!(r.endpoint.ends_with("/portal/sharing/rest/oauth2/token") && r.body.contains("grant_type=refresh_token"));
+    // Unreachable: kept, and not tried again at once.
+    renewal_done(&r, Err("offline".into()));
+    assert!(renewal_due(url).is_none() && authorization(url).is_some());
+    // A new access token.
+    renewal_done(&r, Ok(br#"{"access_token":"new","expires_in":1800}"#));
+    assert_eq!(authorization(url).as_deref(), Some("Bearer new"));
+    // Refused: the session ends.
+    sign_in(portal, "client", grant("old", now_secs() + 10), scopes_for(portal, None, &[]));
+    let r = renewal_due(url).unwrap();
+    renewal_done(&r, Ok(br#"{"error":{"code":400,"error":"invalid_grant"}}"#));
+    assert!(authorization(url).is_none() && signed_in(portal).is_none());
 }

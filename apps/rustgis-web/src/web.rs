@@ -572,6 +572,9 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let url = prepared.url.as_str();
     // An ArcGIS sign-in's token, for the portal and the servers it covers (ArcGIS allows the
     // header across origins).
+    if !prepared.signed {
+        crate::arcgis::renew_if_due(url).await;
+    }
     let arcgis =
         if prepared.signed { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::arcgis_auth::authorization(url) };
     let asked = match (range, tail) {
@@ -819,7 +822,9 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             }),
         )
     };
+    let arcgis_ctx = ctx.clone();
     Services {
+        arcgis_sign_in: Some(Box::new(move |portal, client_id, slot| crate::arcgis::sign_in(portal, client_id, slot, arcgis_ctx.clone()))),
         load_pref: Some(load_pref),
         save_pref: Some(save_pref),
         // No keychain in the browser: script on the page could read anything stored (#754).

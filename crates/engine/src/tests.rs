@@ -1720,6 +1720,8 @@ fn hostile_params_never_panic() {
                 | "boundaries.countries"
                 // Asks Source Cooperative for its featured products.
                 | "sourcecoop.products"
+                // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
+                | "arcgis.signIn"
         ) {
             continue;
         }

@@ -240,6 +240,10 @@ pub struct Services {
     /// Makes an HTTP request (the AI assistant's calls to its model) and puts the response, of any
     /// status, in the slot (the browser's fetch; the desktop sends it on a thread).
     pub http: Option<Box<dyn Fn(rustgis_assistant::HttpRequest, Slot<Result<rustgis_assistant::HttpResponse, rustgis_assistant::Error>>)>>,
+    /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
+    /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
+    /// slot (the browser; the desktop runs `arcgis.signIn`).
+    pub arcgis_sign_in: Option<Box<dyn Fn(String, String, Slot<Result<String, String>>)>>,
 }
 
 /// A new private folder for one print job: unique, created fresh (never an existing path) and,

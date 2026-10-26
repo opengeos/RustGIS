@@ -14,6 +14,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Pure logic, tested natively; only the browser build uses it.
+#[cfg(target_arch = "wasm32")]
+mod arcgis;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod embed;
 #[cfg(target_arch = "wasm32")]

@@ -18,6 +18,9 @@ pub struct State {
     /// The remembered portal and client id were read.
     loaded: bool,
     pub error: Option<String>,
+    /// The browser's sign-in under way: who signed in, or why not.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pending: Option<crate::Slot<Result<String, String>>>,
 }
 
 /// Whether Add From Service shows the sign-in: the ArcGIS REST type, an ArcGIS-looking address,
@@ -74,23 +77,17 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui) {
     });
 }
 
-#[cfg(target_arch = "wasm32")]
-fn form(_app: &mut RustGisApp, ui: &mut egui::Ui, _t: &Tokens) {
-    ui.label(
-        egui::RichText::new(tl!(
-            "In the browser, add a secured service by its address with ?token=… (signing in through the portal's page needs the desktop app)."
-        ))
-        .weak(),
-    );
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
-    use arcgis_auth::Progress;
+/// The portal and client id fields, with what to register.
+fn fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
+    let redirect = if cfg!(target_arch = "wasm32") {
+        format!("…/{}", arcgis_auth::WEB_CALLBACK)
+    } else {
+        arcgis_auth::redirect_uri(arcgis_auth::PORT)
+    };
     ui.label(
         egui::RichText::new(crate::i18n::fmt(
-            "Register an OAuth app on the portal (Content › New item › Developer credentials) whose redirect URL is {redirect}, and give its client ID.",
-            &[("redirect", &arcgis_auth::redirect_uri(arcgis_auth::PORT))],
+            "ArcGIS Online needs no client ID: RustGIS's own app is used. For an ArcGIS Enterprise portal, register an OAuth app on it (Content › New item › Developer credentials) whose redirect URL is {redirect}, and give its client ID.",
+            &[("redirect", &redirect)],
         ))
         .weak(),
     );
@@ -101,9 +98,53 @@ fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
             .on_hover_text(tl!("An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank"));
         ui.end_row();
         let label = ui.label(tl!("Client ID"));
-        ui.add(egui::TextEdit::singleline(&mut app.ui.arcgis.client_id).desired_width(320.0)).labelled_by(label.id);
+        ui.add(
+            egui::TextEdit::singleline(&mut app.ui.arcgis.client_id).hint_text(tl!("RustGIS's own (ArcGIS Online)")).desired_width(320.0),
+        )
+        .labelled_by(label.id);
         ui.end_row();
     });
+}
+
+fn remember(app: &RustGisApp, portal: &str, client_id: &str) {
+    if let Some(save) = &app.services.save_pref {
+        save(PORTAL_PREF, portal);
+        save(CLIENT_PREF, client_id);
+    }
+}
+
+/// The browser: the sign-in runs in a pop-up window (`Services::arcgis_sign_in`).
+#[cfg(target_arch = "wasm32")]
+fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
+    fields(app, ui);
+    let done = app.ui.arcgis.pending.as_ref().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).take());
+    if let Some(result) = done {
+        app.ui.arcgis.pending = None;
+        app.ui.arcgis.error = result.err();
+    }
+    if app.ui.arcgis.pending.is_some() {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(tl!("Finish signing in in the pop-up window…"));
+        });
+        return;
+    }
+    if crate::widgets::dialog_button(ui, tl!("Sign in"), Some(t.accent), egui::vec2(96.0, 28.0)).clicked() {
+        let (portal, client_id) = (app.ui.arcgis.portal.trim().to_string(), app.ui.arcgis.client_id.trim().to_string());
+        app.ui.arcgis.error = None;
+        if let Some(sign_in) = &app.services.arcgis_sign_in {
+            let slot = crate::Slot::default();
+            sign_in(portal.clone(), client_id.clone(), slot.clone());
+            app.ui.arcgis.pending = Some(slot);
+            remember(app, &portal, &client_id);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn form(app: &mut RustGisApp, ui: &mut egui::Ui, t: &Tokens) {
+    use arcgis_auth::Progress;
+    fields(app, ui);
     match arcgis_auth::progress() {
         Progress::Pending { .. } => {
             ui.horizontal(|ui| {
@@ -133,10 +174,7 @@ fn start(app: &mut RustGisApp) {
     let (portal, client_id) = (app.ui.arcgis.portal.trim().to_string(), app.ui.arcgis.client_id.trim().to_string());
     match app.run("arcgis.signIn", json!({"portal": portal, "clientId": client_id})) {
         Ok(v) => {
-            if let Some(save) = &app.services.save_pref {
-                save(PORTAL_PREF, &portal);
-                save(CLIENT_PREF, &client_id);
-            }
+            remember(app, &portal, &client_id);
             app.ui.open_url = v.get("url").and_then(serde_json::Value::as_str).map(str::to_string);
         }
         Err(e) => app.ui.arcgis.error = Some(e),

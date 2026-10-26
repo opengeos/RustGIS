@@ -203,17 +203,21 @@ aren't paged. On the desktop, feature downloads follow their `next` pages (see t
 A secured ArcGIS service answers error 499, "Token Required". There are two ways in:
 
 - **Sign in to ArcGIS** (in Add From Service, shown for ArcGIS addresses; `arcgis.signIn`) signs in
-  to an ArcGIS Online organization (`https://myorg.maps.arcgis.com`) or an ArcGIS Enterprise portal
-  (`https://gis.example.org/portal`) on the portal's own page in the browser, with its single
-  sign-on and multi-factor checks: RustGIS never sees the password. It uses OAuth 2.0 with PKCE and
-  needs the client ID of an app registered on the portal (**Content › New item › Developer
-  credentials › OAuth 2.0 credentials**) whose redirect URLs list
-  `http://127.0.0.1:7290/arcgis/callback`, RustGIS's callback address. ArcGIS accepts only an
-  address the app registers, port and path included, so give `"port"` to `arcgis.signIn` for
-  another port and register that address instead. The portal and client ID are remembered; the session is not. Desktop and command line only.
+  to ArcGIS Online, an ArcGIS Online organization (`https://myorg.maps.arcgis.com`) or an ArcGIS
+  Enterprise portal (`https://gis.example.org/portal`) on the portal's own page, with its single
+  sign-on and multi-factor checks: RustGIS never sees the password. It uses OAuth 2.0 with PKCE.
+  ArcGIS Online needs no setup: leave **Client ID** blank and RustGIS's own app is used. An
+  Enterprise portal needs the client ID of an app registered on it (**Content › New item ›
+  Developer credentials › OAuth 2.0 credentials**) whose redirect URLs list RustGIS's callback:
+  `http://127.0.0.1:7290/arcgis/callback` for the desktop app and the command line (give
+  `"port"` to `arcgis.signIn` for another port, and register that address instead), and
+  `oauth-callback.html` next to the web app's page for the browser (for example
+  `https://web.rustgis.app/oauth-callback.html`), where the sign-in opens in a pop-up window.
+  ArcGIS accepts only an address the app registers, port and path included. The portal and
+  client ID are remembered; the session is not.
 - **A token with the address**: a service address given with `?token=…` (from the portal, or
   `arcgis.token` with `"url"` and `"token"`) keeps the token for that ArcGIS Server and takes it
-  out of the address the layer keeps. Works in the browser too.
+  out of the address the layer keeps.
 
 A token is sent, in the `X-Esri-Authorization` header, only where its session reaches: the portal
 and, for ArcGIS Online, the organization's own hosted services (`services*.arcgis.com/<org id>/…`,
@@ -221,7 +225,7 @@ and, for ArcGIS Online, the organization's own hosted services (`services*.arcgi
 federated servers; a token given with an address goes to that server alone. Its layers, tiles and
 feature pages are then read with it. Tokens live in memory for the session, never in a project or
 a connection, and a sign-in renews itself until the portal's session ends (two weeks at most).
-**Sign out** (`arcgis.signOut`) forgets it and revokes it with the portal; `arcgis.status` lists
+**Sign out** (`arcgis.signOut`) forgets it (and, on the desktop, revokes it with the portal); `arcgis.status` lists
 the sessions.
 
 ### Catalogues
