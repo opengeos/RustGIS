@@ -83,7 +83,8 @@ differences in the short answer, in platform, technology and focus, are the ones
   that runs commands headlessly and built-in notebooks of command cells, but no Python console
   in the app and no R package.
 - **Opening other projects.** GeoLibre imports QGIS (`.qgs`/`.qgz`) and ArcGIS Pro
-  (`.aprx`/`.mapx`) projects. RustGIS opens neither.
+  (`.aprx`/`.mapx`) projects. RustGIS opens supported QGIS projects as maps (see
+  [QGIS projects](../user-guide/workspace.md#qgis-projects-and-styles)) but not ArcGIS Pro ones.
 - **Editing.** GeoLibre edits vertices and writes edits back to their sources (GeoPackage,
   PostGIS, ArcGIS feature services). RustGIS moves, inserts and deletes vertices, but
   edits stay in the project until exported rather than being written back to those sources.
