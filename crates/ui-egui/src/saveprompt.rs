@@ -53,6 +53,13 @@ pub(crate) fn waiting(app: &RustGisApp) -> bool {
     app.save_prompt.asking.is_some()
 }
 
+/// Whether the app ends with unsaved changes the user hasn't agreed to lose: the project has
+/// some, this shell asks, and the dialog wasn't answered with Don't Save (or Save, which leaves
+/// none). Only an end that skipped the close request gets here: macOS's Quit.
+pub(crate) fn unanswered(app: &RustGisApp) -> bool {
+    app.session.dirty() && app.opens_files() && !app.save_prompt.closing
+}
+
 /// Each frame, before anything draws: a request to close the window (its close button, the
 /// system's Quit, or `ui.quit`) waits while the project has unsaved changes, and the dialog asks.
 pub(crate) fn close_requested(app: &mut RustGisApp, ctx: &egui::Context) {

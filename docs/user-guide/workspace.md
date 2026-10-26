@@ -28,8 +28,9 @@ World Atlas sample, a template or a project dropped on the window would replace 
 Commands don't ask: `project.new`, `project.open` and the rest replace the project as they always
 have when a script, a task, the AI Assistant, the command line or an attached agent runs them.
 The browser app doesn't ask yet; it warns before you leave a page with unsaved changes. On macOS,
-**Quit RustGIS** (⌘Q) and the Dock's **Quit** don't ask yet either: close the window instead, or
-save first.
+**Quit RustGIS** (⌘Q) and the Dock's **Quit** don't ask yet either. Your changes aren't lost:
+RustGIS keeps them as a [recovery copy](#autosave-and-recovery) and offers them back the next time
+it starts.
 
 Saved layer addresses omit passwords, access keys, tokens and signatures. The open session
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
@@ -62,8 +63,10 @@ that has unsaved changes of its own: save it first.
 The same choices are commands: `ui.recover` opens the copy, and `ui.recover={"discard": true}`
 deletes it. `ui.autosave` reports the interval and any copy waiting.
 
-Quitting asks about unsaved changes first (see [Projects](#projects)); once you quit, their copy
-is removed. A second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
+Quitting asks about unsaved changes first (see [Projects](#projects)); once you choose
+**Don't Save**, their copy is removed. If RustGIS is quit without that answer (on macOS, **Quit**
+doesn't ask yet), it keeps a last copy of the work instead, and the next launch offers it back,
+saying RustGIS was quit without saving. With autosave off, nothing is kept. A second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
 one's copy; it says so as it starts. Nor does RustGIS autosave when its settings folder can't lock
 files (some network or synced folders), where it can't tell a second copy apart. The browser app
 doesn't autosave yet; it warns before you leave a page with unsaved changes.
