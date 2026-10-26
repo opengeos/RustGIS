@@ -61,7 +61,7 @@ pub fn redirect_uri(port: u16) -> String {
 fn split(url: &str) -> Option<(String, String)> {
     let rest = url.get(..8).filter(|s| s.eq_ignore_ascii_case("https://")).and_then(|_| url.get(8..))?;
     let rest = rest.split(['?', '#']).next()?;
-    let (authority, path) = rest.find('/').map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
+    let (authority, path) = rest.find('/').map_or((rest, "/"), |i| rest.split_at(i));
     if authority.is_empty() || authority.contains(['@', '\\', '[', ']']) || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return None;
     }

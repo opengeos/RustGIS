@@ -46,15 +46,15 @@ fn redirect() -> Result<String, String> {
     Ok(format!("{origin}{dir}/{}", arcgis_auth::WEB_CALLBACK))
 }
 
-async fn sleep(ms: i32) {
+/// Waits `ms`; an error when no timer can be set (the caller gives up rather than spin).
+async fn sleep(ms: i32) -> Result<(), String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let mut timed = Ok(());
     let promise = js_sys::Promise::new(&mut |resolve, _| {
-        // Without a timer, resolved at once: a sleep that never ends would hold the sign-in.
-        let timed = web_sys::window().is_some_and(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms).is_ok());
-        if !timed {
-            let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
-        }
+        timed = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms).map(drop);
     });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    timed.map_err(|_| "the browser has no timer for the sign-in".to_string())?;
+    wasm_bindgen_futures::JsFuture::from(promise).await.map(drop).map_err(err)
 }
 
 /// A request to the portal: a form POSTed, or a GET. Never redirected, never with the page's
@@ -146,7 +146,7 @@ pub fn sign_in(portal: String, client_id: String, slot: Slot<Result<String, Stri
 async fn finish(flow: &arcgis_auth::WebSignIn, popup: &web_sys::Window) -> Result<String, String> {
     let deadline = js_sys::Date::now() + SIGN_IN_MS;
     let (endpoint, body) = loop {
-        sleep(300).await;
+        sleep(300).await?;
         if popup.closed().unwrap_or(true) {
             return Err("the sign-in window was closed".into());
         }
