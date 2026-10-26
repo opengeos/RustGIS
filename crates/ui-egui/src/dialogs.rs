@@ -741,6 +741,10 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
     ui.horizontal(|ui| {
         connect |= crate::widgets::dialog_button(ui, tl!("Connect"), Some(t.accent), vec2(96.0, 28.0)).clicked();
     });
+    // A secured ArcGIS service: sign in to its portal first.
+    if crate::arcgisui::wanted(app) {
+        crate::arcgisui::section(app, ui);
+    }
     if connect {
         let url = app.dialogs.text.trim().to_string();
         app.dialogs.error = None;

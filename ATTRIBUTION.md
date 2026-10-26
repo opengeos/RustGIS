@@ -46,7 +46,11 @@ Copyright 2019 Google LLC (Apache-2.0); Batlow, Vik, Roma and Oleron from Fabio 
 [Scientific colour maps](https://www.fabiocrameri.ch/colourmaps/), Copyright (c) 2020 Fabio
 Crameri (MIT, through [cmcrameri](https://github.com/callumrollo/cmcrameri)); and Balance,
 Haline, Deep and Topo from [cmocean](https://matplotlib.org/cmocean/), Copyright (c) 2015
-Kristen M. Thyng (MIT). The MIT licence's terms: permission is granted, free of charge, to use,
+Kristen M. Thyng (MIT). The Matplotlib group's colour maps (`crates/map/src/color/matplotlib.rs`)
+are sampled from [rio-tiler](https://github.com/cogeotiff/rio-tiler)'s tables, Copyright (c) 2021
+cogeotiff (BSD-3-Clause): matplotlib's own maps (matplotlib licence; its
+ColorBrewer maps, such as Blues and RdYlBu, by Cynthia Brewer, Apache-2.0), cmocean's (MIT, as
+above) and rio-tiler's cfastie, rplumbo and schwarzwald. The MIT licence's terms: permission is granted, free of charge, to use,
 copy, modify, merge, publish, distribute, sublicense and sell copies, provided the copyright
 notice and permission notice are included; the software is provided "as is", without warranty
 of any kind.

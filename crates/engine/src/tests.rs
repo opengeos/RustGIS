@@ -471,6 +471,52 @@ fn line_strokes_take_markers_and_hash_marks_along_the_line() {
 }
 
 #[test]
+fn a_character_of_a_font_is_a_marker_on_points_and_along_lines() {
+    use rustgis_map::{Glyph, LineMark, Marker};
+    let mut s = world();
+    let marker = |s: &Session| s.map().layer_by_name("Cities").unwrap().symbol(0).marker;
+    s.run("layer.marker", &json!({"layer": "Cities", "char": "★x", "font": "DejaVu Sans", "size": 14})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('★', "DejaVu Sans")));
+    // Another character keeps the family; a family alone changes the character's.
+    s.run("layer.marker", &json!({"layer": "Cities", "char": "A"})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('A', "DejaVu Sans")));
+    s.run("layer.marker", &json!({"layer": "Cities", "font": ""})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('A', "")));
+    // Drawn in an export, a family this machine lacks in the label font.
+    let dir = std::env::temp_dir().join(format!("rustgis-chars-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("layer.marker", &json!({"layer": "Cities", "font": "No Such Family"})).unwrap();
+    let strokes =
+        json!([{"color": "#1E5AA8", "markers": {"mark": "character", "char": "»", "font": "DejaVu Sans", "size": 8, "interval": 20}}]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    let m = s.map().layer_by_name("Rivers").unwrap().line_strokes[0].markers.unwrap();
+    assert_eq!(m.mark, LineMark::Marker(Marker::Char(Glyph::new('»', "DejaVu Sans"))));
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // A shape goes back to the shape.
+    s.run("layer.marker", &json!({"layer": "Cities", "shape": "square"})).unwrap();
+    assert_eq!(marker(&s), Marker::Square);
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "char": ""}), "char is a character"),
+        (json!({"layer": "Cities", "char": 7}), "char is a character"),
+        (json!({"layer": "Cities", "char": "a", "shape": "star"}), "not both"),
+    ] {
+        let err = s.run("layer.marker", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "hash", "char": "x"}}]})).unwrap_err();
+    assert!(err.contains("hash marks take no char"), "{err}");
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "character"}}]})).unwrap_err();
+    assert!(err.contains("needs its char"), "{err}");
+    // A shape with a char is refused, as by `layer.marker`.
+    let err =
+        s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "circle", "char": "x"}}]})).unwrap_err();
+    assert!(err.contains("not both"), "{err}");
+    assert_eq!(s.undo_depth(), depth);
+}
+
+#[test]
 fn a_stroke_is_dashed_by_command() {
     let mut s = world();
     let stroke = |dash: Value| json!({"layer": "Rivers", "strokes": [{"color": "#000000", "width": 2, "dash": dash}]});
@@ -1720,6 +1766,11 @@ fn hostile_params_never_panic() {
                 | "boundaries.countries"
                 // Asks Source Cooperative for its featured products.
                 | "sourcecoop.products"
+                // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
+                | "arcgis.signIn"
+                // Signs every session out, which the process's other tests use (its junk is
+                // covered by an_arcgis_token_in_a_service_address_reaches_its_layers).
+                | "arcgis.signOut"
         ) {
             continue;
         }
@@ -4469,11 +4520,21 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     let mut p = s.project.clone();
     p.ramps = serde_json::from_str(
         r##"[{"name": "Brand", "stops": ["#000000", "#ffffff"]}, {"name": "brand", "stops": ["#111111", "#ffffff"]},
-            {"name": "Ember", "stops": ["#222222", "#ffffff"]}]"##,
+            {"name": "Ember", "stops": ["#222222", "#ffffff"]}, {"name": "jet", "stops": ["#333333", "#ffffff"]}]"##,
     )
     .unwrap();
+    let jet = p.ramps.last().cloned().unwrap();
+    fn graduated(p: &mut Project) -> Option<&mut Renderer> {
+        p.maps.iter_mut().flat_map(|m| m.layers.iter_mut()).find(|l| l.name == "Cities").map(|l| &mut l.renderer)
+    }
+    if let Some(Renderer::Graduated { ramp, .. }) = graduated(&mut p) {
+        *ramp = Ramp::Custom(Box::new(jet.clone()));
+    }
     p.normalize();
-    assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)"]);
+    // The matplotlib library's names are built-in too: an older project's own "jet" is kept as
+    // "jet (custom)", while layers keep the copy of it they hold.
+    assert_eq!(p.ramps.iter().map(|r| r.name()).collect::<Vec<_>>(), ["Brand", "brand 2", "Ember (custom)", "jet (custom)"]);
+    assert!(matches!(graduated(&mut p), Some(Renderer::Graduated { ramp: Ramp::Custom(c), .. }) if **c == jet));
     let mut t = world();
     t.run("layer.addData", &json!({"path": path("cities.rgislyr")})).unwrap();
     match &t.map().layer_by_name("Cities (2)").unwrap().renderer {
@@ -8385,6 +8446,53 @@ fn service_times_and_directories() {
     assert_eq!(v["layers"][1]["offer"], json!({"type": "service", "url": "https://x.example.org/arcgis/rest/services/Topo/MapServer"}));
     let e = s.run("service.add", &json!({"url": root, "text": dir, "layer": "Topo/MapServer"})).unwrap_err();
     assert!(e.contains("service.layers"), "{e}");
+}
+
+/// A secured ArcGIS service given by an address with `?token=…` (#914): the token is kept for its
+/// server and sent, as the request's credential, to the addresses built from the service's document (its tiles,
+/// its layers' queries), and no address the session lists or keeps carries it.
+#[test]
+fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
+    use crate::render::rustgis_tiles::arcgis_auth;
+    let mut s = Session::new(Project::default());
+    let base = "https://secure914.example.org/server/rest/services/Roads/MapServer";
+    let doc = r#"{"currentVersion": 11, "mapName": "Roads", "capabilities": "Map,Query,Data", "singleFusedMapCache": true,
+        "tileInfo": {"rows": 256, "spatialReference": {"wkid": 102100}, "lods": [{"level": 0, "resolution": 156543.033928041}]},
+        "layers": [{"id": 0, "name": "Highways"}]}"#;
+    let v = s.run("service.layers", &json!({"url": format!("{base}?f=json&token=secret.Token-914"), "text": doc})).unwrap();
+    assert!(!v.to_string().contains("secret.Token-914"), "{v}");
+    let tiles = format!("{base}/tile/0/0/0");
+    let query = format!("{base}/0/query?where=1%3D1&f=geojson");
+    assert_eq!(arcgis_auth::authorization(&tiles).as_deref(), Some("Bearer secret.Token-914"));
+    assert_eq!(arcgis_auth::authorization(&query).as_deref(), Some("Bearer secret.Token-914"));
+    // Another server never gets it.
+    assert_eq!(arcgis_auth::authorization("https://other914.example.org/server/rest/services/Roads/MapServer/tile/0/0/0"), None);
+    // Added, the tile layer keeps the address without the token.
+    let layer =
+        v["layers"].as_array().unwrap().iter().find(|l| l["offer"]["type"] == "tiles").unwrap()["name"].as_str().unwrap().to_string();
+    s.run("service.add", &json!({"url": format!("{base}?token=secret.Token-914"), "layer": layer, "text": doc})).unwrap();
+    let project = format!("{:?}", s.project);
+    assert!(project.contains("secure914.example.org") && !project.contains("secret.Token-914"));
+    // Listed and forgotten by arcgis.status and arcgis.signOut.
+    let status = s.run("arcgis.status", &json!({})).unwrap();
+    assert!(
+        status["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["portal"] == "https://secure914.example.org/server" && x["kind"] == "token")
+    );
+    assert!(!status.to_string().contains("secret.Token-914"));
+    s.run("arcgis.signOut", &json!({"portal": "https://secure914.example.org/server/"})).unwrap();
+    assert_eq!(arcgis_auth::authorization(&tiles), None);
+    // Junk is refused rather than taken for "every session".
+    for junk in [json!({"portal": 7}), json!({"portal": [true]}), json!({"portal": {"a": 1}})] {
+        assert!(s.run("arcgis.signOut", &junk).is_err());
+    }
+    // Another kind of service keeps its own token parameter.
+    let wms = "https://wms914.example.org/rest/services/wms?token=keep-it";
+    let kept = crate::cmd::service::without_token(&json!({"url": wms, "type": "wms"})).unwrap();
+    assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's
@@ -15123,10 +15231,10 @@ fn default_raster_style_applies_to_new_rasters() {
     let undo = s.undo_label();
     // The layer just added (rasters go in under the vectors, the newest on top of them).
     let style = |s: &Session| s.map().layer(s.active_layer.unwrap()).unwrap().raster.as_ref().unwrap().style.clone();
-    // Without settings: the inverted grey stretch.
+    // Without settings: the black-to-white grey stretch.
     let shown = s.run("raster.setDefaultStyle", &json!({})).unwrap();
-    assert_eq!(shown["ramp"], "Greys");
-    assert_eq!(shown["invert"], true);
+    assert_eq!(shown["ramp"], "gray");
+    assert_eq!(shown["invert"], false);
 
     let shown = s
         .run(
@@ -15167,7 +15275,15 @@ fn default_raster_style_applies_to_new_rasters() {
     s.run("raster.setDefaultStyle", &json!({"reset": true})).unwrap();
     assert_eq!(s.raster_defaults, rustgis_map::RasterDefaults::default());
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem3"})).unwrap();
-    assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::Greys, invert: true });
+    assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::gray(), invert: false });
+    // An inverted stretch stays inverted when only its band changes (the pane sends no invert).
+    let scene = |s: &Session| s.map().layer_by_name("scene").unwrap().raster.as_ref().unwrap().style.renderer.clone();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch", "band": 1, "invert": true})).unwrap();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch", "band": 2})).unwrap();
+    assert!(matches!(scene(&s), RasterRenderer::Stretch { band: 1, invert: true, .. }), "{:?}", scene(&s));
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "classify"})).unwrap();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch"})).unwrap();
+    assert!(matches!(scene(&s), RasterRenderer::Stretch { invert: false, .. }), "a new stretch isn't inverted");
 }
 
 #[test]
@@ -17292,4 +17408,60 @@ fn raster_projection_failures_are_reported_for_zonal_statistics_and_clipping() {
     assert!(clip["messages"].to_string().contains("skipped 1 polygon part(s)"), "{clip}");
     let data = s.map().layer_by_name("clipped").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
     assert_eq!((data.width, data.height), (8, 8));
+}
+
+#[test]
+fn simplify_large_tolerances_keep_a_small_polygon_and_one_step_undo() {
+    use rustgis_data::{Dataset, Field, FieldType, Geometry, GeometryType, Value};
+    use rustgis_geom::Coord;
+    let mut s = world();
+    let ring = (0..=40)
+        .map(|i| {
+            let angle = (i % 40) as f64 * std::f64::consts::TAU / 40.0;
+            Coord::new(10.5 + 0.05 * angle.cos(), 46.5 + 0.05 * angle.sin())
+        })
+        .collect();
+    let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("code", FieldType::Text)]);
+    zones.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![Value::Text("Z1".into())]);
+    s.map_mut().add_layer(rustgis_map::Layer::new(0, zones.clone()));
+    let mut previous = zones.features[0].geometry.as_ref().unwrap().coord_count();
+    for tolerance in [0.1, 0.5, 1.0, 2.0, 5.0, 25.0, 100.0] {
+        let depth = s.undo_depth();
+        s.run("gp.run", &json!({"tool":"simplify", "params":{"input":"zones", "tolerance":tolerance, "output":"simple"}})).unwrap();
+        let out = &s.map().layer_by_name("simple").unwrap().dataset;
+        assert_eq!(out.features.len(), 1);
+        assert_eq!(out.features[0].attrs, zones.features[0].attrs);
+        let count = out.features[0].geometry.as_ref().unwrap().coord_count();
+        assert!((4..=previous).contains(&count), "{tolerance} km: {count} > {previous}");
+        previous = count;
+        assert_eq!(s.map().layer_by_name("zones").unwrap().dataset, zones);
+        assert_eq!(s.undo_depth(), depth + 1);
+        assert!(s.undo());
+        assert!(s.map().layer_by_name("simple").is_none());
+        assert!(s.redo());
+        assert_eq!(s.map().layer_by_name("simple").unwrap().dataset.features[0].geometry.as_ref().unwrap().coord_count(), count);
+        assert!(s.undo());
+    }
+    assert_eq!(previous, 4);
+}
+
+#[test]
+fn publication_locator_keeps_small_islands_across_the_antimeridian() {
+    use rustgis_data::{Dataset, Geometry, GeometryType};
+    use rustgis_geom::Coord;
+    for (lon, lat) in [(0.0_f64, -5.0), (180.0, -5.0), (-180.0, 70.0)] {
+        let mut s = world();
+        let ring: Vec<_> = [(-0.0005, 0.0), (0.0005, 0.0), (0.0005, 0.001), (-0.0005, 0.001), (-0.0005, 0.0)]
+            .into_iter()
+            .map(|(x, y)| Coord::new((lon + x + 180.0).rem_euclid(360.0) - 180.0, lat + y))
+            .collect();
+        let original = Geometry::Polygon(vec![vec![ring]]);
+        let mut island = Dataset::new("island", GeometryType::Polygon, vec![]);
+        island.push(Some(original.clone()), vec![]);
+        s.map_mut().add_layer(rustgis_map::Layer::new(0, island));
+        let r = s.run("layout.publication", &json!({"extent": [-46.8, -11.6, -38.5, -2.2]})).unwrap();
+        let locator = s.project.maps.iter().find(|m| Some(m.name.as_str()) == r["locator"].as_str()).unwrap();
+        let geometry = &locator.layer_by_name("island").unwrap().dataset.features[0].geometry;
+        assert_eq!(geometry.as_ref(), Some(&original), "island at {lon}, {lat}");
+    }
 }

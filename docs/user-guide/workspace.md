@@ -41,8 +41,8 @@ Each layer keeps its look:
   caps, joins, dashes and the symbol's opacity; a line's simple lines as stacked strokes, its
   rendering passes as their levels when the renderer draws in symbol levels; marker and hashed
   lines as strokes of markers or hash marks, at their places (intervals, vertices, the ends, the
-  middle), turned with the line, their markers' offsets and angles kept (font characters along
-  lines are left out for now: drawn as dots, they would blot the line where QGIS draws a tick).
+  middle), turned with the line, their markers' offsets and angles kept; font markers as
+  characters of their font, on points and along lines.
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
@@ -63,11 +63,10 @@ older names of the same settings are read.
 QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
-approximated (pattern fills drawn as a tint of their colour, font and SVG markers as circles,
+approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos in RustGIS's own colour and width, label offsets and
 wrapping, values outside a graduated renderer's ranges in its first or last class, file options
-such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, font markers
-along lines, data-defined
+such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS
 and other sources RustGIS doesn't read, diagrams, joins, virtual fields, a layer's other styles,

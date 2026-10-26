@@ -892,11 +892,54 @@ fn xy_table_to_point(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
+// Three fixed non-collinear anchors prevent ring collapse and keep vertex counts monotonic.
+fn simplify_ring(ring: &geo::LineString<f64>, eps: f64) -> geo::LineString<f64> {
+    use geo::{Distance, Euclidean};
+    if ring.0.len() <= 4 || ring.0.iter().any(|c| !c.x.is_finite() || !c.y.is_finite()) {
+        return ring.clone();
+    }
+    let Some(&first) = ring.0.first() else { return ring.clone() };
+    let Some((b, _)) = ring.0.iter().enumerate().map(|(i, c)| (i, Euclidean.distance(first, *c))).max_by(|a, b| a.1.total_cmp(&b.1)) else {
+        return ring.clone();
+    };
+    let Some(&second) = ring.0.get(b) else { return ring.clone() };
+    let Some((c, _)) = ring
+        .0
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, ((second.x - first.x) * (c.y - first.y) - (second.y - first.y) * (c.x - first.x)).abs()))
+        .filter(|(_, area)| area.is_finite() && *area > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+    else {
+        return ring.clone();
+    };
+    let mut stops = [0, b, c, ring.0.len() - 1];
+    stops.sort_unstable();
+    let mut corners = Vec::new();
+    for bounds in stops.windows(2) {
+        let [start, end] = bounds else { return ring.clone() };
+        let Some(arc) = ring.0.get(*start..=*end) else { return ring.clone() };
+        let simple = geo::LineString::new(arc.to_vec()).simplify(eps);
+        corners.extend(simple.0.into_iter().skip(usize::from(!corners.is_empty())));
+    }
+    geo::LineString::new(corners)
+}
+
 /// A geometry simplified (Douglas–Peucker) to a tolerance in metres.
 pub fn simplify_geometry(g: &Geometry, tol_m: f64) -> Geometry {
     let eps = tol_m * merc_scale(feature_lat(g));
     let sg = match g {
-        Geometry::Polygon(_) => to_multipolygon(g).and_then(|m| from_multipolygon(&m.simplify(eps))),
+        Geometry::Polygon(_) => to_multipolygon(g).and_then(|mut m| {
+            for p in &mut m.0 {
+                p.exterior_mut(|r| *r = simplify_ring(r, eps));
+                p.interiors_mut(|rings| {
+                    for r in rings {
+                        *r = simplify_ring(r, eps);
+                    }
+                });
+            }
+            from_multipolygon(&m)
+        }),
         Geometry::Line(_) => to_multiline(g).and_then(|m| from_line(&m.simplify(eps))),
         _ => None,
     };
@@ -912,14 +955,9 @@ fn simplify(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         let Some(f) = ds.features.get(r) else { continue };
         let Some(g) = &f.geometry else { continue };
         before += g.coord_count();
-        let eps = tol * merc_scale(feature_lat(g));
-        let sg = match g {
-            Geometry::Polygon(_) => to_multipolygon(g).and_then(|m| from_multipolygon(&m.simplify(eps))),
-            Geometry::Line(_) => to_multiline(g).and_then(|m| from_line(&m.simplify(eps))),
-            other => Some(other.clone()),
-        };
-        after += sg.as_ref().map(|g| g.coord_count()).unwrap_or(0);
-        out.push(sg, f.attrs.clone());
+        let sg = simplify_geometry(g, tol);
+        after += sg.coord_count();
+        out.push(Some(sg), f.attrs.clone());
     }
     result(out, format!("Simplify: {before} → {after} vertices"))
 }
@@ -2082,6 +2120,82 @@ mod tests {
     }
 
     #[test]
+    fn simplify_rings_do_not_grow_with_tolerance() {
+        use geo::{Distance, Euclidean};
+        let ring = |x: f64, y: f64, radius: f64| {
+            (0..=80)
+                .map(|i| {
+                    let angle = (i % 80) as f64 * std::f64::consts::TAU / 80.0;
+                    let r = radius * (1.0 + 0.1 * (7.0 * angle).sin());
+                    Coord::new(x + r * angle.cos(), y + r * angle.sin())
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = Geometry::Polygon(vec![vec![ring(10.5, 46.5, 0.1), ring(10.5, 46.52, 0.001)], vec![ring(11.0, 46.5, 0.05)]]);
+        let mut ds = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        ds.push(Some(original.clone()), vec![]);
+        let inputs = Map(HashMap::from([("zones".into(), ds)]));
+        let mut previous = original.coord_count();
+        for tolerance in [0.0, 100.0, 500.0, 1000.0, 2000.0, 5000.0, 25000.0, 100000.0] {
+            let simple = simplify_geometry(&original, tolerance);
+            assert!(simple.coord_count() <= previous, "{tolerance} m: {} > {previous}", simple.coord_count());
+            previous = simple.coord_count();
+            let Geometry::Polygon(parts) = &simple else { panic!("polygon required") };
+            assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
+            for rings in parts {
+                for r in rings {
+                    assert!(r.len() >= 4);
+                    assert_eq!(r.first(), r.last());
+                    assert!(rustgis_data::geometry::ring_area(r).abs() > 1e-14);
+                }
+            }
+            let source = to_multipolygon(&original).unwrap();
+            let target = to_multipolygon(&simple).unwrap();
+            for (a, b) in source.0.iter().zip(&target.0) {
+                for (a, b) in std::iter::once(a.exterior()).chain(a.interiors()).zip(std::iter::once(b.exterior()).chain(b.interiors())) {
+                    let deviation = a.0.iter().map(|c| Euclidean.distance(&geo::Point::from(*c), b)).fold(0.0_f64, f64::max);
+                    assert!(deviation <= tolerance * merc_scale(feature_lat(&original)) + 1e-6, "{tolerance} m: {deviation}");
+                }
+            }
+            let out =
+                layer(crate::run("simplify", &inputs, &serde_json::json!({"input":"zones", "tolerance":tolerance / 1000.0})).unwrap());
+            assert_eq!(out.features[0].geometry.as_ref(), Some(&simple));
+        }
+        assert_eq!(previous, 12, "three closed triangle rings at a very large tolerance");
+    }
+
+    #[test]
+    fn simplify_keeps_points_lines_and_degenerate_rings() {
+        use geo::Area;
+        let point = Geometry::Point(Coord::new(10.0, 46.0));
+        assert_eq!(simplify_geometry(&point, 1e6), point);
+        let line = Geometry::Line(vec![vec![Coord::new(10.0, 46.0), Coord::new(10.1, 46.0), Coord::new(10.2, 46.0)]]);
+        assert_eq!(simplify_geometry(&line, 1e6).coord_count(), 2);
+        let repeated = geo::LineString::new(vec![geo::Coord { x: 1.0, y: 1.0 }; 6]);
+        assert_eq!(simplify_ring(&repeated, 1e6), repeated);
+        let collinear = geo::LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (0.0, 0.0)]);
+        assert_eq!(simplify_ring(&collinear, 1e6), collinear);
+        let both_sides = geo::LineString::from(vec![(0.0, 0.0), (3.0, 0.0), (-3.0, 0.0), (0.0, 0.0), (1.0, 0.0), (0.0, 0.0)]);
+        assert_eq!(simplify_ring(&both_sides, 1e6), both_sides);
+        let concave = geo::LineString::from(vec![(0.0, 0.0), (3.0, 0.0), (2.0, 1.0), (-2.0, 1.0), (-3.0, 0.0), (-2.0, -1.0), (0.0, 0.0)]);
+        let mut previous = concave.0.len();
+        for tolerance in [0.1, 1.1, 2.5, 1e6] {
+            use geo::{Distance, Euclidean};
+            let reduced = simplify_ring(&concave, tolerance);
+            assert!((4..=previous).contains(&reduced.0.len()));
+            previous = reduced.0.len();
+            let deviation = concave.0.iter().map(|c| Euclidean.distance(&geo::Point::from(*c), &reduced)).fold(0.0_f64, f64::max);
+            assert!(deviation <= tolerance + 1e-12);
+            assert!(geo::Polygon::new(reduced, vec![]).unsigned_area() > 0.0);
+        }
+        assert_eq!(previous, 4);
+        let triangle = geo::LineString::from(vec![(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (0.0, 0.0)]);
+        assert_eq!(simplify_ring(&triangle, 1e6), triangle);
+        let nonfinite = geo::LineString::from(vec![(0.0, 0.0), (f64::INFINITY, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]);
+        assert_eq!(simplify_ring(&nonfinite, 1e6), nonfinite);
+    }
+
+    #[test]
     fn all_tools_run() {
         let m = inputs();
         let j = |v: serde_json::Value| v;
@@ -2124,8 +2238,8 @@ mod tests {
         let Geometry::Polygon(polys) = ds.features[0].geometry.as_ref().unwrap() else { panic!("expected buffer polygon") };
         // 500 international feet is exactly 152.4 metres, at every vertex.
         for vertex in polys.iter().flatten().flatten() {
-            let radius = rustgis_geom::haversine_m(center, *vertex);
-            assert!((radius - 152.4).abs() < 0.05, "radius: {radius}");
+            let radius = on_wgs84_m(center, *vertex);
+            assert!((radius - 152.4).abs() < 1e-6, "radius: {radius}");
         }
     }
 
@@ -2349,15 +2463,31 @@ mod tests {
         }
     }
 
-    /// The great-circle distance (km) from `c` to a line, sampled every 500 m along it.
-    fn km_to(c: Coord, line: &[Coord]) -> f64 {
-        line.windows(2)
+    /// The geodesic distance on the WGS 84 ellipsoid (metres), from GeographicLib through `geo`.
+    fn on_wgs84_m(a: Coord, b: Coord) -> f64 {
+        use geo::{Distance, Geodesic, Point};
+        Geodesic.distance(Point::new(a.x, a.y), Point::new(b.x, b.y))
+    }
+
+    /// The distance on WGS 84 (km) from `c` to a line, sampled every `step` metres along it.
+    /// Only the samples within 1.2% of the nearest on the sphere are measured on the ellipsoid,
+    /// whose distances are within 0.6% of the sphere's.
+    fn km_to_every(c: Coord, line: &[Coord], step: f64) -> f64 {
+        let samples: Vec<(Coord, f64)> = line
+            .windows(2)
             .flat_map(|w| {
-                let n = (rustgis_geom::haversine_m(w[0], w[1]) / 500.0).ceil().max(1.0) as usize;
+                let n = (rustgis_geom::haversine_m(w[0], w[1]) / step).ceil().max(1.0) as usize;
                 (0..=n).map(move |i| rustgis_geom::geodesic_interpolate(w[0], w[1], i as f64 / n as f64))
             })
-            .map(|p| rustgis_geom::haversine_m(c, p) / 1000.0)
-            .fold(f64::INFINITY, f64::min)
+            .map(|p| (p, rustgis_geom::haversine_m(c, p)))
+            .collect();
+        let nearest = samples.iter().map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
+        samples.iter().filter(|(_, d)| *d <= nearest * 1.012 + 1.0).map(|(p, _)| on_wgs84_m(c, *p) / 1000.0).fold(f64::INFINITY, f64::min)
+    }
+
+    /// The distance on WGS 84 (km) from `c` to a line, sampled every 500 m along it.
+    fn km_to(c: Coord, line: &[Coord]) -> f64 {
+        km_to_every(c, line, 500.0)
     }
 
     /// Every vertex of every ring is `km` from `line`, within 0.2%. Where the arcs of two pieces
@@ -2371,6 +2501,28 @@ mod tests {
         }
     }
 
+    /// Buffers are geodesic on the WGS 84 ellipsoid, not on a sphere (#888): on a sphere of the
+    /// mean radius a 10 km buffer reached 9,944 to 10,011 m at the equator and 9,997 to 10,029 m
+    /// at 46.5°N, and a 1 km buffer of a 2 km line 999.7 to 1,002.9 m.
+    #[test]
+    fn buffers_keep_their_distance_on_the_ellipsoid() {
+        for centre in [Coord::new(0.0, 0.0), Coord::new(10.5, 46.5), Coord::new(30.0, 60.0), Coord::new(-70.0, -33.4)] {
+            for c in buffered(Geometry::Point(centre), 10.0).iter().flatten().flatten() {
+                let d = on_wgs84_m(centre, *c);
+                assert!((d - 10_000.0).abs() < 1e-3, "{centre:?}: {c:?} is {d} m away");
+            }
+        }
+        let a = Coord::new(10.5, 46.5);
+        for azimuth in [90.0, 0.0, 45.0] {
+            let line = [a, rustgis_geom::geodesic_destination(a, azimuth, 2_000.0)];
+            for c in buffered(Geometry::Line(vec![line.to_vec()]), 1.0).iter().flatten().flatten() {
+                // Sampled every 0.5 m along the line, the nearest sample is at most 0.03 mm further.
+                let d = km_to_every(*c, &line, 0.5) * 1000.0;
+                assert!((d - 1_000.0).abs() < 1e-3, "{azimuth}: {c:?} is {d} m away");
+            }
+        }
+    }
+
     /// Buffers are geodesic (#394): Web Mercator's scale changes with latitude, so one scale for
     /// the whole feature made a 1000 km circle at 60°N reach 872 km north and 1142 km south, and a
     /// 50 km buffer of a line from 5°S to 33°S 59 km wide at one end and 50 km at the other.
@@ -2381,7 +2533,9 @@ mod tests {
         all_at(&circle, &[centre, centre], 1000.0);
         let north = circle.iter().flatten().flatten().map(|c| c.y).fold(f64::MIN, f64::max);
         let south = circle.iter().flatten().flatten().map(|c| c.y).fold(f64::MAX, f64::min);
-        assert!((north - 60.0 - (60.0 - south)).abs() < 0.01, "as far north as south: {north} {south}");
+        // As far north as south, where GeographicLib puts 1000 km on WGS 84 (a degree of
+        // latitude grows towards the pole, so 8.970° north and 8.982° south).
+        assert!((north - 68.969_947_795_748).abs() < 1e-9 && (south - 51.017_861_794_779).abs() < 1e-9, "{north} {south}");
 
         let line = [Coord::new(-45.0, -5.0), Coord::new(-45.0, -33.0)];
         all_at(&buffered(Geometry::Line(vec![line.to_vec()]), 50.0), &line, 50.0);
@@ -2972,7 +3126,8 @@ mod tests {
         ]));
         let run = |params: serde_json::Value| layer(crate::run("spatialJoin", &m, &params).unwrap_or_else(|e| panic!("{e}")));
         let num_at = |ds: &Dataset, row: usize, f: &str| ds.value(row, ds.field_index(f).unwrap()).as_f64();
-        let hav = |a: (f64, f64), b: (f64, f64)| rustgis_geom::haversine_m(Coord::new(a.0, a.1), Coord::new(b.0, b.1));
+        // Distances on WGS 84, as the join measures them (#888).
+        let hav = |a: (f64, f64), b: (f64, f64)| rustgis_geom::wgs84_distance_m(Coord::new(a.0, a.1), Coord::new(b.0, b.1));
 
         // Closest, unlimited: the nearest stop, across the antimeridian and over the pole too.
         let closest =
@@ -2996,7 +3151,7 @@ mod tests {
         );
         assert!((num_at(&feet, 0, "ft").unwrap() - s0 / 0.3048).abs() < 1e-3);
         // A line's nearest point can be between its vertices: north of the home, 2° of longitude
-        // from the vertices. The edge is a great circle, a little poleward of latitude 1 midway.
+        // from the vertices. The edge is a geodesic, a little poleward of latitude 1 midway.
         let to_road =
             run(serde_json::json!({"target": "homes", "join": "road", "match": "Closest", "units": "Meters", "distanceField": "d"}));
         let (north, bulge) = (hav((0.004, 0.0), (0.004, 1.0)), hav((0.004, 0.0), (0.004, 1.000_153)));
@@ -3046,7 +3201,7 @@ mod tests {
         }
         let brute = |x: f64, y: f64| {
             let d = |f: &rustgis_data::Feature| match &f.geometry {
-                Some(Geometry::Point(c)) => rustgis_geom::haversine_m(Coord::new(x, y), *c),
+                Some(Geometry::Point(c)) => rustgis_geom::wgs84_distance_m(Coord::new(x, y), *c),
                 _ => f64::INFINITY,
             };
             let best = many.features.iter().min_by(|a, b| d(a).total_cmp(&d(b))).map(|f| f.attrs[0].clone());
@@ -3099,6 +3254,37 @@ mod tests {
 
         // A blank distance is none (as the Tools pane sends an empty box).
         assert!(crate::run("spatialJoin", &m, &serde_json::json!({"target": "homes", "join": "stops", "distance": " "})).is_ok());
+    }
+
+    /// Within a distance through the join's grid index (more than 16 join features), at the edge
+    /// of 10 km due north of the equator (#888): 0.0904369° is 9,999.995 m on WGS 84 but 10,056 m
+    /// on the mean sphere, so a search worked out on that sphere left it out; 0.0905° is
+    /// 10,006.972 m and stays out.
+    #[test]
+    fn spatial_join_within_a_distance_at_the_ellipsoids_edge() {
+        let point = |x: f64, y: f64| Some(Geometry::Point(Coord::new(x, y)));
+        let mut stops = Dataset::new("stops", GeometryType::Point, vec![Field::new("stop", FieldType::Text)]);
+        stops.push(point(0.0, 0.090_436_9), vec![Value::Text("edge".into())]);
+        stops.push(point(0.0, 0.0905), vec![Value::Text("past".into())]);
+        // More stops, all over 124 km away, so the join indexes them.
+        for k in 0..18 {
+            stops.push(point(1.0 + f64::from(k) * 0.1, 0.5 + f64::from(k) * 0.02), vec![Value::Text(format!("far {k}"))]);
+        }
+        let mut homes = Dataset::new("homes", GeometryType::Point, vec![]);
+        homes.push(point(0.0, 0.0), vec![]);
+        let m = Map(HashMap::from([("stops".to_string(), stops), ("homes".to_string(), homes)]));
+        let within = layer(
+            crate::run(
+                "spatialJoin",
+                &m,
+                &serde_json::json!({"target": "homes", "join": "stops", "match": "Within a distance", "distance": 10_000, "units": "Meters", "operation": "Join one to many", "distanceField": "d"}),
+            )
+            .unwrap(),
+        );
+        let names: Vec<_> = (0..within.features.len()).filter_map(|r| text_at(&within, r, "join_stop")).collect();
+        assert_eq!(names, ["edge"]);
+        let d = within.value(0, within.field_index("d").unwrap()).as_f64().unwrap();
+        assert!((d - 9_999.994_808).abs() < 1e-5, "{d}");
     }
 
     #[test]

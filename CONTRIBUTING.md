@@ -17,8 +17,8 @@ something on the roadmap (or not on it) interests you, propose it and open a pul
    comment on it to say you're taking it.
 2. **Write a short proposal** if there is no issue. It covers:
    - the problem or workflow it serves;
-   - what you plan to build: the commands it adds, where it sits in the ribbon, which formats or
-     tools are involved;
+   - what you plan to build: the commands it adds, where it sits in the ribbon (following the
+     [ribbon guidelines](docs/contributing.md#ribbon-guidelines)), which formats or tools are involved;
    - which crates it touches and whether it adds a dependency;
    - how you will test it.
 

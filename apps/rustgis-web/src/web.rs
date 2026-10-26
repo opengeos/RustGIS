@@ -570,6 +570,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
     let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
     let url = prepared.url.as_str();
+    // An ArcGIS sign-in's token, for the portal and the servers it covers, renewed first when it
+    // is about to expire. It goes as the request's `token` parameter, not a header: ArcGIS's
+    // query endpoints answer the header's CORS preflight with an error.
+    if !prepared.signed {
+        crate::arcgis::renew_if_due(url).await;
+    }
+    let arcgis = if prepared.signed { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::arcgis_auth::with_token(url) };
+    // Only the request carries it: messages name the address without it.
+    let request = arcgis.as_deref().unwrap_or(url);
     let asked = match (range, tail) {
         (Some((a, b)), _) => Some(format!("bytes={a}-{b}")),
         (None, Some(n)) => Some(format!("bytes=-{n}")),
@@ -591,12 +600,17 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
             headers.set(k, v).map_err(err)?;
         }
         init.set_headers(&headers);
-        // A signed request goes only where its credentials are for.
-        if prepared.signed {
-            init.set_redirect(web_sys::RequestRedirect::Error);
-        }
     }
-    let promise = window.fetch_with_str_and_init(url, &init);
+    // A signed or authorized request goes only where its credentials are for.
+    if prepared.signed || arcgis.is_some() {
+        init.set_redirect(web_sys::RequestRedirect::Error);
+    }
+    // The token's address goes nowhere else: no referrer from it, no cookies with it.
+    if arcgis.is_some() {
+        init.set_referrer_policy(web_sys::ReferrerPolicy::NoReferrer);
+        init.set_credentials(web_sys::RequestCredentials::Omit);
+    }
+    let promise = window.fetch_with_str_and_init(request, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.
     let resp: web_sys::Response = unless_stalled(promise, abort.as_ref())
@@ -812,7 +826,9 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             }),
         )
     };
+    let arcgis_ctx = ctx.clone();
     Services {
+        arcgis_sign_in: Some(Box::new(move |portal, client_id, slot| crate::arcgis::sign_in(portal, client_id, slot, arcgis_ctx.clone()))),
         load_pref: Some(load_pref),
         save_pref: Some(save_pref),
         // No keychain in the browser: script on the page could read anything stored (#754).

@@ -48,6 +48,35 @@ fn url_of(p: &Value) -> Result<&str, String> {
     Ok(url)
 }
 
+/// `p` with its ArcGIS service address's `?token=…` taken out and kept for the session (it then
+/// goes, as the request's credential, to every request to that server: the service's layers, tiles and feature
+/// pages), so the address the layer keeps has no token in it. `None` when there is none.
+pub(crate) fn without_token(p: &Value) -> Result<Option<Value>, String> {
+    use crate::render::rustgis_tiles::arcgis_auth;
+    let Some(url) = ps(p, "url").map(str::trim) else { return Ok(None) };
+    let has_token = url
+        .split_once('?')
+        .is_some_and(|(_, q)| q.split('&').any(|kv| kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case("token"))));
+    // ArcGIS REST addresses only: another kind of service's `token` stays in its address.
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    let arcgis = match ps(p, "type") {
+        Some("arcgis") => true,
+        None | Some("auto") => path.contains("/rest/services") || path.contains("/sharing/rest"),
+        Some(_) => false,
+    };
+    if !has_token || !arcgis || arcgis_auth::server_root(url).is_none() {
+        return Ok(None);
+    }
+    let before = arcgis_auth::authorization(url);
+    let mut owned = p.clone();
+    owned["url"] = json!(arcgis_auth::adopt_url_token(url)?);
+    // What was cached unauthorized (refused tiles) is asked for again with the new token.
+    if arcgis_auth::authorization(url) != before {
+        crate::render::rustgis_tiles::cache::clear();
+    }
+    Ok(Some(owned))
+}
+
 /// Capability discovery is shared by supplied-document GUI requests and native commands.
 /// Sources stay alongside layers so a landing page and a collection may use the same name.
 #[derive(Default)]
@@ -291,6 +320,8 @@ pub fn service_json(svc: &Service) -> Value {
 }
 
 pub(crate) fn layers(_s: &mut Session, p: &Value) -> CmdResult {
+    let owned = without_token(p)?;
+    let p = owned.as_ref().unwrap_or(p);
     let found = capabilities(p)?;
     let mut out = service_json(&found.service);
     if let Some(layers) = out.get_mut("layers").and_then(Value::as_array_mut) {
@@ -307,6 +338,8 @@ pub(crate) fn layers(_s: &mut Session, p: &Value) -> CmdResult {
 /// Adds one of a service's layers: map layers as tiles (an overlay), a style as a style, features
 /// downloaded.
 pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
+    let owned = without_token(p)?;
+    let p = owned.as_ref().unwrap_or(p);
     let url = url_of(p)?.to_string();
     let want = ps(p, "layer").map(str::trim).filter(|l| !l.is_empty()).ok_or("layer is required")?;
     let found = capabilities(p)?;

@@ -104,6 +104,13 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 
+**Simplify** uses Douglas–Peucker with a tolerance in kilometres. Each polygon ring keeps at
+least three different, non-collinear corners (plus the closing vertex), so a tolerance larger
+than a polygon produces a small ring instead of restoring its original vertices. Holes and
+multipart rings are retained. This is not a topology-preserving simplifier: check the result
+where holes or neighbouring polygons must stay aligned. The default tolerance remains 25 km;
+use a smaller value for local boundaries.
+
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's
 selection. Summarize Within counts the selected points against **all** input polygons, and
@@ -111,10 +118,14 @@ Calculate Geometry Attributes updates **all** rows. A built-in tool's `output` i
 the project, never a file path.
 
 **Buffer** distances, and the distance of **Select Layer By Location**, are measured on the Earth
-(a sphere of radius 6,371 km), not in the map's display projection. Each feature is buffered in
-an azimuthal equidistant projection centred on it; long lines and large polygon outlines are
+(the WGS 84 ellipsoid, as PROJ and GeographicLib measure it), not in the map's display
+projection. Each feature is buffered in an azimuthal equidistant projection on the ellipsoid
+centred on it, so a point's buffer is exact; long lines and large polygon outlines are
 buffered in stretches of a few hundred kilometres to limit projection error. Negative Buffer
 distances shrink polygons. Buffer and Select Layer By Location limit distances to 5,000 km.
+Lengths and areas (Calculate Geometry Attributes, and Spatial Join's **Largest overlap**) are
+still measured on a sphere of radius 6,371 km: on the ellipsoid, lengths differ by up to about
+0.6 % and areas by up to about 0.9 % (a small area near a pole).
 
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
@@ -150,10 +161,11 @@ stored in longitude/latitude before the join. `match` is one of:
   one, every target gets its nearest feature. Ties keep the join layer's order.
 - **Within a distance**: every join feature within `distance` (required), nearest first.
 
-Distances are on the ground, between the features' nearest points (edges and vertices alike),
-and are zero for features that intersect. `distanceField` names a field added for the distance
-to the joined feature, in `units`; it applies to **Closest** and **Within a distance** only, as
-`distance` does, and the Tools pane shows them only for those.
+Distances are on the ground (the WGS 84 ellipsoid, as for Buffer), between the features' nearest
+points (edges and vertices alike), and are zero for features that intersect. `distanceField`
+names a field added for the distance to the joined feature, in `units`; it applies to
+**Closest** and **Within a distance** only, as `distance` does, and the Tools pane shows them
+only for those.
 
 **Join one to one** (the default `operation`) copies the first matching feature's attributes;
 **Join one to many** makes a row for each match. Both add `join_count`, the total matches for

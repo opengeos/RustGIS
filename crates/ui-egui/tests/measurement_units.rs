@@ -233,6 +233,10 @@ fn distance_controls_follow_display_units_and_keep_metre_command_values() {
     for _ in 0..3 {
         h.step();
     }
+    // The distances are in the pane's Range tab (#858).
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Range").click();
+    h.step();
+    h.step();
     assert!(painted_text(&h).iter().any(|s| s == "1.0 km"));
     h.state_mut().run("ui.measurementUnits", json!({"units": "imperial"})).unwrap();
     h.step();

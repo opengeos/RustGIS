@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod matplotlib;
 mod scientific;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -236,18 +237,21 @@ pub enum RampGroup {
     /// Elevation and bathymetry.
     Topographic,
     Qualitative,
+    /// The matplotlib colour map library: matplotlib's own maps, cmocean's and rio-tiler's.
+    Matplotlib,
     /// The project's own ramps.
     Custom,
 }
 
 impl RampGroup {
     /// The groups, in the order they are listed.
-    pub const ALL: [RampGroup; 6] = [
+    pub const ALL: [RampGroup; 7] = [
         RampGroup::PerceptuallyUniform,
         RampGroup::Sequential,
         RampGroup::Diverging,
         RampGroup::Topographic,
         RampGroup::Qualitative,
+        RampGroup::Matplotlib,
         RampGroup::Custom,
     ];
 
@@ -258,12 +262,91 @@ impl RampGroup {
             RampGroup::Diverging => "Diverging",
             RampGroup::Topographic => "Topographic and Bathymetric",
             RampGroup::Qualitative => "Qualitative",
+            RampGroup::Matplotlib => "Matplotlib",
             RampGroup::Custom => "Custom",
         }
     }
 }
 
-/// A colour ramp: one of our own (sequential, diverging and qualitative), or a custom one.
+/// One of the matplotlib library's colour maps that isn't one of our own ramps already
+/// (`color/matplotlib.rs`). Project files hold it by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Colormap(u8);
+
+impl Colormap {
+    /// Every one, in the library's order.
+    pub fn all() -> impl Iterator<Item = Colormap> {
+        (0..matplotlib::COLORMAPS.len().min(256)).map(|i| Colormap(i as u8))
+    }
+
+    /// By its name, matching case exactly when `exact` (matplotlib's names are case-sensitive).
+    fn find(name: &str, exact: bool) -> Option<Colormap> {
+        let name = name.trim();
+        matplotlib::COLORMAPS
+            .iter()
+            .position(|c| if exact { c.name == name } else { c.name.eq_ignore_ascii_case(name) })
+            .and_then(|i| u8::try_from(i).ok())
+            .map(Colormap)
+    }
+
+    fn get(self) -> Option<&'static matplotlib::Colormap> {
+        matplotlib::COLORMAPS.get(self.0 as usize)
+    }
+
+    /// Its matplotlib name (`"afmhot"`, `"RdYlBu"`).
+    pub fn name(self) -> &'static str {
+        self.get().map_or("gray", |c| c.name)
+    }
+
+    fn kind(self) -> RampKind {
+        self.get().map_or(RampKind::Sequential, |c| c.kind)
+    }
+
+    fn stops(self) -> &'static [(u8, [u8; 3])] {
+        self.get().map_or(&[], |c| c.stops)
+    }
+
+    fn at(self, t: f64) -> Rgba {
+        let s = self.stops();
+        let rgb = |c: [u8; 3]| Rgba::rgb(c[0], c[1], c[2]);
+        let Some(&(_, last)) = s.last() else { return Rgba::rgb(128, 128, 128) };
+        if self.kind() == RampKind::Qualitative {
+            let k = (t * (s.len() - 1) as f64).round() as usize;
+            return s.get(k).map_or(rgb(last), |c| rgb(c.1));
+        }
+        let x = t * 255.0;
+        for w in s.windows(2) {
+            if let [(p0, c0), (p1, c1)] = w
+                && x <= *p1 as f64
+            {
+                let span = (*p1 as f64 - *p0 as f64).max(1.0);
+                return rgb(*c0).lerp(rgb(*c1), (x - *p0 as f64) / span);
+            }
+        }
+        rgb(last)
+    }
+}
+
+impl Serialize for Colormap {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.name())
+    }
+}
+
+/// A name this build doesn't know (a newer version's map, a hand edit) reads as `gray`, so the
+/// project still opens.
+impl<'de> Deserialize<'de> for Colormap {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        Ok(Colormap::find(&name, true)
+            .or_else(|| Colormap::find(&name, false))
+            .or_else(|| Colormap::find("gray", true))
+            .unwrap_or(Colormap(0)))
+    }
+}
+
+/// A colour ramp: one of our own (sequential, diverging and qualitative), one of the matplotlib
+/// library's, or a custom one.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Ramp {
     #[default]
@@ -300,6 +383,8 @@ pub enum Ramp {
     Topo,
     /// cmocean's pale yellow to deep blue, for water depth.
     Deep,
+    /// One of the matplotlib library's colour maps.
+    Matplotlib(Colormap),
     /// A ramp defined by the user.
     Custom(Box<CustomRamp>),
 }
@@ -359,14 +444,47 @@ impl Ramp {
             Ramp::Oleron => "Oleron",
             Ramp::Topo => "Topo",
             Ramp::Deep => "Deep",
+            Ramp::Matplotlib(c) => c.name(),
             Ramp::Custom(c) => c.name(),
         }
+    }
+
+    /// Matplotlib's `gray`: black to white, how single-band rasters are first drawn.
+    pub fn gray() -> Ramp {
+        Ramp::Matplotlib(Colormap::find("gray", true).unwrap_or(Colormap(0)))
+    }
+
+    /// Every built-in ramp: our own, then the matplotlib library's.
+    pub fn builtin() -> impl Iterator<Item = Ramp> {
+        Ramp::ALL.into_iter().chain(Colormap::all().map(Ramp::Matplotlib))
+    }
+
+    /// The whole matplotlib library as the pane lists it, in alphabetical order: its maps that
+    /// are our own ramps already (Viridis, Balance, …) appear as those.
+    pub fn matplotlib_library() -> Vec<Ramp> {
+        let ours = [
+            Ramp::Viridis,
+            Ramp::Plasma,
+            Ramp::Inferno,
+            Ramp::Magma,
+            Ramp::Cividis,
+            Ramp::Turbo,
+            Ramp::Haline,
+            Ramp::Balance,
+            Ramp::Deep,
+            Ramp::Topo,
+            Ramp::Greys,
+        ];
+        let mut all: Vec<Ramp> = ours.into_iter().chain(Colormap::all().map(Ramp::Matplotlib)).collect();
+        all.sort_by_cached_key(|r| r.name().to_ascii_lowercase());
+        all
     }
 
     pub fn kind(&self) -> RampKind {
         match self {
             Ramp::Harbour => RampKind::Qualitative,
             Ramp::Diverging | Ramp::Vik | Ramp::Roma | Ramp::Balance | Ramp::Oleron | Ramp::Topo => RampKind::Diverging,
+            Ramp::Matplotlib(c) => c.kind(),
             Ramp::Custom(c) => c.kind(),
             _ => RampKind::Sequential,
         }
@@ -402,14 +520,19 @@ impl Ramp {
             Ramp::Diverging | Ramp::Vik | Ramp::Roma | Ramp::Balance => RampGroup::Diverging,
             Ramp::Terrain | Ramp::Oleron | Ramp::Topo | Ramp::Deep => RampGroup::Topographic,
             Ramp::Harbour => RampGroup::Qualitative,
+            Ramp::Matplotlib(_) => RampGroup::Matplotlib,
             Ramp::Custom(_) => RampGroup::Custom,
             _ => RampGroup::Sequential,
         }
     }
 
-    /// One of our own ramps by name or label (custom ramps are looked up in the project).
+    /// A built-in ramp by name or label (custom ramps are looked up in the project). A name that
+    /// matches case exactly wins: `"Terrain"` is ours, `"terrain"` matplotlib's.
     pub fn from_name(s: &str) -> Option<Ramp> {
-        Ramp::ALL.into_iter().find(|r| r.name().eq_ignore_ascii_case(s.trim()) || r.label().eq_ignore_ascii_case(s.trim()))
+        let s = s.trim();
+        Ramp::builtin()
+            .find(|r| r.name() == s)
+            .or_else(|| Ramp::builtin().find(|r| r.name().eq_ignore_ascii_case(s) || r.label().eq_ignore_ascii_case(s)))
     }
 
     fn stops(&self) -> &'static [[u8; 3]] {
@@ -453,8 +576,8 @@ impl Ramp {
             Ramp::Oleron => scientific::OLERON,
             Ramp::Topo => scientific::TOPO,
             Ramp::Deep => scientific::DEEP,
-            // Sampled from its own stops (`CustomRamp::at`).
-            Ramp::Custom(_) => &[],
+            // Sampled from their own stops (`Colormap::at`, `CustomRamp::at`).
+            Ramp::Matplotlib(_) | Ramp::Custom(_) => &[],
         }
     }
 
@@ -465,8 +588,10 @@ impl Ramp {
     /// Colour at `t` ∈ [0, 1] (qualitative ramps pick the nearest swatch).
     pub fn at(&self, t: f64) -> Rgba {
         let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
-        if let Ramp::Custom(c) = self {
-            return c.at(t);
+        match self {
+            Ramp::Custom(c) => return c.at(t),
+            Ramp::Matplotlib(c) => return c.at(t),
+            _ => {}
         }
         let mut s = self.stops();
         let mut t = t;
@@ -495,6 +620,13 @@ impl Ramp {
                 return s.get(k % s.len().max(1)).map_or(Rgba::rgb(128, 128, 128), |c| c.1);
             }
         }
+        if let Ramp::Matplotlib(c) = self
+            && c.kind() == RampKind::Qualitative
+        {
+            let s = c.stops();
+            let c = s.get(k % s.len().max(1)).map_or([128, 128, 128], |c| c.1);
+            return Rgba::rgb(c[0], c[1], c[2]);
+        }
         if self.is_qualitative() {
             let s = self.stops();
             let c = s.get(k % s.len().max(1)).copied().unwrap_or([128, 128, 128]);
@@ -514,7 +646,7 @@ mod tests {
         assert_eq!(Rgba::from_hex(&c.hex()), Some(c));
         assert_eq!(Rgba::from_hex("#zz0000"), None);
         assert_eq!(Rgba::from_hex("#ééé"), None);
-        for r in Ramp::ALL {
+        for r in Ramp::builtin() {
             let _ = r.at(f64::NAN);
             let _ = r.pick(99, 3);
             let _ = r.pick(0, 0);
@@ -529,7 +661,7 @@ mod tests {
         assert_eq!(Ramp::Viridis.at(1.0), Rgba::rgb(0xFD, 0xE7, 0x25));
         assert_eq!(Ramp::Magma.at(0.0), Rgba::rgb(0x00, 0x00, 0x04));
         // Names travel in project files as before, and older ones still read.
-        for r in Ramp::ALL {
+        for r in Ramp::builtin() {
             let text = serde_json::to_string(&r).unwrap();
             assert_eq!(serde_json::from_str::<Ramp>(&text).unwrap(), r, "{text}");
             assert_ne!(r.group(), RampGroup::Custom);
@@ -538,7 +670,7 @@ mod tests {
         assert_eq!(Ramp::from_name("topo (land and sea)"), Some(Ramp::Topo));
         // Each group but the project's own lists some, every one in exactly one.
         for g in RampGroup::ALL {
-            assert_eq!(Ramp::ALL.iter().any(|r| r.group() == g), g != RampGroup::Custom, "{g:?}");
+            assert_eq!(Ramp::builtin().any(|r| r.group() == g), g != RampGroup::Custom, "{g:?}");
         }
         // Oleron and Topo jump at sea level instead of blending through it.
         for r in [Ramp::Oleron, Ramp::Topo] {
@@ -556,6 +688,46 @@ mod tests {
                 assert!(step < 40, "{r:?} at {k}: {a:?} → {b:?}");
             }
         }
+    }
+
+    #[test]
+    fn matplotlib_library() {
+        // The whole library rio-tiler and GeoLibre list, each name once, in alphabetical order.
+        let lib = Ramp::matplotlib_library();
+        assert_eq!(lib.len(), 107);
+        let names: Vec<&str> = lib.iter().map(|r| r.name()).collect();
+        assert_eq!(names.first(), Some(&"Accent"));
+        assert!(names.windows(2).all(|w| w[0].to_ascii_lowercase() < w[1].to_ascii_lowercase()), "{names:?}");
+        for r in &lib {
+            assert_eq!(Ramp::from_name(r.name()).as_ref(), Some(r), "{}", r.name());
+        }
+        // Matplotlib's names are case-sensitive; ours keep theirs.
+        let named = |s: &str| Ramp::from_name(s).map(|r| r.name().to_string());
+        assert_eq!(named("terrain").as_deref(), Some("terrain"));
+        assert_eq!(Ramp::from_name("Terrain"), Some(Ramp::Terrain));
+        assert_eq!(Ramp::from_name("Thermal"), Some(Ramp::Thermal));
+        assert_eq!(named("rdylbu").as_deref(), Some("RdYlBu"));
+        assert_eq!(named("viridis").as_deref(), Some("Viridis"));
+        // Their colours: matplotlib's end colours, and its qualitative maps' own swatches.
+        let gray = Ramp::from_name("gray").unwrap();
+        assert_eq!((gray.at(0.0), gray.at(1.0)), (Rgba::rgb(0, 0, 0), Rgba::rgb(255, 255, 255)));
+        assert_eq!(gray.at(0.5), Rgba::rgb(128, 128, 128));
+        // New rasters' default: matplotlib's gray itself, never another map the lookup fell back to.
+        assert_eq!(Ramp::gray(), gray);
+        assert_eq!(Ramp::gray().name(), "gray");
+        let jet = Ramp::from_name("jet").unwrap();
+        assert_eq!(jet.at(0.0), Rgba::rgb(0, 0, 127));
+        let tab10 = Ramp::from_name("tab10").unwrap();
+        assert!(tab10.is_qualitative());
+        assert_eq!(tab10.pick(0, 3), Rgba::rgb(0x1F, 0x77, 0xB4));
+        assert_eq!(tab10.pick(11, 3), tab10.pick(1, 3));
+        assert_eq!(Ramp::from_name("RdBu").map(|r| r.kind()), Some(RampKind::Diverging));
+        // Project files hold them by name.
+        let text = serde_json::to_string(&jet).unwrap();
+        assert_eq!(text, r#"{"Matplotlib":"jet"}"#);
+        assert_eq!(serde_json::from_str::<Ramp>(&text).unwrap(), jet);
+        // An unknown name, from a newer version or a hand edit, still opens: as gray.
+        assert_eq!(serde_json::from_str::<Ramp>(r#"{"Matplotlib":"nope"}"#).unwrap(), gray);
     }
 
     fn custom(json: &str) -> Result<CustomRamp, String> {

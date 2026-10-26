@@ -9,6 +9,7 @@
 mod effects;
 pub mod families;
 pub mod fonts;
+mod glyphs;
 pub mod gpu_scene;
 pub mod layout;
 mod line_labels;
@@ -783,7 +784,7 @@ impl Ctx<'_> {
         let (qx, qy) = (((x - fx) * 4.0).round(), ((y - fy) * 4.0).round());
         let (ix, iy) = (fx as i64 + (qx >= 4.0) as i64, fy as i64 + (qy >= 4.0) as i64);
         let (qx, qy) = ((qx as u8) % 4, (qy as u8) % 4);
-        let reach = ((s.size.max(1.0) * 0.6 + s.stroke_width.max(0.0)) * self.ppp).ceil() as i64 + 3;
+        let reach = ((s.size.max(1.0) * marker_reach(s.marker) + s.stroke_width.max(0.0)) * self.ppp).ceil() as i64 + 3;
         if ix < -reach || iy < -reach || ix > pm.width() as i64 + reach || iy > pm.height() as i64 + reach {
             return;
         }
@@ -1252,8 +1253,27 @@ pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny
             }
             pb.close();
         }
+        Marker::Char(g) => match glyphs::shape(g) {
+            Some(s) => {
+                let em = 2.0 * r;
+                return s.path.clone().transform(Transform::from_row(em, 0.0, 0.0, em, x, y));
+            }
+            // A space draws nothing; a character no font here has, a circle of its size, so the
+            // point still shows.
+            None if g.ch.is_whitespace() => return None,
+            None => pb.push_circle(x, y, r),
+        },
     }
     pb.finish()
+}
+
+/// How far a `marker` reaches from its centre, in its sizes: a shape (a star's points) 0.6, a
+/// character as far as its outline does.
+pub(crate) fn marker_reach(marker: Marker) -> f32 {
+    match marker {
+        Marker::Char(g) => glyphs::shape(g).map_or(0.6, |s| s.reach),
+        _ => 0.6,
+    }
 }
 
 /// A marker centred at (`x`, `y`) device pixels.
@@ -1976,7 +1996,7 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
 /// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
 /// layers, aggregations, graphics or stacked line strokes; no view effects; extrusions only
-/// stand up in a tilted one). A cheap check made before any drawing; labels with icons can still
+/// stand up in a tilted one; nor characters standing up, which the GPU has no template for). A cheap check made before any drawing; labels with icons can still
 /// decline the scene once it is drawn.
 pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
@@ -2007,6 +2027,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && !l.graphics
             && !l.has_strokes()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
+            && !(view.camera.pitch != 0.0 && l.renderer.has_char_markers() && stands_up(map, l))
     })
 }
 
@@ -2296,10 +2317,11 @@ impl UprightMarker {
 
 /// The outline of a `marker` of radius `r` centred at (`x`, `y`), as [`draw_marker`] draws it
 /// (a circle as a polygon): for drawing upright markers as meshes. Every outline is seen whole
-/// from its centre, so a fan from the centre fills it.
+/// from its centre, so a fan from the centre fills it. A character, which no fan fills, as a circle
+/// of its size (while a tilted view moves; the settled view draws the character).
 pub fn marker_outline(marker: Marker, x: f32, y: f32, r: f32) -> Vec<(f32, f32)> {
     match marker {
-        Marker::Circle => (0..24)
+        Marker::Circle | Marker::Char(_) => (0..24)
             .map(|i| {
                 let a = std::f32::consts::TAU * i as f32 / 24.0;
                 (x + r * a.cos(), y + r * a.sin())
@@ -5427,6 +5449,22 @@ mod tests {
     }
 
     #[test]
+    fn a_tilted_view_of_characters_standing_up_stays_on_the_cpu() {
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut map = hill_map();
+        assert!(gpu_may_turn(&map, &view));
+        for l in &mut map.layers {
+            l.renderer.map_symbols(|s| s.marker = Marker::Char(rustgis_map::Glyph::new('L', "")));
+        }
+        // The GPU has no template for a character: standing up, it would be a circle.
+        assert!(!gpu_may_turn(&map, &view));
+        // Turned, not tilted, the map is drawn flat, where the layer is a CPU picture.
+        let turned = View { camera: Camera { bearing: 30.0, pitch: 0.0, ..camera }, ..view };
+        assert!(gpu_may_turn(&map, &turned));
+    }
+
+    #[test]
     fn a_tilted_view_drapes_the_map_over_its_terrain() {
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
@@ -5814,6 +5852,76 @@ mod tests {
         let r = render(&mut m, &view).unwrap();
         assert_ne!(r.pixmap.pixel(100, 110).unwrap(), blank, "drawn 10 pt to the right");
         assert_eq!(r.pixmap.pixel(100, 100).unwrap(), blank, "nothing on the centreline");
+    }
+
+    #[test]
+    fn a_character_marker_draws_its_character_where_qgis_does_and_on_the_cpu() {
+        use ab_glyph::Font;
+        use rustgis_map::Glyph;
+        // A 60 pt "L" at the centre of a 200 px view: its advance centred, its baseline half the
+        // font's ascent below the point.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("signs", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let id = m.add_dataset(d);
+        let black = Rgba::rgb(0, 0, 0);
+        let none = Rgba::new(0, 0, 0, 0);
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(Symbol {
+            fill: black,
+            stroke: none,
+            stroke_width: 0.0,
+            size: 60.0,
+            marker: Marker::Char(Glyph::new('L', "")),
+        });
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        let ink = |x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| p.red() < 100 && p.alpha() > 200);
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for y in 0..200 {
+            for x in 0..200 {
+                if ink(x, y) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        let f = crate::text::label_font().unwrap();
+        let upm = f.units_per_em().unwrap();
+        let baseline = 100.0 + 60.0 * f.ascent_unscaled() / 2.0 / upm;
+        assert!((y1 as f32 + 1.0 - baseline).abs() < 2.0, "foot on the baseline: {y1} vs {baseline}");
+        assert!(y1 - y0 > x1 - x0 && x0 < 100 && x1 > 100, "an L, about the point: {x0},{y0} {x1},{y1}");
+        assert!(ink(x0 + 1, y0 + 1) && !ink(x1 - 1, y0 + 1) && ink(x1 - 1, y1 - 1), "its stem and foot, not a blob");
+        // The GPU has no character template: the layer is a CPU picture there.
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.contains(&"image") && !kinds.contains(&"points"), "{kinds:?}");
+        // A character no font here has still shows the point: a circle of its size.
+        if let rustgis_map::Renderer::Single(sym) = &mut m.layer_mut(id).unwrap().renderer {
+            sym.marker = Marker::Char(Glyph::new('\u{10FFFD}', ""));
+        }
+        let r = render(&mut m, &view).unwrap();
+        let ink = |x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| p.red() < 100 && p.alpha() > 200);
+        assert!(ink(100, 100) && ink(100, 75) && !ink(100, 65), "a 60 pt circle");
+        // Along a line too, turned with it.
+        let mut d = Dataset::new("rail", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.5), Coord::new(1.0, 0.5)]])), vec![]);
+        let line = m.add_dataset(d);
+        let marks = rustgis_map::LineMarkers {
+            mark: rustgis_map::LineMark::Marker(Marker::Char(Glyph::new('L', ""))),
+            size: 20.0,
+            interval: 40.0,
+            ..Default::default()
+        };
+        m.layer_mut(line).unwrap().line_strokes =
+            vec![rustgis_map::LineStroke { color: Some(black), markers: Some(marks), ..Default::default() }];
+        m.layer_mut(id).unwrap().visible = false;
+        let r = render(&mut m, &view).unwrap();
+        let drawn = (0..200)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .filter(|(x, y)| r.pixmap.pixel(*x, *y).is_some_and(|p| p.alpha() > 200 && p.red() < 100))
+            .count();
+        assert!(drawn > 40, "{drawn} px of characters along the line");
     }
 
     #[test]

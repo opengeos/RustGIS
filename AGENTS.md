@@ -33,6 +33,9 @@ Before picking work, read [ROADMAP.md](ROADMAP.md) (check Underway) and
 - **Everything is a command**: a `CommandSpec` in `crates/engine/src/cmd/*.rs`. UI-only
   commands (`ui.*`) live in `crates/ui-egui/src/lib.rs`. The ribbon, shortcuts, command search
   and CLI dispatch by id. Commands never open dialogs.
+- **Ribbon placement** follows the
+  [ribbon guidelines](docs/contributing.md#ribbon-guidelines): the tab's purpose, one button per
+  destination, labels that say what happens, and what a ribbon pull request states.
 - **Never break wasm**: everything below `apps/` must build for `wasm32-unknown-unknown`
   (CI runs `cargo build --target wasm32-unknown-unknown -p rustgis-web`; the Zstandard decoder in
   `rustgis-data` is C, so this needs clang). Use `web_time`, not

@@ -14,7 +14,7 @@ use rustgis_engine::map::symbology::{
 };
 use rustgis_engine::map::tiles::{TileKind, TileLayer};
 use rustgis_engine::map::{
-    ClassMethod, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
+    ClassMethod, Glyph, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
 };
 use serde_json::{Value, json};
 
@@ -453,6 +453,15 @@ fn left_header(app: &mut RustGisApp, ui: &mut Ui, left: LeftPane, t: &Tokens) {
 // ---------------------------------------------------------------------------------------------
 // Contents
 
+/// Paints a character marker's character centred on `at`, `px` tall, in its installed family (the
+/// interface font until egui has it, or where the machine lacks it).
+fn glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, px: f32, c: egui::Color32) {
+    use rustgis_engine::render::families;
+    let font = families::find_ready(g.font.as_str());
+    let family = crate::labelfonts::family(p.ctx(), font, false, false).map_or(egui::FontFamily::Proportional, |(f, _)| f);
+    p.text(at, Align2::CENTER_CENTER, g.ch, egui::FontId::new(px, family), c);
+}
+
 /// Paints a symbol patch for a layer of geometry type `g`.
 pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
     match g {
@@ -482,6 +491,11 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
                         c32(s.fill),
                         Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)),
                     ));
+                }
+                // An outline-only character shows in its outline's colour.
+                Marker::Char(g) => {
+                    let col = if s.fill.a() == 0 && s.stroke_width > 0.0 { s.stroke } else { s.fill };
+                    glyph(p, c, g, (s.size * 1.4).clamp(8.0, 18.0), c32(col));
                 }
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
@@ -1884,6 +1898,15 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     if !l.is_raster() && ui.button(tl!("Labeling Properties…")).clicked() {
         if let Err(e) = app.run("ui.pane.labeling", json!({"layer": l.id})) {
+            app.session.notify(e, true);
+        }
+        ui.close();
+    }
+    // A layer's action, so with the layer's (#858); the Labeling pane keeps the class settings.
+    if !l.is_raster()
+        && ui.button(tl!("Convert To Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked()
+    {
+        if let Err(e) = app.run("labels.convert", json!({"layer": l.id})) {
             app.session.notify(e, true);
         }
         ui.close();
@@ -3386,13 +3409,7 @@ pub fn tool_icon(id: &str) -> &'static str {
 
 fn ramp_swatch(ui: &mut Ui, ramp: &Ramp, w: f32, selected: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click());
-    let n = 24;
-    for i in 0..n {
-        let c = if ramp.is_qualitative() { ramp.pick(i * 10 / n, 10) } else { ramp.at(i as f64 / (n - 1) as f64) };
-        let x0 = r.min.x + r.width() * i as f32 / n as f32;
-        let x1 = r.min.x + r.width() * (i + 1) as f32 / n as f32 + 0.5;
-        ui.painter().rect_filled(Rect::from_min_max(pos2(x0, r.min.y), pos2(x1, r.max.y)), 0.0, c32(c));
-    }
+    paint_ramp(ui.painter(), r, ramp);
     ui.painter().rect_stroke(
         r,
         CornerRadius::same(2),
@@ -3400,6 +3417,18 @@ fn ramp_swatch(ui: &mut Ui, ramp: &Ramp, w: f32, selected: bool, t: &Tokens) -> 
         egui::StrokeKind::Outside,
     );
     resp
+}
+
+/// A ramp's colours across `r`, low to high.
+fn paint_ramp(painter: &egui::Painter, r: Rect, ramp: &Ramp) {
+    let n = 24;
+    for i in 0..n {
+        // A qualitative ramp's `at` picks the nearest of all its swatches (tab20 shows all 20).
+        let c = ramp.at(i as f64 / (n - 1) as f64);
+        let x0 = r.min.x + r.width() * i as f32 / n as f32;
+        let x1 = r.min.x + r.width() * (i + 1) as f32 / n as f32 + 0.5;
+        painter.rect_filled(Rect::from_min_max(pos2(x0, r.min.y), pos2(x1, r.max.y)), 0.0, c32(c));
+    }
 }
 
 const PENDING_SYMBOLOGY: &str = "symbology_pending_field";
@@ -3760,15 +3789,18 @@ fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
     // One collapsible list per group; the current scheme's group starts open.
     let custom: Vec<Ramp> = app.session.project.ramps.iter().map(|r| Ramp::Custom(Box::new(r.clone()))).collect();
     for g in RampGroup::ALL {
-        let ramps: Vec<Ramp> =
-            if g == RampGroup::Custom { custom.clone() } else { Ramp::ALL.into_iter().filter(|r| r.group() == g).collect() };
+        let ramps: Vec<Ramp> = match g {
+            RampGroup::Custom => custom.clone(),
+            RampGroup::Matplotlib => Ramp::matplotlib_library(),
+            _ => Ramp::ALL.into_iter().filter(|r| r.group() == g).collect(),
+        };
         if ramps.is_empty() {
             continue;
         }
         egui::CollapsingHeader::new(egui::RichText::new(tl!(g.label())).size(11.5).color(t.text_dim))
             .id_salt(("ramp_group", g.label()))
             .default_open(cur.group() == g)
-            .show(ui, |ui| grid(app, ui, g.label(), ramps));
+            .show(ui, |ui| if g == RampGroup::Matplotlib { ramp_list(app, ui, &ramps, cur, t) } else { grid(app, ui, g.label(), ramps) });
     }
     if ui
         .small_button(tl!("Add Color Ramp File…"))
@@ -3777,6 +3809,39 @@ fn ramp_picker(app: &mut RustGisApp, ui: &mut Ui, cur: &Ramp, t: &Tokens) {
     {
         let _ = app.run("ui.openItem", json!({"kind": "ramps"}));
     }
+}
+
+/// A long list of ramps, a swatch and its name on each row, scrolling in a box of its own (only
+/// the rows in view are drawn).
+fn ramp_list(app: &mut RustGisApp, ui: &mut Ui, ramps: &[Ramp], cur: &Ramp, t: &Tokens) {
+    const ROW_H: f32 = 24.0;
+    let scroll = egui::ScrollArea::vertical().id_salt("ramp_list").max_height(260.0).auto_shrink([false, true]);
+    scroll.show_rows(ui, ROW_H, ramps.len(), |ui, rows| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let w = ui.available_width();
+        for r in ramps.get(rows).unwrap_or_default() {
+            let selected = r == cur;
+            let (rect, resp) = ui.allocate_exact_size(vec2(w, ROW_H), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, r.name()));
+            if selected || resp.hovered() {
+                ui.painter().rect_filled(rect, CornerRadius::same(3), if selected { t.accent.gamma_multiply(0.18) } else { t.hover });
+            }
+            let swatch = Rect::from_min_size(pos2(rect.min.x + 6.0, rect.center().y - 7.0), vec2(72.0, 14.0));
+            paint_ramp(ui.painter(), swatch, r);
+            ui.painter().rect_stroke(swatch, CornerRadius::same(2), Stroke::new(1.0, t.border_strong), egui::StrokeKind::Outside);
+            // The library's own names, which aren't translated.
+            ui.painter().text(
+                pos2(swatch.max.x + 10.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                r.name(),
+                egui::FontId::proportional(13.0),
+                t.text,
+            );
+            if resp.clicked() {
+                let _ = app.run("layer.ramp", json!({"ramp": r.name()}));
+            }
+        }
+    });
 }
 
 /// Save as Default and Reset Default: how single-band rasters added from now on are drawn.
@@ -3802,7 +3867,7 @@ fn raster_default_buttons(app: &mut RustGisApp, ui: &mut Ui, style: &RasterStyle
         let changed = app.session.raster_defaults != RasterDefaults::default();
         if ui
             .add_enabled(changed, egui::Button::new(tl!("Reset Default")).small())
-            .on_hover_text(tl!("Draw new single-band rasters with the inverted grey stretch again."))
+            .on_hover_text(tl!("Draw new single-band rasters with the grey stretch again."))
             .clicked()
             && let Err(e) = app.run("raster.setDefaultStyle", json!({"reset": true}))
         {
@@ -4108,10 +4173,19 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
                                 let _ = app.run("layer.marker", json!({"shape": m.label()}));
                             }
                         }
+                        let on = matches!(s.marker, Marker::Char(_));
+                        if ui.selectable_label(on, tl!("Character")).clicked() && !on {
+                            let _ = app.run("layer.marker", json!({"char": DEFAULT_CHAR.to_string()}));
+                        }
                     })
                     .response
                     .labelled_by(input_label.id);
                 ui.end_row();
+                if let Marker::Char(g) = s.marker
+                    && let Some((ch, font)) = char_rows(ui, "marker_char", g)
+                {
+                    let _ = app.run("layer.marker", json!({"char": ch.to_string(), "font": font.unwrap_or_default()}));
+                }
             }
         });
     });
@@ -4176,11 +4250,17 @@ fn stroke_json(st: &LineStroke) -> Value {
 
 /// A stroke's markers as `layer.lineStrokes` takes them.
 fn markers_json(m: &LineMarkers) -> Value {
+    let glyph = match m.mark {
+        LineMark::Marker(Marker::Char(g)) => Some(g),
+        _ => None,
+    };
     json!({
         "mark": match m.mark {
             LineMark::Hash => "hash".to_string(),
             LineMark::Marker(shape) => shape.label().to_ascii_lowercase(),
         },
+        "char": glyph.map(|g| g.ch.to_string()),
+        "font": glyph.map(|g| g.font.as_str()),
         "size": m.size,
         "at": m.at.codes(),
         "interval": m.interval,
@@ -4190,6 +4270,35 @@ fn markers_json(m: &LineMarkers) -> Value {
         "angle": m.angle,
         "outline": m.outline.map(|c| c.hex8()),
     })
+}
+
+/// The character a marker switched to a character starts as (one the label font has).
+const DEFAULT_CHAR: char = 'A';
+
+/// A character marker's rows (`g`): its character, typed, and the installed family it is drawn
+/// from. The character and family (none: the label font) when either changes.
+fn char_rows(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug + Copy, g: Glyph) -> Option<(char, Option<String>)> {
+    let font = (!g.font.is_default()).then(|| g.font.as_str().to_string());
+    let mut out = None;
+    let input_label = ui.label(tl!("Character"));
+    let mut text = g.ch.to_string();
+    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(48.0).char_limit(2)).labelled_by(input_label.id);
+    // The character typed: the last one, so typing over the old one replaces it.
+    if r.changed()
+        && let Some(ch) = text.chars().rfind(|c| *c != g.ch).or_else(|| text.chars().next())
+        && ch != g.ch
+    {
+        out = Some((ch, font.clone()));
+    }
+    ui.end_row();
+    let input_label = ui.label(tl!("Font"));
+    let picked = crate::labelpane::family_picker(ui, salt, egui::Id::unique((salt, "search")), font.as_deref());
+    picked.response.labelled_by(input_label.id);
+    if let Some(f) = picked.chosen {
+        out = Some((g.ch, f));
+    }
+    ui.end_row();
+    out
 }
 
 /// The places along a line the stroke editor offers for markers.
@@ -4275,6 +4384,7 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
             LineMark::Marker(Marker::Square) => {
                 ui.painter().rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
             }
+            LineMark::Marker(Marker::Char(g)) => glyph(ui.painter(), pos2(at, y), g, (2.0 * half).max(6.0), c),
             LineMark::Marker(_) => {
                 ui.painter().circle_filled(pos2(at, y), half, c);
             }
@@ -4296,10 +4406,20 @@ fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: L
                         set(app, with(LineMarkers { mark: LineMark::Marker(s), ..m }));
                     }
                 }
+                let on = matches!(shape, Marker::Char(_));
+                if ui.selectable_label(on, tl!("Character")).clicked() && !on {
+                    set(app, with(LineMarkers { mark: LineMark::Marker(Marker::Char(Glyph::new(DEFAULT_CHAR, ""))), ..m }));
+                }
             })
             .response
             .labelled_by(input_label.id);
         ui.end_row();
+        if let Marker::Char(g) = shape
+            && let Some((ch, font)) = char_rows(ui, ("stroke_marker_char", i), g)
+        {
+            let mark = LineMark::Marker(Marker::Char(Glyph::new(ch, font.as_deref().unwrap_or_default())));
+            set(app, with(LineMarkers { mark, ..m }));
+        }
     }
     let input_label = ui.label(if m.mark == LineMark::Hash { tl!("Length") } else { tl!("Size") });
     let mut size = m.size;
@@ -6132,5 +6252,21 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.revision, rev, "the menu ran a command on every frame");
+    }
+
+    /// A feature layer's menu converts its labels into an annotation layer (#858), as View ›
+    /// Labeling › Convert does, by the command's name.
+    #[test]
+    fn the_layer_menu_converts_labels_to_annotation() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        h.step();
+        h.get_by_label("Convert To Annotation").click();
+        h.step();
+        let map = h.state().session.map();
+        assert!(map.layer_by_name("Cities Annotation").is_some(), "no annotation layer");
+        assert!(!map.layer_by_name("Cities").unwrap().labels.enabled, "the layer's own labels give way to it");
     }
 }

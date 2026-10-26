@@ -40,6 +40,105 @@ Interface strings must be translatable: use `tl!("…")` for literals and
 `i18n::fmt("… {name} …", &[("name", value)])` for messages with values. New strings can fall back
 to English until the catalogs are updated; see [Languages](i18n.md).
 
+## Ribbon guidelines
+
+These guidelines decide where a ribbon control goes and what kind of control it is. They guide
+new features and small, tab-by-tab improvements; they are not a claim that the current ribbon
+already follows every rule. Decisions about particular controls live in their issues.
+
+### Start with the task and the tab's purpose
+
+Use the tab's purpose to decide where a feature belongs, rather than putting it wherever there
+is space. Agree on that purpose before reorganising a tab.
+
+| Tab | Purpose |
+| --- | --- |
+| Home | The basics of working with a map: starting a map or layout, adding data, moving around, and selecting and inspecting features. |
+| Data | Working with the content and structure of data: looking at records, changing fields and values, connecting tables, and bringing data in and out. Exports here produce data, such as features and rasters. |
+| Style | Deciding how a layer looks on the map: how its features are drawn and shown at different scales. |
+| Labeling (planned) | How the map is labelled: what gets a label, with which text, where, and at which scales, plus the label settings for the whole map. |
+| Edit | Creating and changing features and graphics on the map, and managing those edits. |
+| Analyze | Turning existing data into new results, from single tools to repeatable workflows, scripts and automation. |
+| View | How the map and workspace are displayed: map appearance and view configuration, and which panes and windows are open. Basic navigation stays on Home. |
+| Publish | Getting work out to others: printing, exporting or sharing products such as maps, layouts, reports and packages, including on the web. |
+| Plugins | Finding, installing and using plugins that extend RustGIS. |
+| Settings | Preferences that apply to every project, such as language, appearance and start-up. |
+| Help | Learning RustGIS, finding commands and shortcuts, and getting information about the app. |
+
+Until the Labeling tab lands, Style still holds the layer's label controls. Keep Data, Style and
+Labeling fixed, rather than making the tab strip change with the selected layer. Their target
+should be explicit: a layer chooser at the left of each layer-dependent tab (for example,
+“Styling: Countries ▾”) is planned, with a useful hint when no suitable layer is selected. Where
+a class chooser is needed, the layer comes first, then the class.
+
+If a control seems to fit two tabs, or none, clarify its task and destination before placing
+it. Home is not a catch-all for anything described as “frequently used”. Data exports data;
+Publish exports products. A control kept on a tab its purpose doesn't cover, until another tab
+is reorganised, is an interim exception: record it in the issue that tracks the move.
+
+### Keep useful shortcuts, not duplicate destinations
+
+- **One button per destination, not per pane.** Buttons that open the same pane at different
+  sections are useful task shortcuts. Merge controls that land in the same place with the same
+  context.
+- **Keep View › Windows complete.** Every pane must be reachable there. Working tabs may repeat
+  the panes their tasks need; do not replace those shortcuts with a generic Panes dropdown just
+  to reduce the button count.
+- **Keep modes with their tools.** Measurement units belong with Measure because they are chosen
+  while measuring. Application-wide preferences such as Dark Mode belong in Settings.
+- **One name and icon per thing.** Use the same label and icon for the same command wherever it
+  appears: ribbon, panes and Command Search. Do not give one tool different names, or expose
+  one setting as two differently named toggles.
+- **Labels say what happens.** Name a control for what it does, not for a similar feature
+  elsewhere. Go To XY pans to coordinates; “Locate” would suggest it also finds addresses, as
+  Find Place does. End a label with “…” when it opens a dialog or file picker that asks for input.
+- **Keep a route to every feature.** Removing a ribbon control must not remove access to its
+  action. Name and check the remaining route, including for UI-only actions.
+
+### Choose controls for the workflow
+
+- Put everyday actions and quick adjustments on the ribbon; keep deeper, less frequent options
+  in a pane. A pane holds the full set of settings; its ribbon controls are shortcuts to the
+  same settings and selected layer or class, not separate state.
+- Use a split button only when there is a clear everyday default. The main action stays fixed;
+  choosing an alternative never changes it to “last used”. The arrow opens related alternatives.
+  Without an obvious default, use a plain dropdown. For example, Select's main action is click
+  or box selection; Polygon, Lasso and Radius are in its arrow menu.
+
+For split-button implementation and enabled-state handling, see
+[Architecture](architecture.md#everything-is-a-command).
+
+### Check workflows before shipping
+
+Improve the ribbon in small pull requests, tab by tab, rather than replacing the whole layout
+at once. Clear naming and duplicate-destination fixes can land independently of a larger
+reorganisation.
+
+Check everyday workflows such as adding data, selecting by location, buffering, symbolising
+and exporting a map. When moving, removing or regrouping controls, record clicks and tab
+switches for these before and after; fewer controls is not an improvement if those tasks become
+harder. Check the tab at 1366 px wide with the [`ui_shot` example](#documentation) and look at
+the image. Keep everyday controls reachable without horizontal scrolling; move deeper options to
+their pane rather than packing more controls into the strip.
+
+A pull request that adds a ribbon control should state:
+
+- the task it serves, its tab and group, and how it fits the tab's purpose;
+- whether it runs immediately, selects a tool, opens a dialog or opens a pane, including the
+  pane section and layer/class context;
+- the fixed default and alternatives if it uses a split button;
+- a screenshot of the tab at 1366 px wide.
+
+A pull request that moves, removes or regroups controls should also state:
+
+- where each removed control's action remains reachable, and any Command Search location or
+  label updates;
+- why any repeated destination is useful in its workflow;
+- the workflows checked, with their click and tab-switch counts before and after.
+
+Changing ribbon placement does not require changing command ids or parameters: keep CLI,
+shortcuts and scripts working.
+
 ## Test data
 
 Generate small datasets during tests instead of committing fixture files. The shared generator

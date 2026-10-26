@@ -33,12 +33,28 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   first. Closing the pane or selecting another layer drops the retry.
 - **Proportional Symbols**: point size grows with a numeric field, chosen as for Graduated Colors.
 
+A point's **Shape** is a circle, square, triangle, diamond or star, or a **Character**: any
+character of an installed font, picked under **Font**, as map signs often are (a symbol font's
+church, tree or mine). Its **Size** is the font's size, and the character sits as QGIS draws a
+font marker: centred across the point, its baseline half the font's ascent below it. A font the
+machine lacks draws the character in the label font, and a character no font here has
+draws a circle, so the point still shows. By command:
+
+```text
+layer.marker={"layer":"Peaks","char":"▲","font":"DejaVu Sans","size":12}
+```
+
 Pick a colour scheme from the pane's swatches, listed in groups: **Perceptually Uniform** (Viridis,
 Plasma, Inferno, Magma, Cividis, Batlow and Aurora: even steps in lightness, so they read in
 greyscale and for colour-blind viewers), **Sequential**, **Diverging** (Red–Blue, Vik, Roma,
 Balance), **Topographic and Bathymetric** (Terrain, Oleron, Topo and Deep; Oleron and Topo change
-colour sharply at the middle of the range, sea level for data centred on 0), **Qualitative** and
-the project's own **Custom** ramps. Click a group's name to show or hide it. The Style tab sets the fill **Color**, the
+colour sharply at the middle of the range, sea level for data centred on 0), **Qualitative**,
+**Matplotlib** (the whole matplotlib colour map library as GeoLibre lists it, cmocean's maps
+included, by name from Accent to YlOrRd) and the project's own **Custom** ramps. Commands take a
+scheme by name; matplotlib's names are case-sensitive where they meet ours (`terrain` is
+matplotlib's, `Terrain` ours). A project's own ramp named like a built-in one (an older
+project's `jet`, say) is renamed with ` (custom)` when the project opens; layers drawn with it
+keep their colours, as each holds its own copy. Click a group's name to show or hide it. The Style tab sets the fill **Color**, the
 **Outline** width, **Transparency** and a **Visibility Range** (the scales between which the layer
 draws; a large file read in place is not read at all outside them); points can be circles, squares,
 triangles, diamonds or stars. **Data › Definition Query** draws only the features matching a SQL
@@ -161,7 +177,7 @@ layer.strokeLevels={"layer":"Roads","on":true}
 
 A stroke can draw markers or hash marks along the line instead of a line, as railways, boundaries
 and directions of flow are drawn: its **Draw** menu picks **Line**, **Markers** or **Hash marks**.
-Markers take a **Shape** and a **Size**; hash marks a **Length**, crossing the line square at an
+Markers take a **Shape** (a character of a font too, as for points) and a **Size**; hash marks a **Length**, crossing the line square at an
 **Angle** of 0°. **Place** puts them at intervals along the line (**Interval** apart, counted from
 its start), at its vertices or its inner ones, at either end or both, or in its middle. **With the
 line** turns each mark with the line's direction; the **Angle** turns it further, clockwise. Marks
@@ -172,6 +188,7 @@ command, `"markers"` on a stroke:
 ```text
 layer.lineStrokes={"layer":"Railways","strokes":[{"color":"#333333","width":1.5},{"color":"#333333","width":1,"markers":{"mark":"hash","size":6,"interval":10}}]}
 layer.lineStrokes={"layer":"Rivers","strokes":[{"width":1},{"markers":{"mark":"triangle","size":7,"at":"middle"}}]}
+layer.lineStrokes={"layer":"Trails","strokes":[{"markers":{"mark":"character","char":"»","font":"DejaVu Sans","size":8,"interval":16}}]}
 ```
 
 `"at"` takes `"interval"`, `"vertices"`, `"innerVertices"`, `"first"`, `"last"`, `"middle"` and
@@ -257,10 +274,12 @@ it unchanged.
 ## Labeling
 
 The **Labeling pane** brings together the label classes and the chosen class's field, SQL
-clause, text symbol, placement and visibility limits, plus the map-wide label display controls.
-Open it for a feature layer with Layers › right-click › **Labeling Properties…**, **View ›
-Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as the
-ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
+clause, text symbol, placement and visibility limits. Under its header (the layer, labels on or
+off, and the class chosen), a tab per topic shows one part at a time: **Content** (the label field,
+with a search in its list, above the SQL query), **Symbol**, **Position** and
+**Range**. Open it for a feature layer with Layers › right-click › **Labeling Properties…**,
+**View › Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as
+the ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
 Label classes are described below.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
@@ -268,7 +287,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
-- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol
   › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
   italic take the family's own bold and italic faces where it has them. The family is saved by
   its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
@@ -295,8 +314,10 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   curved. Points and polygons with these placements are labelled as automatic
   (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
-  labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
-- **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
+  labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
+  apply to the whole map, so they are on the ribbon (View › Labeling), not in the pane.
+- **Convert** (View › Labeling, or Layers › right-click › **Convert To Annotation**) turns a
+  layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
 - **Label classes** label different features differently, such as large cities in larger text.
   Each class has a SQL clause choosing its features, and its own field, text symbol, placement
@@ -307,8 +328,8 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   `pop_max <= 5000000` for Default. Classes are placed in list order, Default last; a hidden
   class or one outside its visibility range labels nothing without excluding features from
   other classes. There can be up to 64 classes besides Default. In the Labeling pane, the
-  **Class** list at the top chooses the class every section shows and edits, and **Visible**
-  under it hides or shows that class. The row under the list has **New**, which adds a class
+  **Class** list at the top, in a card with the class's actions, chooses the class every tab
+  shows and edits, and **Visible** under it hides or shows that class. The row under the list has **New**, which adds a class
   with the chosen class's field, text symbol, placement and range, listed before Default;
   **Rename** and **Move Up** / **Move Down** (the arrows) for the chosen class; and, at its far
   end, **Remove** (Default can be renamed or hidden, not moved or removed). The ribbon's label groups edit the
