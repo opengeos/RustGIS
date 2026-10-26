@@ -15207,12 +15207,13 @@ fn default_raster_style_applies_to_new_rasters() {
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem3"})).unwrap();
     assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::gray(), invert: false });
     // An inverted stretch stays inverted when only its band changes (the pane sends no invert).
-    s.run("raster.symbology", &json!({"type": "stretch", "invert": true})).unwrap();
-    s.run("raster.symbology", &json!({"type": "stretch", "band": 1})).unwrap();
-    assert!(matches!(style(&s).renderer, RasterRenderer::Stretch { invert: true, .. }));
-    s.run("raster.symbology", &json!({"type": "classify"})).unwrap();
-    s.run("raster.symbology", &json!({"type": "stretch"})).unwrap();
-    assert!(matches!(style(&s).renderer, RasterRenderer::Stretch { invert: false, .. }), "a new stretch isn't inverted");
+    let scene = |s: &Session| s.map().layer_by_name("scene").unwrap().raster.as_ref().unwrap().style.renderer.clone();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch", "band": 1, "invert": true})).unwrap();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch", "band": 2})).unwrap();
+    assert!(matches!(scene(&s), RasterRenderer::Stretch { band: 1, invert: true, .. }), "{:?}", scene(&s));
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "classify"})).unwrap();
+    s.run("raster.symbology", &json!({"layer": "scene", "type": "stretch"})).unwrap();
+    assert!(matches!(scene(&s), RasterRenderer::Stretch { invert: false, .. }), "a new stretch isn't inverted");
 }
 
 #[test]
