@@ -33,6 +33,9 @@ const WINDOW: u32 = 101;
 const FEATURE_COUNT: usize = 10;
 /// Most features read from an answer, attributes kept of each, and characters of a value.
 const MAX_FEATURES: usize = 100;
+/// Most bytes read of a capabilities document or a GetFeatureInfo answer, by the command and by
+/// the app alike.
+pub const MAX_INFO_BYTES: usize = 8 << 20;
 const MAX_ATTRIBUTES: usize = 200;
 const MAX_VALUE: usize = 4000;
 
@@ -300,9 +303,18 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
         }
         // GML: a feature collection's members (GML 2/3 featureMember(s), WFS 2 member).
         _ => {
-            let is_member = |n: &Node| n.is_element() && matches!(local(n), "featureMember" | "featureMembers" | "member");
-            // A member inside another is a feature's attribute (one named `member`), not a feature.
-            for member in root.descendants().filter(|n| is_member(n) && !n.ancestors().skip(1).any(|a| is_member(&a))) {
+            // The outermost members, in document order: a member inside another is a feature's
+            // attribute (one named `member`), not a feature, so the walk doesn't go into them.
+            let mut members = Vec::new();
+            let mut stack = vec![*root];
+            while let Some(n) = stack.pop() {
+                if matches!(local(&n), "featureMember" | "featureMembers" | "member") {
+                    members.push(n);
+                } else {
+                    stack.extend(n.children().filter(|c| c.is_element()).collect::<Vec<_>>().into_iter().rev());
+                }
+            }
+            for member in members {
                 for f in member.children().filter(|c| c.is_element()) {
                     out.push(InfoFeature { layer: Some(local(&f).to_string()), attributes: gml_attributes(&f) });
                 }

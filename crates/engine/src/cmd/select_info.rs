@@ -16,9 +16,6 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Most WMS layers one identify asks.
 const MAX_ASKED: usize = 8;
-/// Most bytes read of a capabilities document or an answer (fetched here natively).
-#[cfg(not(target_arch = "wasm32"))]
-const MAX_BYTES: usize = 8 << 20;
 
 pub(super) fn commands() -> Vec<C> {
     vec![
@@ -151,8 +148,9 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let fetch =
-            |url: &str| crate::render::rustgis_tiles::cache::download_blocking_limited(url, MAX_BYTES).map_err(|e| format!("{name}: {e}"));
+        let fetch = |url: &str| {
+            crate::render::rustgis_tiles::cache::download_blocking_limited(url, ogc::MAX_INFO_BYTES).map_err(|e| format!("{name}: {e}"))
+        };
         let mut step = next(s);
         if let Some(caps) = step.as_ref().and_then(|v| v["capabilities"].as_str()).map(str::to_string) {
             learn(s, index, &fetch(&caps)?)?;

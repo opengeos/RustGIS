@@ -10,7 +10,7 @@ use serde_json::value::RawValue;
 
 #[path = "ogc_info.rs"]
 mod info;
-pub use info::{FeatureInfo, InfoFeature, read_feature_info, wms_layer_of};
+pub use info::{FeatureInfo, InfoFeature, MAX_INFO_BYTES, read_feature_info, wms_layer_of};
 
 /// What a layer of a service becomes.
 #[derive(Clone, Debug, PartialEq)]
