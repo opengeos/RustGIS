@@ -267,8 +267,9 @@ deployment-capabilities.md, ui-profiles.md_
   GeoLibre, which covers field work on phones.
 - [ ] **PWA and offline basemap tile pre-caching**. Partial: the web app is installable with
   offline start; offline data areas with sync. Tile pre-caching unverified.
-- [ ] **Docker self-hosting image with runtime config**. Partial: a Dockerfile for the web app; a
-  published image and runtime config (settings from the container's environment) are missing.
+- [ ] **Docker self-hosting image with runtime config**. Partial: a Dockerfile for the web app and a
+  published image (ghcr.io/opengeos/rustgis-web); runtime config (settings from the container's
+  environment) is missing.
 - [ ] **Deployment capabilities, policies and UI profiles**: restrict edit, add, run and export per
   deployment. Missing.
 - [ ] **Package-manager and store channels**: winget, a Homebrew Cask, the Mac App Store. Partial:

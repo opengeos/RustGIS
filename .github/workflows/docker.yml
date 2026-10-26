@@ -1,0 +1,127 @@
+# Builds the web app's Docker image (the Dockerfile at the root, see docs/installation.md ›
+# Self-host the web app with Docker) and publishes it to the GitHub Container Registry as
+# ghcr.io/opengeos/rustgis-web, for linux/amd64 and linux/arm64:
+#
+#   edge, sha-<commit>            every update to main
+#   <version>, <major>.<minor>,   every published release (a pre-release gets only its version)
+#   latest
+#
+# A pull request that changes the image builds and smoke-tests it without publishing. The app is
+# WebAssembly, so the build stage runs once, on the runner's platform, for both platforms.
+name: Docker image
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - packaging/docker/**
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.event_name }}-${{ github.ref }}
+  # A newer push to main supersedes the image being built; a release always finishes.
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+env:
+  IMAGE: ghcr.io/opengeos/rustgis-web
+
+jobs:
+  image:
+    name: Build and publish
+    if: github.repository == 'opengeos/RustGIS'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6
+        env:
+          # The registry shows the index's annotations for a multi-platform image.
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.IMAGE }}
+          # `latest` follows releases, not main.
+          flavor: latest=false
+          tags: |
+            type=edge,branch=main
+            type=sha,enable=${{ github.event_name != 'release' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+          # The Dockerfile's own, ahead of the ones metadata-action takes from the repository.
+          labels: |
+            org.opencontainers.image.title=RustGIS web app
+            org.opencontainers.image.description=The RustGIS web app (WebAssembly), served by nginx
+            org.opencontainers.image.url=https://rustgis.app
+          annotations: |
+            org.opencontainers.image.title=RustGIS web app
+            org.opencontainers.image.description=The RustGIS web app (WebAssembly), served by nginx
+            org.opencontainers.image.url=https://rustgis.app
+
+      # The image for the runner's platform, loaded into Docker to check that it serves the app.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: rustgis-web:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run -d --name rustgis-web -p 8080:8080 rustgis-web:test
+          for _ in $(seq 30); do
+            curl -sSf http://127.0.0.1:8080/healthz >/dev/null && break
+            sleep 1
+          done
+          curl -sSf http://127.0.0.1:8080/ | grep -q '_bg.wasm'
+          curl -sSf -o /dev/null http://127.0.0.1:8080/sw.js
+          curl -sSf -o /dev/null http://127.0.0.1:8080/manifest.webmanifest
+          echo "The image serves the web app."
+
+      - name: Smoke test logs
+        if: failure()
+        run: docker logs rustgis-web || true
+
+      - name: Sign in to the GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both platforms; the build stage is the smoke test's, from the builder's cache.
+      - name: Publish
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha
