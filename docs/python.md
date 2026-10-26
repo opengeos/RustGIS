@@ -136,6 +136,40 @@ The project, with the data that travels with it, goes to that app through the br
 (`postMessage`); nothing goes to a server. The app runs in your browser, so with the default
 address your data stays on your machine. Point `url=` only at a copy of the app you trust.
 
+## The app in a Qt application
+
+`rustgis.qt.MapWidget` is the same app in a Qt widget, for a desktop tool or a script that opens a
+window: it shows the web app in Qt WebEngine and keeps it in step with its session, as `Map` does
+in a notebook. It needs PySide6 (or PyQt6 with PyQt6-WebEngine).
+
+```sh
+pip install "rustgis[qt]"
+```
+
+```python
+from rustgis.qt import MapWidget                     # import it before the QApplication
+from PySide6.QtWidgets import QApplication
+
+app = QApplication([])
+w = MapWidget(sample=True)                           # lang="de", url=... as for Map
+w["Countries"].style("graduated", field="pop_est")   # appears in the app
+w.show()                                             # or add it to a layout
+app.exec()
+
+w.info()["center"]                                   # where the app's map was left
+```
+
+`MapWidget` has the methods of `Map` (`run`, `run_in_app`, `add_data`, `w["Sites"]`, `to_png`,
+`notices`, ...) and is a `QWidget`, so it goes in a layout or a dock like any other; `w.view` is
+the `QWebEngineView` the app runs in. Call its methods from the Qt main thread. What the
+[notebook section](#the-app-in-a-notebook) says about files, merging and the app's address holds
+here too.
+
+In a conda environment that also has conda's own Qt, PySide6 from pip may find conda's Qt plugins
+instead of its own and fail to start ("Could not find the Qt platform plugin"). Use a separate
+environment for it, or point `QT_PLUGIN_PATH` at the `Qt/plugins` folder of the PySide6 package
+(and `QTWEBENGINEPROCESS_PATH` at its `Qt/libexec/QtWebEngineProcess`).
+
 ## Commands
 
 Engine actions are commands with an id and JSON parameters: the same ids the ribbon, the

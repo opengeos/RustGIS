@@ -15,6 +15,7 @@ mod arcgisui;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
+mod autosave;
 mod backstage;
 mod bookmarkpane;
 mod catalogsui;
@@ -87,6 +88,9 @@ use rustgis_engine::render::rustgis_tiles::failure::Failure;
 use rustgis_engine::{Project, Session};
 use serde_json::{Value, json};
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use autosave::FolderStore;
+pub use autosave::{Recovery, RecoveryStore};
 pub use chrome::{DoubleClick, TitlebarMetrics};
 pub use rustgis_assistant;
 pub use rustgis_engine;
@@ -240,6 +244,10 @@ pub struct Services {
     /// Makes an HTTP request (the AI assistant's calls to its model) and puts the response, of any
     /// status, in the slot (the browser's fetch; the desktop sends it on a thread).
     pub http: Option<Box<dyn Fn(rustgis_assistant::HttpRequest, Slot<Result<rustgis_assistant::HttpResponse, rustgis_assistant::Error>>)>>,
+    /// Where autosave keeps the recovery copy of unsaved work (the desktop's recovery folder).
+    /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
+    /// running alongside the first, which mustn't touch its copy.
+    pub recovery: Option<Box<dyn RecoveryStore>>,
     /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
     /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
     /// slot (the browser; the desktop runs `arcgis.signIn`).
@@ -320,6 +328,9 @@ pub struct ServiceBrowse {
     pub filter: String,
     /// The date time-enabled layers are added at (their default when empty).
     pub time: String,
+    /// Feature layers are asked only for the features crossing the map's view (Only the map's
+    /// area), not whole.
+    pub area: bool,
     /// The directories (and their types) opened before the one shown, the last most recent.
     pub back: Vec<(String, &'static str)>,
 }
@@ -815,6 +826,8 @@ pub struct RustGisApp {
     pub quit_requested: bool,
     logo: Option<egui::TextureHandle>,
     pub services: Services,
+    /// Autosave's interval, its last copy, and the copy an earlier run left (#873).
+    pub(crate) autosave: autosave::AutosaveState,
     /// The MCP relay for `rustgis-cli mcp --attach`: a loopback listener on the session this app
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
@@ -905,6 +918,7 @@ impl RustGisApp {
         self.map.set_render_state(rs);
     }
 
+    /// The app around `session`, with no platform hooks (see [`Self::with_services`]).
     pub fn new(session: Session) -> Self {
         // The installed fonts a label can be drawn in, indexed while the app starts.
         rustgis_engine::render::families::warm_up();
@@ -961,14 +975,18 @@ impl RustGisApp {
             label_fonts_indexed: false,
             shown_lang: i18n::Lang::EN,
             seen_project: None,
+            autosave: Default::default(),
         }
     }
 
+    /// Installs the shell's platform hooks and reads what they keep: preferences, saved
+    /// connections and the recovery copy an earlier run left.
     pub fn with_services(mut self, services: Services) -> Self {
         // Both saved database passwords and S3 keys use the same store, installed before prefs.
         self.session.database_logins.set_store(services.secrets.clone());
         self.services = services;
         sourcespane::load_connections(&mut self);
+        autosave::load(&mut self);
         if let Some(lang) = self.services.load_pref.as_ref().and_then(|load| load("language")) {
             self.ui.language = lang;
         }
@@ -1492,6 +1510,12 @@ impl RustGisApp {
         }
     }
 
+    /// A clean exit (the desktop app's `on_exit`): the recovery copy of this run's unsaved work
+    /// is removed, as recovery is for a run that didn't close. Call it once, as the app closes.
+    pub fn end_autosave(&mut self) {
+        autosave::end(self);
+    }
+
     /// Whether this shell opens files by path (the desktop app; the web app picks them in the
     /// browser instead).
     pub(crate) fn opens_files(&self) -> bool {
@@ -1781,7 +1805,7 @@ impl RustGisApp {
         }
     }
 
-    /// Dispatches UI-only commands; transient tool switches do not dirty or persist the project.
+    /// Runs a `ui.*` command: panes, dialogs and the app's own settings.
     fn run_ui(&mut self, id: &str, p: &Value) -> Result<Value, String> {
         // A pane's command toggles it; `{"close": true}` closes it, in view or not (a tab's ✕),
         // whatever else the command is given (SQL to run, a question to ask).
@@ -1904,6 +1928,8 @@ impl RustGisApp {
                 }
                 self.apply_worldview();
             }
+            "ui.autosave" => return autosave::command(self, p),
+            "ui.recover" => return autosave::recover(self, p),
             "ui.startup" => {
                 // `project` (#377) or, as before, `blank`; `project` wins when both are given.
                 let start_with = match p.get("project") {
@@ -3475,6 +3501,7 @@ impl RustGisApp {
         // on the session directly) becomes Last Project now, not a frame later the app may not
         // reach.
         self.note_last_project();
+        autosave::tick(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
         let fonts: Vec<(String, Vec<u8>)> = match &self.services.font_inbox {
@@ -3627,6 +3654,7 @@ impl RustGisApp {
         graphicformat::save_draft(self);
         dialogs::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
+        autosave::offer(self, &ctx);
         pluginsui::show(self, &ctx);
         update::show(self, &ctx);
         showme::tick(self, &ctx);

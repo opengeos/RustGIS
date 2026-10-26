@@ -1,14 +1,15 @@
 //! QGIS symbols (`<symbol type="fill|line|marker">`) as a RustGIS [`Symbol`], and a line's
 //! symbol layers as stacked [`LineStroke`]s. A symbol layer RustGIS has no match for is drawn
-//! as near as it can (a pattern fill as a tint of its colour, a font or SVG marker as a circle in
-//! its colour) or left out, and noted.
+//! as near as it can (a pattern fill as a tint of its colour, an SVG marker as a circle in its
+//! colour) or left out, and noted.
 
 use roxmltree::Node;
 
 use super::{Report, color, data_defined_on, has_effect, points, prop, props, signed_points};
 use crate::Rgba;
 use crate::symbology::{
-    Dash, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_DASH_STEPS, MAX_STROKES, Marker, Placements, Symbol,
+    Dash, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_DASH_STEPS, MAX_STROKES, Marker, MarkerRotation, Placements,
+    Symbol,
 };
 
 /// A symbol layer's settings by name.
@@ -24,6 +25,8 @@ const SYMBOL_UNIT: &str = "(symbol unit)";
 pub(super) struct Converted {
     pub symbol: Symbol,
     pub strokes: Vec<LineStroke>,
+    /// A marker symbol turned by a field (its data-defined angle).
+    pub rotation: Option<MarkerRotation>,
 }
 
 impl Converted {
@@ -40,9 +43,18 @@ pub(super) fn hidden() -> Symbol {
     Symbol { fill: none, stroke: none, stroke_width: 0.0, size: 0.0, marker: Marker::Circle }
 }
 
+/// Whether the marker symbol `sym` turns by a field (its data-defined angle, or a layer's).
+pub(super) fn turns_by_field(sym: Node) -> bool {
+    sym.attribute("type") == Some("marker")
+        && std::iter::once(sym)
+            .chain(sym.children().filter(|c| c.has_tag_name("layer")).take(64))
+            .any(|n| active_properties(n).into_iter().any(|(name, p)| name == "angle" && field_angle(p).is_some()))
+}
+
 /// The symbol `sym` (a `<symbol>` element), its sizes at the reference scale `reference` where
-/// they are in map units.
-pub(super) fn read(sym: Node, reference: Option<f64>, layer: &str, report: &mut Report) -> Converted {
+/// they are in map units. `turned`: the layer's markers turn by a field, so a marker symbol that
+/// doesn't is drawn as a mark that keeps still.
+pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str, report: &mut Report) -> Converted {
     let alpha = sym.attribute("alpha").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0);
     let fade = |c: Rgba| c.with_alpha((f32::from(c.a()) * alpha).round() as u8);
     let unit = sym.attribute("outputUnit");
@@ -52,10 +64,25 @@ pub(super) fn read(sym: Node, reference: Option<f64>, layer: &str, report: &mut 
         .take(64)
         .map(|l| (l, settings(l, unit)))
         .collect();
-    for (l, _) in &layers {
-        if data_defined_on(*l) {
+    // A marker symbol's angle from a field turns the layer's markers; other data-defined settings
+    // are noted.
+    let is_marker = !matches!(sym.attribute("type"), Some("fill") | Some("line"));
+    let mut rotation = None;
+    for node in std::iter::once(sym).chain(layers.iter().map(|(l, _)| *l)) {
+        let active = active_properties(node);
+        // A layout `active_properties` doesn't read (QGIS 2's `dd_properties`) is still noted.
+        if active.is_empty() && data_defined_on(node) {
             report.skipped(layer, "data-defined symbol settings (from fields or expressions)");
         }
+        for (name, property) in active {
+            match field_angle(property).filter(|_| is_marker && name == "angle") {
+                Some(r) if rotation.as_ref().is_none_or(|had| *had == r) => rotation = Some(r),
+                Some(_) => report.approximated(layer, "marker layers turned by different fields, all turned by the first"),
+                None => report.skipped(layer, "data-defined symbol settings (from fields or expressions)"),
+            }
+        }
+    }
+    for (l, _) in &layers {
         if has_effect(*l) {
             report.skipped(layer, "draw effects (shadows, glows, blurs and the like)");
         }
@@ -63,8 +90,9 @@ pub(super) fn read(sym: Node, reference: Option<f64>, layer: &str, report: &mut 
     let mut out = match sym.attribute("type") {
         Some("fill") => fill(&layers, reference, layer, report),
         Some("line") => line(&layers, reference, layer, report),
-        _ => marker(&layers, reference, layer, report),
+        _ => marker(&layers, reference, turned && rotation.is_none(), layer, report),
     };
+    out.rotation = rotation;
     out.symbol.fill = fade(out.symbol.fill);
     out.symbol.stroke = fade(out.symbol.stroke);
     for s in &mut out.strokes {
@@ -205,7 +233,7 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
             }
             class @ ("LinePatternFill" | "PointPatternFill" | "SVGFill" | "RasterFill" | "RandomMarkerFill") => {
                 // The pattern's own symbol's colour, as a tint over what's below.
-                let sub = l.children().find(|c| c.has_tag_name("symbol")).map(|s| read(s, reference, layer, &mut Report::default()));
+                let sub = l.children().find(|c| c.has_tag_name("symbol")).map(|s| read(s, reference, false, layer, &mut Report::default()));
                 let c = sub.map(|s| if s.symbol.stroke.a() > 0 && s.symbol.fill.a() == 0 { s.symbol.stroke } else { s.symbol.fill });
                 if let Some(c) = c.or_else(|| prop(p, "color").and_then(color)) {
                     fill = Some(tint(c));
@@ -218,7 +246,7 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
     }
     let symbol =
         Symbol { fill: fill.unwrap_or(none), stroke: stroke.unwrap_or(none), stroke_width: width, size: 0.0, marker: Marker::Circle };
-    Converted { symbol, strokes: Vec::new() }
+    Converted { symbol, strokes: Vec::new(), rotation: None }
 }
 
 fn line(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &mut Report) -> Converted {
@@ -274,7 +302,7 @@ fn line(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
         }
         None => hidden(),
     };
-    Converted { symbol, strokes }
+    Converted { symbol, strokes, rotation: None }
 }
 
 /// A marker line (`hash` false) or hashed line as strokes of markers or hash marks along the line:
@@ -379,12 +407,7 @@ fn marker_mark(
                 Marker::Circle
             })
         }
-        // A character is mostly thin strokes: a dot of its size would draw a heavy blot along the
-        // line where QGIS draws a tick or a dash, so it is left out.
-        "FontMarker" => {
-            report.skipped(layer, "font markers (characters of a symbol font) along lines");
-            return None;
-        }
+        "FontMarker" => font_char(p, layer, report)?,
         "SvgMarker" | "RasterMarker" | "EllipseMarker" | "FilledMarker" => {
             report.approximated(layer, format!("{} markers, drawn as circles in their colour", marker_name(class)));
             Marker::Circle
@@ -394,6 +417,9 @@ fn marker_mark(
             return None;
         }
     };
+    if class == "FontMarker" && anchored(p) {
+        report.approximated(layer, "font markers anchored off their centre, drawn centred");
+    }
     let fill = prop(p, "color").and_then(color).unwrap_or(Rgba::new(0, 0, 0, 0));
     let outline = if prop(p, "outline_style") == Some("no") { None } else { prop(p, "outline_color").and_then(color) };
     let width = if outline.is_some() { size(p, "outline_width", reference, layer, report).unwrap_or(0.0) } else { 0.0 };
@@ -459,8 +485,11 @@ fn marker_offset(p: &[(String, String)], rotate: bool, reference: Option<f64>, l
     (signed_points(x, unit, reference, layer, report), signed_points(y, unit, reference, layer, report))
 }
 
-fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &mut Report) -> Converted {
+/// `still`: the layer's markers turn by a field, but this symbol's don't.
+fn marker(layers: &[(Node, Props)], reference: Option<f64>, still: bool, layer: &str, report: &mut Report) -> Converted {
     let mut symbol = hidden();
+    // Each layer as a mark, bottom first: drawn as marks when one alone (the symbol) can't say it.
+    let mut marks: Vec<LineStroke> = Vec::new();
     for (l, p) in layers {
         let class = l.attribute("class").unwrap_or_default();
         let fill = prop(p, "color").and_then(color);
@@ -474,10 +503,10 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
                     Marker::Circle
                 })
             }
-            "FontMarker" => {
-                report.approximated(layer, "font markers (characters of a symbol font), drawn as circles in their colour");
-                Marker::Circle
-            }
+            "FontMarker" => match font_char(p, layer, report) {
+                Some(m) => m,
+                None => continue,
+            },
             "SvgMarker" | "RasterMarker" | "EllipseMarker" | "FilledMarker" => {
                 report.approximated(layer, format!("{} markers, drawn as circles in their colour", marker_name(class)));
                 Marker::Circle
@@ -487,13 +516,29 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
                 continue;
             }
         };
-        if prop(p, "angle").and_then(|a| a.trim().parse::<f32>().ok()).is_some_and(|a| a != 0.0) {
-            report.approximated(layer, "turned markers, drawn upright");
-        }
         let fill = fill.unwrap_or(Rgba::new(0, 0, 0, 0));
-        // A font marker's character is all fill; an outline of no width draws none.
-        let width = if class == "FontMarker" { 0.0 } else { size(p, "outline_width", reference, layer, report).unwrap_or(0.0) };
-        // Each layer drawn over the one before: the top one's look, the biggest size.
+        let width = size(p, "outline_width", reference, layer, report).unwrap_or(0.0);
+        let angle = prop(p, "angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(0.0);
+        let (x, y) = point_offset(p, sz, reference, layer, report);
+        let drawn_outline = outline.filter(|_| prop(p, "outline_style") != Some("no") && width > 0.0);
+        marks.push(LineStroke {
+            color: Some(fill),
+            width: Some(width),
+            offset: y,
+            markers: Some(LineMarkers {
+                mark: LineMark::Marker(shape),
+                size: sz,
+                offset_along: x,
+                angle,
+                outline: drawn_outline,
+                rotate: !still,
+                at: Placements::FIRST,
+                ..LineMarkers::default()
+            }),
+            ..LineStroke::default()
+        });
+        // Each layer drawn over the one before: the top one's look, the biggest size (the legend's
+        // and the symbol's when it is drawn alone).
         symbol = Symbol {
             fill,
             stroke: outline.unwrap_or(fill),
@@ -502,7 +547,129 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
             marker: shape,
         };
     }
-    Converted { symbol, strokes: Vec::new() }
+    // One layer, centred and upright, is the symbol itself (drawn the quickest); more, or one shifted
+    // or turned, are marks, as is one that keeps still where the layer's markers turn.
+    let alone = !still
+        && marks.len() <= 1
+        && marks.iter().all(|m| m.offset == 0.0 && m.markers.is_some_and(|k| k.offset_along == 0.0 && k.angle == 0.0));
+    let strokes = if alone { Vec::new() } else { marks.into_iter().map(LineStroke::clamped).collect() };
+    Converted { symbol, strokes, rotation: None }
+}
+
+/// A point marker layer's offset (`offset`, "x,y" in its unit: right and down) in points, its
+/// anchor point added: anchored at its left or top edge, a marker of size `size` sits half its
+/// size right of or below the point, as QGIS draws it. A font marker's baseline anchor is drawn
+/// centred (noted).
+fn point_offset(p: &[(String, String)], size: f32, reference: Option<f64>, layer: &str, report: &mut Report) -> (f32, f32) {
+    let parse = |v: &str| v.trim().parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(0.0);
+    let (x, y) = prop(p, "offset").and_then(|o| o.split_once(',')).map_or((0.0, 0.0), |(x, y)| (parse(x), parse(y)));
+    let unit = prop(p, "offset_unit").or(prop(p, SYMBOL_UNIT));
+    let (mut x, mut y) = if x == 0.0 && y == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (signed_points(x, unit, reference, layer, report), signed_points(y, unit, reference, layer, report))
+    };
+    let half = size / 2.0;
+    match prop(p, "horizontal_anchor_point").map(str::trim) {
+        Some("0") => x += half,
+        Some("2") => x -= half,
+        _ => {}
+    }
+    match prop(p, "vertical_anchor_point").map(str::trim) {
+        Some("0") => y += half,
+        Some("2") => y -= half,
+        Some("3") => report.approximated(layer, "markers anchored at their baseline, drawn centred"),
+        _ => {}
+    }
+    (x, y)
+}
+
+/// The data-defined properties switched on in `node`'s own `data_defined_properties`, by name.
+fn active_properties<'a, 'i>(node: Node<'a, 'i>) -> Vec<(&'a str, Node<'a, 'i>)> {
+    let Some(dd) = node.children().find(|c| c.has_tag_name("data_defined_properties")) else { return Vec::new() };
+    let mut out = Vec::new();
+    for props in dd.descendants().filter(|o| o.has_tag_name("Option") && o.attribute("name") == Some("properties")) {
+        for p in props.children().filter(|c| c.has_tag_name("Option")).take(64) {
+            let on = p.children().any(|a| a.attribute("name") == Some("active") && a.attribute("value") == Some("true"));
+            if let (true, Some(name)) = (on, p.attribute("name")) {
+                out.push((name, p));
+            }
+        }
+    }
+    out
+}
+
+/// A data-defined angle that is a field's value (a field property, or the expression `"field"`,
+/// `- "field"`): the rotation it gives. `None` for any other expression.
+fn field_angle(property: Node) -> Option<MarkerRotation> {
+    let named = |name: &str| {
+        property.children().find(|c| c.has_tag_name("Option") && c.attribute("name") == Some(name)).and_then(|o| o.attribute("value"))
+    };
+    let field = |f: &str| Some(f.to_string()).filter(|f| !f.is_empty() && f.len() <= 256);
+    match named("type").map(str::trim) {
+        Some("2") => Some(MarkerRotation { field: field(named("field")?.trim())?, counterclockwise: false }),
+        Some("3") => {
+            let e = named("expression")?.trim();
+            let (minus, e) = match e.strip_prefix('-') {
+                Some(rest) => (true, rest.trim()),
+                None => (false, e),
+            };
+            let name = match e.strip_prefix('"').and_then(|e| e.strip_suffix('"')) {
+                Some(quoted) if !quoted.contains('"') => quoted,
+                Some(_) => return None,
+                None if e.chars().all(|c| c.is_alphanumeric() || c == '_') => e,
+                None => return None,
+            };
+            Some(MarkerRotation { field: field(name)?, counterclockwise: minus })
+        }
+        _ => None,
+    }
+}
+
+/// A font marker's character (`chr`, of the family `font`) as a character marker: QGIS's `A` when
+/// it has none, and the characters it saves escaped ([`unescape_chr`]) decoded. A
+/// string of several draws its first (noted).
+pub(super) fn font_char(p: &[(String, String)], layer: &str, report: &mut Report) -> Option<Marker> {
+    let text = unescape_chr(prop(p, "chr").filter(|c| !c.is_empty()).unwrap_or("A"));
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        report.approximated(layer, "font markers of several characters, drawn as their first");
+    }
+    if prop(p, "font_style").is_some_and(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("regular")) {
+        report.approximated(layer, "font marker styles (bold, italic and the like), drawn regular");
+    }
+    Some(Marker::Char(Glyph::new(ch, prop(p, "font").unwrap_or_default())))
+}
+
+/// `chr` as QGIS reads it: it saves some characters as their code between two `~!_#!#_!~`.
+fn unescape_chr(chr: &str) -> String {
+    const FIX: &str = "~!_#!#_!~";
+    let (mut out, mut rest) = (String::new(), chr);
+    while let Some(i) = rest.find(FIX) {
+        let after = &rest[i + FIX.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let code = after[..digits].parse::<u16>().ok().and_then(|n| char::from_u32(n.into()));
+        match code {
+            Some(c) if after[digits..].starts_with(FIX) => {
+                out.push_str(&rest[..i]);
+                out.push(c);
+                rest = &after[digits + FIX.len()..];
+            }
+            _ => {
+                out.push_str(&rest[..i + FIX.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether a marker is anchored off its centre (`horizontal_anchor_point`,
+/// `vertical_anchor_point`: 1 is the centre).
+fn anchored(p: &[(String, String)]) -> bool {
+    ["horizontal_anchor_point", "vertical_anchor_point"].iter().any(|k| prop(p, k).is_some_and(|v| v.trim() != "1"))
 }
 
 /// QGIS's simple marker shapes RustGIS has.

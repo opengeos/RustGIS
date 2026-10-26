@@ -16,9 +16,12 @@ pub enum Marker {
     Triangle,
     Diamond,
     Star,
+    /// A character of a font, as QGIS's font markers draw one: the size is the font's em.
+    Char(Glyph),
 }
 
 impl Marker {
+    /// The shapes (every marker but [`Marker::Char`]).
     pub const ALL: [Marker; 5] = [Marker::Circle, Marker::Square, Marker::Triangle, Marker::Diamond, Marker::Star];
     pub fn label(self) -> &'static str {
         match self {
@@ -27,7 +30,73 @@ impl Marker {
             Marker::Triangle => "Triangle",
             Marker::Diamond => "Diamond",
             Marker::Star => "Star",
+            Marker::Char(_) => "Character",
         }
+    }
+}
+
+/// A character marker's character, and the installed family it is drawn from (empty: the label
+/// font). A family the machine lacks draws in the label font, as a label's does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Glyph {
+    pub ch: char,
+    #[serde(default, skip_serializing_if = "FontName::is_default")]
+    pub font: FontName,
+}
+
+impl Glyph {
+    pub fn new(ch: char, font: &str) -> Glyph {
+        Glyph { ch, font: FontName::new(font) }
+    }
+}
+
+/// The most font names kept (each is kept for the rest of the run); one past them is the label font.
+const MAX_FONT_NAMES: usize = 4096;
+
+/// A font family's name, kept once for the rest of the run so a symbol naming one stays `Copy`.
+/// Empty for the label font. Names are kept as a label's are ([`font_name`]), and past
+/// [`MAX_FONT_NAMES`] different ones (from a crafted file) the rest are the label font.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FontName(&'static str);
+
+impl FontName {
+    pub fn new(name: &str) -> FontName {
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+        let Some(name) = font_name(name) else { return FontName::default() };
+        let name = name.as_str();
+        let mut names = NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(kept) = names.get(name) {
+            return FontName(kept);
+        }
+        if names.len() >= MAX_FONT_NAMES {
+            return FontName::default();
+        }
+        let kept: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        names.insert(kept);
+        FontName(kept)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for FontName {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for FontName {
+    /// Not a name (a crafted file): the label font, and the rest still reads.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(de_font(d)?.map_or_else(FontName::default, |n| FontName::new(&n)))
     }
 }
 
@@ -355,6 +424,42 @@ impl<'de> Deserialize<'de> for Placements {
         let codes: Vec<String> = Vec::deserialize(d)?;
         let p = codes.iter().take(16).filter_map(|c| Placements::from_code(c)).fold(Placements::NONE, Placements::with);
         Ok(if p.is_empty() { Placements::default() } else { p })
+    }
+}
+
+/// A point layer's markers turned by a field's angle ([`crate::Layer::marker_rotation`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarkerRotation {
+    /// The field the angle is read from, in degrees.
+    pub field: String,
+    /// The angle runs counterclockwise (as in mathematics), not clockwise (as on a compass).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub counterclockwise: bool,
+}
+
+/// Reads a layer's marker rotation leniently: one that isn't (a crafted file's) is none, and the rest
+/// of the layer still reads. A field name is at most [`MAX_FONT_NAME`]·2 characters.
+pub fn de_marker_rotation<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<MarkerRotation>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Read {
+        Rotation(MarkerRotation),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Read>::deserialize(d)? {
+        Some(Read::Rotation(r)) if !r.field.is_empty() && r.field.chars().count() <= 2 * MAX_FONT_NAME => Some(r),
+        _ => None,
+    })
+}
+
+impl MarkerRotation {
+    /// Row `row`'s turn in degrees clockwise: 0 where its value isn't a number (or the field is gone).
+    pub fn turn(&self, ds: &Dataset, row: usize) -> f32 {
+        let Some(v) = ds.field_index(&self.field).and_then(|fi| ds.value(row, fi).as_f64()).filter(|v| v.is_finite()) else {
+            return 0.0;
+        };
+        let a = v.rem_euclid(360.0) as f32;
+        if self.counterclockwise { -a } else { a }
     }
 }
 
@@ -1228,6 +1333,16 @@ impl Renderer {
             Renderer::Proportional { base, .. } => f(base),
         }
     }
+
+    /// Whether any symbol is a character of a font ([`Marker::Char`]).
+    pub fn has_char_markers(&self) -> bool {
+        let char = |s: &Symbol| matches!(s.marker, Marker::Char(_));
+        match self {
+            Renderer::Single(s) | Renderer::Proportional { base: s, .. } => char(s),
+            Renderer::Unique { classes, other, .. } => char(other) || classes.iter().any(|c| char(&c.1)),
+            Renderer::Graduated { symbols, .. } => symbols.iter().any(char),
+        }
+    }
 }
 
 /// `new` with the hand-made parts of `old`, a class whose scheme colour was `scheme`: the fill
@@ -1840,6 +1955,35 @@ mod tests {
             assert!(serde_json::to_value(&l).unwrap().get("font").is_none());
         }
         assert_eq!(read("x".repeat(10_000).into()).default.font.map(|f| f.chars().count()), Some(MAX_FONT_NAME));
+    }
+
+    /// The shapes are written as they always were; a character with its family, which a crafted
+    /// file can't make long or many, or stop the rest from reading.
+    #[test]
+    fn character_markers_keep_their_font_and_shapes_their_saved_form() {
+        for m in Marker::ALL {
+            assert_eq!(serde_json::to_value(m).unwrap(), serde_json::json!(m.label()));
+            assert_eq!(serde_json::from_value::<Marker>(serde_json::json!(m.label())).unwrap(), m);
+        }
+        let old = serde_json::json!({"fill": [1, 2, 3, 255], "stroke": [0, 0, 0, 255], "stroke_width": 1.0, "size": 7.0, "marker": "Star"});
+        let s: Symbol = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(serde_json::to_value(s).unwrap(), old);
+
+        let g = Marker::Char(Glyph::new('@', " DKM_Symbole "));
+        let v = serde_json::to_value(g).unwrap();
+        assert_eq!(v, serde_json::json!({"Char": {"ch": "@", "font": "DKM_Symbole"}}));
+        assert_eq!(serde_json::from_value::<Marker>(v).unwrap(), g);
+        // The label font's character isn't written a family.
+        assert_eq!(serde_json::to_value(Glyph::new('A', "")).unwrap(), serde_json::json!({"ch": "A"}));
+        for junk in [serde_json::json!(7), serde_json::json!(["Arial"]), serde_json::json!({"a": 1}), serde_json::Value::Null] {
+            let read: Marker = serde_json::from_value(serde_json::json!({"Char": {"ch": "x", "font": junk}})).unwrap();
+            assert_eq!(read, Marker::Char(Glyph::new('x', "")));
+        }
+        let long: Marker = serde_json::from_value(serde_json::json!({"Char": {"ch": "x", "font": "y".repeat(10_000)}})).unwrap();
+        let Marker::Char(g) = long else { panic!() };
+        assert_eq!(g.font.as_str().chars().count(), MAX_FONT_NAME);
+        // Names are kept once each: the same name is the same one.
+        assert!(std::ptr::eq(FontName::new("Some Family").as_str(), FontName::new("Some Family ").as_str()));
     }
 
     /// A project file is read with at most `MAX_LABEL_CLASSES` classes, and only that many count

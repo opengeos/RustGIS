@@ -4,7 +4,7 @@ use std::path::Path;
 
 use rustgis_data::{GeometryType, photo};
 use rustgis_map::symbology::{ClassRef, ClassStyle, LABEL_SIZE, MAX_STROKES};
-use rustgis_map::{ClassMethod, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, Placements, Ramp, Renderer, Rgba};
+use rustgis_map::{ClassMethod, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, Placements, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
@@ -175,10 +175,38 @@ pub fn commands() -> Vec<C> {
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: number}"##),
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
-            .when(need_lines)
+            .when(need_lines_or_points)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"hash" (a mark across the line), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"character"|"hash" (a mark across the line), "char"?: text (a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes; on a point layer they are its marks: each stroke's markers drawn at the point in place of the symbol's, "offsetAlong" shifting a mark right and "offset" down, both turned with its "angle", and "rotate" turning it by layer.markerRotation's field), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
+        C::new("layer.markerRotation", "Marker Rotation", "Style › Drawing", |s, p| {
+            let field = match p.get("field") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(f)) if f.is_empty() => None,
+                Some(Value::String(f)) => Some(f.clone()),
+                Some(_) => return Err("field is a field's name, or null for none".into()),
+            };
+            let counterclockwise = match p.get("counterclockwise") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => return Err("counterclockwise is true or false".into()),
+            };
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if l.geometry_type() != GeometryType::Point || l.graphics {
+                return Err("this works on point layers".into());
+            }
+            if let Some(f) = &field {
+                let fi = l.dataset.field_index(f).ok_or_else(|| format!("no field named '{f}'"))?;
+                if !l.dataset.fields.get(fi).is_some_and(|fd| fd.ty.is_numeric()) {
+                    return Err(format!("'{f}' is not a numeric field"));
+                }
+            }
+            l.marker_rotation = field.map(|field| rustgis_map::MarkerRotation { field, counterclockwise });
+            Ok(Value::Null)
+        })
+        .when(need_points)
+        .params(r#"{"layer"?, "field": numeric field name|null (each point's marker turned by the angle in it, in degrees; null: not turned), "counterclockwise"?: bool (the angles run counterclockwise, as in mathematics; default clockwise, as on a compass)}"#),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
             let id = s.layer_id(p)?;
@@ -194,10 +222,24 @@ pub fn commands() -> Vec<C> {
         C::new("layer.marker", "Marker", "Style › Drawing", |s, p| {
             let shape = ps(p, "shape").map(|n| Marker::ALL.into_iter().find(|m| m.label().eq_ignore_ascii_case(n)).ok_or("unknown marker shape")).transpose()?;
             let size = f(p, "size").map(|v| v.clamp(1.0, 80.0) as f32);
+            let (ch, font) = (character(p)?, ps(p, "font"));
+            if shape.is_some() && ch.is_some() {
+                return Err("give a shape or a char, not both".into());
+            }
             with(s, p, |l| {
                 l.renderer.map_symbols(|sym| {
                     if let Some(m) = shape {
                         sym.marker = m;
+                    }
+                    let was = match sym.marker {
+                        Marker::Char(g) => Some(g),
+                        _ => None,
+                    };
+                    // A new character keeps the family of the one before; a family alone changes a character's.
+                    match (ch, was, font) {
+                        (Some(c), _, _) => sym.marker = Marker::Char(Glyph::new(c, font.unwrap_or(was.map_or("", |g| g.font.as_str())))),
+                        (None, Some(g), Some(fam)) => sym.marker = Marker::Char(Glyph::new(g.ch, fam)),
+                        _ => {}
                     }
                     if let Some(sz) = size {
                         sym.size = sz;
@@ -206,7 +248,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r#"{"layer"?, "shape"?: "circle"|"square"|"triangle"|"diamond"|"star", "size"?: number}"#),
+        .params(r#"{"layer"?, "shape"?: "circle"|"square"|"triangle"|"diamond"|"star", "char"?: text (a character of a font as the marker, its first; sized by the font's em), "font"?: text (the installed family the character is drawn from; "" or one not installed: the label font), "size"?: number}"#),
         C::new("layer.transparency", "Transparency", "Style › Effects", |s, p| {
             let t = f(p, "value").ok_or("value (0–100) is required")?.clamp(0.0, 100.0) as f32;
             with(s, p, |l| l.transparency = t)
@@ -378,6 +420,22 @@ fn need_polygons(s: &Session) -> Option<&'static str> {
 }
 
 /// A line layer is active.
+fn need_lines_or_points(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if matches!(l.geometry_type(), GeometryType::Polyline | GeometryType::Point) && !l.graphics => None,
+        Some(_) => Some("this works on line and point layers"),
+        None => Some("select a layer in the Layers pane first"),
+    }
+}
+
+fn need_points(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if l.geometry_type() == GeometryType::Point && !l.graphics => None,
+        Some(_) => Some("this works on point layers"),
+        None => Some("select a layer in the Layers pane first"),
+    }
+}
+
 fn need_lines(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.geometry_type() == GeometryType::Polyline && !l.graphics => None,
@@ -461,8 +519,13 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-    if l.geometry_type() != GeometryType::Polyline || l.graphics {
-        return Err("this works on line layers".into());
+    let points = l.geometry_type() == GeometryType::Point;
+    if !(points || l.geometry_type() == GeometryType::Polyline) || l.graphics {
+        return Err("this works on line and point layers".into());
+    }
+    // A point draws marks only: a line stroke would draw nothing there.
+    if let Some(i) = strokes.iter().position(|st| st.markers.is_none()).filter(|_| points) {
+        return Err(format!("stroke {}: a point layer's strokes are markers", i + 1));
     }
     let n = strokes.len();
     match class {
@@ -470,6 +533,15 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
         None => l.line_strokes = strokes,
     }
     Ok(json!({"strokes": n}))
+}
+
+/// A character marker's `char` (its first character), if given.
+fn character(p: &Value) -> Result<Option<char>, String> {
+    match p.get("char") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(c)) => c.chars().next().map(Some).ok_or_else(|| "char is a character".into()),
+        Some(_) => Err("char is a character".into()),
+    }
 }
 
 /// A stroke's `markers`: what it draws along the line instead of a line, and where.
@@ -487,10 +559,27 @@ fn line_markers(v: &Value) -> Result<LineMarkers, String> {
     let mark = match o.get("mark") {
         None | Some(Value::Null) => d.mark,
         Some(Value::String(m)) if m.trim().eq_ignore_ascii_case("hash") => LineMark::Hash,
+        // Its `char` says which.
+        Some(Value::String(m)) if m.trim().eq_ignore_ascii_case("character") => {
+            if character(v)?.is_none() {
+                return Err("a character mark needs its char".into());
+            }
+            d.mark
+        }
         Some(Value::String(m)) => LineMark::Marker(
             Marker::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(m.trim())).ok_or_else(|| format!("unknown mark '{m}'"))?,
         ),
-        Some(_) => return Err("mark is \"circle\", \"square\", \"triangle\", \"diamond\", \"star\" or \"hash\"".into()),
+        Some(_) => return Err("mark is \"circle\", \"square\", \"triangle\", \"diamond\", \"star\", \"character\" or \"hash\"".into()),
+    };
+    // A character of a font instead of a shape.
+    let mark = match (character(v)?, o.get("font")) {
+        (Some(_), _) if mark == LineMark::Hash => return Err("hash marks take no char".into()),
+        // As `layer.marker`: a shape named with a char is a mistake, not the char.
+        (Some(_), _) if o.get("mark").and_then(Value::as_str).is_some_and(|m| !m.trim().eq_ignore_ascii_case("character")) => {
+            return Err("give a shape or a char, not both".into());
+        }
+        (Some(c), font) => LineMark::Marker(Marker::Char(Glyph::new(c, font.and_then(Value::as_str).unwrap_or_default()))),
+        (None, _) => mark,
     };
     let bad_at = || format!("at is a placement or a list of them: {}", Placements::all_codes());
     let at = match o.get("at") {

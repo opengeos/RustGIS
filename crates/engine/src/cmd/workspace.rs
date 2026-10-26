@@ -407,7 +407,7 @@ fn animation_zip(s: &mut Session, p: &Value) -> Result<Vec<u8>, String> {
             // Smooth in and out; scale changes geometrically.
             let e = t * t * (3.0 - 2.0 * t);
             let c = Coord::new(a.center.x + (b2.center.x - a.center.x) * e, a.center.y + (b2.center.y - a.center.y) * e);
-            let sc = (a.scale.max(1.0).ln() + (b2.scale.max(1.0).ln() - a.scale.max(1.0).ln()) * e).exp();
+            let sc = rustgis_map::camera::scale_between(a.scale, b2.scale, e);
             if let Err(e) = render(s, c, sc) {
                 result = Err(e);
                 break 'frames;

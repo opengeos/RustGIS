@@ -33,6 +33,32 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   first. Closing the pane or selecting another layer drops the retry.
 - **Proportional Symbols**: point size grows with a numeric field, chosen as for Graduated Colors.
 
+A point's **Shape** is a circle, square, triangle, diamond or star, or a **Character**: any
+character of an installed font, picked under **Font**, as map signs often are (a symbol font's
+church, tree or mine). Its **Size** is the font's size, and the character sits as QGIS draws a
+font marker: centred across the point, its baseline half the font's ascent below it. A font the
+machine lacks draws the character in the label font, and a character no font here has
+draws a circle, so the point still shows. By command:
+
+```text
+layer.marker={"layer":"Peaks","char":"▲","font":"DejaVu Sans","size":12}
+```
+
+**Rotation** turns each point's marker by the angle in a number field, in degrees clockwise
+(**Counterclockwise** for angles as mathematics counts them), as wind arrows or the signs of a
+topographic map turn. **Marks** stack several markers at a point, bottom first, in place of the
+symbol's: a white disc under a sign, say, so it reads on any background. Each mark has its own
+colour, outline, shape, size and angle, and is shifted right (**Offset right**) and down
+(**Offset down**); its offset turns with its angle, as QGIS turns it. **With the field** turns a
+mark by the rotation field too, or keeps it still. A layer with classes can have marks for one
+class of its own, as line strokes can. By command, `layer.markerRotation` and the point layer's
+strokes of markers:
+
+```text
+layer.markerRotation={"layer":"Signs","field":"angle","counterclockwise":true}
+layer.lineStrokes={"layer":"Signs","strokes":[{"color":"#FFFFFF","markers":{"mark":"circle","size":14}},{"color":"#000000","markers":{"mark":"character","char":"▲","size":10,"offsetAlong":0}}]}
+```
+
 Pick a colour scheme from the pane's swatches, listed in groups: **Perceptually Uniform** (Viridis,
 Plasma, Inferno, Magma, Cividis, Batlow and Aurora: even steps in lightness, so they read in
 greyscale and for colour-blind viewers), **Sequential**, **Diverging** (Red–Blue, Vik, Roma,
@@ -166,7 +192,7 @@ layer.strokeLevels={"layer":"Roads","on":true}
 
 A stroke can draw markers or hash marks along the line instead of a line, as railways, boundaries
 and directions of flow are drawn: its **Draw** menu picks **Line**, **Markers** or **Hash marks**.
-Markers take a **Shape** and a **Size**; hash marks a **Length**, crossing the line square at an
+Markers take a **Shape** (a character of a font too, as for points) and a **Size**; hash marks a **Length**, crossing the line square at an
 **Angle** of 0°. **Place** puts them at intervals along the line (**Interval** apart, counted from
 its start), at its vertices or its inner ones, at either end or both, or in its middle. **With the
 line** turns each mark with the line's direction; the **Angle** turns it further, clockwise. Marks
@@ -177,6 +203,7 @@ command, `"markers"` on a stroke:
 ```text
 layer.lineStrokes={"layer":"Railways","strokes":[{"color":"#333333","width":1.5},{"color":"#333333","width":1,"markers":{"mark":"hash","size":6,"interval":10}}]}
 layer.lineStrokes={"layer":"Rivers","strokes":[{"width":1},{"markers":{"mark":"triangle","size":7,"at":"middle"}}]}
+layer.lineStrokes={"layer":"Trails","strokes":[{"markers":{"mark":"character","char":"»","font":"DejaVu Sans","size":8,"interval":16}}]}
 ```
 
 `"at"` takes `"interval"`, `"vertices"`, `"innerVertices"`, `"first"`, `"last"`, `"middle"` and

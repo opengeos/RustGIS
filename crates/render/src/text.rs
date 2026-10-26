@@ -118,6 +118,23 @@ fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static Fo
     f.map(|f| (f, slanted))
 }
 
+/// The label font's regular face.
+pub(crate) fn label_font() -> Option<&'static FontRef<'static>> {
+    font(false)
+}
+
+/// The regular face of the installed family `name` a character marker draws in, and whether that
+/// is final: `None` and `false` while the families are still being indexed (see
+/// [`crate::families::find_ready`]), `None` and `true` for a family this machine lacks (or none).
+pub(crate) fn marker_font(name: &str) -> (Option<&'static FontRef<'static>>, bool) {
+    if name.trim().is_empty() {
+        return (None, true);
+    }
+    let Some(families) = crate::families::available() else { return (None, false) };
+    let named = crate::families::find_ready(name).and_then(|i| families.get(usize::from(i)));
+    (named.and_then(|fam| family_font(fam, Face::default())).map(|(f, _)| f), true)
+}
+
 /// The label font of `face`'s weight, for the characters `f` lacks: `None` when `f` is it.
 fn sans_beside(f: &'static FontRef<'static>, face: Face) -> Option<&'static FontRef<'static>> {
     font(face.bold).filter(|s| !std::ptr::eq(*s, f))
@@ -478,21 +495,51 @@ pub fn styled_at(pm: &mut Pixmap, text: &str, left: f32, cy: f32, px: f32, color
         let g = id.with_scale_and_position(em(gf, px), ab_glyph::point(left + x + spacing * i as f32, base));
         let Some(og) = gf.outline_glyph(g) else { continue };
         let bb = og.px_bounds();
+        if italic {
+            slanted_glyph(pm, &og, base, color);
+            continue;
+        }
         og.draw(|gx, gy, cov| {
-            let (px_x, px_y) = (bb.min.x + gx as f32, bb.min.y + gy as f32);
             // (Floored, so a row just above or left of the pixmap is clipped, not drawn on row 0.)
-            let row = px_y.floor() as i32;
-            if !italic {
-                blend(pm, px_x.floor() as i32, row, color, cov);
-                return;
-            }
-            // Each row leans right by its height above the baseline, split across the two
-            // pixels it falls between so the slant stays smooth.
-            let shifted = px_x + SLANT * (base - px_y - 0.5);
-            let (ix, frac) = (shifted.floor(), shifted - shifted.floor());
-            blend(pm, ix as i32, row, color, cov * (1.0 - frac));
-            blend(pm, ix as i32 + 1, row, color, cov * frac);
+            blend(pm, (bb.min.x + gx as f32).floor() as i32, (bb.min.y + gy as f32).floor() as i32, color, cov);
         });
+    }
+}
+
+/// The most pixels of one slanted glyph's coverage gathered before it is drawn.
+const MAX_SLANTED_PIXELS: usize = 1 << 22;
+
+/// Draws `og` slanted: each row leans right by its height above the baseline `base`, its coverage
+/// split across the two pixels it falls between so the slant stays smooth. The halves are added up
+/// before a pixel is drawn once: blended one after the other, two halves cover only three quarters
+/// of it, and rows that fall between pixels came out lighter, in stripes across large letters.
+fn slanted_glyph(pm: &mut Pixmap, og: &ab_glyph::OutlinedGlyph, base: f32, color: Rgba) {
+    let bb = og.px_bounds();
+    let shift = |px_x: f32, px_y: f32| px_x + SLANT * (base - px_y - 0.5);
+    // Columns from the leftmost a row can lean to, one more on the right for the split.
+    let left = shift(bb.min.x, bb.max.y).min(shift(bb.min.x, bb.min.y)).floor();
+    let right = shift(bb.max.x, bb.min.y).max(shift(bb.max.x, bb.max.y)).ceil() + 1.0;
+    let (w, h) = ((right - left).max(0.0) as usize + 1, bb.height().max(0.0).ceil() as usize + 1);
+    let Some(mut acc) = w.checked_mul(h).filter(|n| *n <= MAX_SLANTED_PIXELS).map(|n| vec![0.0f32; n]) else { return };
+    og.draw(|gx, gy, cov| {
+        let s = shift(bb.min.x + gx as f32, bb.min.y + gy as f32);
+        let (ix, frac) = (s.floor(), s - s.floor());
+        let col = (ix - left) as usize;
+        let at = gy as usize * w + col;
+        if let Some(a) = acc.get_mut(at) {
+            *a += cov * (1.0 - frac);
+        }
+        if col + 1 < w
+            && let Some(a) = acc.get_mut(at + 1)
+        {
+            *a += cov * frac;
+        }
+    });
+    for (i, cov) in acc.into_iter().enumerate() {
+        if cov > 0.0 {
+            let (col, row) = ((i % w) as f32, (i / w) as f32);
+            blend(pm, (left + col) as i32, (bb.min.y + row).floor() as i32, color, cov);
+        }
     }
 }
 
@@ -687,6 +734,24 @@ pub fn text_at(pm: &mut Pixmap, text: &str, x: f32, y: f32, px_size: f32, color:
 
 #[cfg(test)]
 mod coverage_tests {
+    /// Large letters slanted by hand are solid: every row of an "I"'s stem has a fully covered
+    /// pixel (rows that fell between pixels used to come out lighter, in stripes).
+    #[test]
+    fn slanted_letters_have_no_stripes() {
+        use super::{Face, styled_at};
+        use rustgis_map::Rgba;
+        let mut pm = tiny_skia::Pixmap::new(200, 200).unwrap();
+        pm.fill(tiny_skia::Color::WHITE);
+        let face = Face { italic: true, ..Face::default() };
+        styled_at(&mut pm, "I", 60.0, 100.0, 120.0, Rgba::rgb(0, 0, 0), face, 0.0);
+        let rows: Vec<u8> =
+            (0..200).filter_map(|y| (0..200).map(|x| pm.pixel(x, y).unwrap().red()).min().filter(|darkest| *darkest < 128)).collect();
+        assert!(rows.len() > 60, "a tall stem: {} rows", rows.len());
+        // The stem's inner rows (not its top and foot, which antialias).
+        let inner = &rows[3..rows.len() - 3];
+        assert!(inner.iter().all(|d| *d < 8), "{inner:?}");
+    }
+
     #[test]
     fn knows_which_characters_it_can_draw() {
         // Which scripts are covered depends on the fonts this computer has (a system font may

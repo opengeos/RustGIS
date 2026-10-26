@@ -11,10 +11,10 @@ use lyon::tessellation::{
 };
 use rustgis_data::Geometry;
 use rustgis_geom::{Coord, Extent};
-use rustgis_map::{Layer, Rgba, Symbol};
+use rustgis_map::{Layer, Marker, Rgba, Symbol};
 
 use crate::SELECTION;
-use crate::gpu_scene::{DrawCmd, MeshVertex, PointInstance};
+use crate::gpu_scene::{DrawCmd, MeshVertex, PointInstance, f32_holds};
 
 /// Why a mesh wasn't made; the caller falls the layer (or the outline) back to the CPU path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +23,18 @@ pub(crate) enum TessError {
     Refused,
     /// The mesh would pass its vertex limit ([`MAX_LAYER_VERTICES`]).
     TooDense,
+    /// Zoomed in too far for f32: vertices this far from the mesh's origin would land pixels
+    /// from where they belong (#902). The CPU path clips in f64 and draws them where they are.
+    Imprecise,
+}
+
+/// The origin for the features in `ext` (its centre), or `Err(Imprecise)` when f32 can't hold
+/// them at `map_per_px` map units per physical pixel.
+pub(crate) fn origin_for(ext: &Extent, map_per_px: f64) -> Result<[f64; 2], TessError> {
+    if !f32_holds(ext.width().max(ext.height()) / 2.0, map_per_px) {
+        return Err(TessError::Imprecise);
+    }
+    Ok([ext.center().x, ext.center().y])
 }
 
 /// A lyon geometry builder that refuses vertices past `room`, so a tessellation stops at the
@@ -270,7 +282,13 @@ pub(crate) fn stroke_lines(
 /// stroke at r + w/2 under fill at r − w/2 reproduces the exact band (`Ctx::marker`).
 pub(crate) fn marker_instances(c: Coord, origin: [f64; 2], s: &Symbol, ppp: f32, halo: Option<Rgba>) -> Vec<PointInstance> {
     let r = (s.size.max(1.0) * ppp) / 2.0;
-    let shape = s.marker as u32;
+    let shape = match s.marker {
+        Marker::Circle | Marker::Char(_) => 0,
+        Marker::Square => 1,
+        Marker::Triangle => 2,
+        Marker::Diamond => 3,
+        Marker::Star => 4,
+    };
     let mut out = Vec::with_capacity(3);
     if let Some(h) = halo {
         out.push(PointInstance { position: rel(c, origin), color: premul(h), radius_px: r + 1.75 * ppp, shape });
@@ -322,6 +340,10 @@ fn append_geometry(
 ) -> Result<(), TessError> {
     // What the layer's mesh has left: tessellation stops once a part passes it.
     let room = |v: &Vec<MeshVertex>| limit.saturating_sub(v.len());
+    // A character has no shape template: its layer draws on the CPU.
+    if matches!(s.marker, Marker::Char(_)) && matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+        return Err(TessError::Refused);
+    }
     match g {
         Geometry::Point(c) => pts.extend(marker_instances(*c, origin, s, ppp, None)),
         Geometry::MultiPoint(cs) => cs.iter().for_each(|c| pts.extend(marker_instances(*c, origin, s, ppp, None))),
@@ -401,7 +423,8 @@ fn estimate_vertices(g: &Geometry, s: &Symbol, wireframe: bool) -> usize {
 /// draws them, their cached extents, row filter, extent cull), so the GPU draws exactly the
 /// features the CPU would. `limit` is what is left of the layer's [`MAX_LAYER_VERTICES`] (its
 /// earlier batches took the rest). `Ok` with the mesh vertices pushed; `Err(Refused)` when
-/// lyon refused a feature, `Err(TooDense)` when the mesh would pass `limit` — the caller then draws the layer
+/// lyon refused a feature, `Err(TooDense)` when the mesh would pass `limit`, `Err(Imprecise)` when
+/// the features reach too far for f32 at this zoom — the caller then draws the layer
 /// (or batch) with tiny-skia instead (nothing is pushed part-way).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer(
@@ -442,7 +465,7 @@ pub(crate) fn collect_layer(
     if ext.is_empty() {
         return Ok(0);
     }
-    let origin = [ext.center().x, ext.center().y];
+    let origin = origin_for(&ext, map_per_px)?;
     let (mut v, mut i, mut pts) = (Vec::new(), Vec::new(), Vec::new());
     for (g, s, n) in &features {
         // The estimate is rough: a feature estimated not to fit isn't started, and
@@ -465,8 +488,7 @@ pub(crate) fn collect_layer(
 /// Selection highlight of one feature, after its layer (`Ctx::highlight`): haloed markers,
 /// a wider cyan under-stroke for lines, translucent cyan fill + outline for polygons.
 pub(crate) fn collect_highlight(cmds: &mut Vec<DrawCmd>, g: &Geometry, s: &Symbol, ppp: f32, map_per_px: f64) -> Result<(), TessError> {
-    let e = g.extent();
-    let origin = [e.center().x, e.center().y];
+    let origin = origin_for(&g.extent(), map_per_px)?;
     match g {
         Geometry::Point(c) => cmds.push(DrawCmd::Points { origin, instances: marker_instances(*c, origin, s, ppp, Some(SELECTION)) }),
         Geometry::MultiPoint(cs) => {
@@ -501,12 +523,13 @@ pub(crate) fn collect_highlight(cmds: &mut Vec<DrawCmd>, g: &Geometry, s: &Symbo
 pub(crate) fn collect_basemap(
     cmds: &mut Vec<DrawCmd>,
     polys: &[Vec<Vec<Coord>>],
-    origin: [f64; 2],
+    ext: &Extent,
     land: Rgba,
     outline: Rgba,
     ppp: f32,
     map_per_px: f64,
 ) -> Result<(), TessError> {
+    let origin = origin_for(ext, map_per_px)?;
     let (mut v, mut i) = (Vec::new(), Vec::new());
     extend_mesh(&mut v, &mut i, fill_polygon(polys, origin, premul(land), map_per_px, NO_LIMIT))?;
     if outline.a() > 0 {
@@ -522,11 +545,12 @@ pub(crate) fn collect_basemap(
 pub(crate) fn collect_graticule(
     cmds: &mut Vec<DrawCmd>,
     lines: &[Vec<Coord>],
-    origin: [f64; 2],
+    ext: &Extent,
     grat: Rgba,
     ppp: f32,
     map_per_px: f64,
 ) -> Result<(), TessError> {
+    let origin = origin_for(ext, map_per_px)?;
     let (mut v, mut i) = (Vec::new(), Vec::new());
     extend_mesh(&mut v, &mut i, stroke_lines(lines, origin, premul(grat), 0.6 * ppp, map_per_px, NO_LIMIT))?;
     if !i.is_empty() {

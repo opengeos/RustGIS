@@ -48,7 +48,7 @@ pub fn config_dir() -> Option<PathBuf> {
     resolve(Kind::Config, OS, &env)
 }
 
-/// App data kept on this computer: installed plugins and programs.
+/// App data kept on this computer: installed plugins and programs, recovery copies of unsaved work.
 pub fn app_data_dir() -> Option<PathBuf> {
     resolve(Kind::AppData, OS, &env)
 }

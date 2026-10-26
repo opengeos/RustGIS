@@ -3224,6 +3224,7 @@ fn plugin_tab(app: &mut RustGisApp, ui: &mut Ui, plugin: &str) {
     }
 }
 
+/// The Settings tab: ribbon customization, language, start-up and (on the desktop) autosave.
 fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
     group(ui, "Customize", |ui| {
         let hidden = app.ui.hidden_tabs.clone();
@@ -3254,6 +3255,30 @@ fn settings_tab(app: &mut RustGisApp, ui: &mut Ui) {
         worldview_menu(app, ui);
     });
     group(ui, "Start-up", |ui| start_project_menu(app, ui));
+    // Only a shell that keeps recovery copies (the desktop app) has autosave.
+    if app.services.recovery.is_some() {
+        group(ui, "Autosave", |ui| autosave_menu(app, ui));
+    }
+}
+
+/// An interval's name: "Off" or "Every 5 min".
+fn autosave_interval(minutes: u32) -> String {
+    if minutes == 0 { tl!("Off").to_string() } else { crate::i18n::fmt("Every {n} min", &[("n", &minutes.to_string())]) }
+}
+
+/// Settings › Autosave: how often a recovery copy of unsaved work is kept (#873).
+fn autosave_menu(app: &mut RustGisApp, ui: &mut Ui) {
+    let minutes = app.autosave.minutes;
+    let label = format!("{}\n{}", tl!("Autosave"), autosave_interval(minutes));
+    let tip = "How often RustGIS keeps a copy of unsaved work, to offer it back after a crash.";
+    big_menu(ui, app, "save", &label, tip, move |ui, app| {
+        for m in crate::autosave::CHOICES {
+            if ui.add(egui::Button::selectable(minutes == m, autosave_interval(m))).clicked() {
+                let _ = app.run("ui.autosave", json!({"minutes": m}));
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Settings › Start-up › Start With: the World Atlas sample, an empty project, or (in the
@@ -3431,7 +3456,7 @@ pub(crate) const SCALES: [f64; 10] =
 pub(crate) fn scale_label(s: Option<f64>) -> String {
     match s {
         None => tl!("<None>").into(),
-        Some(v) => format!("1:{}", fmt_thousands(v)),
+        Some(v) => rustgis_engine::map::graphics::scale_ratio(v),
     }
 }
 

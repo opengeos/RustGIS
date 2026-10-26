@@ -236,7 +236,7 @@ pub fn status_bar(app: &mut RustGisApp, ui: &mut Ui) {
                 // Scale: typed (1:12,345, 12345, 25k, …) and set with Enter, or picked from the
                 // list. Esc, or clicking away, leaves the map's scale as it was.
                 let scale = app.session.scale();
-                let shown = format!("1:{}", crate::ribbon::fmt_thousands(scale.round()));
+                let shown = rustgis_engine::map::graphics::scale_ratio(scale);
                 let mut text = app.ui.scale_text.take().unwrap_or_else(|| shown.clone());
                 let mut edit = egui::TextEdit::singleline(&mut text).id_salt("status_scale").desired_width(96.0).show(ui);
                 // Clicking in selects the scale, so typing replaces it.
@@ -437,10 +437,23 @@ fn sep(ui: &mut Ui, t: &Tokens) {
 
 /// A map scale typed into the status bar, as its denominator: `1:12,345`, `1/12345`, `12345`,
 /// `12 345`, `12'345`, `12.345` (dots grouping thousands, as many languages write it), `25k` or
-/// `2.5m`. None unless it's a plain number of at least 1: no exponents, and commas or
-/// apostrophes only between groups of three digits (`1:2,5m` is a typo, not 25 million).
+/// `2.5m`, or larger than life as `2:1` (#902). None unless it's a plain number of at least 1: no
+/// exponents, and commas or apostrophes only between groups of three digits (`1:2,5m` is a typo,
+/// not 25 million).
 fn parse_scale(text: &str) -> Option<f64> {
     let t: String = text.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    if let Some(up) = t.strip_suffix(":1").or_else(|| t.strip_suffix("/1")).filter(|u| !u.contains([':', '/'])) {
+        // Times life size, as the status bar writes it: a dot is a decimal point (`1.5:1`), commas
+        // group thousands (`2,000:1`), and there are no `k`/`m` suffixes.
+        let times = if up.contains('.') {
+            up.bytes().all(|b| b.is_ascii_digit() || b == b'.').then(|| up.parse::<f64>().ok()).flatten()?
+        } else if up.ends_with(['k', 'm']) {
+            return None;
+        } else {
+            parse_scale(up)?
+        };
+        return (times.is_finite() && times > 0.0).then(|| 1.0 / times);
+    }
     let chars: Vec<char> = t.chars().collect();
     for (i, c) in chars.iter().enumerate() {
         if matches!(c, ',' | '\'' | '’') {
@@ -1187,12 +1200,21 @@ mod tests {
             ("2.5M", 2_500_000.0),
             ("1:1", 1.0),
             ("  7500  ", 7_500.0),
+            // Larger than life (#902).
+            ("2:1", 0.5),
+            ("2.5:1", 0.4),
+            ("10 : 1", 0.1),
+            ("4/1", 0.25),
+            // A dot is a decimal point there, as the status bar shows it (#923).
+            ("1.234:1", 1.0 / 1.234),
+            ("1.5:1", 1.0 / 1.5),
+            ("2,000:1", 1.0 / 2000.0),
         ] {
             assert_eq!(parse_scale(text), Some(want), "{text}");
         }
         for text in [
             "", "1:", "abc", "0", "1:0", "-5000", "1:-5000", "inf", "NaN", "12.34.5", "k", "1e5", "1:5e300", "0.5", "1:2,5m", "1:12,34",
-            ",345", "12,3456",
+            ",345", "12,3456", "0:1", "1:2:1", ":1", "25k:1", "1.2.3:1", ".:1",
         ] {
             assert_eq!(parse_scale(text), None, "{text}");
         }

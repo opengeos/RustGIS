@@ -15,6 +15,13 @@ pub const PT_PER_MM: f64 = 96.0 / 25.4;
 /// Metres of paper per logical point.
 pub const PAPER_M_PER_PT: f64 = 0.0254 / 96.0;
 
+/// The largest a map frame's scale can be: 2:1, larger than life for finds drawings (#902). Even
+/// there its camera ([`frame_camera`]) stays above the map's closest zoom
+/// ([`crate::camera::MIN_RES`]) anywhere on Web Mercator.
+pub const MIN_FRAME_SCALE: f64 = 0.5;
+/// The smallest: the whole world many times over.
+pub const MAX_FRAME_SCALE: f64 = 1e10;
+
 /// The tokens a layout's text expands besides the map's ([`crate::graphics::TOKENS`], from its
 /// first map frame), with what each shows.
 pub const PAGE_TOKENS: &[(&str, &str)] =
@@ -556,7 +563,7 @@ impl ArrowStyle {
 /// The units a scale bar counts in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScaleUnits {
-    /// Metres or kilometres, whichever reads better at the frame's scale.
+    /// Millimetres, centimetres, metres or kilometres, whichever reads better at the frame's scale.
     #[default]
     Auto,
     Kilometers,
@@ -580,7 +587,7 @@ impl ScaleUnits {
 
     pub fn label(self) -> &'static str {
         match self {
-            ScaleUnits::Auto => "Automatic (m or km)",
+            ScaleUnits::Auto => "Automatic (mm to km)",
             ScaleUnits::Kilometers => "Kilometers",
             ScaleUnits::Meters => "Meters",
             ScaleUnits::Miles => "Miles",
@@ -603,6 +610,9 @@ impl ScaleUnits {
     pub fn resolve(self, total_m: f64) -> (f64, &'static str) {
         match self {
             ScaleUnits::Auto if total_m >= 1000.0 => (1000.0, "km"),
+            // A plan of a find, larger than life (#902), counts in what's drawn on it.
+            ScaleUnits::Auto if total_m < 0.01 => (0.001, "mm"),
+            ScaleUnits::Auto if total_m < 1.0 => (0.01, "cm"),
             ScaleUnits::Auto | ScaleUnits::Meters => (1.0, "m"),
             ScaleUnits::Kilometers => (1000.0, "km"),
             ScaleUnits::Miles => (1609.344, "mi"),
@@ -1104,7 +1114,7 @@ impl Layout {
             e.name = e.name.chars().take(200).collect();
             match &mut e.kind {
                 ElementKind::MapFrame { center, scale, shape, grid, bearing, pitch, extent_width, .. } => {
-                    *scale = finite_or(*scale, 50_000_000.0).clamp(100.0, 1e10);
+                    *scale = finite_or(*scale, 50_000_000.0).clamp(MIN_FRAME_SCALE, MAX_FRAME_SCALE);
                     *extent_width = finite_or(*extent_width, INDICATOR_WIDTH).clamp(MIN_INDICATOR_WIDTH, MAX_INDICATOR_WIDTH);
                     *bearing = crate::camera::normalize_bearing(*bearing);
                     *pitch = crate::camera::normalize_pitch(*pitch);
@@ -1234,9 +1244,12 @@ pub fn fit_scale(map: &Map, e: &rustgis_geom::Extent, w_mm: f64, h_mm: f64) -> O
     }
     let center = flat.inverse(ext.center())?;
     let per = (flat.ground_per_unit(ext.center()) * map.body().ratio()).max(1e-9);
-    let (gw, gh) = (ext.width().max(1.0) * per * 1.1, ext.height().max(1.0) * per * 1.1);
+    // A lone point gets a metre around it; anything larger fits as it is, down to a find a
+    // millimetre across (#902). Ground metres, whatever the projection's units.
+    let floor_m = if ext.width() > 0.0 || ext.height() > 0.0 { 1e-3 } else { 1.0 };
+    let (gw, gh) = ((ext.width() * per).max(floor_m) * 1.1, (ext.height() * per).max(floor_m) * 1.1);
     let scale = (gw / (w_mm / 1000.0)).max(gh / (h_mm / 1000.0));
-    Some((center, scale.clamp(100.0, 1e10)))
+    Some((center, scale.clamp(MIN_FRAME_SCALE, MAX_FRAME_SCALE)))
 }
 
 /// What a colorbar draws for a raster layer.
@@ -1402,7 +1415,7 @@ mod tests {
         assert!(l.width <= 5000.0 && l.height >= 20.0 && l.series.is_none());
         match &l.elements[0].kind {
             ElementKind::MapFrame { scale, shape, extent_of, center, extent_width, .. } => {
-                assert!(*scale >= 100.0 && *shape == FrameShape::Rectangle && extent_of.is_none() && center.is_finite());
+                assert!(*scale == MIN_FRAME_SCALE && *shape == FrameShape::Rectangle && extent_of.is_none() && center.is_finite());
                 assert_eq!(*extent_width, MAX_INDICATOR_WIDTH);
             }
             _ => panic!("frame expected"),
@@ -1451,6 +1464,22 @@ mod tests {
         assert!((cam.res - 264.583).abs() < 0.5, "{}", cam.res);
         let (c, s) = fit_scale(&map, &rustgis_geom::Extent::new(-10.0, -10.0, 10.0, 10.0), 200.0, 200.0).unwrap_or_default();
         assert!(c.x.abs() < 1e-6 && s > 1e7 && s < 2e7, "{c:?} {s}");
+        // A finds drawing at 2:1 on the equator, where a frame's camera is closest (#902).
+        let cam = frame_camera(&map, Coord::new(0.0, 0.0), MIN_FRAME_SCALE, 0.0, 0.0);
+        assert!((cam.res / (MIN_FRAME_SCALE * PAPER_M_PER_PT) - 1.0).abs() < 1e-9, "{}", cam.res);
+        // A 2 cm find fitted into a 100 mm frame would print at about 4.5:1: held at 2:1.
+        let find = rustgis_geom::Extent::new(0.0, 0.0, 0.02 / 111_320.0, 0.02 / 111_320.0);
+        assert_eq!(fit_scale(&map, &find, 100.0, 100.0).map(|(_, s)| s), Some(MIN_FRAME_SCALE));
+    }
+
+    #[test]
+    fn automatic_scale_bars_count_in_what_the_plan_shows() {
+        assert_eq!(ScaleUnits::Auto.resolve(5_000.0), (1000.0, "km"));
+        assert_eq!(ScaleUnits::Auto.resolve(20.0), (1.0, "m"));
+        assert_eq!(ScaleUnits::Auto.resolve(1.0), (1.0, "m"));
+        assert_eq!(ScaleUnits::Auto.resolve(0.05), (0.01, "cm"));
+        assert_eq!(ScaleUnits::Auto.resolve(0.005), (0.001, "mm"));
+        assert_eq!(ScaleUnits::Meters.resolve(0.005), (1.0, "m"), "a chosen unit stays");
     }
 
     #[test]

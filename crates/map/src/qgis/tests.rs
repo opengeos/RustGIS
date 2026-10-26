@@ -1,7 +1,7 @@
 //! A small QGIS project and style, written by hand in the shapes QGIS writes them.
 
 use super::*;
-use crate::symbology::{LabelPlacement, LineCap, LineMark, Marker, Placements};
+use crate::symbology::{Glyph, LabelPlacement, LineCap, LineMark, Marker, Placements};
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis projectname="Towns" version="3.42.0-Münster">
@@ -180,7 +180,8 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     let Some(Renderer::Unique { field, classes, other, .. }) = &towns.style.renderer else { panic!() };
     assert_eq!((field.as_str(), classes.len()), ("rank", 2));
     assert_eq!((classes[0].1.marker, classes[0].1.fill), (Marker::Star, Rgba::rgb(200, 0, 0)));
-    assert_eq!((other.marker, other.fill), (Marker::Circle, Rgba::rgb(0, 0, 0)));
+    // A font marker: its character (of no named family: the label font's).
+    assert_eq!((other.marker, other.fill), (Marker::Char(Glyph::new('A', "")), Rgba::rgb(0, 0, 0)));
 
     // What didn't carry over is said, once for each thing.
     let said =
@@ -193,7 +194,7 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     // A marker line without the symbol it places draws nothing, in QGIS too: nothing to say.
     assert!(!said("Roads", NoteKind::Skipped, "markers"));
     assert!(said("Roads", NoteKind::Skipped, "length("));
-    assert!(said("Towns", NoteKind::Approximated, "font markers"));
+    assert!(!report.notes.iter().any(|n| n.layer == "Towns" && n.text.contains("font markers")), "drawn as characters: {:?}", report.notes);
     // A switched-off label rule is never drawn, so its filter isn't noted.
     assert!(!report.notes.iter().any(|n| n.text.contains("Switched off")), "{:?}", report.notes);
 }
@@ -604,7 +605,7 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     let strokes = s.line_strokes.unwrap();
     let mm = 96.0 / 25.4;
     let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-    assert_eq!(strokes.len(), 4, "{strokes:?}");
+    assert_eq!(strokes.len(), 5, "{strokes:?}");
     assert!(strokes[0].markers.is_none());
     // An offset to the left stays to the left (it used to be taken as none).
     assert!(near(strokes[0].offset, -0.5 * mm), "{:?}", strokes[0]);
@@ -622,17 +623,21 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     assert_eq!((m.mark, m.angle, m.outline), (LineMark::Marker(Marker::Triangle), 90.0, Some(Rgba::new(0, 0, 0, 128))));
     assert!(near(tri.width.unwrap(), 0.2 * mm) && near(tri.offset, 0.5 * mm) && near(m.size, 2.0 * mm));
 
+    // The font character: its family's, in its colour, of its size.
+    let (chr, m) = (strokes[3], strokes[3].markers.unwrap());
+    assert_eq!(m.mark, LineMark::Marker(Marker::Char(Glyph::new('{', "DKM_Symbole"))));
+    assert_eq!(chr.color, Some(Rgba::new(0, 0, 0, 128)));
+    assert!(near(m.size, mm) && near(chr.offset, 0.5 * mm), "{chr:?}");
+
     // QGIS 2's hash marks: upright, at their angle, the line's colour and width.
-    let (hash, m) = (strokes[3], strokes[3].markers.unwrap());
+    let (hash, m) = (strokes[4], strokes[4].markers.unwrap());
     assert_eq!((m.mark, m.at, m.rotate, m.angle), (LineMark::Hash, Placements::INTERVAL, false, 30.0));
     assert_eq!(hash.color, Some(Rgba::rgb(0, 0, 255)));
     assert!(near(m.interval, 2.0 * mm) && near(m.size, 3.0 * mm) && near(hash.width.unwrap(), 0.3 * mm));
 
-    // A font character would be a blot of its size where QGIS draws a tick: left out until RustGIS
-    // draws characters.
-    assert!(report.notes.iter().any(|n| n.kind == NoteKind::Skipped && n.text.contains("font markers")), "{:?}", report.notes);
+    // Only the picture isn't drawn as QGIS draws it.
+    assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
     assert!(report.notes.iter().any(|n| n.kind == NoteKind::Approximated && n.text.contains("SVG markers")), "{:?}", report.notes);
-    assert_eq!(report.notes.iter().filter(|n| n.text.contains("along lines")).count(), 1, "{:?}", report.notes);
 
     // A placement on curves is drawn at the vertices; one QGIS adds later is left out, and said.
     let other = qml.replace("FirstVertex|LastVertex", "CurvePoint|SomethingNew");
@@ -641,4 +646,149 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     assert_eq!(s.line_strokes.unwrap()[1].markers.unwrap().at, Placements::VERTICES);
     let said = |kind: NoteKind, part: &str| report.notes.iter().any(|n| n.kind == kind && n.text.contains(part));
     assert!(said(NoteKind::Approximated, "curve points") && said(NoteKind::Skipped, "\"somethingnew\""), "{:?}", report.notes);
+}
+
+#[test]
+fn a_font_marker_without_its_character_draws_qgiss_a_and_escaped_ones_are_decoded() {
+    let props = |chr: Option<&str>| -> Vec<(String, String)> {
+        chr.map(|c| vec![("chr".to_string(), c.to_string()), ("font".to_string(), "DKM_Symbole".to_string())]).unwrap_or_default()
+    };
+    let char_of = |chr: Option<&str>| match symbol::font_char(&props(chr), "Signs", &mut Report::default()) {
+        Some(Marker::Char(g)) => g.ch,
+        other => panic!("{other:?}"),
+    };
+    // QGIS draws its default `A` for a font marker with no character or an empty one.
+    assert_eq!((char_of(None), char_of(Some(""))), ('A', 'A'));
+    // It saves some characters as their code between two `~!_#!#_!~`.
+    assert_eq!(char_of(Some("~!_#!#_!~1~!_#!#_!~")), '\u{1}');
+    assert_eq!(char_of(Some("~!_#!#_!~10~!_#!#_!~x")), '\n');
+    // A broken escape is read as it is.
+    assert_eq!((char_of(Some("~!_#!#_!~1")), char_of(Some("~!_#!#_!~x~!_#!#_!~"))), ('~', '~'));
+    assert_eq!(char_of(Some("@")), '@');
+}
+
+#[test]
+fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() {
+    // SMV25's signs: a white character under a coloured one, the symbol turned by `- "WINKEL"`;
+    // then a square anchored at its top left, offset, at an angle.
+    let dd = |expr: &str| {
+        format!(
+            r#"<data_defined_properties><Option type="Map"><Option value="" type="QString" name="name"/><Option type="Map" name="properties">
+            <Option type="Map" name="angle"><Option value="true" type="bool" name="active"/><Option value="{expr}" type="QString" name="expression"/>
+            <Option value="3" type="int" name="type"/></Option></Option><Option value="collection" type="QString" name="type"/></Option></data_defined_properties>"#
+        )
+    };
+    let font = |chr: &str, color: &str, size: &str| {
+        format!(
+            r#"<layer class="FontMarker" enabled="1"><Option type="Map"><Option name="chr" value="{chr}"/><Option name="font" value="DKM_Symbole"/>
+            <Option name="color" value="{color}"/><Option name="size" value="{size}"/><Option name="size_unit" value="MM"/>
+            <Option name="horizontal_anchor_point" value="1"/><Option name="vertical_anchor_point" value="1"/></Option>{}</layer>"#,
+            dd("- &quot;WINKEL&quot;")
+        )
+    };
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">{}{}</symbol></symbols></renderer-v2></qgis>"#,
+        font(";", "255,255,255,255", "0.9"),
+        font("L", "0,136,208,255", "1")
+    );
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    let mm = 96.0 / 25.4;
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    let marks = s.line_strokes.clone().unwrap();
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    let (under, over) = (marks[0].markers.unwrap(), marks[1].markers.unwrap());
+    assert_eq!(under.mark, LineMark::Marker(Marker::Char(Glyph::new(';', "DKM_Symbole"))));
+    assert_eq!(marks[0].color, Some(Rgba::rgb(255, 255, 255)));
+    assert_eq!(over.mark, LineMark::Marker(Marker::Char(Glyph::new('L', "DKM_Symbole"))));
+    assert!(near(under.size, 0.9 * mm) && near(over.size, mm) && under.rotate && over.rotate, "they turn");
+    // The top layer is the symbol (the legend's).
+    let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
+    assert_eq!((sym.marker, sym.fill), (Marker::Char(Glyph::new('L', "DKM_Symbole")), Rgba::rgb(0, 136, 208)));
+    assert_eq!(s.marker_rotation, Some(Some(crate::symbology::MarkerRotation { field: "WINKEL".into(), counterclockwise: true })));
+    assert!(!report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
+    // Applied to a point layer, its markers turn.
+    let mut layer = crate::Layer::new(1, rustgis_data::Dataset::new("signs", rustgis_data::GeometryType::Point, vec![]));
+    s.apply(&mut layer);
+    assert_eq!(layer.marker_rotation.as_ref().map(|r| r.field.as_str()), Some("WINKEL"));
+    assert_eq!(layer.line_strokes.len(), 2);
+
+    // A square anchored at its top left, offset and at an angle: one mark, shifted by half its size.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+      <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="square"/><Option name="color" value="0,0,0,255"/>
+        <Option name="size" value="4"/><Option name="offset" value="1,-2"/><Option name="offset_unit" value="MM"/><Option name="angle" value="30"/>
+        <Option name="horizontal_anchor_point" value="0"/><Option name="vertical_anchor_point" value="0"/></Option></layer>
+      </symbol></symbols></renderer-v2></qgis>"#;
+    let mut report = Report::default();
+    let s = read_style(qml, "Signs", &mut report).unwrap();
+    let marks = s.line_strokes.unwrap();
+    let m = marks[0].markers.unwrap();
+    assert_eq!(marks.len(), 1);
+    assert!(near(m.offset_along, 3.0 * mm) && near(marks[0].offset, 0.0) && m.angle == 30.0, "{marks:?}");
+    assert_eq!(s.marker_rotation, Some(None), "not turned by a field");
+    assert!(!report.notes.iter().any(|n| n.text.contains("turned markers")), "{:?}", report.notes);
+
+    // One plain layer stays the symbol alone, as before.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+      <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="star"/><Option name="color" value="200,0,0,255"/></Option></layer>
+      </symbol></symbols></renderer-v2></qgis>"#;
+    let s = read_style(qml, "Signs", &mut Report::default()).unwrap();
+    assert_eq!(s.line_strokes, Some(Vec::new()));
+    let Some(Renderer::Single(sym)) = &s.renderer else { panic!() };
+    assert_eq!(sym.marker, Marker::Star);
+
+    // An angle from any other expression is noted, and turns nothing.
+    let other = qml.replace("</layer>", &format!("{}</layer>", dd("&quot;A&quot; * 2")));
+    let mut report = Report::default();
+    let s = read_style(&other, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation, Some(None));
+    assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
+
+    // Classes of one layer: an antenna that keeps still where a cliff turns by the field. The
+    // antenna's single plain character becomes a mark that doesn't turn; the cliff's turns.
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="Symbol"><categories>
+          <category value="Antenne" symbol="0" label="Antenne" render="true"/><category value="Fels" symbol="1" label="Fels" render="true"/></categories>
+          <symbols><symbol type="marker" name="0" alpha="1">{}</symbol><symbol type="marker" name="1" alpha="1">{}</symbol></symbols></renderer-v2></qgis>"#,
+        font("D", "0,0,0,255", "1.3").replace(&dd("- &quot;WINKEL&quot;"), ""),
+        font("P", "0,0,0,255", "1.5")
+    );
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation.clone().flatten().map(|r| r.field), Some("WINKEL".into()));
+    let Some(Renderer::Unique { class_strokes, .. }) = &s.renderer else { panic!("{:?}", s.renderer) };
+    let still = class_strokes.get("Antenne").unwrap();
+    assert_eq!(still.len(), 1);
+    assert!(!still[0].markers.unwrap().rotate, "the antenna keeps still");
+    // The cliff's one centred character turns as the symbol does: no marks of its own.
+    assert!(!class_strokes.contains_key("Fels"), "{class_strokes:?}");
+    let turned = |r: &Report| r.notes.iter().any(|n| n.text.contains("turned by different fields"));
+    assert!(!turned(&report), "{:?}", report.notes);
+    // Classes turned by different fields all turn by the first: said.
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="Symbol"><categories>
+          <category value="Antenne" symbol="0" label="Antenne" render="true"/><category value="Fels" symbol="1" label="Fels" render="true"/></categories>
+          <symbols><symbol type="marker" name="0" alpha="1">{}</symbol><symbol type="marker" name="1" alpha="1">{}</symbol></symbols></renderer-v2></qgis>"#,
+        font("D", "0,0,0,255", "1.3"),
+        font("P", "0,0,0,255", "1.5").replace(&dd("- &quot;WINKEL&quot;"), &dd("&quot;RICHTUNG&quot;"))
+    );
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation.flatten().map(|r| r.field), Some("WINKEL".into()));
+    assert!(turned(&report), "{:?}", report.notes);
+    // A switched-off class's field turns nothing: the shown one's does, and nothing is said.
+    let qml = qml.replace(r#"label="Antenne" render="true""#, r#"label="Antenne" render="false""#).replace("WINKEL", "W2");
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation.flatten().map(|r| r.field), Some("RICHTUNG".into()));
+    assert!(!turned(&report), "{:?}", report.notes);
+
+    // QGIS 2's `dd_properties` are still noted.
+    let old = r#"<qgis version="2.18.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+      <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="star"/></Option>
+      <dd_properties><Option type="Map" name="angle"><Option name="active" value="true"/></Option></dd_properties></layer>
+      </symbol></symbols></renderer-v2></qgis>"#;
+    let mut report = Report::default();
+    read_style(old, "Signs", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
 }

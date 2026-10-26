@@ -219,12 +219,12 @@ The desktop app and the command line keep their files in three folders:
 | Folder | Holds | Windows | macOS | Linux |
 | --- | --- | --- | --- | --- |
 | Settings | preferences (`prefs.json`), the crash log, AI Assistant sign-ins and skills | `%APPDATA%\RustGIS` | `~/Library/Application Support/RustGIS` | `$XDG_CONFIG_HOME/rustgis` (`~/.config/rustgis`) |
-| Data | installed plugins and the GeoLibre runner | `%LOCALAPPDATA%\RustGIS` | `~/Library/Application Support/RustGIS` | `$XDG_DATA_HOME/rustgis` (`~/.local/share/rustgis`) |
+| Data | installed plugins, the GeoLibre runner and recovery copies of unsaved work | `%LOCALAPPDATA%\RustGIS` | `~/Library/Application Support/RustGIS` | `$XDG_DATA_HOME/rustgis` (`~/.local/share/rustgis`) |
 | Cache | GDAL and DuckDB conversions | `%LOCALAPPDATA%\RustGIS\cache` | `~/Library/Caches/RustGIS` | `$XDG_CACHE_HOME/rustgis` (`~/.cache/rustgis`) |
 
 Set `RUSTGIS_CONFIG_DIR`, `RUSTGIS_APP_DATA_DIR` or `RUSTGIS_CACHE_DIR` to use another folder
 instead, for a portable install on a USB drive, for example. The folder is used as is, and RustGIS
-keeps the same files in it (`plugins/` and `geolibre/` in the data folder, `gdal/` and `duckdb/`
+keeps the same files in it (`plugins/`, `geolibre/` and `recovery/` in the data folder, `gdal/` and `duckdb/`
 in the cache folder). `RUSTGIS_PLUGINS_DIR`, `RUSTGIS_GDAL_CACHE` and `RUSTGIS_DUCKDB_CACHE` name
 the plugins folder and the GDAL and DuckDB caches themselves, ahead of these.
 
@@ -240,6 +240,9 @@ Attach it to a [bug report](https://github.com/opengeos/RustGIS/issues/new?templ
 It holds the version, the operating system, the error message and where in RustGIS it happened.
 An error message can quote what RustGIS was working on, such as a file path or a layer name, so
 read the log first and remove anything you don't want to share.
+
+Unsaved work isn't lost with it: the next launch offers the copy autosave kept (see
+[Autosave and recovery](user-guide/workspace.md#autosave-and-recovery)).
 
 ## If the app doesn't start
 

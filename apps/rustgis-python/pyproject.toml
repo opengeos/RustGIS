@@ -13,7 +13,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD-PARTY-LICENSES.txt"]
 requires-python = ">=3.12"
 authors = [{ name = "Qiusheng Wu", email = "giswqs@gmail.com" }]
-keywords = ["gis", "geospatial", "maps", "geoprocessing", "rust", "jupyter", "anywidget"]
+keywords = ["gis", "geospatial", "maps", "geoprocessing", "rust", "jupyter", "anywidget", "qt"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: Jupyter",
@@ -28,6 +28,8 @@ dynamic = ["version"]
 [project.optional-dependencies]
 geopandas = ["geopandas>=0.14"]
 jupyter = ["anywidget>=0.9"]
+# PySide6 brings Qt WebEngine; rustgis.qt also runs on PyQt6 with PyQt6-WebEngine.
+qt = ["PySide6>=6.6"]
 test = ["pytest>=7", "anywidget>=0.9"]
 
 [project.urls]

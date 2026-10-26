@@ -9,6 +9,7 @@
 mod effects;
 pub mod families;
 pub mod fonts;
+mod glyphs;
 pub mod gpu_scene;
 pub mod layout;
 mod line_labels;
@@ -17,6 +18,7 @@ pub mod logo;
 mod mesh;
 pub mod pdf;
 mod picture;
+mod point_marks;
 pub mod post;
 mod raster;
 pub mod report;
@@ -783,7 +785,7 @@ impl Ctx<'_> {
         let (qx, qy) = (((x - fx) * 4.0).round(), ((y - fy) * 4.0).round());
         let (ix, iy) = (fx as i64 + (qx >= 4.0) as i64, fy as i64 + (qy >= 4.0) as i64);
         let (qx, qy) = ((qx as u8) % 4, (qy as u8) % 4);
-        let reach = ((s.size.max(1.0) * 0.6 + s.stroke_width.max(0.0)) * self.ppp).ceil() as i64 + 3;
+        let reach = ((s.size.max(1.0) * marker_reach(s.marker) + s.stroke_width.max(0.0)) * self.ppp).ceil() as i64 + 3;
         if ix < -reach || iy < -reach || ix > pm.width() as i64 + reach || iy > pm.height() as i64 + reach {
             return;
         }
@@ -864,7 +866,18 @@ impl Ctx<'_> {
         true
     }
 
-    fn highlight(&self, pm: &mut Pixmap, g: &Geometry, s: &Symbol, strokes: &[LineStroke]) {
+    /// A point's marks, or its marker turned ([`point_marks::draw`]), unless it lies off the picture.
+    fn marks(&self, pm: &mut Pixmap, c: Coord, s: &Symbol, strokes: &[LineStroke], turn: f32, halo: Option<Rgba>) {
+        let (x, y) = self.px(c);
+        let reach = (point_marks::reach(s, strokes) + 4.0) * self.ppp;
+        if !(x.is_finite() && y.is_finite()) || x < -reach || y < -reach || x > pm.width() as f32 + reach || y > pm.height() as f32 + reach
+        {
+            return;
+        }
+        point_marks::draw(pm, x, y, s, strokes, turn, halo, self.ppp);
+    }
+
+    fn highlight(&self, pm: &mut Pixmap, g: &Geometry, s: &Symbol, strokes: &[LineStroke], turn: f32) {
         let cyan = paint(SELECTION, 1.0);
         match g {
             Geometry::Line(parts) if !strokes.is_empty() => {
@@ -891,6 +904,10 @@ impl Ctx<'_> {
                     .collect();
                 self.stacked_line(pm, parts, s, &halo);
                 self.stacked_line(pm, parts, s, strokes);
+            }
+            Geometry::Point(c) if !point_marks::plain(strokes, turn) => self.marks(pm, *c, s, strokes, turn, Some(SELECTION)),
+            Geometry::MultiPoint(v) if !point_marks::plain(strokes, turn) => {
+                v.iter().for_each(|c| self.marks(pm, *c, s, strokes, turn, Some(SELECTION)))
             }
             Geometry::Point(c) => self.marker(pm, *c, s, 1.0, Some(SELECTION)),
             Geometry::MultiPoint(v) => v.iter().for_each(|c| self.marker(pm, *c, s, 1.0, Some(SELECTION))),
@@ -1252,8 +1269,27 @@ pub(crate) fn marker_path(x: f32, y: f32, r: f32, marker: Marker) -> Option<tiny
             }
             pb.close();
         }
+        Marker::Char(g) => match glyphs::shape(g) {
+            Some(s) => {
+                let em = 2.0 * r;
+                return s.path.clone().transform(Transform::from_row(em, 0.0, 0.0, em, x, y));
+            }
+            // A space draws nothing; a character no font here has, a circle of its size, so the
+            // point still shows.
+            None if g.ch.is_whitespace() => return None,
+            None => pb.push_circle(x, y, r),
+        },
     }
     pb.finish()
+}
+
+/// How far a `marker` reaches from its centre, in its sizes: a shape (a star's points) 0.6, a
+/// character as far as its outline does.
+pub(crate) fn marker_reach(marker: Marker) -> f32 {
+    match marker {
+        Marker::Char(g) => glyphs::shape(g).map_or(0.6, |s| s.reach),
+        _ => 0.6,
+    }
 }
 
 /// A marker centred at (`x`, `y`) device pixels.
@@ -1976,7 +2012,7 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
 /// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
 /// layers, aggregations, graphics or stacked line strokes; no view effects; extrusions only
-/// stand up in a tilted one). A cheap check made before any drawing; labels with icons can still
+/// stand up in a tilted one; nor characters standing up, which the GPU has no template for). A cheap check made before any drawing; labels with icons can still
 /// decline the scene once it is drawn.
 pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
@@ -2006,7 +2042,9 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && l.aggregation.is_none()
             && !l.graphics
             && !l.has_strokes()
+            && l.marker_rotation.is_none()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
+            && !(view.camera.pitch != 0.0 && l.renderer.has_char_markers() && stands_up(map, l))
     })
 }
 
@@ -2250,6 +2288,9 @@ fn stands_up(map: &Map, layer: &rustgis_map::Layer) -> bool {
         && layer.mask.is_none()
         && layer.blend == rustgis_map::effects::Blend::Normal
         && map.swipe.is_none_or(|(id, _)| id != layer.id)
+        // Marks and turned markers stay on the ground, drawn as the flat map draws them.
+        && !layer.has_strokes()
+        && layer.marker_rotation.is_none()
         && rows.is_some_and(|n| n <= MAX_UPRIGHT_POINTS as u64)
 }
 
@@ -2296,10 +2337,11 @@ impl UprightMarker {
 
 /// The outline of a `marker` of radius `r` centred at (`x`, `y`), as [`draw_marker`] draws it
 /// (a circle as a polygon): for drawing upright markers as meshes. Every outline is seen whole
-/// from its centre, so a fan from the centre fills it.
+/// from its centre, so a fan from the centre fills it. A character, which no fan fills, as a circle
+/// of its size (while a tilted view moves; the settled view draws the character).
 pub fn marker_outline(marker: Marker, x: f32, y: f32, r: f32) -> Vec<(f32, f32)> {
     match marker {
-        Marker::Circle => (0..24)
+        Marker::Circle | Marker::Char(_) => (0..24)
             .map(|i| {
                 let a = std::f32::consts::TAU * i as f32 / 24.0;
                 (x + r * a.cos(), y + r * a.sin())
@@ -2699,12 +2741,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let mut tessellated = false;
                 if gpu {
                     flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-                    let e = g.extent();
-                    tessellated =
-                        mesh::collect_basemap(&mut cmds, polys, [e.center().x, e.center().y], land, outline, ctx.ppp, map_per_px).is_ok();
+                    tessellated = mesh::collect_basemap(&mut cmds, polys, &g.extent(), land, outline, ctx.ppp, map_per_px).is_ok();
                 }
                 if gpu && !tessellated {
-                    // Lyon refused: tiny-skia still draws the outline.
+                    // Lyon refused, or it's too large for f32 this far in: tiny-skia still draws it.
                     ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
                     cpu_dirty = true;
                 } else if !gpu {
@@ -2755,8 +2795,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 }
             }
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-            let tessellated = !e.is_empty()
-                && mesh::collect_graticule(&mut cmds, &lines, [e.center().x, e.center().y], grat, ctx.ppp, map_per_px).is_ok();
+            let tessellated = !e.is_empty() && mesh::collect_graticule(&mut cmds, &lines, &e, grat, ctx.ppp, map_per_px).is_ok();
             if !tessellated {
                 ctx.line(&mut pm, &lines, &p, 0.6);
                 cpu_dirty = true;
@@ -2899,7 +2938,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         } else {
             Default::default()
         };
-        let mut highlights: Vec<(usize, Geometry, Symbol, Vec<LineStroke>)> = Vec::new();
+        let mut highlights: Vec<(usize, Geometry, Symbol, Vec<LineStroke>, f32)> = Vec::new();
         // The GPU mesh vertices the layer has left: a streamed layer's batches share them, so
         // one too dense to mesh goes to the CPU however it is split.
         let mut mesh_room = mesh::MAX_LAYER_VERTICES;
@@ -2996,12 +3035,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && layer.extrusion.is_none()
                 && !layer.graphics
                 && !layer.has_strokes()
+                && layer.marker_rotation.is_none()
                 && !upright.contains(&layer.id);
-            // Lyon refuses degenerate geometry tiny-skia draws fine, and a layer too dense to mesh
-            // (`MAX_LAYER_VERTICES`) is quicker splatted: collect_layer reports both, and the layer
-            // runs the CPU branch below like any ineligible one. It meshes the thinned copy the
-            // CPU draws. A turned or tilted view takes no CPU pictures (`gpu_turned`), so there
-            // such a layer sends the whole view to the CPU renderer, not just itself.
+            // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
+            // (`MAX_LAYER_VERTICES`) is quicker splatted, and zoomed in far, features reaching too
+            // far for f32 are drawn where they are by the CPU (#902): collect_layer reports all
+            // three, and the layer runs the CPU branch below like any ineligible one. It meshes the
+            // thinned copy the CPU draws. A turned or tilted view takes no CPU pictures
+            // (`gpu_turned`), so there such a layer sends the whole view to the CPU renderer, not
+            // just itself.
             let mut gpu_done = false;
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
@@ -3023,7 +3065,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 mesh_room = match collected {
                     Ok(used) => mesh_room.saturating_sub(used),
                     Err(mesh::TessError::TooDense) => 0,
-                    Err(mesh::TessError::Refused) => mesh_room,
+                    Err(mesh::TessError::Refused | mesh::TessError::Imprecise) => mesh_room,
                 };
                 gpu_done = collected.is_ok();
             }
@@ -3059,7 +3101,21 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
                     for (row, g) in drawn.iter().enumerate() {
                         let Some(g) = g else { continue };
-                        if rows.get(row) != Some(&true) || !visible(&extents.get(row).copied().unwrap_or_else(|| g.extent())) {
+                        let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                        // A point's marks, shifted from it, may show while the point is off the view.
+                        let marked_in = || {
+                            if globe.is_some() || !matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+                                return false;
+                            }
+                            let (sym, strokes) = layer.style(row);
+                            if strokes.is_empty() {
+                                return false;
+                            }
+                            // In the layer's pixels (`ctx` is scaled by its size factor).
+                            let r = f64::from(point_marks::reach(&sym, strokes) * ctx.ppp) * map_per_px;
+                            Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
+                        };
+                        if rows.get(row) != Some(&true) || !(visible(&e) || marked_in()) {
                             continue;
                         }
                         // A picture draws in its row's turn, so graphics keep their order. (On the globe
@@ -3087,7 +3143,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         {
                             continue;
                         }
+                        // A point's marks, or its marker turned by a field.
+                        let turn = layer.marker_turn(row);
                         match g {
+                            Geometry::Point(c) if !point_marks::plain(strokes, turn) => ctx.marks(dest, *c, &sym, strokes, turn, None),
+                            Geometry::MultiPoint(v) if !point_marks::plain(strokes, turn) => {
+                                v.iter().for_each(|c| ctx.marks(dest, *c, &sym, strokes, turn, None))
+                            }
                             Geometry::Line(parts) if !strokes.is_empty() && levels => stacked.push((parts, sym, strokes)),
                             Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(ctx, dest, parts, &sym, strokes),
                             _ => ctx.feature(dest, g, &sym),
@@ -3136,12 +3198,12 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     if complete_source {
                         let rank = ds_ptr.features.get(*row).and_then(|f| selected_order.get(&f.id)).copied().unwrap_or(usize::MAX);
                         let (symbol, strokes) = layer.style(*row);
-                        highlights.push((rank, (**g).clone(), symbol, strokes.to_vec()));
+                        highlights.push((rank, (**g).clone(), symbol, strokes.to_vec(), layer.marker_turn(*row)));
                     } else if gpu_done && mesh::collect_highlight(&mut cmds, g, &layer.symbol(*row), ctx.ppp, map_per_px).is_ok() {
                         // highlight tessellated into the scene, right after its layer
                     } else {
                         let (symbol, strokes) = layer.style(*row);
-                        ctx.highlight(&mut pm, g, &symbol, strokes);
+                        ctx.highlight(&mut pm, g, &symbol, strokes, layer.marker_turn(*row));
                         cpu_dirty = true;
                     }
                 }
@@ -3363,8 +3425,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             }
         }
         highlights.sort_by_key(|(rank, ..)| *rank);
-        for (_, geometry, symbol, strokes) in highlights {
-            ctx.highlight(&mut pm, &geometry, &symbol, &strokes);
+        for (_, geometry, symbol, strokes, turn) in highlights {
+            ctx.highlight(&mut pm, &geometry, &symbol, &strokes, turn);
             cpu_dirty = true;
         }
     }
@@ -5119,6 +5181,41 @@ mod tests {
     }
 
     #[test]
+    fn zoomed_in_past_f32_large_features_are_drawn_on_the_cpu_where_they_are() {
+        // A 10° square's west edge at the deepest zoom (#902): its vertices lie hundreds of km
+        // from the mesh's origin, which f32 can't hold to a pixel at a tenth of a millimetre per
+        // pixel, so the layer is drawn on the CPU, with the edge through the middle of the view.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        square_layer(&mut m, "s", 0.0, 40.0, 10.0);
+        let mut camera = Camera::world();
+        camera.center = rustgis_geom::lonlat_to_merc(Coord::new(0.0, 45.0));
+        camera.res = rustgis_map::camera::MIN_RES;
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(!kinds.contains(&"mesh"), "no mesh f32 would misplace: {kinds:?}");
+        let Some(pixmap) = scene.cmds.iter().find_map(|c| match c {
+            gpu_scene::DrawCmd::Image { pixmap } => Some(pixmap),
+            _ => None,
+        }) else {
+            panic!("the square is drawn on the CPU: {kinds:?}")
+        };
+        let alpha = |x: u32| pixmap.pixel(x, 150).map_or(0, |p| p.alpha());
+        assert_eq!(alpha(195), 0, "west of the edge is outside the square");
+        assert!(alpha(205) > 0, "east of the edge is inside it");
+
+        // Zoomed out, the same square is a mesh, and the scene says how far in it holds.
+        let mut camera = view.camera;
+        camera.res = 1_000.0;
+        let view = View { camera, ..view };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(cmd_kinds(&scene).contains(&"mesh"));
+        let half = (rustgis_geom::lonlat_to_merc(Coord::new(10.0, 50.0)).y - rustgis_geom::lonlat_to_merc(Coord::new(0.0, 40.0)).y) / 2.0;
+        assert!((gpu_scene::reach(&scene.cmds) - half).abs() < 1.0, "reach {} vs {half}", gpu_scene::reach(&scene.cmds));
+    }
+
+    #[test]
     fn gpu_scene_carries_backdrop_as_clear_color_and_no_image_for_pure_vectors() {
         let mut m = sample_world();
         let view = View { width: 800.0, height: 500.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
@@ -5367,6 +5464,45 @@ mod tests {
         d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
         m.add_dataset(d);
         m
+    }
+
+    #[test]
+    fn a_raster_at_the_closest_zoom_is_drawn_where_it_is() {
+        // At the deepest zoom (#902) the raster's far corners lie billions of pixels from the
+        // view: its west edge still runs through the middle, with the raster east of it.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let n = 16usize;
+        let values: Vec<f32> = (0..n * n).map(|i| (i % n) as f32).collect();
+        let gt = GeoTransform { origin_x: -1.0, origin_y: 1.0, pixel_width: 2.0 / n as f64, pixel_height: -2.0 / n as f64 };
+        let r = Raster::new("r", n as u32, n as u32, vec![values], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        m.add_raster("r", rustgis_map::RasterLayer::from_path(r, "r.tif"));
+        let camera = Camera { center: lonlat_to_merc(Coord::new(-1.0, 0.0)), res: rustgis_map::camera::MIN_RES, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(out) = render(&mut m, &view) else { panic!("cpu frame") };
+        let px = |x: u32| out.pixmap.pixel(x, 150).map(|p| (p.red(), p.green(), p.blue(), p.alpha()));
+        let (west, east) = (px(195), px(205));
+        assert!(west.is_some() && east.is_some());
+        assert_ne!(west, east, "the raster starts at the middle of the view");
+        assert_eq!(px(5), west, "west of the edge is all background");
+        assert_eq!(px(395), east, "east of it, one raster cell");
+    }
+
+    #[test]
+    fn a_tilted_view_of_characters_standing_up_stays_on_the_cpu() {
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut map = hill_map();
+        assert!(gpu_may_turn(&map, &view));
+        for l in &mut map.layers {
+            l.renderer.map_symbols(|s| s.marker = Marker::Char(rustgis_map::Glyph::new('L', "")));
+        }
+        // The GPU has no template for a character: standing up, it would be a circle.
+        assert!(!gpu_may_turn(&map, &view));
+        // Turned, not tilted, the map is drawn flat, where the layer is a CPU picture.
+        let turned = View { camera: Camera { bearing: 30.0, pitch: 0.0, ..camera }, ..view };
+        assert!(gpu_may_turn(&map, &turned));
     }
 
     #[test]
@@ -5757,6 +5893,127 @@ mod tests {
         let r = render(&mut m, &view).unwrap();
         assert_ne!(r.pixmap.pixel(100, 110).unwrap(), blank, "drawn 10 pt to the right");
         assert_eq!(r.pixmap.pixel(100, 100).unwrap(), blank, "nothing on the centreline");
+    }
+
+    #[test]
+    fn a_points_marks_and_rotation_draw_on_the_cpu_and_old_layers_stay_on_the_gpu() {
+        use rustgis_map::{LineMark, LineMarkers, LineStroke, MarkerRotation};
+        // One point at the centre of a 200 px view, its angle 90 in field "a".
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("signs", GeometryType::Point, vec![rustgis_data::Field::new("a", rustgis_data::FieldType::Double)]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![rustgis_data::Value::Float(90.0)]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        // A plain point stays a GPU instance, as before.
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(cmd_kinds(&scene).contains(&"points"));
+        // A red square 30 pt right of the point, turned with the field to 30 pt below it.
+        let red = Rgba::rgb(255, 0, 0);
+        let square = LineMarkers { mark: LineMark::Marker(Marker::Square), size: 10.0, offset_along: 30.0, ..LineMarkers::default() };
+        let l = m.layer_mut(id).unwrap();
+        l.line_strokes = vec![LineStroke { color: Some(red), width: Some(0.0), markers: Some(square), ..LineStroke::default() }];
+        let is_red = |r: &Rendered, x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.alpha()) == (255, 0, 255));
+        let r = render(&mut m, &view).unwrap();
+        assert!(is_red(&r, 130, 100) && !is_red(&r, 100, 100), "right of the point, the symbol's own marker gone");
+        // The point 20 px left of the view, past its cull margin: its mark still shows, 10 px in.
+        let left = View { camera: Camera { center: Coord::new(camera.center.x + 120.0 * camera.res, camera.center.y), ..camera }, ..view };
+        let r = render(&mut m, &left).unwrap();
+        assert!(is_red(&r, 10, 100), "a mark shifted into the view");
+        // At twice its reference scale's size: the point 60 px left, its mark 60 px right of it.
+        let far = View { camera: Camera { center: Coord::new(camera.center.x + 160.0 * camera.res, camera.center.y), ..camera }, ..view };
+        let scale = m.ground_res_at(&far.camera) / rustgis_geom::PIXEL_M;
+        m.layer_mut(id).unwrap().reference_scale = Some(2.0 * scale);
+        let r = render(&mut m, &far).unwrap();
+        assert!(is_red(&r, 4, 100), "an enlarged mark shifted into the view");
+        m.layer_mut(id).unwrap().reference_scale = None;
+        m.layer_mut(id).unwrap().marker_rotation = Some(MarkerRotation { field: "a".into(), counterclockwise: false });
+        let r = render(&mut m, &view).unwrap();
+        assert!(is_red(&r, 100, 130) && !is_red(&r, 130, 100), "turned to below it");
+        // Selected: a halo round it, where it is.
+        m.layer_mut(id).unwrap().selection = vec![0];
+        let r = render(&mut m, &view).unwrap();
+        let p = r.pixmap.pixel(100, 136).unwrap();
+        assert!((p.red(), p.green(), p.blue()) != (255, 255, 255) && p.alpha() > 0, "{p:?}");
+        m.layer_mut(id).unwrap().selection.clear();
+        // Turned or marked, the layer draws on the CPU.
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.contains(&"image") && !kinds.contains(&"points"), "{kinds:?}");
+        m.layer_mut(id).unwrap().line_strokes.clear();
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(!cmd_kinds(&scene).contains(&"points"), "turned alone, too");
+    }
+
+    #[test]
+    fn a_character_marker_draws_its_character_where_qgis_does_and_on_the_cpu() {
+        use ab_glyph::Font;
+        use rustgis_map::Glyph;
+        // A 60 pt "L" at the centre of a 200 px view: its advance centred, its baseline half the
+        // font's ascent below the point.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("signs", GeometryType::Point, vec![]);
+        d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
+        let id = m.add_dataset(d);
+        let black = Rgba::rgb(0, 0, 0);
+        let none = Rgba::new(0, 0, 0, 0);
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(Symbol {
+            fill: black,
+            stroke: none,
+            stroke_width: 0.0,
+            size: 60.0,
+            marker: Marker::Char(Glyph::new('L', "")),
+        });
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let r = render(&mut m, &view).unwrap();
+        let ink = |x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| p.red() < 100 && p.alpha() > 200);
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for y in 0..200 {
+            for x in 0..200 {
+                if ink(x, y) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        let f = crate::text::label_font().unwrap();
+        let upm = f.units_per_em().unwrap();
+        let baseline = 100.0 + 60.0 * f.ascent_unscaled() / 2.0 / upm;
+        assert!((y1 as f32 + 1.0 - baseline).abs() < 2.0, "foot on the baseline: {y1} vs {baseline}");
+        assert!(y1 - y0 > x1 - x0 && x0 < 100 && x1 > 100, "an L, about the point: {x0},{y0} {x1},{y1}");
+        assert!(ink(x0 + 1, y0 + 1) && !ink(x1 - 1, y0 + 1) && ink(x1 - 1, y1 - 1), "its stem and foot, not a blob");
+        // The GPU has no character template: the layer is a CPU picture there.
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(kinds.contains(&"image") && !kinds.contains(&"points"), "{kinds:?}");
+        // A character no font here has still shows the point: a circle of its size.
+        if let rustgis_map::Renderer::Single(sym) = &mut m.layer_mut(id).unwrap().renderer {
+            sym.marker = Marker::Char(Glyph::new('\u{10FFFD}', ""));
+        }
+        let r = render(&mut m, &view).unwrap();
+        let ink = |x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| p.red() < 100 && p.alpha() > 200);
+        assert!(ink(100, 100) && ink(100, 75) && !ink(100, 65), "a 60 pt circle");
+        // Along a line too, turned with it.
+        let mut d = Dataset::new("rail", GeometryType::Polyline, vec![]);
+        d.push(Some(Geometry::Line(vec![vec![Coord::new(-1.0, 0.5), Coord::new(1.0, 0.5)]])), vec![]);
+        let line = m.add_dataset(d);
+        let marks = rustgis_map::LineMarkers {
+            mark: rustgis_map::LineMark::Marker(Marker::Char(Glyph::new('L', ""))),
+            size: 20.0,
+            interval: 40.0,
+            ..Default::default()
+        };
+        m.layer_mut(line).unwrap().line_strokes =
+            vec![rustgis_map::LineStroke { color: Some(black), markers: Some(marks), ..Default::default() }];
+        m.layer_mut(id).unwrap().visible = false;
+        let r = render(&mut m, &view).unwrap();
+        let drawn = (0..200)
+            .flat_map(|y| (0..200).map(move |x| (x, y)))
+            .filter(|(x, y)| r.pixmap.pixel(*x, *y).is_some_and(|p| p.alpha() > 200 && p.red() < 100))
+            .count();
+        assert!(drawn > 40, "{drawn} px of characters along the line");
     }
 
     #[test]

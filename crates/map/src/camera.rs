@@ -4,9 +4,20 @@
 use rustgis_geom::{Coord, Extent, MERCATOR_R, extent_to_merc, merc_to_lonlat, scale_denominator};
 use serde::{Deserialize, Serialize};
 
-/// Resolution limits (metres per pixel): about 1:500 to the whole world.
-pub const MIN_RES: f64 = 0.15;
+/// Resolution limits (map units per pixel): in to site plans and finds drawings (#902), out to
+/// the whole world. Map projections are in metres or feet (one in degrees isn't a map projection:
+/// `Projector::new` refuses it), so the closest zoom is past 2:1 on every map: about 2.8:1 on Web
+/// Mercator at the equator, closer toward the poles, where its units shrink on the ground.
+pub const MIN_RES: f64 = 1e-4;
 pub const MAX_RES: f64 = 160_000.0;
+
+/// The scale `t` (0 to 1) of the way from scale `a` to `b`, changing geometrically, as a zoom
+/// looks steady. Scales larger than life (#902) take part; one that isn't a positive number counts
+/// as 1:1.
+pub fn scale_between(a: f64, b: f64, t: f64) -> f64 {
+    let ln = |s: f64| if s.is_finite() && s > 0.0 { s.ln() } else { 0.0 };
+    (ln(a) + (ln(b) - ln(a)) * t).exp()
+}
 
 /// The steepest pitch (degrees from looking straight down), as MapLibre allows.
 pub const MAX_PITCH: f64 = 85.0;
@@ -527,6 +538,28 @@ mod tests {
         c.zoom_at(f64::NAN, 0.0, 0.0, 1.0, 1.0);
         c.set_scale(-5.0);
         assert!(c.res.is_finite());
+    }
+
+    #[test]
+    fn animations_zoom_geometrically_past_life_size() {
+        assert!((scale_between(0.5, 20.0, 0.0) - 0.5).abs() < 1e-12);
+        assert!((scale_between(0.5, 20.0, 1.0) - 20.0).abs() < 1e-9);
+        assert!((scale_between(0.25, 4.0, 0.5) - 1.0).abs() < 1e-12, "halfway between 4:1 and 1:4 is 1:1");
+        assert_eq!(scale_between(f64::NAN, -3.0, 0.5), 1.0);
+    }
+
+    #[test]
+    fn zooms_in_to_site_plans_and_finds_drawings() {
+        // Excavation plans at 1:20 and 1:10, finds at 1:1 and larger (#902), anywhere on Earth.
+        for lat in [0.0, 46.5, 70.0] {
+            let mut c = Camera::new(rustgis_geom::lonlat_to_merc(Coord::new(10.0, lat)), 10.0);
+            for scale in [20.0, 10.0, 1.0, 0.5] {
+                c.set_scale(scale);
+                assert!((c.scale() / scale - 1.0).abs() < 1e-9, "1:{scale} at {lat}°: {}", c.scale());
+            }
+            c.set_scale(1e-6);
+            assert_eq!(c.res, MIN_RES, "no further than the limit");
+        }
     }
 
     #[test]

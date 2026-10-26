@@ -567,28 +567,48 @@ const MAX_FONTS_SHOWN: usize = 200;
 /// project made on another, is shown as missing and drawn in the label font.
 fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let input_label = ui.label(tl!("Font"));
-    // The installed fonts are indexed on a thread of their own; until then there's none to pick.
+    let search_id = layer_key(app, l).with("label_pane_font_search");
+    let picked = family_picker(ui, "label_pane_font", search_id, c.it.font.as_deref());
+    picked.response.labelled_by(input_label.id);
+    if let Some(name) = picked.chosen {
+        run(app, "labels.style", c.params(json!({"font": name.unwrap_or_default()})));
+    }
+}
+
+/// What [`family_picker`] showed, and what was picked: `Some(None)` the label font, `Some(Some(name))`
+/// an installed family.
+pub(crate) struct Picked {
+    pub response: egui::Response,
+    pub chosen: Option<Option<String>>,
+}
+
+/// A list of the installed families to pick from (found by typing part of the name, kept under
+/// `search_id`), the label font first; `cur` the one in use (none: the label font). A family this
+/// machine lacks, from a project made on another, is shown as missing. Until the installed fonts
+/// are indexed (on a thread of their own), a disabled button says so.
+pub(crate) fn family_picker(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, search_id: egui::Id, cur: Option<&str>) -> Picked {
     let Some(installed) = families::installed_now() else {
         families::warm_up();
-        ui.add_enabled(false, egui::Button::new(tl!("Reading the installed fonts…"))).labelled_by(input_label.id);
+        let response = ui.add_enabled(false, egui::Button::new(tl!("Reading the installed fonts…")));
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
-        return;
+        return Picked { response, chosen: None };
     };
-    let cur = c.it.font.as_deref();
     let shown = match cur {
         None => tl!("Label font").to_string(),
         Some(name) if families::find(name).is_some() => name.to_string(),
         Some(name) => crate::i18n::fmt("{name} (not installed)", &[("name", name)]),
     };
-    let search_id = layer_key(app, l).with("label_pane_font_search");
-    egui::ComboBox::from_id_salt("label_pane_font")
+    let mut chosen = None;
+    let response = egui::ComboBox::from_id_salt(salt)
         .selected_text(shown)
         .width(180.0)
         .height(320.0)
         .show_ui(ui, |ui| {
             let search = list_search(ui, search_id, tl!("Search fonts"));
             if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
-                run(app, "labels.style", c.params(json!({"font": ""})));
+                if cur.is_some() {
+                    chosen = Some(None);
+                }
                 end_search(ui, search_id);
             }
             let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
@@ -596,7 +616,7 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
                 if ui.selectable_label(on, &f.name).clicked() {
                     if !on {
-                        run(app, "labels.style", c.params(json!({"font": f.name})));
+                        chosen = Some(Some(f.name.clone()));
                     }
                     end_search(ui, search_id);
                 }
@@ -606,8 +626,8 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                 ui.weak(crate::i18n::fmt("{count} more: type part of a name", &[("count", &more.to_string())]));
             }
         })
-        .response
-        .labelled_by(input_label.id);
+        .response;
+    Picked { response, chosen }
 }
 
 fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {

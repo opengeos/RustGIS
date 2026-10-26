@@ -116,7 +116,7 @@ ribbon, arrows at its ends scroll it.
 | **View** | Display (Graticule, Dark Mode, GPU Rendering), View (Globe, Projection, Global; Local on the desktop), Effects, Scene, Windows, Labeling, Navigation, Link, Workspace, Animation, Time (Time Slider), Profile (Profile; Time Series on the desktop) |
 | **Publish** | While a layout is open, its groups first (Page, Map Frames, Map Surrounds, Shapes, Text, Export); then Report, Presentation, Output (Export Map, Export Features, Print Map, Capture To Clipboard, Report, Presentation, Export To 3D), Package, Share As, Layout, Save As, Thumbnail |
 | **Plugins** | Plugins (Plugin Manager, Install From File, Browse Plugins), plus a group for each enabled [plugin](../plugins.md) with commands or tools; a plugin with its own tab adds that tab instead |
-| **Settings** | Customize (Ribbon, Quick Access), Language (interface language and worldview), Start-up (Start With, Projection, Extent) |
+| **Settings** | Customize (Ribbon, Quick Access), Language (interface language and worldview), Start-up (Start With, Projection, Extent), Autosave on the desktop |
 | **Help** | Performance (Diagnostic Monitor), Learn (Learning Resources), Help (About, Check for Updates on the desktop, Command Search, Shortcuts) |
 
 The tabs stay the same whatever is selected: Style and Data act on the layer selected in Layers.
@@ -150,6 +150,8 @@ other files RustGIS reads and writes.
 
 Changes to the project are commands, and each can be undone (++ctrl+z++) and redone
 (++ctrl+y++). Undo keeps the last 40 changes; starting or opening another project clears it.
+The desktop app also keeps a copy of unsaved work and offers it back after a crash: see
+[Autosave and recovery](workspace.md#autosave-and-recovery).
 Exports and other files already written are not undone.
 
 ### Repair Data Source
