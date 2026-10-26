@@ -66,7 +66,12 @@ fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, 
         return None;
     }
     match &t.feature_info {
-        Some(fi) => fi.request(at.x, at.y, m_per_px).map(|url| json!({"tileLayer": t.name, "url": url})),
+        // The request's address comes from the capabilities (hostile input): it must not reach
+        // into the local network from a service on the web.
+        Some(fi) => fi
+            .request(at.x, at.y, m_per_px)
+            .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
+            .map(|url| json!({"tileLayer": t.name, "url": url})),
         None => ogc::wms_layer_of(&t.url).map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
     }
 }

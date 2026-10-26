@@ -437,7 +437,8 @@ fn wms(url: &str, root: &Node) -> Service {
                 lonlat_box(f("minx")?, f("miny")?, f("maxx")?, f("maxy")?)
             })
             .or(inherited_bbox);
-        let queryable = layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim() == "true");
+        let queryable =
+            layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim().eq_ignore_ascii_case("true"));
         for sub in children(&layer, "Layer") {
             stack.push((sub, crs.clone(), bbox, queryable));
         }

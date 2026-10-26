@@ -8618,6 +8618,15 @@ fn identify_asks_wms_layers() {
     // A selection mode asks none.
     let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "selectable"})).unwrap();
     assert!(v.is_null(), "{v}");
+    // A service on the web whose GetFeatureInfo points into the local network isn't asked.
+    let local = WMS.replace("https://maps.example.com/info?", "http://192.168.1.5/info?");
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": local})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let v = s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    assert!(v.is_null(), "{v}");
+    let r = s.run("identify.featureInfo", &json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "request": true})).unwrap();
+    assert_eq!(r, json!({"results": []}));
 }
 
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's

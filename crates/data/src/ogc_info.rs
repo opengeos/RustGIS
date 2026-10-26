@@ -352,23 +352,25 @@ fn text_feature(text: &str) -> Vec<InfoFeature> {
 
 /// An HTML answer's text: its tags, scripts and styles left out.
 fn html_text(html: &str) -> String {
+    // ASCII lowercasing keeps byte offsets, so one copy serves every search (a copy per tag
+    // would be quadratic on an answer of many short scripts).
+    let lower = html.to_ascii_lowercase();
     let mut out = String::new();
-    let mut rest = html;
-    while let Some(open) = rest.find('<') {
-        out.push_str(rest.get(..open).unwrap_or(""));
+    let mut at = 0;
+    while let Some(open) = html.get(at..).and_then(|r| r.find('<')).map(|i| at + i) {
+        out.push_str(html.get(at..open).unwrap_or(""));
         out.push(' ');
-        let after = rest.get(open..).unwrap_or("");
-        let lower = after.get(..after.len().min(8)).unwrap_or("").to_ascii_lowercase();
-        let skip_to = if lower.starts_with("<script") {
-            after.to_ascii_lowercase().find("</script>").map(|i| i + 9)
-        } else if lower.starts_with("<style") {
-            after.to_ascii_lowercase().find("</style>").map(|i| i + 8)
+        let tag = lower.get(open..).unwrap_or("");
+        let skip_to = if tag.starts_with("<script") {
+            tag.find("</script>").map(|i| i + 9)
+        } else if tag.starts_with("<style") {
+            tag.find("</style>").map(|i| i + 8)
         } else {
-            after.find('>').map(|i| i + 1)
+            tag.find('>').map(|i| i + 1)
         };
-        rest = skip_to.and_then(|i| after.get(i..)).unwrap_or("");
+        at = skip_to.map_or(html.len(), |i| open + i);
     }
-    out.push_str(rest);
+    out.push_str(html.get(at..).unwrap_or(""));
     out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
 }
 
@@ -501,6 +503,11 @@ mod tests {
         assert_eq!(read_feature_info(mapserver.as_bytes()).unwrap()[0].attributes, vec![("NAME".into(), "Central".into())]);
         let html = "<html><head><style>p{}</style><script>x()</script></head><body><p>Lake &amp; shore</p></body></html>";
         assert_eq!(read_feature_info(html.as_bytes()).unwrap()[0].attributes, vec![("text".into(), "Lake & shore".into())]);
+        // Any case of script and style is left out; many short scripts read in linear time.
+        let shouting = "<HTML><SCRIPT>x()</Script><Style>p{}</STYLE><B>Peak</B></HTML>";
+        assert_eq!(html_text(shouting).split_whitespace().collect::<Vec<_>>(), ["Peak"]);
+        let many = format!("<html>{}<p>end</p>", "<script></script>".repeat(200_000));
+        assert_eq!(html_text(&many).split_whitespace().collect::<Vec<_>>(), ["end"]);
         assert!(read_feature_info(b"   ").unwrap().is_empty());
     }
 

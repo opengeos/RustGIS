@@ -19,6 +19,10 @@ use serde_json::{Value, json};
 use crate::theme::{Tokens, c32, regular, semibold};
 use crate::{RustGisApp, icons};
 
+/// Most bytes read of a WMS capabilities document or GetFeatureInfo answer, as
+/// `identify.featureInfo` reads them natively: each answer is parsed on the frame thread.
+const MAX_INFO_BYTES: usize = 8 << 20;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Key {
     rev: u64,
@@ -100,7 +104,7 @@ impl Popup {
                     (None, Some(c)) => (c, true),
                     _ => return None,
                 };
-                Some(Ask { layer, capabilities, slot: crate::fetch_into(url) })
+                Some(Ask { layer, capabilities, slot: crate::fetch_into_limited(url, MAX_INFO_BYTES) })
             })
             .collect();
         Popup { info, at, index: 0, map, asks }
@@ -2849,7 +2853,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         match r {
             Ok(v) => {
                 if let Some(url) = v["url"].as_str() {
-                    next.push(Ask { layer, capabilities: false, slot: crate::fetch_into(url) });
+                    next.push(Ask { layer, capabilities: false, slot: crate::fetch_into_limited(url, MAX_INFO_BYTES) });
                 }
                 found.extend(v["results"].as_array().cloned().unwrap_or_default());
             }
