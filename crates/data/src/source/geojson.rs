@@ -45,6 +45,8 @@ pub struct GeoJsonSource {
     /// The features (by place) the declared system can't convert: in no read, and not counted.
     /// Sorted.
     failed: Vec<u32>,
+    /// Features left out when it was opened for geometry that couldn't be read.
+    unreadable: usize,
 }
 
 /// The features of a file as it's scanned.
@@ -190,7 +192,8 @@ impl GeoJsonSource {
             indexed: false,
             notes,
         };
-        Ok(GeoJsonSource { info, path: path.to_path_buf(), places: scan.places, boxes: scan.boxes, reproject, failed })
+        let unreadable = scan.skipped;
+        Ok(GeoJsonSource { info, path: path.to_path_buf(), places: scan.places, boxes: scan.boxes, reproject, failed, unreadable })
     }
 
     /// The features a request matches, in file order: every one without an extent; otherwise
@@ -221,6 +224,10 @@ impl FeatureSource for GeoJsonSource {
 
     fn lost_to_crs(&self) -> bool {
         !self.failed.is_empty()
+    }
+
+    fn skipped_at_open(&self) -> usize {
+        self.unreadable + self.failed.len()
     }
 
     fn read(&self, req: &Request) -> Result<Batch> {

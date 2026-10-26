@@ -1171,8 +1171,7 @@ fn geojson_paths(file: &str, text: &str) -> (Dataset, Vec<String>, String) {
         assert_eq!(inplace.crs, whole.crs, "{file}");
         assert_eq!(inplace.crs_incomplete, whole.crs_incomplete, "{file}");
         assert_eq!(inplace.geometry_type, whole.geometry_type, "{file}");
-        // (What a source skipped at open, unreadable or unplaceable features, is in its notes,
-        // not in `skipped`, which counts what a read skipped.)
+        assert_eq!(report.skipped, in_report.skipped, "{file}");
         let strip = |m: &Vec<String>| m.iter().map(|m| m.trim_start_matches("x: ").to_string()).collect::<Vec<_>>();
         assert_eq!(strip(&report.messages), strip(&in_report.messages), "{file}");
         // The extent a source says is that of the features it reads (those that convert).

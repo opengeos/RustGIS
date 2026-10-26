@@ -217,6 +217,11 @@ pub trait FeatureSource: Send + Sync {
     fn lost_to_crs(&self) -> bool {
         false
     }
+    /// How many features the source left out when it was opened (and from every read), for a
+    /// whole read's `ReadReport::skipped` to count with what reads skip.
+    fn skipped_at_open(&self) -> usize {
+        0
+    }
     /// Reads the features a request asks for. A source read by its web address fails with
     /// [`remote::NEED`] until the bytes the read needs are fetched: run it with
     /// [`remote::drive`] (see [`FeatureSource::remote`]).
@@ -460,6 +465,10 @@ impl FeatureSource for Fetching {
         self.0.lost_to_crs()
     }
 
+    fn skipped_at_open(&self) -> usize {
+        self.0.skipped_at_open()
+    }
+
     fn read(&self, req: &Request) -> Result<Batch> {
         read_blocking(&self.0, req)
     }
@@ -484,7 +493,10 @@ pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
     // Once materialized, it must still direct CRS repairs back to the original file.
     ds.crs_incomplete = (info.format == "Shapefile" && batch.skipped > 0) || src.lost_to_crs();
     ds.features = batch.features.into();
-    let mut report = ReadReport { skipped: batch.skipped, messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect() };
+    let mut report = ReadReport {
+        skipped: batch.skipped + src.skipped_at_open(),
+        messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect(),
+    };
     if !batch.complete {
         report.messages.push(format!("{}: read a sample of {} of {} features", info.name, ds.features.len(), batch.matched));
     }
