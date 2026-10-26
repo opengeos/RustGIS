@@ -27,24 +27,13 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
         return Err("shared vertices can only be moved in polygons".into());
     }
     let original = source.vertex(vertex).ok_or("no such vertex")?;
-    // Retaining shared rows adds no table copy and lets the result include calculation changes.
+    // This clone retains the Arc, not a second row table. The first write can still copy the
+    // full table, which the undo snapshot also shares; keep these rows for post-rule counts.
     let before = layer.dataset.features.clone();
     let mut replacements = Vec::new();
     for (row, feature) in before.iter().enumerate() {
-        let Some(geometry @ Geometry::Polygon(_)) = &feature.geometry else { continue };
-        let mut nodes = Vec::new();
-        geometry.for_each_vertex(|v, c| {
-            if c == original {
-                nodes.push(v);
-            }
-        });
-        if nodes.is_empty() {
-            continue;
-        }
-        let mut moved = geometry.clone();
-        for node in nodes {
-            moved = moved.move_vertex(node, at).ok_or("no such vertex")?;
-        }
+        let Some(geometry) = &feature.geometry else { continue };
+        let Some(moved) = move_matching(geometry, original, at) else { continue };
         super::super::edit::validate(&moved)?;
         replacements.push((row, moved));
     }
@@ -61,6 +50,23 @@ pub(super) fn run(s: &mut Session, p: &Value) -> CmdResult {
     let layer = s.map().layer(id).ok_or("no such layer")?;
     let modified = rows.iter().filter(|&&row| before.get(row) != layer.dataset.features.get(row)).count();
     Ok(json!({"part": vertex.part, "ring": vertex.ring, "index": vertex.index, "modified": modified}))
+}
+
+/// Copies a matching polygon once and rewrites its original-coordinate matches in linear time.
+/// Stored closing duplicates match their first node and move with it, as with `move_vertex`;
+/// open rings stay unnormalized. Non-polygons and polygons without a match need no clone.
+fn move_matching(geometry: &Geometry, original: Coord, at: Coord) -> Option<Geometry> {
+    let Geometry::Polygon(parts) = geometry else { return None };
+    if !parts.iter().flatten().flatten().any(|c| *c == original) {
+        return None;
+    }
+    let mut moved = parts.clone();
+    for c in moved.iter_mut().flatten().flatten() {
+        if *c == original {
+            *c = at;
+        }
+    }
+    Some(Geometry::Polygon(moved))
 }
 
 /// Reads a platform-sized address; optional null parts/rings use the same defaults as `edit.vertex`.

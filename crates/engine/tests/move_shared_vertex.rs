@@ -121,11 +121,76 @@ fn near_vertices_and_other_layers_remain_unchanged() {
     let (mut s, id) = fixture();
     let near = rectangle(f64::EPSILON, 0., 2., 2.);
     s.map_mut().layer_mut(id).unwrap().dataset.features.push(Feature { id: 99, geometry: Some(near.clone()), attrs: vec![Cell::Int(9)] });
+    s.map_mut().layer_mut(id).unwrap().dataset.features.push(Feature {
+        id: 100,
+        geometry: Some(Geometry::Point(Coord::new(0., 0.))),
+        attrs: vec![Cell::Int(10)],
+    });
+    s.map_mut().layer_mut(id).unwrap().dataset.features.push(Feature { id: 101, geometry: None, attrs: vec![Cell::Int(11)] });
+    let unchanged = features(&s, id).into_iter().skip(4).collect::<Vec<_>>();
     let other = add_layer(&mut s, "Other", vec![rectangle(0., 0., 1., 1.)]);
     let untouched = features(&s, other);
     assert_eq!(move_to(&mut s, id, Coord::new(0.2, 0.3))["modified"], 4);
     assert_eq!(features(&s, id)[4].geometry.as_ref(), Some(&near));
+    assert_eq!(&features(&s, id)[4..], unchanged.as_slice());
     assert_eq!(features(&s, other), untouched);
+}
+
+/// Frozen pre-optimization address loop, used only as a small-input closing-alias oracle.
+fn addressed_move(geometry: &Geometry, original: Coord, at: Coord) -> Geometry {
+    let mut moved = geometry.clone();
+    geometry.for_each_vertex(|vertex, c| {
+        if c == original {
+            moved = moved.move_vertex(vertex, at).unwrap();
+        }
+    });
+    moved
+}
+
+/// Single-copy rewriting agrees with vertex-address moves when destinations create closure too.
+#[test]
+fn coincident_rewrite_preserves_open_and_closed_ring_address_semantics() {
+    let c = Coord::new(0., 0.);
+    let a = Coord::new(1., 0.);
+    let b = Coord::new(1., 1.);
+    let d = Coord::new(0., 1.);
+    let rings = [vec![c, a, b, c, d, c], vec![c, a, b, c, d], vec![a, c, b, d, c], vec![c, a, b, d, a], vec![a, b, c, d, a]];
+    for ring in rings {
+        let index = ring.iter().position(|point| *point == c).unwrap();
+        for at in [c, a, Coord::new(-0.1, 0.2)] {
+            let geometry = Geometry::Polygon(vec![vec![ring.clone()]]);
+            let expected = addressed_move(&geometry, c, at);
+            let mut s = Session::new(Project::new("Closing aliases"));
+            let id = add_layer(&mut s, "Parcels", vec![geometry.clone()]);
+            let result = s.run("edit.moveSharedVertex", &json!({"layer":id,"row":0,"index":index,"lon":at.x,"lat":at.y})).unwrap();
+            assert_eq!(features(&s, id)[0].geometry.as_ref(), Some(&expected), "{ring:?} → {at:?}");
+            assert_eq!(result["modified"], usize::from(expected != geometry));
+        }
+    }
+}
+
+/// Many stored matches rewrite together without changing row identity, attributes or one-step undo.
+#[test]
+fn densely_repeated_nodes_move_and_undo_as_one_feature() {
+    let c = Coord::new(0., 0.);
+    let at = Coord::new(-0.1, 0.2);
+    let mut ring = vec![c; 32_768];
+    ring.extend([Coord::new(1., 0.), Coord::new(1., 1.), Coord::new(0., 1.), c]);
+    let geometry = Geometry::Polygon(vec![vec![ring.clone()]]);
+    let expected = Geometry::Polygon(vec![vec![ring.into_iter().map(|point| if point == c { at } else { point }).collect()]]);
+    let mut s = Session::new(Project::new("Repeated nodes"));
+    let id = add_layer(&mut s, "Parcels", vec![geometry]);
+    s.clear_history();
+    let before = features(&s, id);
+    assert_eq!(move_to(&mut s, id, at)["modified"], 1);
+    let after = features(&s, id);
+    assert_eq!(after[0].geometry.as_ref(), Some(&expected));
+    assert_eq!((after[0].id, &after[0].attrs), (before[0].id, &before[0].attrs));
+    assert_eq!(s.undo_depth(), 1);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert_eq!(features(&s, id), before);
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert_eq!(features(&s, id), after);
 }
 
 /// Different segmentation is accepted: intermediate nodes are neither inserted nor remapped.
