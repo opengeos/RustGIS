@@ -443,7 +443,16 @@ fn sep(ui: &mut Ui, t: &Tokens) {
 fn parse_scale(text: &str) -> Option<f64> {
     let t: String = text.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
     if let Some(up) = t.strip_suffix(":1").or_else(|| t.strip_suffix("/1")).filter(|u| !u.contains([':', '/'])) {
-        return parse_scale(up).map(|v| 1.0 / v);
+        // Times life size, as the status bar writes it: a dot is a decimal point (`1.5:1`), commas
+        // group thousands (`2,000:1`), and there are no `k`/`m` suffixes.
+        let times = if up.contains('.') {
+            up.bytes().all(|b| b.is_ascii_digit() || b == b'.').then(|| up.parse::<f64>().ok()).flatten()?
+        } else if up.ends_with(['k', 'm']) {
+            return None;
+        } else {
+            parse_scale(up)?
+        };
+        return (times.is_finite() && times > 0.0).then(|| 1.0 / times);
     }
     let chars: Vec<char> = t.chars().collect();
     for (i, c) in chars.iter().enumerate() {
@@ -1195,12 +1204,16 @@ mod tests {
             ("2.5:1", 0.4),
             ("10 : 1", 0.1),
             ("4/1", 0.25),
+            // A dot is a decimal point there, as the status bar shows it (#923).
+            ("1.234:1", 1.0 / 1.234),
+            ("1.5:1", 1.0 / 1.5),
+            ("2,000:1", 1.0 / 2000.0),
         ] {
             assert_eq!(parse_scale(text), Some(want), "{text}");
         }
         for text in [
             "", "1:", "abc", "0", "1:0", "-5000", "1:-5000", "inf", "NaN", "12.34.5", "k", "1e5", "1:5e300", "0.5", "1:2,5m", "1:12,34",
-            ",345", "12,3456", "0:1", "1:2:1", ":1",
+            ",345", "12,3456", "0:1", "1:2:1", ":1", "25k:1", "1.2.3:1", ".:1",
         ] {
             assert_eq!(parse_scale(text), None, "{text}");
         }
