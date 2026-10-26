@@ -9,12 +9,13 @@ use base64::Engine;
 use rustgis_map::Map;
 use rustgis_map::layout::{ElementKind, FontFamily, Layout, LineHead, PT_PER_MM, TextAlign, frame_camera};
 
-use crate::layout::{PageInfo, expand, page_geometry, render_element};
+use crate::layout::{MAX_PIXELS, PageInfo, expand, page_geometry, render_element};
 
 /// Writes `layout` as an SVG document, pictures drawn at `dpi`; `None` when the page can't be drawn.
 pub fn layout_svg(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) -> Option<String> {
     let (pw, ph) = (layout.width, layout.height);
     let ppp = page_geometry(layout, dpi).2 / PT_PER_MM;
+    let picture_dpi = picture_dpi(layout, dpi);
     let mut s = String::new();
     let _ = write!(
         s,
@@ -109,7 +110,7 @@ pub fn layout_svg(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) 
             }
             ElementKind::Line { color, width, dir, head } => line(&mut s, dir.ends((x, y, w, h)), *color, *width, *head, ppp),
             _ => {
-                if let Some((image, [ix, iy, iw, ih])) = render_element(layout, e.id, maps, dpi, info)? {
+                if let Some((image, [ix, iy, iw, ih])) = render_element(layout, e.id, maps, picture_dpi, info)? {
                     let png = image.encode_png().ok()?;
                     let _ = writeln!(
                         s,
@@ -127,6 +128,28 @@ pub fn layout_svg(layout: &Layout, maps: &mut [Map], dpi: f64, info: &PageInfo) 
     }
     s.push_str("</svg>\n");
     Some(s)
+}
+
+/// The resolution the pictures are drawn at: `dpi`, unless together they would take more than
+/// twice the pixels of the page (surrounds usually sit on a map frame), in which case all of them
+/// are drawn at the resolution that fits, so many large frames don't grow the SVG without bound.
+fn picture_dpi(layout: &Layout, dpi: f64) -> f64 {
+    let on_page = |start: f64, len: f64, page: f64| ((start + len).min(page) - start.max(0.0)).max(0.0);
+    let area: f64 = layout
+        .elements
+        .iter()
+        .filter(|e| e.visible)
+        .filter(|e| {
+            !matches!(
+                e.kind,
+                ElementKind::Text { .. } | ElementKind::Rectangle { .. } | ElementKind::Ellipse { .. } | ElementKind::Line { .. }
+            )
+        })
+        .map(|e| on_page(e.x, e.w, layout.width) * on_page(e.y, e.h, layout.height))
+        .sum();
+    let k = page_geometry(layout, dpi).2;
+    let fit = (2.0 * MAX_PIXELS / (area * k * k)).sqrt();
+    if fit < 1.0 { k * fit / PT_PER_MM * 96.0 } else { dpi }
 }
 
 /// A line element as the page draws it: a shaft and a filled triangle for each head, in millimetres.
@@ -220,6 +243,50 @@ mod tests {
         .unwrap();
         let frame = layout.add("Map", (0.0, 0.0, 100.0, 80.0), kind);
         (layout, vec![Map::new("Map")], frame)
+    }
+
+    /// An A0 page with `n` map frames, each covering the whole page.
+    fn stacked_frames(n: usize) -> Layout {
+        let mut layout = Layout::new("A0", 841.0, 1189.0);
+        for i in 0..n {
+            let kind = serde_json::from_value(serde_json::json!({"MapFrame": {
+                "map": "Map", "center": {"x": 0, "y": 0}, "scale": 100000000
+            }}))
+            .unwrap();
+            layout.add(format!("Map {i}"), (0.0, 0.0, 841.0, 1189.0), kind);
+        }
+        layout
+    }
+
+    #[test]
+    fn surrounds_on_a_frame_keep_the_picture_resolution() {
+        let (mut layout, _, frame) = page();
+        layout.add(
+            "Legend",
+            (10.0, 10.0, 40.0, 30.0),
+            ElementKind::Legend { frame, title: "Map legend".into(), all_classes: true, hide_other: false, exclude: vec![] },
+        );
+        assert_eq!(picture_dpi(&layout, 600.0), 600.0);
+        // A frame and an inset filling an A0 page that is already drawn at its pixel limit.
+        let layout = stacked_frames(2);
+        assert_eq!(picture_dpi(&layout, 600.0), 600.0);
+    }
+
+    #[test]
+    fn stacked_frames_share_the_picture_budget() {
+        let layout = stacked_frames(8);
+        let dpi = picture_dpi(&layout, 600.0);
+        assert!(dpi < 600.0);
+        let k = page_geometry(&layout, dpi).2;
+        let pixels = 8.0 * 841.0 * 1189.0 * k * k;
+        assert!(pixels <= 2.0 * MAX_PIXELS * (1.0 + 1e-9), "{pixels} pixels");
+        assert!(pixels >= 1.99 * MAX_PIXELS, "the pictures use the budget they have: {pixels} pixels");
+        // Pictures off the page take nothing from it.
+        let mut layout = stacked_frames(8);
+        for e in layout.elements.iter_mut().skip(1) {
+            e.x = 900.0;
+        }
+        assert_eq!(picture_dpi(&layout, 600.0), 600.0);
     }
 
     #[test]

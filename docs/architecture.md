@@ -32,6 +32,8 @@ enabled state comes from its command, while `menu_enabled` controls the arrow in
 `ui.push_id` when placing repeated controls whose order can change. Keep whole-button dropdowns
 for choices without a clear everyday default.
 
+For tab purposes, pane shortcuts and choosing controls, follow the [ribbon guidelines](contributing.md#ribbon-guidelines).
+
 Mutating commands snapshot the project for undo and restore it on an error or escaped panic.
 View-only commands do not take undo snapshots. Undo and rollback cover project state, not
 external effects such as files already written.

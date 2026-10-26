@@ -9,8 +9,9 @@ Browse the [plugin catalog](https://plugins.rustgis.app/catalog/).
 [opengeos/rustgis-plugins](https://github.com/opengeos/rustgis-plugins) holds the registry,
 blocklist and [`rustgis-plugin` SDK](https://github.com/opengeos/rustgis-plugins/tree/main/sdk),
 not plugin source. Plugin sources live in their own repositories; start one from the
-[Rust](https://github.com/opengeos/rustgis-plugin-template) or
-[Python](https://github.com/opengeos/rustgis-python-plugin-template) template.
+[Rust WebAssembly](https://github.com/opengeos/rustgis-plugin-template),
+[Rust process](https://github.com/opengeos/rustgis-rust-process-plugin-template) or
+[Python process](https://github.com/opengeos/rustgis-python-plugin-template) template.
 
 ## Using plugins
 
@@ -91,12 +92,13 @@ apply the cached blocklist; the web app fetches it when restoring plugins.
 
 ## Writing a plugin
 
-Start from the [plugin template](https://github.com/opengeos/rustgis-plugin-template) (or the
-[Python template](https://github.com/opengeos/rustgis-python-plugin-template) for a
-[process plugin](#process-plugins)), and read the
+Start from the [Rust WebAssembly template](https://github.com/opengeos/rustgis-plugin-template),
+or the [Rust](https://github.com/opengeos/rustgis-rust-process-plugin-template) or
+[Python](https://github.com/opengeos/rustgis-python-plugin-template) template for a
+[process plugin](#process-plugins), and read the
 [official plugins](https://official-plugins.rustgis.app) for examples, such as
 [Hello RustGIS](https://github.com/opengeos/rustgis-official-plugins/tree/main/plugins/hello).
-A plugin uses the `rustgis-plugin` SDK crate:
+A WebAssembly plugin uses the `rustgis-plugin` SDK crate:
 
 ```rust
 use rustgis_plugin::{Kind, Request, ToolOutput, Value, geojson, host, json};
@@ -529,6 +531,11 @@ with no **Install** button.
 
 ### The protocol
 
+The [Rust process template](https://github.com/opengeos/rustgis-rust-process-plugin-template)
+provides a command, a tool and a reusable JSON-line transport module, with packaging and release
+builds for Linux, Windows and universal macOS. Users run the packaged executable without Rust or
+Python installed. Native plugins are not sandboxed and do not run in the web app.
+
 Each command or tool call starts the program once. It speaks the [ABI](#the-abi-version-1)'s
 requests and replies over its standard input and output, one JSON object per line:
 
@@ -645,8 +652,9 @@ installs from a file in the desktop app, on the command line and in the web app:
 ## Publishing a plugin
 
 1. Write the plugin in your own repository, starting from the
-   [Rust](https://github.com/opengeos/rustgis-plugin-template) or
-   [Python](https://github.com/opengeos/rustgis-python-plugin-template) template. See
+   [Rust WebAssembly](https://github.com/opengeos/rustgis-plugin-template),
+   [Rust process](https://github.com/opengeos/rustgis-rust-process-plugin-template) or
+   [Python process](https://github.com/opengeos/rustgis-python-plugin-template) template. See
    [Write a plugin](https://plugins.rustgis.app/develop/).
 2. Release it: the templates' **Release** workflow attaches the `.rgplugin` and its registry
    entry to a GitHub release.
