@@ -3620,10 +3620,18 @@ impl RustGisApp {
         // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
         // asynchronously and passes them through the inbox instead.)
         if !cfg!(target_arch = "wasm32") {
-            let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            let mut dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            // A project first, so the data dropped with it goes into that project, not the one
+            // it replaces. While the save prompt asks about replacing this one, the rest wait.
+            dropped.sort_by_key(|f| rustgis_engine::project::open_command(&f.path().display().to_string()) != "project.open");
+            let mut held = 0usize;
             for f in dropped {
                 let p = f.path().display().to_string();
                 if p.is_empty() {
+                    continue;
+                }
+                if saveprompt::waiting(self) {
+                    held += 1;
                     continue;
                 }
                 if p.to_ascii_lowercase().ends_with(".rgplugin") {
@@ -3635,6 +3643,18 @@ impl RustGisApp {
                 }
                 let _ = layerchooser::add_file(self, &p);
                 self.map.invalidate();
+            }
+            if held == 1 {
+                self.session.notify(
+                    tl!("Another dropped file wasn't opened: drop it again once you've answered about the unsaved changes."),
+                    false,
+                );
+            } else if held > 1 {
+                let text = crate::i18n::fmt(
+                    "{n} other dropped files weren't opened: drop them again once you've answered about the unsaved changes.",
+                    &[("n", &held.to_string())],
+                );
+                self.session.notify(text, false);
             }
         }
         if self.fonts_frames == 0 {

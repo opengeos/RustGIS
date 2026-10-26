@@ -28,9 +28,9 @@ World Atlas sample, a template or a project dropped on the window would replace 
 Commands don't ask: `project.new`, `project.open` and the rest replace the project as they always
 have when a script, a task, the AI Assistant, the command line or an attached agent runs them.
 The browser app doesn't ask yet; it warns before you leave a page with unsaved changes. On macOS,
-**Quit RustGIS** (⌘Q) and the Dock's **Quit** don't ask yet either. Your changes aren't lost:
-RustGIS keeps them as a [recovery copy](#autosave-and-recovery) and offers them back the next time
-it starts.
+**Quit RustGIS** (⌘Q) and the Dock's **Quit** don't ask yet either. With autosave on (the
+default), RustGIS keeps your changes as a [recovery copy](#autosave-and-recovery) and offers them
+back the next time it starts; with autosave off, they are lost, so save before you quit.
 
 Saved layer addresses omit passwords, access keys, tokens and signatures. The open session
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
@@ -45,7 +45,7 @@ the last one. Choose how often, or turn it off, in **Settings › Autosave**
 project doesn't hold up the app. It leaves out layer passwords, keys and tokens, as a saved project
 does. It is kept in the `recovery` folder of the app's
 [data folder](../installation.md#settings-data-and-cache-folders), not beside your project.
-Saving, opening or starting another project, and quitting RustGIS remove it.
+Saving, opening or starting another project, and choosing **Don't Save** when you quit remove it.
 
 If RustGIS crashes, is closed by the system or loses power, the next launch asks **Recover unsaved
 work?** and says how old the copy is.
@@ -63,13 +63,13 @@ that has unsaved changes of its own: save it first.
 The same choices are commands: `ui.recover` opens the copy, and `ui.recover={"discard": true}`
 deletes it. `ui.autosave` reports the interval and any copy waiting.
 
-Quitting asks about unsaved changes first (see [Projects](#projects)); once you choose
-**Don't Save**, their copy is removed. If RustGIS is quit without that answer (on macOS, **Quit**
-doesn't ask yet), it keeps a last copy of the work instead, and the next launch offers it back,
-saying RustGIS was quit without saving. With autosave off, nothing is kept. A second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
-one's copy; it says so as it starts. Nor does RustGIS autosave when its settings folder can't lock
-files (some network or synced folders), where it can't tell a second copy apart. The browser app
-doesn't autosave yet; it warns before you leave a page with unsaved changes.
+Quitting asks about unsaved changes first (see [Projects](#projects)). If RustGIS is quit without
+that answer (on macOS, **Quit** doesn't ask yet), it keeps a last copy of the work instead, and
+the next launch offers it back, saying RustGIS was quit without saving. With autosave off, nothing
+is kept. A second copy of RustGIS running alongside the first doesn't autosave, so it can't
+replace the first one's copy; it says so as it starts. Nor does RustGIS autosave when its settings
+folder can't lock files (some network or synced folders), where it can't tell a second copy apart.
+The browser app doesn't autosave yet; it warns before you leave a page with unsaved changes.
 
 ### QGIS projects and styles
 

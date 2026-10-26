@@ -147,7 +147,7 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
-/// A New Project card: a thumbnail with its title and line beneath, a button named by its title.
+/// A start card: a thumbnail with its title and line beneath, a button named by its title.
 /// True when clicked.
 fn card(ui: &mut Ui, t: &Tokens, title: &str, sub: &str, icon: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 160.0), Sense::click());

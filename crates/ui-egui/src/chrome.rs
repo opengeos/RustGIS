@@ -554,10 +554,6 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         if id == "tool.set" {
             app.map.cancel_sketch();
             app.layout.cancel_tool();
-            if app.ui.command_search.is_some() {
-                app.ui.command_search = None;
-                continue;
-            }
         }
         // An arrow key nudged the selected layout element (unless it's locked): a held key, or
         // taps close together, are one step to undo.

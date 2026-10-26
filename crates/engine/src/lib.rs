@@ -1268,6 +1268,12 @@ impl Session {
         self.saved != Some(self.state)
     }
 
+    /// Which state the project is in: another after each change, an earlier one after undo. A
+    /// front end compares it to tell whether the project changed since it last looked.
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     /// The project as it is now is saved (written to its file, or downloaded in the browser).
     pub fn mark_saved(&mut self) {
         self.saved = Some(self.state);

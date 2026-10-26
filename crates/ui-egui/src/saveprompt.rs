@@ -31,19 +31,32 @@ pub(crate) struct SavePromptState {
     pub asking: Option<Discard>,
     /// The user chose to quit: the next close request goes through.
     pub closing: bool,
+    /// The project's state when asked ([`rustgis_engine::Session::state`]): Don't Save discards
+    /// the changes the user was asked about, not ones an agent made while the dialog showed.
+    pub asked: u64,
+    /// The project changed while the dialog showed: it asks again, and says why.
+    pub changed: bool,
 }
 
 /// Whether running command `id` from the interface asks first: it replaces the project, which
 /// has unsaved changes, in the desktop app.
 pub(crate) fn asks(app: &RustGisApp, id: &str) -> bool {
-    REPLACES.contains(&id) && app.session.dirty() && app.opens_files()
+    REPLACES.contains(&id) && unsaved_here(app)
 }
 
-/// Shows the dialog for `what`. One already showing keeps its question: a file dropped on the
-/// window meanwhile doesn't replace it. Quitting does, as the user asked for it last.
+/// Whether the project has unsaved changes in a shell that asks about them (the desktop app).
+fn unsaved_here(app: &RustGisApp) -> bool {
+    app.session.dirty() && app.opens_files()
+}
+
+/// Shows the dialog for `what`, about the project as it is now. One already showing keeps its
+/// question (the dialog takes the pointer and the keys; a drop that opens a project waits with
+/// the rest of its files). Quitting does replace it, as the user asked for it last.
 pub(crate) fn ask(app: &mut RustGisApp, what: Discard) {
     if app.save_prompt.asking.is_none() || what == Discard::Quit {
         app.save_prompt.asking = Some(what);
+        app.save_prompt.asked = app.session.state();
+        app.save_prompt.changed = false;
     }
 }
 
@@ -57,7 +70,7 @@ pub(crate) fn waiting(app: &RustGisApp) -> bool {
 /// some, this shell asks, and the dialog wasn't answered with Don't Save (or Save, which leaves
 /// none). Only an end that skipped the close request gets here: macOS's Quit.
 pub(crate) fn unanswered(app: &RustGisApp) -> bool {
-    app.session.dirty() && app.opens_files() && !app.save_prompt.closing
+    unsaved_here(app) && !app.save_prompt.closing
 }
 
 /// Each frame, before anything draws: a request to close the window (its close button, the
@@ -66,7 +79,7 @@ pub(crate) fn close_requested(app: &mut RustGisApp, ctx: &egui::Context) {
     if !ctx.input(|i| i.viewport().close_requested()) || app.save_prompt.closing {
         return;
     }
-    if !(app.session.dirty() && app.opens_files()) {
+    if !unsaved_here(app) {
         return;
     }
     ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -87,6 +100,12 @@ pub(crate) fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         ui.label(egui::RichText::new(crate::i18n::fmt("Save changes to {name}?", &[("name", &name)])).font(semibold(15.0)));
         ui.add_space(4.0);
         ui.label(tl!("Your changes will be lost if you don't save them."));
+        if app.save_prompt.changed {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(tl!("The project changed while this was open: check the changes, then answer again.")).color(t.red),
+            );
+        }
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             if crate::widgets::dialog_button(ui, tl!("Save"), Some(t.accent), vec2(84.0, 28.0)).clicked() {
@@ -103,6 +122,13 @@ pub(crate) fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         });
     });
     let Some(answer) = answer else { return };
+    // Changed since the question (an agent, the AI Assistant): Don't Save would discard changes
+    // the user hasn't seen. The dialog stays and asks about the project as it is now.
+    if matches!(answer, Answer::DontSave) && app.session.state() != app.save_prompt.asked {
+        app.save_prompt.asked = app.session.state();
+        app.save_prompt.changed = true;
+        return;
+    }
     app.save_prompt.asking = None;
     // The shell closes the window, or the replaced project draws, on the next frame.
     ctx.request_repaint();
@@ -350,6 +376,12 @@ mod tests {
         h.key_press(egui::Key::Escape);
         frames(&mut h, 3);
         assert!(!asking(&h) && h.state().session.tool == rustgis_engine::Tool::Measure);
+        // Command Search closes on its own Escape too, leaving the tool.
+        h.state_mut().run("ui.commandSearch", Value::Null).unwrap();
+        frames(&mut h, 3);
+        h.key_press(egui::Key::Escape);
+        frames(&mut h, 3);
+        assert!(h.state().ui.command_search.is_none() && h.state().session.tool == rustgis_engine::Tool::Measure);
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::N);
         frames(&mut h, 3);
         click(&mut h, "Don't Save");
@@ -386,12 +418,40 @@ mod tests {
         assert!(asking(&h) && h.state().session.path.is_none());
         click(&mut h, "Cancel");
         assert!(h.state().session.dirty() && h.state().session.path.is_none());
-        h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(other.clone())));
+        // Data dropped before a project, and a second project: the project is asked about first;
+        // the rest wait, unopened (the data isn't added to the project Don't Save discards), and
+        // a notice says so.
+        let data = dir.join("sites.geojson");
+        std::fs::write(&data, r#"{"type":"FeatureCollection","features":[]}"#).unwrap();
+        let said = h.state().session.notices.len();
+        for f in [data.clone(), other.clone(), other.clone()] {
+            h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(f)));
+        }
         frames(&mut h, 2);
-        assert!(asking(&h));
+        assert!(asking(&h) && h.state().session.map().layer_by_name("sites").is_none());
+        assert!(h.state().session.notices[said..].iter().any(|n| n.text.starts_with("2 other dropped files weren't opened")));
         click(&mut h, "Don't Save");
         assert!(!h.state().session.dirty() && h.state().session.path.as_deref() == Some(other.as_path()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The project changed while the dialog showed (an agent's edit): Don't Save doesn't discard
+    /// what the user wasn't asked about. The dialog says so and asks again; the next answer goes.
+    #[test]
+    fn a_change_while_asking_is_asked_about_again() {
+        let mut h = launch();
+        frames(&mut h, 2);
+        edit(&mut h, "Edited");
+        h.state_mut().run_by_user("project.new", Value::Null).unwrap();
+        frames(&mut h, 2);
+        h.state_mut().session.actor = Some("agent 1".into());
+        h.state_mut().session.run("map.rename", &json!({"name": "By the agent"})).unwrap();
+        h.state_mut().session.actor = None;
+        click(&mut h, "Don't Save");
+        assert!(asking(&h) && h.state().session.map().name == "By the agent");
+        assert!(h.query_by_label_contains("The project changed while this was open").is_some());
+        click(&mut h, "Don't Save");
+        assert!(!asking(&h) && h.state().session.project.name == "Untitled");
     }
 
     /// Commands run directly never ask: scripts, the AI Assistant and attached agents replace the
