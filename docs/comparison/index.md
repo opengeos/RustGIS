@@ -5,8 +5,8 @@ platforms people most often ask about: **QGIS**, **ArcGIS Pro** and **ArcGIS Onl
 
 RustGIS is not trying to replace any of these. It fills a narrower spot: a **free and
 open-source desktop GIS compiled to a single native program**, with a ribbon interface familiar
-from desktop GIS, every action available as a scriptable command, and the same app running in a
-browser tab through WebAssembly.
+from desktop GIS, almost every action available as a scriptable command, and the same app running
+in a browser tab through WebAssembly.
 
 !!! note "How to read this"
     Comparisons like this age quickly and are written by an interested party. The RustGIS
@@ -38,10 +38,11 @@ They differ in how they are built and who they suit:
   out in the order of the work, and an engine whose commands run the
   same way from the ribbon, `rustgis-cli`, Python, notebooks, models and the AI Assistant.
 
-If you want the widest data access and the most platforms, choose GeoLibre. If you want a
-compact native desktop GIS with a classic ribbon workflow and a scriptable command
-engine, choose RustGIS. Both work on local files on your machine; remote features, such as web
-data and AI providers, send requests over the network. See
+They complement each other rather than compete: GeoLibre is web and mobile first, RustGIS
+desktop first and built for automation and AI agents. If you want the widest data access and the
+most platforms, choose GeoLibre. If you want a compact native desktop GIS with a classic ribbon
+workflow and a scriptable command engine, choose RustGIS. Both work on local files on your
+machine; remote features, such as web data and AI providers, send requests over the network. See
 [RustGIS and GeoLibre](geolibre.md) for a closer look.
 
 ## At a glance

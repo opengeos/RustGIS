@@ -156,6 +156,11 @@ pub struct TileLayer {
     /// Why the archive can't be read (a moved file, or a relative path with no project folder): it draws nothing.
     #[serde(skip)]
     pub error: Option<String>,
+    /// A WMS layer's GetFeatureInfo request, from the service's capabilities: what identify asks
+    /// it. Kept for the session only (a project's layer reads the capabilities again); the type
+    /// can be saved, should projects keep it.
+    #[serde(skip)]
+    pub feature_info: Option<rustgis_data::ogc::FeatureInfo>,
 }
 
 /// The most dates a tile layer lists (as the time slider steps through at most).
@@ -253,6 +258,7 @@ impl TileLayer {
             time_urls: Vec::new(),
             time_hidden: false,
             error: None,
+            feature_info: None,
         }
     }
 

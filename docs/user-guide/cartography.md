@@ -18,12 +18,17 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval, quantile, geometric interval or standard deviation. Geometric interval makes class
+  interval, quantile, geometric interval, standard deviation, arithmetic progression or head/tail
+  breaks (the Method list is in alphabetical order). Geometric interval makes class
   widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
   below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
   101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
-  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
-  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Arithmetic
+  progression makes class widths grow by one step (1, 2, 3… units), for more detail among the low
+  values. Head/tail breaks splits at the mean, then at the mean of the values above it, and so on
+  while those stay under 40% of the values they were taken from: for a few very large values among
+  many small ones (city sizes, incomes). It sets its own number of classes, at most the number
+  asked. Manual keeps the bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
   class** adds one, and the field's largest value closes the last class. If no field is
   chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
   field is used. If the layer has no numeric field, or the

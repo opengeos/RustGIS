@@ -40,6 +40,7 @@ pub mod icons;
 mod keymap;
 mod labelfonts;
 mod labelpane;
+mod layerchooser;
 mod layoutview;
 #[cfg(not(target_arch = "wasm32"))]
 mod localagents;
@@ -512,6 +513,10 @@ pub struct UiState {
     pub worldview: String,
     /// Start-up preference: what RustGIS opens with.
     pub start_with: StartWith,
+    /// Whether a file holding several layers asks which to add (#934), or adds them all.
+    pub ask_layers: bool,
+    /// Files whose layers are being listed or chosen, the first one shown.
+    pub choosing: Vec<layerchooser::Chooser>,
     /// The project last opened or saved on this computer, for Start With › Last Project.
     pub last_project: Option<String>,
     /// Start-up preference: the projection the first map starts in (a [`Projection`] code);
@@ -715,6 +720,8 @@ impl Default for UiState {
             language: i18n::AUTO.into(),
             worldview: i18n::AUTO.into(),
             start_with: StartWith::Sample,
+            ask_layers: true,
+            choosing: Vec::new(),
             last_project: None,
             start_projection: String::new(),
             start_projection_input: String::new(),
@@ -1004,6 +1011,7 @@ impl RustGisApp {
             self.ui.start_with = StartWith::Sample;
         }
         self.ui.last_project = self.services.load_pref.as_ref().and_then(|load| load("last_project")).filter(|p| !p.trim().is_empty());
+        self.ui.ask_layers = self.services.load_pref.as_ref().and_then(|load| load("ask_file_layers")).is_none_or(|v| v != "off");
         // A stored projection this version can't use means Web Mercator.
         if let Some(code) = self.services.load_pref.as_ref().and_then(|load| load("start_projection"))
             && let Ok(p) = rustgis_engine::map::Projection::from_code(&code)
@@ -1927,6 +1935,23 @@ impl RustGisApp {
                 self.apply_worldview();
             }
             "ui.autosave" => return autosave::command(self, p),
+            // Adds a file as a drop or Add Data does: one holding several layers asks which (#934).
+            "ui.addFile" => {
+                let path = p.get("path").and_then(Value::as_str).map(str::trim).filter(|p| !p.is_empty()).ok_or("path is required")?;
+                return layerchooser::add_file(self, path);
+            }
+            // Whether a file holding several layers asks which to add.
+            "ui.askLayers" => {
+                // Without `on` it toggles; a value that isn't true or false is refused.
+                self.ui.ask_layers = match p.get("on") {
+                    None | Some(Value::Null) => !self.ui.ask_layers,
+                    Some(v) => v.as_bool().ok_or("on must be true or false")?,
+                };
+                if let Some(save) = &self.services.save_pref {
+                    save("ask_file_layers", if self.ui.ask_layers { "on" } else { "off" });
+                }
+                return Ok(json!({"on": self.ui.ask_layers}));
+            }
             "ui.recover" => return autosave::recover(self, p),
             "ui.startup" => {
                 // `project` (#377) or, as before, `blank`; `project` wins when both are given.
@@ -2116,7 +2141,7 @@ impl RustGisApp {
                 let v = self.session.run("identify", &json!({"lon": lon, "lat": lat, "tolerancePx": 5}))?;
                 if let (false, Some(lon), Some(lat)) = (v.is_null(), lon.as_f64(), lat.as_f64()) {
                     let map = self.session.project.active_map;
-                    self.map.popup = Some(mapview::Popup { info: v, at: rustgis_engine::geom::Coord::new(lon, lat), index: 0, map });
+                    self.map.popup = Some(mapview::Popup::new(v, rustgis_engine::geom::Coord::new(lon, lat), map, self.session.opened));
                 } else {
                     self.map.popup = None;
                 }
@@ -2427,7 +2452,7 @@ impl RustGisApp {
                     .concat(),
                     tl!("Vector and raster data"),
                 ) {
-                    return self.run("layer.addData", json!({"path": path}));
+                    return layerchooser::add_file(self, &path);
                 }
             }
             "ui.open" => {
@@ -3553,12 +3578,14 @@ impl RustGisApp {
         } else {
             labelfonts::install_pending(ctx);
         }
-        // Labels in a named family draw in the label font until the installed fonts are
-        // indexed (`families::warm_up`); then the map is drawn again in theirs.
+        // Labels and layout texts in a named family draw in the label font, or the text's
+        // fallback, until the installed fonts are indexed (`families::warm_up`); then the map and
+        // the layout page are drawn again in theirs.
         if !self.label_fonts_indexed {
             if rustgis_engine::render::families::installed_now().is_some() {
                 self.label_fonts_indexed = true;
                 self.map.invalidate();
+                self.layout.redraw();
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
             }
@@ -3587,7 +3614,7 @@ impl RustGisApp {
                     }
                     continue;
                 }
-                let _ = self.run(rustgis_engine::project::open_command(&p), json!({"path": p}));
+                let _ = layerchooser::add_file(self, &p);
                 self.map.invalidate();
             }
         }
@@ -3651,6 +3678,7 @@ impl RustGisApp {
         layoutview::save_drafts(self);
         graphicformat::save_draft(self);
         dialogs::show(self, &ctx);
+        layerchooser::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         autosave::offer(self, &ctx);
         pluginsui::show(self, &ctx);

@@ -1933,6 +1933,7 @@ mod tests {
             ramp: Ramp::Ember,
             method: ClassMethod::NaturalBreaks,
             min: 0.0,
+            classes: 1,
             class_labels: Default::default(),
             class_strokes: [(0, wild)].into_iter().collect(),
         };

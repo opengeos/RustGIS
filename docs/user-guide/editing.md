@@ -141,9 +141,25 @@ Pop-ups (Home › Navigate) choose which layers a click with Explore identifies:
 under the click, every visible layer, only selectable layers, only the layer selected in Layers, or
 nothing. The pop-up lists every feature under the click in those layers, overlapping ones included
 (up to 100): step through them with ‹ ›. The feature shown is the one selected. The magnifier in
-the pop-up's header zooms to it.
+the pop-up's header zooms to it. Long feature titles and layer names are shortened with an
+ellipsis to leave room for the header controls; hover over either name to read it in full.
 
 The topmost and visible modes also identify the features of vector tile layers under the click:
 PMTiles and MBTiles archives and vector tiles added as data (not catalog basemaps or MapLibre
 styles), beneath the map's own layers. Each shows its tile layer and source layer (`firenze ›
 buildings`) and its attributes; tile features can't be selected or zoomed to.
+
+They ask WMS layers too (WMS tile layers that are shown and, as far as their service's
+capabilities say, queryable): RustGIS sends the service a standard GetFeatureInfo request for the
+point (WMS 1.3.0 or 1.1.1, as in the layer's address), asking for GeoJSON when it offers it, else
+GML, other XML, plain text or HTML, and the features it answers join the pop-up as they arrive.
+When the service answers with an error in that format (swisstopo's MapServer can't write some of
+its layers as GeoJSON, but answers them in GML), RustGIS asks again in the next format it offers,
+and keeps asking that layer in it for the rest of the session.
+Topmost asks only the highest WMS layer that can be asked at the point (one that covers it and is
+queryable), and only when no feature of the map's own layers or of its vector tile layers is under
+the click. A project doesn't save the request: a WMS layer from a project reads its service's
+capabilities again on its first click (once for all the map's layers from that service), so until
+then Topmost takes it as one that can be asked.
+`identify` lists the requests in `featureInfo`, and `identify.featureInfo` reads an answer (or, on
+the command line, asks the service and waits).
