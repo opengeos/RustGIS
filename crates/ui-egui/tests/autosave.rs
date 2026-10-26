@@ -326,7 +326,7 @@ fn recovery_commands_take_junk_parameters() {
     settle(&mut h);
 }
 
-/// Work done before answering the dialog (#896 review): Recover waits until it is saved, rather
+/// Work done before answering the dialog: Recover waits until it is saved, rather
 /// than failing and going for the rest of the session, and then recovers the copy.
 #[test]
 fn recover_returns_once_the_open_work_is_saved() {
@@ -351,7 +351,7 @@ fn recover_returns_once_the_open_work_is_saved() {
     assert!(h.query_by_label("Recover unsaved work?").is_none());
 }
 
-/// A copy that fails in the background wakes the interface (#896 review), so the failure is told
+/// A copy that fails in the background wakes the interface, so the failure is told
 /// on an idle window too, not at the next input.
 #[test]
 fn a_failed_copy_wakes_the_interface() {

@@ -496,7 +496,7 @@ mod tests {
     }
 
     /// A recovery folder that can't be made (a file in its way) or no app-data folder at all gives
-    /// a reason, which the app shows as it starts without autosave (#896 review); a usable one
+    /// a reason, which the app shows as it starts without autosave; a usable one
     /// gives the store.
     #[test]
     fn a_recovery_folder_that_does_not_open_says_why() {

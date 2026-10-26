@@ -121,8 +121,11 @@ fn now_secs() -> u64 {
 }
 
 /// The open project's description for its recovery copy.
+/// A file name that isn't Unicode (legal on Unix) can't be kept exactly in the copy's description:
+/// the project is described as untitled then, so Save asks where to write rather than writing to
+/// a lossy spelling of the name.
 fn about(app: &RustGisApp) -> Recovery {
-    let path = app.session.path.as_ref().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()).display().to_string());
+    let path = app.session.path.as_ref().and_then(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()).to_str().map(str::to_string));
     Recovery { name: app.session.project.name.clone(), path, time: now_secs() }
 }
 
@@ -445,7 +448,9 @@ mod folder {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+                if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+                    log::warn!("autosave: could not make {} private: {e}", dir.display());
+                }
             }
             let live = dir.join(LIVE);
             if live.is_file() {
@@ -572,15 +577,24 @@ mod folder {
         };
         let mut next = rx.recv().ok();
         let mut skipped: Option<(Box<Project>, Recovery)> = None;
+        // Recovered copies that couldn't become this run's copy: removed once a newer copy is
+        // written or the copy is cleared (until then, a crash leaves them to be offered again).
+        let mut leftover: Vec<PathBuf> = Vec::new();
         while let Some(job) = next.take() {
-            // One copy is held back at a time: with one held, this write is done (falling back to
-            // the held one) before another is looked at, so a viable older copy is never dropped.
             if let Job::Write(..) = job
-                && skipped.is_none()
                 && let Ok(later) = rx.try_recv()
             {
                 match later {
-                    Job::Write(..) => {
+                    // Removed as soon as written (a save, a clean exit): neither copy is made, so
+                    // an exit doesn't wait for one.
+                    Job::Clear => {
+                        skipped = None;
+                        next = Some(later);
+                        continue;
+                    }
+                    // One copy is held back at a time: with one held, this write is done (falling
+                    // back to the held one) before the next, so a viable older copy is never dropped.
+                    Job::Write(..) if skipped.is_none() => {
                         if let Job::Write(project, about) = job {
                             skipped = Some((project, about));
                         }
@@ -595,19 +609,29 @@ mod folder {
             let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
                 Job::Write(project, about) => {
                     let earlier = skipped.take();
-                    if let Err(e) = write(*project, &about) {
-                        if let Some((project, about)) = earlier
-                            && let Err(again) = write(*project, &about)
-                        {
-                            log::warn!("autosave: the copy before it failed too: {again}");
+                    let written = match write(*project, &about) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            let fallback = earlier.map(|(project, about)| write(*project, &about));
+                            if let Some(Err(again)) = &fallback {
+                                log::warn!("autosave: the copy before it failed too: {again}");
+                            }
+                            fail(e);
+                            matches!(fallback, Some(Ok(())))
                         }
-                        fail(e);
+                    };
+                    if written {
+                        leftover.drain(..).for_each(|p| remove(&p));
                     }
                 }
-                Job::Clear => remove(&dir.join(LIVE)),
+                Job::Clear => {
+                    remove(&dir.join(LIVE));
+                    leftover.drain(..).for_each(|p| remove(&p));
+                }
                 Job::Remove(path) => remove(&path),
                 Job::Adopt(path) => {
                     if let Err(e) = std::fs::rename(&path, dir.join(LIVE)) {
+                        leftover.push(path);
                         fail(format!("could not keep the recovered copy: {e}"));
                     }
                 }
@@ -687,9 +711,11 @@ mod folder {
             if bytes.len() as u64 > rustgis_engine::project::MAX_BYTES + MAX_HEADER {
                 return Err("the recovery copy is too large".into());
             }
-            let text = String::from_utf8(bytes).map_err(|_| "the recovery copy isn't text".to_string())?;
-            let (_, project) = text.split_once('\n').ok_or("the recovery copy is incomplete")?;
-            Ok(project.to_string())
+            // The description line goes in place: a copy near the size limit isn't held twice.
+            let mut text = String::from_utf8(bytes).map_err(|_| "the recovery copy isn't text".to_string())?;
+            let header = text.find('\n').ok_or("the recovery copy is incomplete")?;
+            text.drain(..=header);
+            Ok(text)
         }
 
         /// The offered copy's file goes after what is queued before it; the next one is offered.
@@ -754,8 +780,8 @@ mod folder {
             super::write(dir, project, about)
         }
 
-        /// A job that panics is told as a failure and the thread goes on with the next one
-        /// (#896 review): autosave doesn't stop without a word.
+        /// A job that panics is told as a failure and the thread goes on with the next one:
+        /// autosave doesn't stop without a word.
         #[test]
         fn a_panicking_copy_is_told_and_the_next_one_still_written() {
             let dir = std::env::temp_dir().join(format!("rustgis-autosave-panic-{}", std::process::id()));
@@ -763,8 +789,8 @@ mod folder {
             std::fs::create_dir_all(&dir).unwrap();
             let copy = |name: &str| Job::Write(Box::new(Project::new(name)), Recovery { name: name.into(), ..Recovery::default() });
             let (tx, rx) = channel();
-            // A removal between keeps the two copies from being merged into one.
-            for job in [copy("boom"), Job::Clear, copy("after")] {
+            // A removal of another file between keeps the two copies from being merged into one.
+            for job in [copy("boom"), Job::Remove(dir.join("unrelated")), copy("after")] {
                 tx.send(job).unwrap();
             }
             drop(tx);
@@ -772,7 +798,7 @@ mod folder {
             work_with(&dir, &rx, &error, &Arc::default(), boom_panics);
             assert!(std::fs::read_to_string(dir.join(LIVE)).unwrap().contains("\"after\""));
             assert!(error.into_inner().unwrap().unwrap().contains("unexpectedly"));
-            // A copy skipped for one that panics is written instead (#896 review).
+            // A copy skipped for one that panics is written instead.
             std::fs::remove_file(dir.join(LIVE)).unwrap();
             let (tx, rx) = channel();
             for job in [copy("older"), copy("boom")] {
@@ -786,7 +812,31 @@ mod folder {
             let _ = std::fs::remove_dir_all(&dir);
         }
 
-        /// A skipped copy is written when the newer one that replaced it fails (#896 review), and
+        /// A recovered copy that can't become this run's copy is still removed by the next clear,
+        /// so a save or a clean exit doesn't leave it to be offered again; a write followed at once
+        /// by a clear isn't made at all.
+        #[test]
+        fn a_copy_that_could_not_be_adopted_is_cleared_and_a_doomed_write_skipped() {
+            let dir = std::env::temp_dir().join(format!("rustgis-autosave-adopt-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let pending = dir.join("recovered-1.recovery");
+            std::fs::write(&pending, "{}\n{}").unwrap();
+            // A folder where this run's copy goes: the rename can't replace it.
+            std::fs::create_dir_all(dir.join(LIVE).join("blocked")).unwrap();
+            let (held, error) = run(&dir, vec![Job::Adopt(pending.clone()), Job::Clear]);
+            assert!(held.is_none() && error.unwrap().contains("recovered copy"));
+            assert!(!pending.exists(), "removed by the clear");
+            std::fs::remove_dir_all(dir.join(LIVE)).unwrap();
+            // Written, then cleared at once: skipped, so nothing is written (and nothing waits).
+            // A copy the writer would refuse: had it been attempted, its failure would be told.
+            let copy = Job::Write(Box::new(Project::new("newer, doomed")), Recovery::default());
+            let (held, error) = run(&dir, vec![copy, Job::Clear]);
+            assert!(held.is_none() && error.is_none());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A skipped copy is written when the newer one that replaced it fails, and
         /// still in order: a removal queued after both removes it.
         #[test]
         fn a_skipped_copy_stands_in_for_a_newer_one_that_failed() {
@@ -799,7 +849,7 @@ mod folder {
             assert!(error.unwrap().contains("too large"), "the newer one's failure is told");
             let (held, _) = run(&dir, vec![copy("older"), copy("newer"), Job::Clear]);
             assert!(held.is_none(), "removed after, as asked");
-            // Three queued (#896 review): the two newer ones fail, the oldest is still written.
+            // Three queued: the two newer ones fail, the oldest is still written.
             let (held, error) = run(&dir, vec![copy("older"), copy("newer"), copy("newer still")]);
             assert!(held.unwrap().contains("\"older\""), "the viable copy is kept");
             assert!(error.is_some());
@@ -858,7 +908,7 @@ mod tests {
         }
     }
 
-    /// A copy that failed in the background (#896 review) is made again at the next interval,
+    /// A copy that failed in the background is made again at the next interval,
     /// though the project hasn't changed since, and the failure is told once.
     #[test]
     fn a_failed_copy_is_retried() {
@@ -886,7 +936,7 @@ mod tests {
         let told = app.session.notices.len();
         tick(&mut app, &ctx);
         assert_eq!(app.session.notices.len(), told, "the same failure is told once");
-        // Saved after a failure (#896 review): the copy an earlier write left is still removed.
+        // Saved after a failure: the copy an earlier write left is still removed.
         app.run(
             "project.saveAs",
             json!({"path": std::env::temp_dir().join(format!("rustgis-retry-{}.rgis", std::process::id())).display().to_string()}),
