@@ -2106,7 +2106,7 @@ impl RustGisApp {
                 let v = self.session.run("identify", &json!({"lon": lon, "lat": lat, "tolerancePx": 5}))?;
                 if let (false, Some(lon), Some(lat)) = (v.is_null(), lon.as_f64(), lat.as_f64()) {
                     let map = self.session.project.active_map;
-                    self.map.popup = Some(mapview::Popup::new(v, rustgis_engine::geom::Coord::new(lon, lat), map));
+                    self.map.popup = Some(mapview::Popup::new(v, rustgis_engine::geom::Coord::new(lon, lat), map, self.session.opened));
                 } else {
                     self.map.popup = None;
                 }

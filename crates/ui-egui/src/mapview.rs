@@ -74,6 +74,9 @@ pub struct Popup {
     /// The map it was opened on (the project's `active_map` then): layer and feature ids belong to
     /// a map, and a duplicated map has the same ones.
     pub map: usize,
+    /// The project it was opened on (`Session::opened`): answers still on their way when another
+    /// project opens are dropped.
+    pub opened: u64,
     /// The WMS layers being asked what is at the point, whose features join the list.
     pub asks: Vec<Ask>,
 }
@@ -88,7 +91,7 @@ pub struct Ask {
 
 impl Popup {
     /// A popup for what identify found at `at`, asking the WMS layers it lists.
-    pub fn new(info: Value, at: Coord, map: usize) -> Popup {
+    pub fn new(info: Value, at: Coord, map: usize, opened: u64) -> Popup {
         let asks = info["featureInfo"]
             .as_array()
             .into_iter()
@@ -103,7 +106,7 @@ impl Popup {
                 Some(Ask { layer, capabilities, slot: crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES) })
             })
             .collect();
-        Popup { info, at, index: 0, map, asks }
+        Popup { info, at, index: 0, map, opened, asks }
     }
 }
 
@@ -2247,7 +2250,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                             // the selection as an empty click does.
                             let _ = app.session.run("select.clear", &Value::Null);
                         }
-                        Some(Popup::new(v, c, app.session.project.active_map))
+                        Some(Popup::new(v, c, app.session.project.active_map, app.session.opened))
                     }
                     _ => {
                         let _ = app.session.run("select.clear", &Value::Null);
@@ -2821,8 +2824,15 @@ fn follow_popup(app: &mut RustGisApp) {
 /// Adds what the WMS layers asked answer to the popup, asking a layer from a project once its
 /// service's capabilities say how; failures are told. The popup closes when nothing was found.
 fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
+    let (active, opened) = (app.session.project.active_map, app.session.opened);
     let Some(pp) = &mut app.map.popup else { return };
     if pp.asks.is_empty() {
+        return;
+    }
+    // Another map in view, or another project: the answers belong to layers no longer shown, and
+    // a layer of the same name there must not take them.
+    if pp.map != active || pp.opened != opened {
+        app.map.popup = None;
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -2841,13 +2851,17 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut found = Vec::new();
     let mut next = Vec::new();
     for (layer, capabilities, r) in landed {
+        // A layer removed or renamed while its answer came: nothing to show, nothing to tell.
+        if !app.session.map().tiles.iter().any(|t| t.name == layer) {
+            continue;
+        }
         let r = r.and_then(|bytes| {
             if capabilities {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let text = rustgis_engine::data::ogc::answer_text(&bytes)?.into_owned();
                 let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
                 app.session.run("identify.featureInfo", &p)
             } else {
-                // Read as the command reads a fetched answer (Latin-1 XML, an image refused).
+                // Read as the command reads a fetched answer (Latin-1, an image refused).
                 let text = rustgis_engine::data::ogc::answer_text(&bytes)?.into_owned();
                 app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))
             }

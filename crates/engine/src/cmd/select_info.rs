@@ -110,19 +110,30 @@ fn wms_layer(s: &Session, name: &str) -> Result<usize, String> {
 }
 
 /// Reads the layer's request from its service's capabilities; a layer the service doesn't list,
-/// or doesn't offer for identify, isn't asked again.
+/// or doesn't offer for identify, isn't asked again. The map's other layers from the same service
+/// that don't know theirs learn it too, so the capabilities are read once.
 fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), String> {
     let Some(t) = s.map().tiles.get(index) else { return Ok(()) };
-    let Some((caps_url, layer)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
-    let service = ogc::parse(&caps_url, capabilities)?;
-    let info = service
-        .layers
-        .into_iter()
-        .find(|l| l.name == layer)
-        .and_then(|l| l.feature_info)
-        .unwrap_or_else(|| FeatureInfo { layer, ..FeatureInfo::default() });
-    if let Some(t) = s.map_mut().tiles.get_mut(index) {
-        t.feature_info = Some(info);
+    let Some((caps_url, _)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
+    // Read as an answer is (Latin-1 from older servers), in the app and natively alike.
+    let service = ogc::parse(&caps_url, ogc::answer_text(capabilities)?.as_bytes())?;
+    let info_of = |layer: String| {
+        service
+            .layers
+            .iter()
+            .find(|l| l.name == layer)
+            .and_then(|l| l.feature_info.clone())
+            .unwrap_or_else(|| FeatureInfo { layer, ..FeatureInfo::default() })
+    };
+    for (i, t) in s.map_mut().tiles.iter_mut().enumerate() {
+        if i != index && t.feature_info.is_some() {
+            continue;
+        }
+        if let Some((caps, layer)) = ogc::wms_layer_of(&t.url)
+            && caps == caps_url
+        {
+            t.feature_info = Some(info_of(layer));
+        }
     }
     Ok(())
 }

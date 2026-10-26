@@ -192,12 +192,14 @@ pub struct InfoFeature {
     pub attributes: Vec<(String, String)>,
 }
 
-/// A GetFeatureInfo answer's text: UTF-8, or an XML or HTML answer in Latin-1 (older servers
-/// declare ISO-8859-1) read as its characters; an error for an answer that isn't text.
+/// A service's answer as text (a GetFeatureInfo answer, a capabilities document): UTF-8, or
+/// Latin-1 (older servers answer in ISO-8859-1) read as its characters; an error for bytes that
+/// aren't text (an image: control characters, C0 or C1, that no ISO-8859-1 text holds).
 pub fn answer_text(body: &[u8]) -> Result<Cow<'_, str>, String> {
+    let control = |b: u8| (b < 0x20 && !matches!(b, b'\t' | b'\n' | b'\r' | 0x0c)) || (0x7f..=0x9f).contains(&b);
     match std::str::from_utf8(body) {
         Ok(t) => Ok(Cow::Borrowed(t)),
-        Err(_) if body.trim_ascii_start().first() == Some(&b'<') => Ok(Cow::Owned(body.iter().map(|&b| char::from(b)).collect())),
+        Err(_) if !body.iter().any(|&b| control(b)) => Ok(Cow::Owned(body.iter().map(|&b| char::from(b)).collect())),
         Err(_) => Err("the service's answer isn't text (perhaps an image)".to_string()),
     }
 }
@@ -306,18 +308,25 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
             for layer in root.children().filter(|c| c.is_element()) {
                 let name = local(&layer).strip_suffix("_layer").unwrap_or(local(&layer)).to_string();
                 for f in layer.children().filter(|c| c.is_element() && local(c).ends_with("_feature")) {
+                    if out.len() >= MAX_FEATURES {
+                        return Ok(out);
+                    }
                     out.push(InfoFeature { layer: Some(name.clone()), attributes: gml_attributes(&f) });
                 }
             }
         }
         // ArcGIS Server: <FeatureInfoResponse><FeatureInfoCollection layername="…"><FeatureInfo>
-        // <Field><FieldName/><FieldValue/></Field>…, or <FIELDS a="…" b="…"/> (1.1.1).
+        // <Field><FieldName/><FieldValue/></Field>…, or <FIELDS a="…" b="…"/> (1.1.1); ncWMS
+        // (THREDDS): <FeatureInfo><layer/><time/><value/></FeatureInfo>, its children's text.
         "FeatureInfoResponse" => {
             for f in root.descendants().filter(|n| n.is_element() && matches!(local(n), "FIELDS" | "FeatureInfo")) {
+                if out.len() >= MAX_FEATURES {
+                    break;
+                }
                 let layer = f.ancestors().find_map(|a| a.attribute("layername")).map(str::to_string);
                 let attributes: Vec<(String, String)> = if local(&f) == "FIELDS" {
                     f.attributes().take(MAX_ATTRIBUTES).map(|a| (a.name().to_string(), capped(a.value()))).collect()
-                } else {
+                } else if children(&f, "Field").next().is_some() {
                     children(&f, "Field")
                         .take(MAX_ATTRIBUTES)
                         .filter_map(|field| {
@@ -325,6 +334,8 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
                             Some((name, capped(&child(&field, "FieldValue").map(|v| text_of(&v)).unwrap_or_default())))
                         })
                         .collect()
+                } else {
+                    gml_attributes(&f)
                 };
                 out.push(InfoFeature { layer, attributes });
             }
@@ -342,17 +353,26 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
                     stack.extend(n.children().filter(|c| c.is_element()).collect::<Vec<_>>().into_iter().rev());
                 }
             }
-            for member in members {
-                if out.len() >= MAX_FEATURES {
-                    break;
+            // XML that is no feature collection (a format not read here): its values, or its text,
+            // rather than nothing. A collection without members is an answer of nothing there.
+            if members.is_empty() && !local(root).ends_with("FeatureCollection") {
+                let attributes = gml_attributes(root);
+                if !attributes.is_empty() {
+                    return Ok(vec![InfoFeature { layer: None, attributes }]);
                 }
+                let words: Vec<&str> = root.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).take(10_000).collect();
+                return Ok(text_feature(&words.join(" ")));
+            }
+            for member in members {
                 for f in member.children().filter(|c| c.is_element()) {
+                    if out.len() >= MAX_FEATURES {
+                        return Ok(out);
+                    }
                     out.push(InfoFeature { layer: Some(local(&f).to_string()), attributes: gml_attributes(&f) });
                 }
             }
         }
     }
-    out.truncate(MAX_FEATURES);
     Ok(out)
 }
 
@@ -411,6 +431,11 @@ fn html_text(html: &str) -> String {
             tag.find("</script>").map(|i| i + 9)
         } else if tag.starts_with("<style") {
             tag.find("</style>").map(|i| i + 8)
+        } else if tag.starts_with("<head>") || tag.starts_with("<head ") {
+            // The page's title and metadata, not the answer (GeoServer's empty answer is a title).
+            tag.find("</head>").map(|i| i + 7)
+        } else if tag.starts_with("<title") {
+            tag.find("</title>").map(|i| i + 8)
         } else {
             tag.find('>').map(|i| i + 1)
         };
@@ -557,6 +582,37 @@ mod tests {
             "<wfs:member><t:a><t:n>1</t:n></t:a></wfs:member>".repeat(MAX_FEATURES + 50)
         );
         assert_eq!(read_feature_info(many.as_bytes()).unwrap().len(), MAX_FEATURES);
+        // In every shape: one featureMembers holding many, Esri's FIELDS, MapServer's features.
+        let plural = format!(
+            r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs" xmlns:gml="http://www.opengis.net/gml" xmlns:t="urn:t"><gml:featureMembers>{}</gml:featureMembers></wfs:FeatureCollection>"#,
+            "<t:a><t:n>1</t:n></t:a>".repeat(MAX_FEATURES + 50)
+        );
+        assert_eq!(read_feature_info(plural.as_bytes()).unwrap().len(), MAX_FEATURES);
+        let esri = format!("<FeatureInfoResponse>{}</FeatureInfoResponse>", r#"<FIELDS a="x"/>"#.repeat(MAX_FEATURES + 50));
+        assert_eq!(read_feature_info(esri.as_bytes()).unwrap().len(), MAX_FEATURES);
+        let ms = format!("<msGMLOutput><r_layer>{}</r_layer></msGMLOutput>", "<r_feature><n>1</n></r_feature>".repeat(MAX_FEATURES + 50));
+        assert_eq!(read_feature_info(ms.as_bytes()).unwrap().len(), MAX_FEATURES);
+        // A collection with no members is nothing there.
+        let none = br#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs"><gml:boundedBy xmlns:gml="http://www.opengis.net/gml"><gml:null>unknown</gml:null></gml:boundedBy></wfs:FeatureCollection>"#;
+        assert!(read_feature_info(none).unwrap().is_empty());
+        // ncWMS (THREDDS): a FeatureInfo's own children are its values.
+        let ncwms = br#"<FeatureInfoResponse><longitude>8.5</longitude><latitude>47.4</latitude><FeatureInfo><layer>sst</layer><time>2024-01-01T00:00:00Z</time><value>284.5</value></FeatureInfo></FeatureInfoResponse>"#;
+        assert_eq!(
+            read_feature_info(ncwms).unwrap(),
+            vec![InfoFeature {
+                layer: None,
+                attributes: vec![
+                    ("layer".into(), "sst".into()),
+                    ("time".into(), "2024-01-01T00:00:00Z".into()),
+                    ("value".into(), "284.5".into())
+                ]
+            }]
+        );
+        // Other XML: its values, or its text, rather than nothing.
+        let other = br#"<Result><name>Lake</name><depth>12</depth></Result>"#;
+        assert_eq!(read_feature_info(other).unwrap()[0].attributes, vec![("name".into(), "Lake".into()), ("depth".into(), "12".into())]);
+        let prose = br#"<Note><p>No <b>data</b> here</p></Note>"#;
+        assert_eq!(read_feature_info(prose).unwrap()[0].attributes, vec![("text".into(), "No data here".into())]);
         let ms = br#"<msGMLOutput xmlns:gml="http://www.opengis.net/gml"><parks_layer><gml:name>parks</gml:name>
             <parks_feature><gml:boundedBy/><NAME>Central</NAME></parks_feature></parks_layer></msGMLOutput>"#;
         let f = read_feature_info(ms).unwrap();
@@ -597,6 +653,11 @@ mod tests {
             vec![("text".into(), "Gen\u{e8}ve".into())]
         );
         assert!(read_feature_info(b"\x89PNG\r\n\x1a\n\xff").unwrap_err().contains("isn't text"));
+        assert_eq!(read_feature_info(b"name = Z\xfcrich\n").unwrap()[0].attributes, vec![("name".into(), "Z\u{fc}rich".into())]);
+        // A page's head (its title) isn't the answer: GeoServer's empty HTML answer is nothing.
+        let empty = "<html><head><title>Geoserver GetFeatureInfo output</title></head><body></body></html>";
+        assert!(read_feature_info(empty.as_bytes()).unwrap().is_empty());
+        assert_eq!(html_text("<header>Top</header><p>x</p>").split_whitespace().collect::<Vec<_>>(), ["Top", "x"], "<header> isn't <head>");
         assert_eq!(read_feature_info(html.as_bytes()).unwrap()[0].attributes, vec![("text".into(), "Lake & shore".into())]);
         // Any case of script and style is left out; many short scripts read in linear time.
         let shouting = "<HTML><SCRIPT>x()</Script><Style>p{}</STYLE><B>Peak</B></HTML>";

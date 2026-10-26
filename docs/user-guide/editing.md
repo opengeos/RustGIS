@@ -118,13 +118,14 @@ PMTiles and MBTiles archives and vector tiles added as data (not catalog basemap
 styles), beneath the map's own layers. Each shows its tile layer and source layer (`firenze ›
 buildings`) and its attributes; tile features can't be selected or zoomed to.
 
-They ask WMS layers too (added from a service, shown, and called queryable in its capabilities):
-RustGIS sends the service a standard GetFeatureInfo request for the point (WMS 1.3.0 or 1.1.1,
-whichever the service was added in), asking for GeoJSON when it offers it, else GML, plain text or
-HTML, and the features it answers join the pop-up as they arrive. Topmost asks only the highest WMS
-layer that can be asked at the point (one that covers it and is queryable), and only when no
-feature of the map's own layers or of its vector tile layers is under the click. A project doesn't
-save the request: a WMS layer from a project reads its service's capabilities again on the first
-click.
+They ask WMS layers too (WMS tile layers that are shown and, as far as their service's
+capabilities say, queryable): RustGIS sends the service a standard GetFeatureInfo request for the
+point (WMS 1.3.0 or 1.1.1, as in the layer's address), asking for GeoJSON when it offers it, else
+GML, other XML, plain text or HTML, and the features it answers join the pop-up as they arrive.
+Topmost asks only the highest WMS layer that can be asked at the point (one that covers it and is
+queryable), and only when no feature of the map's own layers or of its vector tile layers is under
+the click. A project doesn't save the request: a WMS layer from a project reads its service's
+capabilities again on its first click (once for all the map's layers from that service), so until
+then Topmost takes it as one that can be asked.
 `identify` lists the requests in `featureInfo`, and `identify.featureInfo` reads an answer (or, on
 the command line, asks the service and waits).

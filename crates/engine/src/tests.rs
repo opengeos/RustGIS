@@ -8572,6 +8572,9 @@ fn identify_asks_wms_layers() {
     let asks = v["featureInfo"].as_array().unwrap();
     assert_eq!(asks.len(), 1, "{v}");
     assert_eq!(asks[0]["tileLayer"], "Roads");
+    // Topmost asks the highest layer that can be asked there: Relief isn't queryable.
+    let top = s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "topmost"})).unwrap();
+    assert_eq!(top["featureInfo"], v["featureInfo"], "{top}");
     let request = asks[0]["url"].as_str().unwrap();
     assert!(
         request.starts_with("https://maps.example.com/info?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetFeatureInfo&LAYERS=roads&"),
@@ -8609,6 +8612,11 @@ fn identify_asks_wms_layers() {
         .run("identify.featureInfo", &json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "capabilities": WMS, "request": true}))
         .unwrap();
     assert_eq!(r["url"].as_str(), Some(request));
+    // The other layer from the same service learned from those capabilities that it isn't asked,
+    // without reading them again.
+    let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    assert_eq!(v["featureInfo"].as_array().map(Vec::len), Some(1), "{v}");
+    assert_eq!(v["featureInfo"][0]["tileLayer"], "Roads", "{v}");
     let r = reopened
         .run("identify.featureInfo", &json!({"layer": "Relief", "lon": 8.5, "lat": 47.4, "capabilities": WMS, "request": true}))
         .unwrap();
