@@ -78,7 +78,7 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-There are 20 built-in tools; GeoLibre and plugin tools join them when available.
+There are 21 built-in tools; GeoLibre and plugin tools join them when available.
 Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
 | Tool | Id | Toolbox |
@@ -86,6 +86,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Buffer | `buffer` | Analysis › Proximity |
 | Clip | `clip` | Analysis › Extract |
 | Erase | `erase` | Analysis › Overlay |
+| Intersect | `intersect` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
@@ -151,6 +152,23 @@ third of the extent's diagonal. Coordinates, `range`, `extent` and `pixelSize` a
 lines and polygons contribute their bounding-box centres. At least two distinct locations with
 numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the prediction,
 named by `output`, and `<output>_variance`.
+
+**Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
+input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
+first. A parcel two flood zones cross gives two features, one for each zone, and a point in two
+overlapping polygons gives two. Input features outside every overlay polygon are left out. An
+overlay polygon's edge counts as inside it, as for Clip: a point on the edge and a stretch of line
+along it are kept, but polygons that only share an edge or a corner, and a line that only touches
+one, give nothing. The input can be points, lines or polygons and keeps its geometry type; the
+overlay must be polygons. An overlay field whose name the input already has gets a suffix (`id_2`).
+Overlapping features within one layer are not split against each other. Like Clip and Erase, the
+overlay works on the map's Web Mercator coordinates, so the parts' edges are straight on the map.
+Selections in both layers are honoured. To measure each part, run Calculate Geometry Attributes on
+the result:
+
+```text
+gp.run={"tool":"intersect","params":{"input":"parcels","overlay":"floodplain","output":"parcels_in_floodplain"}}
+```
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is
