@@ -360,6 +360,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             join: LineJoin::Round,
             level: None,
             dash: None,
+            markers: None,
         },
         LineStroke {
             color: Some(Rgba::rgb(0xFF, 0x8C, 0)),
@@ -369,6 +370,7 @@ fn line_strokes_stack_and_survive_save_and_undo() {
             join: LineJoin::Miter,
             level: None,
             dash: None,
+            markers: None,
         },
         LineStroke { offset: -2.0, ..LineStroke::default() },
     ];
@@ -413,6 +415,59 @@ fn line_strokes_stack_and_survive_save_and_undo() {
     assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
     s.run("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.map().layer_by_name("Rivers").unwrap().line_strokes.len(), 1);
+}
+
+#[test]
+fn line_strokes_take_markers_and_hash_marks_along_the_line() {
+    use rustgis_map::{LineMark, LineMarkers, Marker, Placements, Rgba};
+    let mut s = world();
+    // A river: its line, triangles at both ends turned with it, and ticks across it.
+    let strokes = json!([
+        {"color": "#1E5AA8", "width": 2},
+        {"color": "#1E5AA8", "markers": {"mark": "Triangle", "size": 8, "at": ["first", "last"], "outline": "#FFFFFF"}, "width": 1},
+        {"color": "#1E5AA8", "width": 1, "markers": {"mark": "hash", "size": 6, "interval": 10, "angle": 30, "rotate": false}}
+    ]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    let st = s.map().layer_by_name("Rivers").unwrap().line_strokes.clone();
+    assert_eq!(st[0].markers, None);
+    let ends = LineMarkers {
+        mark: LineMark::Marker(Marker::Triangle),
+        size: 8.0,
+        at: Placements::FIRST.with(Placements::LAST),
+        outline: Some(Rgba::rgb(255, 255, 255)),
+        ..LineMarkers::default()
+    };
+    assert_eq!(st[1].markers, Some(ends));
+    let ticks = LineMarkers { mark: LineMark::Hash, size: 6.0, interval: 10.0, angle: 30.0, rotate: false, ..LineMarkers::default() };
+    assert_eq!(st[2].markers, Some(ticks));
+    // A single place is a list of one; out-of-range numbers are brought into range.
+    let one = json!([{"markers": {"at": "middle", "size": 1e9, "interval": 0, "angle": 450}}]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": one})).unwrap();
+    let m = s.map().layer_by_name("Rivers").unwrap().line_strokes[0].markers.unwrap();
+    assert_eq!((m.at, m.size, m.interval, m.angle), (Placements::MIDDLE, 100.0, 0.5, 90.0));
+    // Drawn in an export.
+    let dir = std::env::temp_dir().join(format!("rustgis-markers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // Junk is refused, saying where, and changes nothing.
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"markers": 5}), "stroke 1: markers: an object"),
+        (json!({"markers": {"mark": "hexagon"}}), "unknown mark 'hexagon'"),
+        (json!({"markers": {"mark": 3}}), "mark is"),
+        (json!({"markers": {"at": "sideways"}}), "at is a placement"),
+        (json!({"markers": {"at": []}}), "at is a placement"),
+        (json!({"markers": {"at": ["first", 2]}}), "at is a placement"),
+        (json!({"markers": {"rotate": "yes"}}), "rotate is true or false"),
+        (json!({"markers": {"size": "big"}}), "size is a number"),
+        (json!({"markers": {"outline": "white"}}), "outline must be"),
+    ] {
+        let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [bad]})).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
 }
 
 #[test]
@@ -1665,6 +1720,11 @@ fn hostile_params_never_panic() {
                 | "boundaries.countries"
                 // Asks Source Cooperative for its featured products.
                 | "sourcecoop.products"
+                // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
+                | "arcgis.signIn"
+                // Signs every session out, which the process's other tests use (its junk is
+                // covered by an_arcgis_token_in_a_service_address_reaches_its_layers).
+                | "arcgis.signOut"
         ) {
             continue;
         }
@@ -8306,6 +8366,53 @@ fn service_times_and_directories() {
     assert_eq!(v["layers"][1]["offer"], json!({"type": "service", "url": "https://x.example.org/arcgis/rest/services/Topo/MapServer"}));
     let e = s.run("service.add", &json!({"url": root, "text": dir, "layer": "Topo/MapServer"})).unwrap_err();
     assert!(e.contains("service.layers"), "{e}");
+}
+
+/// A secured ArcGIS service given by an address with `?token=…` (#914): the token is kept for its
+/// server and sent, as the request's credential, to the addresses built from the service's document (its tiles,
+/// its layers' queries), and no address the session lists or keeps carries it.
+#[test]
+fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
+    use crate::render::rustgis_tiles::arcgis_auth;
+    let mut s = Session::new(Project::default());
+    let base = "https://secure914.example.org/server/rest/services/Roads/MapServer";
+    let doc = r#"{"currentVersion": 11, "mapName": "Roads", "capabilities": "Map,Query,Data", "singleFusedMapCache": true,
+        "tileInfo": {"rows": 256, "spatialReference": {"wkid": 102100}, "lods": [{"level": 0, "resolution": 156543.033928041}]},
+        "layers": [{"id": 0, "name": "Highways"}]}"#;
+    let v = s.run("service.layers", &json!({"url": format!("{base}?f=json&token=secret.Token-914"), "text": doc})).unwrap();
+    assert!(!v.to_string().contains("secret.Token-914"), "{v}");
+    let tiles = format!("{base}/tile/0/0/0");
+    let query = format!("{base}/0/query?where=1%3D1&f=geojson");
+    assert_eq!(arcgis_auth::authorization(&tiles).as_deref(), Some("Bearer secret.Token-914"));
+    assert_eq!(arcgis_auth::authorization(&query).as_deref(), Some("Bearer secret.Token-914"));
+    // Another server never gets it.
+    assert_eq!(arcgis_auth::authorization("https://other914.example.org/server/rest/services/Roads/MapServer/tile/0/0/0"), None);
+    // Added, the tile layer keeps the address without the token.
+    let layer =
+        v["layers"].as_array().unwrap().iter().find(|l| l["offer"]["type"] == "tiles").unwrap()["name"].as_str().unwrap().to_string();
+    s.run("service.add", &json!({"url": format!("{base}?token=secret.Token-914"), "layer": layer, "text": doc})).unwrap();
+    let project = format!("{:?}", s.project);
+    assert!(project.contains("secure914.example.org") && !project.contains("secret.Token-914"));
+    // Listed and forgotten by arcgis.status and arcgis.signOut.
+    let status = s.run("arcgis.status", &json!({})).unwrap();
+    assert!(
+        status["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["portal"] == "https://secure914.example.org/server" && x["kind"] == "token")
+    );
+    assert!(!status.to_string().contains("secret.Token-914"));
+    s.run("arcgis.signOut", &json!({"portal": "https://secure914.example.org/server/"})).unwrap();
+    assert_eq!(arcgis_auth::authorization(&tiles), None);
+    // Junk is refused rather than taken for "every session".
+    for junk in [json!({"portal": 7}), json!({"portal": [true]}), json!({"portal": {"a": 1}})] {
+        assert!(s.run("arcgis.signOut", &junk).is_err());
+    }
+    // Another kind of service keeps its own token parameter.
+    let wms = "https://wms914.example.org/rest/services/wms?token=keep-it";
+    let kept = crate::cmd::service::without_token(&json!({"url": wms, "type": "wms"})).unwrap();
+    assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's

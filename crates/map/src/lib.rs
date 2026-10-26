@@ -31,7 +31,8 @@ pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{
-    ClassMethod, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineStroke, Marker, Renderer, Symbol,
+    ClassMethod, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineMark, LineMarkers, LineStroke,
+    Marker, Placements, Renderer, Symbol,
 };
 pub use tiles::{TileKind, TileLayer};
 
@@ -1781,6 +1782,56 @@ mod tests {
             let st = serde_json::from_value::<symbology::LineStroke>(v["line_strokes"][0].clone()).unwrap();
             assert_eq!(st.dash, None, "{solid}");
         }
+    }
+
+    #[test]
+    fn markers_along_lines_are_kept_and_hostile_ones_brought_into_range() {
+        use symbology::{LineMark, LineMarkers, MAX_LINE_MARKER_SIZE, MAX_MARKER_INTERVAL, MIN_MARKER_INTERVAL, Placements};
+        let mut l = Layer::new(1, Dataset::new("lines", GeometryType::Polyline, vec![]));
+        let m = LineMarkers {
+            mark: LineMark::Marker(Marker::Triangle),
+            size: 6.0,
+            at: Placements::FIRST.with(Placements::LAST),
+            interval: 20.0,
+            offset_along: -2.0,
+            rotate: false,
+            average_angle: 15.0,
+            angle: 45.0,
+            outline: Some(Rgba::rgb(0, 0, 0)),
+        };
+        l.line_strokes = vec![
+            symbology::LineStroke { markers: Some(m), ..Default::default() },
+            symbology::LineStroke { markers: Some(LineMarkers { mark: LineMark::Hash, ..LineMarkers::default() }), ..Default::default() },
+        ];
+        // Saved with the places as codes, and read back as they were.
+        let text = serde_json::to_string(&l).unwrap();
+        assert!(text.contains(r#""at":["first","last"]"#) && text.contains(r#""mark":"hash""#), "{text}");
+        assert_eq!(serde_json::from_str::<Layer>(&text).unwrap().line_strokes, l.line_strokes);
+        // A stroke without markers is written as before.
+        let plain = serde_json::to_string(&symbology::LineStroke::default()).unwrap();
+        assert!(!plain.contains("markers"), "{plain}");
+
+        // A crafted project's: sizes and intervals clamped, angles within a turn, places it doesn't
+        // know left out (none at all: every interval).
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let read = |v: &serde_json::Value| serde_json::from_value::<Layer>(v.clone()).unwrap().line_strokes[0].markers.unwrap();
+        let mk = &mut v["line_strokes"][0]["markers"];
+        mk["size"] = serde_json::json!(1e30);
+        mk["interval"] = serde_json::json!(0);
+        mk["offset_along"] = serde_json::json!(-1e40);
+        mk["average_angle"] = serde_json::json!(-3);
+        mk["angle"] = serde_json::json!(-90);
+        mk["at"] = serde_json::json!(["last", "sideways"]);
+        let got = read(&v);
+        assert_eq!((got.size, got.interval, got.offset_along), (MAX_LINE_MARKER_SIZE, MIN_MARKER_INTERVAL, -MAX_MARKER_INTERVAL));
+        assert_eq!((got.average_angle, got.angle, got.at), (0.0, 270.0, Placements::LAST));
+        v["line_strokes"][0]["markers"]["at"] = serde_json::json!(["sideways"]);
+        assert_eq!(read(&v).at, Placements::INTERVAL);
+        v["line_strokes"][0]["markers"]["at"] = serde_json::json!(vec!["first"; 5000]);
+        assert_eq!(read(&v).at, Placements::FIRST);
+        // Only what's given: the rest is the default.
+        v["line_strokes"][0]["markers"] = serde_json::json!({});
+        assert_eq!(read(&v), LineMarkers::default());
     }
 
     #[test]

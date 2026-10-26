@@ -19,7 +19,7 @@ impl Paths {
             ctx.ring_path_at(&mut builder, part, false, &mut starts);
         }
         let Some(path) = builder.finish() else { return };
-        ctx.stacked_path(pm, &path, symbol, strokes, &starts);
+        ctx.stacked_path(pm, &path, symbol, strokes, &starts, parts);
         self.remember(path);
     }
     fn remember(&mut self, path: tiny_skia::Path) {

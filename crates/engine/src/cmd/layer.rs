@@ -4,7 +4,7 @@ use std::path::Path;
 
 use rustgis_data::{GeometryType, photo};
 use rustgis_map::symbology::{ClassRef, ClassStyle, LABEL_SIZE, MAX_STROKES};
-use rustgis_map::{ClassMethod, LineCap, LineJoin, LineStroke, Marker, Ramp, Renderer, Rgba};
+use rustgis_map::{ClassMethod, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, Marker, Placements, Ramp, Renderer, Rgba};
 use serde_json::{Value, json};
 
 use super::{b, f, need_feature_layer, need_layer, ps, uint};
@@ -177,7 +177,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
             .when(need_lines)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"hash" (a mark across the line), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
@@ -451,7 +451,13 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
             }
             Some(_) => return Err(bad_dash()),
         };
-        strokes.push(LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level, dash }.clamped());
+        let markers = match o.get("markers") {
+            None | Some(Value::Null) => None,
+            Some(m) => Some(line_markers(m).map_err(|e| format!("stroke {}: markers: {e}", i + 1))?),
+        };
+        strokes.push(
+            LineStroke { color, width: num("width")?, offset: num("offset")?.unwrap_or(0.0), cap, join, level, dash, markers }.clamped(),
+        );
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
@@ -464,6 +470,62 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
         None => l.line_strokes = strokes,
     }
     Ok(json!({"strokes": n}))
+}
+
+/// A stroke's `markers`: what it draws along the line instead of a line, and where.
+fn line_markers(v: &Value) -> Result<LineMarkers, String> {
+    let o = v.as_object().ok_or("an object, such as {\"mark\": \"circle\", \"interval\": 12}")?;
+    let num = |k: &str| -> Result<Option<f32>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => {
+                v.as_f64().filter(|x| x.is_finite()).map(|x| Some(x.clamp(-1e6, 1e6) as f32)).ok_or_else(|| format!("{k} is a number"))
+            }
+        }
+    };
+    let d = LineMarkers::default();
+    let mark = match o.get("mark") {
+        None | Some(Value::Null) => d.mark,
+        Some(Value::String(m)) if m.trim().eq_ignore_ascii_case("hash") => LineMark::Hash,
+        Some(Value::String(m)) => LineMark::Marker(
+            Marker::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(m.trim())).ok_or_else(|| format!("unknown mark '{m}'"))?,
+        ),
+        Some(_) => return Err("mark is \"circle\", \"square\", \"triangle\", \"diamond\", \"star\" or \"hash\"".into()),
+    };
+    let bad_at = || format!("at is a placement or a list of them: {}", Placements::all_codes());
+    let at = match o.get("at") {
+        None | Some(Value::Null) => d.at,
+        Some(Value::String(c)) => Placements::from_code(c).ok_or_else(bad_at)?,
+        Some(Value::Array(a)) if !a.is_empty() && a.len() <= 16 => a
+            .iter()
+            .map(|c| c.as_str().and_then(Placements::from_code).ok_or_else(bad_at))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .fold(Placements::NONE, Placements::with),
+        Some(_) => return Err(bad_at()),
+    };
+    let rotate = match o.get("rotate") {
+        None | Some(Value::Null) => d.rotate,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("rotate is true or false".into()),
+    };
+    let outline = match o.get("outline") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(c)) => Some(Rgba::from_hex(c).ok_or("outline must be #RRGGBB or #RRGGBBAA")?),
+        Some(_) => return Err("outline must be #RRGGBB or #RRGGBBAA".into()),
+    };
+    Ok(LineMarkers {
+        mark,
+        size: num("size")?.unwrap_or(d.size),
+        at,
+        interval: num("interval")?.unwrap_or(d.interval),
+        offset_along: num("offsetAlong")?.unwrap_or(d.offset_along),
+        rotate,
+        average_angle: num("averageAngle")?.unwrap_or(d.average_angle),
+        angle: num("angle")?.unwrap_or(d.angle),
+        outline,
+    }
+    .clamped())
 }
 
 pub(crate) fn s_req<'a>(p: &'a Value, k: &str) -> Result<&'a str, String> {

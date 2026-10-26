@@ -11,6 +11,7 @@ pub mod i18n;
 #[cfg(not(target_arch = "wasm32"))]
 mod agentthreads;
 mod analysispane;
+mod arcgisui;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistantkeys;
 mod assistantpane;
@@ -247,6 +248,10 @@ pub struct Services {
     /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
     /// running alongside the first, which mustn't touch its copy.
     pub recovery: Option<Box<dyn RecoveryStore>>,
+    /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
+    /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
+    /// slot (the browser; the desktop runs `arcgis.signIn`).
+    pub arcgis_sign_in: Option<Box<dyn Fn(String, String, Slot<Result<String, String>>)>>,
 }
 
 /// A new private folder for one print job: unique, created fresh (never an existing path) and,
@@ -619,6 +624,8 @@ pub struct UiState {
     pub embeddings: embeddingsui::State,
     /// NASA Earthaccess: the dataset, the granules found and the request under way.
     pub earthaccess: earthaccessui::State,
+    /// Add From Service › Sign in to ArcGIS.
+    pub arcgis: arcgisui::State,
     /// USGS NLDI: the point traced, its COMID, the navigation and the request under way.
     pub nldi: nldiui::State,
     /// Find Place searches and Geocode Addresses runs under way.
@@ -751,6 +758,7 @@ impl Default for UiState {
             opendata: Default::default(),
             embeddings: Default::default(),
             earthaccess: Default::default(),
+            arcgis: Default::default(),
             nldi: Default::default(),
             geocode: Default::default(),
             nav: Default::default(),

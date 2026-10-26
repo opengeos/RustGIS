@@ -9,8 +9,8 @@ use rustgis_engine::analysis::{ParamKind, tools};
 use rustgis_engine::data::GeometryType;
 use rustgis_engine::map::raster::{Normalizer, RasterLegend, RasterStyle};
 use rustgis_engine::map::symbology::{
-    ClassRef, ClassStyle, Dash, LineCap, LineJoin, LineStroke, MAX_LABEL, MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE,
-    OTHER_VALUES, normalize_label,
+    ClassRef, ClassStyle, Dash, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_LABEL, MAX_LINE_MARKER_SIZE, MAX_MARKER_INTERVAL,
+    MAX_STROKE_OFFSET, MAX_STROKE_WIDTH, MAX_STROKES, MAX_UNIQUE, MIN_MARKER_INTERVAL, OTHER_VALUES, Placements, normalize_label,
 };
 use rustgis_engine::map::tiles::{TileKind, TileLayer};
 use rustgis_engine::map::{
@@ -1884,6 +1884,15 @@ fn layer_menu(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, reorder: bool) {
     }
     if !l.is_raster() && ui.button(tl!("Labeling Properties…")).clicked() {
         if let Err(e) = app.run("ui.pane.labeling", json!({"layer": l.id})) {
+            app.session.notify(e, true);
+        }
+        ui.close();
+    }
+    // A layer's action, so with the layer's (#858); the Labeling pane keeps the class settings.
+    if !l.is_raster()
+        && ui.button(tl!("Convert To Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked()
+    {
+        if let Err(e) = app.run("labels.convert", json!({"layer": l.id})) {
             app.session.notify(e, true);
         }
         ui.close();
@@ -4170,7 +4179,39 @@ fn stroke_json(st: &LineStroke) -> Value {
         "join": st.join.code(),
         "level": st.level,
         "dash": st.dash.map(|d| d.steps().to_vec()),
+        "markers": st.markers.map(|m| markers_json(&m)),
     })
+}
+
+/// A stroke's markers as `layer.lineStrokes` takes them.
+fn markers_json(m: &LineMarkers) -> Value {
+    json!({
+        "mark": match m.mark {
+            LineMark::Hash => "hash".to_string(),
+            LineMark::Marker(shape) => shape.label().to_ascii_lowercase(),
+        },
+        "size": m.size,
+        "at": m.at.codes(),
+        "interval": m.interval,
+        "offsetAlong": m.offset_along,
+        "rotate": m.rotate,
+        "averageAngle": m.average_angle,
+        "angle": m.angle,
+        "outline": m.outline.map(|c| c.hex8()),
+    })
+}
+
+/// The places along a line the stroke editor offers for markers.
+fn marker_places() -> [(&'static str, Placements); 7] {
+    [
+        ("At intervals", Placements::INTERVAL),
+        ("At vertices", Placements::VERTICES),
+        ("At inner vertices", Placements::INNER_VERTICES),
+        ("At both ends", Placements::FIRST.with(Placements::LAST)),
+        ("At the start", Placements::FIRST),
+        ("At the end", Placements::LAST),
+        ("In the middle", Placements::MIDDLE),
+    ]
 }
 
 /// Sets the layer's stacked strokes, or `class`'s own.
@@ -4208,6 +4249,116 @@ fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
         }
         Renderer::Single(_) | Renderer::Proportional { .. } => Vec::new(),
     }
+}
+
+/// A stroke's markers along the editor's preview line, from `x.0` to `x.1` at `y`, scaled by `k`:
+/// markers as dots (squares as squares), hash marks as ticks, `w` wide. A sketch, not the map's
+/// drawing: other shapes and outlines aren't shown, and inner placements are marked at the middle.
+fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: egui::Color32, w: f32) {
+    let mut xs = Vec::new();
+    if m.at.has(Placements::INTERVAL) {
+        let step = (m.interval * k).max(4.0);
+        let mut at = x.0 + (m.offset_along * k).rem_euclid(step);
+        while at <= x.1 && xs.len() < 256 {
+            xs.push(at);
+            at += step;
+        }
+    }
+    if m.at.has(Placements::VERTICES) || m.at.has(Placements::FIRST) {
+        xs.push(x.0);
+    }
+    if m.at.has(Placements::VERTICES) || m.at.has(Placements::LAST) {
+        xs.push(x.1);
+    }
+    if m.at.has(Placements::MIDDLE) || m.at.has(Placements::INNER_VERTICES) || m.at.has(Placements::SEGMENT_MIDDLES) {
+        xs.push((x.0 + x.1) / 2.0);
+    }
+    let half = (m.size * k).max(1.0) / 2.0;
+    for at in xs {
+        match m.mark {
+            LineMark::Hash => {
+                let (sin, cos) = m.angle.to_radians().sin_cos();
+                let (dx, dy) = (half * sin, half * cos);
+                ui.painter().line_segment([pos2(at - dx, y + dy), pos2(at + dx, y - dy)], Stroke::new(w, c));
+            }
+            LineMark::Marker(Marker::Square) => {
+                ui.painter().rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
+            }
+            LineMark::Marker(_) => {
+                ui.painter().circle_filled(pos2(at, y), half, c);
+            }
+        }
+    }
+}
+
+/// The stroke editor's rows for a stroke of markers or hash marks (`st`, its markers `m`): the
+/// shape, its size, where it goes and how far apart, and whether it turns with the line.
+fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: LineMarkers, set: &impl Fn(&mut RustGisApp, LineStroke)) {
+    let with = |m: LineMarkers| LineStroke { markers: Some(m), ..st };
+    if let LineMark::Marker(shape) = m.mark {
+        let input_label = ui.label(tl!("Shape"));
+        egui::ComboBox::from_id_salt(("stroke_marker_shape", i))
+            .selected_text(tl!(shape.label()))
+            .show_ui(ui, |ui| {
+                for s in Marker::ALL {
+                    if ui.selectable_label(s == shape, tl!(s.label())).clicked() {
+                        set(app, with(LineMarkers { mark: LineMark::Marker(s), ..m }));
+                    }
+                }
+            })
+            .response
+            .labelled_by(input_label.id);
+        ui.end_row();
+    }
+    let input_label = ui.label(if m.mark == LineMark::Hash { tl!("Length") } else { tl!("Size") });
+    let mut size = m.size;
+    if ui
+        .add(egui::DragValue::new(&mut size).range(0.0..=MAX_LINE_MARKER_SIZE).speed(0.1).suffix(" pt"))
+        .labelled_by(input_label.id)
+        .changed()
+    {
+        set(app, with(LineMarkers { size, ..m }));
+    }
+    ui.end_row();
+    let input_label = ui.label(tl!("Place"));
+    let places = marker_places();
+    let shown =
+        places.iter().find(|(_, p)| *p == m.at).map_or_else(|| tl!("Several places").to_string(), |(label, _)| tl!(label).to_string());
+    egui::ComboBox::from_id_salt(("stroke_marker_place", i))
+        .selected_text(shown)
+        .show_ui(ui, |ui| {
+            for (label, p) in places {
+                if ui.selectable_label(p == m.at, tl!(label)).clicked() {
+                    set(app, with(LineMarkers { at: p, ..m }));
+                }
+            }
+        })
+        .response
+        .labelled_by(input_label.id);
+    ui.end_row();
+    if m.at.has(Placements::INTERVAL) {
+        let input_label = ui.label(tl!("Interval"));
+        let mut interval = m.interval;
+        let drag = egui::DragValue::new(&mut interval).range(MIN_MARKER_INTERVAL..=MAX_MARKER_INTERVAL).speed(0.2).suffix(" pt");
+        if ui.add(drag).on_hover_text(tl!("The distance between two marks along the line")).labelled_by(input_label.id).changed() {
+            set(app, with(LineMarkers { interval, ..m }));
+        }
+        ui.end_row();
+    }
+    ui.label(tl!("Angle"));
+    ui.horizontal(|ui| {
+        let mut angle = m.angle;
+        let drag = egui::DragValue::new(&mut angle).range(0.0..=359.9).speed(1.0).suffix("°");
+        let tip = if m.mark == LineMark::Hash { tl!("0° crosses the line square") } else { tl!("Turned further, clockwise") };
+        if ui.add(drag).on_hover_text(tip).changed() {
+            set(app, with(LineMarkers { angle, ..m }));
+        }
+        let mut rotate = m.rotate;
+        if ui.checkbox(&mut rotate, tl!("With the line")).on_hover_text(tl!("Turn each mark with the line's direction")).changed() {
+            set(app, with(LineMarkers { rotate, ..m }));
+        }
+    });
+    ui.end_row();
 }
 
 /// The Strokes section of a line layer's symbology: strokes stacked in one symbol, each with
@@ -4286,7 +4437,10 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             levelled.sort_by_key(|(level, _)| *level);
             preview = levelled.into_iter().map(|(_, st)| st).collect();
         }
-        let reach = preview.iter().map(|st| st.offset.abs() + st.resolve(&base).1 / 2.0).fold(1.0_f32, f32::max);
+        let reach = preview
+            .iter()
+            .map(|st| st.offset.abs() + st.resolve(&base).1.max(st.markers.map_or(0.0, |m| m.size)) / 2.0)
+            .fold(1.0_f32, f32::max);
         let k = (18.0 / reach).min(1.0);
         let (x0, x1) = (r.min.x + 14.0, r.max.x - 14.0);
         let cap_pad = |st: &LineStroke, w: f32| if st.cap == LineCap::Butt { 0.0 } else { w / 2.0 };
@@ -4294,6 +4448,10 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             let (c, w) = st.resolve(&base);
             let w = (w * k).max(0.5);
             let y = r.center().y + st.offset * k;
+            if let Some(m) = &st.markers {
+                marker_preview(ui, m, (x0, x1), y, k, c32(c), w);
+                continue;
+            }
             let pad = cap_pad(st, w);
             // The dashes along the preview, scaled as the strokes are. Solid when the map draws the
             // pattern solid: under a pixel a round on this screen, at the pattern's own size.
@@ -4378,6 +4536,32 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
             };
             egui::Grid::new(("stroke_grid", i)).num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 let (c, w) = st.resolve(&base);
+                let input_label = ui.label(tl!("Draw"));
+                let kind = |st: &LineStroke| match st.markers.map(|m| m.mark) {
+                    None => tl!("Line"),
+                    Some(LineMark::Hash) => tl!("Hash marks"),
+                    Some(LineMark::Marker(_)) => tl!("Markers"),
+                };
+                egui::ComboBox::from_id_salt(("stroke_draw", i))
+                    .selected_text(kind(&st))
+                    .show_ui(ui, |ui| {
+                        let line = LineStroke { markers: None, ..st };
+                        let markers = LineStroke {
+                            markers: Some(LineMarkers { mark: LineMark::Marker(Marker::Circle), ..st.markers.unwrap_or_default() }),
+                            ..st
+                        };
+                        let hash =
+                            LineStroke { markers: Some(LineMarkers { mark: LineMark::Hash, ..st.markers.unwrap_or_default() }), ..st };
+                        for option in [line, markers, hash] {
+                            if ui.selectable_label(kind(&option) == kind(&st), kind(&option)).clicked() && kind(&option) != kind(&st) {
+                                set(app, option);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(tl!("A line, or markers or hash marks along it"))
+                    .labelled_by(input_label.id);
+                ui.end_row();
                 ui.label(tl!("Color"));
                 ui.horizontal(|ui| {
                     let mut cc = c32(c);
@@ -4414,76 +4598,86 @@ fn line_strokes_editor(app: &mut RustGisApp, ui: &mut Ui, l: &rustgis_engine::ma
                     set(app, LineStroke { offset: off, ..st });
                 }
                 ui.end_row();
-                let input_label = ui.label(tl!("Cap"));
-                egui::ComboBox::from_id_salt(("stroke_cap", i))
-                    .selected_text(tl!(st.cap.label()))
-                    .show_ui(ui, |ui| {
-                        for c in LineCap::ALL {
-                            if ui.selectable_label(c == st.cap, tl!(c.label())).clicked() {
-                                set(app, LineStroke { cap: c, ..st });
-                            }
-                        }
-                    })
-                    .response
-                    .labelled_by(input_label.id);
-                ui.end_row();
-                let input_label = ui.label(tl!("Join"));
-                egui::ComboBox::from_id_salt(("stroke_join", i))
-                    .selected_text(tl!(st.join.label()))
-                    .show_ui(ui, |ui| {
-                        for j in LineJoin::ALL {
-                            if ui.selectable_label(j == st.join, tl!(j.label())).clicked() {
-                                set(app, LineStroke { join: j, ..st });
-                            }
-                        }
-                    })
-                    .response
-                    .labelled_by(input_label.id);
-                ui.end_row();
-                ui.label(tl!("Dash"));
-                ui.horizontal(|ui| {
-                    // The pattern as typed, kept while the box has focus; set when it loses it. The
-                    // draft remembers whose stroke it is, so it never shows or lands on another
-                    // layer's or class's stroke at the same place.
-                    let id = ui.scope_id().with(("stroke_dash", i));
-                    let owner = (l.id, class.cloned());
-                    let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
-                    let draft = draft_for(ui.data_mut(|m| m.get_temp::<DashDraft>(id)), &owner);
-                    let typed = draft.is_some();
-                    let mut text = draft.unwrap_or(shown);
-                    let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
-                    let r =
-                        ui.add(edit).on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
-                    if r.changed() {
-                        ui.data_mut(|m| m.insert_temp::<DashDraft>(id, (owner.0, owner.1.clone(), text.clone())));
-                    }
-                    // Text that isn't a pattern is outlined: it won't be kept when the box loses focus.
-                    if parse_dash(&text).is_none() {
-                        ui.painter().rect_stroke(r.rect, CornerRadius::same(2), egui::Stroke::new(1.5, t.red), egui::StrokeKind::Outside);
-                    }
-                    if r.lost_focus() {
-                        ui.data_mut(|m| m.remove::<DashDraft>(id));
-                        // As the class label box does, Escape drops what was typed.
-                        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                        if let Some(dash) = dash_commit(typed || r.changed(), escaped, &text, st.dash) {
-                            set(app, LineStroke { dash, ..st });
-                        }
-                    }
-                    let preset = egui::ComboBox::from_id_salt(("stroke_dash_preset", i)).selected_text("").width(24.0);
-                    preset
+                if let Some(m) = st.markers {
+                    marker_rows(app, ui, i, st, m, &set);
+                } else {
+                    let input_label = ui.label(tl!("Cap"));
+                    egui::ComboBox::from_id_salt(("stroke_cap", i))
+                        .selected_text(tl!(st.cap.label()))
                         .show_ui(ui, |ui| {
-                            for (label, steps) in DASH_PRESETS {
-                                // Scaled by the stroke's width, so a thick line's dashes stay in proportion.
-                                let dash = steps.and_then(|s| Dash::new(&s.iter().map(|v| v * w.max(1.0)).collect::<Vec<_>>()));
-                                if ui.selectable_label(dash == st.dash, tl!(label)).clicked() {
-                                    set(app, LineStroke { dash, ..st });
+                            for c in LineCap::ALL {
+                                if ui.selectable_label(c == st.cap, tl!(c.label())).clicked() {
+                                    set(app, LineStroke { cap: c, ..st });
                                 }
                             }
                         })
                         .response
-                        .on_hover_text(tl!("Dash"));
-                });
-                ui.end_row();
+                        .labelled_by(input_label.id);
+                    ui.end_row();
+                    let input_label = ui.label(tl!("Join"));
+                    egui::ComboBox::from_id_salt(("stroke_join", i))
+                        .selected_text(tl!(st.join.label()))
+                        .show_ui(ui, |ui| {
+                            for j in LineJoin::ALL {
+                                if ui.selectable_label(j == st.join, tl!(j.label())).clicked() {
+                                    set(app, LineStroke { join: j, ..st });
+                                }
+                            }
+                        })
+                        .response
+                        .labelled_by(input_label.id);
+                    ui.end_row();
+                    ui.label(tl!("Dash"));
+                    ui.horizontal(|ui| {
+                        // The pattern as typed, kept while the box has focus; set when it loses it. The
+                        // draft remembers whose stroke it is, so it never shows or lands on another
+                        // layer's or class's stroke at the same place.
+                        let id = ui.scope_id().with(("stroke_dash", i));
+                        let owner = (l.id, class.cloned());
+                        let shown = st.dash.map(|d| dash_text(&d)).unwrap_or_default();
+                        let draft = draft_for(ui.data_mut(|m| m.get_temp::<DashDraft>(id)), &owner);
+                        let typed = draft.is_some();
+                        let mut text = draft.unwrap_or(shown);
+                        let edit = egui::TextEdit::singleline(&mut text).hint_text(tl!("Solid")).desired_width(84.0);
+                        let r = ui
+                            .add(edit)
+                            .on_hover_text(tl!("Dash and gap lengths in points, in turn, such as 4 2. Empty for a solid line."));
+                        if r.changed() {
+                            ui.data_mut(|m| m.insert_temp::<DashDraft>(id, (owner.0, owner.1.clone(), text.clone())));
+                        }
+                        // Text that isn't a pattern is outlined: it won't be kept when the box loses focus.
+                        if parse_dash(&text).is_none() {
+                            ui.painter().rect_stroke(
+                                r.rect,
+                                CornerRadius::same(2),
+                                egui::Stroke::new(1.5, t.red),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        if r.lost_focus() {
+                            ui.data_mut(|m| m.remove::<DashDraft>(id));
+                            // As the class label box does, Escape drops what was typed.
+                            let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                            if let Some(dash) = dash_commit(typed || r.changed(), escaped, &text, st.dash) {
+                                set(app, LineStroke { dash, ..st });
+                            }
+                        }
+                        let preset = egui::ComboBox::from_id_salt(("stroke_dash_preset", i)).selected_text("").width(24.0);
+                        preset
+                            .show_ui(ui, |ui| {
+                                for (label, steps) in DASH_PRESETS {
+                                    // Scaled by the stroke's width, so a thick line's dashes stay in proportion.
+                                    let dash = steps.and_then(|s| Dash::new(&s.iter().map(|v| v * w.max(1.0)).collect::<Vec<_>>()));
+                                    if ui.selectable_label(dash == st.dash, tl!(label)).clicked() {
+                                        set(app, LineStroke { dash, ..st });
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(tl!("Dash"));
+                    });
+                    ui.end_row();
+                }
                 if l.stroke_levels {
                     ui.label(tl!("Level"));
                     ui.horizontal(|ui| {
@@ -5947,5 +6141,21 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.revision, rev, "the menu ran a command on every frame");
+    }
+
+    /// A feature layer's menu converts its labels into an annotation layer (#858), as View ›
+    /// Labeling › Convert does, by the command's name.
+    #[test]
+    fn the_layer_menu_converts_labels_to_annotation() {
+        use egui_kittest::kittest::Queryable;
+        let app = RustGisApp::with_sample();
+        let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
+        let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);
+        h.step();
+        h.get_by_label("Convert To Annotation").click();
+        h.step();
+        let map = h.state().session.map();
+        assert!(map.layer_by_name("Cities Annotation").is_some(), "no annotation layer");
+        assert!(!map.layer_by_name("Cities").unwrap().labels.enabled, "the layer's own labels give way to it");
     }
 }

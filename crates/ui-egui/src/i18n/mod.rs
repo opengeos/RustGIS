@@ -83,7 +83,7 @@ macro_rules! lang {
 }
 
 /// The registry. English first: it is the source language and the fallback.
-pub static LANGUAGES: [LangInfo; 18] = [
+pub static LANGUAGES: [LangInfo; 19] = [
     LangInfo {
         code: "en",
         name: "English",
@@ -98,6 +98,7 @@ pub static LANGUAGES: [LangInfo; 18] = [
     lang!("fr", "Français", "French", Script::Alphabetic, "fr.tsv"),
     lang!("it", "Italiano", "Italian", Script::Alphabetic, "it.tsv"),
     lang!("nl", "Nederlands", "Dutch", Script::Alphabetic, "nl.tsv"),
+    lang!("pl", "Polski", "Polish", Script::Alphabetic, "pl.tsv"),
     lang!("pt", "Português", "Portuguese", Script::Alphabetic, "pt.tsv"),
     lang!("ru", "Русский", "Russian", Script::Alphabetic, "ru.tsv"),
     lang!("tr", "Türkçe", "Turkish", Script::Alphabetic, "tr.tsv"),

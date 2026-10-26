@@ -159,6 +159,27 @@ layer.lineStrokes={"layer":"Roads","value":"Motorway","strokes":[{"color":"#5A3A
 layer.strokeLevels={"layer":"Roads","on":true}
 ```
 
+A stroke can draw markers or hash marks along the line instead of a line, as railways, boundaries
+and directions of flow are drawn: its **Draw** menu picks **Line**, **Markers** or **Hash marks**.
+Markers take a **Shape** and a **Size**; hash marks a **Length**, crossing the line square at an
+**Angle** of 0°. **Place** puts them at intervals along the line (**Interval** apart, counted from
+its start), at its vertices or its inner ones, at either end or both, or in its middle. **With the
+line** turns each mark with the line's direction; the **Angle** turns it further, clockwise. Marks
+take the stroke's colour, its width as a hash mark's line (or a marker's outline, by command), and
+its offset to either side. Stack them with line strokes: a casing, a core and ticks across it. By
+command, `"markers"` on a stroke:
+
+```text
+layer.lineStrokes={"layer":"Railways","strokes":[{"color":"#333333","width":1.5},{"color":"#333333","width":1,"markers":{"mark":"hash","size":6,"interval":10}}]}
+layer.lineStrokes={"layer":"Rivers","strokes":[{"width":1},{"markers":{"mark":"triangle","size":7,"at":"middle"}}]}
+```
+
+`"at"` takes `"interval"`, `"vertices"`, `"innerVertices"`, `"first"`, `"last"`, `"middle"` and
+`"segmentMiddles"`, or a list of them; `"offsetAlong"` moves the marks along the line (from its
+start, back from its end, on from its middle), `"averageAngle"` turns a mark at an interval with
+the line over that stretch of it (smoother on a line of many short bends), `"rotate": false`
+keeps marks upright, and `"outline"` gives markers an outline as wide as the stroke.
+
 ### Reference scale
 
 Symbol and label sizes are set in points, and normally keep that size on screen at every scale.
@@ -236,10 +257,12 @@ it unchanged.
 ## Labeling
 
 The **Labeling pane** brings together the label classes and the chosen class's field, SQL
-clause, text symbol, placement and visibility limits, plus the map-wide label display controls.
-Open it for a feature layer with Layers › right-click › **Labeling Properties…**, **View ›
-Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as the
-ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
+clause, text symbol, placement and visibility limits. Under its header (the layer, labels on or
+off, and the class chosen), a tab per topic shows one part at a time: **Content** (the list of the
+layer's fields, filtered when it is long, above the SQL query), **Symbol**, **Position** and
+**Range**. Open it for a feature layer with Layers › right-click › **Labeling Properties…**,
+**View › Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as
+the ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
 Label classes are described below.
 
 Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
@@ -247,7 +270,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
-- **Font**: the labels' font family, any installed on the computer (Labeling pane › Text Symbol
+- **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol
   › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
   italic take the family's own bold and italic faces where it has them. The family is saved by
   its name, so a project keeps it on a computer that lacks it, drawing its labels in the label
@@ -274,8 +297,10 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   curved. Points and polygons with these placements are labelled as automatic
   (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
-  labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red.
-- **Convert** turns a layer's labels into an annotation layer: one point per label, carrying its
+  labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
+  apply to the whole map, so they are on the ribbon (View › Labeling), not in the pane.
+- **Convert** (View › Labeling, or Layers › right-click › **Convert To Annotation**) turns a
+  layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
 - **Label classes** label different features differently, such as large cities in larger text.
   Each class has a SQL clause choosing its features, and its own field, text symbol, placement
@@ -286,8 +311,8 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   `pop_max <= 5000000` for Default. Classes are placed in list order, Default last; a hidden
   class or one outside its visibility range labels nothing without excluding features from
   other classes. There can be up to 64 classes besides Default. In the Labeling pane, the
-  **Class** list at the top chooses the class every section shows and edits, and **Visible**
-  under it hides or shows that class. The row under the list has **New**, which adds a class
+  **Class** list at the top, in a card with the class's actions, chooses the class every tab
+  shows and edits, and **Visible** under it hides or shows that class. The row under the list has **New**, which adds a class
   with the chosen class's field, text symbol, placement and range, listed before Default;
   **Rename** and **Move Up** / **Move Down** (the arrows) for the chosen class; and, at its far
   end, **Remove** (Default can be renamed or hidden, not moved or removed). The ribbon's label groups edit the

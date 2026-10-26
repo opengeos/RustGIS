@@ -29,6 +29,7 @@ fn cached_pixels_equal_sequential_strokes_including_overlap_and_alpha() {
                         cap,
                         level: None,
                         dash: None,
+                        markers: None,
                     },
                     LineStroke {
                         offset: -2.0,
@@ -38,8 +39,18 @@ fn cached_pixels_equal_sequential_strokes_including_overlap_and_alpha() {
                         cap,
                         level: None,
                         dash: None,
+                        markers: None,
                     },
-                    LineStroke { offset: 2.0, width: Some(1.0), color: Some(Rgba::rgb(30, 40, 50)), join, cap, level: None, dash: None },
+                    LineStroke {
+                        offset: 2.0,
+                        width: Some(1.0),
+                        color: Some(Rgba::rgb(30, 40, 50)),
+                        join,
+                        cap,
+                        level: None,
+                        dash: None,
+                        markers: None,
+                    },
                 ];
                 let mut batch = Paths::default();
                 for i in 0..180 {

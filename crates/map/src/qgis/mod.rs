@@ -573,7 +573,18 @@ pub(crate) fn color(s: &str) -> Option<Rgba> {
 /// no fixed size on screen: they are taken at the layer's reference scale when it has one
 /// (`reference`, RustGIS's), else as metres at 1:25,000, and noted.
 fn points(v: f64, unit: Option<&str>, reference: Option<f64>, layer: &str, report: &mut Report) -> f32 {
-    let pt = match unit.unwrap_or("MM") {
+    let pt = in_points(v, unit, reference, layer, report);
+    if pt.is_finite() { pt.clamp(0.0, 1000.0) as f32 } else { 0.0 }
+}
+
+/// [`points`] for a distance that may be negative, such as an offset to the left.
+fn signed_points(v: f64, unit: Option<&str>, reference: Option<f64>, layer: &str, report: &mut Report) -> f32 {
+    let pt = in_points(v, unit, reference, layer, report);
+    if pt.is_finite() { pt.clamp(-1000.0, 1000.0) as f32 } else { 0.0 }
+}
+
+fn in_points(v: f64, unit: Option<&str>, reference: Option<f64>, layer: &str, report: &mut Report) -> f64 {
+    match unit.unwrap_or("MM") {
         "MM" => v * 96.0 / 25.4,
         "Point" => v * 96.0 / 72.0,
         "Pixel" => v,
@@ -586,6 +597,5 @@ fn points(v: f64, unit: Option<&str>, reference: Option<f64>, layer: &str, repor
             report.approximated(layer, format!("sizes in {other}, taken as millimetres"));
             v * 96.0 / 25.4
         }
-    };
-    if pt.is_finite() { pt.clamp(0.0, 1000.0) as f32 } else { 0.0 }
+    }
 }

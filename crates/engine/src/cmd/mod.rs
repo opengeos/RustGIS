@@ -1,5 +1,6 @@
 //! Every command, grouped by ribbon tab.
 
+pub mod arcgis;
 pub mod catalogs;
 pub mod clipboard;
 pub mod connections;
@@ -105,6 +106,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(webdata::commands());
     v.extend(embeddings::commands());
     v.extend(earthdata::commands());
+    v.extend(arcgis::commands());
     v.extend(nldi::commands());
     v.extend(time::commands());
     v

@@ -2,18 +2,20 @@
 //! from a layer's right-click menu (Labeling Properties…) or View › Windows › Labeling. The ribbon
 //! keeps its label groups; both run the same `labels.*` commands, so the pane holds no state of its
 //! own (it reads the layer each frame, as the Symbology pane does) and every change undoes. It
-//! edits one label class at a time, the one chosen in its header (#722); the ribbon's label groups
-//! edit and choose the same one (#858).
+//! edits one label class at a time, the one chosen in its header (#722), in a tab per topic; the
+//! ribbon's label groups edit and choose the same one (#858). The map-wide settings (Lock, Pause,
+//! View Unplaced) are on the ribbon only, and Convert on the ribbon and the layer's menu.
 
-use egui::{RichText, Ui, vec2};
+use egui::{Align2, CornerRadius, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, Labeling, MAX_LABEL_CLASSES, label_class_name};
 use rustgis_engine::map::{LabelPlacement, Layer, Rgba};
 use rustgis_engine::render::families;
 use serde_json::{Value, json};
 
 use crate::RustGisApp;
-use crate::textform::{LABEL_W, section};
-use crate::theme::{Tokens, c32, rgba, semibold};
+use crate::textform::LABEL_W;
+use crate::theme::{Tokens, c32, regular, rgba, semibold};
+use crate::widgets::text_w;
 
 /// The placements as they sit around a feature, row by row; Automatic sits apart, above them.
 const GRID: [[LabelPlacement; 3]; 3] = [
@@ -42,12 +44,110 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         run(app, "labels.enable", json!({"on": on}));
     }
     let c = chosen(ui, app, &l);
-    classes(app, ui, &l, &c, t);
-    class(app, ui, &l, &c, t);
-    text_symbol(app, ui, &l, &c);
-    position(app, ui, &l, &c);
-    visibility(app, ui, &c);
-    map_labeling(app, ui);
+    // The class in a card of its own, the tabs right under it: they are the parts of the class
+    // chosen in it, not of the layer.
+    ui.add_space(4.0);
+    let card = egui::Frame::NONE.fill(t.pane_header).corner_radius(CornerRadius::same(8));
+    card.inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        classes(app, ui, &l, &c, t);
+    });
+    ui.add_space(8.0);
+    match topic(ui, t) {
+        Topic::Content => content(app, ui, &l, &c, t),
+        Topic::Symbol => text_symbol(app, ui, &l, &c),
+        Topic::Position => position(app, ui, &l, &c),
+        Topic::Range => visibility(app, ui, &c),
+    }
+}
+
+/// The pane's tabs under its header, one per topic (#858), as ArcGIS Pro's: each short, so the
+/// pane doesn't grow downwards with every setting.
+#[derive(Clone, Copy, PartialEq)]
+enum Topic {
+    Content,
+    Symbol,
+    Position,
+    Range,
+}
+
+/// The tab row, and the tab chosen in it. It is the pane's, not a layer's or a class's: choosing
+/// another keeps the topic in view. The tabs are drawn as the ribbon's, the chosen one open onto
+/// the pane below with its accent bar, so they don't read as buttons; each has the icon of its
+/// ribbon control. A pane too narrow for icons and names shows the names alone, and one too
+/// narrow for those the icons alone, named on hover.
+fn topic(ui: &mut Ui, t: &Tokens) -> Topic {
+    let key = egui::Id::unique("label_pane_topic");
+    let mut tab = ui.data(|d| d.get_temp::<Topic>(key)).unwrap_or(Topic::Content);
+    let tabs = [
+        ("Content", "unique", Topic::Content),
+        ("Symbol", "g_text", Topic::Symbol),
+        ("Position", "placement", Topic::Position),
+        ("Range", "scale_label", Topic::Range),
+    ];
+    let font = |on: bool| if on { semibold(12.5) } else { regular(12.5) };
+    let (pad, icon, gap, h) = (8.0, 16.0, 5.0, 30.0);
+    // Measured in the chosen tab's font, so the tabs don't move as another is chosen.
+    let text = tabs.map(|(label, _, _)| text_w(ui, tl!(label), semibold(12.5)));
+    let room = ui.available_width() - 2.0 * (tabs.len() as f32 - 1.0);
+    // A tab's room besides its name, with or without its icon.
+    let extra = |icons: bool| 2.0 * pad + if icons { icon + gap } else { 0.0 };
+    let fits = |icons: bool| text.iter().map(|w| w + extra(icons)).sum::<f32>() <= room;
+    let (icons, names) = if fits(true) {
+        (true, true)
+    } else if fits(false) {
+        (false, true)
+    } else {
+        (true, false)
+    };
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+    let base = row.max.y - 0.5;
+    ui.painter().hline(row.x_range(), base, Stroke::new(1.0, t.border));
+    let mut x = row.min.x;
+    for ((label, name, it), w) in tabs.into_iter().zip(text) {
+        let shown = tl!(label);
+        let on = it == tab;
+        let w = if names { extra(icons) + w } else { 36.0 };
+        let r = Rect::from_min_size(pos2(x, row.min.y), vec2(w, h));
+        x = r.max.x + 2.0;
+        let mut resp = ui.interact(r, key.with(label), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, shown));
+        let p = ui.painter();
+        let body = Rect::from_min_max(pos2(r.min.x, r.min.y + 3.0), r.max);
+        let round = CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 };
+        if on {
+            p.rect_filled(body, round, t.pane);
+            p.rect_stroke(body, round, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            // Open onto the pane: the line under the tabs stops at the chosen one.
+            p.rect_filled(Rect::from_min_max(pos2(r.min.x + 1.0, base - 1.0), pos2(r.max.x - 1.0, row.max.y + 1.0)), 0.0, t.pane);
+            p.rect_filled(
+                Rect::from_min_max(pos2(r.min.x + 8.0, r.max.y - 3.0), pos2(r.max.x - 8.0, r.max.y - 1.0)),
+                CornerRadius::same(1),
+                t.accent,
+            );
+        } else if resp.hovered() {
+            p.rect_filled(body.shrink2(vec2(1.0, 2.0)), CornerRadius::same(5), t.hover);
+        }
+        let cy = body.center().y - 1.0;
+        if !names {
+            crate::icons::paint(p, Rect::from_center_size(pos2(r.center().x, cy), vec2(icon, icon)), name, t.icon, t.accent);
+            resp = resp.on_hover_text(shown);
+        } else {
+            let mut tx = r.min.x + pad;
+            if icons {
+                crate::icons::paint(p, Rect::from_min_size(pos2(tx, cy - icon / 2.0), vec2(icon, icon)), name, t.icon, t.accent);
+                tx += icon + gap;
+            }
+            let ink = if on { t.text } else { t.text_dim };
+            p.text(pos2(tx, cy), Align2::LEFT_CENTER, shown, font(on), ink);
+        }
+        if resp.clicked() {
+            tab = it;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, tab));
+    ui.add_space(4.0);
+    tab
 }
 
 /// The label class the pane's sections and the ribbon's label groups show and edit (#722).
@@ -157,33 +257,23 @@ fn grid(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
     egui::Grid::new(("label_pane", id)).num_columns(2).min_col_width(LABEL_W).spacing(vec2(8.0, 6.0)).show(ui, add);
 }
 
-/// The tabs of the Class section, as ArcGIS Pro's Class tab: what the label shows, and the SQL
-/// choosing the features it labels.
-#[derive(Clone, Copy, PartialEq)]
-enum ClassTab {
-    Field,
-    Sql,
+/// The rows the field list shows before it scrolls.
+const FIELD_ROWS: usize = 8;
+
+/// The chosen class's field and SQL clause (#618) on one page, as ArcGIS Pro's Class tab shows the
+/// fields above the expression: what the label shows, then the features it labels. Named Content,
+/// not Class, as the class itself is the one chosen in the card above the tabs.
+fn content(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
+    field(app, ui, l, c, t);
+    ui.add_space(4.0);
+    heading(ui, "SQL Query");
+    sql(app, ui, l, c, t);
 }
 
-/// The chosen class's field and SQL clause (#618) choosing the features it labels.
-fn class(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
-    section(ui, "Class", |ui| {
-        let key = egui::Id::unique("label_pane_class_tab");
-        let mut tab = ui.data(|d| d.get_temp::<ClassTab>(key)).unwrap_or(ClassTab::Field);
-        ui.horizontal(|ui| {
-            for (label, it) in [(tl!("Field"), ClassTab::Field), (tl!("SQL"), ClassTab::Sql)] {
-                if ui.add(egui::Button::selectable(tab == it, label)).clicked() {
-                    tab = it;
-                }
-            }
-        });
-        ui.data_mut(|d| d.insert_temp(key, tab));
-        ui.add_space(4.0);
-        match tab {
-            ClassTab::Field => field(app, ui, l, c),
-            ClassTab::Sql => sql(app, ui, l, c, t),
-        }
-    });
+fn heading(ui: &mut Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!(text)).font(semibold(12.5)));
+    ui.add_space(2.0);
 }
 
 /// A class being renamed: the name typed so far, for the class it was started on.
@@ -322,24 +412,52 @@ fn new_name(labels: &Labeling) -> String {
         .unwrap_or_default()
 }
 
-/// The field the class labels with.
-fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
-    grid(ui, "class", |ui| {
-        let input_label = ui.label(tl!("Field"));
-        let cur = &c.it.field;
-        egui::ComboBox::from_id_salt("label_pane_field")
-            .selected_text(cur.as_str())
-            .width(180.0)
-            .show_ui(ui, |ui| {
-                for f in &l.dataset.fields {
-                    if ui.selectable_label(f.name == *cur, &f.name).clicked() {
-                        run(app, "labels.field", c.params(json!({"field": f.name})));
-                    }
+/// The field the class labels with, chosen in a list of the layer's fields, so they show without
+/// opening a menu. A list longer than [`FIELD_ROWS`] scrolls, and a filter above it narrows it.
+fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
+    heading(ui, "Field");
+    let fields = &l.dataset.fields;
+    // The class's own: one typed for another class would hide this one's field.
+    let key = egui::Id::unique((layer_key(app, l), c.name)).with("label_pane_field_filter");
+    let mut filter = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
+    // Only while its box shows: one kept from when the layer had more fields would hide some, with
+    // no box to clear it in.
+    let needle = if fields.len() > FIELD_ROWS {
+        if crate::widgets::search_field(ui, &mut filter, tl!("Filter fields")).changed() {
+            ui.data_mut(|d| d.insert_temp(key, filter.clone()));
+        }
+        filter.to_lowercase()
+    } else {
+        String::new()
+    };
+    let cur = &c.it.field;
+    // The class's field scrolls into view when the layer, the class or the field changes, for a
+    // few passes (a pass that egui discards drops its scroll request), not on every frame, so the
+    // list still scrolls by hand.
+    let seen_key = egui::Id::unique("label_pane_field_seen");
+    let now = egui::Id::unique((layer_key(app, l), c.name, cur.as_str())).value();
+    let (seen, scrolls): (u64, u8) = ui.data(|d| d.get_temp(seen_key)).unwrap_or_default();
+    let scrolls = if seen == now { scrolls } else { 0 };
+    if scrolls < 3 {
+        ui.data_mut(|d| d.insert_temp(seen_key, (now, scrolls + 1)));
+    }
+    let frame = egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(CornerRadius::same(4));
+    frame.inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+        let area = egui::ScrollArea::vertical().id_salt("label_pane_fields").max_height(FIELD_ROWS as f32 * 22.0);
+        area.auto_shrink([false, true]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for f in fields.iter().filter(|f| f.name.to_lowercase().contains(&needle)) {
+                let on = f.name == *cur;
+                let row = egui::Button::selectable(on, &f.name).min_size(vec2(ui.available_width(), 20.0));
+                let resp = ui.add(row);
+                if on && scrolls < 3 {
+                    resp.scroll_to_me(None);
                 }
-            })
-            .response
-            .labelled_by(input_label.id);
-        ui.end_row();
+                if resp.clicked() && !on {
+                    run(app, "labels.field", c.params(json!({"field": f.name})));
+                }
+            }
+        });
     });
 }
 
@@ -384,55 +502,53 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
 }
 
 fn text_symbol(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
-    section(ui, "Text Symbol", |ui| {
-        grid(ui, "symbol", |ui| {
-            font(app, ui, l, c);
-            ui.end_row();
-            let input_label = ui.label(tl!("Size"));
-            // The whole range `labels.style` accepts (#457); the map follows a drag and letting
-            // go runs the command once, so a drag is one undo step.
-            let mut size = f64::from(c.it.size);
-            let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt")).labelled_by(input_label.id);
-            let id = l.id;
-            crate::ribbon::live_drag(
-                app,
-                ui,
-                &r,
-                f64::from(c.it.size),
-                size,
-                |app, x| {
-                    if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
-                        k.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
-                    }
-                },
-                |app, x| {
-                    run(app, "labels.style", c.params(json!({"size": x})));
-                },
-            );
-            ui.end_row();
-            ui.label(tl!("Color"));
-            let mut color = c32(c.it.color);
-            if crate::widgets::color_button(ui, &mut color).changed() {
-                color_drag(app, ui, l, c.name, rgba(color));
+    grid(ui, "symbol", |ui| {
+        font(app, ui, l, c);
+        ui.end_row();
+        let input_label = ui.label(tl!("Size"));
+        // The whole range `labels.style` accepts (#457); the map follows a drag and letting
+        // go runs the command once, so a drag is one undo step.
+        let mut size = f64::from(c.it.size);
+        let r = ui.add(egui::DragValue::new(&mut size).range(LABEL_SIZE).speed(0.1).suffix(" pt")).labelled_by(input_label.id);
+        let id = l.id;
+        crate::ribbon::live_drag(
+            app,
+            ui,
+            &r,
+            f64::from(c.it.size),
+            size,
+            |app, x| {
+                if let Some(k) = app.session.map_mut().layer_mut(id).and_then(|l| class_mut(&mut l.labels, c.name)) {
+                    k.size = x.clamp(*LABEL_SIZE.start(), *LABEL_SIZE.end()) as f32;
+                }
+            },
+            |app, x| {
+                run(app, "labels.style", c.params(json!({"size": x})));
+            },
+        );
+        ui.end_row();
+        ui.label(tl!("Color"));
+        let mut color = c32(c.it.color);
+        if crate::widgets::color_button(ui, &mut color).changed() {
+            color_drag(app, ui, l, c.name, rgba(color));
+        }
+        ui.end_row();
+        ui.label("");
+        ui.horizontal(|ui| {
+            let mut bold = c.it.bold;
+            if ui.checkbox(&mut bold, tl!("Bold")).changed() {
+                run(app, "labels.style", c.params(json!({"bold": bold})));
             }
-            ui.end_row();
-            ui.label("");
-            ui.horizontal(|ui| {
-                let mut bold = c.it.bold;
-                if ui.checkbox(&mut bold, tl!("Bold")).changed() {
-                    run(app, "labels.style", c.params(json!({"bold": bold})));
-                }
-                let mut italic = c.it.italic;
-                if ui.checkbox(&mut italic, tl!("Italic")).changed() {
-                    run(app, "labels.style", c.params(json!({"italic": italic})));
-                }
-                let mut halo = c.it.halo;
-                if ui.checkbox(&mut halo, tl!("Halo")).changed() {
-                    run(app, "labels.style", c.params(json!({"halo": halo})));
-                }
-            });
-            ui.end_row();
+            let mut italic = c.it.italic;
+            if ui.checkbox(&mut italic, tl!("Italic")).changed() {
+                run(app, "labels.style", c.params(json!({"italic": italic})));
+            }
+            let mut halo = c.it.halo;
+            if ui.checkbox(&mut halo, tl!("Halo")).changed() {
+                run(app, "labels.style", c.params(json!({"halo": halo})));
+            }
         });
+        ui.end_row();
     });
 }
 
@@ -489,104 +605,78 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
 }
 
 fn position(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
-    section(ui, "Position", |ui| {
-        let cur = c.it.placement;
-        let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
-            if ui.add_sized(vec2(92.0, 22.0), egui::Button::selectable(cur == pl, tl!(pl.label())).truncate()).clicked() && cur != pl {
-                run(app, "labels.placement", c.params(json!({"position": pl.code()})));
+    let cur = c.it.placement;
+    let pick = |app: &mut RustGisApp, ui: &mut Ui, pl: LabelPlacement| {
+        if ui.add_sized(vec2(92.0, 22.0), egui::Button::selectable(cur == pl, tl!(pl.label())).truncate()).clicked() && cur != pl {
+            run(app, "labels.placement", c.params(json!({"position": pl.code()})));
+        }
+    };
+    ui.horizontal(|ui| pick(app, ui, LabelPlacement::Auto));
+    ui.add_space(2.0);
+    egui::Grid::new(("label_pane", "position")).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        for row in GRID {
+            for pl in row {
+                pick(app, ui, pl);
             }
-        };
-        ui.horizontal(|ui| pick(app, ui, LabelPlacement::Auto));
-        ui.add_space(2.0);
-        egui::Grid::new(("label_pane", "position")).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
-            for row in GRID {
-                for pl in row {
-                    pick(app, ui, pl);
-                }
-                ui.end_row();
-            }
-        });
-        // Lines: the text along them, straight or bending with them.
-        if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
-            ui.add_space(4.0);
-            ui.label(RichText::new(tl!("Along lines")).size(11.5));
-            ui.horizontal(|ui| {
-                pick(app, ui, LabelPlacement::Parallel);
-                pick(app, ui, LabelPlacement::Curved);
-            });
+            ui.end_row();
         }
     });
+    // Lines: the text along them, straight or bending with them.
+    if l.geometry_type() == rustgis_engine::data::GeometryType::Polyline {
+        ui.add_space(4.0);
+        ui.label(RichText::new(tl!("Along lines")).size(11.5));
+        ui.horizontal(|ui| {
+            pick(app, ui, LabelPlacement::Parallel);
+            pick(app, ui, LabelPlacement::Curved);
+        });
+    }
 }
 
 fn visibility(app: &mut RustGisApp, ui: &mut Ui, c: &Class) {
-    section(ui, "Visibility Range", |ui| {
-        grid(ui, "range", |ui| {
-            for (label, cur, key) in [("Out Beyond", c.it.min_scale, "min"), ("In Beyond", c.it.max_scale, "max")] {
-                let input_label = ui.label(tl!(label));
-                egui::ComboBox::from_id_salt(("label_pane_scale", key))
-                    .selected_text(crate::ribbon::scale_label(cur))
-                    .width(140.0)
-                    .show_ui(ui, |ui| {
-                        for s in std::iter::once(None).chain(crate::ribbon::SCALES.iter().map(|s| Some(*s))) {
-                            if ui.selectable_label(s == cur, crate::ribbon::scale_label(s)).clicked() {
-                                run(app, "labels.scaleRange", c.params(json!({key: s})));
-                            }
+    grid(ui, "range", |ui| {
+        for (label, cur, key) in [("Out Beyond", c.it.min_scale, "min"), ("In Beyond", c.it.max_scale, "max")] {
+            let input_label = ui.label(tl!(label));
+            egui::ComboBox::from_id_salt(("label_pane_scale", key))
+                .selected_text(crate::ribbon::scale_label(cur))
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for s in std::iter::once(None).chain(crate::ribbon::SCALES.iter().map(|s| Some(*s))) {
+                        if ui.selectable_label(s == cur, crate::ribbon::scale_label(s)).clicked() {
+                            run(app, "labels.scaleRange", c.params(json!({key: s})));
                         }
-                    })
-                    .response
-                    .labelled_by(input_label.id);
-                ui.end_row();
-            }
-            for (label, cur, key) in [("Closest", c.it.closest, "closest"), ("Farthest", c.it.farthest, "farthest")] {
-                let input_label = ui.label(tl!(label));
-                let imperial = app.ui.measurement_imperial;
-                let text =
-                    |d: Option<f64>| d.map(|d| crate::measure_units::distance(d, imperial)).unwrap_or_else(|| tl!("<None>").to_string());
-                egui::ComboBox::from_id_salt(("label_pane_distance", key))
-                    .selected_text(text(cur))
-                    .width(140.0)
-                    .show_ui(ui, |ui| {
-                        for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
-                            if ui.selectable_label(d == cur, text(d)).clicked() {
-                                run(app, "labels.distanceRange", c.params(json!({key: d})));
-                            }
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
+            ui.end_row();
+        }
+        for (label, cur, key) in [("Closest", c.it.closest, "closest"), ("Farthest", c.it.farthest, "farthest")] {
+            let input_label = ui.label(tl!(label));
+            let imperial = app.ui.measurement_imperial;
+            let text = |d: Option<f64>| d.map(|d| crate::measure_units::distance(d, imperial)).unwrap_or_else(|| tl!("<None>").to_string());
+            egui::ComboBox::from_id_salt(("label_pane_distance", key))
+                .selected_text(text(cur))
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for d in std::iter::once(None).chain(DISTANCES.iter().map(|d| Some(*d))) {
+                        if ui.selectable_label(d == cur, text(d)).clicked() {
+                            run(app, "labels.distanceRange", c.params(json!({key: d})));
                         }
-                    })
-                    .response
-                    .labelled_by(input_label.id);
-                ui.end_row();
-            }
-        });
-        let limited = [c.it.min_scale, c.it.max_scale, c.it.closest, c.it.farthest].iter().any(Option::is_some);
-        if ui
-            .add_enabled(limited, egui::Button::new(tl!("Clear Limits")))
-            .on_hover_text(tl!("Draw labels at every scale and distance."))
-            .clicked()
-        {
-            run(app, "labels.scaleRange", c.params(json!({"clear": true})));
+                    }
+                })
+                .response
+                .labelled_by(input_label.id);
+            ui.end_row();
         }
     });
-}
-
-/// The settings for every layer's labels on the map, and turning this layer's into annotation.
-fn map_labeling(app: &mut RustGisApp, ui: &mut Ui) {
-    section(ui, "Map Labeling", |ui| {
-        let d = app.session.map().label_display;
-        for (label, desc, id, cur) in [
-            ("Lock", "Keep the labelled features fixed as the map moves.", "labels.lock", d.locked),
-            ("Pause", "Stop drawing labels, for faster navigation.", "labels.pause", d.paused),
-            ("View Unplaced", "Show the labels that don't fit, in red.", "labels.viewUnplaced", d.show_unplaced),
-        ] {
-            let mut on = cur;
-            if ui.checkbox(&mut on, tl!(label)).on_hover_text(tl!(desc)).changed() {
-                run(app, id, json!({"on": on}));
-            }
-        }
-        ui.add_space(4.0);
-        if ui.button(tl!("Convert to Annotation")).on_hover_text(tl!("Convert this layer's labels into an annotation layer.")).clicked() {
-            run(app, "labels.convert", json!({}));
-        }
-    });
+    let limited = [c.it.min_scale, c.it.max_scale, c.it.closest, c.it.farthest].iter().any(Option::is_some);
+    if ui
+        .add_enabled(limited, egui::Button::new(tl!("Clear Limits")))
+        .on_hover_text(tl!("Draw labels at every scale and distance."))
+        .clicked()
+    {
+        run(app, "labels.scaleRange", c.params(json!({"clear": true})));
+    }
 }
 
 /// Where a label colour being dragged in the pane or ribbon's picker waits.
@@ -704,22 +794,36 @@ mod tests {
         )
     }
 
-    /// Inputs remain reachable by their purpose, independently of the selected value (#790).
+    /// Opens the pane's tab for `topic` (#858).
+    fn open_tab(h: &mut egui_kittest::Harness<'static, RustGisApp>, topic: &str) {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, topic).click();
+        h.run();
+    }
+
+    /// Inputs remain reachable by their purpose, independently of the selected value (#790), each
+    /// in its topic's tab (#858).
     #[test]
     fn inputs_are_reachable_by_their_row_labels() {
         use egui::accesskit::Role;
         let mut h = harness(with_cities());
         h.run();
-        for label in ["Class", "Field", "Font", "Out Beyond", "In Beyond", "Closest", "Farthest"] {
-            assert!(h.query_by_role_and_label(Role::ComboBox, label).is_some(), "missing input: {label}");
+        for (tab, inputs) in
+            [("Content", &["Class"][..]), ("Symbol", &["Font", "Class"]), ("Range", &["Out Beyond", "In Beyond", "Closest", "Farthest"])]
+        {
+            open_tab(&mut h, tab);
+            for label in inputs {
+                assert!(h.query_by_role_and_label(Role::ComboBox, label).is_some(), "missing input: {label}");
+            }
         }
+        assert!(h.query_by_role_and_label(Role::ComboBox, "Font").is_none(), "one tab at a time");
+        open_tab(&mut h, "Symbol");
         assert!(h.query_by_role_and_label(Role::SpinButton, "Size").is_some());
-        h.get_by_role_and_label(Role::ComboBox, "Field").click();
+        open_tab(&mut h, "Content");
+        // The field list comes first, before the SQL query's field chips of the same names.
+        h.query_all_by_role_and_label(Role::Button, "pop_max").next().unwrap().click();
         h.run();
-        h.get_by_label("name").click();
-        h.run();
-        assert_eq!(h.state().session.map().layer_by_name("Cities").unwrap().labels.default.field, "name");
-        assert!(h.query_by_role_and_label(Role::ComboBox, "Field").is_some());
+        assert_eq!(h.state().session.map().layer_by_name("Cities").unwrap().labels.default.field, "pop_max");
+        assert!(h.query_by_label("+ New expression").is_some(), "the SQL query is beside the fields");
     }
 
     #[test]
@@ -756,8 +860,10 @@ mod tests {
         h.run();
         h.get_by_label("Label features in this layer").click();
         h.run();
+        open_tab(&mut h, "Position");
         h.get_by_label("Below Right").click();
         h.run();
+        open_tab(&mut h, "Symbol");
         h.get_by_label("Bold").click();
         h.run();
         let app = h.state();
@@ -781,8 +887,10 @@ mod tests {
         app.ws.recording = Some(Vec::new());
         let mut h = harness(app);
         h.run();
+        open_tab(&mut h, "Position");
         h.get_by_label("Below Right").click();
         h.run();
+        open_tab(&mut h, "Symbol");
         h.get_by_label("Bold").click();
         h.run();
         let steps = h.state().ws.recording.clone().unwrap();
@@ -899,15 +1007,6 @@ mod tests {
         app.session.map().layer(app.session.active_layer.unwrap()).unwrap().labels.default.where_.clone()
     }
 
-    /// Opens the Class section's SQL tab.
-    fn sql_tab(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
-        let mut h = harness(app);
-        h.run();
-        h.get_by_label("SQL").click();
-        h.run();
-        h
-    }
-
     fn type_clause(h: &mut egui_kittest::Harness<'static, RustGisApp>, text: &str) {
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
         h.run();
@@ -921,7 +1020,8 @@ mod tests {
     fn the_sql_tab_applies_a_clause_in_one_step() {
         let app = with_cities();
         let steps = app.session.undo_depth();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("There is no expression defined.");
         h.get_by_label("+ New expression").click();
         h.run();
@@ -953,7 +1053,8 @@ mod tests {
     fn a_clause_that_doesnt_read_is_not_applied() {
         let app = with_cities();
         let steps = app.session.undo_depth();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max >");
@@ -968,7 +1069,8 @@ mod tests {
     #[test]
     fn the_draft_follows_the_layer_and_its_clause() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.state_mut().run("labels.class.update", json!({"where": "pop_max > 1"})).unwrap();
         h.run();
         assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 1"));
@@ -991,7 +1093,8 @@ mod tests {
         let mut app = with_cities();
         app.run("labels.class.add", json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap();
         app.run("labels.class.update", json!({"visible": false})).unwrap();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         assert!(h.query_by_label_contains("Each class labels the features its own clause matches").is_some());
         h.get_by_label("Show labels").click();
         h.run();
@@ -1004,7 +1107,8 @@ mod tests {
     #[test]
     fn a_draft_is_dropped_with_its_project() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1021,7 +1125,8 @@ mod tests {
     #[test]
     fn a_check_is_dropped_after_a_change() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1046,7 +1151,8 @@ mod tests {
         let mut app = with_cities();
         app.run("labels.class.update", json!({"where": "pop_max > 1"})).unwrap();
         app.run("edit.deleteField", json!({"field": "pop_max"})).unwrap();
-        let h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         assert!(h.query_by_label_contains("This clause no longer reads").is_some());
     }
 
@@ -1055,7 +1161,8 @@ mod tests {
     fn a_clause_recorded_from_the_pane_names_the_layer() {
         let mut app = with_cities();
         app.ws.recording = Some(Vec::new());
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1090,6 +1197,32 @@ mod tests {
         h.run();
     }
 
+    /// The field filter is the class's (#858): another class shows every field, its own among
+    /// them, and the first gets its filter back.
+    #[test]
+    fn each_class_has_its_own_field_filter() {
+        use egui::accesskit::Role;
+        super::families::installed();
+        let mut app = RustGisApp::with_sample();
+        // Countries has more fields than the list shows, so it has a filter.
+        let id = layer_id(&app, "Countries");
+        app.session.run("layer.select", &json!({"layer": id})).unwrap();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        app.run("labels.field", json!({"class": "Big", "field": "iso_a3"})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        h.get_by_role(Role::TextInput).focus();
+        h.run();
+        h.get_by_role(Role::TextInput).type_text("pop");
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "iso_a3").is_none(), "Default's list is filtered");
+        pick_class(&mut h, "Default", "Big");
+        assert!(h.query_by_role_and_label(Role::Button, "iso_a3").is_some(), "Big's field is in its list");
+        assert!(h.query_by_role_and_label(Role::Button, "continent").is_some(), "Big's list is whole");
+        pick_class(&mut h, "Big", "Default");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("pop"), "Default keeps its filter");
+    }
+
     /// The pane edits the class chosen, and only it; its steps name it, and Default's name none
     /// (#722).
     #[test]
@@ -1101,8 +1234,10 @@ mod tests {
         let mut h = harness(app);
         h.run();
         pick_class(&mut h, "Default", "Big");
+        open_tab(&mut h, "Position");
         h.get_by_label("Below Right").click();
         h.run();
+        open_tab(&mut h, "Symbol");
         h.get_by_label("Bold").click();
         h.run();
         let l = labels(h.state());
@@ -1136,10 +1271,13 @@ mod tests {
         let mut h = harness(app);
         h.run();
         pick_class(&mut h, "Default", "Named");
+        open_tab(&mut h, "Symbol");
         h.get_by_label("Italic").click();
         h.run();
+        open_tab(&mut h, "Position");
         h.get_by_label("Curved").click();
         h.run();
+        open_tab(&mut h, "Symbol");
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").click();
         h.run();
         h.get_by_label("Label font").click();
@@ -1170,6 +1308,7 @@ mod tests {
         h.state_mut().run("labels.class.remove", json!({"class": "Big"})).unwrap();
         h.run();
         assert!(shown(&h, "Default"));
+        open_tab(&mut h, "Symbol");
         h.get_by_label("Bold").click();
         h.run();
         assert_ne!(labels(h.state()).default.bold, before, "the pane edits Default again");
@@ -1348,7 +1487,8 @@ mod tests {
     fn sql_drafts_survive_switching_label_classes() {
         let mut app = with_cities();
         app.run("labels.class.add", json!({"name": "Big"})).unwrap();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 123");
@@ -1370,8 +1510,6 @@ mod tests {
         let mut h = harness(app);
         h.run();
         pick_class(&mut h, "Default", "Big");
-        h.get_by_label("SQL").click();
-        h.run();
         assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 5000000"));
         h.get_by_label("Clear").click();
         h.run();

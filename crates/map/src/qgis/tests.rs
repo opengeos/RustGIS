@@ -1,7 +1,7 @@
 //! A small QGIS project and style, written by hand in the shapes QGIS writes them.
 
 use super::*;
-use crate::symbology::{LabelPlacement, LineCap, Marker};
+use crate::symbology::{LabelPlacement, LineCap, LineMark, Marker, Placements};
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis projectname="Towns" version="3.42.0-Münster">
@@ -190,7 +190,8 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     // A QGIS font family is the label class's font, drawn in it where it's installed.
     assert!(!said("Land", NoteKind::Approximated, "Liberation Sans Narrow"), "no longer approximated");
     assert!(said("Roads", NoteKind::Approximated, "dashed"));
-    assert!(said("Roads", NoteKind::Skipped, "markers and hash marks"));
+    // A marker line without the symbol it places draws nothing, in QGIS too: nothing to say.
+    assert!(!said("Roads", NoteKind::Skipped, "markers"));
     assert!(said("Roads", NoteKind::Skipped, "length("));
     assert!(said("Towns", NoteKind::Approximated, "font markers"));
     // A switched-off label rule is never drawn, so its filter isn't noted.
@@ -571,4 +572,73 @@ fn every_corpus_file_reads() {
         // The PostGIS and SQL Server projects' made-up password reaches neither the layers nor the notes.
         assert!(!format!("{project:?} {report:?}").contains("secret"), "{}: the password came through", path.display());
     }
+}
+
+#[test]
+fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
+    // As SMV25 writes them: a line (offset to the left), then marks at its ends in three layers (a
+    // picture, a triangle and a font character, offset), then QGIS 2's hash marks at an interval.
+    let qml = r#"<qgis version="3.40.0"><renderer-v2 type="singleSymbol"><symbols>
+      <symbol type="line" name="0" alpha="1">
+        <layer class="SimpleLine" enabled="1"><Option type="Map"><Option name="line_color" value="0,0,0,255"/><Option name="line_width" value="0.5"/>
+          <Option name="offset" value="-0.5"/></Option></layer>
+        <layer class="MarkerLine" enabled="1" pass="2"><Option type="Map">
+          <Option name="placements" value="FirstVertex|LastVertex"/><Option name="rotate" value="1"/><Option name="interval" value="3"/>
+          <Option name="offset" value="0.5"/><Option name="offset_unit" value="MM"/><Option name="average_angle_length" value="4"/></Option>
+          <symbol type="marker" name="@0@1" alpha="0.5">
+            <layer class="SvgMarker" enabled="1"><Option type="Map"><Option name="name" value="arrow.svg"/>
+              <Option name="color" value="242,242,242,255"/><Option name="size" value="1"/><Option name="offset" value="0.12,-0.35"/><Option name="offset_unit" value="MM"/></Option></layer>
+            <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="triangle"/><Option name="color" value="0,136,208,255"/>
+              <Option name="outline_color" value="0,0,0,255"/><Option name="outline_width" value="0.2"/><Option name="size" value="2"/><Option name="angle" value="90"/></Option></layer>
+            <layer class="FontMarker" enabled="1"><Option type="Map"><Option name="chr" value="{"/><Option name="font" value="DKM_Symbole"/>
+              <Option name="color" value="0,0,0,255"/><Option name="size" value="1"/></Option></layer>
+          </symbol>
+        </layer>
+        <layer class="HashLine" enabled="1"><prop k="placement" v="interval"/><prop k="interval" v="2"/><prop k="interval_unit" v="MM"/>
+          <prop k="hash_length" v="3"/><prop k="hash_angle" v="30"/><prop k="rotate" v="0"/>
+          <symbol type="line" name="@0@2" alpha="1"><layer class="SimpleLine" enabled="1"><prop k="line_color" v="0,0,255,255"/><prop k="line_width" v="0.3"/></layer></symbol>
+        </layer>
+      </symbol></symbols></renderer-v2></qgis>"#;
+    let mut report = Report::default();
+    let s = read_style(qml, "Rail", &mut report).unwrap();
+    let strokes = s.line_strokes.unwrap();
+    let mm = 96.0 / 25.4;
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert_eq!(strokes.len(), 4, "{strokes:?}");
+    assert!(strokes[0].markers.is_none());
+    // An offset to the left stays to the left (it used to be taken as none).
+    assert!(near(strokes[0].offset, -0.5 * mm), "{:?}", strokes[0]);
+
+    // The picture: a circle in its colour (the symbol's opacity on it), offset along and across.
+    let (pic, m) = (strokes[1], strokes[1].markers.unwrap());
+    assert_eq!((m.mark, m.at), (LineMark::Marker(Marker::Circle), Placements::FIRST.with(Placements::LAST)));
+    assert_eq!(pic.color, Some(Rgba::new(242, 242, 242, 128)));
+    assert!(near(m.offset_along, 0.12 * mm) && near(pic.offset, (0.5 - 0.35) * mm), "{pic:?}");
+    assert!(near(m.size, mm) && near(m.average_angle, 4.0 * mm) && m.rotate && m.outline.is_none());
+    assert_eq!(pic.level, Some(2));
+
+    // The triangle: its outline, its angle, offset only by the line's.
+    let (tri, m) = (strokes[2], strokes[2].markers.unwrap());
+    assert_eq!((m.mark, m.angle, m.outline), (LineMark::Marker(Marker::Triangle), 90.0, Some(Rgba::new(0, 0, 0, 128))));
+    assert!(near(tri.width.unwrap(), 0.2 * mm) && near(tri.offset, 0.5 * mm) && near(m.size, 2.0 * mm));
+
+    // QGIS 2's hash marks: upright, at their angle, the line's colour and width.
+    let (hash, m) = (strokes[3], strokes[3].markers.unwrap());
+    assert_eq!((m.mark, m.at, m.rotate, m.angle), (LineMark::Hash, Placements::INTERVAL, false, 30.0));
+    assert_eq!(hash.color, Some(Rgba::rgb(0, 0, 255)));
+    assert!(near(m.interval, 2.0 * mm) && near(m.size, 3.0 * mm) && near(hash.width.unwrap(), 0.3 * mm));
+
+    // A font character would be a blot of its size where QGIS draws a tick: left out until RustGIS
+    // draws characters.
+    assert!(report.notes.iter().any(|n| n.kind == NoteKind::Skipped && n.text.contains("font markers")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.kind == NoteKind::Approximated && n.text.contains("SVG markers")), "{:?}", report.notes);
+    assert_eq!(report.notes.iter().filter(|n| n.text.contains("along lines")).count(), 1, "{:?}", report.notes);
+
+    // A placement on curves is drawn at the vertices; one QGIS adds later is left out, and said.
+    let other = qml.replace("FirstVertex|LastVertex", "CurvePoint|SomethingNew");
+    let mut report = Report::default();
+    let s = read_style(&other, "Rail", &mut report).unwrap();
+    assert_eq!(s.line_strokes.unwrap()[1].markers.unwrap().at, Placements::VERTICES);
+    let said = |kind: NoteKind, part: &str| report.notes.iter().any(|n| n.kind == kind && n.text.contains(part));
+    assert!(said(NoteKind::Approximated, "curve points") && said(NoteKind::Skipped, "\"somethingnew\""), "{:?}", report.notes);
 }

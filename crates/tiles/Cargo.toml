@@ -26,10 +26,13 @@ ruzstd = { workspace = true }
 # S3 requests are signed (Signature Version 4) and its listings are XML.
 sha2 = { workspace = true }
 roxmltree = { workspace = true }
+# ArcGIS sign-ins: PKCE challenges and random states.
+base64 = { workspace = true }
 
 # Fetching tiles on worker threads. The browser fetches them itself (see `set_fetcher`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+getrandom = "0.4"
 
 [dev-dependencies]
 # Tests write Brotli-compressed PMTiles archives.

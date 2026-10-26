@@ -659,7 +659,13 @@ mod tests {
         let child = run.child.clone();
         drop(run);
         super::finish_stops();
-        assert!(child.lock().unwrap().as_mut().unwrap().try_wait().unwrap().is_some());
+        // Another test's `finish_stops` may have taken this stop job and still be waiting on it,
+        // so the agent is stopped soon rather than at once.
+        let until = Instant::now() + Duration::from_secs(5);
+        while child.lock().unwrap().as_mut().unwrap().try_wait().unwrap().is_none() {
+            assert!(Instant::now() < until, "agent survived Stop");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         relay.stop();
         let _ = std::fs::remove_dir_all(work);
     }
