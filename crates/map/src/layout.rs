@@ -563,7 +563,7 @@ impl ArrowStyle {
 /// The units a scale bar counts in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScaleUnits {
-    /// Metres or kilometres, whichever reads better at the frame's scale.
+    /// Millimetres, centimetres, metres or kilometres, whichever reads better at the frame's scale.
     #[default]
     Auto,
     Kilometers,
@@ -587,7 +587,7 @@ impl ScaleUnits {
 
     pub fn label(self) -> &'static str {
         match self {
-            ScaleUnits::Auto => "Automatic (m or km)",
+            ScaleUnits::Auto => "Automatic (mm to km)",
             ScaleUnits::Kilometers => "Kilometers",
             ScaleUnits::Meters => "Meters",
             ScaleUnits::Miles => "Miles",
