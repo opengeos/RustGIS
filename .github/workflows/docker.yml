@@ -1,6 +1,6 @@
 # Builds the web app's Docker image (the Dockerfile at the root, see docs/installation.md ›
 # Self-host the web app with Docker) and publishes it to the GitHub Container Registry as
-# ghcr.io/opengeos/rustgis-web, for linux/amd64 and linux/arm64:
+# ghcr.io/opengeos/rustgis, for linux/amd64 and linux/arm64:
 #
 #   edge, sha-<commit>            every update to main
 #   <version>, <major>.<minor>,   every published release (a pre-release gets only its version)
@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'release' }}
 
 env:
-  IMAGE: ghcr.io/opengeos/rustgis-web
+  IMAGE: ghcr.io/opengeos/rustgis
 
 jobs:
   image:
@@ -84,14 +84,14 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: rustgis-web:test
+          tags: rustgis:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test
         run: |
           set -euo pipefail
-          docker run -d --name rustgis-web -p 8080:8080 rustgis-web:test
+          docker run -d --name rustgis -p 8080:8080 rustgis:test
           for _ in $(seq 30); do
             curl -sSf http://127.0.0.1:8080/healthz >/dev/null && break
             sleep 1
@@ -103,7 +103,7 @@ jobs:
 
       - name: Smoke test logs
         if: failure()
-        run: docker logs rustgis-web || true
+        run: docker logs rustgis || true
 
       - name: Sign in to the GitHub Container Registry
         if: github.event_name != 'pull_request'

@@ -3,8 +3,8 @@
 # The RustGIS web app, built from this checkout and served by nginx (see docs/installation.md ›
 # Self-host the web app with Docker):
 #
-#   docker build -t rustgis-web .
-#   docker run --rm -p 8080:8080 rustgis-web     # http://localhost:8080
+#   docker build -t rustgis .
+#   docker run --rm -p 8080:8080 rustgis     # http://localhost:8080
 #
 # It builds as .github/workflows/web-deploy.yml does, with three differences: no analytics tag
 # (only the official deploy adds one), relative addresses (as the docs preview's build) so it can
