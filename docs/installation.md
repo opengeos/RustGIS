@@ -242,6 +242,22 @@ Docker Desktop's containerd image store),
 publishes one image for both. The app itself is WebAssembly, so it is compiled once, on the
 machine that builds it, whichever platforms the image is for.
 
+### The command line in Docker
+
+`ghcr.io/opengeos/rustgis-cli` holds the [command line](cli.md), `rustgis-cli`, on a slim Debian,
+for x86-64 and arm64, with the same tags. It runs in `/data`, so mount the folder to work on
+there:
+
+```sh
+docker run --rm -v "$PWD:/data" ghcr.io/opengeos/rustgis-cli info cities.geojson
+docker run --rm -v "$PWD:/data" ghcr.io/opengeos/rustgis-cli render cities.geojson map.png --basemap ocean
+```
+
+It runs as a user with ID 1000, the first user on most Linux systems, so the files it writes are
+yours; elsewhere, add `--user "$(id -u):$(id -g)" -e HOME=/tmp`. The optional GDAL, DuckDB and
+GeoLibre programs aren't in the image. To build it yourself:
+`docker build -f packaging/docker/cli.Dockerfile -t rustgis-cli .`
+
 ## Fonts
 
 RustGIS uses an installed sans-serif when it finds one (Segoe UI, San Francisco, Arial, Inter,

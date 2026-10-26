@@ -49,9 +49,12 @@ updates:
           - minor
           - patch
 
-  # The base images of the Dockerfile that self-hosts the web app, pinned by tag and digest.
+  # The base images of the Docker images (the web app's Dockerfile at the root, the command line's
+  # in packaging/docker), pinned by tag and digest.
   - package-ecosystem: docker
-    directory: "/"
+    directories:
+      - "/"
+      - "/packaging/docker"
     schedule:
       interval: weekly
     open-pull-requests-limit: 2

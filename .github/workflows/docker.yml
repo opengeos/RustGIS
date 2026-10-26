@@ -1,14 +1,20 @@
-# Builds the web app's Docker image (the Dockerfile at the root, see docs/installation.md ›
-# Self-host the web app with Docker) and publishes it to the GitHub Container Registry as
-# ghcr.io/opengeos/rustgis, for linux/amd64 and linux/arm64:
+# Builds RustGIS's Docker images and publishes them to the GitHub Container Registry, for
+# linux/amd64 and linux/arm64 (see docs/installation.md › Docker):
+#
+#   ghcr.io/opengeos/rustgis       the web app, served by nginx (the Dockerfile at the root)
+#   ghcr.io/opengeos/rustgis-cli   the command line (packaging/docker/cli.Dockerfile)
+#
+# with the tags
 #
 #   edge, sha-<commit>            every update to main
 #   <version>, <major>.<minor>,   every published release (a pre-release gets only its version)
 #   latest
 #
-# A pull request that changes the image builds and smoke-tests it without publishing. The app is
-# WebAssembly, so the build stage runs once, on the runner's platform, for both platforms.
-name: Docker image
+# A pull request that changes an image builds and smoke-tests both without publishing. The web app
+# is WebAssembly, so its build stage runs once, on the runner's platform, for both platforms; the
+# command line is native code, so each platform is built on a runner of its own and the two are
+# then published under one multi-platform tag.
+name: Docker images
 
 on:
   push:
@@ -28,15 +34,23 @@ permissions:
 
 concurrency:
   group: docker-${{ github.event_name }}-${{ github.ref }}
-  # A newer push to main supersedes the image being built; a release always finishes.
+  # A newer push to main supersedes the images being built; a release always finishes.
   cancel-in-progress: ${{ github.event_name != 'release' }}
 
 env:
-  IMAGE: ghcr.io/opengeos/rustgis
+  WEB_IMAGE: ghcr.io/opengeos/rustgis
+  CLI_IMAGE: ghcr.io/opengeos/rustgis-cli
+  # The tags of both images (docker/metadata-action); `latest` follows releases, not main.
+  TAGS: |
+    type=edge,branch=main
+    type=sha,enable=${{ github.event_name != 'release' }}
+    type=semver,pattern={{version}}
+    type=semver,pattern={{major}}.{{minor}}
+    type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
 
 jobs:
-  image:
-    name: Build and publish
+  web:
+    name: Web app image
     if: github.repository == 'opengeos/RustGIS'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -58,15 +72,9 @@ jobs:
           # The registry shows the index's annotations for a multi-platform image.
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
-          images: ${{ env.IMAGE }}
-          # `latest` follows releases, not main.
+          images: ${{ env.WEB_IMAGE }}
           flavor: latest=false
-          tags: |
-            type=edge,branch=main
-            type=sha,enable=${{ github.event_name != 'release' }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+          tags: ${{ env.TAGS }}
           # The Dockerfile's own, ahead of the ones metadata-action takes from the repository.
           labels: |
             org.opencontainers.image.title=RustGIS web app
@@ -85,8 +93,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: rustgis:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
 
       - name: Smoke test
         run: |
@@ -124,4 +132,155 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=web
+
+  cli:
+    name: Command line image (${{ matrix.arch }})
+    if: github.repository == 'opengeos/RustGIS'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Image labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.CLI_IMAGE }}
+          flavor: latest=false
+          tags: ${{ env.TAGS }}
+          # The Dockerfile's own, ahead of the ones metadata-action takes from the repository.
+          labels: |
+            org.opencontainers.image.title=RustGIS command line
+            org.opencontainers.image.description=The RustGIS command line: run commands and geoprocessing, render maps, inspect data
+            org.opencontainers.image.url=https://rustgis.app
+
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/cli.Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: rustgis-cli:test
+          cache-from: type=gha,scope=cli-${{ matrix.arch }}
+          cache-to: type=gha,scope=cli-${{ matrix.arch }},mode=max
+
+      # Runs the binary as the image runs it; drawing the logo and rendering the built-in sample
+      # exercise the renderer, the fonts and the embedded data.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          docker run --rm rustgis-cli:test tools > "$RUNNER_TEMP/tools.txt"
+          grep -q buffer "$RUNNER_TEMP/tools.txt"
+          docker run --rm rustgis-cli:test logo /tmp/logo.png --size 64
+          docker run --rm --entrypoint sh rustgis-cli:test -c \
+            'rustgis-cli run --sample --cmd "share.exportMap={\"path\":\"/tmp/map.png\"}" && test -s /tmp/map.png'
+          echo "The image runs the command line."
+
+      - name: Sign in to the GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by digest only; the manifest job tags the two platforms' images together.
+      - name: Publish by digest
+        id: push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packaging/docker/cli.Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.CLI_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=cli-${{ matrix.arch }}
+
+      - name: Record the digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  cli-manifest:
+    name: Command line image (publish)
+    needs: cli
+    if: github.repository == 'opengeos/RustGIS' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: cli-digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.CLI_IMAGE }}
+          flavor: latest=false
+          tags: ${{ env.TAGS }}
+
+      - name: Sign in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the multi-platform tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -euo pipefail
+          tags=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && tags+=(-t "$tag")
+          done <<< "$DOCKER_METADATA_OUTPUT_TAGS"
+          sources=()
+          for digest in *; do sources+=("$CLI_IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${tags[@]}" \
+            --annotation "index:org.opencontainers.image.title=RustGIS command line" \
+            --annotation "index:org.opencontainers.image.description=The RustGIS command line: run commands and geoprocessing, render maps, inspect data" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/opengeos/RustGIS" \
+            --annotation "index:org.opencontainers.image.licenses=Apache-2.0" \
+            "${sources[@]}"
+          docker buildx imagetools inspect "$CLI_IMAGE:$DOCKER_METADATA_OUTPUT_VERSION"
