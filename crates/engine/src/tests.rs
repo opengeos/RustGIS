@@ -8626,6 +8626,19 @@ fn identify_asks_wms_layers() {
     // A selection mode asks none.
     let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "selectable"})).unwrap();
     assert!(v.is_null(), "{v}");
+    // Answers and capabilities past the download limit are refused, naming the layer.
+    let huge = "x".repeat(2 * rustgis_data::ogc::MAX_INFO_BYTES + 1);
+    for key in ["text", "capabilities"] {
+        let e = reopened.run("identify.featureInfo", &json!({"layer": "Roads", key: huge})).unwrap_err();
+        assert!(e.starts_with("Roads: ") && e.contains("larger than"), "{e}");
+    }
+    // A WMS layer added by its address (not from the service, not an overlay) is asked too.
+    let mut added = Session::new(Project::default());
+    let template = "https://maps.example.com/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/png";
+    added.run("map.addTiles", &json!({"url": template, "name": "Mine"})).unwrap();
+    added.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let v = added.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    assert_eq!(v["featureInfo"][0]["tileLayer"], "Mine", "{v}");
     // A service on the web whose GetFeatureInfo points into the local network isn't asked.
     let local = WMS.replace("https://maps.example.com/info?", "http://192.168.1.5/info?");
     let mut s = Session::new(Project::default());

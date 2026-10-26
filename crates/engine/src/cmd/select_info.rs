@@ -16,6 +16,9 @@ use crate::{CmdResult, CommandSpec as C, Session};
 
 /// Most WMS layers one identify asks.
 const MAX_ASKED: usize = 8;
+/// Most bytes of an answer or capabilities passed as text: what may be downloaded, as UTF-8 (a
+/// Latin-1 answer grows to at most twice its size).
+const MAX_TEXT: usize = 2 * ogc::MAX_INFO_BYTES;
 
 pub(super) fn commands() -> Vec<C> {
     vec![
@@ -46,8 +49,9 @@ pub(super) fn merc_at(s: &Session, lon: f64, lat: f64) -> Option<(Coord, f64)> {
 
 /// Whether a tile layer is a WMS layer that can be asked: drawn, and queryable or not known yet.
 fn askable(t: &rustgis_map::tiles::TileLayer) -> bool {
+    // As for vector tiles' features: a basemap (one from the catalog) isn't asked, an added layer is.
     t.kind == TileKind::Raster
-        && t.overlay
+        && (t.id.is_empty() || t.overlay)
         && t.draws()
         && t.opacity > 0.0
         && match &t.feature_info {
@@ -141,11 +145,19 @@ fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), Strin
 fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
     let name = ps(p, "layer").ok_or("layer is required (a WMS tile layer's name)")?.to_string();
     let index = wms_layer(s, &name)?;
+    // Errors name the layer: the app shows them as they are.
+    let named = |e: String| format!("{name}: {e}");
     if let Some(caps) = ps(p, "capabilities") {
-        learn(s, index, caps.as_bytes())?;
+        if caps.len() > MAX_TEXT {
+            return Err(named(format!("the capabilities are larger than {} MB", MAX_TEXT >> 20)));
+        }
+        learn(s, index, caps.as_bytes()).map_err(named)?;
     }
     if let Some(text) = ps(p, "text") {
-        return Ok(results(&name, ogc::read_feature_info(text.as_bytes())?));
+        if text.len() > MAX_TEXT {
+            return Err(named(format!("the answer is larger than {} MB", MAX_TEXT >> 20)));
+        }
+        return Ok(results(&name, ogc::read_feature_info(text.as_bytes()).map_err(named)?));
     }
     let lon = f(p, "lon").ok_or("lon is required")?;
     let lat = f(p, "lat").ok_or("lat is required")?;
@@ -167,11 +179,11 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
         };
         let mut step = next(s);
         if let Some(caps) = step.as_ref().and_then(|v| v["capabilities"].as_str()).map(str::to_string) {
-            learn(s, index, &fetch(&caps)?)?;
+            learn(s, index, &fetch(&caps)?).map_err(named)?;
             step = next(s);
         }
         match step.as_ref().and_then(|v| v["url"].as_str()) {
-            Some(url) => Ok(results(&name, ogc::read_feature_info(&fetch(url)?)?)),
+            Some(url) => Ok(results(&name, ogc::read_feature_info(&fetch(url)?).map_err(named)?)),
             None => Ok(json!({"results": []})),
         }
     }

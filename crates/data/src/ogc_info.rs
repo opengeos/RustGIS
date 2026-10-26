@@ -185,7 +185,7 @@ pub fn wms_layer_of(template: &str) -> Option<(String, String)> {
 }
 
 /// A feature of a GetFeatureInfo answer: the layer it is in, when the answer says, and its
-/// attributes as text, in the answer's order.
+/// attributes as text: in the answer's order for XML and plain text, by name for JSON.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InfoFeature {
     pub layer: Option<String>,

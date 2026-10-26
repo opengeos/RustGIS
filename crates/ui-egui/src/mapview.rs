@@ -85,6 +85,8 @@ pub struct Popup {
 /// request's, or first its service's capabilities (a layer from a project doesn't know its request).
 pub struct Ask {
     layer: String,
+    /// The other layers waiting for the same capabilities: fetched and read once for all.
+    also: Vec<String>,
     capabilities: bool,
     slot: crate::Slot<Result<Vec<u8>, String>>,
 }
@@ -92,20 +94,28 @@ pub struct Ask {
 impl Popup {
     /// A popup for what identify found at `at`, asking the WMS layers it lists.
     pub fn new(info: Value, at: Coord, map: usize, opened: u64) -> Popup {
-        let asks = info["featureInfo"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|a| {
-                let layer = a["tileLayer"].as_str()?.to_string();
-                let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
-                    (Some(u), _) => (u, false),
-                    (None, Some(c)) => (c, true),
-                    _ => return None,
-                };
-                Some(Ask { layer, capabilities, slot: crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES) })
-            })
-            .collect();
+        let mut asks: Vec<Ask> = Vec::new();
+        // The capabilities each fetch is for: layers of one service share it.
+        let mut fetched: Vec<(String, usize)> = Vec::new();
+        for a in info["featureInfo"].as_array().into_iter().flatten() {
+            let Some(layer) = a["tileLayer"].as_str().map(str::to_string) else { continue };
+            let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
+                (Some(u), _) => (u, false),
+                (None, Some(c)) => (c, true),
+                _ => continue,
+            };
+            if capabilities && let Some(&(_, i)) = fetched.iter().find(|(c, _)| c == url) {
+                if let Some(ask) = asks.get_mut(i) {
+                    ask.also.push(layer);
+                }
+                continue;
+            }
+            if capabilities {
+                fetched.push((url.to_string(), asks.len()));
+            }
+            let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+            asks.push(Ask { layer, also: Vec::new(), capabilities, slot });
+        }
         Popup { info, at, index: 0, map, opened, asks }
     }
 }
@@ -2838,9 +2848,9 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(100));
     let (lon, lat) = (pp.at.x, pp.at.y);
     let mut landed = Vec::new();
-    pp.asks.retain(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    pp.asks.retain_mut(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(r) => {
-            landed.push((a.layer.clone(), a.capabilities, r));
+            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, r));
             false
         }
         None => true,
@@ -2850,34 +2860,44 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let mut found = Vec::new();
     let mut next = Vec::new();
-    for (layer, capabilities, r) in landed {
-        // A layer removed or renamed while its answer came: nothing to show, nothing to tell.
-        if !app.session.map().tiles.iter().any(|t| t.name == layer) {
-            continue;
-        }
-        let r = r.and_then(|bytes| {
-            if capabilities {
-                let text = rustgis_engine::data::ogc::answer_text(&bytes)?.into_owned();
-                let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
-                app.session.run("identify.featureInfo", &p)
-            } else {
-                // Read as the command reads a fetched answer (Latin-1, an image refused).
-                let text = rustgis_engine::data::ogc::answer_text(&bytes)?.into_owned();
-                app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))
+    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
+    for (layer, also, capabilities, r) in landed {
+        // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
+        // first of a service's layers still there takes the capabilities for the rest.
+        let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
+        let Some(layer) = group.next() else { continue };
+        let also: Vec<String> = group.collect();
+        // The fetch's failure, or an answer that isn't text, is told here; the command tells its
+        // own errors (naming the layer).
+        let text = match r.and_then(|bytes| rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)) {
+            Ok(text) => text,
+            Err(e) => {
+                app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true);
+                continue;
             }
-        });
-        match r {
-            Ok(v) => {
-                if let Some(url) = v["url"].as_str() {
-                    next.push(Ask {
-                        layer,
-                        capabilities: false,
-                        slot: crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES),
-                    });
+        };
+        let mut replies = Vec::new();
+        if capabilities {
+            let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
+            replies.push((layer, app.session.run("identify.featureInfo", &p)));
+            // The service's other layers learned their requests from the same capabilities.
+            if replies.iter().all(|(_, r)| r.is_ok()) {
+                for other in also {
+                    let p = json!({"layer": other, "lon": lon, "lat": lat, "request": true});
+                    let r = app.session.run("identify.featureInfo", &p);
+                    replies.push((other, r));
                 }
-                found.extend(v["results"].as_array().cloned().unwrap_or_default());
             }
-            Err(e) => app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true),
+        } else {
+            replies.push((layer.clone(), app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))));
+        }
+        for (layer, r) in replies {
+            let Ok(v) = r else { continue };
+            if let Some(url) = v["url"].as_str() {
+                let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+                next.push(Ask { layer, also: Vec::new(), capabilities: false, slot });
+            }
+            found.extend(v["results"].as_array().cloned().unwrap_or_default());
         }
     }
     let Some(pp) = &mut app.map.popup else { return };
