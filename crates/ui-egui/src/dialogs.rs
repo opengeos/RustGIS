@@ -161,7 +161,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let title = match which {
         "selectByAttributes" => "Select By Attributes",
-        "goToXY" => "Go To XY",
+        "goToXY" => "By Coordinates",
         "bookmark" => "New Bookmark",
         "addField" => "Add Field",
         "calculateField" => "Calculate Field",
@@ -177,7 +177,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
         "layerTemplate" => "Layer Template",
         "addPolyline" => "Add Encoded Polyline",
         "addCsv" => "Add Delimited Text",
-        "findPlace" => "Find Place",
+        "findPlace" => "By Place or Address",
         "geocode" => "Geocode Addresses",
         "addUrl" => "Add Data From URL",
         "addService" => "Add From Service",

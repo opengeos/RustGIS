@@ -188,7 +188,7 @@ fn capabilities(p: &Value) -> Result<Discovery, String> {
 
 #[cfg(target_arch = "wasm32")]
 fn fetch_capabilities(url: &str, _caps: &str) -> Result<Service, String> {
-    Err(format!("{url}: in the web app, use Home › Add Data › From Service"))
+    Err(format!("{url}: in the web app, use Home › Add › Add Data › From Service"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -408,7 +408,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             #[cfg(target_arch = "wasm32")]
             {
                 let _ = get;
-                Err(format!("{url}: in the web app, Home › Add Data › From Service downloads the coverage"))
+                Err(format!("{url}: in the web app, Home › Add › Add Data › From Service downloads the coverage"))
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -423,7 +423,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             #[cfg(target_arch = "wasm32")]
             {
                 let _ = (items, asked);
-                Err(format!("{url}: in the web app, Home › Add Data › From Service downloads the features"))
+                Err(format!("{url}: in the web app, Home › Add › Add Data › From Service downloads the features"))
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -601,5 +601,5 @@ fn fetch_records(url: &str, request: &str) -> Result<rustgis_data::ogc::RecordPa
 
 #[cfg(target_arch = "wasm32")]
 fn fetch_records(url: &str, _: &str) -> Result<rustgis_data::ogc::RecordPage, String> {
-    Err(format!("{url}: in the web app, use Home › Add Data › From Service › Search Catalogue"))
+    Err(format!("{url}: in the web app, use Home › Add › Add Data › From Service › Search Catalogue"))
 }

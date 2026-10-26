@@ -147,6 +147,8 @@ pub struct MapView {
     pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
+    /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
+    pub move_shared_vertices: bool,
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
@@ -243,6 +245,7 @@ impl Default for MapView {
             vertex: None,
             vertex_drag: None,
             vertex_drag_owner: None,
+            move_shared_vertices: false,
             magnifier: false,
             popup: None,
             popup_rev: 0,

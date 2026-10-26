@@ -67,6 +67,36 @@ you edit the value or choose units; click **Apply elevation** to apply the new i
   have dangles, must be covered by); Validate lists the errors, and clicking one zooms to it.
 - **Status**: features added, changed and deleted per layer since the last save.
 
+### Moving shared polygon vertices
+
+**Edit › Features › Shared Vertices** opts polygon moves into linked editing. It starts off,
+lasts only for the current app session, and is not saved in projects or preferences. With it on,
+dragging a polygon vertex moves every polygon vertex in that layer stored at exactly the same
+original coordinate, including unselected and filtered-out rows, point-only contacts, other
+polygon parts and holes. Unrelated polygons touching by chance at that point move together too;
+turn the switch off to move just the source feature. Inserting and deleting vertices, and moving
+line or point vertices, keep their existing behaviour. Changing the switch cancels a held drag.
+
+The command uses row positions and the same vertex addresses as `edit.vertex`:
+
+```json
+{"layer":"Parcels","row":0,"part":0,"ring":0,"index":3,"lon":12.5,"lat":41.9}
+```
+
+Run these parameters with `edit.moveSharedVertex`. It returns the source `part`, `ring` and
+`index`, plus `modified`: the number of features whose geometry or attributes actually changed.
+Every matched feature runs through attribute rules and archiving in one transaction; a rejection
+rolls back the whole edit. A successful command is one undo step. As with `edit.vertex`, a direct
+same-position command still runs the rules and records an edit, even if `modified` is zero.
+Undo retains cumulative edit counts. Streamed layers require **Load All Features** first.
+
+This moves coincident **vertices**, not every shared boundary. For a boundary stored as P–Q
+on one polygon and P–R–Q on its neighbour, moving Q moves the two stored Q vertices but leaves
+R in place. It does not remap intermediate vertices, insert missing ones or refuse the edit
+because vertex densities differ; the two boundaries can separate. There is no tolerance or
+nearby-coordinate matching. Use the `mustNotOverlap` and `mustNotHaveGaps` topology rules, then
+**Edit › Manage Edits › Topology › Error Inspector (validate)** (`topology.validate`) to inspect a coverage.
+
 ### Distance units in commands
 
 `edit.move`, `edit.traverse` and constant `edit.elevation` accept `"units": "Feet"`,

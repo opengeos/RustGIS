@@ -166,12 +166,11 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
 - **Pane Sets** (View › Workspace) save the left pane, open right-hand pane tabs, active pane
   and ribbon tab and bring them back. The **Workflow Manager** tracks jobs (new, in progress,
   on hold, done) with the area each covers.
-- **Connections** (Home › Add Data › **Connections…**) opens the Data Sources pane on its saved
-  connections; it only ever opens the pane, so it is safe to choose when the pane is already open
-  (**View › Windows › Data Sources** still shows or hides it). **Add Data › New Connection** lists
-  each kind of connection (PostgreSQL/PostGIS, MySQL/MariaDB and SQL Server are left out in the web
-  app) and opens its form. Saved connections are listed in the pane, not in the menu. Command
-  Search finds **Connections…** by name.
+- **Data Sources** (Home › Add › **Data Sources**) opens the Data Sources pane; **View › Windows ›
+  Data Sources** still shows or hides it. **Home › Add › Add Data › New Connection** lists each
+  kind of connection (PostgreSQL/PostGIS, MySQL/MariaDB and SQL Server are left out in the web
+  app) and opens its form. Saved connections are listed in the pane, not in the Add Data menu.
+  Command Search finds the pane as **Data Sources**.
 - **Tasks** (Analyze › Tasks, or View › Tasks) steps through a task's instructions: read the current step and do it
   yourself, with **Show Me** to find where, or click **Run** to have it done.
     - **Show Me** points at the step's command:
@@ -229,8 +228,8 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
       cloud-optimised GeoTIFF a file per date with `layer.addUrl`, giving its `start` and `end`.
       For example NASA GIBS daily MODIS imagery:
       `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
-    - A Zarr variable added with **Follow the time slider** (Add Data › Zarr…) shows the step the
-      slider is at; see [Zarr stores](data.md#zarr-stores).
+    - A Zarr variable added with **Follow the time slider** (Home › Add › Add Data › Zarr…) shows
+      the step the slider is at; see [Zarr stores](data.md#zarr-stores).
     - From scripts: `time.bind` (`"layer"`, `"field"`, `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`), `time.set` (the
       window: `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`, `"speed"`, `"loop"`,
       `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes

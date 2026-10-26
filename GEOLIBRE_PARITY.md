@@ -29,8 +29,8 @@ _GeoLibre: docs/data-formats.md, docs/features.md › Adding data, SQL and datab
   footprints). Still missing: DWG (GDAL only) and File Geodatabase in the web app.
 - [x] **Excel, LandXML, encoded polylines, GeoRSS** ([#118](https://github.com/opengeos/RustGIS/issues/118)).
 - [x] **Delimited text with a projected CRS or address geocoding**: x/y columns in any coordinate
-  system, WKT columns and any separator ([#115](https://github.com/opengeos/RustGIS/issues/115)); Find Place and address-table geocoding ([#127](https://github.com/opengeos/RustGIS/issues/127)).
-- [x] **Remote vector and COG by URL**: Add Data › From URL ([#116](https://github.com/opengeos/RustGIS/issues/116)); COGs ([#132](https://github.com/opengeos/RustGIS/issues/132)), FlatGeobuf and
+  system, WKT columns and any separator ([#115](https://github.com/opengeos/RustGIS/issues/115)); place search and address-table geocoding ([#127](https://github.com/opengeos/RustGIS/issues/127)).
+- [x] **Remote vector and COG by URL**: Home › Add › Add Data › From URL ([#116](https://github.com/opengeos/RustGIS/issues/116)); COGs ([#132](https://github.com/opengeos/RustGIS/issues/132)), FlatGeobuf and
   GeoParquet ([#152](https://github.com/opengeos/RustGIS/issues/152)) read in place by HTTP range on the desktop and the web, from `s3://` too
   ([#150](https://github.com/opengeos/RustGIS/issues/150)).
 - [x] **PMTiles and MBTiles** ([#74](https://github.com/opengeos/RustGIS/issues/74), [#113](https://github.com/opengeos/RustGIS/issues/113)): raster and vector archives, desktop and web.
@@ -87,7 +87,7 @@ _GeoLibre: docs/features.md › Map workspace, Rendering engines and 3D globe; d
 - [ ] **Multi-map grid**: N synchronized panes. Partial: Side by Side with two maps and linked
   views and cursors (_Roadmap: any time_).
 - [ ] **Coordinate grids and readouts**: UTM and MGRS/USNG grids, UTM/MGRS/DDM readouts,
-  grid-reference search, pointer elevation. Partial: graticule, decimal/DMS and Go To XY
+  grid-reference search, pointer elevation. Partial: graticule, decimal/DMS and coordinate navigation
   (_Roadmap: any time_).
 - [ ] **Live data overlays**: RainViewer radar, a Timelapse of annual cloudless imagery, live feeds
   (quakes, satellites, fires, AIS). Missing.
@@ -166,7 +166,7 @@ model-builder.md, segmentation.md, obia.md_
 - [ ] **Routing services**: isochrones, service areas, OD matrix, multi-stop routing,
   turn-by-turn (Valhalla/OSRM). Partial: shortest path over a line layer (_Roadmap: analysis_).
 - [ ] **Geocoding**: forward, batch and reverse, with multiple providers and a place search box.
-  Partial: Find Place and address tables (Nominatim, Photon or your own server), a local locator,
+  Partial: place search and address tables (Nominatim, Photon or your own server), a local locator,
   a search box. Missing: reverse geocoding (_Roadmap: analysis_).
 - [ ] **Spatial statistics**: Emerging Hot Spot (Getis-Ord Gi\*), composite score builder.
   Partial: Suitability Modeler (_Roadmap: analysis_ for hot spots).
