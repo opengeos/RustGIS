@@ -509,6 +509,10 @@ fn a_character_of_a_font_is_a_marker_on_points_and_along_lines() {
     assert!(err.contains("hash marks take no char"), "{err}");
     let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "character"}}]})).unwrap_err();
     assert!(err.contains("needs its char"), "{err}");
+    // A shape with a char is refused, as by `layer.marker`.
+    let err =
+        s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "circle", "char": "x"}}]})).unwrap_err();
+    assert!(err.contains("not both"), "{err}");
     assert_eq!(s.undo_depth(), depth);
 }
 

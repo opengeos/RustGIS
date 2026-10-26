@@ -505,10 +505,11 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
     Converted { symbol, strokes: Vec::new() }
 }
 
-/// A font marker's character (`chr`, of the family `font`) as a character marker; `None` for one
-/// with none (it draws nothing). A string of several draws its first (noted).
-fn font_char(p: &[(String, String)], layer: &str, report: &mut Report) -> Option<Marker> {
-    let text = prop(p, "chr").unwrap_or_default();
+/// A font marker's character (`chr`, of the family `font`) as a character marker: QGIS's `A` when
+/// it has none, and the characters it saves escaped ([`unescape_chr`]) decoded. A
+/// string of several draws its first (noted).
+pub(super) fn font_char(p: &[(String, String)], layer: &str, report: &mut Report) -> Option<Marker> {
+    let text = unescape_chr(prop(p, "chr").filter(|c| !c.is_empty()).unwrap_or("A"));
     let mut chars = text.chars();
     let ch = chars.next()?;
     if chars.next().is_some() {
@@ -518,6 +519,30 @@ fn font_char(p: &[(String, String)], layer: &str, report: &mut Report) -> Option
         report.approximated(layer, "font marker styles (bold, italic and the like), drawn regular");
     }
     Some(Marker::Char(Glyph::new(ch, prop(p, "font").unwrap_or_default())))
+}
+
+/// `chr` as QGIS reads it: it saves some characters as their code between two `~!_#!#_!~`.
+fn unescape_chr(chr: &str) -> String {
+    const FIX: &str = "~!_#!#_!~";
+    let (mut out, mut rest) = (String::new(), chr);
+    while let Some(i) = rest.find(FIX) {
+        let after = &rest[i + FIX.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let code = after[..digits].parse::<u16>().ok().and_then(|n| char::from_u32(n.into()));
+        match code {
+            Some(c) if after[digits..].starts_with(FIX) => {
+                out.push_str(&rest[..i]);
+                out.push(c);
+                rest = &after[digits + FIX.len()..];
+            }
+            _ => {
+                out.push_str(&rest[..i + FIX.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Whether a marker is anchored off its centre (`horizontal_anchor_point`,

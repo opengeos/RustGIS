@@ -1297,6 +1297,16 @@ impl Renderer {
             Renderer::Proportional { base, .. } => f(base),
         }
     }
+
+    /// Whether any symbol is a character of a font ([`Marker::Char`]).
+    pub fn has_char_markers(&self) -> bool {
+        let char = |s: &Symbol| matches!(s.marker, Marker::Char(_));
+        match self {
+            Renderer::Single(s) | Renderer::Proportional { base: s, .. } => char(s),
+            Renderer::Unique { classes, other, .. } => char(other) || classes.iter().any(|c| char(&c.1)),
+            Renderer::Graduated { symbols, .. } => symbols.iter().any(char),
+        }
+    }
 }
 
 /// `new` with the hand-made parts of `old`, a class whose scheme colour was `scheme`: the fill

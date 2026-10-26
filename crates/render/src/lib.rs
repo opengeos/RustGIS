@@ -1996,7 +1996,7 @@ fn place_tilted_labels(map: &Map, view: &View, mut candidates: Vec<Candidate>, g
 /// Whether a turned or tilted `view` of `map` may be drawn on the GPU ([`gpu_turned`]): only
 /// what the GPU draws itself shows (no tiles, rasters, see-through, masked, swiped or blended
 /// layers, aggregations, graphics or stacked line strokes; no view effects; extrusions only
-/// stand up in a tilted one). A cheap check made before any drawing; labels with icons can still
+/// stand up in a tilted one; nor characters standing up, which the GPU has no template for). A cheap check made before any drawing; labels with icons can still
 /// decline the scene once it is drawn.
 pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
     if map.projection.is_globe()
@@ -2027,6 +2027,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && !l.graphics
             && !l.has_strokes()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
+            && !(view.camera.pitch != 0.0 && l.renderer.has_char_markers() && stands_up(map, l))
     })
 }
 
@@ -5388,6 +5389,22 @@ mod tests {
         d.push(Some(Geometry::Point(Coord::new(0.0, 0.0))), vec![]);
         m.add_dataset(d);
         m
+    }
+
+    #[test]
+    fn a_tilted_view_of_characters_standing_up_stays_on_the_cpu() {
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let mut map = hill_map();
+        assert!(gpu_may_turn(&map, &view));
+        for l in &mut map.layers {
+            l.renderer.map_symbols(|s| s.marker = Marker::Char(rustgis_map::Glyph::new('L', "")));
+        }
+        // The GPU has no template for a character: standing up, it would be a circle.
+        assert!(!gpu_may_turn(&map, &view));
+        // Turned, not tilted, the map is drawn flat, where the layer is a CPU picture.
+        let turned = View { camera: Camera { bearing: 30.0, pitch: 0.0, ..camera }, ..view };
+        assert!(gpu_may_turn(&map, &turned));
     }
 
     #[test]

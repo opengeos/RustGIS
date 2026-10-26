@@ -606,7 +606,9 @@ pub(crate) fn family_picker(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::
         .show_ui(ui, |ui| {
             let search = list_search(ui, search_id, tl!("Search fonts"));
             if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
-                chosen = Some(None);
+                if cur.is_some() {
+                    chosen = Some(None);
+                }
                 end_search(ui, search_id);
             }
             let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));

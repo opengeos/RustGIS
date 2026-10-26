@@ -647,3 +647,22 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     let said = |kind: NoteKind, part: &str| report.notes.iter().any(|n| n.kind == kind && n.text.contains(part));
     assert!(said(NoteKind::Approximated, "curve points") && said(NoteKind::Skipped, "\"somethingnew\""), "{:?}", report.notes);
 }
+
+#[test]
+fn a_font_marker_without_its_character_draws_qgiss_a_and_escaped_ones_are_decoded() {
+    let props = |chr: Option<&str>| -> Vec<(String, String)> {
+        chr.map(|c| vec![("chr".to_string(), c.to_string()), ("font".to_string(), "DKM_Symbole".to_string())]).unwrap_or_default()
+    };
+    let char_of = |chr: Option<&str>| match symbol::font_char(&props(chr), "Signs", &mut Report::default()) {
+        Some(Marker::Char(g)) => g.ch,
+        other => panic!("{other:?}"),
+    };
+    // QGIS draws its default `A` for a font marker with no character or an empty one.
+    assert_eq!((char_of(None), char_of(Some(""))), ('A', 'A'));
+    // It saves some characters as their code between two `~!_#!#_!~`.
+    assert_eq!(char_of(Some("~!_#!#_!~1~!_#!#_!~")), '\u{1}');
+    assert_eq!(char_of(Some("~!_#!#_!~10~!_#!#_!~x")), '\n');
+    // A broken escape is read as it is.
+    assert_eq!((char_of(Some("~!_#!#_!~1")), char_of(Some("~!_#!#_!~x~!_#!#_!~"))), ('~', '~'));
+    assert_eq!(char_of(Some("@")), '@');
+}

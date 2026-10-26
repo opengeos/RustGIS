@@ -520,11 +520,15 @@ fn line_markers(v: &Value) -> Result<LineMarkers, String> {
         Some(Value::String(m)) => LineMark::Marker(
             Marker::ALL.into_iter().find(|s| s.label().eq_ignore_ascii_case(m.trim())).ok_or_else(|| format!("unknown mark '{m}'"))?,
         ),
-        Some(_) => return Err("mark is \"circle\", \"square\", \"triangle\", \"diamond\", \"star\" or \"hash\"".into()),
+        Some(_) => return Err("mark is \"circle\", \"square\", \"triangle\", \"diamond\", \"star\", \"character\" or \"hash\"".into()),
     };
     // A character of a font instead of a shape.
     let mark = match (character(v)?, o.get("font")) {
         (Some(_), _) if mark == LineMark::Hash => return Err("hash marks take no char".into()),
+        // As `layer.marker`: a shape named with a char is a mistake, not the char.
+        (Some(_), _) if o.get("mark").and_then(Value::as_str).is_some_and(|m| !m.trim().eq_ignore_ascii_case("character")) => {
+            return Err("give a shape or a char, not both".into());
+        }
         (Some(c), font) => LineMark::Marker(Marker::Char(Glyph::new(c, font.and_then(Value::as_str).unwrap_or_default()))),
         (None, _) => mark,
     };

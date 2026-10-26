@@ -492,7 +492,11 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
                         Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)),
                     ));
                 }
-                Marker::Char(g) => glyph(p, c, g, (s.size * 1.4).clamp(8.0, 18.0), c32(s.fill)),
+                // An outline-only character shows in its outline's colour.
+                Marker::Char(g) => {
+                    let col = if s.fill.a() == 0 && s.stroke_width > 0.0 { s.stroke } else { s.fill };
+                    glyph(p, c, g, (s.size * 1.4).clamp(8.0, 18.0), c32(col));
+                }
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
                     p.circle_stroke(c, rad, Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)));
