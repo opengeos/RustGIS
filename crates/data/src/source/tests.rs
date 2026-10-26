@@ -1171,7 +1171,8 @@ fn geojson_paths(file: &str, text: &str) -> (Dataset, Vec<String>, String) {
         assert_eq!(inplace.crs, whole.crs, "{file}");
         assert_eq!(inplace.crs_incomplete, whole.crs_incomplete, "{file}");
         assert_eq!(inplace.geometry_type, whole.geometry_type, "{file}");
-        assert_eq!(report.skipped, in_report.skipped, "{file}");
+        // (What a source skipped at open, unreadable or unplaceable features, is in its notes,
+        // not in `skipped`, which counts what a read skipped.)
         let strip = |m: &Vec<String>| m.iter().map(|m| m.trim_start_matches("x: ").to_string()).collect::<Vec<_>>();
         assert_eq!(strip(&report.messages), strip(&in_report.messages), "{file}");
         // The extent a source says is that of the features it reads (those that convert).
@@ -1363,6 +1364,61 @@ fn geojson_features_that_cant_be_converted_are_skipped_and_counted() {
             assert!((c.x + 81.0).abs() < 1e-6 && (c.y - 42.0).abs() < 1e-3, "{c:?}");
         }
     }
+}
+
+/// A point in Web Mercator that converts, one that doesn't (longitude 8983°), and a polygon.
+const MERC_OK: &str = r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1000000,6000000]}}"#;
+const MERC_BAD: &str = r#"{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1e9,0]}}"#;
+const MERC_POLY: &str = r#"{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[1000000,6000000],[1100000,6000000],[1100000,6100000],[1000000,6000000]]]}}"#;
+
+fn merc_collection(features: &[&str]) -> String {
+    format!(r#"{{"type":"FeatureCollection","crs":{},"features":[{}]}}"#, named("EPSG:3857"), features.join(","))
+}
+
+#[test]
+fn geojson_dropped_features_do_not_set_the_geometry_type() {
+    // Two points that can't be placed and one polygon that can: a polygon layer, as read whole.
+    let (ds, _, _) = geojson_paths("kinds.geojson", &merc_collection(&[MERC_BAD, MERC_POLY, MERC_BAD]));
+    assert_eq!(ds.geometry_type, GeometryType::Polygon);
+    assert_eq!(ds.features.len(), 1);
+    // Nothing that can be placed: no geometry type at all, both ways.
+    let (ds, messages, _) = geojson_paths("none.geojson", &merc_collection(&[MERC_BAD, MERC_BAD]));
+    assert_eq!(ds.geometry_type, GeometryType::None);
+    assert!(ds.features.is_empty() && ds.crs_incomplete);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+}
+
+#[test]
+fn geojson_sampling_skips_dropped_features() {
+    // Unplaceable features at every other place must not use up the sample: a read asking for
+    // two of the three placeable ones gets two, and says it matched three.
+    let text = merc_collection(&[MERC_BAD, MERC_OK, MERC_BAD, MERC_OK, MERC_BAD, MERC_OK]);
+    let p = dir().join("geojson-crs").join("alternating.geojson");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, &text).unwrap();
+    for in_memory in [crate::io::MAX_BYTES, 0] {
+        let src = geojson::GeoJsonSource::open_with(&p, "x", in_memory).unwrap();
+        assert_eq!(src.info().count, Some(3));
+        let all = src.read(&Request { extent: None, limit: 100 }).unwrap();
+        assert_eq!((all.features.len(), all.matched, all.skipped, all.complete), (3, 3, 0, true));
+        let some = src.read(&Request { extent: None, limit: 2 }).unwrap();
+        assert_eq!((some.features.len(), some.matched, some.skipped, some.complete), (2, 3, 0, false));
+        assert!(some.features.iter().all(|f| f.geometry.is_some()));
+        let ids: Vec<u64> = all.features.iter().map(|f| f.id).collect();
+        assert_eq!(ids, [2, 4, 6]);
+    }
+}
+
+#[test]
+fn geojson_unreadable_feature_alone_does_not_make_the_layer_incomplete() {
+    // A declared system, one feature with geometry that can't be read, and all the others
+    // placed: nothing was lost to the system, so Define Projection stays available, both ways.
+    let bad = r#"{"type":"Feature","properties":{},"geometry":{"type":"Nope"}}"#;
+    let (ds, messages, _) = geojson_paths("unreadable.geojson", &merc_collection(&[MERC_OK, bad]));
+    assert_eq!(ds.features.len(), 1);
+    assert!(!ds.crs_incomplete);
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(messages[0].contains("unreadable geometry"), "{}", messages[0]);
 }
 
 #[test]

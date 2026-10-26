@@ -212,6 +212,11 @@ pub trait FeatureSource: Send + Sync {
         Err(DataError::Format("this provider does not support chunk traversal".into()))
     }
     fn info(&self) -> &SourceInfo;
+    /// Whether features were left out of every read because the coordinate system the source
+    /// declares can't place them, so that defining its projection again can't bring them back.
+    fn lost_to_crs(&self) -> bool {
+        false
+    }
     /// Reads the features a request asks for. A source read by its web address fails with
     /// [`remote::NEED`] until the bytes the read needs are fetched: run it with
     /// [`remote::drive`] (see [`FeatureSource::remote`]).
@@ -451,6 +456,10 @@ impl FeatureSource for Fetching {
         self.0.info()
     }
 
+    fn lost_to_crs(&self) -> bool {
+        self.0.lost_to_crs()
+    }
+
     fn read(&self, req: &Request) -> Result<Batch> {
         read_blocking(&self.0, req)
     }
@@ -473,7 +482,7 @@ pub fn materialize(src: &dyn FeatureSource) -> Result<(Dataset, ReadReport)> {
     ds.crs = info.coordinate_system();
     // A streamed Shapefile skips unconvertible shapes rather than retaining empty geometry.
     // Once materialized, it must still direct CRS repairs back to the original file.
-    ds.crs_incomplete = (info.format == "Shapefile" || (info.format == "GeoJSON" && ds.crs.is_some())) && batch.skipped > 0;
+    ds.crs_incomplete = (info.format == "Shapefile" && batch.skipped > 0) || src.lost_to_crs();
     ds.features = batch.features.into();
     let mut report = ReadReport { skipped: batch.skipped, messages: info.notes.iter().map(|n| format!("{}: {n}", info.name)).collect() };
     if !batch.complete {
