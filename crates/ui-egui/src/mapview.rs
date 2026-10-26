@@ -1334,7 +1334,7 @@ fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>
         let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
         return (ring.into_iter().map(|(x, y)| vec2(x, y)).collect(), c32(h));
     };
-    let reach = rustgis_engine::render::halo_reach(width, l.size) * 1.33;
+    let reach = rustgis_engine::render::halo_reach(width) * 1.33;
     // No width, or one that isn't a number: no halo.
     if reach.is_nan() || reach <= 0.0 {
         return (Vec::new(), c32(h));
@@ -3486,7 +3486,7 @@ mod halo_tests {
         for w in [0.5, 1.42, 3.0, 10.0, 1e9] {
             let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
             let far = offsets.iter().map(|o| o.length()).fold(0.0, f32::max);
-            let reach = rustgis_engine::render::halo_reach(w, 10.0) * 1.33;
+            let reach = rustgis_engine::render::halo_reach(w) * 1.33;
             assert!((far - reach).abs() < 1e-3 && offsets.len() <= MAX_HALO_COATS, "{w}: {far} of {reach}, {}", offsets.len());
         }
         assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");

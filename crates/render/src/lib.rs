@@ -4182,7 +4182,7 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         // A halo drawn at a width of its own reaches past the letters (points × 1.33, as the text's
         // size and the drawing have it): another label's text must not fall under it. A width
         // kept with the halo turned off reserves nothing.
-        let halo = l.halo.and(l.halo_width).map_or(0.0, |w| text::halo_reach(w, l.size) * 1.33);
+        let halo = l.halo.filter(|h| h.a() > 0).and(l.halo_width).map_or(0.0, |w| text::halo_reach(w) * 1.33);
         let p = l.collide.text_padding.clamp(0.0, 100.0) + halo;
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
@@ -4386,9 +4386,12 @@ mod tests {
         assert!((a[1] - b[1] - reach).abs() < 1e-4 && (b[3] - a[3] - reach).abs() < 1e-4, "{a:?} {b:?}");
         haloed.halo_width = None;
         assert_eq!(label_boxes(&haloed).0[0], a);
-        // A width kept with the halo turned off: nothing drawn, nothing reserved.
+        // A width kept with the halo turned off, or a fully see-through halo: nothing drawn,
+        // nothing reserved.
         let off = PlacedLabel { halo: None, halo_width: Some(5.0), ..plain.clone() };
         assert_eq!(label_boxes(&off).0[0], a);
+        let clear = PlacedLabel { halo: Some(Rgba::new(255, 255, 255, 0)), halo_width: Some(5.0), ..plain.clone() };
+        assert_eq!(label_boxes(&clear).0[0], a);
         // Turned and curved labels' squares grow by it too.
         haloed.halo_width = Some(5.0);
         let turned = |l: &PlacedLabel| PlacedLabel { angle: Some(0.5), ..l.clone() };
@@ -6625,8 +6628,13 @@ mod tests {
         // One coat of the see-through red over the grey: nowhere redder than one coat makes.
         let one_coat = (255.0 * 0.5 + 128.0 * 0.5_f32).round() as u8 + 2;
         assert!(wide.pixels().iter().all(|p| p.red() <= one_coat), "a pixel coated twice");
-        // At most 10 pt, or as wide as the text: one grown with its label at a reference scale.
-        assert_eq!((text::halo_reach(15.0, 8.0), text::halo_reach(15.0, 30.0), text::halo_reach(f32::NAN, 8.0)), (10.0, 15.0, 0.0));
+        // A width grown with its label at a reference scale isn't cut back, whatever the text's
+        // size (a 10 pt halo on 9 pt text at twice the size: 20 pt); past the most a reference
+        // scale grows a 10 pt width, and for no number, it is held.
+        assert_eq!(
+            (text::halo_reach(20.0), text::halo_reach(1e9), text::halo_reach(f32::NAN), text::halo_reach(-3.0)),
+            (20.0, 320.0, 0.0, 0.0)
+        );
         // No width, no halo: not even round the letters' edges.
         assert_eq!(drawn(&label(red, Some(0.0))).data(), drawn(&PlacedLabel { halo: None, ..label(red, None) }).data());
         // A spaced label is drawn with its letters farther apart.

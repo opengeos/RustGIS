@@ -583,7 +583,8 @@ enum Ink {
 fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32, ink: Ink) {
     let (w, h) = (label_width(l), block_height(&l.text, l.size).max(line_pitch(l.size)));
     // Room for the halo, and for the glyphs reaching past the line.
-    let pad = 4.0 + l.size * 0.5 + l.halo_width.map_or(0.0, |w| halo_reach(w, l.size) * 1.33);
+    // (The halo is drawn at most MAX_HALO_PX wide, so no more room is kept for it.)
+    let pad = 4.0 + l.size * 0.5 + l.halo_width.map_or(0.0, |w| (halo_reach(w) * 1.33).min(MAX_HALO_PX / ppp.max(f32::EPSILON)));
     let (pw, ph) = (((w + 2.0 * pad) * ppp).ceil(), ((h + 2.0 * pad) * ppp).ceil());
     if !(pw.is_finite() && ph.is_finite()) || pw > 4096.0 || ph > 4096.0 {
         return;
@@ -644,7 +645,7 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
             Some(width) => {
                 // At most MAX_HALO_PX: a halo grown far past any map's needs (a reference scale
                 // at a high resolution) can't take the memory and time of a huge one.
-                let r = (halo_reach(width, l.size) * 1.33 * ppp).min(MAX_HALO_PX);
+                let r = (halo_reach(width) * 1.33 * ppp).min(MAX_HALO_PX);
                 // Its reach, and room for a slant's overhang (the lines' rows already hold the
                 // letters' height).
                 let (pad, x0, x1) = (
@@ -696,13 +697,16 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
     }
 }
 
-/// The widest halo drawn (points), whatever a placed label asks, unless its text is larger.
+/// The widest halo a label class sets (points); a reference scale grows it up to
+/// [`rustgis_map::SIZE_FACTORS`] times.
 const MAX_HALO: f32 = *rustgis_map::symbology::HALO_WIDTH.end() as f32;
 
-/// How far a label's halo of `width` reaches (points): at most [`MAX_HALO`] or the text's size
-/// (`size`), so one grown with its label at a reference scale isn't cut back.
-pub fn halo_reach(width: f32, size: f32) -> f32 {
-    if width.is_finite() { width.clamp(0.0, MAX_HALO.max(size.min(1000.0))) } else { 0.0 }
+/// How far a label's halo of `width` reaches (points): at most [`MAX_HALO`] grown by the most a
+/// reference scale grows a label ([`rustgis_map::SIZE_FACTORS`]), so one grown with its label isn't
+/// cut back (its class's own width is already within [`MAX_HALO`]); none for a width of no number.
+pub fn halo_reach(width: f32) -> f32 {
+    let most = MAX_HALO * rustgis_map::SIZE_FACTORS.1 as f32;
+    if width.is_finite() { width.clamp(0.0, most) } else { 0.0 }
 }
 
 /// The widest halo drawn on a picture (pixels; about 64 points at 300 dpi): with the mask held to
