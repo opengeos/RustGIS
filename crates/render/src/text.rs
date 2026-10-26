@@ -31,7 +31,7 @@ fn font(bold: bool) -> Option<&'static FontRef<'static>> {
 
 /// The family and style a line is drawn in: a layout text's serif (#517), with its bold and
 /// italic, or the label font's.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Face {
     pub bold: bool,
     pub italic: bool,
@@ -394,13 +394,33 @@ fn spaced_line_width(line: &str, size: f32, face: Face, spacing: f32, ppp: f32) 
     if spacing == 0.0 {
         return advance;
     }
-    let letters = match face_font(face) {
-        Some((f, _)) => shape(line, size * 1.33 * ppp, f, sans_beside(f, face)).0.len(),
-        None => line.chars().count(),
-    };
+    let letters = letters_of(line, face);
     // Letters drawn tighter than their own width (the most negative spacing) don't make it less
     // than nothing.
     (advance + spacing * 1.33 * ppp * letters.saturating_sub(1) as f32).max(0.0)
+}
+
+/// How many glyphs a line is drawn with in `face` (letter spacing goes between them): shaped once
+/// for each line and face, as a size doesn't change it, and kept while the lines kept are few.
+fn letters_of(line: &str, face: Face) -> usize {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static KEPT: OnceLock<Mutex<HashMap<(String, Face), usize>>> = OnceLock::new();
+    let kept = KEPT.get_or_init(Mutex::default);
+    let key = (line.to_string(), face);
+    if let Some(n) = kept.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        return *n;
+    }
+    let n = match face_font(face) {
+        Some((f, _)) => shape(line, 12.0, f, sans_beside(f, face)).0.len(),
+        None => line.chars().count(),
+    };
+    let mut kept = kept.lock().unwrap_or_else(|e| e.into_inner());
+    if kept.len() >= 4096 {
+        kept.clear();
+    }
+    kept.insert(key, n);
+    n
 }
 
 /// A label's width in points: its widest line, as [`draw`] lays its lines out (#577), `spacing`
@@ -923,6 +943,19 @@ mod spread_tests {
             }
         }
         pm
+    }
+
+    /// A spaced line's letters are counted once for each line and face, whatever its size or
+    /// pixel density, and its width is as when they were counted for each query.
+    #[test]
+    fn spaced_widths_count_the_letters_once() {
+        let face = Face::default();
+        let n = letters_of("Rhein", face);
+        assert_eq!((n, letters_of("Rhein", face)), (n, n));
+        assert!(n >= 5, "{n}");
+        let (plain, spaced) = (spaced_line_width("Rhein", 12.0, face, 0.0, 2.0), spaced_line_width("Rhein", 12.0, face, 1.0, 2.0));
+        assert!((spaced - plain - 1.33 * 2.0 * (n - 1) as f32).abs() < 1e-3, "{plain} {spaced}");
+        assert_eq!(spaced_line_width("Rhein", 30.0, face, 1.0, 2.0) - spaced_line_width("Rhein", 30.0, face, 0.0, 2.0), spaced - plain);
     }
 
     /// The distance transform gives what reading every pixel's distance to every letter pixel

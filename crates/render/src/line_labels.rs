@@ -154,7 +154,8 @@ pub(super) fn parallel(line: &[(f32, f32)], len: f32, overrun: f32) -> Option<(f
     a_to_b.is_finite().then_some(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, a_to_b))
 }
 
-/// Characters `advances` wide (points), `gap` points apart (letter spacing), in turn along `line`
+/// Characters `advances` wide, `gap` apart (letter spacing; both in the label's units, points ×
+/// 1.33, as its text's size), in turn along `line`
 /// at its middle: the label's centre, and each character's centre relative to it and angle
 /// (radians, clockwise, upright). `None` when the line (with `overrun` past each end) is shorter than the text, or turns more than
 /// [`MAX_TURN`] from one character to the next.

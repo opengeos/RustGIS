@@ -1344,7 +1344,7 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
                 .with_override_text_color(color)
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
-        if let Some(h) = l.halo.filter(|_| halo) {
+        if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
             let (offsets, hc) = halo_coats(l, h);
             for offset in offsets {
                 p.add(shape(offset, hc));
@@ -1361,7 +1361,7 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
         let cyan = c32(rustgis_engine::render::SELECTION);
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
-    if let Some(h) = l.halo.filter(|_| halo) {
+    if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
         let (offsets, hc) = halo_coats(l, h);
         for offset in offsets {
             p.galley_with_override_text_color(pos + offset, galley.clone(), hc);

@@ -346,7 +346,10 @@ pub fn commands() -> Vec<C> {
             let halo_width = match p.get("haloWidth") {
                 None => None,
                 Some(Value::Null) => Some(None),
-                Some(_) => Some(Some(f(p, "haloWidth").ok_or("haloWidth must be a number of points, or null")?.clamp(*hw.start(), *hw.end()) as f32)),
+                Some(_) => {
+                    let w = f(p, "haloWidth").ok_or("haloWidth must be a number of points, or null")?;
+                    Some(Some(w.clamp(*hw.start(), *hw.end()) as f32))
+                }
             };
             let spacing = match p.get("spacing") {
                 None => None,
