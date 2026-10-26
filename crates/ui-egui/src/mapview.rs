@@ -2242,6 +2242,10 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                     Ok(v) if !v.is_null() => {
                         if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
                             let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
+                        } else if !is_found(&v) {
+                            // Only WMS layers being asked: the click found nothing yet, so it clears
+                            // the selection as an empty click does.
+                            let _ = app.session.run("select.clear", &Value::Null);
                         }
                         Some(Popup::new(v, c, app.session.project.active_map))
                     }
@@ -2838,11 +2842,13 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut next = Vec::new();
     for (layer, capabilities, r) in landed {
         let r = r.and_then(|bytes| {
-            let text = String::from_utf8_lossy(&bytes).into_owned();
             if capabilities {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
                 let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
                 app.session.run("identify.featureInfo", &p)
             } else {
+                // Read as the command reads a fetched answer (Latin-1 XML, an image refused).
+                let text = rustgis_engine::data::ogc::answer_text(&bytes)?.into_owned();
                 app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))
             }
         });

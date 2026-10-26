@@ -3,6 +3,8 @@
 //! GeoJSON, GML (a WFS-style feature collection or MapServer's), Esri's XML, plain text or
 //! HTML — read as features. Answers are hostile input: they are capped like capabilities.
 
+use std::borrow::Cow;
+
 use roxmltree::Node;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -110,8 +112,10 @@ pub(super) fn request_of(root: &Node, url: &str, version: &str, map_format: &str
         .find(|n| n.is_element() && local(n) == "Get")
         .and_then(|g| child(&g, "OnlineResource"))
         .and_then(|o| href(&o))
-        .filter(|h| is_web(h))
+        .and_then(|h| super::resolve(url, &h))
         .unwrap_or_else(|| super::endpoint(url));
+    // The request's own parameters replace any the advertised address carries.
+    let get = without_wms_keys(&get);
     Some(FeatureInfo { url: get, version: version.to_string(), layer: String::new(), map_format: map_format.to_string(), formats })
 }
 
@@ -135,6 +139,32 @@ const GET_MAP_KEYS: [&str; 16] = [
     "elevation",
 ];
 
+/// GetFeatureInfo's own parameters, beyond GetMap's.
+const INFO_KEYS: [&str; 7] = ["query_layers", "info_format", "feature_count", "i", "j", "x", "y"];
+
+/// An address without the WMS request parameters it carries (GetMap's and GetFeatureInfo's),
+/// keeping the others (MapServer's `map=`, a token); as it is when it carries none.
+fn without_wms_keys(url: &str) -> String {
+    let pairs: Vec<&str> = url
+        .split('#')
+        .next()
+        .and_then(|u| u.split_once('?'))
+        .map(|(_, q)| q)
+        .unwrap_or("")
+        .split('&')
+        .filter(|kv| !kv.is_empty())
+        .collect();
+    let is_wms_key = |kv: &&str| {
+        let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).to_ascii_lowercase();
+        GET_MAP_KEYS.contains(&k.as_str()) || INFO_KEYS.contains(&k.as_str())
+    };
+    if !pairs.iter().any(is_wms_key) {
+        return url.to_string();
+    }
+    let kept: Vec<&str> = pairs.into_iter().filter(|kv| !is_wms_key(kv)).collect();
+    if kept.is_empty() { base(url).to_string() } else { format!("{}?{}", base(url), kept.join("&")) }
+}
+
 /// A WMS tile template's (a GetMap request's) service and layer: its GetCapabilities address and
 /// the layer's name. How a layer whose GetFeatureInfo request isn't known (one from a project)
 /// finds it. `None` for other templates.
@@ -146,19 +176,7 @@ pub fn wms_layer_of(template: &str) -> Option<(String, String)> {
     let decode = |v: &str| url::form_urlencoded::parse(format!("v={v}").as_bytes()).next().map(|(_, v)| v.into_owned());
     let layer = query_value(template, "layers").and_then(decode).filter(|l| !l.is_empty())?;
     let version = query_value(template, "version").and_then(decode).filter(|v| v.starts_with("1.1") || v.starts_with("1.3"));
-    let kept: Vec<&str> = template
-        .split('#')
-        .next()
-        .and_then(|u| u.split_once('?'))
-        .map(|(_, q)| q)
-        .unwrap_or("")
-        .split('&')
-        .filter(|kv| {
-            let k = kv.split_once('=').map(|(k, _)| k).unwrap_or(kv).to_ascii_lowercase();
-            !kv.is_empty() && !GET_MAP_KEYS.contains(&k.as_str())
-        })
-        .collect();
-    let service = if kept.is_empty() { base(template).to_string() } else { format!("{}?{}", base(template), kept.join("&")) };
+    let service = without_wms_keys(template);
     let mut q = String::from("SERVICE=WMS&REQUEST=GetCapabilities");
     if let Some(v) = version {
         q.push_str(&format!("&VERSION={}", super::encode(&v)));
@@ -174,10 +192,20 @@ pub struct InfoFeature {
     pub attributes: Vec<(String, String)>,
 }
 
+/// A GetFeatureInfo answer's text: UTF-8, or an XML or HTML answer in Latin-1 (older servers
+/// declare ISO-8859-1) read as its characters; an error for an answer that isn't text.
+pub fn answer_text(body: &[u8]) -> Result<Cow<'_, str>, String> {
+    match std::str::from_utf8(body) {
+        Ok(t) => Ok(Cow::Borrowed(t)),
+        Err(_) if body.trim_ascii_start().first() == Some(&b'<') => Ok(Cow::Owned(body.iter().map(|&b| char::from(b)).collect())),
+        Err(_) => Err("the service's answer isn't text (perhaps an image)".to_string()),
+    }
+}
+
 /// Reads a GetFeatureInfo answer, whatever its format (found from the answer itself): its
 /// features, none when nothing is at the point, or the service's exception as the error.
 pub fn read_feature_info(body: &[u8]) -> Result<Vec<InfoFeature>, String> {
-    let text = std::str::from_utf8(body).map_err(|_| "the service's answer isn't text (perhaps an image)".to_string())?;
+    let text = answer_text(body)?;
     let text = text.trim_start_matches('\u{feff}').trim();
     if text.is_empty() {
         return Ok(Vec::new());
@@ -315,6 +343,9 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
                 }
             }
             for member in members {
+                if out.len() >= MAX_FEATURES {
+                    break;
+                }
                 for f in member.children().filter(|c| c.is_element()) {
                     out.push(InfoFeature { layer: Some(local(&f).to_string()), attributes: gml_attributes(&f) });
                 }
@@ -449,6 +480,27 @@ mod tests {
     }
 
     #[test]
+    fn the_advertised_address_is_resolved_and_its_request_keys_replaced() {
+        // A relative address is the capabilities' own server's, not the capabilities endpoint.
+        let relative = CAPS_13.replace("https://info.example.org/wms?", "/feature-info?map=x");
+        let fi = info_of(&relative, "roads");
+        assert_eq!(fi.url, "https://maps.example.org/feature-info?map=x");
+        // WMS keys the address carries give way to the request's own; others (map, a token) stay.
+        let keyed = CAPS_13.replace(
+            "https://info.example.org/wms?",
+            "https://info.example.org/wms?map=x&amp;REQUEST=GetMap&amp;version=1.1.1&amp;Layers=all&amp;INFO_FORMAT=text/html&amp;i=3&amp;token=t",
+        );
+        let fi = info_of(&keyed, "roads");
+        assert_eq!(fi.url, "https://info.example.org/wms?map=x&token=t");
+        let r = fi.request(0.0, 0.0, 1.0).unwrap();
+        assert_eq!(r.matches("REQUEST=").count(), 1, "{r}");
+        assert!(r.starts_with("https://info.example.org/wms?map=x&token=t&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetFeatureInfo&"), "{r}");
+        // An address that isn't the web's (a script, another scheme) falls back to the endpoint.
+        let script = CAPS_13.replace("https://info.example.org/wms?", "javascript:alert(1)");
+        assert_eq!(info_of(&script, "roads").url, "https://maps.example.org/wms");
+    }
+
+    #[test]
     fn without_a_get_feature_info_request_layers_are_not_queryable() {
         // Each layer knows it isn't asked, so Identify doesn't fetch the capabilities again.
         let caps = CAPS_13.replace("GetFeatureInfo", "GetLegendGraphic");
@@ -499,6 +551,12 @@ mod tests {
         let f = read_feature_info(wfs2).unwrap();
         assert_eq!(f.len(), 1, "{f:?}");
         assert_eq!(f[0].layer.as_deref(), Some("clubs"));
+        // Members past the most features read aren't turned into features.
+        let many = format!(
+            r#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:t="urn:t">{}</wfs:FeatureCollection>"#,
+            "<wfs:member><t:a><t:n>1</t:n></t:a></wfs:member>".repeat(MAX_FEATURES + 50)
+        );
+        assert_eq!(read_feature_info(many.as_bytes()).unwrap().len(), MAX_FEATURES);
         let ms = br#"<msGMLOutput xmlns:gml="http://www.opengis.net/gml"><parks_layer><gml:name>parks</gml:name>
             <parks_feature><gml:boundedBy/><NAME>Central</NAME></parks_feature></parks_layer></msGMLOutput>"#;
         let f = read_feature_info(ms).unwrap();
@@ -530,6 +588,15 @@ mod tests {
         assert_eq!(read_feature_info(mapserver.as_bytes()).unwrap()[0].attributes, vec![("NAME".into(), "Central".into())]);
         let html = "<html><head><style>p{}</style><script>x()</script></head><body><p>Lake &amp; shore</p></body></html>";
         assert_eq!(html_text("a &amp;lt; b").trim(), "a &lt; b", "an escaped entity is read once");
+        // Latin-1 XML and HTML (older servers) read as their characters; other bytes aren't text.
+        let latin1 =
+            b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><FeatureInfoResponse><FIELDS NAME=\"Z\xfcrich\"/></FeatureInfoResponse>";
+        assert_eq!(read_feature_info(latin1).unwrap()[0].attributes, vec![("NAME".into(), "Z\u{fc}rich".into())]);
+        assert_eq!(
+            read_feature_info(b"<html><body><p>Gen\xe8ve</p></body></html>").unwrap()[0].attributes,
+            vec![("text".into(), "Gen\u{e8}ve".into())]
+        );
+        assert!(read_feature_info(b"\x89PNG\r\n\x1a\n\xff").unwrap_err().contains("isn't text"));
         assert_eq!(read_feature_info(html.as_bytes()).unwrap()[0].attributes, vec![("text".into(), "Lake & shore".into())]);
         // Any case of script and style is left out; many short scripts read in linear time.
         let shouting = "<HTML><SCRIPT>x()</Script><Style>p{}</STYLE><B>Peak</B></HTML>";

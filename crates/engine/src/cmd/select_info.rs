@@ -69,7 +69,10 @@ fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, 
             .request(at.x, at.y, m_per_px)
             .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
             .map(|url| json!({"tileLayer": t.name, "url": url})),
-        None => ogc::wms_layer_of(&t.url).map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
+        // The capabilities address comes from the layer's template (a project's, untrusted too).
+        None => ogc::wms_layer_of(&t.url)
+            .filter(|(caps, _)| crate::render::rustgis_tiles::address::check(caps, Some(&t.url)).is_ok())
+            .map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
     }
 }
 
