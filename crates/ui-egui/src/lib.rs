@@ -2460,8 +2460,12 @@ impl RustGisApp {
                     let lower = path.to_ascii_lowercase();
                     let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
                     let r = self.run_by_user(cmd, json!({"path": path}));
-                    self.ui.backstage = false;
-                    self.map.invalidate();
+                    // Asking to save first: the Project tab stays until the answer, so Cancel
+                    // goes back to it.
+                    if !saveprompt::waiting(self) {
+                        self.ui.backstage = false;
+                        self.map.invalidate();
+                    }
                     return r;
                 }
             }

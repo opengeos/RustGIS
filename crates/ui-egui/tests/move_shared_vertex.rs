@@ -99,7 +99,7 @@ fn ribbon_toggle_routes_polygon_drag_and_undoes_all_neighbours() {
     h.run();
     assert!(h.state().map.move_shared_vertices);
     assert_eq!(h.state().session.undo_depth(), 0);
-    assert!(!h.state().session.dirty);
+    assert!(!h.state().session.dirty());
     let to = drag(&mut h, c(0., 0.), c(45., 30.));
     let at = h.state().map.vertex_drag.unwrap().at;
     assert_eq!(geometries(&h), before);

@@ -47,6 +47,12 @@ pub(crate) fn ask(app: &mut RustGisApp, what: Discard) {
     }
 }
 
+/// Whether the dialog is waiting for an answer: what asked it waits too (the Project tab stays
+/// open, so Cancel goes back to it; it closes once the project is replaced).
+pub(crate) fn waiting(app: &RustGisApp) -> bool {
+    app.save_prompt.asking.is_some()
+}
+
 /// Each frame, before anything draws: a request to close the window (its close button, the
 /// system's Quit, or `ui.quit`) waits while the project has unsaved changes, and the dialog asks.
 pub(crate) fn close_requested(app: &mut RustGisApp, ctx: &egui::Context) {
@@ -95,7 +101,10 @@ pub(crate) fn show(app: &mut RustGisApp, ctx: &egui::Context) {
     ctx.request_repaint();
     match answer {
         // Save As when the project has no file. A save that fails says why (its notice), and one
-        // cancelled leaves the changes unsaved: either way nothing is discarded.
+        // cancelled leaves the changes unsaved: either way nothing is discarded. This reads the
+        // result at once: on the desktop, the only shell that asks (`asks`), `ui.save` writes the
+        // file, and Save As's picker returns, before it does. A shell that saved later (the
+        // browser's download dialog) would have to go on from there instead.
         Answer::Save => {
             if app.run("ui.save", Value::Null).is_ok() && !app.session.dirty() {
                 proceed(app, what);
@@ -344,6 +353,11 @@ mod tests {
         h.get_by_role_and_label(Role::Button, "World Atlas").click();
         frames(&mut h, 3);
         assert!(asking(&h) && h.state().session.project.name == "Untitled");
+        // Cancel goes back to the Project tab, not the map.
+        click(&mut h, "Cancel");
+        assert!(h.state().ui.backstage && h.state().session.project.name == "Untitled");
+        h.get_by_role_and_label(Role::Button, "World Atlas").click();
+        frames(&mut h, 3);
         click(&mut h, "Don't Save");
         assert!(h.state().session.project.name == "World Atlas" && !h.state().ui.backstage);
     }

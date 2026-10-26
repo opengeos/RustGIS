@@ -27,7 +27,9 @@ World Atlas sample, a template or a project dropped on the window would replace 
 
 Commands don't ask: `project.new`, `project.open` and the rest replace the project as they always
 have when a script, a task, the AI Assistant, the command line or an attached agent runs them.
-The browser app doesn't ask yet; it warns before you leave a page with unsaved changes.
+The browser app doesn't ask yet; it warns before you leave a page with unsaved changes. On macOS,
+**Quit RustGIS** (⌘Q) and the Dock's **Quit** don't ask yet either: close the window instead, or
+save first.
 
 Saved layer addresses omit passwords, access keys, tokens and signatures. The open session
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
