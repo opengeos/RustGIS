@@ -204,7 +204,11 @@ mod running {
                 true
             }
         };
-        let marked = file.set_len(0).and_then(|_| file.rewind()).and_then(|_| file.write_all(b"running")).and_then(|_| file.flush());
+        // Written over what is there, then cut to its length: a write that fails leaves the old
+        // content, so a marker that was set never reads as a clean exit.
+        const RUNNING: &[u8] = b"running";
+        let marked =
+            file.rewind().and_then(|_| file.write_all(RUNNING)).and_then(|_| file.set_len(RUNNING.len() as u64)).and_then(|_| file.flush());
         if let Err(e) = marked {
             log::warn!("could not mark this run: {e}");
         }

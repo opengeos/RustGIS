@@ -573,7 +573,10 @@ mod folder {
         let mut next = rx.recv().ok();
         let mut skipped: Option<(Box<Project>, Recovery)> = None;
         while let Some(job) = next.take() {
+            // One copy is held back at a time: with one held, this write is done (falling back to
+            // the held one) before another is looked at, so a viable older copy is never dropped.
             if let Job::Write(..) = job
+                && skipped.is_none()
                 && let Ok(later) = rx.try_recv()
             {
                 match later {
@@ -721,10 +724,10 @@ mod folder {
 
         use super::{Job, LIVE, Recovery, work_with};
 
-        /// Writes copies as the store does, except a project named "newer", which is refused
+        /// Writes copies as the store does, except projects named "newer…", which are refused
         /// as too large.
         fn newer_fails(dir: &std::path::Path, project: Project, about: &Recovery) -> Result<(), String> {
-            if project.name == "newer" {
+            if project.name.starts_with("newer") {
                 return Err("the project is too large to keep a recovery copy".into());
             }
             super::write(dir, project, about)
@@ -796,6 +799,10 @@ mod folder {
             assert!(error.unwrap().contains("too large"), "the newer one's failure is told");
             let (held, _) = run(&dir, vec![copy("older"), copy("newer"), Job::Clear]);
             assert!(held.is_none(), "removed after, as asked");
+            // Three queued (#896 review): the two newer ones fail, the oldest is still written.
+            let (held, error) = run(&dir, vec![copy("older"), copy("newer"), copy("newer still")]);
+            assert!(held.unwrap().contains("\"older\""), "the viable copy is kept");
+            assert!(error.is_some());
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
