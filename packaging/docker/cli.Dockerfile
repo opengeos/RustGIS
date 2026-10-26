@@ -35,7 +35,8 @@ FROM debian:13.7-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be4
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 1000 rustgis
+    && useradd --create-home --uid 1000 rustgis \
+    && install -d -o rustgis -g rustgis /data
 
 LABEL org.opencontainers.image.title="RustGIS command line" \
       org.opencontainers.image.description="The RustGIS command line: run commands and geoprocessing, render maps, inspect data" \

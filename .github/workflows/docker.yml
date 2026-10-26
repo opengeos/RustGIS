@@ -1,5 +1,6 @@
 # Builds RustGIS's Docker images and publishes them to the GitHub Container Registry, for
-# linux/amd64 and linux/arm64 (see docs/installation.md › Docker):
+# linux/amd64 and linux/arm64 (see docs/installation.md › Self-host the web app with Docker, and
+# The command line in Docker):
 #
 #   ghcr.io/opengeos/rustgis       the web app, served by nginx (the Dockerfile at the root)
 #   ghcr.io/opengeos/rustgis-cli   the command line (packaging/docker/cli.Dockerfile)
@@ -36,15 +37,19 @@ on:
       - xtask/**
       - apps/rustgis-web/**
       - apps/rustgis-cli/**
+      - LICENSE
+      - THIRD-PARTY-LICENSES.txt
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One run at a time per ref, so pushes and manual runs on main publish `edge` in order. A publishing
+# run always finishes (a cancelled one could leave the CLI's tags half updated); a newer push only
+# replaces a run that is still waiting. A pull request's newer push cancels its older run.
 concurrency:
-  group: docker-${{ github.event_name }}-${{ github.ref }}
-  # A newer push to main supersedes the images being built; a release always finishes.
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   WEB_IMAGE: ghcr.io/opengeos/rustgis
@@ -199,7 +204,7 @@ jobs:
           set -euo pipefail
           docker run --rm rustgis-cli:test tools > "$RUNNER_TEMP/tools.txt"
           grep -q buffer "$RUNNER_TEMP/tools.txt"
-          docker run --rm rustgis-cli:test logo /tmp/logo.png --size 64
+          docker run --rm rustgis-cli:test logo logo.png --size 64   # into /data, unmounted
           docker run --rm --entrypoint sh rustgis-cli:test -c \
             'rustgis-cli run --sample --cmd "share.exportMap={\"path\":\"/tmp/map.png\"}" && test -s /tmp/map.png \
             && test -s /usr/share/doc/rustgis/THIRD-PARTY-LICENSES.txt'
