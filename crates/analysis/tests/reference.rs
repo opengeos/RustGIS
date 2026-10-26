@@ -18,9 +18,9 @@ use serde_json::Value as Json;
 const AREA_TOLERANCE: f64 = 1e-7;
 /// Lines may differ in length, and sit, this far (Web Mercator metres) from the reference.
 const POSITION_TOLERANCE_M: f64 = 1e-3;
-/// Distances may differ by this fraction, plus a millimetre. The reference measures along great
-/// circles; the join finds the nearest points in an azimuthal equidistant plane (see `join.rs`),
-/// whose straight edges are within this of the great circles, as its own tests require.
+/// Distances may differ by this fraction, plus a millimetre. The reference measures to the WGS 84
+/// geodesic between an edge's vertices; the join finds the nearest points in an azimuthal
+/// equidistant plane (see `join.rs`), whose straight edges are within this of the geodesics.
 const DISTANCE_TOLERANCE: f64 = 1e-4;
 
 /// The reference corpus: the layers, the expected results and `cases.json`.
@@ -88,8 +88,28 @@ fn lines(gs: &[Geometry]) -> MultiLineString<f64> {
     MultiLineString::new(gs.iter().filter_map(to_multiline).flat_map(|m| m.0).collect())
 }
 
+/// The kinds of geometry among `gs`, by name, in order and without repeats.
+fn kinds(gs: &[Geometry]) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = gs
+        .iter()
+        .map(|g| match g {
+            Geometry::Point(_) | Geometry::MultiPoint(_) => "point",
+            Geometry::Line(_) => "line",
+            Geometry::Polygon(_) => "polygon",
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// How one geometry differs from the reference, if it does beyond the tolerances.
 fn compare_geometry(got: &[Geometry], want: &[Geometry]) -> Option<String> {
+    // The comparisons below look only at the reference's kind of geometry, so another kind in the
+    // output would go unseen.
+    if kinds(got) != kinds(want) {
+        return Some(format!("{:?} geometry, the reference {:?}", kinds(got), kinds(want)));
+    }
     if want.iter().any(|g| matches!(g, Geometry::Polygon(_))) {
         let (g, w) = (polygons(got), polygons(want));
         // The area the two don't share, not vertex positions: GEOS keeps vertices partway along a
@@ -140,7 +160,11 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
         }
         if let Some(counts) = expect["counts"].as_object() {
             for (row, _) in ds.features.iter().enumerate() {
-                let k = key.and_then(|key| text(&ds, row, key)).unwrap_or_default();
+                // The same key as `by_key` gives the feature.
+                let k = match key {
+                    Some(key) => text(&ds, row, key).unwrap_or_default(),
+                    None => "all".into(),
+                };
                 let (n, want) = (text(&ds, row, "count"), counts.get(&k).and_then(json_text));
                 if n != want {
                     problems.push(format!("{k}: count {n:?}, the reference {want:?}"));
@@ -150,10 +174,10 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
     } else if let Some(ids) = expect["ids"].as_array() {
         let want: Vec<String> = ids.iter().filter_map(json_text).collect();
         let got: Vec<String> = match result.output {
-            Output::Selection { layer, rows } => {
-                let ds = &layers.0[&layer];
-                rows.iter().filter_map(|r| text(ds, *r, "id")).collect()
-            }
+            Output::Selection { layer, rows } => match layers.0.get(&layer) {
+                Some(ds) => rows.iter().filter_map(|r| text(ds, *r, "id")).collect(),
+                None => return vec![format!("a selection in '{layer}', which isn't a reference layer")],
+            },
             other => match layer_of(other) {
                 Some(ds) => (0..ds.features.len()).filter_map(|r| text(&ds, r, "id")).collect(),
                 None => return vec!["neither a selection nor a layer came out".into()],
@@ -165,6 +189,14 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
     } else if let Some(values) = expect["values"].as_object() {
         let Some(ds) = layer_of(result.output) else { return vec!["no layer came out".into()] };
         let field = expect["field"].as_str().unwrap_or_default();
+        // Every feature once: a missing, extra or repeated one fails even when the counts agree.
+        let mut ids: Vec<String> = (0..ds.features.len()).map(|row| text(&ds, row, "id").unwrap_or_default()).collect();
+        let mut want_ids: Vec<String> = values.keys().cloned().collect();
+        ids.sort();
+        want_ids.sort();
+        if ids != want_ids {
+            problems.push(format!("features {ids:?}, the reference {want_ids:?}"));
+        }
         for row in 0..ds.features.len() {
             let id = text(&ds, row, "id").unwrap_or_default();
             let (got, want) = (text(&ds, row, field), values.get(&id).and_then(json_text));
@@ -202,12 +234,16 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
                 continue;
             }
             for ((j, gd), (_, wd)) in g.iter().zip(&w) {
-                if let (Some(gd), Some(wd)) = (gd, wd)
-                    && (gd - wd).abs() > DISTANCE_TOLERANCE * wd + 1e-3
-                {
-                    problems.push(format!("{t}→{}: {gd:.4} m, the reference {wd:.4} m", j.clone().unwrap_or_default()));
-                } else if gd.is_some() != wd.is_some() {
-                    problems.push(format!("{t}→{}: distance {gd:?}, the reference {wd:?}", j.clone().unwrap_or_default()));
+                let j = j.clone().unwrap_or_default();
+                match (gd, wd) {
+                    (Some(gd), Some(wd)) if (gd - wd).abs() > DISTANCE_TOLERANCE * wd + 1e-3 => {
+                        problems.push(format!("{t}→{j}: {gd:.4} m, the reference {wd:.4} m"));
+                    }
+                    // A distance where the reference has none, or none where it has one.
+                    (Some(_), None) | (None, Some(_)) => {
+                        problems.push(format!("{t}→{j}: distance {gd:?}, the reference {wd:?}"));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -222,7 +258,9 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
 
 #[test]
 fn tools_agree_with_the_reference() {
-    let cases: Json = serde_json::from_str(&std::fs::read_to_string(dir().join("cases.json")).unwrap()).unwrap();
+    let path = dir().join("cases.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let cases: Json = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let layers = Layers(
         ["parcels", "zones", "points", "roads", "stations"]
             .into_iter()
@@ -230,7 +268,7 @@ fn tools_agree_with_the_reference() {
             .collect(),
     );
     let mut report = Vec::new();
-    for case in cases["cases"].as_array().unwrap() {
+    for case in cases["cases"].as_array().expect("cases.json has a \"cases\" list") {
         let problems = check(case, &layers);
         if !problems.is_empty() {
             report.push(format!("{}:\n    {}", case["name"].as_str().unwrap_or("?"), problems.join("\n    ")));

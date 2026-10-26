@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["shapely==2.1.*"]
+# dependencies = ["shapely==2.1.*", "pyproj==3.7.*"]
 # ///
 """Writes the reference layers and the answers RustGIS's tools must give for them.
 
@@ -8,23 +8,26 @@ The answers come from GEOS (through Shapely), the geometry engine of QGIS and Po
 from this directory with `uv run generate.py`; the Rust test `reference.rs` reads what it writes.
 
 Overlays and spatial predicates are worked out in Web Mercator, the plane RustGIS's tools use, so
-the comparison tests the geometry engine rather than the choice of plane. Distances are on a
-sphere of radius 6,371,008.8 m along great circles, as RustGIS measures them, worked out exactly
-from unit vectors (and checked against dense sampling).
+the comparison tests the geometry engine rather than the choice of plane. Distances are on the
+WGS 84 ellipsoid, as RustGIS measures them: GeographicLib (through pyproj) gives the distance
+between two points, and the nearest point of an edge, the geodesic between its vertices, is found
+by searching along it (and checked against dense sampling).
 """
 
 import json
 import math
 from pathlib import Path
 
+import pyproj
 import shapely
 from shapely.geometry import LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon, box, mapping
+from pyproj import Geod
 from shapely.ops import transform, unary_union
 
 HERE = Path(__file__).parent
 MERC_R = 6378137.0
 MAX_LAT = 85.051_128_779_806_59
-EARTH_R = 6_371_008.8
+GEOD = Geod(ellps="WGS84")
 
 
 # --- the layers -------------------------------------------------------------------------------
@@ -108,39 +111,34 @@ def ll(g):
     return transform(to_lonlat, g)
 
 
-def unit(lon, lat):
-    lo, la = math.radians(lon), math.radians(lat)
-    return (math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la))
-
-
-def cross(a, b):
-    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
-
-
-def dot(a, b):
-    return sum(x * y for x, y in zip(a, b))
-
-
-def norm(a):
-    return math.sqrt(dot(a, a))
-
-
-def angle(a, b):
-    return math.atan2(norm(cross(a, b)), dot(a, b))
+def geodesic_m(p, q):
+    """Distance on WGS 84 between two lon/lat points."""
+    return GEOD.inv(p[0], p[1], q[0], q[1], return_back_azimuth=True)[2]
 
 
 def point_arc_m(p, a, b):
-    """Distance on the sphere from point p to the great-circle arc a→b (lon/lat pairs)."""
-    P, A, B = unit(*p), unit(*a), unit(*b)
-    n = cross(A, B)
-    if norm(n) < 1e-15:
-        return EARTH_R * angle(P, A)
-    n = tuple(x / norm(n) for x in n)
-    s = dot(P, n)
-    C = tuple(pi - s * ni for pi, ni in zip(P, n))
-    if norm(C) > 1e-15 and dot(cross(A, C), n) >= 0 and dot(cross(C, B), n) >= 0:
-        return EARTH_R * angle(P, C)
-    return EARTH_R * min(angle(P, A), angle(P, B))
+    """Distance on WGS 84 from point p to the geodesic a→b (lon/lat pairs): its nearest point is
+    bracketed by sampling along the geodesic, then found by golden-section search."""
+    az, _, length = GEOD.inv(a[0], a[1], b[0], b[1], return_back_azimuth=True)
+    if length == 0:
+        return geodesic_m(p, a)
+
+    def at(s):
+        lon, lat, _ = GEOD.fwd(a[0], a[1], az, s)
+        return geodesic_m(p, (lon, lat))
+
+    n = 400
+    ds = [at(length * k / n) for k in range(n + 1)]
+    k = min(range(n + 1), key=ds.__getitem__)
+    lo, hi = length * max(k - 1, 0) / n, length * min(k + 1, n) / n
+    g = (math.sqrt(5) - 1) / 2
+    while hi - lo > 1e-6:
+        x1, x2 = hi - g * (hi - lo), lo + g * (hi - lo)
+        if at(x1) <= at(x2):
+            hi = x2
+        else:
+            lo = x1
+    return min(at((lo + hi) / 2), ds[0], ds[-1])
 
 
 def segments(g):
@@ -160,25 +158,20 @@ def segments(g):
 def point_distance_m(p, g):
     """Ground distance from point p to g: zero when they intersect (in the tools' plane)."""
     if isinstance(g, Point):
-        return EARTH_R * angle(unit(p.x, p.y), unit(g.x, g.y))
+        return geodesic_m((p.x, p.y), (g.x, g.y))
     if m(g).intersects(m(p)):
         return 0.0
     return min(point_arc_m((p.x, p.y), a, b) for a, b in segments(g))
 
 
 def sampled_distance_m(p, g, step_m=2.0):
-    """The same distance by sampling every edge densely: a check on point_distance_m."""
+    """The same distance by sampling every edge's geodesic densely: a check on point_distance_m."""
     best = math.inf
-    P = unit(p.x, p.y)
     for a, b in segments(g):
-        A, B = unit(*a), unit(*b)
-        w = angle(A, B)
-        n = max(1, math.ceil(w * EARTH_R / step_m))
-        for k in range(n + 1):
-            t = k / n
-            s0, s1 = math.sin((1 - t) * w), math.sin(t * w)
-            q = tuple((s0 * x + s1 * y) / math.sin(w) for x, y in zip(A, B)) if w > 0 else A
-            best = min(best, EARTH_R * angle(P, q))
+        pts = GEOD.inv_intermediate(a[0], a[1], b[0], b[1], del_s=step_m, initial_idx=0, terminus_idx=0, return_back_azimuth=True)
+        lons, lats = list(pts.lons), list(pts.lats)
+        _, _, d = GEOD.inv([p.x] * len(lons), [p.y] * len(lats), lons, lats, return_back_azimuth=True)
+        best = min(best, *d)
     return best
 
 
@@ -327,6 +320,8 @@ def main():
         "about": "Answers from GEOS; regenerate with `uv run generate.py` (see its header).",
         "shapely": shapely.__version__,
         "geos": shapely.geos_version_string,
+        "pyproj": pyproj.__version__,
+        "proj": pyproj.proj_version_str,
         "cases": cases,
     }
     (HERE / "cases.json").write_text(json.dumps(meta, indent=1) + "\n")
