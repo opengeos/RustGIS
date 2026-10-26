@@ -225,6 +225,34 @@ fn geoparquet_with_and_without_a_covering() {
 }
 
 #[test]
+fn flatgeobuf_refuses_impossible_index_counts() {
+    let path = dir().join("impossible-index.fgb");
+    write_fgb(&path);
+    let original = std::fs::read(&path).unwrap();
+    let header = flatgeobuf::size_prefixed_root_as_header(&original[8..]).unwrap();
+    let slot = header._tab.vtable().get(flatgeobuf::Header::VT_FEATURES_COUNT) as usize;
+    assert_ne!(slot, 0);
+    let offset = 8 + header._tab.loc() + slot;
+    for count in [1u64 << 63, u64::MAX, (1u64 << 40) + 1] {
+        let mut bytes = original.clone();
+        bytes[offset..offset + 8].copy_from_slice(&count.to_le_bytes());
+        assert!(matches!(open_bytes("impossible.fgb", bytes.clone(), None), Err(DataError::Format(_))));
+        assert!(crate::io::read_layers("impossible.fgb", &bytes).is_err());
+        std::fs::write(&path, &original).unwrap();
+        let opened = open_path(&path, None).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(matches!(open_path(&path, None), Err(DataError::Format(_))));
+        // A path is reopened on every request: validate again if its file changed.
+        for extent in [None, Some(Extent::WORLD_LONLAT)] {
+            assert!(matches!(opened.read(&Request { extent, ..Request::all() }), Err(DataError::Format(_))));
+        }
+        let url = format!("https://test.example/impossible-index-{count}.fgb");
+        remote::testing::serve(&url, bytes);
+        assert!(matches!(open_url_blocking(&url), Err(DataError::Format(_))));
+    }
+}
+
+#[test]
 fn flatgeobuf() {
     let p = dir().join("grid.fgb");
     write_fgb(&p);

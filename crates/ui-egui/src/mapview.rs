@@ -74,6 +74,59 @@ pub struct Popup {
     /// The map it was opened on (the project's `active_map` then): layer and feature ids belong to
     /// a map, and a duplicated map has the same ones.
     pub map: usize,
+    /// The project it was opened on (`Session::opened`): answers still on their way when another
+    /// project opens are dropped.
+    pub opened: u64,
+    /// The WMS layers being asked what is at the point, whose features join the list.
+    pub asks: Vec<Ask>,
+}
+
+/// A WMS layer asked what is at a popup's point (GetFeatureInfo), its answer on the way: the
+/// request's, or first its service's capabilities (a layer from a project doesn't know its request).
+pub struct Ask {
+    layer: String,
+    /// The other layers waiting for the same capabilities: fetched and read once for all.
+    also: Vec<String>,
+    capabilities: bool,
+    /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
+    /// ask next after the service's error.
+    request: Option<String>,
+    slot: crate::Slot<Result<Vec<u8>, String>>,
+}
+
+impl Popup {
+    /// A popup for what identify found at `at`, asking the WMS layers it lists.
+    pub fn new(info: Value, at: Coord, map: usize, opened: u64) -> Popup {
+        let mut asks: Vec<Ask> = Vec::new();
+        // The capabilities each fetch is for: layers of one service share it.
+        let mut fetched: Vec<(String, usize)> = Vec::new();
+        for a in info["featureInfo"].as_array().into_iter().flatten() {
+            let Some(layer) = a["tileLayer"].as_str().map(str::to_string) else { continue };
+            let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
+                (Some(u), _) => (u, false),
+                (None, Some(c)) => (c, true),
+                _ => continue,
+            };
+            if capabilities && let Some(&(_, i)) = fetched.iter().find(|(c, _)| c == url) {
+                if let Some(ask) = asks.get_mut(i) {
+                    ask.also.push(layer);
+                }
+                continue;
+            }
+            if capabilities {
+                fetched.push((url.to_string(), asks.len()));
+            }
+            let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+            let request = (!capabilities).then(|| url.to_string());
+            asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
+        }
+        Popup { info, at, index: 0, map, opened, asks }
+    }
+}
+
+/// Whether a popup's value is a feature or pixel found, not only WMS layers still being asked.
+fn is_found(v: &Value) -> bool {
+    v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
 /// A notice shown as a toast.
@@ -2209,8 +2262,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                     Ok(v) if !v.is_null() => {
                         if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
                             let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
+                        } else if !is_found(&v) {
+                            // Only WMS layers being asked: the click found nothing yet, so it clears
+                            // the selection as an empty click does.
+                            let _ = app.session.run("select.clear", &Value::Null);
                         }
-                        Some(Popup { info: v, at: c, index: 0, map: app.session.project.active_map })
+                        Some(Popup::new(v, c, app.session.project.active_map, app.session.opened))
                     }
                     _ => {
                         let _ = app.session.run("select.clear", &Value::Null);
@@ -2781,7 +2838,102 @@ fn follow_popup(app: &mut RustGisApp) {
     pp.info = info;
 }
 
+/// Adds what the WMS layers asked answer to the popup, asking a layer from a project once its
+/// service's capabilities say how; failures are told. The popup closes when nothing was found.
+fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
+    let (active, opened) = (app.session.project.active_map, app.session.opened);
+    let Some(pp) = &mut app.map.popup else { return };
+    if pp.asks.is_empty() {
+        return;
+    }
+    // Another map in view, or another project: the answers belong to layers no longer shown, and
+    // a layer of the same name there must not take them.
+    if pp.map != active || pp.opened != opened {
+        app.map.popup = None;
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let (lon, lat) = (pp.at.x, pp.at.y);
+    let mut landed = Vec::new();
+    pp.asks.retain_mut(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => {
+            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, a.request.take(), r));
+            false
+        }
+        None => true,
+    });
+    if landed.is_empty() {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut next = Vec::new();
+    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
+    for (layer, also, capabilities, request, r) in landed {
+        // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
+        // first of a service's layers still there takes the capabilities for the rest.
+        let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
+        let Some(layer) = group.next() else { continue };
+        let also: Vec<String> = group.collect();
+        // The fetch's failure, or an answer that isn't text, is told here; the command tells its
+        // own errors (naming the layer).
+        let text = match r.and_then(|bytes| rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)) {
+            Ok(text) => text,
+            Err(e) => {
+                app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true);
+                continue;
+            }
+        };
+        let mut replies = Vec::new();
+        if capabilities {
+            let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
+            replies.push((layer, app.session.run("identify.featureInfo", &p)));
+            // The service's other layers learned their requests from the same capabilities.
+            if replies.iter().all(|(_, r)| r.is_ok()) {
+                for other in also {
+                    let p = json!({"layer": other, "lon": lon, "lat": lat, "request": true});
+                    let r = app.session.run("identify.featureInfo", &p);
+                    replies.push((other, r));
+                }
+            }
+        } else {
+            // With the request and the point: the service's error in one answer format asks again
+            // in the next.
+            let p = json!({"layer": layer, "text": text, "url": request, "lon": lon, "lat": lat});
+            replies.push((layer.clone(), app.session.run("identify.featureInfo", &p)));
+        }
+        for (layer, r) in replies {
+            let Ok(v) = r else { continue };
+            if let Some(url) = v["url"].as_str() {
+                let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+                next.push(Ask { layer, also: Vec::new(), capabilities: false, request: Some(url.to_string()), slot });
+            }
+            found.extend(v["results"].as_array().cloned().unwrap_or_default());
+        }
+    }
+    let Some(pp) = &mut app.map.popup else { return };
+    pp.asks.extend(next);
+    if !found.is_empty() {
+        let mut all: Vec<Value> = match pp.info["results"].as_array() {
+            Some(r) => r.clone(),
+            None if is_found(&pp.info) => vec![pp.info.clone()],
+            None => Vec::new(),
+        };
+        all.extend(found);
+        if let Some(mut info) = all.first().cloned() {
+            if let Value::Object(o) = &mut info {
+                o.remove("featureInfo");
+                o.insert("results".into(), Value::Array(all));
+            }
+            pp.info = info;
+        }
+    }
+    if pp.asks.is_empty() && !is_found(&pp.info) {
+        app.map.popup = None;
+    }
+}
+
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
+    follow_asks(app, ui.ctx());
     follow_popup(app);
     let Some(pp) = &app.map.popup else { return };
     let t = Tokens::get(ui.ctx());
@@ -2796,12 +2948,20 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let mut zoom = false;
     // The feature shown, as its layer id and feature id (a raster pixel has neither).
     let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
-    let layer = info["layer"].as_str().unwrap_or("").to_string();
+    // Only WMS layers being asked so far: their names.
+    let waiting = !is_found(&info);
+    let layer = if waiting {
+        pp.asks.iter().map(|a| a.layer.as_str()).collect::<Vec<_>>().join(", ")
+    } else {
+        info["layer"].as_str().unwrap_or("").to_string()
+    };
     let mut attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     // A picture value (a photo's thumbnail) shows as the picture, not as its text.
     let picture_key = attrs.iter().find(|(_, v)| v.as_str().is_some_and(is_picture)).map(|(k, _)| k.clone());
     let picture = picture_key.and_then(|k| attrs.remove(&k)).and_then(|v| v.as_str().map(|s| picture_texture(app, ui.ctx(), s)));
-    let title = if info["raster"].as_bool() == Some(true) {
+    let title = if waiting {
+        tl!("Asking the map service…").to_string()
+    } else if info["raster"].as_bool() == Some(true) {
         tl!("Pixel").to_string()
     } else {
         {
@@ -2844,40 +3004,40 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                     .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new(&title).font(semibold(14.0)));
-                                ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
-                                    close = true;
+                        // Lay out controls first; the title and layer share only the width left.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
+                                close = true;
+                            }
+                            // A feature (not a raster pixel): zoom to it.
+                            if shown.is_some() {
+                                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                let ink = if resp.hovered() { t.text } else { t.icon };
+                                crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
+                                if resp.on_hover_text(tl!("Zoom To")).clicked() {
+                                    zoom = true;
                                 }
-                                // A feature (not a raster pixel): zoom to it.
-                                if shown.is_some() {
-                                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                                    let ink = if resp.hovered() { t.text } else { t.icon };
-                                    crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
-                                    if resp.on_hover_text(tl!("Zoom To")).clicked() {
-                                        zoom = true;
-                                    }
+                            }
+                            // Several features identified: step through them.
+                            if results > 1 {
+                                if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
+                                    step = Some(index + 1);
                                 }
-                                // Several features identified: step through them.
-                                if results > 1 {
-                                    if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
-                                        step = Some(index + 1);
-                                    }
-                                    let n = (index + 1).to_string();
-                                    let total = results.to_string();
-                                    ui.label(
-                                        egui::RichText::new(crate::i18n::fmt("{n} of {total}", &[("n", &n), ("total", &total)]))
-                                            .size(11.0)
-                                            .color(t.text_dim),
-                                    );
-                                    if ui.add_enabled(index > 0, egui::Button::new("‹").frame(false)).clicked() {
-                                        step = Some(index.saturating_sub(1));
-                                    }
+                                let n = (index + 1).to_string();
+                                let total = results.to_string();
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::fmt("{n} of {total}", &[("n", &n), ("total", &total)]))
+                                        .size(11.0)
+                                        .color(t.text_dim),
+                                );
+                                if ui.add_enabled(index > 0, egui::Button::new("‹").frame(false)).clicked() {
+                                    step = Some(index.saturating_sub(1));
                                 }
+                            }
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&title).font(semibold(14.0))).truncate()).on_hover_text(&title);
+                                ui.add(egui::Label::new(egui::RichText::new(&layer).size(11.0).color(t.text_dim)).truncate())
+                                    .on_hover_text(&layer);
                             });
                         });
                     });

@@ -3642,13 +3642,15 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             legend_list(app, ui, &l, t);
         }
         Renderer::Graduated { field, breaks, ramp, method, min, .. } => {
+            // Re-classing keeps the classes asked for, not the fewer some methods found.
+            let asked = l.renderer.classes_asked();
             field_combo(app, ui, "Field", field, &numeric, "graduated");
             ui.horizontal(|ui| {
                 let input_label = ui.label(tl!("Method"));
                 egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
-                    for m in ClassMethod::ALL {
+                    for m in methods_by_name() {
                         if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
-                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": ramp.name()}));
+                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": asked, "ramp": ramp.name()}));
                         }
                     }
                 }).response.labelled_by(input_label.id);
@@ -3658,7 +3660,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             } else {
                 ui.horizontal(|ui| {
                     let input_label = ui.label(tl!("Classes"));
-                    let mut k = breaks.len();
+                    let mut k = asked;
                     if ui.add(egui::DragValue::new(&mut k).range(1..=12)).labelled_by(input_label.id).changed() {
                         let _ = app.run(
                             "layer.symbology",
@@ -3755,6 +3757,13 @@ fn transparency_drag(app: &mut RustGisApp, ui: &Ui, r: &egui::Response, l: &Laye
             let _ = app.run("layer.transparency", json!({"value": x}));
         },
     );
+}
+
+/// The classification methods in alphabetical order of their names in the interface language.
+fn methods_by_name() -> Vec<ClassMethod> {
+    let mut m = ClassMethod::ALL.to_vec();
+    m.sort_by_cached_key(|m| crate::i18n::t_raw(m.label()).to_lowercase());
+    m
 }
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
@@ -5368,7 +5377,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     .width(180.0)
                     .show_ui(ui, |ui| {
                         // Manual bounds are for Graduated Colors; a raster's are worked out.
-                        for mm in ClassMethod::ALL.into_iter().filter(|m| *m != ClassMethod::Manual) {
+                        for mm in methods_by_name().into_iter().filter(|m| *m != ClassMethod::Manual) {
                             if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
                                 let _ = app.run(
                                     "raster.symbology",

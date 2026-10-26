@@ -2925,6 +2925,53 @@ fn dynamic_text_is_a_menu_of_values_that_starts_the_text() {
 }
 
 #[test]
+fn popup_titles_leave_room_for_controls() {
+    use egui::accesskit::Role;
+
+    for title in ["Oak".to_string(), "HIDDEN INTERSECTION Tab Sign (Oversized) ".repeat(4), "長い地物名".repeat(30)] {
+        for count in [1, 2] {
+            let mut h = harness();
+            h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+            let features: Vec<_> = (0..count)
+                .map(|_| json!({"type": "Feature", "properties": {"name": title}, "geometry": {"type": "Point", "coordinates": [0, 0]}}))
+                .collect();
+            h.state_mut()
+                .run(
+                    "layer.addDataText",
+                    json!({
+                        "fileName": "popup.geojson",
+                        "name": "A layer with a name much longer than the popup header can hold",
+                        "text": json!({"type": "FeatureCollection", "features": features}).to_string()
+                    }),
+                )
+                .unwrap();
+            h.state_mut().run("map.zoomToExtent", json!({"extent": [-5, -4, 5, 4]})).unwrap();
+            h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("identify_popup_limit"), egui::vec2(240.0, 360.0)));
+            h.state_mut().run("ui.identify", json!({"lon": 0, "lat": 0})).unwrap();
+            h.run_steps(6);
+
+            let title_rect = h.query_all_by_label(&title).map(|n| n.rect()).min_by(|a, b| a.min.y.total_cmp(&b.min.y)).unwrap();
+            let close = h.get_by_role_and_label(Role::Button, "×").rect();
+            assert!(close.max.x <= title_rect.min.x - 12.0 + 240.0, "close must stay inside the popup");
+            assert!(title_rect.max.x < close.min.x, "title must leave room for close");
+            if count > 1 {
+                let previous = h.get_by_role_and_label(Role::Button, "‹").rect();
+                assert!(title_rect.max.x < previous.min.x, "title must leave room for all navigation controls");
+                h.get_by_role_and_label(Role::Button, "›").click();
+                h.run_steps(3);
+                assert_eq!(h.state().map.popup.as_ref().unwrap().index, 1);
+                h.get_by_role_and_label(Role::Button, "‹").click();
+                h.run_steps(3);
+                assert_eq!(h.state().map.popup.as_ref().unwrap().index, 0);
+            }
+            h.get_by_role_and_label(Role::Button, "×").click();
+            h.run_steps(3);
+            assert!(h.state().map.popup.is_none(), "close must remain clickable");
+        }
+    }
+}
+
+#[test]
 fn the_popup_closes_when_its_feature_is_deleted() {
     let mut h = harness();
     h.step();
