@@ -5,8 +5,8 @@ platforms people most often ask about: **QGIS**, **ArcGIS Pro** and **ArcGIS Onl
 
 RustGIS is not trying to replace any of these. It fills a narrower spot: a **free and
 open-source desktop GIS compiled to a single native program**, with a ribbon interface familiar
-from desktop GIS, every action available as a scriptable command, and the same app running in a
-browser tab through WebAssembly.
+from desktop GIS, almost every action available as a scriptable command, and the same app running
+in a browser tab through WebAssembly.
 
 !!! note "How to read this"
     Comparisons like this age quickly and are written by an interested party. The RustGIS

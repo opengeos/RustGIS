@@ -180,7 +180,8 @@ model-builder.md, segmentation.md, obia.md_
 - [ ] **H3 and DGGS grids**: H3, A5, DGGRID, DGGAL. Partial: A5 grids (_Roadmap: any time_ for
   H3).
 - [ ] ~~AI segmentation and detection~~ (SAM/SamGeo, ONNX/YOLO detection, OBIA with eCognition
-  import): left to GeoLibre, which has these models built in. RustGIS has pixel classification.
+  import): left to GeoLibre, which has SAM and ONNX models built in and an OBIA workbench with
+  eCognition import. RustGIS has pixel classification.
 - [ ] **Visual Model Builder canvas**: a node graph with validation and export to code. Partial:
   ModelBuilder with a node canvas and models from history.
 - [ ] **Re-run or copy history as code; batch runs over a folder**. Partial: history copied as
