@@ -66,7 +66,7 @@ _GeoLibre: docs/data-formats.md, docs/features.md › Adding data, SQL and datab
   Missing: write-back (_Roadmap: data at the source_) and Iceberg.
 - [x] **Spatial SQL workspace** ([#131](https://github.com/opengeos/RustGIS/issues/131)): an SQL pane over DuckDB Spatial on the desktop. The web app
   has no in-browser engine: SQL in the browser is left to GeoLibre, which runs DuckDB, PGlite and
-  Sedona there ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  Sedona there.
 - [ ] **Private S3 buckets**: partial. `s3://` addresses, SigV4-signed connections, saved
   connections without their secrets and an S3 browser, desktop and web ([#150](https://github.com/opengeos/RustGIS/issues/150)). Missing: SSO, IAM
   roles and secrets kept in the keychain (_Roadmap: solid ground_).
@@ -180,8 +180,7 @@ model-builder.md, segmentation.md, obia.md_
 - [ ] **H3 and DGGS grids**: H3, A5, DGGRID, DGGAL. Partial: A5 grids (_Roadmap: any time_ for
   H3).
 - [ ] ~~AI segmentation and detection~~ (SAM/SamGeo, ONNX/YOLO detection, OBIA with eCognition
-  import): left to GeoLibre, which has these models built in ([#951](https://github.com/opengeos/RustGIS/discussions/951)). RustGIS has pixel
-  classification.
+  import): left to GeoLibre, which has these models built in. RustGIS has pixel classification.
 - [ ] **Visual Model Builder canvas**: a node graph with validation and export to code. Partial:
   ModelBuilder with a node canvas and models from history.
 - [ ] **Re-run or copy history as code; batch runs over a folder**. Partial: history copied as
@@ -211,11 +210,11 @@ _GeoLibre: docs/collaboration.md, docs/server-api.md, docs/user-guide/embedding.
 storymaps.md_
 
 - [ ] ~~Real-time multi-user collaboration~~ (live sessions, permissions, roster, chat):
-  left to GeoLibre, the shared, web-first app ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  left to GeoLibre, the shared, web-first app.
 - [ ] ~~Review comments~~ (anchored, threaded, resolvable): left to GeoLibre, the shared,
-  web-first app ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  web-first app.
 - [ ] ~~Share links, project gallery, accounts~~ (roles, expiry, passwords, a server API):
-  left to GeoLibre, the shared, web-first app ([#951](https://github.com/opengeos/RustGIS/discussions/951)). Share As writes static files.
+  left to GeoLibre, the shared, web-first app. Share As writes static files.
 - [ ] **Story maps**: chapters that fly the live map, a presenter view, HTML export. Partial:
   Presentations.
 - [ ] **Embed API**: a `postMessage` protocol, an npm client, viewer-only and map-only modes, deep
@@ -256,16 +255,15 @@ docs/agent-skill.md_
 _GeoLibre: docs/android.md, ios.md, mac-app-store.md, downloads.md, self-hosting.md,
 deployment-capabilities.md, ui-profiles.md_
 
-- [ ] ~~Android app~~: left to GeoLibre, which has the mobile apps ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
-- [ ] ~~iOS/iPadOS app~~: left to GeoLibre, which has the mobile apps ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
-- [ ] ~~Touch and responsive layout~~: left to GeoLibre, which has the mobile apps
-  ([#951](https://github.com/opengeos/RustGIS/discussions/951)). RustGIS's layout is for desktop screens.
+- [ ] ~~Android app~~: left to GeoLibre, which has the mobile apps.
+- [ ] ~~iOS/iPadOS app~~: left to GeoLibre, which has the mobile apps.
+- [ ] ~~Touch and responsive layout~~: left to GeoLibre, which has the mobile apps. RustGIS's
+  layout is for desktop screens.
 - [ ] ~~Field data collection~~ (forms, photos, GPS or tap placement): left to GeoLibre, which
-  has the mobile apps ([#951](https://github.com/opengeos/RustGIS/discussions/951)). A QFieldCloud
-  connection, requested in [#665](https://github.com/opengeos/RustGIS/issues/665), is not planned
-  either.
+  has the mobile apps. A QFieldCloud connection, requested in
+  [#665](https://github.com/opengeos/RustGIS/issues/665), is not on the roadmap either.
 - [ ] ~~GPS~~ (live position, track logs, digitizing from GPS, NMEA receivers): left to
-  GeoLibre, which covers field work on phones ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  GeoLibre, which covers field work on phones.
 - [ ] **PWA and offline basemap tile pre-caching**. Partial: the web app is installable with
   offline start; offline data areas with sync. Tile pre-caching unverified.
 - [ ] **Docker self-hosting image with runtime config**. Partial: the static web build (_Roadmap:
