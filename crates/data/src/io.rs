@@ -701,13 +701,16 @@ fn legacy_crs(decl: &Json) -> std::result::Result<Option<(Crs, crate::raster::Tr
         return Err("only named coordinate systems are supported".into());
     }
     let name = decl.get("properties").and_then(|p| p.get("name")).and_then(Json::as_str).ok_or("it has no properties.name")?;
-    let up = name.to_ascii_uppercase();
-    // Not WKT or a PROJ string (which `Crs::parse` also takes, and would register a system for).
-    if name.len() > CRS_NAME_MAX
-        || name.contains('[')
-        || name.trim_start().starts_with('+')
-        || !(up.contains("EPSG") || up.ends_with("CRS84"))
-    {
+    // An EPSG name (`EPSG:28992`, `urn:ogc:def:crs:EPSG::28992`, `urn:ogc:def:crs:EPSG:6.6:28992`,
+    // `http://www.opengis.net/def/crs/EPSG/0/28992`) or a CRS84 one (`urn:ogc:def:crs:OGC:1.3:CRS84`,
+    // `urn:ogc:def:crs:OGC::CRS84`, `http://www.opengis.net/def/crs/OGC/1.3/CRS84`), and no other
+    // text for `Crs::parse`, which also takes WKT and PROJ strings (and registers a system for them).
+    let up = name.trim().to_ascii_uppercase();
+    let tokens: Vec<&str> = up.split([':', '/']).collect();
+    let last = tokens.last().copied().unwrap_or("");
+    let epsg = tokens.contains(&"EPSG") && !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit());
+    let crs84 = tokens.contains(&"OGC") && last == "CRS84";
+    if name.len() > CRS_NAME_MAX || !(epsg || crs84) {
         return Err("only EPSG codes and CRS84 are supported".into());
     }
     let crs = Crs::parse(name)?;

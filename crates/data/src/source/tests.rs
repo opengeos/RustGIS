@@ -1174,15 +1174,9 @@ fn geojson_paths(file: &str, text: &str) -> (Dataset, Vec<String>, String) {
         assert_eq!(report.skipped, in_report.skipped, "{file}");
         let strip = |m: &Vec<String>| m.iter().map(|m| m.trim_start_matches("x: ").to_string()).collect::<Vec<_>>();
         assert_eq!(strip(&report.messages), strip(&in_report.messages), "{file}");
-        // The extent a source says holds its features (reprojecting a box makes it a little larger).
-        let (said, held) = (src.info().extent, inplace.extent());
-        assert!(
-            said.min_x <= held.min_x + 1e-9
-                && said.min_y <= held.min_y + 1e-9
-                && said.max_x >= held.max_x - 1e-9
-                && said.max_y >= held.max_y - 1e-9,
-            "{file}: {said:?} holds {held:?}"
-        );
+        // The extent a source says is that of the features it reads (those that convert).
+        assert_eq!(src.info().extent, whole.extent(), "{file}");
+        assert_eq!(src.info().count, Some(whole.features.len() as u64), "{file}");
         assert_eq!(src.info().coordinate_system(), whole.crs, "{file}");
     }
     let src = geojson::GeoJsonSource::open_with(&p, "x", crate::io::MAX_BYTES).unwrap();
@@ -1277,6 +1271,8 @@ fn geojson_crs_not_understood_is_said_and_coordinates_kept() {
         (named("EPSG:99999999999"), "EPSG:99999999999"),
         (named("EPSG:abc"), "EPSG:abc"),
         (named("Amersfoort / RD New"), "Amersfoort"),
+        (named("VN-2000 / UTM zone 48N EPSG:28992"), "VN-2000"),
+        (named("OGC:CRS84:EPSG"), "OGC:CRS84:EPSG"),
         (named("+proj=utm +zone=31 +datum=WGS84 EPSG"), "+proj=utm"),
         (named("PROJCS[\\\"RD\\\",EPSG]"), "PROJCS"),
         (named(&format!("EPSG:28992{long}")), "…"),

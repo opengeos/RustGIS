@@ -145,10 +145,12 @@ impl GeoJsonSource {
         }
         let reproject = Reproject::known(declared_crs(&rest, &mut notes));
         // The declaration may come after the features, so only now can each be tried: a feature
-        // the declared system can't convert is counted here, and skipped when read.
+        // the declared system can't convert is counted here, and skipped when read; the extent
+        // said is that of the features that convert.
         let mut unconverted = 0u64;
+        let mut extent = scan.extent;
         if let Some(t) = reproject.transformer() {
-            unconverted = count_unconvertible(path, &scan.places, t)?;
+            (unconverted, extent) = convert_pass(path, &scan.places, t)?;
             if unconverted > 0 {
                 notes.push(format!(
                     "{unconverted} features couldn't be converted from {} to longitude/latitude and were skipped",
@@ -168,7 +170,7 @@ impl GeoJsonSource {
             format: "GeoJSON",
             geometry_type,
             fields: scan.schema.fields(),
-            extent: reproject.extent_to_lonlat(&scan.extent),
+            extent,
             count: Some((scan.places.len() as u64).saturating_sub(unconverted)),
             crs: reproject.label(),
             indexed: false,
@@ -263,21 +265,24 @@ fn read_place(f: &mut BufReader<File>, pos: &mut u64, buf: &mut Vec<u8>, place: 
     serde_json::from_slice::<Json>(text).ok()
 }
 
-/// How many of the features a file holds the transformer can't convert to longitude/latitude (see
-/// [`geometry_to_lonlat`]): a second pass over the file, made only for a declared coordinate system.
-fn count_unconvertible(path: &Path, places: &[Place], t: &crate::raster::Transformer) -> Result<u64> {
+/// A second pass over the file, made only for a declared coordinate system: how many of its
+/// features the transformer can't convert to longitude/latitude (see [`geometry_to_lonlat`]), and
+/// the extent of those it can, in longitude/latitude.
+fn convert_pass(path: &Path, places: &[Place], t: &crate::raster::Transformer) -> Result<(u64, Extent)> {
     let mut f = BufReader::with_capacity(BUFFER, File::open(path)?);
-    let (mut pos, mut buf, mut n) = (0u64, Vec::new(), 0u64);
+    let (mut pos, mut buf, mut n, mut extent) = (0u64, Vec::new(), 0u64, Extent::EMPTY);
     for place in places {
         // A feature that can't be read now is left to the reads, which skip it.
         if let Some(json) = read_place(&mut f, &mut pos, &mut buf, place)
             && let Ok(Some(g)) = geojson_geometry(&json)
-            && geometry_to_lonlat(&g, t).is_none()
         {
-            n += 1;
+            match geometry_to_lonlat(&g, t) {
+                Some(g) => extent = extent.union(&g.extent()),
+                None => n += 1,
+            }
         }
     }
-    Ok(n)
+    Ok((n, extent))
 }
 
 /// A reader counting the bytes read through it, for features' places in the file. The JSON reader
