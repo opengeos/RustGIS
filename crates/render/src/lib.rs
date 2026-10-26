@@ -4392,10 +4392,11 @@ mod tests {
         assert_eq!(label_boxes(&off).0[0], a);
         let clear = PlacedLabel { halo: Some(Rgba::new(255, 255, 255, 0)), halo_width: Some(5.0), ..plain.clone() };
         assert_eq!(label_boxes(&clear).0[0], a);
-        // A halo grown far past what is drawn reserves only what is drawn.
+        // A halo grown at a reference scale reserves all it reaches: labels are placed once for
+        // every pixel density, and only drawing holds a halo to MAX_HALO_PX pixels.
         let grown = PlacedLabel { halo_width: Some(300.0), ..haloed.clone() };
         let g = label_boxes(&grown).0[0];
-        assert!((a[0] - g[0] - text::drawn_halo_reach(&grown)).abs() < 1e-3 && text::drawn_halo_reach(&grown) <= 256.0, "{g:?}");
+        assert!((a[0] - g[0] - 300.0 * 1.33).abs() < 1e-2, "{g:?}");
         // Turned and curved labels' squares grow by it too.
         haloed.halo_width = Some(5.0);
         let turned = |l: &PlacedLabel| PlacedLabel { angle: Some(0.5), ..l.clone() };

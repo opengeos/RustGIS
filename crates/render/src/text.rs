@@ -701,11 +701,12 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
 /// [`rustgis_map::SIZE_FACTORS`] times.
 const MAX_HALO: f32 = *rustgis_map::symbology::HALO_WIDTH.end() as f32;
 
-/// How far past its letters a label's halo of its own width is drawn (the label's units: points ×
-/// 1.33, as its text's size): none when no halo is drawn (turned off, or fully see-through), and at
-/// most [`MAX_HALO_PX`], as drawn at one pixel a unit (more pixels a unit draw it no farther).
+/// How far past its letters a label's halo of its own width reaches (the label's units: points ×
+/// 1.33, as its text's size), none when no halo is drawn (turned off, or fully see-through). Labels
+/// are placed once for every pixel density they are drawn at, so this is the reach the class asks
+/// for; only drawing holds a halo to [`MAX_HALO_PX`] pixels.
 pub fn drawn_halo_reach(l: &PlacedLabel) -> f32 {
-    l.halo.filter(|h| h.a() > 0).and(l.halo_width).map_or(0.0, |w| (halo_reach(w) * 1.33).min(MAX_HALO_PX))
+    l.halo.filter(|h| h.a() > 0).and(l.halo_width).map_or(0.0, |w| halo_reach(w) * 1.33)
 }
 
 /// How far a label's halo of `width` reaches (points): at most [`MAX_HALO`] grown by the most a
