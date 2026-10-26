@@ -259,7 +259,7 @@ deployment-capabilities.md, ui-profiles.md_
 - [ ] ~~Android app~~: left to GeoLibre, which has the mobile apps.
 - [ ] ~~iOS/iPadOS app~~: left to GeoLibre, which has the mobile apps.
 - [ ] ~~Touch and responsive layout~~: left to GeoLibre, which has the mobile apps. RustGIS's
-  layout is for desktop screens.
+  layout is built for desktop screens, though the web app installs on phones and tablets.
 - [ ] ~~Field data collection~~ (forms, photos, GPS or tap placement): left to GeoLibre, which
   has the mobile apps. A QFieldCloud connection, requested in
   [#665](https://github.com/opengeos/RustGIS/issues/665), is not on the roadmap either.
