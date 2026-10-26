@@ -95,7 +95,7 @@ on one polygon and P–R–Q on its neighbour, moving Q moves the two stored Q v
 R in place. It does not remap intermediate vertices, insert missing ones or refuse the edit
 because vertex densities differ; the two boundaries can separate. There is no tolerance or
 nearby-coordinate matching. Use the `mustNotOverlap` and `mustNotHaveGaps` topology rules, then
-**Edit › Topology › Error Inspector (validate)** (`topology.validate`) to inspect a coverage.
+**Edit › Manage Edits › Topology › Error Inspector (validate)** (`topology.validate`) to inspect a coverage.
 
 ### Distance units in commands
 
