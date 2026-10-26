@@ -265,7 +265,7 @@ deployment-capabilities.md, ui-profiles.md_
   connection, requested in [#665](https://github.com/opengeos/RustGIS/issues/665), is not planned
   either.
 - [ ] ~~GPS~~ (live position, track logs, digitizing from GPS, NMEA receivers): left to
-  GeoLibre with field work, which it covers on phones ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  GeoLibre, which covers field work on phones ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
 - [ ] **PWA and offline basemap tile pre-caching**. Partial: the web app is installable with
   offline start; offline data areas with sync. Tile pre-caching unverified.
 - [ ] **Docker self-hosting image with runtime config**. Partial: the static web build (_Roadmap:
