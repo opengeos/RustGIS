@@ -435,7 +435,7 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         None if cur.is_empty() => tl!("<None>").to_string(),
         None => crate::i18n::fmt("{name} (not in the layer)", &[("name", cur)]),
     };
-    let search_id = egui::Id::unique(("label_pane_field_search", l.id));
+    let search_id = layer_key(app, l).with("label_pane_field_search");
     grid(ui, "field", |ui| {
         let input_label = ui.label(tl!("Field"));
         egui::ComboBox::from_id_salt("label_pane_field")
@@ -577,7 +577,7 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         Some(name) if families::find(name).is_some() => name.to_string(),
         Some(name) => crate::i18n::fmt("{name} (not installed)", &[("name", name)]),
     };
-    let search_id = egui::Id::unique(("label_pane_font_search", l.id));
+    let search_id = layer_key(app, l).with("label_pane_font_search");
     egui::ComboBox::from_id_salt("label_pane_font")
         .selected_text(shown)
         .width(180.0)
