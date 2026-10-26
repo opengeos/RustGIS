@@ -1,0 +1,161 @@
+//! Identify on WMS layers: what a service says is at a point (GetFeatureInfo). Identify lists the
+//! requests for the WMS tile layers drawn there; the app fetches them in the background and passes
+//! each answer to `identify.featureInfo` as `"text"`; the command line, MCP and the assistant let
+//! `identify.featureInfo` fetch (waiting for the answer).
+//!
+//! A layer added from the service knows its request from the capabilities; one from a project
+//! (which doesn't keep it) is asked for its service's capabilities first.
+
+use rustgis_data::ogc::{self, FeatureInfo, InfoFeature};
+use rustgis_geom::Coord;
+use rustgis_map::tiles::TileKind;
+use serde_json::{Value, json};
+
+use super::super::{b, f, ps};
+use crate::{CmdResult, CommandSpec as C, Session};
+
+/// Most WMS layers one identify asks.
+const MAX_ASKED: usize = 8;
+/// Most bytes read of a capabilities document or an answer (fetched here natively).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_BYTES: usize = 8 << 20;
+
+pub(super) fn commands() -> Vec<C> {
+    vec![
+        C::new("identify.featureInfo", "Identify WMS Layer", "Home › Inspect", feature_info).view().params(
+            r#"{"layer": "a WMS tile layer's name", "lon"?, "lat"?: the point (for a request), "text"?: "the GetFeatureInfo answer, when already fetched (identify lists the requests)", "capabilities"?: "the service's capabilities document, when the layer doesn't know its request (identify then asks for it)", "request"?: bool (only say what to fetch next: {url} or {capabilities})} → results, as identify's (with "tileLayer"), or with request, what to fetch"#,
+        ),
+    ]
+}
+
+/// Web Mercator metres per pixel at a point, as tiles are drawn (in another projection, the
+/// distance of a pixel there; in Web Mercator, the camera's resolution), and the point there.
+pub(super) fn merc_at(s: &Session, lon: f64, lat: f64) -> Option<(Coord, f64)> {
+    let map = s.map();
+    if !(lon.is_finite() && lat.is_finite()) {
+        return None;
+    }
+    let at = rustgis_geom::lonlat_to_merc(Coord::new(lon, lat.clamp(-85.06, 85.06)));
+    let res = map.camera.res;
+    let m_per_px = map
+        .to_map(Coord::new(lon, lat))
+        .and_then(|m| map.to_lonlat(Coord::new(m.x + res, m.y)))
+        .map(|c| rustgis_geom::lonlat_to_merc(Coord::new(c.x, c.y.clamp(-85.06, 85.06))))
+        .map(|b| (b.x - at.x).hypot(b.y - at.y))
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(res);
+    Some((at, m_per_px))
+}
+
+/// Whether a tile layer is a WMS layer that can be asked: drawn, and queryable or not known yet.
+fn askable(t: &rustgis_map::tiles::TileLayer) -> bool {
+    t.kind == TileKind::Raster
+        && t.overlay
+        && t.draws()
+        && t.opacity > 0.0
+        && match &t.feature_info {
+            Some(fi) => fi.queryable(),
+            None => ogc::wms_layer_of(&t.url).is_some(),
+        }
+}
+
+/// What to fetch to ask a WMS tile layer about a point: the GetFeatureInfo request, or the
+/// service's capabilities when the layer doesn't know it. `None` when it can't be asked there.
+fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Value> {
+    if t.bounds.is_some_and(|[w, s, e, n]| !(w <= lon && lon <= e && s <= lat && lat <= n)) {
+        return None;
+    }
+    match &t.feature_info {
+        Some(fi) => fi.request(at.x, at.y, m_per_px).map(|url| json!({"tileLayer": t.name, "url": url})),
+        None => ogc::wms_layer_of(&t.url).map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
+    }
+}
+
+/// The WMS tile layers drawn at a point to ask what is there, topmost first (only the topmost
+/// when `first_layer`), each with what to fetch.
+pub(super) fn requests(s: &Session, lon: f64, lat: f64, first_layer: bool) -> Vec<Value> {
+    let Some((at, m_per_px)) = merc_at(s, lon, lat) else { return Vec::new() };
+    let wanted = if first_layer { 1 } else { MAX_ASKED };
+    s.map().tiles.iter().filter(|t| askable(t)).filter_map(|t| next_fetch(t, lon, lat, at, m_per_px)).take(wanted).collect()
+}
+
+/// The answer's features as identify's results.
+fn results(layer: &str, features: Vec<InfoFeature>) -> Value {
+    let list: Vec<Value> = features
+        .into_iter()
+        .map(|f| {
+            let attrs: serde_json::Map<String, Value> = f.attributes.into_iter().map(|(k, v)| (k, json!(v))).collect();
+            let name = match &f.layer {
+                Some(l) if l != layer => format!("{layer} › {l}"),
+                _ => layer.to_string(),
+            };
+            json!({"layer": name, "tileLayer": layer, "sourceLayer": f.layer, "attributes": attrs})
+        })
+        .collect();
+    json!({"results": list})
+}
+
+/// The index of the WMS tile layer named `name`.
+fn wms_layer(s: &Session, name: &str) -> Result<usize, String> {
+    s.map()
+        .tiles
+        .iter()
+        .position(|t| t.name == name && (t.feature_info.is_some() || ogc::wms_layer_of(&t.url).is_some()))
+        .ok_or_else(|| format!("no WMS tile layer '{name}' (map.tiles lists them)"))
+}
+
+/// Reads the layer's request from its service's capabilities; a layer the service doesn't list,
+/// or doesn't offer for identify, isn't asked again.
+fn learn(s: &mut Session, index: usize, capabilities: &[u8]) -> Result<(), String> {
+    let Some(t) = s.map().tiles.get(index) else { return Ok(()) };
+    let Some((caps_url, layer)) = ogc::wms_layer_of(&t.url) else { return Ok(()) };
+    let service = ogc::parse(&caps_url, capabilities)?;
+    let info = service
+        .layers
+        .into_iter()
+        .find(|l| l.name == layer)
+        .and_then(|l| l.feature_info)
+        .unwrap_or_else(|| FeatureInfo { layer, ..FeatureInfo::default() });
+    if let Some(t) = s.map_mut().tiles.get_mut(index) {
+        t.feature_info = Some(info);
+    }
+    Ok(())
+}
+
+fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
+    let name = ps(p, "layer").ok_or("layer is required (a WMS tile layer's name)")?.to_string();
+    let index = wms_layer(s, &name)?;
+    if let Some(caps) = ps(p, "capabilities") {
+        learn(s, index, caps.as_bytes())?;
+    }
+    if let Some(text) = ps(p, "text") {
+        return Ok(results(&name, ogc::read_feature_info(text.as_bytes())?));
+    }
+    let lon = f(p, "lon").ok_or("lon is required")?;
+    let lat = f(p, "lat").ok_or("lat is required")?;
+    let (at, m_per_px) = merc_at(s, lon, lat).ok_or("lon and lat must be numbers")?;
+    let next = |s: &Session| s.map().tiles.get(index).and_then(|t| next_fetch(t, lon, lat, at, m_per_px));
+    if b(p, "request") == Some(true) {
+        // Nothing to ask (not queryable, or outside the layer): no results.
+        return Ok(next(s).unwrap_or_else(|| json!({"results": []})));
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = next;
+        Err(format!("{name}: in the web app, the map's Identify asks the service"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let fetch =
+            |url: &str| crate::render::rustgis_tiles::cache::download_blocking_limited(url, MAX_BYTES).map_err(|e| format!("{name}: {e}"));
+        let mut step = next(s);
+        if let Some(caps) = step.as_ref().and_then(|v| v["capabilities"].as_str()).map(str::to_string) {
+            learn(s, index, &fetch(&caps)?)?;
+            step = next(s);
+        }
+        match step.as_ref().and_then(|v| v["url"].as_str()) {
+            Some(url) => Ok(results(&name, ogc::read_feature_info(&fetch(url)?)?)),
+            None => Ok(json!({"results": []})),
+        }
+    }
+}

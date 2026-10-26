@@ -8549,6 +8549,77 @@ fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
     assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
+/// Identify asks a WMS layer what is at the point (GetFeatureInfo): the request from the
+/// capabilities, the answer read as results; a project's layer, which doesn't keep the request,
+/// reads its service's capabilities again; a layer that isn't queryable isn't asked.
+#[test]
+fn identify_asks_wms_layers() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>text/plain</Format><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS>
+<Layer><Name>roads</Name><Title>Roads</Title></Layer>
+<Layer queryable="0"><Name>relief</Name><Title>Relief</Title></Layer>
+</Layer></Capability></WMS_Capabilities>"#;
+    const ANSWER: &str = r#"{"type": "FeatureCollection", "features": [{"type": "Feature", "id": "roads.3", "properties": {"name": "Main St"}, "geometry": null}]}"#;
+    let mut s = Session::new(Project::default());
+    let url = "https://maps.example.com/wms";
+    s.run("service.add", &json!({"url": url, "layer": "relief", "text": WMS})).unwrap();
+    s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let v = s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    let asks = v["featureInfo"].as_array().unwrap();
+    assert_eq!(asks.len(), 1, "{v}");
+    assert_eq!(asks[0]["tileLayer"], "Roads");
+    let request = asks[0]["url"].as_str().unwrap();
+    assert!(
+        request.starts_with("https://maps.example.com/info?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetFeatureInfo&LAYERS=roads&"),
+        "{request}"
+    );
+    assert!(request.contains("&QUERY_LAYERS=roads&INFO_FORMAT=application%2Fgeo%2Bjson&") && request.contains("&I=50&J=50&"), "{request}");
+    let r = s.run("identify.featureInfo", &json!({"layer": "Roads", "text": ANSWER})).unwrap();
+    assert_eq!(r["results"][0]["layer"], "Roads › roads");
+    assert_eq!(r["results"][0]["tileLayer"], "Roads");
+    assert_eq!(r["results"][0]["attributes"]["name"], "Main St");
+    let e = s.run(
+        "identify.featureInfo",
+        &json!({"layer": "Roads", "text": "<ServiceExceptionReport><ServiceException>bad</ServiceException></ServiceExceptionReport>"}),
+    );
+    assert!(e.unwrap_err().contains("bad"));
+    assert!(s.run("identify.featureInfo", &json!({"layer": "nope", "text": ANSWER})).is_err());
+    // A hidden layer isn't asked; nothing else is there, so identify finds nothing.
+    s.run("map.setTiles", &json!({"name": "Roads", "visible": false})).unwrap();
+    assert!(s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap().is_null());
+    s.run("map.setTiles", &json!({"name": "Roads", "visible": true})).unwrap();
+    // The project file is as before: it doesn't keep the request.
+    let project = serde_json::to_string(&s.project).unwrap();
+    assert!(!project.contains("featureInfo") && !project.contains("GetFeatureInfo"));
+    let mut reopened = Session::new(serde_json::from_str(&project).unwrap());
+    reopened.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    let asks = v["featureInfo"].as_array().unwrap();
+    assert_eq!(asks.len(), 2, "{v}");
+    assert!(
+        asks.iter().all(|a| a["capabilities"] == "https://maps.example.com/wms?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0"),
+        "{v}"
+    );
+    // With its service's capabilities, each knows its request (or that it isn't asked).
+    let r = reopened
+        .run("identify.featureInfo", &json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "capabilities": WMS, "request": true}))
+        .unwrap();
+    assert_eq!(r["url"].as_str(), Some(request));
+    let r = reopened
+        .run("identify.featureInfo", &json!({"layer": "Relief", "lon": 8.5, "lat": 47.4, "capabilities": WMS, "request": true}))
+        .unwrap();
+    assert_eq!(r, json!({"results": []}));
+    let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+    assert_eq!(v["featureInfo"].as_array().map(Vec::len), Some(1), "{v}");
+    // A selection mode asks none.
+    let v = reopened.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "selectable"})).unwrap();
+    assert!(v.is_null(), "{v}");
+}
+
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's
 /// features are downloaded (from a local server); unknown layers and documents are refused.
 #[test]

@@ -20,6 +20,7 @@ pub const NETWORK: &[&str] = &[
     "layer.addUrl",
     "service.layers",
     "service.add",
+    "identify.featureInfo",
     "service.import",
     "service.refresh",
     "service.groupPlan",

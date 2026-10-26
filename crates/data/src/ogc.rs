@@ -8,6 +8,10 @@
 use roxmltree::{Node, ParsingOptions};
 use serde_json::value::RawValue;
 
+#[path = "ogc_info.rs"]
+mod info;
+pub use info::{FeatureInfo, InfoFeature, read_feature_info, wms_layer_of};
+
 /// What a layer of a service becomes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Offer {
@@ -71,6 +75,8 @@ pub struct ServiceLayer {
     pub tilesets: Option<String>,
     /// Its time dimension, when its tiles change with time (the template then has `{Time}`).
     pub time: Option<LayerTime>,
+    /// A WMS layer's GetFeatureInfo request (its formats empty when the layer isn't queryable).
+    pub feature_info: Option<FeatureInfo>,
 }
 
 /// A service's capabilities: its kind (`WMS`, `WMTS`, `WFS`, `OGC API Features`), title, the
@@ -403,16 +409,19 @@ fn wms(url: &str, root: &Node) -> Service {
         .find(|f| formats.iter().any(|g| g.eq_ignore_ascii_case(f)))
         .copied()
         .unwrap_or("image/png");
+    let version = if v13 { "1.3.0" } else { "1.1.1" };
+    let info_request = info::request_of(root, url, version, format);
     let mut service = Service { kind: "WMS".into(), title, ..Service::default() };
     let mut skipped = 0;
-    // Layers inherit their parents' coordinate systems and nearest valid geographic bounds.
-    let mut stack: Vec<(Node, Vec<String>, Option<[f64; 4]>)> = root
+    // Layers inherit their parents' coordinate systems, nearest valid geographic bounds and
+    // queryable attribute.
+    let mut stack: Vec<(Node, Vec<String>, Option<[f64; 4]>, bool)> = root
         .descendants()
         .filter(|n| n.is_element() && local(n) == "Capability")
         .flat_map(|c| children(&c, "Layer").collect::<Vec<_>>())
-        .map(|l| (l, Vec::new(), None))
+        .map(|l| (l, Vec::new(), None, false))
         .collect();
-    while let Some((layer, mut crs, inherited_bbox)) = stack.pop() {
+    while let Some((layer, mut crs, inherited_bbox, inherited_queryable)) = stack.pop() {
         if service.layers.len() >= MAX_LAYERS {
             break;
         }
@@ -428,8 +437,9 @@ fn wms(url: &str, root: &Node) -> Service {
                 lonlat_box(f("minx")?, f("miny")?, f("maxx")?, f("maxy")?)
             })
             .or(inherited_bbox);
+        let queryable = layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim() == "true");
         for sub in children(&layer, "Layer") {
-            stack.push((sub, crs.clone(), bbox));
+            stack.push((sub, crs.clone(), bbox, queryable));
         }
         let Some(name) = child_text(&layer, "Name") else { continue };
         if !crs.iter().any(|c| c.split_whitespace().any(is_web_mercator)) {
@@ -437,7 +447,6 @@ fn wms(url: &str, root: &Node) -> Service {
             continue;
         }
         let crs_key = if v13 { "CRS" } else { "SRS" };
-        let version = if v13 { "1.3.0" } else { "1.1.1" };
         let template = with_query(
             &get_map,
             &format!(
@@ -447,7 +456,8 @@ fn wms(url: &str, root: &Node) -> Service {
             ),
         );
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time: None });
+        let feature_info = info_request.as_ref().map(|r| r.for_layer(&name, queryable));
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time: None, feature_info });
     }
     service.layers.reverse();
     if skipped > 0 {
@@ -598,7 +608,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
             lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
         });
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time });
+        service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time, feature_info: None });
     }
     if skipped > 0 {
         service.notes.push(format!("{skipped} layers have no Web Mercator tile matrix set RustGIS can draw and are left out"));
@@ -697,7 +707,15 @@ fn wfs(url: &str, root: &Node) -> Service {
             )
         };
         let url = with_query(&get, &query);
-        service.layers.push(ServiceLayer { name, title, offer: Offer::Features { url }, bbox, tilesets: None, time: None });
+        service.layers.push(ServiceLayer {
+            name,
+            title,
+            offer: Offer::Features { url },
+            bbox,
+            tilesets: None,
+            time: None,
+            feature_info: None,
+        });
     }
     service
 }
@@ -822,6 +840,7 @@ fn wcs(url: &str, root: &Node) -> Service {
             bbox,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     };
     let mut n = 0;
@@ -1236,6 +1255,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 bbox: full,
                 tilesets: None,
                 time: None,
+                feature_info: None,
             });
         }
     };
@@ -1257,6 +1277,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             bbox: full,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
         features(&mut service);
         // A dynamic map's layers, each drawn alone (`layers=show:<id>`): a national layer is
@@ -1276,6 +1297,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                     bbox: full,
                     tilesets: None,
                     time: None,
+                    feature_info: None,
                 });
             }
         }
@@ -1289,6 +1311,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             bbox: full,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     } else if lower.ends_with("/vectortileserver") {
         service.kind = "ArcGIS VectorTileServer".into();
@@ -1304,6 +1327,7 @@ fn arcgis(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             bbox: full,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     } else {
         return Err("an ArcGIS address, but not a FeatureServer, MapServer, ImageServer or VectorTileServer".into());
@@ -1387,6 +1411,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
             bbox: None,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     }
     for s in v.get("services").and_then(|s| s.as_array()).into_iter().flatten().take(MAX_LAYERS) {
@@ -1410,6 +1435,7 @@ fn arcgis_directory(b: &str, v: &serde_json::Value) -> Service {
             bbox: None,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     }
     if skipped > 0 {
@@ -1442,6 +1468,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 bbox: None,
                 tilesets: Some(list),
                 time: None,
+                feature_info: None,
             });
         }
         if !service.layers.is_empty() || service.collections_url.is_some() {
@@ -1481,6 +1508,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 bbox,
                 tilesets: Some(list.clone()),
                 time: None,
+                feature_info: None,
             });
         }
         if let Some((t, list)) = &vector {
@@ -1491,6 +1519,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
                 bbox,
                 tilesets: Some(list.clone()),
                 time: None,
+                feature_info: None,
             });
         }
         if map.is_some() || vector.is_some() {
@@ -1527,6 +1556,7 @@ fn ogc_api(url: &str, v: &serde_json::Value) -> Result<Service, String> {
             bbox,
             tilesets: None,
             time: None,
+            feature_info: None,
         });
     }
     if unreadable > 0 {

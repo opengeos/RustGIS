@@ -383,6 +383,11 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
                 None => template.to_string(),
             };
             let r = super::tiles::add(s, &json!({"url": template, "kind": "raster", "name": name, "overlay": true, "bounds": layer.bbox}))?;
+            // A WMS layer's GetFeatureInfo request, for identify.
+            let added = r["index"].as_u64().and_then(|i| usize::try_from(i).ok());
+            if let Some(t) = added.and_then(|i| s.map_mut().tiles.get_mut(i)) {
+                t.feature_info = layer.feature_info.clone();
+            }
             zoom(s);
             Ok(r)
         }

@@ -74,6 +74,42 @@ pub struct Popup {
     /// The map it was opened on (the project's `active_map` then): layer and feature ids belong to
     /// a map, and a duplicated map has the same ones.
     pub map: usize,
+    /// The WMS layers being asked what is at the point, whose features join the list.
+    pub asks: Vec<Ask>,
+}
+
+/// A WMS layer asked what is at a popup's point (GetFeatureInfo), its answer on the way: the
+/// request's, or first its service's capabilities (a layer from a project doesn't know its request).
+pub struct Ask {
+    layer: String,
+    capabilities: bool,
+    slot: crate::Slot<Result<Vec<u8>, String>>,
+}
+
+impl Popup {
+    /// A popup for what identify found at `at`, asking the WMS layers it lists.
+    pub fn new(info: Value, at: Coord, map: usize) -> Popup {
+        let asks = info["featureInfo"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                let layer = a["tileLayer"].as_str()?.to_string();
+                let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
+                    (Some(u), _) => (u, false),
+                    (None, Some(c)) => (c, true),
+                    _ => return None,
+                };
+                Some(Ask { layer, capabilities, slot: crate::fetch_into(url) })
+            })
+            .collect();
+        Popup { info, at, index: 0, map, asks }
+    }
+}
+
+/// Whether a popup's value is a feature or pixel found, not only WMS layers still being asked.
+fn is_found(v: &Value) -> bool {
+    v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
 /// A notice shown as a toast.
@@ -2207,7 +2243,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                         if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
                             let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
                         }
-                        Some(Popup { info: v, at: c, index: 0, map: app.session.project.active_map })
+                        Some(Popup::new(v, c, app.session.project.active_map))
                     }
                     _ => {
                         let _ = app.session.run("select.clear", &Value::Null);
@@ -2778,7 +2814,72 @@ fn follow_popup(app: &mut RustGisApp) {
     pp.info = info;
 }
 
+/// Adds what the WMS layers asked answer to the popup, asking a layer from a project once its
+/// service's capabilities say how; failures are told. The popup closes when nothing was found.
+fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
+    let Some(pp) = &mut app.map.popup else { return };
+    if pp.asks.is_empty() {
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let (lon, lat) = (pp.at.x, pp.at.y);
+    let mut landed = Vec::new();
+    pp.asks.retain(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => {
+            landed.push((a.layer.clone(), a.capabilities, r));
+            false
+        }
+        None => true,
+    });
+    if landed.is_empty() {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut next = Vec::new();
+    for (layer, capabilities, r) in landed {
+        let r = r.and_then(|bytes| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            if capabilities {
+                let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
+                app.session.run("identify.featureInfo", &p)
+            } else {
+                app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))
+            }
+        });
+        match r {
+            Ok(v) => {
+                if let Some(url) = v["url"].as_str() {
+                    next.push(Ask { layer, capabilities: false, slot: crate::fetch_into(url) });
+                }
+                found.extend(v["results"].as_array().cloned().unwrap_or_default());
+            }
+            Err(e) => app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true),
+        }
+    }
+    let Some(pp) = &mut app.map.popup else { return };
+    pp.asks.extend(next);
+    if !found.is_empty() {
+        let mut all: Vec<Value> = match pp.info["results"].as_array() {
+            Some(r) => r.clone(),
+            None if is_found(&pp.info) => vec![pp.info.clone()],
+            None => Vec::new(),
+        };
+        all.extend(found);
+        if let Some(mut info) = all.first().cloned() {
+            if let Value::Object(o) = &mut info {
+                o.remove("featureInfo");
+                o.insert("results".into(), Value::Array(all));
+            }
+            pp.info = info;
+        }
+    }
+    if pp.asks.is_empty() && !is_found(&pp.info) {
+        app.map.popup = None;
+    }
+}
+
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
+    follow_asks(app, ui.ctx());
     follow_popup(app);
     let Some(pp) = &app.map.popup else { return };
     let t = Tokens::get(ui.ctx());
@@ -2793,12 +2894,20 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let mut zoom = false;
     // The feature shown, as its layer id and feature id (a raster pixel has neither).
     let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
-    let layer = info["layer"].as_str().unwrap_or("").to_string();
+    // Only WMS layers being asked so far: their names.
+    let waiting = !is_found(&info);
+    let layer = if waiting {
+        pp.asks.iter().map(|a| a.layer.as_str()).collect::<Vec<_>>().join(", ")
+    } else {
+        info["layer"].as_str().unwrap_or("").to_string()
+    };
     let mut attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     // A picture value (a photo's thumbnail) shows as the picture, not as its text.
     let picture_key = attrs.iter().find(|(_, v)| v.as_str().is_some_and(is_picture)).map(|(k, _)| k.clone());
     let picture = picture_key.and_then(|k| attrs.remove(&k)).and_then(|v| v.as_str().map(|s| picture_texture(app, ui.ctx(), s)));
-    let title = if info["raster"].as_bool() == Some(true) {
+    let title = if waiting {
+        tl!("Asking the map service…").to_string()
+    } else if info["raster"].as_bool() == Some(true) {
         tl!("Pixel").to_string()
     } else {
         {
