@@ -1127,10 +1127,11 @@ mod tests {
         h.run();
         let rule = "Each class labels the features its own clause matches";
         assert!(h.query_by_label_contains("Labels are off for this layer").is_some());
-        assert!(h.query_by_label("Show labels").is_none() && h.query_by_label_contains(rule).is_none(), "one note");
+        assert!(h.query_by_label("Show labels").is_none(), "no hidden-class note while labels are off");
+        assert!(h.query_by_label_contains(rule).is_none(), "no rule note while labels are off");
         h.state_mut().run("labels.enable", json!({"on": true})).unwrap();
         h.run();
-        assert!(h.query_by_label_contains(rule).is_none(), "one note");
+        assert!(h.query_by_label_contains(rule).is_none(), "no rule note while Default is hidden");
         h.get_by_label("Show labels").click();
         h.run();
         let l = &h.state().session.map().layer(h.state().session.active_layer.unwrap()).unwrap().labels;
