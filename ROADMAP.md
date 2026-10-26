@@ -4,8 +4,11 @@ _Last reviewed: 2026-10-24 (v0.4.0). Reviewed weekly; if this date is old, trust
 over this page._
 
 This page says where RustGIS is heading and where help is most useful. Details live in the linked
-issues; feature-by-feature comparison with GeoLibre is tracked in
-[GEOLIBRE_PARITY.md](GEOLIBRE_PARITY.md).
+issues. RustGIS and GeoLibre complement each other
+([#951](https://github.com/opengeos/RustGIS/discussions/951)): GeoLibre is web and mobile first,
+RustGIS desktop first and built for automation and AI agents.
+[GEOLIBRE_PARITY.md](GEOLIBRE_PARITY.md) compares the two feature by feature as a reference, not a
+plan: not every GeoLibre feature suits RustGIS.
 
 ## Goals
 - **What exists works.** A feature that crashes, misreads data or is undocumented costs more
@@ -96,6 +99,9 @@ And alongside it:
 ### Data at the source
 - Write edits back to GeoPackage and PostGIS (edits stay in the project today). _Coordinate
   first._
+- Open GeoLibre `.geolibre` projects as maps, the way supported QGIS projects open
+  ([#962](https://github.com/opengeos/RustGIS/issues/962)). GeoLibre opening
+  `.rgis` projects follows once RustGIS reads a wider range of data.
 - A date and date-time field type, read and written as dates (they are text today)
   ([#853](https://github.com/opengeos/RustGIS/issues/853)). _Coordinate first_ (it changes
   `FieldType`).
@@ -159,16 +165,11 @@ Open questions rather than plans; discuss before building.
   and point cloud I/O library: which of its drivers, coordinate transformations and GDAL-style
   operations could back or replace RustGIS's own readers, or stand in for the GDAL program, and
   which of them build for the web app.
-- Collaboration: shared projects, review comments, accounts and a server.
-- Mobile and field work: touch layout, GPS, data collection, QFieldCloud
-  ([#665](https://github.com/opengeos/RustGIS/issues/665)).
 - Native NetCDF-4/HDF5 without GDAL ([#396](https://github.com/opengeos/RustGIS/issues/396)),
   kerchunk and Icechunk.
-- An SQL engine in the web app.
 - Broader QGIS project compatibility and opening ArcGIS Pro projects (supported QGIS projects
   already open as maps).
 - An in-app Python console; an R package.
-- AI segmentation and detection (SAM, ONNX models).
 
 ## Done
 - Projects that survive a move: local data paths relative to the project and undoable Repair
