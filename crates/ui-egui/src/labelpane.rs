@@ -452,8 +452,11 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                 }
                 for f in matching {
                     let on = f.name.eq_ignore_ascii_case(cur);
-                    if ui.selectable_label(on, &f.name).clicked() && !on {
-                        run(app, "labels.field", c.params(json!({"field": f.name})));
+                    // Any pick ends the search, the chosen field's too: the box closes on it.
+                    if ui.selectable_label(on, &f.name).clicked() {
+                        if !on {
+                            run(app, "labels.field", c.params(json!({"field": f.name})));
+                        }
                         end_search(ui, search_id);
                     }
                 }
@@ -591,8 +594,10 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
             for f in matching.by_ref().take(MAX_FONTS_SHOWN) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
-                if ui.selectable_label(on, &f.name).clicked() && !on {
-                    run(app, "labels.style", c.params(json!({"font": f.name})));
+                if ui.selectable_label(on, &f.name).clicked() {
+                    if !on {
+                        run(app, "labels.style", c.params(json!({"font": f.name})));
+                    }
                     end_search(ui, search_id);
                 }
             }
@@ -1227,6 +1232,11 @@ mod tests {
         h.run();
         assert_eq!(labels(h.state()).default.field, "pop_max");
         assert!(shown(&h, "pop_max"));
+        // Picking the chosen field again ends a search too; the pick before had ended the first.
+        search(&mut h, "pop");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("pop"), "the pick ended the search");
+        h.get_by_role_and_label(Role::Button, "pop_max").click();
+        h.run();
         // A pick ends the search: the box reopens on the whole list.
         h.get_by_role_and_label(Role::ComboBox, "Field").click();
         h.run();
