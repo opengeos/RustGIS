@@ -23,7 +23,8 @@ workflows. Neither is meant to replace the other
 MapLibre GL JS, DuckDB-WASM, deck.gl) and runs in a browser tab with nothing installed, as a
 desktop app, and as native Android and iOS apps. Its strengths are access from anywhere,
 cloud-native data, interactive visualization and sharing. GeoLibre is mature, with a broad
-set of features, and its development now centres on stability, performance and usability.
+set of features, and its development now centres on stability, performance and usability
+([#951](https://github.com/opengeos/RustGIS/discussions/951)).
 
 **RustGIS is desktop first, built for automation and AI agents.** It is a single program written
 entirely in Rust that draws its own interface on the GPU, with no browser engine or JavaScript

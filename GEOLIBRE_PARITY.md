@@ -261,7 +261,9 @@ deployment-capabilities.md, ui-profiles.md_
 - [ ] ~~Touch and responsive layout~~: left to GeoLibre, which has the mobile apps
   ([#951](https://github.com/opengeos/RustGIS/discussions/951)). RustGIS's layout is for desktop screens.
 - [ ] ~~Field data collection~~ (forms, photos, GPS or tap placement): left to GeoLibre, which
-  has the mobile apps ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+  has the mobile apps ([#951](https://github.com/opengeos/RustGIS/discussions/951)). A QFieldCloud
+  connection, requested in [#665](https://github.com/opengeos/RustGIS/issues/665), is not planned
+  either.
 - [ ] ~~GPS~~ (live position, track logs, digitizing from GPS, NMEA receivers): left to
   GeoLibre with field work, which it covers on phones ([#951](https://github.com/opengeos/RustGIS/discussions/951)).
 - [ ] **PWA and offline basemap tile pre-caching**. Partial: the web app is installable with
