@@ -439,6 +439,8 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                     let on = f.name.eq_ignore_ascii_case(cur);
                     if ui.selectable_label(on, &f.name).clicked() && !on {
                         run(app, "labels.field", c.params(json!({"field": f.name})));
+                        // A pick ends the search: the list opens whole next time.
+                        ui.data_mut(|d| d.remove::<String>(search_id));
                     }
                 }
             })
@@ -573,6 +575,7 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             }
             if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
                 run(app, "labels.style", c.params(json!({"font": ""})));
+                ui.data_mut(|d| d.remove::<String>(search_id));
             }
             let search = search.to_lowercase();
             let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
@@ -580,6 +583,8 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
                 if ui.selectable_label(on, &f.name).clicked() && !on {
                     run(app, "labels.style", c.params(json!({"font": f.name})));
+                    // A pick ends the search, as the field box's does.
+                    ui.data_mut(|d| d.remove::<String>(search_id));
                 }
             }
             let more = matching.count();
@@ -1213,7 +1218,14 @@ mod tests {
         h.run();
         assert_eq!(labels(h.state()).default.field, "pop_max");
         assert!(shown(&h, "pop_max"));
+        // A pick ends the search: the box reopens on the whole list.
+        h.get_by_role_and_label(Role::ComboBox, "Field").click();
+        h.run();
+        assert!(h.query_by_label("adm0name").is_some(), "the list opens whole after a pick");
+        h.get_by_role_and_label(Role::ComboBox, "Field").click();
+        h.run();
         search(&mut h, "zzz");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("zzz"), "the pick ended the search");
         assert!(h.query_by_label("No fields match").is_some());
     }
 
