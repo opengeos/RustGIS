@@ -1324,10 +1324,11 @@ const MAX_HALO_COATS: usize = 64;
 
 /// Where a label's halo of colour `h` is drawn round its text (points), and in what colour each
 /// copy: a thin ring, or for a halo of its own width rings about 1.5 points apart out to that
-/// width (1.33 × in screen points, as the text's size), the [`MAX_HALO_COATS`] copies shared among
-/// the rings by their length so they stand evenly apart, in a see-through colour shared among the
-/// rings so the halo is about as see-through as one coat. A halo of a few points (QGIS's usual
-/// buffer) is solid; a very wide one is approximated here, while an export draws it exactly.
+/// width (1.33 × in screen points, as the text's size), copies about a point apart round each
+/// (at most [`MAX_HALO_COATS`] in all, shared among the rings by their length), in a see-through
+/// colour shared among the rings. A halo of a few points (QGIS's usual buffer) is solid with few
+/// copies; a very wide one is approximated, and a see-through one is about one coat (copies
+/// overlap near the letters, so it is a little darker there): an export draws both exactly.
 fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>, Color32) {
     let Some(width) = l.halo_width else {
         let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
@@ -1345,9 +1346,10 @@ fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>
     let total: f32 = radii.iter().sum();
     let mut out = Vec::new();
     for r in radii {
-        // Rounded down, so the copies stay within the budget (the innermost of at most six rings
-        // still gets three or more).
-        let n = ((MAX_HALO_COATS as f32 * r / total).floor() as usize).max(3);
+        // A copy about a point apart round the ring, within its share of the budget (rounded down,
+        // so the copies stay within it; the innermost of at most six rings still gets three).
+        let share = ((MAX_HALO_COATS as f32 * r / total).floor() as usize).max(3);
+        let n = ((std::f32::consts::TAU * r).ceil() as usize).clamp(3, share);
         out.extend((0..n).map(|k| {
             let (sin, cos) = (std::f32::consts::TAU * k as f32 / n as f32).sin_cos();
             vec2(r * cos, r * sin)
@@ -3490,6 +3492,8 @@ mod halo_tests {
         assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");
         // QGIS's usual buffer (0.5 mm, 1.42 pt) is solid: neighbouring copies on a ring are well
         // under a pixel apart. On every ring, at any width, the copies stand evenly round it.
+        // ... with few copies: about as many as the thin halo's two or three times over.
+        assert!(halo_coats(&label(Some(1.42)), Rgba::rgb(255, 255, 255)).0.len() <= 24);
         for w in [1.42, 3.0, 10.0] {
             let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
             let mut rings: Vec<(f32, Vec<egui::Vec2>)> = Vec::new();
@@ -3504,7 +3508,7 @@ mod halo_tests {
                 let next = (ring[1] - ring[0]).length();
                 assert!((next - 2.0 * r * (gap / (2.0 * r)).sin()).abs() < 1e-3, "{w}: uneven ring {r}");
                 if w < 2.0 {
-                    assert!(gap < 1.0, "{w}: ring {r} has gaps of {gap}");
+                    assert!(gap <= 1.0, "{w}: ring {r} has gaps of {gap}");
                 }
             }
         }

@@ -4179,9 +4179,11 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     if !l.text.is_empty() {
         let tw = text::label_width(l);
         let th = text::block_height(&l.text, l.size);
-        // The halo of a width of its own reaches past the letters (points × 1.33, as the text's
-        // size and the drawing have it): another label's text must not fall under it.
-        let p = l.collide.text_padding.clamp(0.0, 100.0) + l.halo_width.map_or(0.0, |w| text::halo_reach(w, l.size) * 1.33);
+        // A halo drawn at a width of its own reaches past the letters (points × 1.33, as the text's
+        // size and the drawing have it): another label's text must not fall under it. A width
+        // kept with the halo turned off reserves nothing.
+        let halo = l.halo.and(l.halo_width).map_or(0.0, |w| text::halo_reach(w, l.size) * 1.33);
+        let p = l.collide.text_padding.clamp(0.0, 100.0) + halo;
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
             // A curved label: a square round each character, as tall as the text.
@@ -4384,6 +4386,9 @@ mod tests {
         assert!((a[1] - b[1] - reach).abs() < 1e-4 && (b[3] - a[3] - reach).abs() < 1e-4, "{a:?} {b:?}");
         haloed.halo_width = None;
         assert_eq!(label_boxes(&haloed).0[0], a);
+        // A width kept with the halo turned off: nothing drawn, nothing reserved.
+        let off = PlacedLabel { halo: None, halo_width: Some(5.0), ..plain.clone() };
+        assert_eq!(label_boxes(&off).0[0], a);
         // Turned and curved labels' squares grow by it too.
         haloed.halo_width = Some(5.0);
         let turned = |l: &PlacedLabel| PlacedLabel { angle: Some(0.5), ..l.clone() };

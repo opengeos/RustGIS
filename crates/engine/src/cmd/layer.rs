@@ -341,7 +341,8 @@ pub fn commands() -> Vec<C> {
                 Some(Value::String(c)) if c.trim().is_empty() => Some(None),
                 Some(_) => Some(Some(s.get_color(p, "haloColor")?.ok_or("haloColor must be #RRGGBB or #RRGGBBAA")?)),
             };
-            let (hw, sp) = (rustgis_map::symbology::HALO_WIDTH, (rustgis_map::layout::MIN_LETTER_SPACING, rustgis_map::layout::MAX_LETTER_SPACING));
+            let hw = rustgis_map::symbology::HALO_WIDTH;
+            let sp = (rustgis_map::layout::MIN_LETTER_SPACING, rustgis_map::layout::MAX_LETTER_SPACING);
             let halo_width = match p.get("haloWidth") {
                 None => None,
                 Some(Value::Null) => Some(None),
