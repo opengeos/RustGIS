@@ -216,8 +216,10 @@ docker run --rm -p 8080:8080 ghcr.io/opengeos/rustgis   # http://localhost:8080
 ```
 
 `latest` is the newest release, `0.5.0` or `0.5` a given one (releases have images from 0.5.0
-on), and `edge` the newest build of `main`. To build the image yourself, the `Dockerfile` at the root of the repository builds the web
-app the way the deploy does:
+on), and `edge` the newest build of `main`.
+
+To build the image yourself, the `Dockerfile` at the root of the repository builds the web app
+the way the deploy does:
 
 ```sh
 docker build -t rustgis .

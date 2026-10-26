@@ -44,6 +44,8 @@ LABEL org.opencontainers.image.title="RustGIS command line" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /usr/local/bin/rustgis-cli /usr/local/bin/rustgis-cli
+# The licence and the notices of the dependencies compiled into it, where the .deb puts them.
+COPY LICENSE THIRD-PARTY-LICENSES.txt /usr/share/doc/rustgis/
 
 # Non-root; its settings, plugins and caches go to /home/rustgis. Mount the data to work on at
 # /data, the working directory, so relative paths resolve there.

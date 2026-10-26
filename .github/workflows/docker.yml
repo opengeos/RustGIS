@@ -21,12 +21,21 @@ on:
     branches: [main]
   release:
     types: [published]
+  # The images' own files and what changes how they build: the dependencies, the build tasks and
+  # the two apps. A change to the crates' code is built natively and for wasm by
+  # ci.yml already; a new build dependency of theirs arrives through Cargo.lock.
   pull_request:
     paths:
       - Dockerfile
       - .dockerignore
       - packaging/docker/**
       - .github/workflows/docker.yml
+      - Cargo.toml
+      - Cargo.lock
+      - .cargo/**
+      - xtask/**
+      - apps/rustgis-web/**
+      - apps/rustgis-cli/**
   workflow_dispatch:
 
 permissions:
@@ -104,7 +113,8 @@ jobs:
             curl -sSf http://127.0.0.1:8080/healthz >/dev/null && break
             sleep 1
           done
-          curl -sSf http://127.0.0.1:8080/ | grep -q '_bg.wasm'
+          curl -sSf -o "$RUNNER_TEMP/index.html" http://127.0.0.1:8080/
+          grep -q '_bg.wasm' "$RUNNER_TEMP/index.html"
           curl -sSf -o /dev/null http://127.0.0.1:8080/sw.js
           curl -sSf -o /dev/null http://127.0.0.1:8080/manifest.webmanifest
           echo "The image serves the web app."
@@ -191,7 +201,8 @@ jobs:
           grep -q buffer "$RUNNER_TEMP/tools.txt"
           docker run --rm rustgis-cli:test logo /tmp/logo.png --size 64
           docker run --rm --entrypoint sh rustgis-cli:test -c \
-            'rustgis-cli run --sample --cmd "share.exportMap={\"path\":\"/tmp/map.png\"}" && test -s /tmp/map.png'
+            'rustgis-cli run --sample --cmd "share.exportMap={\"path\":\"/tmp/map.png\"}" && test -s /tmp/map.png \
+            && test -s /usr/share/doc/rustgis/THIRD-PARTY-LICENSES.txt'
           echo "The image runs the command line."
 
       - name: Sign in to the GitHub Container Registry
