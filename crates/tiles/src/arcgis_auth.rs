@@ -8,7 +8,8 @@
 //! the redirect addresses an app registration lists, exactly, so the portal's administrator
 //! registers that address with the OAuth client id the user gives.
 //!
-//! A token kept here goes, in the `X-Esri-Authorization` header, only to the addresses its
+//! A token kept here goes, in the `X-Esri-Authorization` header ([`with_token`]'s `token`
+//! parameter in the browser), only to the addresses its
 //! session covers ([`Scope`]): the portal itself and, for ArcGIS Online, the organization's
 //! hosted services (`*.arcgis.com/<org id>/…`); for ArcGIS Enterprise, the portal's host and
 //! its federated servers. A token given with a service's address (`…/FeatureServer?token=…`,
@@ -484,6 +485,26 @@ pub fn authorization(url: &str) -> Option<String> {
     let all = sessions();
     let s = all.get(covering(&all, url)?)?;
     (s.expires_at > now_secs()).then(|| format!("Bearer {}", s.access_token))
+}
+
+/// `url` with the token of the session covering it as its `token` parameter, for the browser:
+/// ArcGIS's `query` endpoints answer a CORS preflight with an error, so a request carrying the
+/// header can't be sent from a web page, while a plain GET needs no preflight. Only the request
+/// carries it: the address a layer or the cache keeps has no token. `None` when nothing covers it.
+pub fn with_token(url: &str) -> Option<String> {
+    let token = {
+        let all = sessions();
+        let s = all.get(covering(&all, url)?)?;
+        (s.expires_at > now_secs()).then(|| s.access_token.clone())?
+    };
+    let (base, fragment) = url.split_once('#').map_or((url, None), |(b, f)| (b, Some(f)));
+    let joint = if base.contains('?') { if base.ends_with('?') || base.ends_with('&') { "" } else { "&" } } else { "?" };
+    let mut out = format!("{base}{joint}token={}", encode(&token));
+    if let Some(f) = fragment {
+        out.push('#');
+        out.push_str(f);
+    }
+    Some(out)
 }
 
 /// A renewal to send: the token request renewing the session covering an address.

@@ -148,6 +148,17 @@ fn a_server_token_wins_over_a_portal_sign_in() {
     add_token("https://both.example.org/server/rest/services", "server-token").unwrap();
     assert_eq!(authorization("https://both.example.org/server/rest/services/A/MapServer").as_deref(), Some("Bearer server-token"));
     assert_eq!(authorization("https://both.example.org/portal/sharing/rest/portals/self").as_deref(), Some("Bearer portal-token"));
+    // The browser sends it as the request's parameter instead (ArcGIS's query endpoints refuse
+    // the header's CORS preflight).
+    assert_eq!(
+        with_token("https://both.example.org/server/rest/services/A/FeatureServer/0/query?where=1%3D1&f=geojson").as_deref(),
+        Some("https://both.example.org/server/rest/services/A/FeatureServer/0/query?where=1%3D1&f=geojson&token=server-token")
+    );
+    assert_eq!(
+        with_token("https://both.example.org/server/rest/services/A/MapServer/tile/1/0/0#x").as_deref(),
+        Some("https://both.example.org/server/rest/services/A/MapServer/tile/1/0/0?token=server-token#x")
+    );
+    assert_eq!(with_token("https://elsewhere.example.org/server/rest/services"), None);
     sign_out(Some(portal));
     sign_out(Some("https://both.example.org/server"));
     // A token for the portal's own address sits beside its sign-in, never replacing it.

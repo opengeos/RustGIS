@@ -570,13 +570,15 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     // is signed (the bucket's CORS rules must allow the Authorization and x-amz-* headers).
     let prepared = rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::s3::prepare(url)?;
     let url = prepared.url.as_str();
-    // An ArcGIS sign-in's token, for the portal and the servers it covers (ArcGIS allows the
-    // header across origins).
+    // An ArcGIS sign-in's token, for the portal and the servers it covers, renewed first when it
+    // is about to expire. It goes as the request's `token` parameter, not a header: ArcGIS's
+    // query endpoints answer the header's CORS preflight with an error.
     if !prepared.signed {
         crate::arcgis::renew_if_due(url).await;
     }
-    let arcgis =
-        if prepared.signed { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::arcgis_auth::authorization(url) };
+    let arcgis = if prepared.signed { None } else { rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::arcgis_auth::with_token(url) };
+    // Only the request carries it: messages name the address without it.
+    let request = arcgis.as_deref().unwrap_or(url);
     let asked = match (range, tail) {
         (Some((a, b)), _) => Some(format!("bytes={a}-{b}")),
         (None, Some(n)) => Some(format!("bytes=-{n}")),
@@ -589,7 +591,7 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         init.set_signal(Some(&a.signal()));
     }
     let stalled = || format!("nothing came in {} seconds", STALL_MS / 1000);
-    if asked.is_some() || !prepared.headers.is_empty() || arcgis.is_some() {
+    if asked.is_some() || !prepared.headers.is_empty() {
         let headers = web_sys::Headers::new().map_err(err)?;
         if let Some(r) = &asked {
             headers.set("Range", r).map_err(err)?;
@@ -597,16 +599,13 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         for (k, v) in &prepared.headers {
             headers.set(k, v).map_err(err)?;
         }
-        if let Some(auth) = &arcgis {
-            headers.set("X-Esri-Authorization", auth).map_err(err)?;
-        }
         init.set_headers(&headers);
-        // A signed or authorized request goes only where its credentials are for.
-        if prepared.signed || arcgis.is_some() {
-            init.set_redirect(web_sys::RequestRedirect::Error);
-        }
     }
-    let promise = window.fetch_with_str_and_init(url, &init);
+    // A signed or authorized request goes only where its credentials are for.
+    if prepared.signed || arcgis.is_some() {
+        init.set_redirect(web_sys::RequestRedirect::Error);
+    }
+    let promise = window.fetch_with_str_and_init(request, &init);
     // A refused fetch is an opaque TypeError ("Failed to fetch") by design: the browser doesn't
     // say why, so the likely reasons are named, with the browser's own message but not its stack.
     let resp: web_sys::Response = unless_stalled(promise, abort.as_ref())

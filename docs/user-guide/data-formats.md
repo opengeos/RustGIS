@@ -219,7 +219,9 @@ A secured ArcGIS service answers error 499, "Token Required". There are two ways
   `arcgis.token` with `"url"` and `"token"`) keeps the token for that ArcGIS Server and takes it
   out of the address the layer keeps.
 
-A token is sent, in the `X-Esri-Authorization` header, only where its session reaches: the portal
+A token is sent (in the `X-Esri-Authorization` header; in the browser, as the request's `token`
+parameter, since ArcGIS's query endpoints refuse the header from web pages) only where its session
+reaches: the portal
 and, for ArcGIS Online, the organization's own hosted services (`services*.arcgis.com/<org id>/…`,
 `tiles.arcgis.com/tiles/<org id>/…`), or, for ArcGIS Enterprise, the portal's host and its
 federated servers; a token given with an address goes to that server alone. Its layers, tiles and

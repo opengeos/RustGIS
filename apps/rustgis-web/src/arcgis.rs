@@ -1,7 +1,8 @@
 //! Signing in to ArcGIS in the browser: the portal's sign-in page in a pop-up window, which comes
 //! back to the app's own `oauth-callback.html` (same origin, so its address can be read here),
 //! then the code is exchanged for tokens with the browser's fetch (ArcGIS answers web pages from
-//! any origin) and the session is kept as on the desktop (see `rustgis_tiles::arcgis_auth`).
+//! any origin) and the session is kept as on the desktop (see `rustgis_tiles::arcgis_auth`;
+//! requests carry the token as their `token` parameter, see `arcgis_auth::with_token`).
 //! Access tokens are renewed before they expire, by the fetcher.
 
 use std::cell::Cell;
