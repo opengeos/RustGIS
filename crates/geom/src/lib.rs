@@ -13,7 +13,7 @@ pub use sinusoidal::Sinusoidal;
 
 use std::sync::LazyLock;
 
-use geographiclib_rs::{DirectGeodesic, Geodesic, InverseGeodesic};
+use geographiclib_rs::{DirectGeodesic, Geodesic, InverseGeodesic, PolygonArea, Winding};
 use serde::{Deserialize, Serialize};
 
 /// Mean Earth radius used by the haversine formula (metres).
@@ -253,6 +253,41 @@ pub fn wgs84_distance_m(a: Coord, b: Coord) -> f64 {
     s12
 }
 
+/// Length of a lon/lat polyline along the WGS 84 ellipsoid's geodesics (metres): each segment is
+/// an inverse geodesic solve, so it is exact, unlike [`geodesic_length_m`]'s great circles. Long
+/// lines of many vertices cost a solve per segment (a few microseconds each).
+pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
+    pts.windows(2)
+        .map(|w| match w {
+            [a, b] => wgs84_distance_m(*a, *b),
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// The perimeter (metres) and the unsigned enclosed area (square metres) of a lon/lat ring on the
+/// WGS 84 ellipsoid. The ring is closed along a geodesic to its first point, whatever its winding,
+/// so a ring of many vertices needs one accumulation, not a solve per vertex. A ring gives the
+/// region it traces (so polar rings and globe-wide bands follow their own edges, as the sphere's
+/// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude.
+pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
+    if ring.len() < 3 {
+        return (0.0, 0.0);
+    }
+    // A broken vertex is no place: NaN, never a plausible number (see [`haversine_m`]).
+    if !ring.iter().all(|c| c.is_finite()) {
+        return (f64::NAN, f64::NAN);
+    }
+    let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
+    for c in ring {
+        polygon.add_point(c.y.clamp(-90.0, 90.0), c.x);
+    }
+    // `compute` keeps the signed area of the region the ring traces, either winding; the magnitude
+    // is the unsigned area.
+    let (perimeter, area, _) = polygon.compute(true);
+    (perimeter, area.abs())
+}
+
 /// The WGS 84 ellipsoid's geodesic solver.
 static WGS84: LazyLock<Geodesic> = LazyLock::new(Geodesic::wgs84);
 
@@ -415,6 +450,36 @@ mod tests {
             let back = merc_to_lonlat(m);
             assert!((back.x - x).abs() < 1e-9 && (back.y - y).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn wgs84_measures_match_geographiclib() {
+        // References from GeographicLib (pyproj.Geod / Polygon.Compute on WGS 84), cross-checked
+        // against `geo`'s GeodesicArea: a 1° × 1° box at the equator, and the same box stretched
+        // across the antimeridian (unwrapped, 179° to 181°).
+        let equator = &[Coord::new(0.0, 0.0), Coord::new(0.0, 1.0), Coord::new(1.0, 1.0), Coord::new(1.0, 0.0)];
+        let (perimeter, area) = wgs84_ring_perimeter_area_m2(equator);
+        assert!((perimeter - 443_770.917).abs() < 0.001, "{perimeter}");
+        assert!((area - 12_308_778_361.469).abs() < 0.001, "{area}");
+        // The ring traced the other way around gives the same magnitude.
+        let (perimeter_reversed, area_reversed) = wgs84_ring_perimeter_area_m2(&equator.iter().rev().copied().collect::<Vec<_>>());
+        assert!((perimeter - perimeter_reversed).abs() < 1e-6);
+        assert!((area - area_reversed).abs() < 1e-6);
+        // Unwrapped longitudes past the antimeridian are one ring, not a world-sized complement.
+        let across = &[Coord::new(179.0, 0.0), Coord::new(181.0, 0.0), Coord::new(181.0, 1.0), Coord::new(179.0, 1.0)];
+        let (perimeter_across, area_across) = wgs84_ring_perimeter_area_m2(across);
+        assert!((perimeter_across - 666_393.055).abs() < 0.001, "{perimeter_across}");
+        assert!((area_across - 24_619_443_759.277).abs() < 0.001, "{area_across}");
+        // Segment lengths are inverse geodesic solves, unwrapped or folded alike.
+        assert!((wgs84_length_m(&[Coord::new(0.0, 0.0), Coord::new(3.0, 0.0)]) - 3.0 * 111_319.4908).abs() < 0.01);
+        assert!((wgs84_distance_m(Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)) - 222_638.9816).abs() < 0.001);
+        // A broken coordinate is no length and no area (see `haversine_m`'s guard).
+        assert!(wgs84_length_m(&[Coord::new(0.0, 0.0), Coord::new(f64::NAN, 0.0)]).is_nan());
+        let (perimeter_broken, area_broken) =
+            wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0), Coord::new(0.0, 1.0), Coord::new(f64::NAN, 0.0)]);
+        assert!(perimeter_broken.is_nan() && area_broken.is_nan());
+        // Degenerate rings keep their zero.
+        assert_eq!(wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0)]), (0.0, 0.0));
     }
 
     #[test]

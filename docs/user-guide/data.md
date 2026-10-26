@@ -80,7 +80,8 @@ For an editable feature layer, double-click a cell to change it. The table's too
 fields, calculates field expressions and opens **Calculate Geometry** (`edit.calculateGeometry`).
 The geometry calculator fills a new double field or an existing numeric field with area,
 perimeter, length or point X/Y, for all or selected features. Point coordinates can be WGS 84
-degrees or a supported projected EPSG system's units. See [Editing](editing.md) for field
+degrees or a supported projected EPSG system's units. Areas, perimeters and lengths measure on
+the WGS 84 ellipsoid. See [Editing](editing.md) for field
 calculations and data-design rules. Streamed layers must first be loaded with **Load All
 Features**.
 

@@ -4,7 +4,7 @@
 use std::collections::{BinaryHeap, HashMap};
 
 use rustgis_data::{Dataset, Geometry};
-use rustgis_geom::{Coord, haversine_m};
+use rustgis_geom::{Coord, wgs84_distance_m};
 
 /// A shortest route: its path, length in metres, cost, and the line rows it uses.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,8 +35,8 @@ fn key(c: Coord) -> (i64, i64) {
 }
 
 /// The shortest route between two points over the lines of `rows`, joining where vertices
-/// coincide. Each edge costs its length times the row's `cost_field` value (1 when empty; lines
-/// costing zero or less are closed). Each
+/// coincide. Each edge costs its length (on the WGS 84 ellipsoid) times the row's `cost_field`
+/// value (1 when empty; lines costing zero or less are closed). Each
 /// end snaps to the nearest point on a line (within `snap_m`), where the route starts or stops.
 pub fn shortest_route(
     ds: &Dataset,
@@ -70,7 +70,7 @@ pub fn shortest_route(
             for w in part.windows(2) {
                 let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
                 let (ia, ib) = (node(*a, &mut ids, &mut nodes, &mut adj), node(*b, &mut ids, &mut nodes, &mut adj));
-                let len = haversine_m(*a, *b);
+                let len = wgs84_distance_m(*a, *b);
                 if let Some(v) = adj.get_mut(ia) {
                     v.push((ib, len * weight, len, *r));
                 }
@@ -96,7 +96,7 @@ pub fn shortest_route(
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-                Some((i, t, q, haversine_m(q, p)))
+                Some((i, t, q, wgs84_distance_m(q, p)))
             })
             .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
     };
@@ -117,7 +117,7 @@ pub fn shortest_route(
         adj.push(Vec::new());
         let n = nodes.len() - 1;
         for end in [a, b] {
-            let len = haversine_m(q, nodes.get(end).copied().unwrap_or(q));
+            let len = wgs84_distance_m(q, nodes.get(end).copied().unwrap_or(q));
             if let Some(v) = adj.get_mut(n) {
                 v.push((end, len * weight, len, row));
             }
@@ -134,7 +134,7 @@ pub fn shortest_route(
         let (Some(&(_, _, weight, row)), Some(a), Some(b)) = (segs.get(s_seg), nodes.get(s).copied(), nodes.get(t).copied()) else {
             return Err("the layer has no lines".into());
         };
-        let len = haversine_m(a, b);
+        let len = wgs84_distance_m(a, b);
         if let Some(v) = adj.get_mut(s) {
             v.push((t, len * weight, len, row));
         }
