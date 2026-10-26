@@ -119,6 +119,9 @@ fn a_token_in_a_service_address_reaches_its_layers() {
         bearer
     );
     assert_eq!(authorization("https://tokenserver.example.org/other/rest/services"), None);
+    // A path leading elsewhere by its dot segments gets none.
+    assert_eq!(authorization("https://tokenserver.example.org/server/../other/rest/services"), None);
+    assert_eq!(authorization("https://tokenserver.example.org/server/%2E%2E/other/rest/services"), None);
     assert!(list().iter().any(|i| i.portal == "https://tokenserver.example.org/server" && i.token && i.expires_at.is_none()));
     // An address without a token is unchanged; a hostile one is refused.
     assert_eq!(
@@ -178,13 +181,6 @@ fn a_pasted_token_keeps_its_plus_signs() {
     sign_out(Some("https://plus.example.org/server"));
 }
 
-#[test]
-fn hints_for_refusals() {
-    assert!(refused_hint(499).is_some_and(|h| h.contains("arcgis.signIn")));
-    assert!(refused_hint(498).is_some());
-    assert!(refused_hint(400).is_none());
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_sign_in_refuses_bad_input_before_listening() {
@@ -228,6 +224,9 @@ fn renewals_land_or_end_the_session() {
     // Unreachable: kept, and not tried again at once.
     renewal_done(&r, Err("offline".into()));
     assert!(renewal_due(url).is_none() && authorization(url).is_some());
+    // A proxy's error page: kept too.
+    renewal_done(&r, Ok(b"<html>502 Bad Gateway</html>"));
+    assert!(authorization(url).is_some());
     // A new access token.
     renewal_done(&r, Ok(br#"{"access_token":"new","expires_in":1800}"#));
     assert_eq!(authorization(url).as_deref(), Some("Bearer new"));

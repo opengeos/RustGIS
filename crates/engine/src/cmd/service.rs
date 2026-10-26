@@ -49,7 +49,7 @@ fn url_of(p: &Value) -> Result<&str, String> {
 }
 
 /// `p` with its ArcGIS service address's `?token=…` taken out and kept for the session (it then
-/// goes, in a header, to every request to that server: the service's layers, tiles and feature
+/// goes, as the request's credential, to every request to that server: the service's layers, tiles and feature
 /// pages), so the address the layer keeps has no token in it. `None` when there is none.
 pub(crate) fn without_token(p: &Value) -> Result<Option<Value>, String> {
     use crate::render::rustgis_tiles::arcgis_auth;

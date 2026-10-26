@@ -1722,6 +1722,9 @@ fn hostile_params_never_panic() {
                 | "sourcecoop.products"
                 // Starts a sign-in's callback server (RustGIS's own app on ArcGIS Online).
                 | "arcgis.signIn"
+                // Signs every session out, which the process's other tests use (its junk is
+                // covered by an_arcgis_token_in_a_service_address_reaches_its_layers).
+                | "arcgis.signOut"
         ) {
             continue;
         }
@@ -8402,6 +8405,10 @@ fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
     assert!(!status.to_string().contains("secret.Token-914"));
     s.run("arcgis.signOut", &json!({"portal": "https://secure914.example.org/server/"})).unwrap();
     assert_eq!(arcgis_auth::authorization(&tiles), None);
+    // Junk is refused rather than taken for "every session".
+    for junk in [json!({"portal": 7}), json!({"portal": [true]}), json!({"portal": {"a": 1}})] {
+        assert!(s.run("arcgis.signOut", &junk).is_err());
+    }
     // Another kind of service keeps its own token parameter.
     let wms = "https://wms914.example.org/rest/services/wms?token=keep-it";
     let kept = crate::cmd::service::without_token(&json!({"url": wms, "type": "wms"})).unwrap();

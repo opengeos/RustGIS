@@ -9,7 +9,8 @@
 //! registers that address with the OAuth client id the user gives.
 //!
 //! A token kept here goes, in the `X-Esri-Authorization` header ([`with_token`]'s `token`
-//! parameter in the browser), only to the addresses its
+//! parameter in the browser, so the portal's and any proxy's request logs may keep it there, as
+//! with ArcGIS's own web apps), only to the addresses its
 //! session covers ([`Scope`]): the portal itself and, for ArcGIS Online, the organization's
 //! hosted services (`*.arcgis.com/<org id>/…`); for ArcGIS Enterprise, the portal's host and
 //! its federated servers. A token given with a service's address (`…/FeatureServer?token=…`,
@@ -285,6 +286,15 @@ impl Scope {
     }
 
     fn covers(&self, origin: &str, path: &str) -> bool {
+        // A path whose dot segments a client would resolve (`/server/../other/`) is judged by
+        // where it leads, so it gets no token at all.
+        let lower = path.to_ascii_lowercase();
+        if lower.split('/').any(|seg| {
+            let seg = seg.replace("%2e", ".");
+            seg == "." || seg == ".."
+        }) {
+            return false;
+        }
         match self {
             Scope::Prefix { origin: o, path: p } => {
                 if o != origin {
@@ -538,6 +548,15 @@ pub fn renewal_due(url: &str) -> Option<Renewal> {
 pub fn renewal_done(r: &Renewal, answer: Result<&[u8], String>) {
     let mut all = sessions();
     let Some(i) = all.iter().position(|s| s.portal == r.portal && s.refresh_token.as_deref() == Some(r.refresh.as_str())) else { return };
+    // An answer that isn't a JSON object (a proxy's error page) says nothing of the refresh
+    // token: tried again later, as an unreachable portal is.
+    let answer = answer.and_then(|body| {
+        if serde_json::from_slice::<Value>(body).is_ok_and(|v| v.is_object()) {
+            Ok(body)
+        } else {
+            Err("the portal's answer isn't JSON".to_string())
+        }
+    });
     match answer.map(|body| parse_grant(body, now_secs())) {
         Ok(Ok(grant)) => {
             if let Some(s) = all.get_mut(i) {
@@ -669,7 +688,7 @@ pub fn list() -> Vec<Info> {
 
 /// The session signed in to `portal` (a base as [`portal_base`] gives), if any.
 pub fn signed_in(portal: &str) -> Option<Info> {
-    list().into_iter().find(|s| s.portal == portal)
+    list().into_iter().find(|s| s.portal == portal && !s.token)
 }
 
 /// A revocation to send after a sign-out: the endpoint and its form.
@@ -698,17 +717,6 @@ pub fn sign_out(portal: Option<&str>) -> (Vec<Revocation>, usize) {
     });
     let gone = before - all.len();
     (revocations, gone)
-}
-
-/// The hint for a service that answered "Token Required" (499) or "Invalid Token" (498).
-pub fn refused_hint(code: i64) -> Option<&'static str> {
-    match code {
-        499 => Some(
-            "the service is secured: sign in to its ArcGIS portal (Add Service › Sign in to ArcGIS, or arcgis.signIn), or add the service's address with ?token=…",
-        ),
-        498 => Some("the ArcGIS token was refused (it may have expired): sign in to the portal again"),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -787,13 +795,22 @@ mod native {
             .into()
     }
 
+    /// POSTs a form; a refusal's answer (an OAuth `error`, often with HTTP 400) is returned for
+    /// the caller to read, while a server error (5xx) counts as the portal not being reached.
     fn post_form(url: &str, body: &str) -> Result<Vec<u8>, String> {
         let resp = agent()
             .post(url)
+            .config()
+            .http_status_as_error(false)
+            .build()
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Accept", "application/json")
             .send(body)
             .map_err(|e| format!("couldn't reach the portal: {e}"))?;
+        let status = resp.status().as_u16();
+        if status >= 500 {
+            return Err(format!("the portal answered HTTP {status}"));
+        }
         resp.into_body().with_config().limit(1 << 20).read_to_vec().map_err(|e| e.to_string())
     }
 
@@ -1002,7 +1019,12 @@ mod native {
     fn request_target(stream: &mut TcpStream) -> Option<String> {
         let mut buf = Vec::new();
         let mut chunk = [0u8; 2048];
+        // A client trickling bytes doesn't hold the server past a few seconds.
+        let until = Instant::now() + Duration::from_secs(5);
         while !buf.windows(2).any(|w| w == b"\r\n") {
+            if Instant::now() >= until {
+                return None;
+            }
             let n = stream.read(&mut chunk).ok()?;
             if n == 0 || buf.len() > 16 << 10 {
                 return None;

@@ -11,6 +11,10 @@ use rustgis_ui_egui::Slot;
 use rustgis_ui_egui::rustgis_engine::render::rustgis_tiles::{arcgis_auth, cache};
 use wasm_bindgen::JsCast as _;
 
+/// How long a request to the portal may take before it is given up.
+const REQUEST_MS: i32 = 30_000;
+/// The largest answer read from the portal.
+const MAX_ANSWER: usize = 4 << 20;
 /// How long the user has to finish the portal's page.
 const SIGN_IN_MS: f64 = 5.0 * 60_000.0;
 
@@ -69,17 +73,42 @@ async fn request(url: &str, form: Option<&str>, token: Option<&str>) -> Result<V
         headers.set("X-Esri-Authorization", &format!("Bearer {t}")).map_err(err)?;
     }
     init.set_headers(&headers);
-    let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str_and_init(url, &init))
-        .await
-        .map_err(|_| "couldn't reach the portal".to_string())?
-        .dyn_into()
-        .map_err(err)?;
-    let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?).await.map_err(err)?;
-    let bytes = js_sys::Uint8Array::new(&buf);
-    if bytes.length() as usize > 4 << 20 {
-        return Err("the portal's answer is too large".into());
+    // A portal that never answers is given up, so a sign-in or a renewal can't hang for good.
+    let abort = web_sys::AbortController::new().map_err(err)?;
+    init.set_signal(Some(&abort.signal()));
+    let stop = {
+        let abort = abort.clone();
+        wasm_bindgen::closure::Closure::once_into_js(move || abort.abort())
+    };
+    let timer = window.set_timeout_with_callback_and_timeout_and_arguments_0(stop.unchecked_ref(), REQUEST_MS).ok();
+    let read = async {
+        let resp: web_sys::Response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str_and_init(url, &init))
+            .await
+            .map_err(|_| "couldn't reach the portal".to_string())?
+            .dyn_into()
+            .map_err(err)?;
+        // A server error says nothing of the request: it counts as the portal not being reached.
+        if resp.status() >= 500 {
+            return Err(format!("the portal answered HTTP {}", resp.status()));
+        }
+        let length = resp.headers().get("content-length").ok().flatten().and_then(|l| l.parse::<usize>().ok());
+        if length.is_some_and(|n| n > MAX_ANSWER) {
+            return Err("the portal's answer is too large".into());
+        }
+        let buf = wasm_bindgen_futures::JsFuture::from(resp.array_buffer().map_err(err)?)
+            .await
+            .map_err(|_| "couldn't reach the portal".to_string())?;
+        let bytes = js_sys::Uint8Array::new(&buf);
+        if bytes.length() as usize > MAX_ANSWER {
+            return Err("the portal's answer is too large".into());
+        }
+        Ok(bytes.to_vec())
+    };
+    let result = read.await;
+    if let Some(t) = timer {
+        window.clear_timeout_with_handle(t);
     }
-    Ok(bytes.to_vec())
+    result
 }
 
 /// Signs in to `portal` (blank: ArcGIS Online) with `client_id` (blank: RustGIS's own app on
@@ -149,8 +178,15 @@ pub async fn renew_if_due(url: &str) {
         return;
     }
     let Some(r) = arcgis_auth::renewal_due(url) else { return };
+    /// Clears the flag however the renewal ends, the fetch that started it dropped included.
+    struct Renewing;
+    impl Drop for Renewing {
+        fn drop(&mut self) {
+            RENEWING.set(false);
+        }
+    }
     RENEWING.set(true);
+    let _renewing = Renewing;
     let answer = request(&r.endpoint, Some(&r.body), None).await;
     arcgis_auth::renewal_done(&r, answer.as_deref().map_err(String::clone));
-    RENEWING.set(false);
 }

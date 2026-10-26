@@ -97,6 +97,10 @@ fn token(_s: &mut Session, p: &Value) -> CmdResult {
 }
 
 fn sign_out(_s: &mut Session, p: &Value) -> CmdResult {
+    // Only an absent (or blank) portal means every session: junk is refused, not taken for it.
+    if p.get("portal").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("portal is a signed-in portal's address (arcgis.status lists them)".into());
+    }
     let portal = match ps(p, "portal").map(str::trim).filter(|s| !s.is_empty()) {
         // A portal's address in any of its forms, or a server root as arcgis.status lists it.
         Some(given) => {
