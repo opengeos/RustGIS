@@ -51,8 +51,10 @@ fn read_depth(r: Node, layer: &str, style: &mut Style, report: &mut Report, dept
     let turned = symbols.values().any(|n| symbol::turns_by_field(*n));
     let read = |n: Node, report: &mut Report| {
         let c = symbol::read(n, reference, turned, layer, report);
-        if let (Some(r), Ok(mut had)) = (&c.rotation, rotation.try_borrow_mut()) {
-            had.get_or_insert_with(|| r.clone());
+        if let (Some(r), Ok(mut had)) = (&c.rotation, rotation.try_borrow_mut())
+            && *had.get_or_insert_with(|| r.clone()) != *r
+        {
+            report.approximated(layer, "marker layers turned by different fields, all turned by the first");
         }
         c
     };

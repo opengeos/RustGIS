@@ -762,4 +762,27 @@ fn marker_symbols_of_several_layers_carry_over_as_marks_turned_by_their_field() 
     assert!(!still[0].markers.unwrap().rotate, "the antenna keeps still");
     // The cliff's one centred character turns as the symbol does: no marks of its own.
     assert!(!class_strokes.contains_key("Fels"), "{class_strokes:?}");
+    let turned = |r: &Report| r.notes.iter().any(|n| n.text.contains("turned by different fields"));
+    assert!(!turned(&report), "{:?}", report.notes);
+    // Classes turned by different fields all turn by the first: said.
+    let qml = format!(
+        r#"<qgis version="3.40.0"><renderer-v2 type="categorizedSymbol" attr="Symbol"><categories>
+          <category value="Antenne" symbol="0" label="Antenne" render="true"/><category value="Fels" symbol="1" label="Fels" render="true"/></categories>
+          <symbols><symbol type="marker" name="0" alpha="1">{}</symbol><symbol type="marker" name="1" alpha="1">{}</symbol></symbols></renderer-v2></qgis>"#,
+        font("D", "0,0,0,255", "1.3"),
+        font("P", "0,0,0,255", "1.5").replace(&dd("- &quot;WINKEL&quot;"), &dd("&quot;RICHTUNG&quot;"))
+    );
+    let mut report = Report::default();
+    let s = read_style(&qml, "Signs", &mut report).unwrap();
+    assert_eq!(s.marker_rotation.flatten().map(|r| r.field), Some("WINKEL".into()));
+    assert!(turned(&report), "{:?}", report.notes);
+
+    // QGIS 2's `dd_properties` are still noted.
+    let old = r#"<qgis version="2.18.0"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1">
+      <layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="name" value="star"/></Option>
+      <dd_properties><Option type="Map" name="angle"><Option name="active" value="true"/></Option></dd_properties></layer>
+      </symbol></symbols></renderer-v2></qgis>"#;
+    let mut report = Report::default();
+    read_style(old, "Signs", &mut report).unwrap();
+    assert!(report.notes.iter().any(|n| n.text.contains("data-defined")), "{:?}", report.notes);
 }

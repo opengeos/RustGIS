@@ -69,7 +69,12 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
     let is_marker = !matches!(sym.attribute("type"), Some("fill") | Some("line"));
     let mut rotation = None;
     for node in std::iter::once(sym).chain(layers.iter().map(|(l, _)| *l)) {
-        for (name, property) in active_properties(node) {
+        let active = active_properties(node);
+        // A layout `active_properties` doesn't read (QGIS 2's `dd_properties`) is still noted.
+        if active.is_empty() && data_defined_on(node) {
+            report.skipped(layer, "data-defined symbol settings (from fields or expressions)");
+        }
+        for (name, property) in active {
             match field_angle(property).filter(|_| is_marker && name == "angle") {
                 Some(r) if rotation.as_ref().is_none_or(|had| *had == r) => rotation = Some(r),
                 Some(_) => report.approximated(layer, "marker layers turned by different fields, all turned by the first"),

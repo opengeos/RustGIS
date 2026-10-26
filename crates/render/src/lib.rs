@@ -3102,7 +3102,16 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
                     for (row, g) in drawn.iter().enumerate() {
                         let Some(g) = g else { continue };
-                        if rows.get(row) != Some(&true) || !visible(&extents.get(row).copied().unwrap_or_else(|| g.extent())) {
+                        let e = extents.get(row).copied().unwrap_or_else(|| g.extent());
+                        // A point's marks, shifted from it, may show while the point is off the view.
+                        let marked_in = || {
+                            globe.is_none() && matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) && {
+                                let (sym, strokes) = layer.style(row);
+                                let r = f64::from(point_marks::reach(&sym, strokes)) * view.camera.res;
+                                !strokes.is_empty() && Extent::new(e.min_x - r, e.min_y - r, e.max_x + r, e.max_y + r).intersects(&ctx.cull)
+                            }
+                        };
+                        if rows.get(row) != Some(&true) || !(visible(&e) || marked_in()) {
                             continue;
                         }
                         // A picture draws in its row's turn, so graphics keep their order. (On the globe
@@ -5846,6 +5855,10 @@ mod tests {
         let is_red = |r: &Rendered, x: u32, y: u32| r.pixmap.pixel(x, y).is_some_and(|p| (p.red(), p.green(), p.alpha()) == (255, 0, 255));
         let r = render(&mut m, &view).unwrap();
         assert!(is_red(&r, 130, 100) && !is_red(&r, 100, 100), "right of the point, the symbol's own marker gone");
+        // The point 20 px left of the view, past its cull margin: its mark still shows, 10 px in.
+        let left = View { camera: Camera { center: Coord::new(camera.center.x + 120.0 * camera.res, camera.center.y), ..camera }, ..view };
+        let r = render(&mut m, &left).unwrap();
+        assert!(is_red(&r, 10, 100), "a mark shifted into the view");
         m.layer_mut(id).unwrap().marker_rotation = Some(MarkerRotation { field: "a".into(), counterclockwise: false });
         let r = render(&mut m, &view).unwrap();
         assert!(is_red(&r, 100, 130) && !is_red(&r, 130, 100), "turned to below it");
