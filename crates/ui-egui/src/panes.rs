@@ -2254,6 +2254,10 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                         "asc",
                         // A File Geodatabase's folder, listed as data above.
                         "gdb",
+                        // Databases holding several layers, which ask which to add (#934).
+                        "gpkg",
+                        "duckdb",
+                        "ddb",
                         "rgis",
                         "rgisx",
                         "rgispkg",

@@ -15,12 +15,16 @@ pub struct Chooser {
     /// Its layers, and whether each is ticked.
     layers: Vec<(String, bool)>,
     filter: String,
+    /// The project it was opened for (`Session::opened`): another project opened since drops it,
+    /// so its layers never go to the wrong project.
+    opened: u64,
 }
 
 /// Whether a file lists its layers without reading their features, so it can ask which to add:
 /// a File Geodatabase (or one of its tables), a GeoPackage, a DuckDB database or a file GDAL reads.
-/// Files read whole (KML, GPX, zips) and those whose "layer" means something else (a DXF's drawing
-/// layers, a spreadsheet's sheet) add as before.
+/// Files read whole (KML, GPX, zips), those that always hold one layer (GeoParquet, FlatGeobuf,
+/// LAS/LAZ) and those whose "layer" means something else (a DXF's drawing layers, a spreadsheet's
+/// sheet) add as before.
 pub fn lists_layers(path: &str) -> bool {
     if cfg!(target_arch = "wasm32") {
         return false;
@@ -36,7 +40,8 @@ pub fn lists_layers(path: &str) -> bool {
             return true;
         }
     }
-    rustgis_engine::data::source::is_source_name(&lower)
+    // Of the formats read in place, only a GeoPackage holds several layers.
+    lower.ends_with(".gpkg")
 }
 
 /// Adds a file the user dropped, picked or double-clicked: a project opens, and a file with
@@ -57,7 +62,8 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
         let result = session.run("info.fileLayers", &json!({"path": listed}));
         *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
-    app.ui.choosing.push(Chooser { path: path.to_string(), listing: Some(slot), layers: Vec::new(), filter: String::new() });
+    let opened = app.session.opened;
+    app.ui.choosing.push(Chooser { path: path.to_string(), listing: Some(slot), layers: Vec::new(), filter: String::new(), opened });
     Ok(json!({"choosing": path}))
 }
 
@@ -74,6 +80,9 @@ fn add_chosen(app: &mut RustGisApp, path: &str, layers: &[String]) {
 /// Shows the first file waiting to be chosen from; one that turns out to hold a single layer (or
 /// can't be listed) is added as it would have been.
 pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
+    // Files chosen from for a project since replaced (new, open, sample) are dropped.
+    let opened = app.session.opened;
+    app.ui.choosing.retain(|c| c.opened == opened);
     let Some(c) = app.ui.choosing.first_mut() else { return };
     if let Some(slot) = &c.listing {
         let landed = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -126,8 +135,11 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             let total = c.layers.len().to_string();
             ui.label(egui::RichText::new(crate::i18n::fmt("{n} layers: choose the ones to add.", &[("n", &total)])).color(t.text_dim));
             // A filter for a long list (a geodatabase can hold hundreds of tables).
+            let mut typing = false;
             if c.layers.len() > 8 {
-                ui.add(egui::TextEdit::singleline(&mut c.filter).hint_text(tl!("Filter layers")).desired_width(f32::INFINITY));
+                let filter = ui.add(egui::TextEdit::singleline(&mut c.filter).hint_text(tl!("Filter layers")).desired_width(f32::INFINITY));
+                // Enter in the filter ends the typing (a single line gives up its focus on it).
+                typing = filter.has_focus() || filter.lost_focus();
             }
             let needle = c.filter.trim().to_lowercase();
             let shows = |name: &str| needle.is_empty() || name.to_lowercase().contains(&needle);
@@ -155,7 +167,7 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     .add_enabled_ui(enabled, |ui| crate::widgets::dialog_button(ui, &label, Some(t.accent), egui::vec2(84.0, 28.0)))
                     .inner
                     .clicked();
-                if enabled && (clicked || ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                if enabled && (clicked || (!typing && ui.input(|i| i.key_pressed(egui::Key::Enter)))) {
                     add = Some(chosen.clone());
                 }
                 cancel = crate::widgets::dialog_button(ui, tl!("Cancel"), None, egui::vec2(84.0, 28.0)).clicked();
@@ -192,11 +204,11 @@ mod tests {
         h
     }
 
-    /// A chooser whose listing has already landed.
-    fn listed(path: &str, result: Result<Value, String>) -> Chooser {
+    /// A chooser whose listing has already landed, for the project `opened`.
+    fn listed(opened: u64, path: &str, result: Result<Value, String>) -> Chooser {
         let slot: crate::Slot<Result<Value, String>> = crate::Slot::default();
         *slot.lock().unwrap() = Some(result);
-        Chooser { path: path.to_string(), listing: Some(slot), layers: Vec::new(), filter: String::new() }
+        Chooser { path: path.to_string(), listing: Some(slot), layers: Vec::new(), filter: String::new(), opened }
     }
 
     const KML: &str = r#"<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
@@ -218,9 +230,10 @@ mod tests {
         let names: Vec<String> =
             listing.as_ref().unwrap()["layers"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
         assert_eq!(names.len(), 2, "{listing:?}");
-        app.ui.choosing.push(listed(&kml, listing));
-        let before = app.session.map().layers.len();
         let mut h = harness(app);
+        let opened = h.state().session.opened;
+        let before = h.state().session.map().layers.len();
+        h.state_mut().ui.choosing.push(listed(opened, &kml, listing));
         h.run_steps(2);
         let c = h.state().ui.choosing.first().unwrap();
         assert!(c.listing.is_none());
@@ -238,22 +251,30 @@ mod tests {
         let geojson = dir.path().join("one.geojson");
         std::fs::write(&geojson, r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#).unwrap();
         let geojson = geojson.display().to_string();
-        h.state_mut().ui.choosing.push(listed(&geojson, Ok(json!({"count": 1, "layers": ["one"]}))));
+        h.state_mut().ui.choosing.push(listed(opened, &geojson, Ok(json!({"count": 1, "layers": ["one"]}))));
         h.run_steps(2);
         assert!(h.state().ui.choosing.is_empty());
         assert_eq!(h.state().session.map().layers.len(), before + 2);
         let mark = h.state().session.notice_mark();
-        h.state_mut().ui.choosing.push(listed("/nonexistent/x.gpkg", Err("no such file".into())));
+        h.state_mut().ui.choosing.push(listed(opened, "/nonexistent/x.gpkg", Err("no such file".into())));
         h.run_steps(2);
         assert!(h.state().ui.choosing.is_empty());
         assert!(!h.state().session.notices_since(mark).is_empty());
         // Cancel adds nothing.
-        h.state_mut().ui.choosing.push(listed(&kml, Ok(json!({"count": 2, "layers": names}))));
+        h.state_mut().ui.choosing.push(listed(opened, &kml, Ok(json!({"count": 2, "layers": names.clone()}))));
         h.run_steps(2);
         h.get_by_label("Cancel").click();
         h.run_steps(2);
         assert!(h.state().ui.choosing.is_empty());
         assert_eq!(h.state().session.map().layers.len(), before + 2);
+        // Another project opened while a file waits: its layers never go to the new project.
+        h.state_mut().ui.choosing.push(listed(opened, &kml, Ok(json!({"count": 2, "layers": names}))));
+        h.state_mut().session.run("project.new", &json!({})).unwrap();
+        assert_ne!(h.state().session.opened, opened);
+        let fresh = h.state().session.map().layers.len();
+        h.run_steps(2);
+        assert!(h.state().ui.choosing.is_empty());
+        assert_eq!(h.state().session.map().layers.len(), fresh);
     }
 
     /// The setting: off, a file is added whole without listing it; it is kept as a preference.
@@ -283,7 +304,7 @@ mod tests {
         for p in ["/data/roads.gdb", "/data/roads.gdb/", "/data/roads.gdb/a00000009.gdbtable", "x.gpkg", "x.duckdb"] {
             assert!(lists_layers(p), "{p}");
         }
-        for p in ["x.geojson", "x.kml", "x.zip", "x.dxf", "x.xlsx", "x.tif", "x.csv"] {
+        for p in ["x.geojson", "x.kml", "x.zip", "x.dxf", "x.xlsx", "x.tif", "x.csv", "x.parquet", "x.fgb", "x.las", "x.laz", "x.shp"] {
             assert!(!lists_layers(p), "{p}");
         }
     }
