@@ -101,7 +101,7 @@ And alongside it:
   first._
 - Open GeoLibre `.geolibre` projects as maps, the way supported QGIS projects open
   ([#962](https://github.com/opengeos/RustGIS/issues/962)). GeoLibre opening
-  `.rgis` projects follows once RustGIS reads a wider range of data.
+  `.rgis` projects comes later, once RustGIS's project format and supported data types settle.
 - A date and date-time field type, read and written as dates (they are text today)
   ([#853](https://github.com/opengeos/RustGIS/issues/853)). _Coordinate first_ (it changes
   `FieldType`).

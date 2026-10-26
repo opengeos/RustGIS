@@ -41,8 +41,8 @@ They differ in how they are built and who they suit:
 They complement each other rather than compete: GeoLibre is web and mobile first, RustGIS
 desktop first and built for automation and AI agents. If you want the widest data access and the
 most platforms, choose GeoLibre. If you want a compact native desktop GIS with a classic ribbon
-workflow and a scriptable command engine, choose RustGIS. Both work on local files on your machine; remote features, such as web
-data and AI providers, send requests over the network. See
+workflow and a scriptable command engine, choose RustGIS. Both work on local files on your
+machine; remote features, such as web data and AI providers, send requests over the network. See
 [RustGIS and GeoLibre](geolibre.md) for a closer look.
 
 ## At a glance

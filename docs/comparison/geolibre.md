@@ -159,8 +159,9 @@ GeoTIFF (GeoPackage export is desktop only in RustGIS).
 
 Neither opens the other's project file yet; for now, move the data across and restyle it. The
 plan is for RustGIS to open `.geolibre` projects first
-([#962](https://github.com/opengeos/RustGIS/issues/962)), and for GeoLibre to
-open `.rgis` projects once RustGIS reads a wider range of data.
+([#962](https://github.com/opengeos/RustGIS/issues/962)). GeoLibre opening `.rgis` projects
+comes later, once RustGIS's project format and the data types it supports settle: RustGIS is
+still changing quickly, and GeoLibre would otherwise be reading a moving target.
 
 They also share their geoprocessing. RustGIS's **Analyze › Tools** offers the GeoLibre and
 Whitebox suite through the optional `geolibre` program on desktop and an on-demand WebAssembly
