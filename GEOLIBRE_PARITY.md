@@ -15,9 +15,10 @@ section; RustGIS [ROADMAP.md](ROADMAP.md), [docs/](docs/) and the command regist
 strike those through with a reason rather than leaving them open.
 
 This list is a reference, not a plan: not every GeoLibre feature suits RustGIS. Some are left
-to GeoLibre by decision ([#951](https://github.com/opengeos/RustGIS/discussions/951)), each
-struck through below with its reason: mobile apps and field work, real-time collaboration and
-sharing, an SQL engine in the browser, and AI segmentation.
+to GeoLibre by decision ([#951](https://github.com/opengeos/RustGIS/discussions/951)): mobile
+apps and field work, real-time collaboration and sharing, and AI segmentation are struck through
+below with their reasons, and the Spatial SQL item notes that an SQL engine in the browser is
+GeoLibre's too.
 
 ## Data formats & sources
 _GeoLibre: docs/data-formats.md, docs/features.md › Adding data, SQL and databases_
