@@ -417,7 +417,8 @@ fn new_name(labels: &Labeling) -> String {
 fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     heading(ui, "Field");
     let fields = &l.dataset.fields;
-    let key = layer_key(app, l).with("label_pane_field_filter");
+    // The class's own: one typed for another class would hide this one's field.
+    let key = egui::Id::unique((layer_key(app, l), c.name)).with("label_pane_field_filter");
     let mut filter = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
     // Only while its box shows: one kept from when the layer had more fields would hide some, with
     // no box to clear it in.
@@ -1194,6 +1195,32 @@ mod tests {
         h.run();
         h.get_by_label(to).click();
         h.run();
+    }
+
+    /// The field filter is the class's (#858): another class shows every field, its own among
+    /// them, and the first gets its filter back.
+    #[test]
+    fn each_class_has_its_own_field_filter() {
+        use egui::accesskit::Role;
+        super::families::installed();
+        let mut app = RustGisApp::with_sample();
+        // Countries has more fields than the list shows, so it has a filter.
+        let id = layer_id(&app, "Countries");
+        app.session.run("layer.select", &json!({"layer": id})).unwrap();
+        app.run("labels.class.add", json!({"name": "Big"})).unwrap();
+        app.run("labels.field", json!({"class": "Big", "field": "iso_a3"})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        h.get_by_role(Role::TextInput).focus();
+        h.run();
+        h.get_by_role(Role::TextInput).type_text("pop");
+        h.run();
+        assert!(h.query_by_role_and_label(Role::Button, "iso_a3").is_none(), "Default's list is filtered");
+        pick_class(&mut h, "Default", "Big");
+        assert!(h.query_by_role_and_label(Role::Button, "iso_a3").is_some(), "Big's field is in its list");
+        assert!(h.query_by_role_and_label(Role::Button, "continent").is_some(), "Big's list is whole");
+        pick_class(&mut h, "Big", "Default");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("pop"), "Default keeps its filter");
     }
 
     /// The pane edits the class chosen, and only it; its steps name it, and Default's name none
