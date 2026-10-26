@@ -3418,7 +3418,7 @@ pub(crate) const SCALES: [f64; 10] =
 pub(crate) fn scale_label(s: Option<f64>) -> String {
     match s {
         None => tl!("<None>").into(),
-        Some(v) => format!("1:{}", fmt_thousands(v)),
+        Some(v) => rustgis_engine::map::graphics::scale_ratio(v),
     }
 }
 

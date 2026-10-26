@@ -11,6 +11,33 @@ use crate::PlacedLabel;
 use rustgis_map::Camera;
 use rustgis_tiles::cache::Payload;
 
+/// How many physical pixels from its origin a vertex may lie: an f32 holds 24 bits, and
+/// rounding the vertex and the shader's sum each cost up to half a unit in the last place, so
+/// within 2^23 px the error stays under a pixel. Zoomed in further, the renderer draws such
+/// features on the CPU (#902), and a scene's meshes are not moved past it ([`reach`]).
+pub const F32_REACH_PX: f64 = 8_388_608.0;
+
+/// Whether vertices up to `reach` map units from their origin land within a pixel of where they
+/// belong at `map_per_px` map units per physical pixel.
+pub fn f32_holds(reach: f64, map_per_px: f64) -> bool {
+    reach / map_per_px <= F32_REACH_PX
+}
+
+/// The farthest any vertex of `cmds` lies from its command's origin, in map units: how far in
+/// the scene can be zoomed before f32 moves its vertices (see [`f32_holds`]). Raster and
+/// vector tiles are left out: each sits on its own tile's corner.
+pub fn reach(cmds: &[DrawCmd]) -> f64 {
+    let far = |p: &[f32]| p.iter().fold(0f64, |m, v| m.max(f64::from(v.abs())));
+    cmds.iter()
+        .map(|c| match c {
+            DrawCmd::Mesh { vertices, .. } => vertices.iter().map(|v| far(&v.position)).fold(0.0, f64::max),
+            DrawCmd::Points { instances, .. } => instances.iter().map(|p| far(&p.position)).fold(0.0, f64::max),
+            DrawCmd::Extrusion { vertices, .. } => vertices.iter().map(|v| far(&v.position[..2])).fold(0.0, f64::max),
+            _ => 0.0,
+        })
+        .fold(0.0, f64::max)
+}
+
 /// A finished GPU scene: draw commands in bottom-first order plus the same side channels
 /// (labels, attribution, pending flags) the CPU render returns in [`crate::Rendered`].
 pub struct GpuScene {

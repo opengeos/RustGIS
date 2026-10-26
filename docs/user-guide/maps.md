@@ -15,8 +15,10 @@ latitude. **New Bookmark…** saves the current view under a name, with an optio
 the place. The Bookmarks menu removes a bookmark with the button beside it, and exports or imports
 them as a `.rgisbookmarks` file. Imported bookmarks show the same place on a map in another
 projection; places that projection can't show are skipped. Type a scale in the status bar to jump
-to it. Beside it are the zoom level, bearing and pitch; click them to face north and look straight
-down again. More navigation tools are under [View effects](#view-effects) below.
+to it: the map zooms from the whole world in past 2:1, close enough for site plans at 1:20 and
+finds drawings at 1:1 (type `2:1` for twice life size). Beside it are the zoom level, bearing
+and pitch; click them to face north and look straight down again. More navigation tools are
+under [View effects](#view-effects) below.
 
 **Measurement units.** In **Home › Inspect › Measure**, choose **Metric** or **Imperial**.
 The choice is remembered and updates existing distance and area measurements, the live

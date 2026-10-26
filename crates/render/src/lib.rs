@@ -2699,12 +2699,10 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 let mut tessellated = false;
                 if gpu {
                     flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-                    let e = g.extent();
-                    tessellated =
-                        mesh::collect_basemap(&mut cmds, polys, [e.center().x, e.center().y], land, outline, ctx.ppp, map_per_px).is_ok();
+                    tessellated = mesh::collect_basemap(&mut cmds, polys, &g.extent(), land, outline, ctx.ppp, map_per_px).is_ok();
                 }
                 if gpu && !tessellated {
-                    // Lyon refused: tiny-skia still draws the outline.
+                    // Lyon refused, or it's too large for f32 this far in: tiny-skia still draws it.
                     ctx.polygon(&mut pm, polys, Some(fill.clone()), stroke.clone());
                     cpu_dirty = true;
                 } else if !gpu {
@@ -2755,8 +2753,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 }
             }
             flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)?;
-            let tessellated = !e.is_empty()
-                && mesh::collect_graticule(&mut cmds, &lines, [e.center().x, e.center().y], grat, ctx.ppp, map_per_px).is_ok();
+            let tessellated = !e.is_empty() && mesh::collect_graticule(&mut cmds, &lines, &e, grat, ctx.ppp, map_per_px).is_ok();
             if !tessellated {
                 ctx.line(&mut pm, &lines, &p, 0.6);
                 cpu_dirty = true;
@@ -2997,11 +2994,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 && !layer.graphics
                 && !layer.has_strokes()
                 && !upright.contains(&layer.id);
-            // Lyon refuses degenerate geometry tiny-skia draws fine, and a layer too dense to mesh
-            // (`MAX_LAYER_VERTICES`) is quicker splatted: collect_layer reports both, and the layer
-            // runs the CPU branch below like any ineligible one. It meshes the thinned copy the
-            // CPU draws. A turned or tilted view takes no CPU pictures (`gpu_turned`), so there
-            // such a layer sends the whole view to the CPU renderer, not just itself.
+            // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
+            // (`MAX_LAYER_VERTICES`) is quicker splatted, and zoomed in far, features reaching too
+            // far for f32 are drawn where they are by the CPU (#902): collect_layer reports all
+            // three, and the layer runs the CPU branch below like any ineligible one. It meshes the
+            // thinned copy the CPU draws. A turned or tilted view takes no CPU pictures
+            // (`gpu_turned`), so there such a layer sends the whole view to the CPU renderer, not
+            // just itself.
             let mut gpu_done = false;
             if gpu_layer {
                 flush_acc(&mut pm, &mut cmds, &mut cpu_dirty)
@@ -3023,7 +3022,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 mesh_room = match collected {
                     Ok(used) => mesh_room.saturating_sub(used),
                     Err(mesh::TessError::TooDense) => 0,
-                    Err(mesh::TessError::Refused) => mesh_room,
+                    Err(mesh::TessError::Refused | mesh::TessError::Imprecise) => mesh_room,
                 };
                 gpu_done = collected.is_ok();
             }
@@ -5116,6 +5115,41 @@ mod tests {
         let kinds = cmd_kinds(&scene);
         assert_eq!(kinds.last(), Some(&"mesh"), "the highlight mesh follows the layer: {kinds:?}");
         assert!(kinds.iter().filter(|k| **k == "mesh").count() >= 2, "layer mesh + highlight mesh: {kinds:?}");
+    }
+
+    #[test]
+    fn zoomed_in_past_f32_large_features_are_drawn_on_the_cpu_where_they_are() {
+        // A 10° square's west edge at the deepest zoom (#902): its vertices lie hundreds of km
+        // from the mesh's origin, which f32 can't hold to a pixel at a tenth of a millimetre per
+        // pixel, so the layer is drawn on the CPU, with the edge through the middle of the view.
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        square_layer(&mut m, "s", 0.0, 40.0, 10.0);
+        let mut camera = Camera::world();
+        camera.center = rustgis_geom::lonlat_to_merc(Coord::new(0.0, 45.0));
+        camera.res = rustgis_map::camera::MIN_RES;
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        assert!(!kinds.contains(&"mesh"), "no mesh f32 would misplace: {kinds:?}");
+        let Some(pixmap) = scene.cmds.iter().find_map(|c| match c {
+            gpu_scene::DrawCmd::Image { pixmap } => Some(pixmap),
+            _ => None,
+        }) else {
+            panic!("the square is drawn on the CPU: {kinds:?}")
+        };
+        let alpha = |x: u32| pixmap.pixel(x, 150).map_or(0, |p| p.alpha());
+        assert_eq!(alpha(195), 0, "west of the edge is outside the square");
+        assert!(alpha(205) > 0, "east of the edge is inside it");
+
+        // Zoomed out, the same square is a mesh, and the scene says how far in it holds.
+        let mut camera = view.camera;
+        camera.res = 1_000.0;
+        let view = View { camera, ..view };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::Gpu) else { panic!("gpu scene") };
+        assert!(cmd_kinds(&scene).contains(&"mesh"));
+        let half = (rustgis_geom::lonlat_to_merc(Coord::new(10.0, 50.0)).y - rustgis_geom::lonlat_to_merc(Coord::new(0.0, 40.0)).y) / 2.0;
+        assert!((gpu_scene::reach(&scene.cmds) - half).abs() < 1.0, "reach {} vs {half}", gpu_scene::reach(&scene.cmds));
     }
 
     #[test]

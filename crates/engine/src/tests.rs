@@ -2843,6 +2843,30 @@ fn zooms_to_a_layer_follow_its_definition_query() {
 }
 
 #[test]
+fn layout_frames_print_site_plans_and_finds() {
+    // Excavation plans at 1:20, finds at 1:1 and larger (#902): no longer held at 1:100.
+    use rustgis_map::layout::{ElementKind, MIN_FRAME_SCALE};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "orientation": "landscape", "template": "map"})).unwrap();
+    let scale_of = |s: &Session| {
+        let l = &s.project.layouts[0];
+        match l.element(l.first_frame().unwrap_or_default()).map(|e| &e.kind) {
+            Some(ElementKind::MapFrame { scale, .. }) => *scale,
+            _ => panic!("no frame"),
+        }
+    };
+    let id = s.project.layouts[0].first_frame().unwrap();
+    s.run("layout.update", &json!({"element": id, "scale": 20})).unwrap();
+    assert_eq!(scale_of(&s), 20.0);
+    s.run("layout.update", &json!({"element": id, "scale": 0.1})).unwrap();
+    assert_eq!(scale_of(&s), MIN_FRAME_SCALE, "no larger than 2:1");
+    // A frame matched to a view at 1:1 is a site-scale frame too.
+    s.run("map.goToXY", &json!({"lon": 10.746, "lat": 46.82, "scale": 1})).unwrap();
+    s.run("layout.frameZoom", &json!({"to": "view"})).unwrap();
+    assert!(scale_of(&s) < 100.0, "{}", scale_of(&s));
+}
+
+#[test]
 fn layout_frames_turn_and_tilt() {
     use rustgis_map::layout::ElementKind;
     let mut s = world();

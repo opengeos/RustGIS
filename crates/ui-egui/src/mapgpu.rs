@@ -59,7 +59,7 @@ use std::sync::Arc;
 use egui_wgpu::{CallbackResources, CallbackTrait, RenderState, wgpu};
 use wgpu::util::DeviceExt;
 
-use rustgis_engine::render::gpu_scene::{CmdClip, DrawCmd, GpuScene, MeshTile, SceneTilt, TileMeshVertex, TileQuad};
+use rustgis_engine::render::gpu_scene::{self, CmdClip, DrawCmd, GpuScene, MeshTile, SceneTilt, TileMeshVertex, TileQuad};
 use rustgis_engine::render::rustgis_tiles::cache::Payload;
 use rustgis_engine::render::tile_mesh::TileMesh;
 
@@ -1014,6 +1014,9 @@ pub(crate) struct SceneBuffers {
     pub live: Vec<(rustgis_engine::render::rustgis_tiles::Spec, f32)>,
     /// Every tile layer of the scene is live: a tile arriving needs no new scene.
     pub tiles_live: bool,
+    /// The farthest a vertex lies from its origin (map units, [`gpu_scene::reach`]): zoomed in
+    /// past what f32 holds of it, the scene is drawn again rather than moved (#902).
+    pub reach: f64,
 }
 
 /// The live raster tile layers of a scene placed for the camera of the frame shown.
@@ -1061,15 +1064,18 @@ impl SceneBuffers {
     /// Whether a camera move to `cam` may re-project the scene: a flat, north-up scene for a
     /// flat, north-up view; a turned or tilted one for about the same bearing and pitch, a zoom
     /// and a pan within reach (it covers the ground its own camera showed: a turned view's north-up
-    /// box, a tilted view's bands out to its reach), else it is drawn again.
+    /// box, a tilted view's bands out to its reach), and not zoomed in past what f32 holds of its
+    /// vertices; else it is drawn again.
     pub(crate) fn fits(&self, cam: &Camera) -> bool {
         let pitch = rustgis_engine::map::camera::normalize_pitch(cam.pitch);
-        match &self.tilt {
-            None => cam.bearing == 0.0 && pitch == 0.0,
-            Some(t) => {
-                let turn = rustgis_engine::map::camera::normalize_bearing(cam.bearing - t.camera.bearing).abs();
-                let zoom = cam.res / t.camera.res.max(1e-12);
-                (t.camera.bearing != 0.0) == (cam.bearing != 0.0)
+        let precise = gpu_scene::f32_holds(self.reach, cam.res / f64::from(self.ppp.max(0.1)));
+        precise
+            && match &self.tilt {
+                None => cam.bearing == 0.0 && pitch == 0.0,
+                Some(t) => {
+                    let turn = rustgis_engine::map::camera::normalize_bearing(cam.bearing - t.camera.bearing).abs();
+                    let zoom = cam.res / t.camera.res.max(1e-12);
+                    (t.camera.bearing != 0.0) == (cam.bearing != 0.0)
                     && (t.camera.pitch != 0.0) == (pitch != 0.0)
                     && turn < 0.5
                     && (pitch - t.camera.pitch).abs() < 0.5
@@ -1077,8 +1083,8 @@ impl SceneBuffers {
                     // Panned less than a quarter of the view: the ground it drew still covers it.
                     && (cam.center.x - t.camera.center.x).hypot(cam.center.y - t.camera.center.y)
                         < 0.25 * self.size[0].min(self.size[1]) * t.camera.res
+                }
             }
-        }
     }
 }
 
@@ -1415,7 +1421,8 @@ impl SceneBuffers {
         tile_meshes.end_scene();
         let tiles_live =
             !live.is_empty() && !has_images && !has_tiles && !scene.cmds.iter().any(|c| matches!(c, DrawCmd::TileMeshes { .. }));
-        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, has_tiles, tilt: scene.tilt, live, tiles_live })
+        let reach = gpu_scene::reach(&scene.cmds);
+        Some(SceneBuffers { draws, clear: scene.clear, size, ppp, has_images, has_tiles, tilt: scene.tilt, live, tiles_live, reach })
     }
 
     /// Rewrites every command's camera uniforms for a moved camera — pan/zoom without

@@ -309,7 +309,7 @@ pub fn page_layout(s: &Session, pres: &Presentation, page: &Page) -> Layout {
             let (fw, fh) = (w - 2.0 * m, h - top - m);
             let map =
                 s.project.maps.iter().find(|x| x.name.eq_ignore_ascii_case(map)).map_or_else(|| s.map().name.clone(), |x| x.name.clone());
-            let scale = (width_m / (fw / 1000.0)).clamp(100.0, 1e10);
+            let scale = (width_m / (fw / 1000.0)).clamp(rustgis_map::layout::MIN_FRAME_SCALE, rustgis_map::layout::MAX_FRAME_SCALE);
             l.add(
                 "Map",
                 (m, top, fw, fh),
