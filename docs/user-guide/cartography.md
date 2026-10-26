@@ -258,8 +258,8 @@ it unchanged.
 
 The **Labeling pane** brings together the label classes and the chosen class's field, SQL
 clause, text symbol, placement and visibility limits. Under its header (the layer, labels on or
-off, and the class chosen), a tab per topic shows one part at a time: **Content** (the list of the
-layer's fields, filtered when it is long, above the SQL query), **Symbol**, **Position** and
+off, and the class chosen), a tab per topic shows one part at a time: **Content** (the label field,
+with a search in its list, above the SQL query), **Symbol**, **Position** and
 **Range**. Open it for a feature layer with Layers › right-click › **Labeling Properties…**,
 **View › Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as
 the ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
