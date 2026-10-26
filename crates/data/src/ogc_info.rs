@@ -300,8 +300,9 @@ fn xml_features(root: &Node) -> Result<Vec<InfoFeature>, String> {
         }
         // GML: a feature collection's members (GML 2/3 featureMember(s), WFS 2 member).
         _ => {
-            for member in root.descendants().filter(|n| n.is_element() && matches!(local(n), "featureMember" | "featureMembers" | "member"))
-            {
+            let is_member = |n: &Node| n.is_element() && matches!(local(n), "featureMember" | "featureMembers" | "member");
+            // A member inside another is a feature's attribute (one named `member`), not a feature.
+            for member in root.descendants().filter(|n| is_member(n) && !n.ancestors().skip(1).any(|a| is_member(&a))) {
                 for f in member.children().filter(|c| c.is_element()) {
                     out.push(InfoFeature { layer: Some(local(&f).to_string()), attributes: gml_attributes(&f) });
                 }
@@ -327,10 +328,12 @@ fn plain_features(text: &str) -> Vec<InfoFeature> {
     for line in text.lines().take(100_000) {
         let t = line.trim();
         let quoted = |rest: &str| rest.split(['\'', '"']).nth(1).map(str::to_string);
-        if let Some(rest) = t.strip_prefix("Layer ").or_else(|| t.strip_prefix("Results for FeatureType")) {
+        // A `name = value` line is an attribute, whatever its name starts with ("Layer name = x").
+        let heading = !t.contains(" = ");
+        if let Some(rest) = t.strip_prefix("Layer ").or_else(|| t.strip_prefix("Results for FeatureType")).filter(|_| heading) {
             flush(&layer, &mut current, &mut out);
             layer = quoted(rest).or(layer.take());
-        } else if t.starts_with("Feature ") || (t.len() >= 3 && t.bytes().all(|b| b == b'-' || b == b'=')) {
+        } else if (heading && t.starts_with("Feature ")) || (t.len() >= 3 && t.bytes().all(|b| b == b'-' || b == b'=')) {
             flush(&layer, &mut current, &mut out);
         } else if let Some((k, v)) = t.split_once(" = ")
             && current.len() < MAX_ATTRIBUTES
@@ -476,6 +479,12 @@ mod tests {
                 attributes: vec![("name".into(), "Main St".into()), ("lanes".into(), "2".into())]
             }]
         );
+        // A feature's attribute named `member` is no member of the collection.
+        let wfs2 = br#"<wfs:FeatureCollection xmlns:wfs="http://www.opengis.net/wfs/2.0" xmlns:t="urn:t">
+  <wfs:member><t:clubs><t:name>Chess</t:name><t:member>Ann</t:member></t:clubs></wfs:member></wfs:FeatureCollection>"#;
+        let f = read_feature_info(wfs2).unwrap();
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].layer.as_deref(), Some("clubs"));
         let ms = br#"<msGMLOutput xmlns:gml="http://www.opengis.net/gml"><parks_layer><gml:name>parks</gml:name>
             <parks_feature><gml:boundedBy/><NAME>Central</NAME></parks_feature></parks_layer></msGMLOutput>"#;
         let f = read_feature_info(ms).unwrap();
@@ -499,6 +508,10 @@ mod tests {
         assert_eq!(f.len(), 2);
         assert_eq!(f[1].layer.as_deref(), Some("roads"));
         assert_eq!(f[1].attributes, vec![("name".into(), "Side St".into()), ("lanes".into(), "1".into())]);
+        let named = "Layer 'roads'\n  Feature 3: \n    Feature class = 'Road'\n    Layer name = 'base'\n";
+        let f = read_feature_info(named.as_bytes()).unwrap();
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].attributes, vec![("Feature class".into(), "Road".into()), ("Layer name".into(), "base".into())]);
         let mapserver = "GetFeatureInfo results:\n\nLayer 'parks'\n  Feature 12: \n    NAME = 'Central'\n";
         assert_eq!(read_feature_info(mapserver.as_bytes()).unwrap()[0].attributes, vec![("NAME".into(), "Central".into())]);
         let html = "<html><head><style>p{}</style><script>x()</script></head><body><p>Lake &amp; shore</p></body></html>";
