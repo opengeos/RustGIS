@@ -8656,6 +8656,68 @@ fn identify_asks_wms_layers() {
     assert_eq!(r, json!({"results": []}));
 }
 
+/// A service whose answer in one format is its error (swisstopo's MapServer fails to write GeoJSON
+/// for some layers, its GML answers) is asked again in the next format it offers; once that one
+/// answers, the layer keeps asking in it. Without the request or the point, after an error no
+/// format changes, or with no format left, the error is told.
+#[test]
+fn identify_asks_again_in_the_next_format_after_the_services_error() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/json</Format><Format>application/json; subtype=geojson</Format><Format>application/vnd.ogc.gml</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>lines</Name><Title>Lines</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+    const FAILED: &str = r#"<?xml version='1.0' encoding="UTF-8" standalone="no" ?>
+<ServiceExceptionReport version="1.3.0" xmlns="http://www.opengis.net/ogc"><ServiceException>msOGRWriteFromQuery(): General error message.</ServiceException></ServiceExceptionReport>"#;
+    const GML: &str = r#"<msGMLOutput xmlns:gml="http://www.opengis.net/gml"><thrust_layer><gml:name>thrust</gml:name><thrust_feature><kind_desc>Thrust</kind_desc></thrust_feature></thrust_layer></msGMLOutput>"#;
+    let added = || {
+        let mut s = Session::new(Project::default());
+        s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "lines", "text": WMS})).unwrap();
+        s.run("map.goToXY", &json!({"lon": 8.73, "lat": 47.5, "scale": 10000})).unwrap();
+        s
+    };
+    let ask = |s: &mut Session| {
+        let v = s.run("identify", &json!({"lon": 8.73, "lat": 47.5, "mode": "visible"})).unwrap();
+        v["featureInfo"][0]["url"].as_str().unwrap().to_string()
+    };
+    let answer = |text: &str, url: &str| json!({"layer": "Lines", "text": text, "url": url, "lon": 8.73, "lat": 47.5});
+    let mut s = added();
+    let first = ask(&mut s);
+    assert!(first.contains("&INFO_FORMAT=application%2Fjson&"), "{first}");
+    // Without the request or the point, the error is told as before.
+    let e = s.run("identify.featureInfo", &json!({"layer": "Lines", "text": FAILED})).unwrap_err();
+    assert!(e.starts_with("Lines: the service answered with an error: msOGRWriteFromQuery()"), "{e}");
+    assert!(s.run("identify.featureInfo", &json!({"layer": "Lines", "text": FAILED, "url": first})).is_err());
+    // With them, the request in GML (GeoJSON's other name is left out too); the layer keeps its
+    // own until GML answers, so the same error again leads to GML again.
+    let r = s.run("identify.featureInfo", &answer(FAILED, &first)).unwrap();
+    let gml = r["url"].as_str().unwrap().to_string();
+    assert!(gml.contains("&INFO_FORMAT=application%2Fvnd.ogc.gml&"), "{r}");
+    assert_eq!(r["tileLayer"], "Lines");
+    assert_eq!(ask(&mut s), first);
+    assert_eq!(s.run("identify.featureInfo", &answer(FAILED, &first)).unwrap()["url"], gml.as_str());
+    let r = s.run("identify.featureInfo", &answer(GML, &gml)).unwrap();
+    assert_eq!(r["results"][0]["layer"], "Lines › thrust", "{r}");
+    assert_eq!(r["results"][0]["attributes"]["kind_desc"], "Thrust");
+    assert_eq!(ask(&mut s), gml);
+    // The last format's error is told, and the layer keeps asking in it; a late GeoJSON answer
+    // doesn't bring it back.
+    let e = s.run("identify.featureInfo", &answer(FAILED, &gml)).unwrap_err();
+    assert!(e.contains("msOGRWriteFromQuery()"), "{e}");
+    s.run("identify.featureInfo", &answer(GML, &first)).unwrap();
+    assert_eq!(ask(&mut s), gml);
+    // An error no format changes, or an answer that isn't the service's error, isn't retried.
+    let mut t = added();
+    let not_queryable =
+        r#"<ServiceExceptionReport><ServiceException code="LayerNotQueryable">no</ServiceException></ServiceExceptionReport>"#;
+    assert!(t.run("identify.featureInfo", &answer(not_queryable, &first)).is_err());
+    assert!(t.run("identify.featureInfo", &answer("{oops", &first)).is_err());
+    assert_eq!(ask(&mut t), first);
+    // The project file is as before.
+    let project = serde_json::to_string(&s.project).unwrap();
+    assert!(!project.contains("featureInfo") && !project.contains("vnd.ogc.gml"));
+}
+
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's
 /// features are downloaded (from a local server); unknown layers and documents are refused.
 #[test]

@@ -88,6 +88,9 @@ pub struct Ask {
     /// The other layers waiting for the same capabilities: fetched and read once for all.
     also: Vec<String>,
     capabilities: bool,
+    /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
+    /// ask next after the service's error.
+    request: Option<String>,
     slot: crate::Slot<Result<Vec<u8>, String>>,
 }
 
@@ -114,7 +117,8 @@ impl Popup {
                 fetched.push((url.to_string(), asks.len()));
             }
             let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
-            asks.push(Ask { layer, also: Vec::new(), capabilities, slot });
+            let request = (!capabilities).then(|| url.to_string());
+            asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
         Popup { info, at, index: 0, map, opened, asks }
     }
@@ -2853,7 +2857,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut landed = Vec::new();
     pp.asks.retain_mut(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(r) => {
-            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, r));
+            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, a.request.take(), r));
             false
         }
         None => true,
@@ -2864,7 +2868,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut found = Vec::new();
     let mut next = Vec::new();
     let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
-    for (layer, also, capabilities, r) in landed {
+    for (layer, also, capabilities, request, r) in landed {
         // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
         // first of a service's layers still there takes the capabilities for the rest.
         let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
@@ -2892,13 +2896,16 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
             }
         } else {
-            replies.push((layer.clone(), app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))));
+            // With the request and the point: the service's error in one answer format asks again
+            // in the next.
+            let p = json!({"layer": layer, "text": text, "url": request, "lon": lon, "lat": lat});
+            replies.push((layer.clone(), app.session.run("identify.featureInfo", &p)));
         }
         for (layer, r) in replies {
             let Ok(v) = r else { continue };
             if let Some(url) = v["url"].as_str() {
                 let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
-                next.push(Ask { layer, also: Vec::new(), capabilities: false, slot });
+                next.push(Ask { layer, also: Vec::new(), capabilities: false, request: Some(url.to_string()), slot });
             }
             found.extend(v["results"].as_array().cloned().unwrap_or_default());
         }
