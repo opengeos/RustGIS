@@ -6147,6 +6147,7 @@ mod tests {
     /// Labeling › Convert does, by the command's name.
     #[test]
     fn the_layer_menu_converts_labels_to_annotation() {
+        use egui_kittest::kittest::Queryable;
         let app = RustGisApp::with_sample();
         let layer = app.session.map().layers.iter().find(|l| l.name == "Cities").cloned().unwrap();
         let mut h = egui_kittest::Harness::builder().build_ui_state(|ui, app: &mut RustGisApp| layer_menu(app, ui, &layer, true), app);

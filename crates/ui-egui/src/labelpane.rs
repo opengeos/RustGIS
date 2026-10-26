@@ -90,10 +90,12 @@ fn topic(ui: &mut Ui, t: &Tokens) -> Topic {
     // Measured in the chosen tab's font, so the tabs don't move as another is chosen.
     let text = tabs.map(|(label, _, _)| text_w(ui, tl!(label), semibold(12.5)));
     let room = ui.available_width() - 2.0 * (tabs.len() as f32 - 1.0);
-    let fits = |extra: f32| text.iter().map(|w| w + extra).sum::<f32>() <= room;
-    let (icons, names) = if fits(2.0 * pad + icon + gap) {
+    // A tab's room besides its name, with or without its icon.
+    let extra = |icons: bool| 2.0 * pad + if icons { icon + gap } else { 0.0 };
+    let fits = |icons: bool| text.iter().map(|w| w + extra(icons)).sum::<f32>() <= room;
+    let (icons, names) = if fits(true) {
         (true, true)
-    } else if fits(2.0 * pad) {
+    } else if fits(false) {
         (false, true)
     } else {
         (true, false)
@@ -105,13 +107,7 @@ fn topic(ui: &mut Ui, t: &Tokens) -> Topic {
     for ((label, name, it), w) in tabs.into_iter().zip(text) {
         let shown = tl!(label);
         let on = it == tab;
-        let w = if !names {
-            36.0
-        } else if icons {
-            2.0 * pad + icon + gap + w
-        } else {
-            2.0 * pad + w
-        };
+        let w = if names { extra(icons) + w } else { 36.0 };
         let r = Rect::from_min_size(pos2(x, row.min.y), vec2(w, h));
         x = r.max.x + 2.0;
         let mut resp = ui.interact(r, key.with(label), Sense::click());
@@ -269,10 +265,15 @@ const FIELD_ROWS: usize = 8;
 /// not Class, as the class itself is the one chosen in the card above the tabs.
 fn content(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     field(app, ui, l, c, t);
-    ui.add_space(10.0);
-    ui.label(RichText::new(tl!("SQL Query")).font(semibold(12.5)));
-    ui.add_space(2.0);
+    ui.add_space(4.0);
+    heading(ui, "SQL Query");
     sql(app, ui, l, c, t);
+}
+
+fn heading(ui: &mut Ui, text: &str) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!(text)).font(semibold(12.5)));
+    ui.add_space(2.0);
 }
 
 /// A class being renamed: the name typed so far, for the class it was started on.
@@ -414,16 +415,16 @@ fn new_name(labels: &Labeling) -> String {
 /// The field the class labels with, chosen in a list of the layer's fields, so they show without
 /// opening a menu. A list longer than [`FIELD_ROWS`] scrolls, and a filter above it narrows it.
 fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
-    ui.label(RichText::new(tl!("Field")).font(semibold(12.5)));
-    ui.add_space(2.0);
+    heading(ui, "Field");
     let fields = &l.dataset.fields;
     let key = layer_key(app, l).with("label_pane_field_filter");
     let mut filter = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
     // Only while its box shows: one kept from when the layer had more fields would hide some, with
     // no box to clear it in.
     let needle = if fields.len() > FIELD_ROWS {
-        crate::widgets::search_field(ui, &mut filter, tl!("Filter fields"));
-        ui.data_mut(|d| d.insert_temp(key, filter.clone()));
+        if crate::widgets::search_field(ui, &mut filter, tl!("Filter fields")).changed() {
+            ui.data_mut(|d| d.insert_temp(key, filter.clone()));
+        }
         filter.to_lowercase()
     } else {
         String::new()
@@ -1005,13 +1006,6 @@ mod tests {
         app.session.map().layer(app.session.active_layer.unwrap()).unwrap().labels.default.where_.clone()
     }
 
-    /// Opens the pane on its Content tab, where the SQL query is.
-    fn sql_tab(app: RustGisApp) -> egui_kittest::Harness<'static, RustGisApp> {
-        let mut h = harness(app);
-        h.run();
-        h
-    }
-
     fn type_clause(h: &mut egui_kittest::Harness<'static, RustGisApp>, text: &str) {
         h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
         h.run();
@@ -1025,7 +1019,8 @@ mod tests {
     fn the_sql_tab_applies_a_clause_in_one_step() {
         let app = with_cities();
         let steps = app.session.undo_depth();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("There is no expression defined.");
         h.get_by_label("+ New expression").click();
         h.run();
@@ -1057,7 +1052,8 @@ mod tests {
     fn a_clause_that_doesnt_read_is_not_applied() {
         let app = with_cities();
         let steps = app.session.undo_depth();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max >");
@@ -1072,7 +1068,8 @@ mod tests {
     #[test]
     fn the_draft_follows_the_layer_and_its_clause() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.state_mut().run("labels.class.update", json!({"where": "pop_max > 1"})).unwrap();
         h.run();
         assert_eq!(h.get_by_role(egui::accesskit::Role::MultilineTextInput).value().as_deref(), Some("pop_max > 1"));
@@ -1095,7 +1092,8 @@ mod tests {
         let mut app = with_cities();
         app.run("labels.class.add", json!({"name": "Big", "where": "pop_max > 5000000"})).unwrap();
         app.run("labels.class.update", json!({"visible": false})).unwrap();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         assert!(h.query_by_label_contains("Each class labels the features its own clause matches").is_some());
         h.get_by_label("Show labels").click();
         h.run();
@@ -1108,7 +1106,8 @@ mod tests {
     #[test]
     fn a_draft_is_dropped_with_its_project() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1125,7 +1124,8 @@ mod tests {
     #[test]
     fn a_check_is_dropped_after_a_change() {
         let app = with_cities();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1150,7 +1150,8 @@ mod tests {
         let mut app = with_cities();
         app.run("labels.class.update", json!({"where": "pop_max > 1"})).unwrap();
         app.run("edit.deleteField", json!({"field": "pop_max"})).unwrap();
-        let h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         assert!(h.query_by_label_contains("This clause no longer reads").is_some());
     }
 
@@ -1159,7 +1160,8 @@ mod tests {
     fn a_clause_recorded_from_the_pane_names_the_layer() {
         let mut app = with_cities();
         app.ws.recording = Some(Vec::new());
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 5000000");
@@ -1458,7 +1460,8 @@ mod tests {
     fn sql_drafts_survive_switching_label_classes() {
         let mut app = with_cities();
         app.run("labels.class.add", json!({"name": "Big"})).unwrap();
-        let mut h = sql_tab(app);
+        let mut h = harness(app);
+        h.run();
         h.get_by_label("+ New expression").click();
         h.run();
         type_clause(&mut h, "pop_max > 123");
