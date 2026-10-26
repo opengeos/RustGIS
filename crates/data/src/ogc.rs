@@ -457,7 +457,13 @@ fn wms(url: &str, root: &Node) -> Service {
             ),
         );
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
-        let feature_info = info_request.as_ref().map(|r| r.for_layer(&name, queryable));
+        // A service without GetFeatureInfo still gives each layer one, never asked, so Identify
+        // doesn't fetch the capabilities again to find out.
+        let feature_info = Some(
+            info_request
+                .as_ref()
+                .map_or_else(|| FeatureInfo { layer: name.clone(), ..FeatureInfo::default() }, |r| r.for_layer(&name, queryable)),
+        );
         service.layers.push(ServiceLayer { name, title, offer: Offer::Tiles { template }, bbox, tilesets: None, time: None, feature_info });
     }
     service.layers.reverse();

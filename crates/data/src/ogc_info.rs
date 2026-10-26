@@ -386,7 +386,8 @@ fn html_text(html: &str) -> String {
         at = skip_to.map_or(html.len(), |i| open + i);
     }
     out.push_str(html.get(at..).unwrap_or(""));
-    out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+    // `&amp;` last, so `&amp;lt;` reads as `&lt;`.
+    out.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -448,10 +449,11 @@ mod tests {
     }
 
     #[test]
-    fn without_a_get_feature_info_request_layers_have_none() {
+    fn without_a_get_feature_info_request_layers_are_not_queryable() {
+        // Each layer knows it isn't asked, so Identify doesn't fetch the capabilities again.
         let caps = CAPS_13.replace("GetFeatureInfo", "GetLegendGraphic");
         let service = crate::ogc::parse("https://maps.example.org/wms", caps.as_bytes()).unwrap();
-        assert!(service.layers.iter().all(|l| l.feature_info.is_none()));
+        assert!(service.layers.iter().all(|l| l.feature_info.as_ref().is_some_and(|f| !f.queryable() && f.layer == l.name)));
     }
 
     #[test]
@@ -527,6 +529,7 @@ mod tests {
         let mapserver = "GetFeatureInfo results:\n\nLayer 'parks'\n  Feature 12: \n    NAME = 'Central'\n";
         assert_eq!(read_feature_info(mapserver.as_bytes()).unwrap()[0].attributes, vec![("NAME".into(), "Central".into())]);
         let html = "<html><head><style>p{}</style><script>x()</script></head><body><p>Lake &amp; shore</p></body></html>";
+        assert_eq!(html_text("a &amp;lt; b").trim(), "a &lt; b", "an escaped entity is read once");
         assert_eq!(read_feature_info(html.as_bytes()).unwrap()[0].attributes, vec![("text".into(), "Lake & shore".into())]);
         // Any case of script and style is left out; many short scripts read in linear time.
         let shouting = "<HTML><SCRIPT>x()</Script><Style>p{}</STYLE><B>Peak</B></HTML>";
