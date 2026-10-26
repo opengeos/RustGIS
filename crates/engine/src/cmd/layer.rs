@@ -175,10 +175,38 @@ pub fn commands() -> Vec<C> {
         .when(need_feature_layer)
         .params(r##"{"layer"?, "color"?: "#RRGGBB"|"#RRGGBBAA", "width"?: number}"##),
         C::new("layer.lineStrokes", "Line Strokes", "Style › Drawing", line_strokes)
-            .when(need_lines)
+            .when(need_lines_or_points)
             .params(
-                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"character"|"hash" (a mark across the line), "char"?: text (a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
+                r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"character"|"hash" (a mark across the line), "char"?: text (a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes; on a point layer they are its marks: each stroke's markers drawn at the point in place of the symbol's, "offsetAlong" shifting a mark right and "offset" down, both turned with its "angle", and "rotate" turning it by layer.markerRotation's field), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
+        C::new("layer.markerRotation", "Marker Rotation", "Style › Drawing", |s, p| {
+            let field = match p.get("field") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(f)) if f.is_empty() => None,
+                Some(Value::String(f)) => Some(f.clone()),
+                Some(_) => return Err("field is a field's name, or null for none".into()),
+            };
+            let counterclockwise = match p.get("counterclockwise") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => return Err("counterclockwise is true or false".into()),
+            };
+            let id = s.layer_id(p)?;
+            let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+            if l.geometry_type() != GeometryType::Point || l.graphics {
+                return Err("this works on point layers".into());
+            }
+            if let Some(f) = &field {
+                let fi = l.dataset.field_index(f).ok_or_else(|| format!("no field named '{f}'"))?;
+                if !l.dataset.fields.get(fi).is_some_and(|fd| fd.ty.is_numeric()) {
+                    return Err(format!("'{f}' is not a numeric field"));
+                }
+            }
+            l.marker_rotation = field.map(|field| rustgis_map::MarkerRotation { field, counterclockwise });
+            Ok(Value::Null)
+        })
+        .when(need_points)
+        .params(r#"{"layer"?, "field": numeric field name|null (each point's marker turned by the angle in it, in degrees; null: not turned), "counterclockwise"?: bool (the angles run counterclockwise, as in mathematics; default clockwise, as on a compass)}"#),
         C::new("layer.strokeLevels", "Stroke Levels", "Style › Drawing", |s, p| {
             let on = b(p, "on").ok_or("on is true or false")?;
             let id = s.layer_id(p)?;
@@ -392,6 +420,22 @@ fn need_polygons(s: &Session) -> Option<&'static str> {
 }
 
 /// A line layer is active.
+fn need_lines_or_points(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if matches!(l.geometry_type(), GeometryType::Polyline | GeometryType::Point) && !l.graphics => None,
+        Some(_) => Some("this works on line and point layers"),
+        None => Some("select a layer in the Layers pane first"),
+    }
+}
+
+fn need_points(s: &Session) -> Option<&'static str> {
+    match s.active_layer.and_then(|id| s.map().layer(id)) {
+        Some(l) if l.geometry_type() == GeometryType::Point && !l.graphics => None,
+        Some(_) => Some("this works on point layers"),
+        None => Some("select a layer in the Layers pane first"),
+    }
+}
+
 fn need_lines(s: &Session) -> Option<&'static str> {
     match s.active_layer.and_then(|id| s.map().layer(id)) {
         Some(l) if l.geometry_type() == GeometryType::Polyline && !l.graphics => None,
@@ -475,8 +519,13 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
     }
     let id = s.layer_id(p)?;
     let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
-    if l.geometry_type() != GeometryType::Polyline || l.graphics {
-        return Err("this works on line layers".into());
+    let points = l.geometry_type() == GeometryType::Point;
+    if !(points || l.geometry_type() == GeometryType::Polyline) || l.graphics {
+        return Err("this works on line and point layers".into());
+    }
+    // A point draws marks only: a line stroke would draw nothing there.
+    if let Some(i) = strokes.iter().position(|st| st.markers.is_none()).filter(|_| points) {
+        return Err(format!("stroke {}: a point layer's strokes are markers", i + 1));
     }
     let n = strokes.len();
     match class {

@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::Rgba;
 use crate::effects::Blend;
-use crate::symbology::{Labeling, LineStroke, Renderer};
+use crate::symbology::{Labeling, LineStroke, MarkerRotation, Renderer};
 pub use expr::to_sql;
 pub use source::{Source, is_drive_relative, is_relative};
 
@@ -104,6 +104,8 @@ pub struct Style {
     /// offset one).
     pub line_strokes: Option<Vec<LineStroke>>,
     pub stroke_levels: Option<bool>,
+    /// Point markers turned by a field (`Some(None)`: not turned).
+    pub marker_rotation: Option<Option<MarkerRotation>>,
     pub reference_scale: Option<f64>,
     pub labels: Option<Labeling>,
     /// 0 opaque to 100 invisible.
@@ -148,6 +150,10 @@ impl Style {
         }
         if let Some(on) = self.stroke_levels {
             layer.stroke_levels = on;
+        }
+        // Only a point layer's markers turn.
+        if let Some(r) = &self.marker_rotation {
+            layer.marker_rotation = r.clone().filter(|_| layer.geometry_type() == rustgis_data::GeometryType::Point);
         }
         if let Some(r) = self.reference_scale {
             layer.reference_scale = Some(r);

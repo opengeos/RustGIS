@@ -42,7 +42,9 @@ Each layer keeps its look:
   rendering passes as their levels when the renderer draws in symbol levels; marker and hashed
   lines as strokes of markers or hash marks, at their places (intervals, vertices, the ends, the
   middle), turned with the line, their markers' offsets and angles kept; font markers as
-  characters of their font, on points and along lines.
+  characters of their font, on points and along lines; a marker symbol of several layers, or one
+  shifted, turned or anchored off its centre, as a point's marks; a marker angle taken from a
+  field (`"field"` or `- "field"`) as the layer's rotation field.
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
@@ -66,7 +68,7 @@ near as it can, or left out, and said: the import's notes list, layer by layer, 
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos in RustGIS's own colour and width, label offsets and
 wrapping, values outside a graduated renderer's ranges in its first or last class, file options
-such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, data-defined
+such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS
 and other sources RustGIS doesn't read, diagrams, joins, virtual fields, a layer's other styles,

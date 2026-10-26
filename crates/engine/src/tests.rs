@@ -405,11 +405,14 @@ fn line_strokes_stack_and_survive_save_and_undo() {
         json!({"layer": "Rivers", "strokes": [{"width": "wide"}]}),
         json!({"layer": "Rivers", "strokes": [7]}),
         json!({"layer": "Rivers", "strokes": vec![json!({}); 17]}),
-        json!({"layer": "Cities", "strokes": []}),
+        // Polygons have no strokes of their own (points have marks).
+        json!({"layer": "Countries", "strokes": []}),
     ] {
         assert!(s.run("layer.lineStrokes", &bad).is_err(), "{bad}");
     }
     assert_eq!(s.undo_depth(), depth);
+    s.run("layer.lineStrokes", &json!({"layer": "Cities", "strokes": []})).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
     // [] goes back to the single stroke; undo brings the stack back.
     s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": []})).unwrap();
     assert!(s.map().layer_by_name("Rivers").unwrap().line_strokes.is_empty());
@@ -514,6 +517,57 @@ fn a_character_of_a_font_is_a_marker_on_points_and_along_lines() {
         s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "circle", "char": "x"}}]})).unwrap_err();
     assert!(err.contains("not both"), "{err}");
     assert_eq!(s.undo_depth(), depth);
+}
+
+#[test]
+fn a_point_takes_stacked_marks_and_turns_by_a_field() {
+    use rustgis_map::{Glyph, LineMark, Marker};
+    let mut s = world();
+    // A white disc under a black character, and a red square 6 pt right of the point.
+    let marks = json!([
+        {"color": "#FFFFFF", "markers": {"mark": "circle", "size": 14}},
+        {"color": "#000000", "markers": {"mark": "character", "char": "A", "size": 12}},
+        {"color": "#FF0000", "markers": {"mark": "square", "size": 4, "offsetAlong": 6}}
+    ]);
+    let mark = s.notice_mark();
+    s.run("layer.lineStrokes", &json!({"layer": "Cities", "strokes": marks})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("ignores")), "every key is read");
+    let st = s.map().layer_by_name("Cities").unwrap().line_strokes.clone();
+    assert_eq!(st.len(), 3);
+    assert_eq!(st[1].markers.unwrap().mark, LineMark::Marker(Marker::Char(Glyph::new('A', ""))));
+    assert_eq!(st[2].markers.unwrap().offset_along, 6.0);
+    // A line stroke would draw nothing at a point.
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Cities", "strokes": [{"width": 2}]})).unwrap_err();
+    assert!(err.contains("stroke 1: a point layer's strokes are markers"), "{err}");
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Countries", "strokes": marks})).unwrap_err();
+    assert!(err.contains("line and point layers"), "{err}");
+    // Turned by a numeric field, counterclockwise.
+    s.run("layer.markerRotation", &json!({"layer": "Cities", "field": "pop_max", "counterclockwise": true})).unwrap();
+    let l = s.map().layer_by_name("Cities").unwrap();
+    let r = l.marker_rotation.clone().unwrap();
+    assert_eq!((r.field.as_str(), r.counterclockwise), ("pop_max", true));
+    let fi = l.dataset.field_index("pop_max").unwrap();
+    let v = l.dataset.value(0, fi).as_f64().unwrap();
+    assert_eq!(l.marker_turn(0), -(v.rem_euclid(360.0) as f32));
+    // Drawn in an export.
+    let dir = std::env::temp_dir().join(format!("rustgis-marks-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "field": "name"}), "not a numeric field"),
+        (json!({"layer": "Cities", "field": "nowhere"}), "no field named"),
+        (json!({"layer": "Cities", "field": 3}), "field is a field's name"),
+        (json!({"layer": "Rivers", "field": "pop_max"}), "point layers"),
+    ] {
+        let err = s.run("layer.markerRotation", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    assert_eq!(s.undo_depth(), depth);
+    // None turns them back.
+    s.run("layer.markerRotation", &json!({"layer": "Cities", "field": null})).unwrap();
+    assert!(s.map().layer_by_name("Cities").unwrap().marker_rotation.is_none());
 }
 
 #[test]

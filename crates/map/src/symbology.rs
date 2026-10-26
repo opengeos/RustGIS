@@ -427,6 +427,42 @@ impl<'de> Deserialize<'de> for Placements {
     }
 }
 
+/// A point layer's markers turned by a field's angle ([`crate::Layer::marker_rotation`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarkerRotation {
+    /// The field the angle is read from, in degrees.
+    pub field: String,
+    /// The angle runs counterclockwise (as in mathematics), not clockwise (as on a compass).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub counterclockwise: bool,
+}
+
+/// Reads a layer's marker rotation leniently: one that isn't (a crafted file's) is none, and the rest
+/// of the layer still reads. A field name is at most [`MAX_FONT_NAME`]·2 characters.
+pub fn de_marker_rotation<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<MarkerRotation>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Read {
+        Rotation(MarkerRotation),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Read>::deserialize(d)? {
+        Some(Read::Rotation(r)) if !r.field.is_empty() && r.field.chars().count() <= 2 * MAX_FONT_NAME => Some(r),
+        _ => None,
+    })
+}
+
+impl MarkerRotation {
+    /// Row `row`'s turn in degrees clockwise: 0 where its value isn't a number (or the field is gone).
+    pub fn turn(&self, ds: &Dataset, row: usize) -> f32 {
+        let Some(v) = ds.field_index(&self.field).and_then(|fi| ds.value(row, fi).as_f64()).filter(|v| v.is_finite()) else {
+            return 0.0;
+        };
+        let a = v.rem_euclid(360.0) as f32;
+        if self.counterclockwise { -a } else { a }
+    }
+}
+
 /// What a stroke draws along a line instead of a line: a marker, or a hash mark across it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
