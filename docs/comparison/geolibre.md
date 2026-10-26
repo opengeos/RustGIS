@@ -23,8 +23,9 @@ workflows. Neither is meant to replace the other
 MapLibre GL JS, DuckDB-WASM, deck.gl) and runs in a browser tab with nothing installed, as a
 desktop app, and as native Android and iOS apps. Its strengths are access from anywhere,
 cloud-native data, interactive visualization and sharing. GeoLibre is mature, with a broad
-set of features, and its development now centres on stability, performance and usability
-([#951](https://github.com/opengeos/RustGIS/discussions/951)).
+set of features; as its maintainer put it in
+[discussion #951](https://github.com/opengeos/RustGIS/discussions/951), its development now
+centres on stability, performance and usability.
 
 **RustGIS is desktop first, built for automation and AI agents.** It is a single program written
 entirely in Rust that draws its own interface on the GPU, with no browser engine or JavaScript
@@ -35,8 +36,9 @@ classic desktop GIS jobs of data design, reports and print layouts. RustGIS is y
 changing quickly: expect frequent releases, new capabilities and some significant changes.
 
 The two complement each other. Both can run the 1,000+ GeoLibre/Whitebox geoprocessing suite,
-both read and write common open formats, and the plan is for each to open the other's projects
-(see [Using them together](#using-them-together)). Choose GeoLibre for the browser, phones and
+both read and write common open formats, and the plan is for RustGIS to open `.geolibre`
+projects first and for GeoLibre to open `.rgis` projects later (see
+[Using them together](#using-them-together)). Choose GeoLibre for web-first work, phones and
 notebooks, choose RustGIS for a scriptable desktop GIS, or use both.
 
 ## Where each is stronger today
