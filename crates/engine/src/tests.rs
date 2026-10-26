@@ -1993,7 +1993,7 @@ fn identify_reports_every_overlapping_feature() {
 
 #[test]
 fn label_size_stays_within_what_text_symbol_shows() {
-    // Style › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
+    // Labeling › Text Symbol offers the range `labels.style` accepts (#457): 72 pt is kept, and
     // anything outside is brought back to the nearest end.
     let mut s = world();
     let size = |s: &Session| s.map().layers.iter().find(|l| l.name == "Countries").map(|l| f64::from(l.labels.default.size));

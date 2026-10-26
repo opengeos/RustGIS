@@ -1486,7 +1486,7 @@ fn jenks(sorted: &[f64], k: usize) -> Vec<f64> {
     breaks
 }
 
-/// The label sizes `labels.style` accepts, in points (Style › Text Symbol).
+/// The label sizes `labels.style` accepts, in points (Labeling › Text Symbol).
 pub const LABEL_SIZE: std::ops::RangeInclusive<f64> = 4.0..=72.0;
 
 /// The most label classes a layer keeps besides its Default class.

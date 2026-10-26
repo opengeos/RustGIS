@@ -107,8 +107,8 @@ compact, scriptable desktop GIS, or use both.
   subreports, and layouts with publication presets, shaped map frames, legends, colorbars,
   grids, tables, charts, extent indicators and map series, exported to PDF or PNG. GeoLibre's
   print layout and atlas cover the common cases, and it has no report builder.
-- **A ribbon interface.** Tabs follow the order of the work (Home, Data, Style, Edit, Analyze,
-  View, Publish), with Command Search (++ctrl+k++) to find any command or tool by name. People
+- **A ribbon interface.** Tabs follow the order of the work (Home, Data, Style, Labeling, Edit,
+  Analyze, View, Publish), with Command Search (++ctrl+k++) to find any command or tool by name. People
   coming from ArcGIS Pro often find it familiar. GeoLibre uses menus and panels, with a command
   palette and beginner, intermediate and advanced interface levels.
 - **Offline local workflows.** RustGIS's local-file readers, built-in tools and rendering work

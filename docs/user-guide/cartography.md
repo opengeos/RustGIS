@@ -278,11 +278,11 @@ clause, text symbol, placement and visibility limits. Under its header (the laye
 off, and the class chosen), a tab per topic shows one part at a time: **Content** (the label field,
 with a search in its list, above the SQL query), **Symbol**, **Position** and
 **Range**. Open it for a feature layer with Layers › right-click › **Labeling Properties…**,
-**View › Windows › Labeling**, or **Style › Labels › Properties**. It runs the same commands as
+**View › Windows › Labeling**, or **Labeling › Labels › Properties**. It runs the same commands as
 the ribbon, so each setting change undoes on its own (a dragged size or a colour pick is one step).
 Label classes are described below.
 
-Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
+Turn labels on per layer (Labeling › Labels › **Label**), then:
 
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
@@ -315,8 +315,8 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   (`labels.placement={"layer": "Rivers", "position": "curved"}`).
 - **Lock** keeps the labelled features fixed while you pan and zoom; **Pause** stops drawing
   labels for faster navigation; **View Unplaced** draws the labels that didn't fit in red. They
-  apply to the whole map, so they are on the ribbon (View › Labeling), not in the pane.
-- **Convert** (View › Labeling, or Layers › right-click › **Convert To Annotation**) turns a
+  apply to the whole map, so they are on the ribbon (Labeling › Map Labeling), not in the pane.
+- **Convert** (Labeling › Map Labeling, or Layers › right-click › **Convert To Annotation**) turns a
   layer's labels into an annotation layer: one point per label, carrying its
   text in a `TEXT` field, which you can then edit, move or delete like any other features.
 - **Label classes** label different features differently, such as large cities in larger text.
@@ -333,7 +333,7 @@ Turn labels on per layer (View › Labeling › Label, or the Style tab), then:
   with the chosen class's field, text symbol, placement and range, listed before Default;
   **Rename** and **Move Up** / **Move Down** (the arrows) for the chosen class; and, at its far
   end, **Remove** (Default can be renamed or hidden, not moved or removed). The ribbon's label groups edit the
-  same chosen class, and **Style › Label Class › Class** chooses it as the pane's list does. By
+  same chosen class, and **Labeling › Label Class › Class** chooses it as the pane's list does. By
   command, make them with
   `labels.class.add` (a new class copies Default's field, text symbol, placement and range, or
   those of the class named by `from`), then `labels.class.rename`, `labels.class.update` (`where` or `visible`),

@@ -81,8 +81,8 @@ The same World Atlas data, styled the same way, in each app.
   FlatGeobuf, PMTiles and Zarr are read in place by RustGIS's own readers, over HTTP byte ranges
   and from `s3://` buckets, on the desktop and in the browser alike. QGIS reads all of these too,
   through GDAL on the desktop.
-- **A ribbon interface.** Tabs follow the order of the work (Home, Data, Style, Edit, Analyze,
-  View, Publish), with Command Search (++ctrl+k++) to find any command or tool by name. People
+- **A ribbon interface.** Tabs follow the order of the work (Home, Data, Style, Labeling, Edit,
+  Analyze, View, Publish), with Command Search (++ctrl+k++) to find any command or tool by name. People
   coming from ArcGIS Pro often find it familiar; people who know QGIS's toolbars may not want it,
   which is a matter of taste.
 - **A permissive licence.** RustGIS is Apache-2.0, so its crates can be embedded in proprietary
