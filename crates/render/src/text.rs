@@ -584,7 +584,7 @@ fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32, ink: Ink)
     let (w, h) = (label_width(l), block_height(&l.text, l.size).max(line_pitch(l.size)));
     // Room for the halo, and for the glyphs reaching past the line.
     // (The halo is drawn at most MAX_HALO_PX wide, so no more room is kept for it.)
-    let pad = 4.0 + l.size * 0.5 + l.halo_width.map_or(0.0, |w| (halo_reach(w) * 1.33).min(MAX_HALO_PX / ppp.max(f32::EPSILON)));
+    let pad = 4.0 + l.size * 0.5 + drawn_halo_reach(l).min(MAX_HALO_PX / ppp.max(f32::EPSILON));
     let (pw, ph) = (((w + 2.0 * pad) * ppp).ceil(), ((h + 2.0 * pad) * ppp).ceil());
     if !(pw.is_finite() && ph.is_finite()) || pw > 4096.0 || ph > 4096.0 {
         return;
@@ -700,6 +700,13 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
 /// The widest halo a label class sets (points); a reference scale grows it up to
 /// [`rustgis_map::SIZE_FACTORS`] times.
 const MAX_HALO: f32 = *rustgis_map::symbology::HALO_WIDTH.end() as f32;
+
+/// How far past its letters a label's halo of its own width is drawn (the label's units: points ×
+/// 1.33, as its text's size): none when no halo is drawn (turned off, or fully see-through), and at
+/// most [`MAX_HALO_PX`], as drawn at one pixel a unit (more pixels a unit draw it no farther).
+pub fn drawn_halo_reach(l: &PlacedLabel) -> f32 {
+    l.halo.filter(|h| h.a() > 0).and(l.halo_width).map_or(0.0, |w| (halo_reach(w) * 1.33).min(MAX_HALO_PX))
+}
 
 /// How far a label's halo of `width` reaches (points): at most [`MAX_HALO`] grown by the most a
 /// reference scale grows a label ([`rustgis_map::SIZE_FACTORS`]), so one grown with its label isn't

@@ -4182,7 +4182,7 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         // A halo drawn at a width of its own reaches past the letters (points × 1.33, as the text's
         // size and the drawing have it): another label's text must not fall under it. A width
         // kept with the halo turned off reserves nothing.
-        let halo = l.halo.filter(|h| h.a() > 0).and(l.halo_width).map_or(0.0, |w| text::halo_reach(w) * 1.33);
+        let halo = text::drawn_halo_reach(l);
         let p = l.collide.text_padding.clamp(0.0, 100.0) + halo;
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
@@ -4392,6 +4392,10 @@ mod tests {
         assert_eq!(label_boxes(&off).0[0], a);
         let clear = PlacedLabel { halo: Some(Rgba::new(255, 255, 255, 0)), halo_width: Some(5.0), ..plain.clone() };
         assert_eq!(label_boxes(&clear).0[0], a);
+        // A halo grown far past what is drawn reserves only what is drawn.
+        let grown = PlacedLabel { halo_width: Some(300.0), ..haloed.clone() };
+        let g = label_boxes(&grown).0[0];
+        assert!((a[0] - g[0] - text::drawn_halo_reach(&grown)).abs() < 1e-3 && text::drawn_halo_reach(&grown) <= 256.0, "{g:?}");
         // Turned and curved labels' squares grow by it too.
         haloed.halo_width = Some(5.0);
         let turned = |l: &PlacedLabel| PlacedLabel { angle: Some(0.5), ..l.clone() };
