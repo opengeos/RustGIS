@@ -701,16 +701,9 @@ fn legacy_crs(decl: &Json) -> std::result::Result<Option<(Crs, crate::raster::Tr
         return Err("only named coordinate systems are supported".into());
     }
     let name = decl.get("properties").and_then(|p| p.get("name")).and_then(Json::as_str).ok_or("it has no properties.name")?;
-    // An EPSG name (`EPSG:28992`, `urn:ogc:def:crs:EPSG::28992`, `urn:ogc:def:crs:EPSG:6.6:28992`,
-    // `http://www.opengis.net/def/crs/EPSG/0/28992`) or a CRS84 one (`urn:ogc:def:crs:OGC:1.3:CRS84`,
-    // `urn:ogc:def:crs:OGC::CRS84`, `http://www.opengis.net/def/crs/OGC/1.3/CRS84`), and no other
-    // text for `Crs::parse`, which also takes WKT and PROJ strings (and registers a system for them).
-    let up = name.trim().to_ascii_uppercase();
-    let tokens: Vec<&str> = up.split([':', '/']).collect();
-    let last = tokens.last().copied().unwrap_or("");
-    let epsg = tokens.contains(&"EPSG") && !last.is_empty() && last.bytes().all(|b| b.is_ascii_digit());
-    let crs84 = tokens.contains(&"OGC") && last == "CRS84";
-    if name.len() > CRS_NAME_MAX || !(epsg || crs84) {
+    // Only the forms below, anchored (not any text holding "EPSG"), and no other text for
+    // `Crs::parse`, which also takes WKT and PROJ strings (and registers a system for them).
+    if name.len() > CRS_NAME_MAX || !is_epsg_or_crs84_name(name) {
         return Err("only EPSG codes and CRS84 are supported".into());
     }
     let crs = Crs::parse(name)?;
@@ -719,6 +712,39 @@ fn legacy_crs(decl: &Json) -> std::result::Result<Option<(Crs, crate::raster::Tr
     }
     let t = crs.transformer()?;
     Ok(Some((crs, t)))
+}
+
+/// Whether a `crs` name is `EPSG:N`, `urn:ogc:def:crs:EPSG:<version, maybe empty>:N`,
+/// `http(s)://www.opengis.net/def/crs/EPSG/<version>/N`, or CRS84 as `CRS84`, `OGC:CRS84`,
+/// `urn:ogc:def:crs:OGC:<version, maybe empty>:CRS84` or
+/// `http(s)://www.opengis.net/def/crs/OGC/<version>/CRS84` (any case, whitespace around).
+fn is_epsg_or_crs84_name(name: &str) -> bool {
+    let up = name.trim().to_ascii_uppercase();
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let version = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    // `<version><sep><last>`: a version (maybe empty), then what's after the last separator.
+    let tail = |rest: &str, sep: char| {
+        rest.split_once(sep).filter(|(v, last)| version(v) && !last.contains(sep)).map(|(_, last)| last.to_string())
+    };
+    fn url(rest: &str) -> Option<&str> {
+        rest.strip_prefix("HTTP://").or_else(|| rest.strip_prefix("HTTPS://")).and_then(|r| r.strip_prefix("WWW.OPENGIS.NET/DEF/CRS/"))
+    }
+    if let Some(code) = up.strip_prefix("EPSG:") {
+        return digits(code);
+    }
+    if let Some(rest) = up.strip_prefix("URN:OGC:DEF:CRS:EPSG:") {
+        return tail(rest, ':').is_some_and(|c| digits(&c));
+    }
+    if let Some(rest) = up.strip_prefix("URN:OGC:DEF:CRS:OGC:") {
+        return tail(rest, ':').is_some_and(|c| c == "CRS84");
+    }
+    if let Some(rest) = url(&up).and_then(|r| r.strip_prefix("EPSG/")) {
+        return tail(rest, '/').is_some_and(|c| digits(&c));
+    }
+    if let Some(rest) = url(&up).and_then(|r| r.strip_prefix("OGC/")) {
+        return tail(rest, '/').is_some_and(|c| c == "CRS84");
+    }
+    up == "CRS84" || up == "OGC:CRS84"
 }
 
 /// A geometry in longitude/latitude from the coordinates `t` converts: `None` when a coordinate
