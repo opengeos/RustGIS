@@ -1,14 +1,14 @@
 //! QGIS symbols (`<symbol type="fill|line|marker">`) as a RustGIS [`Symbol`], and a line's
 //! symbol layers as stacked [`LineStroke`]s. A symbol layer RustGIS has no match for is drawn
-//! as near as it can (a pattern fill as a tint of its colour, a font or SVG marker as a circle in
-//! its colour) or left out, and noted.
+//! as near as it can (a pattern fill as a tint of its colour, an SVG marker as a circle in its
+//! colour) or left out, and noted.
 
 use roxmltree::Node;
 
 use super::{Report, color, data_defined_on, has_effect, points, prop, props, signed_points};
 use crate::Rgba;
 use crate::symbology::{
-    Dash, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_DASH_STEPS, MAX_STROKES, Marker, Placements, Symbol,
+    Dash, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_DASH_STEPS, MAX_STROKES, Marker, Placements, Symbol,
 };
 
 /// A symbol layer's settings by name.
@@ -379,12 +379,7 @@ fn marker_mark(
                 Marker::Circle
             })
         }
-        // A character is mostly thin strokes: a dot of its size would draw a heavy blot along the
-        // line where QGIS draws a tick or a dash, so it is left out.
-        "FontMarker" => {
-            report.skipped(layer, "font markers (characters of a symbol font) along lines");
-            return None;
-        }
+        "FontMarker" => font_char(p, layer, report)?,
         "SvgMarker" | "RasterMarker" | "EllipseMarker" | "FilledMarker" => {
             report.approximated(layer, format!("{} markers, drawn as circles in their colour", marker_name(class)));
             Marker::Circle
@@ -394,6 +389,9 @@ fn marker_mark(
             return None;
         }
     };
+    if class == "FontMarker" && anchored(p) {
+        report.approximated(layer, "font markers anchored off their centre, drawn centred");
+    }
     let fill = prop(p, "color").and_then(color).unwrap_or(Rgba::new(0, 0, 0, 0));
     let outline = if prop(p, "outline_style") == Some("no") { None } else { prop(p, "outline_color").and_then(color) };
     let width = if outline.is_some() { size(p, "outline_width", reference, layer, report).unwrap_or(0.0) } else { 0.0 };
@@ -474,10 +472,10 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
                     Marker::Circle
                 })
             }
-            "FontMarker" => {
-                report.approximated(layer, "font markers (characters of a symbol font), drawn as circles in their colour");
-                Marker::Circle
-            }
+            "FontMarker" => match font_char(p, layer, report) {
+                Some(m) => m,
+                None => continue,
+            },
             "SvgMarker" | "RasterMarker" | "EllipseMarker" | "FilledMarker" => {
                 report.approximated(layer, format!("{} markers, drawn as circles in their colour", marker_name(class)));
                 Marker::Circle
@@ -487,12 +485,14 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
                 continue;
             }
         };
+        if class == "FontMarker" && anchored(p) {
+            report.approximated(layer, "font markers anchored off their centre, drawn centred");
+        }
         if prop(p, "angle").and_then(|a| a.trim().parse::<f32>().ok()).is_some_and(|a| a != 0.0) {
             report.approximated(layer, "turned markers, drawn upright");
         }
         let fill = fill.unwrap_or(Rgba::new(0, 0, 0, 0));
-        // A font marker's character is all fill; an outline of no width draws none.
-        let width = if class == "FontMarker" { 0.0 } else { size(p, "outline_width", reference, layer, report).unwrap_or(0.0) };
+        let width = size(p, "outline_width", reference, layer, report).unwrap_or(0.0);
         // Each layer drawn over the one before: the top one's look, the biggest size.
         symbol = Symbol {
             fill,
@@ -503,6 +503,27 @@ fn marker(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report:
         };
     }
     Converted { symbol, strokes: Vec::new() }
+}
+
+/// A font marker's character (`chr`, of the family `font`) as a character marker; `None` for one
+/// with none (it draws nothing). A string of several draws its first (noted).
+fn font_char(p: &[(String, String)], layer: &str, report: &mut Report) -> Option<Marker> {
+    let text = prop(p, "chr").unwrap_or_default();
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        report.approximated(layer, "font markers of several characters, drawn as their first");
+    }
+    if prop(p, "font_style").is_some_and(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("regular")) {
+        report.approximated(layer, "font marker styles (bold, italic and the like), drawn regular");
+    }
+    Some(Marker::Char(Glyph::new(ch, prop(p, "font").unwrap_or_default())))
+}
+
+/// Whether a marker is anchored off its centre (`horizontal_anchor_point`,
+/// `vertical_anchor_point`: 1 is the centre).
+fn anchored(p: &[(String, String)]) -> bool {
+    ["horizontal_anchor_point", "vertical_anchor_point"].iter().any(|k| prop(p, k).is_some_and(|v| v.trim() != "1"))
 }
 
 /// QGIS's simple marker shapes RustGIS has.

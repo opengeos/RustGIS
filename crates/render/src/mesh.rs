@@ -11,7 +11,7 @@ use lyon::tessellation::{
 };
 use rustgis_data::Geometry;
 use rustgis_geom::{Coord, Extent};
-use rustgis_map::{Layer, Rgba, Symbol};
+use rustgis_map::{Layer, Marker, Rgba, Symbol};
 
 use crate::SELECTION;
 use crate::gpu_scene::{DrawCmd, MeshVertex, PointInstance};
@@ -270,7 +270,13 @@ pub(crate) fn stroke_lines(
 /// stroke at r + w/2 under fill at r − w/2 reproduces the exact band (`Ctx::marker`).
 pub(crate) fn marker_instances(c: Coord, origin: [f64; 2], s: &Symbol, ppp: f32, halo: Option<Rgba>) -> Vec<PointInstance> {
     let r = (s.size.max(1.0) * ppp) / 2.0;
-    let shape = s.marker as u32;
+    let shape = match s.marker {
+        Marker::Circle | Marker::Char(_) => 0,
+        Marker::Square => 1,
+        Marker::Triangle => 2,
+        Marker::Diamond => 3,
+        Marker::Star => 4,
+    };
     let mut out = Vec::with_capacity(3);
     if let Some(h) = halo {
         out.push(PointInstance { position: rel(c, origin), color: premul(h), radius_px: r + 1.75 * ppp, shape });
@@ -322,6 +328,10 @@ fn append_geometry(
 ) -> Result<(), TessError> {
     // What the layer's mesh has left: tessellation stops once a part passes it.
     let room = |v: &Vec<MeshVertex>| limit.saturating_sub(v.len());
+    // A character has no shape template: its layer draws on the CPU.
+    if matches!(s.marker, Marker::Char(_)) && matches!(g, Geometry::Point(_) | Geometry::MultiPoint(_)) {
+        return Err(TessError::Refused);
+    }
     match g {
         Geometry::Point(c) => pts.extend(marker_instances(*c, origin, s, ppp, None)),
         Geometry::MultiPoint(cs) => cs.iter().for_each(|c| pts.extend(marker_instances(*c, origin, s, ppp, None))),

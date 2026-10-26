@@ -118,6 +118,23 @@ fn family_font(fam: &crate::families::Family, face: Face) -> Option<(&'static Fo
     f.map(|f| (f, slanted))
 }
 
+/// The label font's regular face.
+pub(crate) fn label_font() -> Option<&'static FontRef<'static>> {
+    font(false)
+}
+
+/// The regular face of the installed family `name` a character marker draws in, and whether that
+/// is final: `None` and `false` while the families are still being indexed (see
+/// [`crate::families::find_ready`]), `None` and `true` for a family this machine lacks (or none).
+pub(crate) fn marker_font(name: &str) -> (Option<&'static FontRef<'static>>, bool) {
+    if name.trim().is_empty() {
+        return (None, true);
+    }
+    let Some(families) = crate::families::available() else { return (None, false) };
+    let named = crate::families::find_ready(name).and_then(|i| families.get(usize::from(i)));
+    (named.and_then(|fam| family_font(fam, Face::default())).map(|(f, _)| f), true)
+}
+
 /// The label font of `face`'s weight, for the characters `f` lacks: `None` when `f` is it.
 fn sans_beside(f: &'static FontRef<'static>, face: Face) -> Option<&'static FontRef<'static>> {
     font(face.bold).filter(|s| !std::ptr::eq(*s, f))

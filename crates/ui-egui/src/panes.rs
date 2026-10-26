@@ -14,7 +14,7 @@ use rustgis_engine::map::symbology::{
 };
 use rustgis_engine::map::tiles::{TileKind, TileLayer};
 use rustgis_engine::map::{
-    ClassMethod, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
+    ClassMethod, Glyph, Layer, Marker, Ramp, RampGroup, RasterDefaults, RasterRenderer, Renderer, Resampling, Stretch, Symbol,
 };
 use serde_json::{Value, json};
 
@@ -453,6 +453,15 @@ fn left_header(app: &mut RustGisApp, ui: &mut Ui, left: LeftPane, t: &Tokens) {
 // ---------------------------------------------------------------------------------------------
 // Contents
 
+/// Paints a character marker's character centred on `at`, `px` tall, in its installed family (the
+/// interface font until egui has it, or where the machine lacks it).
+fn glyph(p: &egui::Painter, at: egui::Pos2, g: Glyph, px: f32, c: egui::Color32) {
+    use rustgis_engine::render::families;
+    let font = families::find_ready(g.font.as_str());
+    let family = crate::labelfonts::family(p.ctx(), font, false, false).map_or(egui::FontFamily::Proportional, |(f, _)| f);
+    p.text(at, Align2::CENTER_CENTER, g.ch, egui::FontId::new(px, family), c);
+}
+
 /// Paints a symbol patch for a layer of geometry type `g`.
 pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
     match g {
@@ -483,6 +492,7 @@ pub fn patch(p: &egui::Painter, r: Rect, s: &Symbol, g: GeometryType) {
                         Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)),
                     ));
                 }
+                Marker::Char(g) => glyph(p, c, g, (s.size * 1.4).clamp(8.0, 18.0), c32(s.fill)),
                 _ => {
                     p.circle_filled(c, rad, c32(s.fill));
                     p.circle_stroke(c, rad, Stroke::new(s.stroke_width.min(2.0), c32(s.stroke)));
@@ -4159,10 +4169,19 @@ fn symbol_editor(app: &mut RustGisApp, ui: &mut Ui, s: Symbol, g: GeometryType, 
                                 let _ = app.run("layer.marker", json!({"shape": m.label()}));
                             }
                         }
+                        let on = matches!(s.marker, Marker::Char(_));
+                        if ui.selectable_label(on, tl!("Character")).clicked() && !on {
+                            let _ = app.run("layer.marker", json!({"char": DEFAULT_CHAR.to_string()}));
+                        }
                     })
                     .response
                     .labelled_by(input_label.id);
                 ui.end_row();
+                if let Marker::Char(g) = s.marker
+                    && let Some((ch, font)) = char_rows(ui, "marker_char", g)
+                {
+                    let _ = app.run("layer.marker", json!({"char": ch.to_string(), "font": font.unwrap_or_default()}));
+                }
             }
         });
     });
@@ -4227,11 +4246,17 @@ fn stroke_json(st: &LineStroke) -> Value {
 
 /// A stroke's markers as `layer.lineStrokes` takes them.
 fn markers_json(m: &LineMarkers) -> Value {
+    let glyph = match m.mark {
+        LineMark::Marker(Marker::Char(g)) => Some(g),
+        _ => None,
+    };
     json!({
         "mark": match m.mark {
             LineMark::Hash => "hash".to_string(),
             LineMark::Marker(shape) => shape.label().to_ascii_lowercase(),
         },
+        "char": glyph.map(|g| g.ch.to_string()),
+        "font": glyph.map(|g| g.font.as_str()),
         "size": m.size,
         "at": m.at.codes(),
         "interval": m.interval,
@@ -4241,6 +4266,35 @@ fn markers_json(m: &LineMarkers) -> Value {
         "angle": m.angle,
         "outline": m.outline.map(|c| c.hex8()),
     })
+}
+
+/// The character a marker switched to a character starts as (one the label font has).
+const DEFAULT_CHAR: char = 'A';
+
+/// A character marker's rows (`g`): its character, typed, and the installed family it is drawn
+/// from. The character and family (none: the label font) when either changes.
+fn char_rows(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug + Copy, g: Glyph) -> Option<(char, Option<String>)> {
+    let font = (!g.font.is_default()).then(|| g.font.as_str().to_string());
+    let mut out = None;
+    let input_label = ui.label(tl!("Character"));
+    let mut text = g.ch.to_string();
+    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(48.0).char_limit(2)).labelled_by(input_label.id);
+    // The character typed: the last one, so typing over the old one replaces it.
+    if r.changed()
+        && let Some(ch) = text.chars().rfind(|c| *c != g.ch).or_else(|| text.chars().next())
+        && ch != g.ch
+    {
+        out = Some((ch, font.clone()));
+    }
+    ui.end_row();
+    let input_label = ui.label(tl!("Font"));
+    let picked = crate::labelpane::family_picker(ui, salt, egui::Id::unique((salt, "search")), font.as_deref());
+    picked.response.labelled_by(input_label.id);
+    if let Some(f) = picked.chosen {
+        out = Some((g.ch, f));
+    }
+    ui.end_row();
+    out
 }
 
 /// The places along a line the stroke editor offers for markers.
@@ -4326,6 +4380,7 @@ fn marker_preview(ui: &Ui, m: &LineMarkers, x: (f32, f32), y: f32, k: f32, c: eg
             LineMark::Marker(Marker::Square) => {
                 ui.painter().rect_filled(Rect::from_center_size(pos2(at, y), vec2(half * 1.8, half * 1.8)), CornerRadius::ZERO, c);
             }
+            LineMark::Marker(Marker::Char(g)) => glyph(ui.painter(), pos2(at, y), g, (2.0 * half).max(6.0), c),
             LineMark::Marker(_) => {
                 ui.painter().circle_filled(pos2(at, y), half, c);
             }
@@ -4347,10 +4402,20 @@ fn marker_rows(app: &mut RustGisApp, ui: &mut Ui, i: usize, st: LineStroke, m: L
                         set(app, with(LineMarkers { mark: LineMark::Marker(s), ..m }));
                     }
                 }
+                let on = matches!(shape, Marker::Char(_));
+                if ui.selectable_label(on, tl!("Character")).clicked() && !on {
+                    set(app, with(LineMarkers { mark: LineMark::Marker(Marker::Char(Glyph::new(DEFAULT_CHAR, ""))), ..m }));
+                }
             })
             .response
             .labelled_by(input_label.id);
         ui.end_row();
+        if let Marker::Char(g) = shape
+            && let Some((ch, font)) = char_rows(ui, ("stroke_marker_char", i), g)
+        {
+            let mark = LineMark::Marker(Marker::Char(Glyph::new(ch, font.as_deref().unwrap_or_default())));
+            set(app, with(LineMarkers { mark, ..m }));
+        }
     }
     let input_label = ui.label(if m.mark == LineMark::Hash { tl!("Length") } else { tl!("Size") });
     let mut size = m.size;

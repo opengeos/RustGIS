@@ -6,7 +6,7 @@
 use rustgis_map::{LineMark, LineMarkers, Placements, Rgba};
 use tiny_skia::{FillRule, LineCap, Path, PathBuilder, Pixmap, Stroke, Transform};
 
-use crate::{marker_path, paint};
+use crate::{marker_path, marker_reach, paint};
 
 /// The most marks one stroke draws on one feature, so an interval far shorter than the line
 /// seen whole can't take the time.
@@ -228,7 +228,12 @@ pub(crate) fn draw(pm: &mut Pixmap, runs: &[Run], m: &LineMarkers, color: Rgba, 
     let Some(shape) = shape else { return };
     let stroke = Stroke { width: (width * ppp).max(0.5), line_cap: LineCap::Butt, ..Stroke::default() };
     let offset = f64::from(offset * ppp);
-    let reach = f64::from(size + width * ppp) + offset.abs() + 2.0;
+    // A character can reach past its size (a shape stays within it).
+    let extent = match m.mark {
+        LineMark::Marker(shape) => 2.0 * marker_reach(shape).max(0.5),
+        LineMark::Hash => 1.0,
+    };
+    let reach = f64::from(size * extent + width * ppp) + offset.abs() + 2.0;
     let (w, h) = (f64::from(pm.width()), f64::from(pm.height()));
     let near = Window { x0: -reach, y0: -reach, x1: w + reach, y1: h + reach };
     let mut room = MAX_MARKS;

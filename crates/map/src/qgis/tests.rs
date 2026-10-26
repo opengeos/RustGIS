@@ -1,7 +1,7 @@
 //! A small QGIS project and style, written by hand in the shapes QGIS writes them.
 
 use super::*;
-use crate::symbology::{LabelPlacement, LineCap, LineMark, Marker, Placements};
+use crate::symbology::{Glyph, LabelPlacement, LineCap, LineMark, Marker, Placements};
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
 <qgis projectname="Towns" version="3.42.0-Münster">
@@ -180,7 +180,8 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     let Some(Renderer::Unique { field, classes, other, .. }) = &towns.style.renderer else { panic!() };
     assert_eq!((field.as_str(), classes.len()), ("rank", 2));
     assert_eq!((classes[0].1.marker, classes[0].1.fill), (Marker::Star, Rgba::rgb(200, 0, 0)));
-    assert_eq!((other.marker, other.fill), (Marker::Circle, Rgba::rgb(0, 0, 0)));
+    // A font marker: its character (of no named family: the label font's).
+    assert_eq!((other.marker, other.fill), (Marker::Char(Glyph::new('A', "")), Rgba::rgb(0, 0, 0)));
 
     // What didn't carry over is said, once for each thing.
     let said =
@@ -193,7 +194,7 @@ fn a_project_reads_into_layers_in_tree_order_with_their_styles() {
     // A marker line without the symbol it places draws nothing, in QGIS too: nothing to say.
     assert!(!said("Roads", NoteKind::Skipped, "markers"));
     assert!(said("Roads", NoteKind::Skipped, "length("));
-    assert!(said("Towns", NoteKind::Approximated, "font markers"));
+    assert!(!report.notes.iter().any(|n| n.layer == "Towns" && n.text.contains("font markers")), "drawn as characters: {:?}", report.notes);
     // A switched-off label rule is never drawn, so its filter isn't noted.
     assert!(!report.notes.iter().any(|n| n.text.contains("Switched off")), "{:?}", report.notes);
 }
@@ -604,7 +605,7 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     let strokes = s.line_strokes.unwrap();
     let mm = 96.0 / 25.4;
     let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-    assert_eq!(strokes.len(), 4, "{strokes:?}");
+    assert_eq!(strokes.len(), 5, "{strokes:?}");
     assert!(strokes[0].markers.is_none());
     // An offset to the left stays to the left (it used to be taken as none).
     assert!(near(strokes[0].offset, -0.5 * mm), "{:?}", strokes[0]);
@@ -622,17 +623,21 @@ fn marker_and_hashed_lines_carry_over_as_strokes_of_marks() {
     assert_eq!((m.mark, m.angle, m.outline), (LineMark::Marker(Marker::Triangle), 90.0, Some(Rgba::new(0, 0, 0, 128))));
     assert!(near(tri.width.unwrap(), 0.2 * mm) && near(tri.offset, 0.5 * mm) && near(m.size, 2.0 * mm));
 
+    // The font character: its family's, in its colour, of its size.
+    let (chr, m) = (strokes[3], strokes[3].markers.unwrap());
+    assert_eq!(m.mark, LineMark::Marker(Marker::Char(Glyph::new('{', "DKM_Symbole"))));
+    assert_eq!(chr.color, Some(Rgba::new(0, 0, 0, 128)));
+    assert!(near(m.size, mm) && near(chr.offset, 0.5 * mm), "{chr:?}");
+
     // QGIS 2's hash marks: upright, at their angle, the line's colour and width.
-    let (hash, m) = (strokes[3], strokes[3].markers.unwrap());
+    let (hash, m) = (strokes[4], strokes[4].markers.unwrap());
     assert_eq!((m.mark, m.at, m.rotate, m.angle), (LineMark::Hash, Placements::INTERVAL, false, 30.0));
     assert_eq!(hash.color, Some(Rgba::rgb(0, 0, 255)));
     assert!(near(m.interval, 2.0 * mm) && near(m.size, 3.0 * mm) && near(hash.width.unwrap(), 0.3 * mm));
 
-    // A font character would be a blot of its size where QGIS draws a tick: left out until RustGIS
-    // draws characters.
-    assert!(report.notes.iter().any(|n| n.kind == NoteKind::Skipped && n.text.contains("font markers")), "{:?}", report.notes);
+    // Only the picture isn't drawn as QGIS draws it.
+    assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
     assert!(report.notes.iter().any(|n| n.kind == NoteKind::Approximated && n.text.contains("SVG markers")), "{:?}", report.notes);
-    assert_eq!(report.notes.iter().filter(|n| n.text.contains("along lines")).count(), 1, "{:?}", report.notes);
 
     // A placement on curves is drawn at the vertices; one QGIS adds later is left out, and said.
     let other = qml.replace("FirstVertex|LastVertex", "CurvePoint|SomethingNew");

@@ -471,6 +471,48 @@ fn line_strokes_take_markers_and_hash_marks_along_the_line() {
 }
 
 #[test]
+fn a_character_of_a_font_is_a_marker_on_points_and_along_lines() {
+    use rustgis_map::{Glyph, LineMark, Marker};
+    let mut s = world();
+    let marker = |s: &Session| s.map().layer_by_name("Cities").unwrap().symbol(0).marker;
+    s.run("layer.marker", &json!({"layer": "Cities", "char": "★x", "font": "DejaVu Sans", "size": 14})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('★', "DejaVu Sans")));
+    // Another character keeps the family; a family alone changes the character's.
+    s.run("layer.marker", &json!({"layer": "Cities", "char": "A"})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('A', "DejaVu Sans")));
+    s.run("layer.marker", &json!({"layer": "Cities", "font": ""})).unwrap();
+    assert_eq!(marker(&s), Marker::Char(Glyph::new('A', "")));
+    // Drawn in an export, a family this machine lacks in the label font.
+    let dir = std::env::temp_dir().join(format!("rustgis-chars-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    s.run("layer.marker", &json!({"layer": "Cities", "font": "No Such Family"})).unwrap();
+    let strokes =
+        json!([{"color": "#1E5AA8", "markers": {"mark": "character", "char": "»", "font": "DejaVu Sans", "size": 8, "interval": 20}}]);
+    s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": strokes})).unwrap();
+    let m = s.map().layer_by_name("Rivers").unwrap().line_strokes[0].markers.unwrap();
+    assert_eq!(m.mark, LineMark::Marker(Marker::Char(Glyph::new('»', "DejaVu Sans"))));
+    s.run("share.exportMap", &json!({"path": dir.join("map.png").display().to_string(), "width": 320, "height": 200})).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    // A shape goes back to the shape.
+    s.run("layer.marker", &json!({"layer": "Cities", "shape": "square"})).unwrap();
+    assert_eq!(marker(&s), Marker::Square);
+    let depth = s.undo_depth();
+    for (bad, says) in [
+        (json!({"layer": "Cities", "char": ""}), "char is a character"),
+        (json!({"layer": "Cities", "char": 7}), "char is a character"),
+        (json!({"layer": "Cities", "char": "a", "shape": "star"}), "not both"),
+    ] {
+        let err = s.run("layer.marker", &bad).unwrap_err();
+        assert!(err.contains(says), "{bad}: {err}");
+    }
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "hash", "char": "x"}}]})).unwrap_err();
+    assert!(err.contains("hash marks take no char"), "{err}");
+    let err = s.run("layer.lineStrokes", &json!({"layer": "Rivers", "strokes": [{"markers": {"mark": "character"}}]})).unwrap_err();
+    assert!(err.contains("needs its char"), "{err}");
+    assert_eq!(s.undo_depth(), depth);
+}
+
+#[test]
 fn a_stroke_is_dashed_by_command() {
     let mut s = world();
     let stroke = |dash: Value| json!({"layer": "Rivers", "strokes": [{"color": "#000000", "width": 2, "dash": dash}]});
