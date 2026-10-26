@@ -556,7 +556,9 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         rl.style.renderer = match kind.to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "stretch" => {
                 let ramp = ramp.or(cur_ramp.filter(|r| !r.is_qualitative())).unwrap_or_else(Ramp::gray);
-                let invert = b(p, "invert").unwrap_or(false);
+                // Left out, a stretch keeps its own inversion (a band change); a new one isn't inverted.
+                let cur_invert = matches!(rl.style.renderer, RasterRenderer::Stretch { invert: true, .. });
+                let invert = b(p, "invert").unwrap_or(cur_invert);
                 RasterRenderer::Stretch { band: bi, ramp, invert }
             }
             "rgb" => {

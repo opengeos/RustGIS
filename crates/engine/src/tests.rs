@@ -15206,6 +15206,13 @@ fn default_raster_style_applies_to_new_rasters() {
     assert_eq!(s.raster_defaults, rustgis_map::RasterDefaults::default());
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem3"})).unwrap();
     assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::gray(), invert: false });
+    // An inverted stretch stays inverted when only its band changes (the pane sends no invert).
+    s.run("raster.symbology", &json!({"type": "stretch", "invert": true})).unwrap();
+    s.run("raster.symbology", &json!({"type": "stretch", "band": 1})).unwrap();
+    assert!(matches!(style(&s).renderer, RasterRenderer::Stretch { invert: true, .. }));
+    s.run("raster.symbology", &json!({"type": "classify"})).unwrap();
+    s.run("raster.symbology", &json!({"type": "stretch"})).unwrap();
+    assert!(matches!(style(&s).renderer, RasterRenderer::Stretch { invert: false, .. }), "a new stretch isn't inverted");
 }
 
 #[test]
