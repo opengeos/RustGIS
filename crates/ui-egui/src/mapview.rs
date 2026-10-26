@@ -1292,9 +1292,9 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
         if let Some(h) = l.halo.filter(|_| halo) {
-            let hc = c32(h);
-            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-                p.add(shape(vec2(dx, dy), hc));
+            let (offsets, hc) = halo_coats(l, h);
+            for offset in offsets {
+                p.add(shape(offset, hc));
             }
         }
         if text {
@@ -1309,14 +1309,52 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
     if let Some(h) = l.halo.filter(|_| halo) {
-        let hc = c32(h);
-        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-            p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
+        let (offsets, hc) = halo_coats(l, h);
+        for offset in offsets {
+            p.galley_with_override_text_color(pos + offset, galley.clone(), hc);
         }
     }
     if text {
         p.galley_with_override_text_color(pos, galley, c32(l.color));
     }
+}
+
+/// The most copies of a label's text a halo of its own width is drawn with.
+const MAX_HALO_COATS: usize = 32;
+
+/// Where a label's halo of colour `h` is drawn round its text (points), and in what colour each
+/// copy: a thin ring, or for a halo of its own width rings out to that width (1.33 × in screen
+/// points, as the text's size), at most [`MAX_HALO_COATS`] copies, a see-through colour shared
+/// among the rings so the halo is about as see-through as one coat (as an export draws it).
+fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>, Color32) {
+    let Some(width) = l.halo_width else {
+        let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
+        return (ring.into_iter().map(|(x, y)| vec2(x, y)).collect(), c32(h));
+    };
+    let reach = rustgis_engine::render::halo_reach(width, l.size) * 1.33;
+    // Rings a point apart, or fewer when the copies would be too many, each copy as far from the
+    // next round it as the rings are apart.
+    let rings = (reach.ceil() as usize).clamp(1, 4);
+    let step = reach / rings as f32;
+    let mut out = Vec::new();
+    for i in 0..rings {
+        let r = reach - i as f32 * step;
+        if r <= 0.0 {
+            break;
+        }
+        let n = ((std::f32::consts::TAU * r / step.max(1.0)).ceil() as usize).clamp(6, MAX_HALO_COATS / rings);
+        out.extend((0..n).map(|k| {
+            let (sin, cos) = (std::f32::consts::TAU * k as f32 / n as f32).sin_cos();
+            vec2(r * cos, r * sin)
+        }));
+    }
+    if reach <= 0.0 {
+        out.clear();
+    }
+    // About one copy of each ring covers a pixel of the halo.
+    let a = f32::from(h.a()) / 255.0;
+    let each = if a < 1.0 { 1.0 - (1.0 - a).powf(1.0 / rings as f32) } else { 1.0 };
+    (out, c32(h.with_alpha((each * 255.0).round() as u8)))
 }
 
 /// The globe as seen in this view, when the map is a globe.
@@ -3405,6 +3443,52 @@ mod tile_redraw_tests {
         }
         assert_eq!(started, 0);
         assert_eq!(shown, Some(key(28)));
+    }
+}
+
+#[cfg(test)]
+mod halo_tests {
+    use super::*;
+    use rustgis_engine::map::Rgba;
+
+    fn label(halo_width: Option<f32>) -> PlacedLabel {
+        PlacedLabel {
+            text: "A".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 10.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo: Some(Rgba::rgb(255, 255, 255)),
+            halo_width,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed: false,
+            italic: false,
+            spacing: 0.0,
+            font: None,
+            line_align: TextAlign::Left,
+            angle: None,
+            collide: Default::default(),
+            glyphs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_halos_copies_reach_its_width_and_stay_few_and_one_coat_see_through() {
+        // The thin halo as it always was: eight copies a point round, in its own colour.
+        let (thin, c) = halo_coats(&label(None), Rgba::new(255, 255, 255, 225));
+        assert_eq!((thin.len(), c), (8, Color32::from_rgba_unmultiplied(255, 255, 255, 225)));
+        for w in [0.5, 1.42, 3.0, 10.0, 1e9] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let far = offsets.iter().map(|o| o.length()).fold(0.0, f32::max);
+            let reach = rustgis_engine::render::halo_reach(w, 10.0) * 1.33;
+            assert!((far - reach).abs() < 1e-3 && offsets.len() <= MAX_HALO_COATS, "{w}: {far} of {reach}, {}", offsets.len());
+        }
+        assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");
+        // Half see-through, shared among its rings: each copy fainter, about one coat in all.
+        let (offsets, c) = halo_coats(&label(Some(3.0)), Rgba::new(255, 0, 0, 128));
+        assert!(offsets.len() > 8 && c.a() < 128 && c.a() > 0, "{c:?}");
     }
 }
 

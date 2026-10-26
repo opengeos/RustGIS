@@ -88,8 +88,8 @@ Each layer keeps its look:
   transparency, clipping and no-data settings hide as the raster's mask.
 - **Labels**: simple and rule-based, each rule a label class whose SQL clause is its filter and
   its parents' (an else rule's: none of its siblings'), with the text's field, size, colour,
-  bold and italic, its font family (drawn in it where it is installed, else in RustGIS's label
-  font), its buffer as a halo, its placement (Parallel and Curved along lines,
+  bold, italic and letter spacing, its font family (drawn in it where it is installed, else in
+  RustGIS's label font), its buffer as a halo of its colour, opacity and size, its placement (Parallel and Curved along lines,
   around and over points) and its scale range.
 
 Projects and styles from QGIS 1 and 2 read too: their legend gives the layers' order, and the
@@ -99,7 +99,7 @@ QGIS expressions carry over where they are SQL: fields compared with values, `LI
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
-dashed polygon outlines solid, label halos in RustGIS's own colour and width, label offsets and
+dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn over the map, label offsets and
 wrapping, values outside a graduated renderer's ranges in its first or last class, file options
 such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster

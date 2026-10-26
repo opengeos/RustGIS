@@ -2142,6 +2142,44 @@ fn labels_take_a_font_by_family_name() {
     assert!(s.run("labels.fonts", &json!({})).unwrap()["fonts"].is_array());
 }
 
+/// A label class's halo takes its own colour and width, and its letters a spacing; blank and null
+/// go back to the automatic colour and the thin halo, and other settings leave them.
+#[test]
+fn labels_take_a_halo_colour_and_width_and_letter_spacing() {
+    use rustgis_map::Rgba;
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
+        (c.halo_color, c.halo_width, c.spacing)
+    };
+    assert_eq!(class(&s), (None, None, 0.0));
+    let mark = s.notice_mark();
+    s.run("labels.style", &json!({"layer": "Cities", "haloColor": "#FFEE00", "haloWidth": 1.42, "spacing": "0.5"})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("ignores")), "every key is read");
+    assert_eq!(class(&s), (Some(Rgba::rgb(0xFF, 0xEE, 0)), Some(1.42), 0.5));
+    s.run("labels.style", &json!({"layer": "Cities", "size": 12})).unwrap();
+    assert_eq!(class(&s), (Some(Rgba::rgb(0xFF, 0xEE, 0)), Some(1.42), 0.5), "other settings leave them");
+    s.run("labels.style", &json!({"layer": "Cities", "haloWidth": 99, "spacing": -99})).unwrap();
+    assert_eq!(class(&s), (Some(Rgba::rgb(0xFF, 0xEE, 0)), Some(10.0), -5.0), "within their ranges");
+    s.run("labels.style", &json!({"layer": "Cities", "haloColor": "", "haloWidth": null})).unwrap();
+    assert_eq!(class(&s), (None, None, -5.0));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s), (Some(Rgba::rgb(0xFF, 0xEE, 0)), Some(10.0), -5.0), "undoes");
+    s.run("labels.style", &json!({"layer": "Cities", "haloColor": null})).unwrap();
+    assert_eq!(class(&s).0, None);
+    for bad in [
+        json!({"haloColor": "pink"}),
+        json!({"haloColor": 7}),
+        json!({"haloWidth": "wide"}),
+        json!({"spacing": null}),
+        json!({"spacing": [1]}),
+    ] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Cities");
+        assert!(s.run("labels.style", &p).is_err(), "{bad}");
+    }
+}
+
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
 /// moved or removed) locks the labels again on the next frame, a change within a class keeps the
 /// lock (#732).

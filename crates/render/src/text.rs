@@ -358,12 +358,6 @@ pub fn wrap(line: &str, size: f32, bold: bool, spacing: f32, max_w: f32) -> Vec<
     out
 }
 
-/// A label's width in points: its widest line, as [`draw`] lays its lines out (#577). Text drawn
-/// on one line (table cells, chart names…) is measured with [`measure`].
-pub fn block_width(text: &str, size: f32, face: Face) -> f32 {
-    lines(text).map(|line| measure_in(line, size, face)).fold(0.0, f32::max)
-}
-
 /// The distance between a label's lines in points, as [`draw`] sets them: 1.25 × the font's
 /// pixel size, as a layout's text.
 pub fn line_pitch(size: f32) -> f32 {
@@ -391,18 +385,29 @@ pub fn label_face(l: &PlacedLabel) -> Face {
 /// between letters (not past the last), as the map view lays it out (#535), so a text is placed
 /// alike on screen and in an export. A slant's overhang isn't counted, as it isn't there either.
 fn line_width(l: &PlacedLabel, line: &str, ppp: f32) -> f32 {
-    let face = label_face(l);
-    let advance = measure_in(line, l.size, face) * ppp;
-    if l.spacing == 0.0 {
+    spaced_line_width(line, l.size, label_face(l), l.spacing, ppp)
+}
+
+/// [`line_width`] of a line of `size` in `face`, `spacing` points between its letters.
+fn spaced_line_width(line: &str, size: f32, face: Face, spacing: f32, ppp: f32) -> f32 {
+    let advance = measure_in(line, size, face) * ppp;
+    if spacing == 0.0 {
         return advance;
     }
     let letters = match face_font(face) {
-        Some((f, _)) => shape(line, l.size * 1.33 * ppp, f, sans_beside(f, face)).0.len(),
+        Some((f, _)) => shape(line, size * 1.33 * ppp, f, sans_beside(f, face)).0.len(),
         None => line.chars().count(),
     };
     // Letters drawn tighter than their own width (the most negative spacing) don't make it less
     // than nothing.
-    (advance + l.spacing * 1.33 * ppp * letters.saturating_sub(1) as f32).max(0.0)
+    (advance + spacing * 1.33 * ppp * letters.saturating_sub(1) as f32).max(0.0)
+}
+
+/// A label's width in points: its widest line, as [`draw`] lays its lines out (#577), `spacing`
+/// points between the letters. Text drawn on one line (table cells, chart names…) is measured
+/// with [`measure`].
+pub fn spaced_block_width(text: &str, size: f32, face: Face, spacing: f32) -> f32 {
+    lines(text).map(|line| spaced_line_width(line, size, face, spacing, 1.0)).fold(0.0, f32::max)
 }
 
 /// A label's width in points: its widest line as [`draw`] lays it out, its style included.
@@ -578,7 +583,7 @@ enum Ink {
 fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32, ink: Ink) {
     let (w, h) = (label_width(l), block_height(&l.text, l.size).max(line_pitch(l.size)));
     // Room for the halo, and for the glyphs reaching past the line.
-    let pad = 4.0 + l.size * 0.5;
+    let pad = 4.0 + l.size * 0.5 + l.halo_width.map_or(0.0, |w| halo_reach(w, l.size) * 1.33);
     let (pw, ph) = (((w + 2.0 * pad) * ppp).ceil(), ((h + 2.0 * pad) * ppp).ceil());
     if !(pw.is_finite() && ph.is_finite()) || pw > 4096.0 || ph > 4096.0 {
         return;
@@ -632,12 +637,52 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
     };
     // Every line's halo first, so none covers the line above it.
     if let Some(h) = l.halo.filter(|_| ink != Ink::Text) {
-        let r = 1.2 * ppp;
-        let ring =
-            [(-r, 0.0), (r, 0.0), (0.0, -r), (0.0, r), (-r * 0.7, -r * 0.7), (r * 0.7, r * 0.7), (-r * 0.7, r * 0.7), (r * 0.7, -r * 0.7)];
-        for line in &placed {
-            for offset in ring {
-                put(pm, line, h, offset);
+        match l.halo_width {
+            // As wide as its class sets it: the letters spread that far all round, as QGIS's
+            // buffer, in one coat (a see-through halo isn't darker where letters are close; on a
+            // curved label, each letter's is its own).
+            Some(width) => {
+                let r = halo_reach(width, l.size) * 1.33 * ppp;
+                // Its reach, and room for a slant's overhang (the lines' rows already hold the
+                // letters' height).
+                let (pad, x0, x1) = (
+                    r + 0.4 * px + 2.0,
+                    placed.iter().map(|p| p.1).fold(f32::MAX, f32::min),
+                    placed.iter().map(|p| p.1 + p.2).fold(f32::MIN, f32::max),
+                );
+                let (y0, y1) = (top - line_h, top + n as f32 * line_h);
+                // Only what can show: the picture's part of it, and its halo's reach beyond.
+                let (pw, ph) = (pm.width() as f32, pm.height() as f32);
+                let (x0, y0) = ((x0 - pad).max(-pad).floor(), (y0 - pad).max(-pad).floor());
+                let (x1, y1) = ((x1 + pad).min(pw + pad).ceil(), (y1 + pad).min(ph + pad).ceil());
+                // (None at all for a halo no wider than nothing.)
+                if let Some(mut mask) = (r > 0.0 && x1 > x0 && y1 > y0).then(|| Pixmap::new((x1 - x0) as u32, (y1 - y0) as u32)).flatten() {
+                    for line in &placed {
+                        put(&mut mask, line, Rgba::rgb(0, 0, 0), (-x0, -y0));
+                    }
+                    let (w, cover) = (mask.width() as usize, spread(&mask, r));
+                    for (i, c) in cover.into_iter().enumerate() {
+                        blend(pm, x0 as i32 + (i % w) as i32, y0 as i32 + (i / w) as i32, h, c);
+                    }
+                }
+            }
+            None => {
+                let r = 1.2 * ppp;
+                let ring = [
+                    (-r, 0.0),
+                    (r, 0.0),
+                    (0.0, -r),
+                    (0.0, r),
+                    (-r * 0.7, -r * 0.7),
+                    (r * 0.7, r * 0.7),
+                    (-r * 0.7, r * 0.7),
+                    (r * 0.7, -r * 0.7),
+                ];
+                for line in &placed {
+                    for offset in ring {
+                        put(pm, line, h, offset);
+                    }
+                }
             }
         }
     }
@@ -647,6 +692,59 @@ fn draw_upright(pm: &mut Pixmap, l: &PlacedLabel, ppp: f32, ink: Ink) {
     for line in &placed {
         put(pm, line, l.color, (0.0, 0.0));
     }
+}
+
+/// The widest halo drawn (points), whatever a placed label asks, unless its text is larger.
+const MAX_HALO: f32 = 10.0;
+
+/// How far a label's halo of `width` reaches (points): at most [`MAX_HALO`] or the text's size
+/// (`size`), so one grown with its label at a reference scale isn't cut back.
+pub fn halo_reach(width: f32, size: f32) -> f32 {
+    if width.is_finite() { width.clamp(0.0, MAX_HALO.max(size.min(1000.0))) } else { 0.0 }
+}
+
+/// How much of each of `mask`'s pixels a halo `r` pixels wide covers: its letters' coverage spread
+/// `r` pixels all round, the edge smooth (a disc, as a round-joined stroke reaches).
+fn spread(mask: &Pixmap, r: f32) -> Vec<f32> {
+    let (w, h) = (mask.width() as usize, mask.height() as usize);
+    let mut near: Vec<f32> = mask.pixels().iter().map(|p| f32::from(p.alpha()) / 255.0).collect();
+    let mut out = near.clone();
+    let reach = (r + 0.5).ceil().max(0.0) as usize;
+    // How much a pixel `dx`, `dy` away covers: all of it within `r`, none half a pixel past it.
+    let weight = |dx: usize, dy: usize| (r + 0.5 - ((dx * dx + dy * dy) as f32).sqrt()).clamp(0.0, 1.0);
+    let mut row = vec![0.0f32; w];
+    for k in 0..=reach {
+        // `near`: the most coverage within `k` pixels along each row.
+        if k > 0 {
+            for y in 0..h {
+                let Some(line) = near.get_mut(y * w..(y + 1) * w) else { continue };
+                row.copy_from_slice(line);
+                for (x, v) in line.iter_mut().enumerate() {
+                    let left = x.checked_sub(1).and_then(|x| row.get(x)).copied().unwrap_or(0.0);
+                    let right = row.get(x + 1).copied().unwrap_or(0.0);
+                    *v = v.max(left).max(right);
+                }
+            }
+        }
+        for dy in 0..=reach {
+            let wt = weight(k, dy);
+            // Only where it adds: a row `dy` away takes the widest reach it covers whole and the
+            // partly covered ones past it (a narrower reach holds less), so the work grows with
+            // `r`, not `r`².
+            if wt <= 0.0 || (k == 0 && dy == 0) || (k < reach && weight(k + 1, dy) >= 1.0) {
+                continue;
+            }
+            for y in 0..h {
+                for from in [y.checked_sub(dy), Some(y + dy).filter(|v| *v < h)].into_iter().flatten() {
+                    let (Some(src), Some(dst)) = (near.get(from * w..(from + 1) * w), out.get_mut(y * w..(y + 1) * w)) else { continue };
+                    for (o, s) in dst.iter_mut().zip(src) {
+                        *o = o.max(s * wt);
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The selection's frame: a light fill and an outline in the selection colour.
@@ -691,6 +789,7 @@ pub fn scale_bar(pm: &mut Pixmap, view: &View, ground_per_pt: f64) {
         size: 8.0,
         color: Rgba::rgb(30, 30, 30),
         halo: None,
+        halo_width: None,
         bold: false,
         icon: None,
         align: 0.0,

@@ -1,13 +1,13 @@
 //! QGIS labels (`<labeling type="simple|rule-based">`) as RustGIS label classes: each rule a
 //! class whose SQL clause is its filter (and its parents'), an else rule the features no other
-//! rule takes; the text's field, size, colour, weight and slant, its buffer as a halo, its
-//! placement and its scale range.
+//! rule takes; the text's field, size, colour, weight, slant and letter spacing, its buffer as a
+//! halo of its colour and size, its placement and its scale range.
 
 use roxmltree::Node;
 
 use super::{QGIS_SCALE, Report, child, color, data_defined_on, expr, prop, props};
 use crate::Rgba;
-use crate::symbology::{DEFAULT_LABEL_CLASS, LABEL_SIZE, LabelClass, LabelPlacement, Labeling, MAX_LABEL_CLASSES};
+use crate::symbology::{DEFAULT_LABEL_CLASS, HALO_WIDTH, LABEL_SIZE, LabelClass, LabelPlacement, Labeling, MAX_LABEL_CLASSES};
 
 /// A layer's labels from its `<labeling>`, or `None` when none can be carried over.
 pub(super) fn read(l: Node, layer: &str, report: &mut Report) -> Option<Labeling> {
@@ -162,18 +162,10 @@ fn class(
         return None;
     }
     let num = |n: Node, k: &str| n.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
-    // The size in typographic points, as RustGIS's label sizes are.
-    let raw = num(text, "fontSize").unwrap_or(10.0);
-    let size = match text.attribute("fontSizeUnit").unwrap_or("Point") {
-        "Point" => raw,
-        "MM" => raw * 72.0 / 25.4,
-        "Pixel" => raw * 0.75,
-        "Inch" => raw * 72.0,
-        _ => {
-            report.approximated(layer, "label sizes in map units, taken at 1:25,000");
-            raw / 25_000.0 * 72.0 / 0.0254
-        }
-    };
+    // The size in typographic points, as RustGIS's label sizes are; its letter spacing in the
+    // size's unit.
+    let size_unit = text.attribute("fontSizeUnit").unwrap_or("Point");
+    let size = points(num(text, "fontSize").unwrap_or(10.0), size_unit, "label sizes", layer, report);
     let opacity = num(text, "textOpacity").unwrap_or(1.0).clamp(0.0, 1.0) as f32;
     let c = text.attribute("textColor").and_then(color).unwrap_or(Rgba::rgb(0, 0, 0));
     let c = c.with_alpha((f32::from(c.a()) * opacity).round() as u8);
@@ -187,15 +179,28 @@ fn class(
     let italic = style.contains("italic") || style.contains("oblique") || text.attribute("fontItalic") == Some("1");
     // QGIS's font family: drawn in it where it is installed, else in RustGIS's label font.
     let font = text.attribute("fontFamily").and_then(crate::symbology::font_name);
-    if num(text, "fontLetterSpacing").is_some_and(|s| s != 0.0) {
-        report.approximated(layer, "label letter spacing, left out");
-    }
-    let halo = child(text, "text-buffer").is_some_and(|b| b.attribute("bufferDraw") == Some("1"));
-    if halo {
-        report.approximated(
-            layer,
-            "label halos in their own colour and width, drawn as RustGIS's (thin, white or dark by the text's colour)",
-        );
+    let spacing =
+        num(text, "fontLetterSpacing").filter(|s| *s != 0.0).map_or(0.0, |s| points(s, size_unit, "label letter spacing", layer, report));
+    let (spacing_min, spacing_max) = (crate::layout::MIN_LETTER_SPACING, crate::layout::MAX_LETTER_SPACING);
+    // Its buffer as the halo, in the buffer's colour (and opacity) and size.
+    let buffer = child(text, "text-buffer").filter(|b| b.attribute("bufferDraw") == Some("1"));
+    let halo = buffer.is_some();
+    // (QGIS's buffer is white unless it says otherwise.)
+    let halo_color = buffer.map(|b| b.attribute("bufferColor").and_then(color).unwrap_or(Rgba::rgb(255, 255, 255))).map(|c| {
+        let opacity = buffer.and_then(|b| num(b, "bufferOpacity")).unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+        c.with_alpha((f32::from(c.a()) * opacity).round() as u8)
+    });
+    let halo_width = buffer.map(|b| {
+        let w = points(num(b, "bufferSize").unwrap_or(1.0), b.attribute("bufferSizeUnits").unwrap_or("MM"), "label halos", layer, report);
+        w.clamp(*HALO_WIDTH.start(), *HALO_WIDTH.end()) as f32
+    });
+    if let Some(b) = buffer {
+        if b.attribute("bufferJoinStyle").is_some_and(|j| j != "128") {
+            report.approximated(layer, "label halos with sharp or bevelled corners, drawn round");
+        }
+        if !matches!(b.attribute("bufferBlendMode"), None | Some("0")) {
+            report.approximated(layer, "label halos blended into the map, drawn over it");
+        }
     }
     if child(text, "background").is_some_and(|b| b.attribute("shapeDraw") == Some("1")) {
         report.approximated(layer, "label backgrounds (shapes behind the text), left out");
@@ -228,7 +233,24 @@ fn class(
         placement,
         italic,
         font,
+        halo_color,
+        halo_width,
+        spacing: spacing.clamp(spacing_min, spacing_max) as f32,
     })
+}
+
+/// A QGIS length (`what`'s, for the report) in typographic points: map units taken at 1:25,000.
+fn points(v: f64, unit: &str, what: &str, layer: &str, report: &mut Report) -> f64 {
+    match unit {
+        "Point" => v,
+        "MM" => v * 72.0 / 25.4,
+        "Pixel" => v * 0.75,
+        "Inch" => v * 72.0,
+        _ => {
+            report.approximated(layer, format!("{what} in map units, taken at 1:25,000"));
+            v / 25_000.0 * 72.0 / 0.0254
+        }
+    }
 }
 
 /// Notes the label settings RustGIS has no place for, where they are set off QGIS's defaults.
