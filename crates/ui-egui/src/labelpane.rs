@@ -471,18 +471,19 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
 /// none takes every feature.
 fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let labels = &l.labels;
+    // One note, about what decides the labels first: labels off, then a hidden class, then
+    // the other classes. Each is a whole sentence, as joined ones would read in the wrong
+    // order right to left.
     if !labels.enabled {
         ui.label(RichText::new(tl!("Labels are off for this layer: the clause applies once they are on.")).small().color(t.text_dim));
-    }
-    if !c.it.visible {
+    } else if !c.it.visible {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(tl!("This class is hidden, so it labels nothing.")).small().color(t.text_dim));
             if ui.small_button(tl!("Show labels")).clicked() {
                 run(app, "labels.class.update", c.params(json!({"visible": true})));
             }
         });
-    }
-    if !labels.classes.is_empty() {
+    } else if !labels.classes.is_empty() {
         let said = tl!("Each class labels the features its own clause matches, so a feature can get a label from more than one.");
         ui.label(RichText::new(said).small().color(t.text_dim));
     }
@@ -1115,8 +1116,8 @@ mod tests {
         h.get_by_label("There is no expression defined.");
     }
 
-    /// The SQL tab says that every class labels what its clause matches, and that a hidden Default
-    /// labels nothing; Show labels shows Default again.
+    /// The SQL Query section of the Content tab has one note, on what decides the labels first:
+    /// labels off, then a hidden Default (Show labels shows it again), then the other classes.
     #[test]
     fn the_sql_tab_says_what_else_decides_the_labels() {
         let mut app = with_cities();
@@ -1124,11 +1125,17 @@ mod tests {
         app.run("labels.class.update", json!({"visible": false})).unwrap();
         let mut h = harness(app);
         h.run();
-        assert!(h.query_by_label_contains("Each class labels the features its own clause matches").is_some());
+        let rule = "Each class labels the features its own clause matches";
+        assert!(h.query_by_label_contains("Labels are off for this layer").is_some());
+        assert!(h.query_by_label("Show labels").is_none() && h.query_by_label_contains(rule).is_none(), "one note");
+        h.state_mut().run("labels.enable", json!({"on": true})).unwrap();
+        h.run();
+        assert!(h.query_by_label_contains(rule).is_none(), "one note");
         h.get_by_label("Show labels").click();
         h.run();
         let l = &h.state().session.map().layer(h.state().session.active_layer.unwrap()).unwrap().labels;
         assert!(l.default.visible);
+        assert!(h.query_by_label_contains(rule).is_some());
     }
 
     /// A draft belongs to its layer in its project: another project, though it reuses the
