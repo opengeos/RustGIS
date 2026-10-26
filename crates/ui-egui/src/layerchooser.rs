@@ -67,12 +67,11 @@ pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
     Ok(json!({"choosing": path}))
 }
 
-/// Adds the layers ticked, each by name (a failure is told and the rest still added).
+/// Adds the layers ticked, each by name (a failure is told, by the command, and the rest still
+/// added).
 fn add_chosen(app: &mut RustGisApp, path: &str, layers: &[String]) {
     for layer in layers {
-        if let Err(e) = app.run("layer.addData", json!({"path": path, "layer": layer})) {
-            app.session.notify(e, true);
-        }
+        let _ = app.run("layer.addData", json!({"path": path, "layer": layer}));
     }
     app.map.invalidate();
 }
@@ -96,14 +95,16 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             Some(_) => {
                 let path = c.path.clone();
                 app.ui.choosing.remove(0);
-                if let Err(e) = app.run("layer.addData", json!({"path": path})) {
-                    app.session.notify(e, true);
-                }
+                // A failure is told by the command.
+                let _ = app.run("layer.addData", json!({"path": path}));
                 app.map.invalidate();
                 return;
             }
         }
     }
+    // Enter and Escape are the chooser's only while nothing else has the keyboard: a key pressed
+    // in a text box elsewhere (or in the chooser's filter) is that box's.
+    let keys_free = ctx.memory(|m| m.focused().is_none());
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut add: Option<Vec<String>> = None;
@@ -135,11 +136,8 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
             let total = c.layers.len().to_string();
             ui.label(egui::RichText::new(crate::i18n::fmt("{n} layers: choose the ones to add.", &[("n", &total)])).color(t.text_dim));
             // A filter for a long list (a geodatabase can hold hundreds of tables).
-            let mut typing = false;
             if c.layers.len() > 8 {
-                let filter = ui.add(egui::TextEdit::singleline(&mut c.filter).hint_text(tl!("Filter layers")).desired_width(f32::INFINITY));
-                // Enter in the filter ends the typing (a single line gives up its focus on it).
-                typing = filter.has_focus() || filter.lost_focus();
+                ui.add(egui::TextEdit::singleline(&mut c.filter).hint_text(tl!("Filter layers")).desired_width(f32::INFINITY));
             }
             let needle = c.filter.trim().to_lowercase();
             let shows = |name: &str| needle.is_empty() || name.to_lowercase().contains(&needle);
@@ -167,13 +165,13 @@ pub fn show(app: &mut RustGisApp, ctx: &egui::Context) {
                     .add_enabled_ui(enabled, |ui| crate::widgets::dialog_button(ui, &label, Some(t.accent), egui::vec2(84.0, 28.0)))
                     .inner
                     .clicked();
-                if enabled && (clicked || (!typing && ui.input(|i| i.key_pressed(egui::Key::Enter)))) {
+                if enabled && (clicked || (keys_free && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))) {
                     add = Some(chosen.clone());
                 }
                 cancel = crate::widgets::dialog_button(ui, tl!("Cancel"), None, egui::vec2(84.0, 28.0)).clicked();
             });
         });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if keys_free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cancel = true;
     }
     if let Some(layers) = add {
@@ -259,7 +257,7 @@ mod tests {
         h.state_mut().ui.choosing.push(listed(opened, "/nonexistent/x.gpkg", Err("no such file".into())));
         h.run_steps(2);
         assert!(h.state().ui.choosing.is_empty());
-        assert!(!h.state().session.notices_since(mark).is_empty());
+        assert_eq!(h.state().session.notices_since(mark).len(), 1, "a failure is told once");
         // Cancel adds nothing.
         h.state_mut().ui.choosing.push(listed(opened, &kml, Ok(json!({"count": 2, "layers": names.clone()}))));
         h.run_steps(2);
@@ -286,6 +284,11 @@ mod tests {
         app.services.save_pref = Some(Box::new(move |k, v| log.lock().unwrap().push((k.to_string(), v.to_string()))));
         assert!(app.ui.ask_layers);
         assert_eq!(app.run("ui.askLayers", json!({"on": false})).unwrap(), json!({"on": false}));
+        // A value that isn't true or false is refused and changes nothing.
+        for junk in [json!({"on": "true"}), json!({"on": 1}), json!({"on": [true]})] {
+            assert!(app.run("ui.askLayers", junk).is_err());
+            assert!(!app.ui.ask_layers);
+        }
         assert_eq!(saved.lock().unwrap().last().cloned(), Some(("ask_file_layers".to_string(), "off".to_string())));
         // A GeoPackage that isn't there: added straight away (and refused), never listed.
         assert!(app.run("ui.addFile", json!({"path": "/nonexistent/x.gpkg"})).is_err());

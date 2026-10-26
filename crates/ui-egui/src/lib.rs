@@ -1942,7 +1942,11 @@ impl RustGisApp {
             }
             // Whether a file holding several layers asks which to add.
             "ui.askLayers" => {
-                self.ui.ask_layers = p.get("on").and_then(Value::as_bool).unwrap_or(!self.ui.ask_layers);
+                // Without `on` it toggles; a value that isn't true or false is refused.
+                self.ui.ask_layers = match p.get("on") {
+                    None | Some(Value::Null) => !self.ui.ask_layers,
+                    Some(v) => v.as_bool().ok_or("on must be true or false")?,
+                };
                 if let Some(save) = &self.services.save_pref {
                     save("ask_file_layers", if self.ui.ask_layers { "on" } else { "off" });
                 }
