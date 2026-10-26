@@ -146,10 +146,16 @@ impl Extent {
     }
 }
 
-/// Longitude/latitude (degrees) → Web Mercator metres. Latitude is clamped to ±85.05°.
+/// Longitude/latitude (degrees) → Web Mercator metres. Latitude is clamped to ±85.05°; a longitude
+/// outside −180..180 folds into that range, so a shape kept unwrapped across the antimeridian
+/// (as `geodesic_interpolate` and `Aeqd::inverse` keep one) projects onto the world, never metres
+/// past its ±20,037,508.34 m edge (#940).
 pub fn lonlat_to_merc(c: Coord) -> Coord {
     let lat = c.y.clamp(-MAX_LAT, MAX_LAT).to_radians();
-    Coord::new(MERCATOR_R * c.x.to_radians(), MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat / 2.0).tan().ln())
+    // A finite longitude outside −180..180 folds into that range; a non-finite one stays broken
+    // rather than quietly becoming the prime meridian.
+    let lon = if !c.x.is_finite() || (c.x >= -180.0 && c.x <= 180.0) { c.x } else { wrap_lon(c.x) };
+    Coord::new(MERCATOR_R * lon.to_radians(), MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat / 2.0).tan().ln())
 }
 
 /// Web Mercator metres → longitude/latitude (degrees).
@@ -450,6 +456,19 @@ mod tests {
             let back = merc_to_lonlat(m);
             assert!((back.x - x).abs() < 1e-9 && (back.y - y).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn mercator_folds_longitudes_outside_the_world() {
+        // 185° is -175° on the world: the same place, at metres inside ±20,037,508, never past
+        // its edge. Unwrapped geometry (a buffer that crossed the antimeridian) zooms to itself.
+        let folded = lonlat_to_merc(Coord::new(185.0, 0.0));
+        let there = lonlat_to_merc(Coord::new(-175.0, 0.0));
+        assert!((folded.x - there.x).abs() < 1e-6 && folded.y == there.y);
+        assert!(folded.x.abs() <= MERCATOR_R * std::f64::consts::PI, "{}", folded.x);
+        // A broken longitude stays broken, never a plausible place near Greenwich.
+        assert!(lonlat_to_merc(Coord::new(f64::NAN, 0.0)).x.is_nan());
+        assert!(lonlat_to_merc(Coord::new(f64::INFINITY, 0.0)).x.is_infinite());
     }
 
     #[test]
