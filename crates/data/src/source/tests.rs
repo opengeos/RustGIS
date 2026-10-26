@@ -1232,6 +1232,11 @@ fn geojson_without_a_crs_or_in_lonlat_is_unchanged() {
         r#""crs":null,"#.to_string(),
         format!(r#""crs":{},"#, named("urn:ogc:def:crs:OGC:1.3:CRS84")),
         format!(r#""crs":{},"#, named("urn:ogc:def:crs:OGC::CRS84")),
+        format!(r#""crs":{},"#, named("OGC::CRS84")),
+        format!(r#""crs":{},"#, named("OGC:1.3:CRS84")),
+        format!(r#""crs":{},"#, named("OGC:CRS84")),
+        format!(r#""crs":{},"#, named("CRS84")),
+        format!(r#""crs":{},"#, named("http://www.opengis.net/def/crs/OGC/1.3/CRS84")),
         format!(r#""crs":{},"#, named("EPSG:4326")),
         format!(r#""crs":{},"#, named("urn:ogc:def:crs:EPSG::4326")),
     ];

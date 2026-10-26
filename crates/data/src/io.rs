@@ -744,7 +744,8 @@ fn is_epsg_or_crs84_name(name: &str) -> bool {
     if let Some(rest) = url(&up).and_then(|r| r.strip_prefix("OGC/")) {
         return tail(rest, '/').is_some_and(|c| c == "CRS84");
     }
-    up == "CRS84" || up == "OGC:CRS84"
+    // The shorthands: `CRS84`, `OGC:CRS84`, `OGC::CRS84`, `OGC:1.3:CRS84`.
+    up == "CRS84" || up == "OGC:CRS84" || up.strip_prefix("OGC:").and_then(|rest| tail(rest, ':')).is_some_and(|c| c == "CRS84")
 }
 
 /// A geometry in longitude/latitude from the coordinates `t` converts: `None` when a coordinate
