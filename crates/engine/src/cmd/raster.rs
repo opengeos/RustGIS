@@ -84,7 +84,7 @@ pub fn commands() -> Vec<C> {
         .when(need_raster)
         .params(r#"{"layer"?, "brightness"?: -100..100, "contrast"?: -100..100, "gamma"?: 0.1..10}"#),
         C::new("raster.setDefaultStyle", "Save as Default Raster Style", "Style › Rendering", set_default_style).view().params(
-            r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch; the settings apply to every raster added later that would be a grey stretch, opened files and analysis results alike), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the inverted grey stretch)}"#,
+            r#"{"fromLayer"?: bool (the active or named layer's colour ramp stretch; the settings apply to every raster added later that would be a grey stretch, opened files and analysis results alike), "layer"?, "ramp"?, "invert"?: bool, "stretch"?: "none"|"minMax"|"percentClip"|"standardDeviation"|"histogramEqualize", "low"?, "high"?: %, "n"?: deviations, "resampling"?: "nearest"|"bilinear", "reset"?: bool (back to the black-to-white grey stretch)}"#,
         ),
         C::new("raster.info", "Raster Information", "Data › Information", info).view().when(need_raster).params(r#"{"layer"?}"#),
         C::new("share.exportRaster", "Export Raster", "Data › Information", export).view().when(need_raster).params(
@@ -555,8 +555,8 @@ fn symbology(s: &mut Session, p: &Value) -> CmdResult {
         let cur_ramp = rl.style.renderer.ramp();
         rl.style.renderer = match kind.to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
             "stretch" => {
-                let ramp = ramp.or(cur_ramp.filter(|r| !r.is_qualitative())).unwrap_or(Ramp::Greys);
-                let invert = b(p, "invert").unwrap_or(ramp == Ramp::Greys);
+                let ramp = ramp.or(cur_ramp.filter(|r| !r.is_qualitative())).unwrap_or_else(Ramp::gray);
+                let invert = b(p, "invert").unwrap_or(false);
                 RasterRenderer::Stretch { band: bi, ramp, invert }
             }
             "rgb" => {

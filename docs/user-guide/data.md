@@ -747,7 +747,7 @@ stretch, class breaks and legend then use only the values shown. **Clear mask** 
 again; the mask is saved with the project.
 
 A single-band raster of continuous values (an elevation model, a temperature grid, an index such
-as NDVI) is first drawn as an inverted grey stretch clipping 0.5 % at each end. To draw such rasters
+as NDVI) is first drawn as a grey stretch, black to white (matplotlib's `gray`), clipping 0.5 % at each end. To draw such rasters
 your own way, style one with the Stretch symbology, then click **Save as Default** under
 **Resampling**: rasters added from then on, opened files and analysis results (a slope, an NDVI)
 alike, take its color scheme, inversion, stretch type and

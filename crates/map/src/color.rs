@@ -449,6 +449,11 @@ impl Ramp {
         }
     }
 
+    /// Matplotlib's `gray`: black to white, how single-band rasters are first drawn.
+    pub fn gray() -> Ramp {
+        Ramp::Matplotlib(Colormap::find("gray", true).unwrap_or(Colormap(0)))
+    }
+
     /// Every built-in ramp: our own, then the matplotlib library's.
     pub fn builtin() -> impl Iterator<Item = Ramp> {
         Ramp::ALL.into_iter().chain(Colormap::all().map(Ramp::Matplotlib))

@@ -15161,10 +15161,10 @@ fn default_raster_style_applies_to_new_rasters() {
     let undo = s.undo_label();
     // The layer just added (rasters go in under the vectors, the newest on top of them).
     let style = |s: &Session| s.map().layer(s.active_layer.unwrap()).unwrap().raster.as_ref().unwrap().style.clone();
-    // Without settings: the inverted grey stretch.
+    // Without settings: the black-to-white grey stretch.
     let shown = s.run("raster.setDefaultStyle", &json!({})).unwrap();
-    assert_eq!(shown["ramp"], "Greys");
-    assert_eq!(shown["invert"], true);
+    assert_eq!(shown["ramp"], "gray");
+    assert_eq!(shown["invert"], false);
 
     let shown = s
         .run(
@@ -15205,7 +15205,7 @@ fn default_raster_style_applies_to_new_rasters() {
     s.run("raster.setDefaultStyle", &json!({"reset": true})).unwrap();
     assert_eq!(s.raster_defaults, rustgis_map::RasterDefaults::default());
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64(), "name": "dem3"})).unwrap();
-    assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::Greys, invert: true });
+    assert_eq!(style(&s).renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::gray(), invert: false });
 }
 
 #[test]

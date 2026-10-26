@@ -549,7 +549,7 @@ impl RasterRenderer {
 
 /// How a newly added single-band raster of continuous values is drawn: a colour ramp stretch with
 /// these settings (`raster.setDefaultStyle`). The app keeps them with its preferences, not the
-/// project; the default is an inverted grey stretch clipping 0.5 % at each end.
+/// project; the default is a black-to-white grey stretch clipping 0.5 % at each end.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RasterDefaults {
@@ -562,7 +562,7 @@ pub struct RasterDefaults {
 
 impl Default for RasterDefaults {
     fn default() -> Self {
-        RasterDefaults { ramp: Ramp::Greys, invert: true, stretch: Stretch::default(), resampling: Resampling::Nearest }
+        RasterDefaults { ramp: Ramp::gray(), invert: false, stretch: Stretch::default(), resampling: Resampling::Nearest }
     }
 }
 
@@ -1122,7 +1122,7 @@ mod tests {
         let c = Colorizer::new(&s, &r, None);
         let lo = c.color(&[0.0], None).unwrap();
         let hi = c.color(&[6.0], None).unwrap();
-        assert!(lo[0] < hi[0], "inverted greys: low is dark ({lo:?} vs {hi:?})");
+        assert!(lo[0] < hi[0], "grey: low is dark ({lo:?} vs {hi:?})");
         assert_eq!(c.color(&[f32::NAN], None), None);
         assert_eq!(c.color(&[], None), None);
 
