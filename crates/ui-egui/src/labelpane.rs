@@ -409,13 +409,30 @@ fn new_name(labels: &Labeling) -> String {
         .unwrap_or_default()
 }
 
+/// A list's search box, as its first row: the text kept for `id` while the list is reopened,
+/// lowercased to match names by. The Field and Font boxes share it, so they search alike.
+fn list_search(ui: &mut Ui, id: egui::Id, hint: &str) -> String {
+    let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    if ui.add(egui::TextEdit::singleline(&mut text).hint_text(hint)).changed() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+    text.to_lowercase()
+}
+
+/// A pick ends the search: the list opens whole next time.
+fn end_search(ui: &Ui, id: egui::Id) {
+    ui.data_mut(|d| d.remove::<String>(id));
+}
+
 /// The field the class labels with, chosen as the font is: the box shows it (or says it is gone,
 /// as a style or a service can leave it), and the list has a search for a layer with many.
 fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
     let fields = &l.dataset.fields;
     let cur = &c.it.field;
+    // A layer without fields leaves its classes on none.
     let shown = match l.dataset.field_index(cur) {
         Some(_) => cur.clone(),
+        None if cur.is_empty() => tl!("<None>").to_string(),
         None => crate::i18n::fmt("{name} (not in the layer)", &[("name", cur)]),
     };
     let search_id = egui::Id::unique(("label_pane_field_search", l.id));
@@ -426,21 +443,18 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
             .width(180.0)
             .height(320.0)
             .show_ui(ui, |ui| {
-                let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-                if ui.add(egui::TextEdit::singleline(&mut search).hint_text(tl!("Search fields"))).changed() {
-                    ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
-                }
-                let search = search.to_lowercase();
+                let search = list_search(ui, search_id, tl!("Search fields"));
                 let mut matching = fields.iter().filter(|f| f.name.to_lowercase().contains(&search)).peekable();
-                if matching.peek().is_none() {
+                if fields.is_empty() {
+                    ui.weak(tl!("This layer has no fields."));
+                } else if matching.peek().is_none() {
                     ui.weak(tl!("No fields match"));
                 }
                 for f in matching {
                     let on = f.name.eq_ignore_ascii_case(cur);
                     if ui.selectable_label(on, &f.name).clicked() && !on {
                         run(app, "labels.field", c.params(json!({"field": f.name})));
-                        // A pick ends the search: the list opens whole next time.
-                        ui.data_mut(|d| d.remove::<String>(search_id));
+                        end_search(ui, search_id);
                     }
                 }
             })
@@ -569,22 +583,17 @@ fn font(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
         .width(180.0)
         .height(320.0)
         .show_ui(ui, |ui| {
-            let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-            if ui.add(egui::TextEdit::singleline(&mut search).hint_text(tl!("Search fonts"))).changed() {
-                ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
-            }
+            let search = list_search(ui, search_id, tl!("Search fonts"));
             if ui.selectable_label(cur.is_none(), tl!("Label font")).clicked() {
                 run(app, "labels.style", c.params(json!({"font": ""})));
-                ui.data_mut(|d| d.remove::<String>(search_id));
+                end_search(ui, search_id);
             }
-            let search = search.to_lowercase();
             let mut matching = installed.iter().filter(|f| f.listed && (search.is_empty() || f.name.to_lowercase().contains(&search)));
             for f in matching.by_ref().take(MAX_FONTS_SHOWN) {
                 let on = cur.is_some_and(|c| c.eq_ignore_ascii_case(&f.name));
                 if ui.selectable_label(on, &f.name).clicked() && !on {
                     run(app, "labels.style", c.params(json!({"font": f.name})));
-                    // A pick ends the search, as the field box's does.
-                    ui.data_mut(|d| d.remove::<String>(search_id));
+                    end_search(ui, search_id);
                 }
             }
             let more = matching.count();
@@ -1227,6 +1236,24 @@ mod tests {
         search(&mut h, "zzz");
         assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("zzz"), "the pick ended the search");
         assert!(h.query_by_label("No fields match").is_some());
+    }
+
+    /// A layer without fields has no label field to offer: the box shows none, and its list says
+    /// why rather than that nothing matches.
+    #[test]
+    fn a_layer_without_fields_has_no_label_field() {
+        use egui::accesskit::Role;
+        use rustgis_engine::data::{Dataset, GeometryType};
+        let mut app = RustGisApp::with_sample();
+        let id = app.session.map_mut().add_dataset(Dataset::new("Bare", GeometryType::Point, vec![]));
+        app.session.run("layer.select", &json!({"layer": id})).unwrap();
+        let mut h = harness(app);
+        h.run();
+        assert!(shown(&h, "<None>"));
+        h.get_by_role_and_label(Role::ComboBox, "Field").click();
+        h.run();
+        assert!(h.query_by_label("This layer has no fields.").is_some());
+        assert!(h.query_by_label("No fields match").is_none());
     }
 
     /// The pane edits the class chosen, and only it; its steps name it, and Default's name none
