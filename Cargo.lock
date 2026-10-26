@@ -4887,7 +4887,7 @@ dependencies = [
  "egui_kittest",
  "image",
  "log",
- "pollster 0.4.0",
+ "pollster 1.0.1",
  "rfd",
  "rustgis-assistant",
  "rustgis-engine",
