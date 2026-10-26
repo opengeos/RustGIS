@@ -38,6 +38,12 @@ file picker opens formats listed on [Supported Data Formats](data-formats.md), i
 cloud-optimised GeoTIFF, GeoParquet and FlatGeobuf (read in place, a view at a time; see [Files
 on the web](data-formats.md#files-on-the-web)). **Home › Add › Data Sources** opens the pane with
 saved connections, favourites, recent data and the public-source library.
+On the desktop, a file that holds several layers (a File Geodatabase, a GeoPackage, a DuckDB
+database or a file read through GDAL) asks which to add when it is picked, dropped or
+double-clicked in the Browser: **Choose Layers** lists them, all ticked, with **Select All**,
+**Select None** and a filter for a long list. Turn **Ask Which Layers to Add** off in the Add Data
+menu to add every layer, as before. Scripts pick one with `layer.addData`'s `"layer"`;
+`info.fileLayers` lists them.
 On the desktop, **Home › Add › Add Data › Add Folder…** connects a folder to the Browser; the web
 app does not offer folder connections.
 **Home › Add › Add Data › Delimited Text…** asks for a CSV or a spreadsheet first, then lists its columns to pick the x and y (or WKT)

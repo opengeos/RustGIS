@@ -2292,7 +2292,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 } else if name.ends_with(".rgislayout") {
                     let _ = app.run("layout.import", json!({"path": path.display().to_string()}));
                 } else {
-                    let _ = app.run("layer.addData", json!({"path": path.display().to_string()}));
+                    let _ = crate::layerchooser::add_file(app, &path.display().to_string());
                 }
             }
         });
