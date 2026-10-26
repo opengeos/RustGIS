@@ -79,6 +79,7 @@ pub fn section(app: &mut RustGisApp, ui: &mut egui::Ui) {
 
 /// The portal and client id fields, with what to register.
 fn fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
+    prefill(&mut app.ui.arcgis);
     let redirect = if cfg!(target_arch = "wasm32") {
         format!("…/{}", arcgis_auth::WEB_CALLBACK)
     } else {
@@ -86,7 +87,7 @@ fn fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
     };
     ui.label(
         egui::RichText::new(crate::i18n::fmt(
-            "ArcGIS Online needs no client ID: RustGIS's own app is used. For an ArcGIS Enterprise portal, register an OAuth app on it (Content › New item › Developer credentials) whose redirect URL is {redirect}, and give its client ID.",
+            "For ArcGIS Online, the client ID is RustGIS's own app. For an ArcGIS Enterprise portal, register an OAuth app on it (Content › New item › Developer credentials) whose redirect URL is {redirect}, and give its client ID.",
             &[("redirect", &redirect)],
         ))
         .weak(),
@@ -98,12 +99,23 @@ fn fields(app: &mut RustGisApp, ui: &mut egui::Ui) {
             .on_hover_text(tl!("An ArcGIS Online organization's or an ArcGIS Enterprise portal's address; ArcGIS Online when blank"));
         ui.end_row();
         let label = ui.label(tl!("Client ID"));
-        ui.add(
-            egui::TextEdit::singleline(&mut app.ui.arcgis.client_id).hint_text(tl!("RustGIS's own (ArcGIS Online)")).desired_width(320.0),
-        )
-        .labelled_by(label.id);
+        ui.add(egui::TextEdit::singleline(&mut app.ui.arcgis.client_id).hint_text(tl!("The portal's OAuth app")).desired_width(320.0))
+            .labelled_by(label.id);
         ui.end_row();
     });
+}
+
+/// Shows RustGIS's own client id for an ArcGIS Online portal (blank, or an organization's
+/// address) when none is given, and takes it away for an Enterprise portal, which registers its own.
+/// A client id the user types is kept.
+fn prefill(s: &mut State) {
+    let online = arcgis_auth::portal_base(&s.portal).is_ok_and(|p| arcgis_auth::is_online(&p));
+    let id = s.client_id.trim();
+    if online && id.is_empty() {
+        s.client_id = arcgis_auth::DEFAULT_CLIENT_ID.to_string();
+    } else if !online && id == arcgis_auth::DEFAULT_CLIENT_ID {
+        s.client_id.clear();
+    }
 }
 
 fn remember(app: &RustGisApp, portal: &str, client_id: &str) {
@@ -178,5 +190,29 @@ fn start(app: &mut RustGisApp) {
             app.ui.open_url = v.get("url").and_then(serde_json::Value::as_str).map(str::to_string);
         }
         Err(e) => app.ui.arcgis.error = Some(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arcgis_online_shows_the_default_client_id() {
+        let mut s = State::default();
+        prefill(&mut s);
+        assert_eq!(s.client_id, arcgis_auth::DEFAULT_CLIENT_ID);
+        s.portal = "https://myorg.maps.arcgis.com".into();
+        prefill(&mut s);
+        assert_eq!(s.client_id, arcgis_auth::DEFAULT_CLIENT_ID);
+        // An Enterprise portal registers its own.
+        s.portal = "https://gis.example.org/portal".into();
+        prefill(&mut s);
+        assert!(s.client_id.is_empty());
+        // One typed is kept, whichever the portal.
+        s.client_id = "mine".into();
+        s.portal.clear();
+        prefill(&mut s);
+        assert_eq!(s.client_id, "mine");
     }
 }
