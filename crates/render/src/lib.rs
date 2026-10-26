@@ -116,8 +116,8 @@ use rustgis_geom::{Coord, Extent, extent_to_merc, lonlat_to_merc};
 use rustgis_map::globe::{V3, densify};
 use rustgis_map::layout::TextAlign;
 use rustgis_map::{Camera, Globe, LabelPlacement, LineStroke, Map, Marker, Rgba, Symbol};
-/// The image type pages and maps are drawn into.
 pub use text::halo_reach;
+/// The image type pages and maps are drawn into.
 pub use tiny_skia::Pixmap;
 use tiny_skia::{
     FillRule, GradientStop, LineCap, LineJoin, Paint, PathBuilder, PixmapPaint, Point, RadialGradient, SpreadMode, Stroke, Transform,
@@ -4179,7 +4179,9 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
     if !l.text.is_empty() {
         let tw = text::label_width(l);
         let th = text::block_height(&l.text, l.size);
-        let p = l.collide.text_padding.clamp(0.0, 100.0);
+        // The halo of a width of its own reaches past the letters (points × 1.33, as the text's
+        // size and the drawing have it): another label's text must not fall under it.
+        let p = l.collide.text_padding.clamp(0.0, 100.0) + l.halo_width.map_or(0.0, |w| text::halo_reach(w, l.size) * 1.33);
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
             // A curved label: a square round each character, as tall as the text.
@@ -4366,6 +4368,27 @@ mod tests {
             collide: Default::default(),
             glyphs: Vec::new(),
         }
+    }
+
+    /// A halo of its own width reaches past the letters, so its label's collision box grows by it:
+    /// another label's text never falls under it. The thin halo and none leave the box as it was.
+    #[test]
+    fn a_wide_halo_keeps_other_labels_out_of_its_reach() {
+        let plain = label("Rhein", 50.0, None, 0.0);
+        let mut haloed = plain.clone();
+        (haloed.halo, haloed.halo_width) = (Some(Rgba::rgb(255, 255, 255)), Some(5.0));
+        // As far as the halo is drawn: 5 points, at the 1.33 the text's size is drawn at.
+        let reach = 5.0 * 1.33;
+        let (a, b) = (label_boxes(&plain).0[0], label_boxes(&haloed).0[0]);
+        assert!((a[0] - b[0] - reach).abs() < 1e-4 && (b[2] - a[2] - reach).abs() < 1e-4, "{a:?} {b:?}");
+        assert!((a[1] - b[1] - reach).abs() < 1e-4 && (b[3] - a[3] - reach).abs() < 1e-4, "{a:?} {b:?}");
+        haloed.halo_width = None;
+        assert_eq!(label_boxes(&haloed).0[0], a);
+        // Turned and curved labels' squares grow by it too.
+        haloed.halo_width = Some(5.0);
+        let turned = |l: &PlacedLabel| PlacedLabel { angle: Some(0.5), ..l.clone() };
+        let (a, b) = (label_boxes(&turned(&plain)).0[0], label_boxes(&turned(&haloed)).0[0]);
+        assert!(((b[2] - b[0]) - (a[2] - a[0]) - 2.0 * reach).abs() < 1e-4, "{a:?} {b:?}");
     }
 
     #[test]

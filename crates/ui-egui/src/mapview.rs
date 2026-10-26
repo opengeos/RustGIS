@@ -1320,36 +1320,38 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
 }
 
 /// The most copies of a label's text a halo of its own width is drawn with.
-const MAX_HALO_COATS: usize = 32;
+const MAX_HALO_COATS: usize = 64;
 
 /// Where a label's halo of colour `h` is drawn round its text (points), and in what colour each
-/// copy: a thin ring, or for a halo of its own width rings out to that width (1.33 × in screen
-/// points, as the text's size), at most [`MAX_HALO_COATS`] copies, a see-through colour shared
-/// among the rings so the halo is about as see-through as one coat (as an export draws it).
+/// copy: a thin ring, or for a halo of its own width rings about 1.5 points apart out to that
+/// width (1.33 × in screen points, as the text's size), the [`MAX_HALO_COATS`] copies shared among
+/// the rings by their length so they stand evenly apart, in a see-through colour shared among the
+/// rings so the halo is about as see-through as one coat. A halo of a few points (QGIS's usual
+/// buffer) is solid; a very wide one is approximated here, while an export draws it exactly.
 fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>, Color32) {
     let Some(width) = l.halo_width else {
         let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
         return (ring.into_iter().map(|(x, y)| vec2(x, y)).collect(), c32(h));
     };
     let reach = rustgis_engine::render::halo_reach(width, l.size) * 1.33;
-    // Rings a point apart, or fewer when the copies would be too many, each copy as far from the
-    // next round it as the rings are apart.
-    let rings = (reach.ceil() as usize).clamp(1, 4);
+    // No width, or one that isn't a number: no halo.
+    if reach.is_nan() || reach <= 0.0 {
+        return (Vec::new(), c32(h));
+    }
+    let rings = ((reach / 1.5).ceil() as usize).clamp(1, 6);
     let step = reach / rings as f32;
+    // Ring i (outermost first) has radius reach - i·step; copies go to each by its length.
+    let radii: Vec<f32> = (0..rings).map(|i| reach - i as f32 * step).collect();
+    let total: f32 = radii.iter().sum();
     let mut out = Vec::new();
-    for i in 0..rings {
-        let r = reach - i as f32 * step;
-        if r <= 0.0 {
-            break;
-        }
-        let n = ((std::f32::consts::TAU * r / step.max(1.0)).ceil() as usize).clamp(6, MAX_HALO_COATS / rings);
+    for r in radii {
+        // Rounded down, so the copies stay within the budget (the innermost of at most six rings
+        // still gets three or more).
+        let n = ((MAX_HALO_COATS as f32 * r / total).floor() as usize).max(3);
         out.extend((0..n).map(|k| {
             let (sin, cos) = (std::f32::consts::TAU * k as f32 / n as f32).sin_cos();
             vec2(r * cos, r * sin)
         }));
-    }
-    if reach <= 0.0 {
-        out.clear();
     }
     // About one copy of each ring covers a pixel of the halo.
     let a = f32::from(h.a()) / 255.0;
@@ -3486,6 +3488,26 @@ mod halo_tests {
             assert!((far - reach).abs() < 1e-3 && offsets.len() <= MAX_HALO_COATS, "{w}: {far} of {reach}, {}", offsets.len());
         }
         assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");
+        // QGIS's usual buffer (0.5 mm, 1.42 pt) is solid: neighbouring copies on a ring are well
+        // under a pixel apart. On every ring, at any width, the copies stand evenly round it.
+        for w in [1.42, 3.0, 10.0] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let mut rings: Vec<(f32, Vec<egui::Vec2>)> = Vec::new();
+            for o in offsets {
+                match rings.iter_mut().find(|(r, _)| (r - o.length()).abs() < 1e-3) {
+                    Some((_, ring)) => ring.push(o),
+                    None => rings.push((o.length(), vec![o])),
+                }
+            }
+            for (r, ring) in &rings {
+                let gap = std::f32::consts::TAU * r / ring.len() as f32;
+                let next = (ring[1] - ring[0]).length();
+                assert!((next - 2.0 * r * (gap / (2.0 * r)).sin()).abs() < 1e-3, "{w}: uneven ring {r}");
+                if w < 2.0 {
+                    assert!(gap < 1.0, "{w}: ring {r} has gaps of {gap}");
+                }
+            }
+        }
         // Half see-through, shared among its rings: each copy fainter, about one coat in all.
         let (offsets, c) = halo_coats(&label(Some(3.0)), Rgba::new(255, 0, 0, 128));
         assert!(offsets.len() > 8 && c.a() < 128 && c.a() > 0, "{c:?}");

@@ -1743,6 +1743,9 @@ fn hostile_params_never_panic() {
         json!({"layer":"Countries","row":0,"part":0,"ring":0,"index":0,"lon":{},"lat":1e300}),
         json!({"layer": 99999, "path": "/nonexistent/x.geojson", "name": "", "where": "((", "tool": "buffer", "params": 7}),
         json!({"layer": "Countries", "row": 1e30, "field": "nope", "value": [1], "scale": -1, "lon": 1e300, "lat": "x", "classes": 1e9, "type": "graduated"}),
+        // Label halos and spacing: out of range, of the wrong type.
+        json!({"layer": "Cities", "haloWidth": 1e308, "haloColor": 7, "spacing": "NaN"}),
+        json!({"layer": "Cities", "haloWidth": -1, "haloColor": "#zzz", "spacing": -1e9}),
         json!({"layer": "Cities", "rows": [1, 99999999], "geometry": {"type": "Polygon", "coordinates": [[]]}, "width": 1e9, "height": -3, "expression": "'"}),
         json!({"band": -1, "red": 1e12, "green": "x", "blue": f64::MAX, "preset": "", "ramp": "nope", "classes": -5, "n": 1e308, "low": -50, "high": 900, "gamma": 0, "zFactor": -1, "fileName": "a.tif", "data": "!!!"}),
         json!({"fileName": "a.tif", "data": "AAAA", "type": "unique", "on": "maybe"}),
@@ -7285,6 +7288,21 @@ fn web_style_carries_the_layers_scale_limits_as_zooms() {
         style["layers"].as_array().unwrap().iter().any(|l| l["type"] == "symbol")
     };
     assert!(labelled(&s));
+    // The halo is the one the map draws: without its own colour, light behind dark text and dark
+    // behind light; its own colour as it is, see-through included.
+    let halo = |s: &Session| {
+        let style = crate::cmd::sharing::web_style(s.map().layer(id).unwrap());
+        let label = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "symbol").cloned().unwrap();
+        label["paint"]["text-halo-color"].as_str().unwrap().to_string()
+    };
+    let l = s.map_mut().layer_mut(id).unwrap();
+    l.labels.default.color = rustgis_map::Rgba::rgb(0, 0, 0);
+    l.labels.default.halo_color = None;
+    assert_eq!(halo(&s), "rgba(255,255,255,0.882)");
+    s.map_mut().layer_mut(id).unwrap().labels.default.color = rustgis_map::Rgba::rgb(255, 255, 255);
+    assert_eq!(halo(&s), "rgba(20,22,26,0.824)");
+    s.map_mut().layer_mut(id).unwrap().labels.default.halo_color = Some(rustgis_map::Rgba::new(255, 0, 0, 128));
+    assert_eq!(halo(&s), "rgba(255,0,0,0.502)");
     s.map_mut().layer_mut(id).unwrap().labels.default.visible = false;
     assert!(!labelled(&s));
 }
