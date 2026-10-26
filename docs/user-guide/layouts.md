@@ -190,6 +190,11 @@ Layouts open as tabs next to the maps; while one is open, its groups lead the Pu
   Mac) deletes the selected element, and **Ctrl+D** (**⌘D** on a Mac) duplicates it: the copy is
   placed 5 mm down and to the right, on top, and selected. The **arrow keys** nudge it 1 mm, or
   10 mm with **Shift**, and keep it moving while held; a run of nudges is one step to undo.
+- **Arrange**: elements later in the layout are drawn over earlier ones, and a click picks the one
+  on top. Under Duplicate and Delete, **Bring to Front** and **Send to Back** put the selected
+  element over or under every other, and **Bring Forward** and **Send Backward** move it one
+  place, to put a legend over a map frame, say. A locked element keeps its place. From a command:
+  `layout.arrange={"element":4,"to":"front"}` (`front`, `forward`, `backward` or `back`).
 - **Locked**, at the top of the Format pane, keeps a finished element from being changed by
   mistake: it can still be selected (a lock marks its corner, and it has no handles), but not
   moved, resized, deleted or edited, and a locked map frame's map isn't panned or zoomed. A map

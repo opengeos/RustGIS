@@ -8764,7 +8764,7 @@ fn service_features_asked_for_over_an_area() {
     assert_eq!(&boxes[2..], [None, None, None, None]);
     let notes: Vec<&str> = s.notices.iter().map(|n| n.text.as_str()).collect();
     assert!(notes.iter().any(|n| n.starts_with("M4: an area across the antimeridian")), "{notes:?}");
-    assert!(notes.iter().any(|n| n.starts_with("M5: the service can't be asked for an area")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.starts_with("M5: its request can't carry an area")), "{notes:?}");
     // Asked for the box given, the map goes to it, not to the whole layer's bounds.
     s.run("service.add", &json!({"url": url, "layer": "CGMAT:munic", "text": caps("2.0.0"), "name": "Piauí", "bbox": piaui})).unwrap();
     let v = view_lonlat(&s);
@@ -13660,6 +13660,50 @@ fn map_rename_names_any_map_and_what_shows_it_follows() {
         assert!(s.run("map.rename", &json!({"map": m, "name": "X"})).is_err(), "{m}");
     }
     assert_eq!(s.map().name, "Second");
+}
+
+#[test]
+fn layout_elements_are_brought_to_the_front_and_sent_to_the_back() {
+    let mut s = world();
+    s.run("layout.new", &json!({"name": "Order"})).unwrap();
+    let li = s.active_layout.unwrap();
+    let l = &s.project.layouts[li];
+    let frame = l.first_frame().unwrap();
+    let legend = l.elements.iter().find(|e| e.name == "Legend").unwrap().clone();
+    let order = |s: &Session, id: u32| s.project.layouts[li].draw_order(id).unwrap();
+    let n = order(&s, frame).1;
+    // The legend moved over the map frame: where they overlap it's drawn on top and is picked.
+    s.run("layout.update", &json!({"element": legend.id, "x": 30, "y": 30})).unwrap();
+    s.run("layout.arrange", &json!({"element": frame, "to": "front"})).unwrap();
+    assert_eq!(order(&s, frame), (n - 1, n));
+    assert_eq!(s.project.layouts[li].hit(31.0, 31.0), Some(frame), "the frame, on top, covers the legend");
+    let r = s.run("layout.arrange", &json!({"element": legend.id, "to": "front"})).unwrap();
+    assert_eq!((r["index"].as_u64(), r["of"].as_u64()), (Some(n as u64 - 1), Some(n as u64)));
+    assert_eq!(s.project.layouts[li].hit(31.0, 31.0), Some(legend.id), "the legend over the map");
+    // One place at a time, and to the bottom.
+    s.run("layout.arrange", &json!({"element": legend.id, "to": "backward"})).unwrap();
+    assert_eq!(order(&s, legend.id).0, n - 2);
+    s.run("layout.arrange", &json!({"element": legend.id, "to": "back"})).unwrap();
+    assert_eq!(order(&s, legend.id).0, 0);
+    s.run("layout.arrange", &json!({"element": legend.id, "to": "forward"})).unwrap();
+    assert_eq!(order(&s, legend.id).0, 1);
+    // Bad values, and a locked element, change nothing.
+    for bad in [json!({"element": legend.id, "to": "top"}), json!({"element": legend.id}), json!({"element": 999_999, "to": "front"})] {
+        assert!(s.run("layout.arrange", &bad).is_err(), "{bad}");
+    }
+    s.run("layout.update", &json!({"element": legend.id, "locked": true})).unwrap();
+    assert!(s.run("layout.arrange", &json!({"element": legend.id, "to": "front"})).is_err());
+    assert_eq!(order(&s, legend.id).0, 1);
+    // Each move is an undo step.
+    s.run("edit.undo", &Value::Null).unwrap(); // the lock
+    s.run("edit.undo", &Value::Null).unwrap(); // forward
+    assert_eq!(order(&s, legend.id).0, 0);
+    // A move that changes nothing (back, for the element already at the bottom) succeeds but is
+    // no step to undo.
+    let depth = s.undo_depth();
+    let r = s.run("layout.arrange", &json!({"element": legend.id, "to": "back"})).unwrap();
+    assert_eq!(r["index"].as_u64(), Some(0));
+    assert_eq!(s.undo_depth(), depth, "no empty undo step");
 }
 
 #[test]

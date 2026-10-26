@@ -6,7 +6,7 @@ use std::path::Path;
 use rustgis_geom::{Coord, Extent};
 use rustgis_map::Rgba;
 use rustgis_map::layout::{
-    ArrowStyle, CoordFormat, ElementKind, FontFamily, FrameShape, Grid, GridEdges, GridStyle, Guides, Layout, LineDir, LineHead,
+    Arrange, ArrowStyle, CoordFormat, ElementKind, FontFamily, FrameShape, Grid, GridEdges, GridStyle, Guides, Layout, LineDir, LineHead,
     MAX_COLORBAR_TICKS, MAX_GRID_WIDTH, MAX_GUIDES, MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_ELEMENT_MM, MapSeries, Orientation, PAGES,
     ScaleBarStyle, ScaleUnits, TextAlign, TickSide, fit_scale, line_angle, line_at_angle, line_length,
 };
@@ -95,6 +95,9 @@ pub fn commands() -> Vec<C> {
         ),
         C::new("layout.duplicateElement", "Duplicate Element", "Publish › Element", duplicate_element).params(
             r#"{"layout"?, "element": id, "dx"?, "dy"?: mm (offset of the copy, default 5)}"#,
+        ),
+        C::new("layout.arrange", "Arrange Element", "Publish › Element", arrange).params(
+            r#"{"layout"?, "element": id, "to": "front"|"forward"|"backward"|"back" (later elements are drawn over earlier ones: front puts it over every other, forward over the one above it, backward under the one below, back under every other)}"#,
         ),
         C::new("layout.removeElement", "Delete Element", "Publish › Element", |s, p| {
             let id = element_id(p)?;
@@ -185,6 +188,26 @@ fn active<'a>(s: &'a mut Session, p: &Value) -> Result<&'a mut Layout, String> {
 
 fn element_id(p: &Value) -> Result<u32, String> {
     p.get("element").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).ok_or_else(|| "element is required".to_string())
+}
+
+/// Moves an element in the layout's drawing order: a legend brought to the front is drawn over
+/// the map frame under it, and is the one a click there picks.
+fn arrange(s: &mut Session, p: &Value) -> CmdResult {
+    let id = element_id(p)?;
+    let to = ps(p, "to").and_then(Arrange::from_name).ok_or("to is front, forward, backward or back")?;
+    let l = active(s, p)?;
+    if l.element(id).is_none() {
+        return Err(format!("no element {id}"));
+    }
+    unlocked(l, id)?;
+    let before = l.draw_order(id).map(|(i, _)| i);
+    let index = l.arrange(id, to).ok_or_else(|| format!("no element {id}"))?;
+    let of = l.elements.len();
+    // A move that changes nothing (front for the element already on top) is no step to undo.
+    if before == Some(index) {
+        s.request_only = true;
+    }
+    Ok(json!({"element": id, "index": index, "of": of}))
 }
 
 /// Refuses to change a locked element (#536).

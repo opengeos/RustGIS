@@ -167,13 +167,13 @@ pub fn extent_to_merc(e: &Extent) -> Extent {
     Extent::from_points(lonlat_to_merc(Coord::new(e.min_x, e.min_y)), lonlat_to_merc(Coord::new(e.max_x, e.max_y)))
 }
 
-/// Great-circle distance between two lon/lat points (metres).
+/// Great-circle distance between two lon/lat points (metres); NaN for non-finite coordinates.
 pub fn haversine_m(a: Coord, b: Coord) -> f64 {
     let (la1, la2) = (a.y.to_radians(), b.y.to_radians());
     let dlat = la2 - la1;
     let dlon = (b.x - a.x).to_radians();
     let h = (dlat / 2.0).sin().powi(2) + la1.cos() * la2.cos() * (dlon / 2.0).sin().powi(2);
-    2.0 * EARTH_RADIUS_M * h.sqrt().min(1.0).asin()
+    2.0 * EARTH_RADIUS_M * h.sqrt().clamp(0.0, 1.0).asin()
 }
 
 /// Length of a lon/lat polyline along great circles (metres).
@@ -463,6 +463,26 @@ mod tests {
         assert!((geodesic_interpolate(Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0), 0.5).x - 180.0).abs() < 1e-9);
         assert_eq!(spherical_centre(&[Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)]).map(|c| c.x.abs().round()), Some(180.0));
         assert!(spherical_centre(&[]).is_none());
+    }
+
+    #[test]
+    fn nonfinite_coordinates_do_not_become_valid_distances() {
+        let c = Coord::new;
+        let origin = c(0.0, 0.0);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for invalid in [c(value, 0.0), c(0.0, value)] {
+                assert!(haversine_m(origin, invalid).is_nan());
+                assert!(haversine_m(invalid, origin).is_nan());
+                assert!(geodesic_length_m(&[origin, invalid, c(1.0, 0.0)]).is_nan());
+                assert!(geodesic_ring_area_m2(&[origin, invalid, c(1.0, 1.0)]).is_nan());
+            }
+        }
+        assert_eq!(haversine_m(origin, origin), 0.0);
+        let antipodal = haversine_m(origin, c(180.0, 0.0));
+        assert!((antipodal - std::f64::consts::PI * EARTH_RADIUS_M).abs() < 1e-6);
+        let across = haversine_m(c(179.0, 0.0), c(-179.0, 0.0));
+        let unwrapped = haversine_m(c(179.0, 0.0), c(181.0, 0.0));
+        assert!((across - unwrapped).abs() < 1e-6);
     }
 
     #[test]
