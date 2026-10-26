@@ -42,18 +42,24 @@ fn info_json(i: &Info) -> Value {
 /// The sessions kept, and the sign-in under way or how the last one ended.
 pub fn status() -> Value {
     let sessions: Vec<Value> = arcgis_auth::list().iter().map(info_json).collect();
-    let mut out = json!({"sessions": sessions, "redirectUri": arcgis_auth::redirect_uri(arcgis_auth::PORT)});
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use arcgis_auth::Progress;
-        out["signIn"] = match arcgis_auth::progress() {
-            Progress::Idle => json!({"state": "idle"}),
-            Progress::Pending { portal } => json!({"state": "pending", "portal": portal}),
-            Progress::Done(i) => json!({"state": "signedIn", "portal": i.portal, "username": i.username}),
-            Progress::Failed(e) => json!({"state": "failed", "error": e}),
-        };
+    json!({"sessions": sessions, "redirectUri": arcgis_auth::redirect_uri(arcgis_auth::PORT), "signIn": progress()})
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn progress() -> Value {
+    use arcgis_auth::Progress;
+    match arcgis_auth::progress() {
+        Progress::Idle => json!({"state": "idle"}),
+        Progress::Pending { portal } => json!({"state": "pending", "portal": portal}),
+        Progress::Done(i) => json!({"state": "signedIn", "portal": i.portal, "username": i.username}),
+        Progress::Failed(e) => json!({"state": "failed", "error": e}),
     }
-    out
+}
+
+/// The browser doesn't sign in itself (see `start`).
+#[cfg(target_arch = "wasm32")]
+fn progress() -> Value {
+    json!({"state": "idle"})
 }
 
 fn sign_in(_s: &mut Session, p: &Value) -> CmdResult {
@@ -101,6 +107,10 @@ fn sign_out(_s: &mut Session, p: &Value) -> CmdResult {
         None => None,
     };
     let (revocations, gone) = arcgis_auth::sign_out(portal.as_deref());
+    // Tiles and documents read with the token are cached by address: they go with it.
+    if gone > 0 {
+        crate::render::rustgis_tiles::cache::clear();
+    }
     #[cfg(not(target_arch = "wasm32"))]
     arcgis_auth::revoke_all(revocations);
     #[cfg(target_arch = "wasm32")]

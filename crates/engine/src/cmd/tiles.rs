@@ -54,8 +54,10 @@ pub const NETWORK: &[&str] = &[
     "nldi.basin",
     "nldi.sources",
     "nldi.navigate",
-    // A sign-in reaches the portal; a token is sent to the server it is given for.
+    // A sign-in reaches the portal, and a sign-out revokes its token there; a token is sent to
+    // the server it is given for.
     "arcgis.signIn",
+    "arcgis.signOut",
     "arcgis.token",
 ];
 

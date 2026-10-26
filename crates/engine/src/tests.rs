@@ -8400,6 +8400,10 @@ fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
     assert!(!status.to_string().contains("secret.Token-914"));
     s.run("arcgis.signOut", &json!({"portal": "https://secure914.example.org/server/"})).unwrap();
     assert_eq!(arcgis_auth::authorization(&tiles), None);
+    // Another kind of service keeps its own token parameter.
+    let wms = "https://wms914.example.org/rest/services/wms?token=keep-it";
+    let kept = crate::cmd::service::without_token(&json!({"url": wms, "type": "wms"})).unwrap();
+    assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
 /// Services from their capabilities: a WMS layer becomes a tile layer, an OGC API collection's

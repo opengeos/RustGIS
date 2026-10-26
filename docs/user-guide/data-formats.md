@@ -208,9 +208,9 @@ A secured ArcGIS service answers error 499, "Token Required". There are two ways
   sign-on and multi-factor checks: RustGIS never sees the password. It uses OAuth 2.0 with PKCE and
   needs the client ID of an app registered on the portal (**Content › New item › Developer
   credentials › OAuth 2.0 credentials**) whose redirect URLs list
-  `http://127.0.0.1:7290/arcgis/callback` exactly (ArcGIS accepts no other port or path; give
-  `"port"` to `arcgis.signIn` for another port, and register that address). The portal and client
-  ID are remembered; the session is not. Desktop and command line only.
+  `http://127.0.0.1:7290/arcgis/callback`, RustGIS's callback address. ArcGIS accepts only an
+  address the app registers, port and path included, so give `"port"` to `arcgis.signIn` for
+  another port and register that address instead. The portal and client ID are remembered; the session is not. Desktop and command line only.
 - **A token with the address**: a service address given with `?token=…` (from the portal, or
   `arcgis.token` with `"url"` and `"token"`) keeps the token for that ArcGIS Server and takes it
   out of the address the layer keeps. Works in the browser too.

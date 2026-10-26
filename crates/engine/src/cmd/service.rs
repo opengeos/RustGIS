@@ -57,11 +57,23 @@ pub(crate) fn without_token(p: &Value) -> Result<Option<Value>, String> {
     let has_token = url
         .split_once('?')
         .is_some_and(|(_, q)| q.split('&').any(|kv| kv.split('=').next().is_some_and(|k| k.eq_ignore_ascii_case("token"))));
-    if !has_token || arcgis_auth::server_root(url).is_none() {
+    // ArcGIS REST addresses only: another kind of service's `token` stays in its address.
+    let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
+    let arcgis = match ps(p, "type") {
+        Some("arcgis") => true,
+        None | Some("auto") => path.contains("/rest/services") || path.contains("/sharing/rest"),
+        Some(_) => false,
+    };
+    if !has_token || !arcgis || arcgis_auth::server_root(url).is_none() {
         return Ok(None);
     }
+    let before = arcgis_auth::authorization(url);
     let mut owned = p.clone();
     owned["url"] = json!(arcgis_auth::adopt_url_token(url)?);
+    // What was cached unauthorized (refused tiles) is asked for again with the new token.
+    if arcgis_auth::authorization(url) != before {
+        crate::render::rustgis_tiles::cache::clear();
+    }
     Ok(Some(owned))
 }
 

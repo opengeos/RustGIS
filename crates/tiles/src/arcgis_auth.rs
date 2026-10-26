@@ -32,6 +32,9 @@ pub const CALLBACK: &str = "/arcgis/callback";
 /// An access token is renewed this long before it expires (seconds).
 #[cfg(not(target_arch = "wasm32"))]
 const REFRESH_MARGIN: i64 = 60;
+/// After the portal couldn't be reached for a renewal, how long until it is tried again (seconds).
+#[cfg(not(target_arch = "wasm32"))]
+const RETRY_RENEWAL: i64 = 30;
 /// The session asked for: two weeks (the longest ArcGIS gives), in minutes.
 const EXPIRATION_MINUTES: &str = "20160";
 /// The longest token kept (ArcGIS's are a few hundred characters).
@@ -135,12 +138,17 @@ fn form(params: &[(&str, &str)]) -> String {
 
 /// Decodes a query value (`+` is a space).
 fn decode(s: &str) -> String {
+    decode_with(s, true)
+}
+
+/// Decodes `%XX` escapes, and `+` as a space when `plus` (form data, not a pasted token).
+fn decode_with(s: &str, plus: bool) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while let Some(&b) = bytes.get(i) {
         match b {
-            b'+' => out.push(b' '),
+            b'+' if plus => out.push(b' '),
             b'%' => {
                 let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
                 if let Some(v) = hex {
@@ -343,6 +351,10 @@ struct Session {
     expires_at: i64,
     refresh_token: Option<String>,
     scopes: Vec<Scope>,
+    /// Unix seconds before which a renewal isn't tried again (after the portal couldn't be reached).
+    /// The browser doesn't renew.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    retry_at: i64,
 }
 
 fn store() -> &'static Mutex<Vec<Session>> {
@@ -360,7 +372,8 @@ fn now_secs() -> i64 {
 
 fn keep(session: Session) {
     let mut all = sessions();
-    all.retain(|s| s.portal != session.portal);
+    // A token given for a portal's own address doesn't replace a sign-in to it (nor the reverse).
+    all.retain(|s| !(s.portal == session.portal && s.client_id.is_empty() == session.client_id.is_empty()));
     if all.len() >= MAX_SESSIONS {
         all.remove(0);
     }
@@ -377,6 +390,7 @@ pub fn sign_in(portal: &str, client_id: &str, grant: Grant, scopes: Vec<Scope>) 
         expires_at: grant.expires_at,
         refresh_token: grant.refresh_token,
         scopes,
+        retry_at: 0,
     });
 }
 
@@ -409,6 +423,7 @@ pub fn add_token(url: &str, token: &str) -> Result<String, String> {
         expires_at: i64::MAX,
         refresh_token: None,
         scopes,
+        retry_at: 0,
     });
     Ok(root)
 }
@@ -425,7 +440,8 @@ pub fn adopt_url_token(url: &str) -> Result<String, String> {
         .filter(|p| {
             let (k, v) = p.split_once('=').unwrap_or((p, ""));
             if k.eq_ignore_ascii_case("token") {
-                token = Some(decode(v));
+                // A token is pasted, not form-encoded: its `+` stays a `+`.
+                token = Some(decode_with(v, false));
                 false
             } else {
                 true
@@ -473,7 +489,8 @@ fn needs_renewal(url: &str) -> Option<(String, String, String)> {
     let all = sessions();
     let s = all.get(covering(&all, url)?)?;
     let refresh = s.refresh_token.as_ref()?;
-    (s.expires_at - now_secs() <= REFRESH_MARGIN).then(|| (s.portal.clone(), s.client_id.clone(), refresh.clone()))
+    let now = now_secs();
+    (s.expires_at - now <= REFRESH_MARGIN && now >= s.retry_at).then(|| (s.portal.clone(), s.client_id.clone(), refresh.clone()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -486,6 +503,15 @@ fn renewed(portal: &str, old_refresh: &str, grant: Grant) {
         if grant.refresh_token.is_some() {
             s.refresh_token = grant.refresh_token;
         }
+    }
+}
+
+/// Holds off renewing `portal`'s session for a while: its portal couldn't be reached, and each
+/// request it covers would otherwise wait on another attempt.
+#[cfg(not(target_arch = "wasm32"))]
+fn postpone(portal: &str, old_refresh: &str) {
+    if let Some(s) = sessions().iter_mut().find(|s| s.portal == portal && s.refresh_token.as_deref() == Some(old_refresh)) {
+        s.retry_at = now_secs() + RETRY_RENEWAL;
     }
 }
 
@@ -673,8 +699,7 @@ mod native {
         }
         cancel_sign_in();
         let redirect = super::redirect_uri(port);
-        let listener = TcpListener::bind(("127.0.0.1", port))
-            .map_err(|e| format!("can't start the sign-in's callback server on 127.0.0.1:{port}: {e} (is another sign-in open?)"))?;
+        let listener = bind(port)?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let verifier = random_token()?;
         let state = random_token()?;
@@ -699,6 +724,25 @@ mod native {
             }
         });
         Ok(url)
+    }
+
+    /// Binds the callback server. A sign-in just cancelled lets go of the port when its thread
+    /// next looks (within a few seconds): until then, try again.
+    fn bind(port: u16) -> Result<TcpListener, String> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match TcpListener::bind(("127.0.0.1", port)) {
+                Ok(l) => return Ok(l),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "can't start the sign-in's callback server on 127.0.0.1:{port}: {e} (another program may be using the port)"
+                    ));
+                }
+            }
+        }
     }
 
     struct Pending {
@@ -830,7 +874,10 @@ mod native {
                             super::expired(&portal, &refresh);
                         }
                     },
-                    Err(e) => log::warn!("{portal}: couldn't renew the ArcGIS sign-in: {e}"),
+                    Err(e) => {
+                        log::warn!("{portal}: couldn't renew the ArcGIS sign-in: {e}");
+                        super::postpone(&portal, &refresh);
+                    }
                 }
             }
         }

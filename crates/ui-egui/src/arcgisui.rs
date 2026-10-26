@@ -24,7 +24,16 @@ pub struct State {
 /// or a session kept.
 pub fn wanted(app: &RustGisApp) -> bool {
     let address = app.dialogs.text.to_ascii_lowercase();
-    app.dialogs.mode == "arcgis" || address.contains("/rest/services") || address.contains("arcgis") || !arcgis_auth::list().is_empty()
+    // A service known as ArcGIS by its answer (behind a proxy's address), or one refused for a token.
+    let answered = app.ui.service.as_ref().is_some_and(|c| {
+        c.listing.as_ref().and_then(|v| v.get("kind")).and_then(serde_json::Value::as_str).is_some_and(|k| k.starts_with("ArcGIS"))
+            || c.error.as_deref().is_some_and(|e| e.contains("Token Required") || e.contains("ArcGIS token"))
+    });
+    app.dialogs.mode == "arcgis"
+        || address.contains("/rest/services")
+        || address.contains("arcgis")
+        || answered
+        || !arcgis_auth::list().is_empty()
 }
 
 /// The sign-in's controls, folded under a header.

@@ -150,6 +150,21 @@ fn a_server_token_wins_over_a_portal_sign_in() {
     assert_eq!(authorization("https://both.example.org/portal/sharing/rest/portals/self").as_deref(), Some("Bearer portal-token"));
     sign_out(Some(portal));
     sign_out(Some("https://both.example.org/server"));
+    // A token for the portal's own address sits beside its sign-in, never replacing it.
+    let portal = "https://same.example.org/portal";
+    sign_in(portal, "client", grant("signin-token", now_secs() + 3600), scopes_for(portal, None, &[]));
+    add_token("https://same.example.org/portal/sharing/rest/portals/self", "pasted-token").unwrap();
+    let kinds: Vec<bool> = list().iter().filter(|i| i.portal == portal).map(|i| i.token).collect();
+    assert!(kinds.len() == 2 && kinds.contains(&true) && kinds.contains(&false), "{kinds:?}");
+    let (revocations, gone) = sign_out(Some(portal));
+    assert_eq!((revocations.len(), gone), (1, 2));
+}
+
+#[test]
+fn a_pasted_token_keeps_its_plus_signs() {
+    adopt_url_token("https://plus.example.org/server/rest/services/A/MapServer?token=ab+cd%2Fef").unwrap();
+    assert_eq!(authorization("https://plus.example.org/server/rest/services/A/MapServer/tile/0/0/0").as_deref(), Some("Bearer ab+cd/ef"));
+    sign_out(Some("https://plus.example.org/server"));
 }
 
 #[test]
