@@ -325,12 +325,18 @@ pub fn nice_distance(d: f64) -> f64 {
     n * p
 }
 
-/// Formats a distance in metres as `5 mm` / `20 cm` / `850 m` / `12.5 km`: under a metre in
-/// centimetres or millimetres, so a scale bar on a site plan (#902) doesn't read `0 m`.
+/// Formats a distance in metres as `0.2 mm` / `5 mm` / `20 cm` / `850 m` / `12.5 km`: under a
+/// metre in centimetres or millimetres, so a scale bar on a site plan (#902) doesn't read `0 m`.
 pub fn format_distance(m: f64) -> String {
     // Each unit is picked, and shown, by the value rounded as it shows: formatting alone rounds
     // halves to even.
     let (mm, cm) = ((m * 1000.0).round(), (m * 100.0).round());
+    if m != 0.0 && mm == 0.0 {
+        // Under half a millimetre, which the closest zoom spreads over pixels: tenths, then a
+        // bound rather than 0.
+        let tenths = (m * 10_000.0).round() / 10.0;
+        return if tenths != 0.0 { format!("{tenths:.1} mm") } else { "< 0.1 mm".to_string() };
+    }
     if m != 0.0 && mm.abs() < 10.0 {
         format!("{mm:.0} mm")
     } else if m != 0.0 && cm.abs() < 100.0 {
@@ -436,6 +442,10 @@ mod tests {
         assert_eq!(format_distance(0.995), "1 m");
         assert_eq!(format_distance(-0.005), "-5 mm");
         assert_eq!(format_distance(-0.2), "-20 cm");
+        // Under half a millimetre, never 0 (#923).
+        assert_eq!(format_distance(0.0002), "0.2 mm");
+        assert_eq!(format_distance(-0.0002), "-0.2 mm");
+        assert_eq!(format_distance(0.00001), "< 0.1 mm");
         assert_eq!(format_distance(999.4), "999 m");
         assert_eq!(format_distance(999.6), "1.0 km");
         assert_eq!(format_distance(12_500.0), "12.5 km");

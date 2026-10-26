@@ -4,8 +4,10 @@
 use rustgis_geom::{Coord, Extent, MERCATOR_R, extent_to_merc, merc_to_lonlat, scale_denominator};
 use serde::{Deserialize, Serialize};
 
-/// Resolution limits (map units per pixel): about 3:1, for site plans and finds drawings (#902),
-/// to the whole world.
+/// Resolution limits (map units per pixel): in to site plans and finds drawings (#902), out to
+/// the whole world. Map projections are in metres or feet (one in degrees isn't a map projection:
+/// `Projector::new` refuses it), so the closest zoom is past 2:1 on every map: about 2.8:1 on Web
+/// Mercator at the equator, closer toward the poles, where its units shrink on the ground.
 pub const MIN_RES: f64 = 1e-4;
 pub const MAX_RES: f64 = 160_000.0;
 

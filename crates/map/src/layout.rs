@@ -1245,9 +1245,9 @@ pub fn fit_scale(map: &Map, e: &rustgis_geom::Extent, w_mm: f64, h_mm: f64) -> O
     let center = flat.inverse(ext.center())?;
     let per = (flat.ground_per_unit(ext.center()) * map.body().ratio()).max(1e-9);
     // A lone point gets a metre around it; anything larger fits as it is, down to a find a
-    // millimetre across (#902).
-    let floor = if ext.width() > 0.0 || ext.height() > 0.0 { 1e-3 } else { 1.0 };
-    let (gw, gh) = (ext.width().max(floor) * per * 1.1, ext.height().max(floor) * per * 1.1);
+    // millimetre across (#902). Ground metres, whatever the projection's units.
+    let floor_m = if ext.width() > 0.0 || ext.height() > 0.0 { 1e-3 } else { 1.0 };
+    let (gw, gh) = ((ext.width() * per).max(floor_m) * 1.1, (ext.height() * per).max(floor_m) * 1.1);
     let scale = (gw / (w_mm / 1000.0)).max(gh / (h_mm / 1000.0));
     Some((center, scale.clamp(MIN_FRAME_SCALE, MAX_FRAME_SCALE)))
 }

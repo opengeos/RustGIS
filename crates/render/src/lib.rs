@@ -5404,6 +5404,29 @@ mod tests {
     }
 
     #[test]
+    fn a_raster_at_the_closest_zoom_is_drawn_where_it_is() {
+        // At the deepest zoom (#902) the raster's far corners lie billions of pixels from the
+        // view: its west edge still runs through the middle, with the raster east of it.
+        use rustgis_data::raster::{ColorHint, Crs, GeoTransform, Raster};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let n = 16usize;
+        let values: Vec<f32> = (0..n * n).map(|i| (i % n) as f32).collect();
+        let gt = GeoTransform { origin_x: -1.0, origin_y: 1.0, pixel_width: 2.0 / n as f64, pixel_height: -2.0 / n as f64 };
+        let r = Raster::new("r", n as u32, n as u32, vec![values], gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap();
+        m.add_raster("r", rustgis_map::RasterLayer::from_path(r, "r.tif"));
+        let camera = Camera { center: lonlat_to_merc(Coord::new(-1.0, 0.0)), res: rustgis_map::camera::MIN_RES, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
+        let Some(out) = render(&mut m, &view) else { panic!("cpu frame") };
+        let px = |x: u32| out.pixmap.pixel(x, 150).map(|p| (p.red(), p.green(), p.blue(), p.alpha()));
+        let (west, east) = (px(195), px(205));
+        assert!(west.is_some() && east.is_some());
+        assert_ne!(west, east, "the raster starts at the middle of the view");
+        assert_eq!(px(5), west, "west of the edge is all background");
+        assert_eq!(px(395), east, "east of it, one raster cell");
+    }
+
+    #[test]
     fn a_tilted_view_drapes_the_map_over_its_terrain() {
         let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, -0.6)), res: 600.0, bearing: 0.0, pitch: 65.0 };
         let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera, sky: false };
