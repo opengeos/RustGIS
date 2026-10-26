@@ -48,8 +48,10 @@ fn redirect() -> Result<String, String> {
 
 async fn sleep(ms: i32) {
     let promise = js_sys::Promise::new(&mut |resolve, _| {
-        if let Some(w) = web_sys::window() {
-            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        // Without a timer, resolved at once: a sleep that never ends would hold the sign-in.
+        let timed = web_sys::window().is_some_and(|w| w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms).is_ok());
+        if !timed {
+            let _ = resolve.call0(&wasm_bindgen::JsValue::UNDEFINED);
         }
     });
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
