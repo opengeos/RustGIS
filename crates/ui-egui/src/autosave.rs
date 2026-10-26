@@ -186,7 +186,7 @@ pub(crate) fn tick(app: &mut RustGisApp, ctx: &egui::Context) {
             app.session.notify(text, true);
         }
     }
-    if app.autosave.minutes == 0 || !app.session.dirty {
+    if app.autosave.minutes == 0 || !app.session.dirty() {
         if app.autosave.written.take().is_some() {
             store.clear();
         }
@@ -260,13 +260,13 @@ pub(crate) fn recover(app: &mut RustGisApp, p: &Value) -> Result<Value, String> 
     }
     // Opening it replaces the open project: never one with work of its own not saved (after
     // Later), which it would lose with its recovery copy.
-    if app.session.dirty {
+    if app.session.dirty() {
         return Err("the open project has unsaved changes: save them before recovering other work".into());
     }
     let text = store.read_pending()?;
     app.run("project.openText", json!({"text": text}))?;
     app.session.path = offered.path.as_ref().map(std::path::PathBuf::from);
-    app.session.dirty = true;
+    app.session.mark_unsaved();
     // The copy becomes this run's as it is: a crash now loses nothing, and nothing is written.
     if let Some(store) = &app.services.recovery {
         store.adopt_pending();
@@ -340,7 +340,7 @@ pub(crate) fn offer(app: &mut RustGisApp, ctx: &egui::Context) {
         }
         // Recovering replaces the open project: not one with unsaved work of its own (an edit
         // made before answering). Recover comes back once that work is saved.
-        let blocked = app.session.dirty;
+        let blocked = app.session.dirty();
         if blocked {
             ui.add_space(4.0);
             ui.label(

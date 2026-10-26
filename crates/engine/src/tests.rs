@@ -34,26 +34,26 @@ fn worldview_swaps_only_untouched_sample_countries() {
     use sample::{Worldview, swap_countries};
     let countries = |s: &Session| s.map().layer_by_name("Countries").unwrap().dataset.features.len();
     let mut s = world();
-    s.dirty = false;
+    s.mark_saved();
     let n = countries(&s);
     // The layer holds the default countries, not China's.
     assert!(!swap_countries(&mut s, Worldview::China, Worldview::Default));
     assert!(swap_countries(&mut s, Worldview::Default, Worldview::China));
     assert_ne!(countries(&s), n);
-    assert!(!s.dirty);
+    assert!(!s.dirty());
     assert!(swap_countries(&mut s, Worldview::China, Worldview::Default));
     assert_eq!(countries(&s), n);
     // Not in a project with changes, or a saved one.
-    s.dirty = true;
+    s.mark_unsaved();
     assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
-    s.dirty = false;
+    s.mark_saved();
     s.path = Some("atlas.rgis".into());
     assert!(!swap_countries(&mut s, Worldview::Default, Worldview::China));
     // Not someone else's layer named Countries.
     let mut t = world();
-    t.dirty = false;
+    t.mark_saved();
     t.run("edit.deleteField", &json!({"layer": "Countries", "field": "pop_est"})).unwrap();
-    t.dirty = false;
+    t.mark_saved();
     assert!(!swap_countries(&mut t, Worldview::Default, Worldview::China));
 }
 
@@ -257,7 +257,7 @@ fn undo_steps_share_the_layers_they_leave_alone() {
     s.run("layer.rename", &json!({"layer": "Nations", "name": "States"})).unwrap();
     let live = s.map().layer_by_name("States").unwrap();
     let id = live.id;
-    for (snap, _, _, _) in &s.undo {
+    for (snap, _, _, _, _) in &s.undo {
         let old = snap.maps.iter().flat_map(|m| &m.layers).find(|l| l.id == id).unwrap();
         assert!(old.dataset.features.shares(&live.dataset.features), "the snapshot copied the features");
         assert_eq!(old.projected_cache().as_ptr(), live.projected_cache().as_ptr(), "the snapshot copied the projected geometry");
@@ -266,7 +266,7 @@ fn undo_steps_share_the_layers_they_leave_alone() {
     let before = s.map().layer_by_name("Cities").unwrap().dataset.features.len();
     s.run("edit.addFeature", &json!({"layer": "Cities", "geometry": {"type": "Point", "coordinates": [1.0, 2.0]}})).unwrap();
     let cities = s.map().layer_by_name("Cities").unwrap();
-    let (snap, _, _, _) = s.undo.last().unwrap();
+    let (snap, _, _, _, _) = s.undo.last().unwrap();
     let old = snap.maps.iter().flat_map(|m| &m.layers).find(|l| l.id == cities.id).unwrap();
     assert!(!old.dataset.features.shares(&cities.dataset.features));
     assert_eq!((old.dataset.features.len(), cities.dataset.features.len()), (before, before + 1));
@@ -1071,17 +1071,17 @@ fn a_file_inside_a_geodatabase_adds_the_geodatabase() {
 #[test]
 fn save_clears_dirty_and_open_clears_history() {
     let mut s = world();
-    assert!(!s.dirty && !s.can_undo(), "a fresh sample is clean");
+    assert!(!s.dirty() && !s.can_undo(), "a fresh sample is clean");
     s.run("layer.color", &json!({"layer": "Countries", "color": "#336699"})).unwrap();
-    assert!(s.dirty && s.can_undo());
+    assert!(s.dirty() && s.can_undo());
     let dir = std::env::temp_dir().join(format!("rustgis-dirty-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a.rgis");
     s.run("project.saveAs", &json!({"path": path.display().to_string()})).unwrap();
-    assert!(!s.dirty, "saving clears the dirty marker");
+    assert!(!s.dirty(), "saving clears the dirty marker");
     assert!(s.can_undo(), "saving keeps the edit history");
     s.run("project.open", &json!({"path": path.display().to_string()})).unwrap();
-    assert!(!s.dirty && !s.can_undo() && !s.can_redo(), "opening starts a fresh history");
+    assert!(!s.dirty() && !s.can_undo() && !s.can_redo(), "opening starts a fresh history");
     assert!(s.run("edit.undo", &Value::Null).is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -1122,7 +1122,7 @@ fn open_from_text() {
     assert!(s.run("layer.addDataText", &json!({"fileName": "x.geojson", "text": "{"})).is_err());
     assert!(s.run("project.openText", &json!({"text": "not json"})).is_err());
     s.run("project.openText", &json!({"text": text})).unwrap();
-    assert!(s.map().layer_by_name("pts").is_none() && !s.dirty && !s.can_undo());
+    assert!(s.map().layer_by_name("pts").is_none() && !s.dirty() && !s.can_undo());
 }
 
 #[test]
@@ -8241,12 +8241,12 @@ fn a_pending_answer_is_no_undo_step() {
     let r = s.guarded("Add Data From URL", true, |s| s.request_url(&p));
     assert_eq!(r.unwrap()["pending"], true);
     assert_eq!(s.undo.len(), undo);
-    assert!(!s.dirty);
+    assert!(!s.dirty());
     assert_eq!(s.take_url_requests().len(), 1);
     let r = s.guarded("Plugin Command", true, |_| Ok(json!({"pending": true})));
     assert!(r.is_ok());
     assert_eq!(s.undo.len(), undo + 1, "an answer alone doesn't skip the step");
-    assert!(s.dirty);
+    assert!(s.dirty());
     assert!(s.run("map.new", &json!({"name": "B"})).is_ok());
     assert_eq!(s.undo.len(), undo + 2);
     // A command that changed the project and then, through a command of its own, left a
@@ -8989,9 +8989,9 @@ fn blank_project_starts_in_a_projected_crs() {
     assert!(s.map().layers.is_empty());
     let r = s.run("map.projection", &json!({"type": "EPSG:3010"})).unwrap();
     assert_eq!(r["projection"], "EPSG:3010");
-    assert!(s.dirty && s.can_undo());
+    assert!(s.dirty() && s.can_undo());
     s.clear_history();
-    assert!(!s.dirty && !s.can_undo());
+    assert!(!s.dirty() && !s.can_undo());
     assert_eq!(s.map().projection.code(), "EPSG:3010");
     // It opens on the country, and reports that view back.
     s.run("map.zoomToExtent", &json!({"extent": [10.5, 55.0, 24.5, 69.5]})).unwrap();
@@ -11483,9 +11483,9 @@ fn s3_connections_listings_and_objects() {
     );
     s.run("s3.disconnect", &json!({"name": "s3-blank"})).unwrap();
     // A level of the bucket, and the connection's buckets; listing isn't an edit of the project.
-    assert!(!s.dirty && !s.can_undo());
+    assert!(!s.dirty() && !s.can_undo());
     let r = s.run("s3.list", &json!({"url": "s3://s3-test-bucket/data/"})).unwrap();
-    assert!(!s.dirty && !s.can_undo(), "a listing is no edit");
+    assert!(!s.dirty() && !s.can_undo(), "a listing is no edit");
     assert_eq!(r["prefixes"], json!(["data/more/"]));
     assert_eq!(r["objects"][0]["url"], "s3://s3-test-bucket/data/places.geojson");
     let r = s.run("s3.list", &json!({"connection": "s3-test"})).unwrap();
@@ -12099,7 +12099,7 @@ fn connections_commands() {
         assert!(crate::cmd::plugins::user_only(id), "{id}");
     }
     assert!(!crate::cmd::plugins::user_only("connection.list"));
-    assert!(!s.dirty && !s.can_undo());
+    assert!(!s.dirty() && !s.can_undo());
 }
 
 #[test]
@@ -14465,7 +14465,7 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     s.run("map.rename", &json!({"name": "Edited"})).unwrap();
     s.trusted_tasks.insert("mine".into());
     let (name, opened, undo) = (s.project.name.clone(), s.opened, s.undo_label());
-    assert!(undo.is_some() && s.dirty);
+    assert!(undo.is_some() && s.dirty());
     let r = s.guarded("Task", true, |s| {
         s.run("project.new", &json!({"name": "Other"}))?;
         Err("a later step failed".into())
@@ -14475,7 +14475,7 @@ fn a_failed_command_keeps_the_project_open_before_it() {
     // It comes back with what it held: its undo history, its unsaved state, the trust it had, and
     // its file, so Save writes there.
     assert_eq!(s.undo_label(), undo);
-    assert!(s.dirty && s.trusted_tasks.contains("mine"));
+    assert!(s.dirty() && s.trusted_tasks.contains("mine"));
     assert_eq!(s.path.as_deref(), Some(std::path::Path::new("atlas.rgis")));
     s.run("edit.undo", &Value::Null).unwrap();
     assert_ne!(s.map().name, "Edited", "the edit before still undoes");
@@ -14624,13 +14624,13 @@ fn a_run_is_copied_from_the_history_as_code() {
     assert!(text.contains("\"World Atlas.rgis\""), "{text}");
     // Saved, then changed: the script says to save it again first.
     s.path = Some("atlas.rgis".into());
-    s.dirty = true;
+    s.mark_unsaved();
     let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
     assert!(
         text.contains("# The project has changes that aren't saved: save it first") && !text.contains("hasn't been saved yet"),
         "{text}"
     );
-    s.dirty = false;
+    s.mark_saved();
     let text = s.run("gp.historyScript", &Value::Null).unwrap()["text"].as_str().unwrap().to_string();
     assert!(!text.contains("aren't saved") && text.contains("rustgis.Session(\"atlas.rgis\")"), "{text}");
     s.path = None;
@@ -15357,7 +15357,7 @@ fn raster_stretch_custom_bounds() {
 fn default_raster_style_applies_to_new_rasters() {
     use rustgis_map::{RasterRenderer, Resampling, Stretch};
     let mut s = world();
-    s.dirty = false;
+    s.mark_saved();
     let undo = s.undo_label();
     // The layer just added (rasters go in under the vectors, the newest on top of them).
     let style = |s: &Session| s.map().layer(s.active_layer.unwrap()).unwrap().raster.as_ref().unwrap().style.clone();
@@ -15373,7 +15373,7 @@ fn default_raster_style_applies_to_new_rasters() {
         )
         .unwrap();
     assert_eq!(shown, json!({"ramp": "Viridis", "invert": false, "stretch": "standardDeviation", "n": 2.5, "resampling": "Bilinear"}));
-    assert!(!s.dirty && s.undo_label() == undo, "an app setting, not a project change");
+    assert!(!s.dirty() && s.undo_label() == undo, "an app setting, not a project change");
     s.run("layer.addDataBytes", &json!({"fileName": "dem.tif", "data": dem_b64()})).unwrap();
     let st = style(&s);
     assert_eq!(st.renderer, RasterRenderer::Stretch { band: 0, ramp: rustgis_map::Ramp::Viridis, invert: false });
@@ -16296,6 +16296,77 @@ fn undo_steps_remember_who_made_them() {
     assert_eq!((s.undo_actor(), s.redo_actor()), (Some(None), Some(Some("agent 1"))));
     s.run("edit.redo", &json!({})).unwrap();
     assert_eq!((s.undo_actor(), s.redo_actor()), (Some(Some("agent 1")), None));
+}
+
+/// Unsaved means unsaved (#906): undo or redo back to the state last saved leaves no unsaved
+/// changes, whichever way it gets there; an edit after undoing past the save leaves that state
+/// out of reach.
+#[test]
+fn undo_back_to_the_saved_state_leaves_nothing_unsaved() {
+    let dir = std::env::temp_dir().join(format!("rustgis-saved-state-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("atlas.rgis").display().to_string();
+    let mut s = world();
+    let rename =
+        |s: &mut Session, name: &str| s.run("layer.rename", &json!({"layer": s.map().layers[0].name.clone(), "name": name})).unwrap();
+    rename(&mut s, "One");
+    s.run("project.saveAs", &json!({"path": path})).unwrap();
+    assert!(!s.dirty());
+    rename(&mut s, "Two");
+    rename(&mut s, "Three");
+    assert!(s.dirty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.dirty(), "one step from the save");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(!s.dirty(), "back at the save");
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.dirty(), "before the save");
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert!(!s.dirty(), "redo back to the save");
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert!(s.dirty());
+    // Saving there: the states either side are unsaved.
+    s.run("project.save", &Value::Null).unwrap();
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.dirty());
+    s.run("edit.redo", &Value::Null).unwrap();
+    assert!(!s.dirty());
+    // Steps merged into one: undo takes them all back to the save.
+    s.merge_undo("nudge");
+    rename(&mut s, "Four");
+    s.merge_undo("nudge");
+    rename(&mut s, "Five");
+    assert!(s.dirty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(!s.dirty());
+    // A failed command leaves the state as it was, and a project it replaced on the way gives
+    // back its saved state with its history.
+    assert!(s.run("layer.rename", &json!({"layer": "Two", "name": ""})).is_err());
+    assert!(!s.dirty());
+    rename(&mut s, "Six");
+    let r = s.guarded("Task", true, |s| {
+        s.run("project.new", &json!({"name": "Other"}))?;
+        Err("a later step failed".into())
+    });
+    assert!(r.is_err() && s.dirty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(!s.dirty(), "the save is still the one undo returns to");
+    // An edit after undoing past the save: no way back to it. States are compared, not contents:
+    // the same name typed again is a change.
+    s.run("edit.undo", &Value::Null).unwrap();
+    rename(&mut s, "Two");
+    assert!(s.dirty() && !s.can_redo());
+    // Recovered work is unsaved whatever undo does; opening a project starts saved.
+    s.mark_unsaved();
+    assert!(s.dirty());
+    s.run("project.open", &json!({"path": path})).unwrap();
+    assert!(!s.dirty());
+    // A project opened by a command that is then undone isn't the one saved.
+    let r = s.guarded("Task", true, |s| s.run("project.new", &json!({"name": "Other"})));
+    assert!(r.is_ok() && s.dirty());
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.dirty(), "the project before the task, not the new one's saved state");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// A legend can leave layers out though the map draws them: set when added or later, checked

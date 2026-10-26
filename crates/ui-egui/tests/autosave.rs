@@ -126,7 +126,7 @@ fn unsaved_work_is_kept_and_offered_back_after_a_crash() {
     let app = h.state();
     assert!(app.session.map().layer_by_name("Inspections").is_some());
     assert_eq!(app.session.path.as_deref(), Some(std::path::absolute(&project).unwrap().as_path()), "Save writes back to its file");
-    assert!(app.session.dirty, "recovered work is unsaved");
+    assert!(app.session.dirty(), "recovered work is unsaved");
     // The copy is this run's now, unchanged, until the work is saved.
     assert!(!file(&dir.0, PENDING).exists() && file(&dir.0, LIVE).is_file());
     h.state_mut().run("project.save", json!({})).unwrap();

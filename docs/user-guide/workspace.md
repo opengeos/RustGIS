@@ -15,6 +15,20 @@ templates, packages and files for individual items.
 command line. A package opens as a new, unsaved project; Save writes a plain `.rgis` file.
 Opening or creating a project clears undo history; saving does not.
 
+A `•` after the project's name in the title bar means it has unsaved changes. Undoing or redoing
+back to the state you last saved clears it. Before the desktop app discards unsaved changes, it
+asks **Save changes to…?** That happens when you quit or close the window, and when New, Open, the
+World Atlas sample, a template or a project dropped on the window would replace the project:
+
+- **Save** saves first and then goes on. A project that was never saved asks where to write it.
+  If you cancel that, or the save fails, nothing is discarded.
+- **Don't Save** goes on without saving.
+- **Cancel** (or Escape) goes back to the project.
+
+Commands don't ask: `project.new`, `project.open` and the rest replace the project as they always
+have when a script, a task, the AI Assistant, the command line or an attached agent runs them.
+The browser app doesn't ask yet; it warns before you leave a page with unsaved changes.
+
 Saved layer addresses omit passwords, access keys, tokens and signatures. The open session
 keeps them, but after restarting RustGIS a protected source may need you to sign in to its
 connection again or add it again with credentials.
@@ -46,8 +60,8 @@ that has unsaved changes of its own: save it first.
 The same choices are commands: `ui.recover` opens the copy, and `ui.recover={"discard": true}`
 deletes it. `ui.autosave` reports the interval and any copy waiting.
 
-Quitting doesn't ask about unsaved changes, and their copy is removed: save before you quit. A
-second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
+Quitting asks about unsaved changes first (see [Projects](#projects)); once you quit, their copy
+is removed. A second copy of RustGIS running alongside the first doesn't autosave, so it can't replace the first
 one's copy; it says so as it starts. Nor does RustGIS autosave when its settings folder can't lock
 files (some network or synced folders), where it can't tell a second copy apart. The browser app
 doesn't autosave yet; it warns before you leave a page with unsaved changes.

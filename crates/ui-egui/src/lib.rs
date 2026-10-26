@@ -61,6 +61,7 @@ mod repairsource;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod saveprompt;
 mod scriptcolor;
 mod scriptcomplete;
 mod searchbox;
@@ -828,6 +829,8 @@ pub struct RustGisApp {
     pub services: Services,
     /// Autosave's interval, its last copy, and the copy an earlier run left (#873).
     pub(crate) autosave: autosave::AutosaveState,
+    /// The question asked before unsaved changes are discarded, and a quit the user agreed to.
+    pub(crate) save_prompt: saveprompt::SavePromptState,
     /// The MCP relay for `rustgis-cli mcp --attach`: a loopback listener on the session this app
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
@@ -976,6 +979,7 @@ impl RustGisApp {
             shown_lang: i18n::Lang::EN,
             seen_project: None,
             autosave: Default::default(),
+            save_prompt: Default::default(),
         }
     }
 
@@ -1363,7 +1367,7 @@ impl RustGisApp {
                 false,
             );
         }
-        self.session.dirty = false;
+        self.session.mark_saved();
         self.ui.web_file = Some(file);
         Ok(())
     }
@@ -1409,7 +1413,7 @@ impl RustGisApp {
         rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
-        s.dirty = false;
+        s.mark_saved();
         RustGisApp::new(s)
     }
 
@@ -1539,6 +1543,18 @@ impl RustGisApp {
             save("last_project", &path);
         }
         self.ui.last_project = Some(path);
+    }
+
+    /// Runs a command the user asked for in the interface (a button, a menu, a shortcut, Command
+    /// Search, a file dropped on the window): one that would replace a project with unsaved
+    /// changes asks to save them first, and runs once answered. Scripts, the AI Assistant and
+    /// attached agents run commands without asking ([`Self::run`]).
+    pub fn run_by_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if saveprompt::asks(self, id) {
+            saveprompt::ask(self, saveprompt::Discard::Replace(id.to_string(), params));
+            return Ok(Value::Null);
+        }
+        self.run(id, params)
     }
 
     /// Runs a command by id: `ui.*` here, everything else in the engine.
@@ -2433,7 +2449,7 @@ impl RustGisApp {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
                     let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
-                    let r = self.run(cmd, json!({"path": path}));
+                    let r = self.run_by_user(cmd, json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
                     return r;
@@ -2594,7 +2610,7 @@ impl RustGisApp {
                     self.ui.pending_open = Some(cmd);
                     open(if kind == "ramps" { "ramp" } else { "item" });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
-                    let r = self.run(cmd, json!({"path": path}));
+                    let r = self.run_by_user(cmd, json!({"path": path}));
                     self.map.invalidate();
                     return r;
                 }
@@ -3489,6 +3505,7 @@ impl RustGisApp {
         // on the session directly) becomes Last Project now, not a frame later the app may not
         // reach.
         self.note_last_project();
+        saveprompt::close_requested(self, ctx);
         autosave::tick(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
@@ -3577,7 +3594,7 @@ impl RustGisApp {
                     }
                     continue;
                 }
-                let _ = self.run(rustgis_engine::project::open_command(&p), json!({"path": p}));
+                let _ = self.run_by_user(rustgis_engine::project::open_command(&p), json!({"path": p}));
                 self.map.invalidate();
             }
         }
@@ -3643,6 +3660,7 @@ impl RustGisApp {
         dialogs::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         autosave::offer(self, &ctx);
+        saveprompt::show(self, &ctx);
         pluginsui::show(self, &ctx);
         update::show(self, &ctx);
         showme::tick(self, &ctx);
@@ -3660,7 +3678,7 @@ impl RustGisApp {
         if let Some(url) = self.ui.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
-        let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty { " •" } else { "" });
+        let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty() { " •" } else { "" });
         if title != self.sent_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.sent_title = title;
