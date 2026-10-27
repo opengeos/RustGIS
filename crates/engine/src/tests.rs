@@ -16326,6 +16326,28 @@ fn tile_layers_keep_their_place_when_groups_change() {
     assert_eq!(names, ["Depths", "Streets"]);
 }
 
+/// A layer placed on its own spot, or a group moved to where it is, leaves the tile layers over
+/// them in their places: only a move hands them to the layer below.
+#[test]
+fn tile_layers_stay_over_a_layer_or_group_that_stays() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 2})).unwrap();
+    let before = stack_names(&s);
+    assert_eq!(before, ["Cities", "Rivers", "~Depths", "Lakes", "Countries"]);
+    // Lakes placed just above Countries, where it is.
+    s.run("layer.group", &json!({"layer": "Lakes", "group": null, "before": "Countries"})).unwrap();
+    assert_eq!(stack_names(&s), before);
+    // A group of Lakes and Countries moved to its own place.
+    s.run("group.add", &json!({"name": "Water", "layers": ["Lakes", "Countries"]})).unwrap();
+    let grouped = stack_names(&s);
+    s.run("group.move", &json!({"group": "Water", "to": 2})).unwrap();
+    assert_eq!(stack_names(&s), grouped);
+    // Moved, it still takes them along to the layer below as before.
+    s.run("layer.group", &json!({"layer": "Cities", "group": null, "before": null})).unwrap();
+    assert_eq!(stack_names(&s).last().map(String::as_str), Some("Cities"));
+}
+
 /// A tile layer added as data (an archive, a GeoTIFF read in place) goes on top as an overlay
 /// does, without being one.
 #[test]

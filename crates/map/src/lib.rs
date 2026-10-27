@@ -1331,6 +1331,7 @@ impl Map {
                 return Err("the layer to go before isn't in the group".into());
             }
         }
+        let (order, places) = (self.layer_order(), self.tile_places());
         self.release_tiles(&[layer]);
         for g in &mut self.groups {
             g.children.retain(|c| *c != layer);
@@ -1352,6 +1353,7 @@ impl Map {
         if let Some(g) = group.and_then(|g| self.groups.iter_mut().find(|x| x.id == g)) {
             g.children.push(layer);
         }
+        self.keep_tiles_if_unmoved(&order, places);
         self.settle_tiles();
         Ok(())
     }
@@ -1360,6 +1362,7 @@ impl Map {
     /// the bottom); a position inside another group's run moves up above that group.
     pub fn move_group(&mut self, group: u32, to: usize) -> Result<(), String> {
         let children = self.group(group).ok_or("no such group")?.children.clone();
+        let (order, places) = (self.layer_order(), self.tile_places());
         self.release_tiles(&children);
         let (members, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.layers).into_iter().partition(|l| children.contains(&l.id));
         self.layers = rest;
@@ -1373,6 +1376,7 @@ impl Map {
         let tail = self.layers.split_off(at);
         self.layers.extend(members);
         self.layers.extend(tail);
+        self.keep_tiles_if_unmoved(&order, places);
         self.settle_tiles();
         Ok(())
     }
@@ -1582,6 +1586,33 @@ impl Map {
             let Some(over) = t.over.filter(|o| moving.contains(o)) else { continue };
             let from = layers.iter().position(|l| l.id == over).unwrap_or(layers.len());
             t.over = layers.iter().skip(from).map(|l| l.id).find(|id| !moving.contains(id));
+        }
+        self.sort_tiles(0);
+    }
+
+    /// The layers' ids in the drawing order.
+    fn layer_order(&self) -> Vec<u32> {
+        self.layers.iter().map(|l| l.id).collect()
+    }
+
+    /// Each tile layer's place now (by its id), where some tile layer has one among the layers.
+    fn tile_places(&self) -> Option<Vec<(String, Option<u32>)>> {
+        self.tiles.iter().any(|t| t.over.is_some()).then(|| self.tiles.iter().map(|t| t.id.clone()).zip(self.tile_slots()).collect())
+    }
+
+    /// Puts the tile layers back in `places` when the layers are still in `order`: a move that
+    /// left them where they were (a layer placed on its own spot, a group moved to where it is)
+    /// doesn't hand the tile layers over them to the layer below, as [`Map::release_tiles`] did
+    /// for a move.
+    fn keep_tiles_if_unmoved(&mut self, order: &[u32], places: Option<Vec<(String, Option<u32>)>>) {
+        let Some(places) = places else { return };
+        if !self.layers.iter().map(|l| l.id).eq(order.iter().copied()) {
+            return;
+        }
+        for t in &mut self.tiles {
+            if let Some((_, over)) = places.iter().find(|(id, _)| *id == t.id) {
+                t.over = *over;
+            }
         }
         self.sort_tiles(0);
     }
