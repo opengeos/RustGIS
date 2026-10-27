@@ -311,8 +311,8 @@ jobs:
 
             For each thread, read the code it points at and decide:
               - `fixed` — the comment is right: make the smallest change that addresses it, in the style of the surrounding code. A bug fix gets a regression test where the crate has tests.
-              - `addressed` — the code already does what the comment asks (an earlier commit fixed it, or the comment misread the code): say where, in one sentence. The thread is resolved.
-              - `declined` — the comment is wrong or not worth the change: say why in one or two sentences. The thread stays open for a maintainer.
+              - `addressed` — the code already does exactly what the comment asks, usually because an earlier commit fixed it: cite the `path:line` that does it, in one sentence. The thread is resolved, so use this only when you can point at that line.
+              - `declined` — the comment is wrong (including a misreading of the code) or not worth the change: say why in one or two sentences. The thread stays open for a maintainer.
               - `unclear` — you can't tell what is wanted, or the fix needs a design decision a maintainer should make.
             Don't change anything no thread asks for, don't touch `.github/`, and don't add dependencies.
 
