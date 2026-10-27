@@ -7,7 +7,7 @@
 //! first ([`gate`]).
 
 use rustgis_engine::cmd::plugins::{Reach, reaches, user_only};
-use rustgis_engine::{Session, analysis};
+use rustgis_engine::{Session, analysis, project};
 use serde_json::{Value, json};
 
 use crate::provider::{ToolCall, ToolDef};
@@ -97,12 +97,12 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read_features",
-            description: "Read a vector layer's or a standalone table's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Returns the number matching and up to `limit` rows, each with its row number (_row; a layer's for select.rows) and a layer's location (_lon, _lat).",
+            description: "Read a vector layer's or a standalone table's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Give layer or table. Returns the number matching and up to `limit` rows, each with its row number (_row; a layer's for select.rows) and a layer's location (_lon, _lat).",
             schema: json!({
                 "type": "object",
                 "properties": {
                     "layer": {"type": "string", "description": "Layer name or id (or a standalone table's name, when no layer has it)"},
-                    "table": {"type": "string", "description": "A standalone table's name or id, such as a tool's output table (instead of layer)"},
+                    "table": {"type": "string", "description": "A standalone table's name or id (an id as text, \"7\"), such as a tool's output table (read instead of layer)"},
                     "where": {"type": "string", "description": "A where clause; empty for all rows"},
                     "fields": {"type": "array", "items": {"type": "string"}, "description": "Only these fields (default all)"},
                     "order_by": {"type": "string", "description": "Sort by this field"},
@@ -590,22 +590,28 @@ struct RowSource<'a> {
 /// Resolves `read_features`' `table` (a standalone table's name or id) or `layer` (a layer's name
 /// or id). A `layer` text that names no layer but a standalone table reads the table: a tool's
 /// output table comes back by name, and a model passes that name as `layer` as readily as `table`.
-/// Layers come first, so a layer and a table sharing a name read the layer.
+/// Layers come first, so a layer and a table sharing a name read the layer; that fallback matches
+/// table names only, by [`project::find_table`]'s rule (exact case first), not ids. A `table` given
+/// as null or empty text counts as absent, since models send unused optional arguments that way;
+/// otherwise it is read instead of `layer`.
 fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
     let table = |i: usize| {
         s.project.tables.get(i).map(|t| RowSource { kind: "table", name: &t.name, ds: &t.dataset, selection: None }).ok_or("no such table")
     };
-    if let Some(t) = a.get("table") {
+    let given = |v: &&Value| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty());
+    if let Some(t) = a.get("table").filter(given) {
         return Ok(table(s.table_index(&json!({"table": t}))?)?);
     }
     let layer = a.get("layer").cloned().ok_or("layer (or table) is required")?;
     let id = match s.layer_id(&json!({"layer": layer})) {
         Ok(id) => id,
         Err(e) => {
-            let by_name = layer.as_str().and_then(|n| s.project.tables.iter().position(|t| t.name.eq_ignore_ascii_case(n.trim())));
+            let Some(n) = layer.as_str().map(str::trim) else { return Err(e) };
+            let tables = &s.project.tables;
+            let by_name = project::find_table(tables, n).filter(|&i| tables.get(i).is_some_and(|t| t.name.eq_ignore_ascii_case(n)));
             return match by_name {
                 Some(i) => Ok(table(i)?),
-                None => Err(e),
+                None => Err(format!("no layer or standalone table named '{n}'")),
             };
         }
     };
@@ -706,11 +712,12 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
             Some(Value::Object(o))
         })
         .collect();
-    let mut v = json!({"total": ds.features.len(), "matched": rows.len(), "rows": out});
-    if let Some(o) = v.as_object_mut() {
-        o.insert(src.kind.into(), json!(name));
-    }
-    Ok(v)
+    let mut reply = serde_json::Map::new();
+    reply.insert(src.kind.into(), json!(name));
+    reply.insert("total".into(), json!(ds.features.len()));
+    reply.insert("matched".into(), json!(rows.len()));
+    reply.insert("rows".into(), Value::Array(out));
+    Ok(Value::Object(reply))
 }
 
 /// The map as the model sees it at the start of a request: one line per layer.

@@ -420,9 +420,35 @@ fn read_features_reads_a_tools_output_table() {
     let sel = tools::run(&mut s, &t("read_features", json!({"table": name, "selected": true})));
     assert!(sel.as_ref().is_err_and(|e| e.contains("no selection")), "{sel:?}");
     let missing = tools::run(&mut s, &t("read_features", json!({"layer": "No such thing"})));
-    assert!(missing.as_ref().is_err_and(|e| e.contains("no layer named")), "{missing:?}");
+    assert!(missing.as_ref().is_err_and(|e| e.contains("no layer or standalone table named")), "{missing:?}");
     assert!(tools::run(&mut s, &t("read_features", json!({"table": "Countries"}))).is_err(), "a layer is not a table");
     assert!(tools::run(&mut s, &t("read_features", json!({}))).is_err());
+    // An unused `table` sent as null or empty text leaves `layer` in charge.
+    for unused in [json!(null), json!(""), json!("  ")] {
+        let read: Value = serde_json::from_str(
+            &tools::run(&mut s, &t("read_features", json!({"layer": "Cities", "table": unused, "limit": 1}))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read["layer"], json!("Cities"), "{unused}: {read}");
+    }
+    // `layer` finds a table by name as `table` does, exact case first, but not by id.
+    for (file, v) in [("stats.csv", 1), ("Stats.csv", 2)] {
+        s.run("layer.addDataText", &json!({"fileName": file, "text": format!("k,v\na,{v}\n")})).unwrap();
+    }
+    for name in ["stats", "Stats"] {
+        let by_layer = tools::run(&mut s, &t("read_features", json!({"layer": name}))).unwrap();
+        assert_eq!(by_layer, tools::run(&mut s, &t("read_features", json!({"table": name}))).unwrap(), "{name}");
+        assert!(by_layer.contains(&format!("\"table\":\"{name}\"")), "{by_layer}");
+    }
+    let id = s.project.tables.last().map(|t| t.id).unwrap_or_default();
+    // A layer with that id reads; otherwise it's an error, never the table.
+    let by_id = tools::run(&mut s, &t("read_features", json!({"layer": id.to_string()})));
+    let read_a_layer = match &by_id {
+        Ok(r) => r.contains("\"layer\"") && !r.contains("\"table\""),
+        Err(_) => true,
+    };
+    assert!(read_a_layer, "{by_id:?}");
+    assert!(tools::run(&mut s, &t("read_features", json!({"table": id.to_string()}))).is_ok());
     // A table named like a layer: `layer` reads the layer.
     s.run("layer.addDataText", &json!({"fileName": "Cities.csv", "text": "k,v\na,1\n"})).unwrap();
     let city: Value =
