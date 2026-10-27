@@ -6763,7 +6763,9 @@ mod tests {
         // Up and down only as far as it reaches there: less padding than across, less kept off.
         assert!(up_down < reach && (plain_box[0][1] - bg_box[0][1] - up_down).abs() < 0.01, "{up_down} {plain_box:?} {bg_box:?}");
         let beside = |first: PlacedLabel| {
-            let next = PlacedLabel { x: first.x + w + 4.0, ..label(None) };
+            // A point clear of the two labels' padding (2 points each), not on its edge, where
+            // fonts' rounding decides.
+            let next = PlacedLabel { x: first.x + w + 5.0, ..label(None) };
             place_labels(vec![(first, 2.0, (0, 0, 0)), (next, 1.0, (0, 1, 0))], Vec::new(), 400.0, 100.0, false).labels.len()
         };
         assert_eq!((beside(label(None)), beside(l.clone())), (2, 1));
