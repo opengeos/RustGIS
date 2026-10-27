@@ -1021,7 +1021,18 @@ impl Renderer {
     /// The stacked fills a polygon feature row's class has of its own (`class_fills`), or `None`
     /// when its class has none (the layer's `fill_layers` apply).
     pub fn fills_for(&self, ds: &Dataset, row: usize) -> Option<&[FillLayer]> {
-        let fills = match (self, self.class_of(ds, row)?) {
+        self.fills_in(self.class_of(ds, row))
+    }
+
+    /// The symbol, class strokes and class fills of a feature row ([`Renderer::style_for`],
+    /// [`Renderer::fills_for`]), the feature classed once for all three.
+    pub fn style_fills_for(&self, ds: &Dataset, row: usize) -> (Symbol, Option<&[LineStroke]>, Option<&[FillLayer]>) {
+        let slot = self.class_of(ds, row);
+        (self.symbol_in(ds, row, slot), self.strokes_in(slot), self.fills_in(slot))
+    }
+
+    fn fills_in(&self, slot: Option<Slot>) -> Option<&[FillLayer]> {
+        let fills = match (self, slot?) {
             (Renderer::Unique { classes, class_fills, .. }, Slot::Class(i)) => class_fills.get(&classes.get(i)?.0)?,
             (Renderer::Unique { other_fills, .. }, Slot::Other) => other_fills,
             (Renderer::Graduated { class_fills, .. }, Slot::Class(i)) => class_fills.get(&i)?,

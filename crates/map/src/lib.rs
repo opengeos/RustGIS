@@ -576,6 +576,17 @@ impl Layer {
         self.renderer.fills_for(&self.dataset, row).unwrap_or(&self.fill_layers)
     }
 
+    /// A polygon row's symbol, stacked strokes and stacked fills ([`Layer::style`],
+    /// [`Layer::fills`]), the feature classed once for all three.
+    pub fn style_and_fills(&self, row: usize) -> (Symbol, &[LineStroke], &[fills::FillLayer]) {
+        if self.graphics || !self.renderer.has_class_fills() {
+            let (symbol, strokes) = self.style(row);
+            return (symbol, strokes, self.fills(row));
+        }
+        let (symbol, strokes, fills) = self.renderer.style_fills_for(&self.dataset, row);
+        (symbol, strokes.unwrap_or(&self.line_strokes), fills.unwrap_or(&self.fill_layers))
+    }
+
     /// Whether some feature may be drawn with stacked fills ([`Layer::fills`]).
     pub fn has_fills(&self) -> bool {
         !self.graphics && (!self.fill_layers.is_empty() || self.renderer.has_class_fills())

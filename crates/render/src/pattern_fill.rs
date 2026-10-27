@@ -12,7 +12,7 @@ use std::sync::Arc;
 use rustgis_geom::Coord;
 use rustgis_map::fills::{FillLayer, FillPattern};
 use rustgis_map::{Marker, Rgba, Symbol};
-use tiny_skia::{FillRule, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, Paint, Pixmap, Transform};
 
 use crate::{Ctx, paint};
 
@@ -42,13 +42,7 @@ impl Ctx<'_> {
     /// Draws `polys` with its stacked `fills`, bottom first (a fill without a colour of its own
     /// takes the symbol's), then the symbol's outline over them.
     pub(crate) fn filled(&self, pm: &mut Pixmap, polys: &[Vec<Vec<Coord>>], s: &Symbol, fills: &[FillLayer]) {
-        let mut pb = PathBuilder::new();
-        for rings in polys {
-            for r in rings {
-                self.ring_path(&mut pb, r, true);
-            }
-        }
-        let Some(path) = pb.finish() else { return };
+        let Some(path) = self.polygon_path(polys) else { return };
         // The map's origin in device pixels, in f64: the patterns' lattice point.
         let origin = match self.globe {
             Some(_) => (0.0, 0.0),
@@ -78,9 +72,8 @@ impl Ctx<'_> {
                 }
             }
         }
-        if s.stroke_width > 0.0 && s.stroke.a() > 0 {
-            let st = Stroke { width: s.stroke_width * self.ppp, line_join: LineJoin::Round, ..Stroke::default() };
-            pm.stroke_path(&path, &paint(s.stroke, 1.0), &st, Transform::identity(), None);
+        if s.stroke.a() > 0 {
+            self.outline(pm, &path, &paint(s.stroke, 1.0), s.stroke_width);
         }
     }
 }
@@ -141,6 +134,50 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
             Some((tile, Transform::from_scale(tw / (tw * k).ceil().max(1.0), th / (th * k).ceil().max(1.0)).post_translate(ax, ay)))
         }
     }
+}
+
+/// The colour a polygon's stacked `fills` show as together when it is smaller than a pixel (a
+/// fill without a colour of its own taking the feature's `feature`): each over those under it, a
+/// pattern by the share of the area its lines or markers cover (a marker's outline too), a solid
+/// fill by all of it.
+pub(crate) fn tint(fills: &[FillLayer], feature: Rgba) -> Rgba {
+    // Premultiplied, 0 to 1.
+    let mut out = [0.0f32; 4];
+    let mut over = |c: Rgba, share: f32| {
+        let a = f32::from(c.a()) / 255.0 * if share.is_finite() { share.clamp(0.0, 1.0) } else { 1.0 };
+        for (o, v) in out.iter_mut().zip([c.r(), c.g(), c.b()]) {
+            *o = f32::from(v) / 255.0 * a + *o * (1.0 - a);
+        }
+        out[3] = a + out[3] * (1.0 - a);
+    };
+    let per = |ink: f32, cell: f32| if cell > 0.0 { ink / cell } else { 1.0 };
+    for f in fills.iter().filter(|f| f.draws(feature)) {
+        let c = f.color.unwrap_or(feature);
+        match f.pattern {
+            FillPattern::Solid => over(c, 1.0),
+            FillPattern::Hatch { spacing, width, .. } => over(c, per(width, spacing)),
+            FillPattern::Dots { marker, size, outline, outline_width, spacing, .. } => {
+                // As drawn: at least a point across; a square covers its whole box, the other
+                // shapes about a circle's share of it.
+                let d = size.max(1.0);
+                let (area, edge) = if marker == Marker::Square {
+                    (d * d, 4.0 * d)
+                } else {
+                    (std::f32::consts::FRAC_PI_4 * d * d, std::f32::consts::PI * d)
+                };
+                let cell = spacing[0] * spacing[1];
+                over(c, per(area, cell));
+                if let Some(o) = outline.filter(|_| outline_width > 0.0) {
+                    over(o, per(edge * outline_width, cell));
+                }
+            }
+        }
+    }
+    if out[3] <= 0.0 {
+        return Rgba::new(0, 0, 0, 0);
+    }
+    let byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    Rgba::new(byte(out[0] / out[3]), byte(out[1] / out[3]), byte(out[2] / out[3]), byte(out[3]))
 }
 
 /// What a tile draws at what size (and whether antialiased): its colour, size and kind, and the
@@ -235,5 +272,34 @@ mod tests {
         };
         let red = Rgba::rgb(255, 0, 0);
         assert!(key(&dots(Marker::Circle), red, 1.0) != key(&dots(Marker::Square), red, 1.0));
+    }
+
+    #[test]
+    fn stacked_fills_under_a_pixel_tint_as_their_ink_covers() {
+        let (red, white) = (Rgba::rgb(255, 0, 0), Rgba::rgb(255, 255, 255));
+        let solid = |c| FillLayer { color: Some(c), pattern: FillPattern::Solid };
+        // A solid fill is its colour; one over another hides it.
+        assert_eq!(tint(&[solid(white), solid(red)], white), red);
+        // Hatch lines 1.5 wide every 6 cover a quarter: a quarter of red over white.
+        let hatch = FillLayer { color: Some(red), pattern: FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 } };
+        let t = tint(&[solid(white), hatch], white);
+        assert_eq!((t.r(), t.a()), (255, 255));
+        assert!((i32::from(t.g()) - 191).abs() <= 1, "{t:?}");
+        // Alone, a quarter as opaque; nothing drawn, nothing.
+        assert!((i32::from(tint(&[hatch], white).a()) - 64).abs() <= 1);
+        assert_eq!(tint(&[], white).a(), 0);
+        assert_eq!(tint(&[FillLayer { color: None, pattern: FillPattern::Solid }], Rgba::new(0, 0, 0, 0)).a(), 0);
+        // Hollow dots show their outlines' ink.
+        let hollow = FillPattern::Dots {
+            marker: Marker::Circle,
+            size: 3.0,
+            outline: Some(red),
+            outline_width: 0.5,
+            spacing: [10.0, 10.0],
+            displacement: [5.0, 0.0],
+            offset: [0.0, 0.0],
+        };
+        let t = tint(&[FillLayer { color: Some(Rgba::new(0, 0, 0, 0)), pattern: hollow }], white);
+        assert!(t.r() == 255 && t.g() == 0 && t.a() > 0, "{t:?}");
     }
 }

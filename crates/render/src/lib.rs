@@ -601,21 +601,32 @@ impl Ctx<'_> {
     }
 
     fn polygon(&self, pm: &mut Pixmap, polys: &[Vec<Vec<Coord>>], fill: Option<Paint>, stroke: Option<(Paint, f32)>) {
+        let Some(path) = self.polygon_path(polys) else { return };
+        if let Some(f) = fill {
+            pm.fill_path(&path, &f, FillRule::EvenOdd, Transform::identity(), None);
+        }
+        if let Some((s, w)) = stroke {
+            self.outline(pm, &path, &s, w);
+        }
+    }
+
+    /// A polygon's rings as one path (its holes cut out by the even-odd rule); `None` for one
+    /// with nothing to draw.
+    pub(crate) fn polygon_path(&self, polys: &[Vec<Vec<Coord>>]) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
         for rings in polys {
             for r in rings {
                 self.ring_path(&mut pb, r, true);
             }
         }
-        let Some(path) = pb.finish() else { return };
-        if let Some(f) = fill {
-            pm.fill_path(&path, &f, FillRule::EvenOdd, Transform::identity(), None);
-        }
-        if let Some((s, w)) = stroke
-            && w > 0.0
-        {
+        pb.finish()
+    }
+
+    /// A polygon's outline `w` points wide (round joins); none for no width.
+    pub(crate) fn outline(&self, pm: &mut Pixmap, path: &tiny_skia::Path, p: &Paint, w: f32) {
+        if w > 0.0 {
             let st = Stroke { width: w * self.ppp, line_join: LineJoin::Round, ..Stroke::default() };
-            pm.stroke_path(&path, &s, &st, Transform::identity(), None);
+            pm.stroke_path(path, p, &st, Transform::identity(), None);
         }
     }
 
@@ -3156,21 +3167,25 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             }
                             continue;
                         }
-                        // Its symbol, and the layer's stacked strokes or the feature's class's own.
-                        let (sym, strokes) = layer.style(row);
-                        // A polygon's stacked fills (its class's, else the layer's), looked up once;
-                        // none in wireframe, which draws outlines only.
-                        let fills = if has_fills && !ctx.wireframe && matches!(g, Geometry::Polygon(_)) { layer.fills(row) } else { &[] };
+                        // Its symbol, and the layer's stacked strokes or the feature's class's own; a
+                        // polygon's stacked fills too (none in wireframe, which draws outlines only),
+                        // the feature classed once for all.
+                        let (sym, strokes, fills) = if has_fills && !ctx.wireframe && matches!(g, Geometry::Polygon(_)) {
+                            layer.style_and_fills(row)
+                        } else {
+                            let (sym, strokes) = layer.style(row);
+                            (sym, strokes, &[] as &[rustgis_map::fills::FillLayer])
+                        };
                         // A feature under a pixel across: blend its coverage into the pixels it touches
-                        // (a dense layer seen whole is mostly these, and a path each is slow).
-                        // Not stacked strokes or fills: a splat would draw them unshifted, or in the
-                        // symbol's fill colour.
+                        // (a dense layer seen whole is mostly these, and a path each is slow). Not
+                        // stacked strokes: a splat would draw them unshifted, in one colour. Stacked
+                        // fills show as the colour they make together at that size.
+                        let splat_sym = if fills.is_empty() { sym } else { Symbol { fill: pattern_fill::tint(fills, sym.fill), ..sym } };
                         if globe.is_none()
                             && !layer.graphics
                             && strokes.is_empty()
-                            && fills.is_empty()
                             && let Some(e) = extents.get(row)
-                            && ctx.splat(dest, e, g, &sym)
+                            && ctx.splat(dest, e, g, &splat_sym)
                         {
                             continue;
                         }
@@ -6105,6 +6120,21 @@ mod tests {
         m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(Rgba::rgb(255, 0, 0)), pattern: FillPattern::Solid }];
         let filled = ink(&mut m);
         assert!(!filled.is_empty() && filled.iter().all(|(r, b)| r > b), "its red fill: {filled:?}");
+        // Far smaller (0.15 across), still blended in, not lost as a path of no area.
+        let mut small = Map::new("Map");
+        small.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("specks", GeometryType::Polygon, vec![]);
+        let t = 0.0045 * 0.15 / 0.67;
+        let ring = vec![Coord::new(-t, -t), Coord::new(t, -t), Coord::new(t, t), Coord::new(-t, t), Coord::new(-t, -t)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let tiny = small.add_dataset(d);
+        let l = small.layer_mut(tiny).unwrap();
+        l.renderer = rustgis_map::Renderer::Single(symbol);
+        l.fill_layers = vec![FillLayer { color: Some(Rgba::rgb(255, 0, 0)), pattern: FillPattern::Solid }];
+        // (A faint speck: about 2 % of a pixel's area.)
+        let r = render(&mut small, &view).unwrap();
+        let specks: Vec<_> = r.pixmap.pixels().iter().filter(|p| p.green() < 255).map(|p| (p.red(), p.green(), p.blue())).collect();
+        assert!(!specks.is_empty() && specks.iter().all(|(r, g, b)| r > g && g == b), "a speck of red: {specks:?}");
     }
 
     #[test]
