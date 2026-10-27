@@ -715,19 +715,28 @@ fn union_of(inp: &dyn Inputs, p: &Json, k: &str) -> Result<MultiPolygon<f64>, St
     Ok(union_all(polys.iter().flat_map(|m| m.0.iter())))
 }
 
-/// The part of a feature inside `mask` (polygons in Web Mercator, oriented as `union_all` leaves
-/// them), or outside it when `inside` is false. Inside, a polygon's overlap with it, a line's
-/// stretches in it, the points in it or on its edge; outside, the rest. `None` when nothing is
-/// left, or only a shared edge or corner.
+/// A feature as the overlay can take it: a feature of several polygons, which may overlap, unioned
+/// into one; any other as it is, so a single polygon's edges stay exactly where they are.
+fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
+    match g {
+        Geometry::Polygon(polys) if polys.len() > 1 => to_multipolygon(g)
+            .and_then(|m| from_multipolygon(&union_all(m.0.iter())))
+            .map_or(std::borrow::Cow::Borrowed(g), std::borrow::Cow::Owned),
+        _ => std::borrow::Cow::Borrowed(g),
+    }
+}
+
+/// The part of a feature inside `mask`, or outside it when `inside` is false. Inside, a polygon's
+/// overlap with it, a line's stretches in it, the points in it or on its edge; outside, the rest.
+/// `None` when nothing is left, or only a shared edge or corner.
 ///
-/// The feature's polygons may wind either way (the reference corpus has a clockwise parcel); a
-/// feature of several polygons is unioned first, as the overlay can't take parts that overlap.
+/// The mask's polygons are in Web Mercator, oriented as `union_all` leaves them. The feature's may
+/// wind either way (the reference corpus has a clockwise parcel), but must not overlap each other:
+/// pass a feature of several polygons through [`dissolved`] first, once for all its masks.
 fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry> {
     match g {
         Geometry::Polygon(_) => {
-            let m = to_multipolygon(g)?;
-            let m = if m.0.len() > 1 { union_all(m.0.iter()) } else { m };
-            from_multipolygon(&if inside { m.intersection(mask) } else { m.difference(mask) })
+            to_multipolygon(g).and_then(|m| from_multipolygon(&if inside { m.intersection(mask) } else { m.difference(mask) }))
         }
         Geometry::Line(_) => to_multiline(g).and_then(|m| from_line(&mask.clip(&m, !inside))),
         Geometry::Point(_) | Geometry::MultiPoint(_) => {
@@ -759,7 +768,7 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(c) = f.geometry.as_ref().and_then(|g| part(g, &mask, true)) {
+        if let Some(c) = f.geometry.as_ref().and_then(|g| part(&dissolved(g), &mask, true)) {
             out.push(Some(c), f.attrs.clone());
         }
     }
@@ -884,10 +893,12 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
             continue;
         };
         let ext = g.extent();
+        // A feature of overlapping parts is unioned once, for all the zones it meets.
+        let whole = dissolved(g);
         let mut hit: Vec<usize> = Vec::new();
         for zi in index.candidates(&ext) {
             let Some(z) = zones.get(zi).filter(|z| ext.intersects(&z.ext)) else { continue };
-            if let Some(inside) = part(g, &z.poly, true) {
+            if let Some(inside) = part(&whole, &z.poly, true) {
                 out.push_next(Some(inside), overlay_row(ds, Some(&f.attrs), ov, zone_attrs(z)));
                 hit.push(zi);
             }
@@ -898,7 +909,12 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
         let rest = if hit.is_empty() {
             Some(g.clone())
         } else {
-            part(g, &union_all(hit.iter().filter_map(|zi| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false)
+            // The same mask the inside part was cut with, when one zone was hit: a union would move its
+            // edges by a rounding error, and a line along one could come out on both sides.
+            match hit.as_slice() {
+                [only] => zones.get(*only).and_then(|z| part(&whole, &z.poly, false)),
+                _ => part(&whole, &union_all(hit.iter().filter_map(|zi| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false),
+            }
         };
         if let Some(rest) = rest {
             out.push_next(Some(rest), overlay_row(ds, Some(&f.attrs), ov, None));
@@ -3414,6 +3430,30 @@ mod tests {
         let want = to_multipolygon(&Geometry::Polygon(vec![vec![outline]])).unwrap();
         assert_eq!(rest.0.len(), 1, "{rest:?}");
         assert!((rest.unsigned_area() - want.unsigned_area()).abs() < 1e-6 * want.unsigned_area(), "{rest:?}");
+    }
+
+    #[test]
+    fn identity_keeps_a_line_along_a_zone_edge_once() {
+        // A road along the top edge of a zone, and on past its corner.
+        let mut roads = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("id", FieldType::Text)]);
+        roads.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 2.0), Coord::new(3.0, 2.0)]])), vec![Value::Text("r".into())]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+        zones.push(Some(sq(0.0, 0.0, 2.0)), vec![Value::Text("z".into())]);
+        let m = Map(HashMap::from([("roads".to_string(), roads), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("identity", &m, &serde_json::json!({"input": "roads", "overlay": "zones"})).unwrap());
+        // The stretch on the edge is inside (x 0–2), once; the rest (x 2–3) outside.
+        let spans: Vec<(f64, f64, &Value)> = out
+            .features
+            .iter()
+            .map(|f| {
+                let e = f.geometry.as_ref().unwrap().extent();
+                (e.min_x, e.max_x, &f.attrs[1])
+            })
+            .collect();
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(spans[0].0, 0.0) && near(spans[0].1, 2.0) && *spans[0].2 == Value::Text("z".into()), "{spans:?}");
+        assert!(near(spans[1].0, 2.0) && near(spans[1].1, 3.0) && *spans[1].2 == Value::Null, "{spans:?}");
     }
 
     #[test]

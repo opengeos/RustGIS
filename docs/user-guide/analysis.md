@@ -180,7 +180,9 @@ leaves it out). **Union** (`union`) takes two polygon
 layers and adds, after Identity's features, each overlay polygon's part outside every input polygon,
 with empty input attributes: together the features cover everything either layer covers. Both
 follow Intersect's rules for field names, touching parts and selections. Where overlay polygons
-overlap each other, an input feature's part in both comes out once for each.
+overlap each other, an input feature's part in both comes out once for each, and Union adds each
+overlay polygon's own remainder, so the overlay's overlap outside the input comes out once for each
+too.
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is
