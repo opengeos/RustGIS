@@ -116,7 +116,7 @@ impl FillLayer {
             FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, offset } => {
                 let spacing = spacing.map(|s| within(s, *PATTERN_SPACING.start(), *PATTERN_SPACING.end(), dot_spacing()[0]));
                 FillPattern::Dots {
-                    marker: if let Marker::Char(_) = marker { Marker::Circle } else { marker },
+                    marker,
                     size: within(size, 0.0, MAX_DOT_SIZE, dot_size()),
                     outline,
                     outline_width: within(outline_width, 0.0, MAX_HATCH_WIDTH, 0.0),

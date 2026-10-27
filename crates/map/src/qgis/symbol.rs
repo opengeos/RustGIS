@@ -326,18 +326,12 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
                 let spacing = [apart("distance_x", report), apart("distance_y", report)];
                 let displacement = [shift("displacement_x", report), shift("displacement_y", report)];
                 let moved = [shift("offset_x", report), shift("offset_y", report)];
-                let marker = if let Marker::Char(_) = m.marker {
-                    report.approximated(layer, "font markers in point pattern fills, drawn as circles");
-                    Marker::Circle
-                } else {
-                    m.marker
-                };
                 let outline = (m.stroke.a() > 0 && m.stroke_width > 0.0).then_some(m.stroke);
                 stack.push(
                     FillLayer {
                         color: Some(m.fill),
                         pattern: FillPattern::Dots {
-                            marker,
+                            marker: m.marker,
                             size: m.size,
                             outline,
                             outline_width: m.stroke_width,
