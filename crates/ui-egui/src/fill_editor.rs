@@ -81,8 +81,7 @@ pub(crate) fn fills_editor(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tok
                 if add.on_hover_text(tl!("Stack another fill on top")).clicked() {
                     let mut next = fills.clone();
                     // The first stands for the symbol's own fill; the next hatches over it.
-                    let first = FillLayer::default();
-                    next.push(if next.is_empty() { first } else { FillLayer::hatch(45.0, 6.0, 1.0) });
+                    next.push(if next.is_empty() { FillLayer::default() } else { FillLayer::hatch(45.0, 6.0, 1.0) });
                     set_fills(app, class, &next);
                 }
             });

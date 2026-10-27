@@ -569,7 +569,8 @@ impl Layer {
         if self.graphics {
             return &[];
         }
-        // (A layer whose classes have none of their own isn't classed for them.)
+        // A class without fills of its own takes the layer's: a layer with no class fills isn't
+        // classed for them.
         if !self.renderer.has_class_fills() {
             return &self.fill_layers;
         }

@@ -34,8 +34,15 @@ struct Tiles {
     bytes: usize,
 }
 
+/// The most provisional tiles kept: those of character markers drawn while the installed
+/// families are still being indexed.
+const MAX_PROVISIONAL: usize = 64;
+
 thread_local! {
     static TILES: RefCell<Tiles> = RefCell::new(Tiles::default());
+    /// Provisional tiles (in the label font, for now), kept apart and never used once their
+    /// marker's family is settled, so a layer of them isn't drawn again for each polygon meanwhile.
+    static PROVISIONAL: RefCell<HashMap<Key, Option<Arc<Pixmap>>>> = RefCell::new(HashMap::new());
 }
 
 impl Ctx<'_> {
@@ -220,10 +227,19 @@ fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Key {
     Key { bits, marker }
 }
 
-/// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time (and kept
-/// when `keep`); `None` for one that can't be made.
+/// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time; `None` for
+/// one that can't be made. Kept among the tiles when `keep`; otherwise (a character marker
+/// before the fonts are indexed) among the provisional ones, until its family is settled.
 fn tile(key: &Key, keep: bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
-    if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
+    if keep {
+        // Settled now: the provisional one, if any, is left behind.
+        if key.marker.is_some_and(|m| matches!(m, Marker::Char(_))) {
+            PROVISIONAL.with(|p| p.borrow_mut().remove(key));
+        }
+        if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
+            return t;
+        }
+    } else if let Some(t) = PROVISIONAL.with(|p| p.borrow().get(key).cloned()) {
         return t;
     }
     let made = (w.is_finite() && h.is_finite() && w <= MAX_TILE_PX + 1.0 && h <= MAX_TILE_PX + 1.0)
@@ -234,6 +250,13 @@ fn tile(key: &Key, keep: bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -
             Arc::new(pm)
         });
     if !keep {
+        PROVISIONAL.with(|p| {
+            let mut p = p.borrow_mut();
+            if p.len() >= MAX_PROVISIONAL {
+                p.clear();
+            }
+            p.insert(key.clone(), made.clone());
+        });
         return made;
     }
     let size = made.as_ref().map_or(0, |pm| pm.data().len());
@@ -283,11 +306,18 @@ mod tests {
         };
         let red = Rgba::rgb(255, 0, 0);
         assert!(key(&dots(Marker::Circle), red, 1.0) != key(&dots(Marker::Square), red, 1.0));
-        // One not to keep (a character marker drawn before the fonts are indexed) is drawn and
-        // not kept.
-        let unsettled = hatch(u32::MAX);
-        assert!(tile(&unsettled, false, 4.0, 4.0, |_| {}).is_some());
-        assert!(!kept(u32::MAX));
+        // One not to keep (a character marker drawn before the fonts are indexed) is drawn once
+        // and kept apart, not among the tiles; settled, it is drawn again and kept.
+        let glyph = |c| key(&dots(Marker::Char(rustgis_map::Glyph::new(c, "Noto Sans"))), red, 1.0);
+        let mut drawn = 0;
+        for _ in 0..3 {
+            assert!(tile(&glyph('x'), false, 4.0, 4.0, |_| drawn += 1).is_some());
+        }
+        assert_eq!(drawn, 1, "drawn once while the fonts are indexed");
+        assert!(TILES.with(|t| !t.borrow().by_key.contains_key(&glyph('x'))));
+        assert!(tile(&glyph('x'), true, 4.0, 4.0, |_| drawn += 1).is_some());
+        assert_eq!(drawn, 2, "drawn again once settled");
+        assert!(PROVISIONAL.with(|p| p.borrow().is_empty()));
     }
 
     #[test]
