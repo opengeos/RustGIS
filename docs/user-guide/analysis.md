@@ -78,7 +78,7 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-There are 21 built-in tools; GeoLibre and plugin tools join them when available.
+There are 22 built-in tools; GeoLibre and plugin tools join them when available.
 Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
 | Tool | Id | Toolbox |
@@ -102,6 +102,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Summarize Within | `countPoints` | Analysis › Summarize |
 | Summary Statistics | `summaryStatistics` | Analysis › Statistics |
 | Export Features | `exportFeatures` | Conversion |
+| Zonal Statistics | `zonalStats` | Analysis › Raster |
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 
@@ -155,7 +156,7 @@ named by `output`, and `<output>_variance`.
 
 **Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
 input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
-first. A parcel two flood zones cross gives two features, one for each zone, and a point in two
+first. A parcel crossed by two flood zones gives two features, one for each zone, and a point in two
 overlapping polygons gives two. Input features outside every overlay polygon are left out. An
 overlay polygon's edge counts as inside it, as for Clip: a point on the edge and a stretch of line
 along it are kept, but polygons that only share an edge or a corner, and a line that only touches

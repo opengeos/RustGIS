@@ -759,7 +759,7 @@ struct Zone {
 
 /// The overlay layer of an overlay tool (its `overlay` parameter), which must be polygons, and its
 /// (selected) features with geometry as [`Zone`]s, in order.
-fn zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
+fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
     let ov = input(inp, p, "overlay")?;
     if ov.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", ov.name));
@@ -803,7 +803,7 @@ fn intersect(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     if ds.geometry_type == GeometryType::None {
         return Err(format!("'{}' has no geometry", ds.name));
     }
-    let (ov, zones) = zones(inp, p)?;
+    let (ov, zones) = overlay_zones(inp, p)?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = overlay_schema(ds, ov, out_name(p, format!("{}_Intersect", ds.name)), ds.geometry_type);
     for r in rows(inp, p, "input", ds) {
@@ -1638,7 +1638,11 @@ impl ExtentIndex {
         if !ext.intersects(&self.total) {
             return Vec::new();
         }
-        let ((x0, y0), (x1, y1)) = (self.key(ext.min_x, ext.min_y), self.key(ext.max_x, ext.max_y));
+        // Only the part of `ext` over the grid: a feature far larger than the indexed layer would
+        // otherwise reach cells up to the clamp, past the grid's own.
+        let t = &self.total;
+        let (min_x, min_y, max_x, max_y) = (ext.min_x.max(t.min_x), ext.min_y.max(t.min_y), ext.max_x.min(t.max_x), ext.max_y.min(t.max_y));
+        let ((x0, y0), (x1, y1)) = (self.key(min_x, min_y), self.key(max_x, max_y));
         let mut found = Vec::new();
         for x in x0..=x1 {
             for y in y0..=y1 {
@@ -3191,6 +3195,19 @@ mod tests {
             .map(|f| (f.attrs[0].as_f64().unwrap(), if let Value::Text(t) = &f.attrs[1] { t.as_str() } else { "" }))
             .collect();
         assert_eq!(rows, [(1.0, "a"), (2.0, "a"), (2.0, "a")]);
+    }
+
+    #[test]
+    fn extent_index_looks_only_at_its_own_cells() {
+        // 20 small extents in a 1° row: a grid of about 4 cells a side.
+        let index = ExtentIndex::new((0..20).map(|i| Extent::new(f64::from(i) * 0.05, 0.0, f64::from(i) * 0.05 + 0.01, 0.01)));
+        assert!(index.cell_size().is_some());
+        // A query far larger than the layer finds every feature once, in order.
+        assert_eq!(index.candidates(&Extent::new(-170.0, -80.0, 170.0, 80.0)), (0..20).collect::<Vec<_>>());
+        // A small one finds the features of its cell, not the whole row.
+        let near_start = index.candidates(&Extent::new(0.0, 0.0, 0.02, 0.005));
+        assert!(near_start.first() == Some(&0) && near_start.len() < 20, "{near_start:?}");
+        assert!(index.candidates(&Extent::new(5.0, 5.0, 6.0, 6.0)).is_empty());
     }
 
     #[test]
