@@ -51,7 +51,8 @@ pub fn play(app: &mut RustGisApp, ctx: &Context) {
         match read {
             // Pasted where the user still is, which may be seconds later (the browser asked
             // first): into the field as it is now, or, with nothing focused (the browser's prompt
-            // took it), into the field as the menu left it. Moved on to another field, the text
+            // took the focus, or a click on the map or an empty part of a pane did), into the
+            // field Paste was picked in, as the menu left it. Moved on to another field, the text
             // isn't pasted there.
             Ok(text) => match ctx.memory(|m| m.focused()) {
                 Some(id) if id == field.0 => ctx.input_mut(|i| i.events.push(Event::Paste(text))),
