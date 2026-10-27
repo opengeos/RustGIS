@@ -1331,7 +1331,7 @@ impl Map {
                 return Err("the layer to go before isn't in the group".into());
             }
         }
-        let (order, places) = (self.layer_order(), self.tile_places());
+        let (order, places) = (self.layer_order(), self.pin_tile_places());
         self.release_tiles(&[layer]);
         for g in &mut self.groups {
             g.children.retain(|c| *c != layer);
@@ -1362,7 +1362,7 @@ impl Map {
     /// the bottom); a position inside another group's run moves up above that group.
     pub fn move_group(&mut self, group: u32, to: usize) -> Result<(), String> {
         let children = self.group(group).ok_or("no such group")?.children.clone();
-        let (order, places) = (self.layer_order(), self.tile_places());
+        let (order, places) = (self.layer_order(), self.pin_tile_places());
         self.release_tiles(&children);
         let (members, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.layers).into_iter().partition(|l| children.contains(&l.id));
         self.layers = rest;
@@ -1596,10 +1596,16 @@ impl Map {
     }
 
     /// The tile layers as they are, in their order and places, where some tile layer has a place
-    /// among the layers ([`Map::release_tiles`] may change both). Kept whole: a tile layer's
-    /// `id` may be empty or shared, so it can't tell them apart.
-    fn tile_places(&self) -> Option<Vec<TileLayer>> {
-        self.tiles.iter().any(|t| t.over.is_some()).then(|| self.tiles.clone())
+    /// among the layers ([`Map::release_tiles`] may change both): each pinned first to the layer
+    /// it is drawn over now, under the groups as they are (a move inside a group leaves a tile
+    /// layer's `over` on a layer that is no longer the group's top), as `release_tiles` pins
+    /// them. Kept whole: a tile layer's `id` may be empty or shared, so it can't tell them apart.
+    fn pin_tile_places(&mut self) -> Option<Vec<TileLayer>> {
+        if self.tiles.iter().all(|t| t.over.is_none()) {
+            return None;
+        }
+        self.pin_tiles();
+        Some(self.tiles.clone())
     }
 
     /// Puts the tile layers back as `places` had them when the layers are still in `order`: a

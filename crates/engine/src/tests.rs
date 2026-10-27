@@ -16358,15 +16358,32 @@ fn tile_layers_without_ids_keep_their_places_when_nothing_moves() {
         s.run("map.addTiles", &json!({"url": format!("https://{name}.example.org/{{z}}/{{x}}/{{y}}.png"), "name": name, "overlay": true}))
             .unwrap();
     }
-    s.run("map.setTiles", &json!({"name": "Upper", "to": 1})).unwrap();
+    // Upper over Lakes (the layer placed next, on its own spot), Lower over Countries.
+    s.run("map.setTiles", &json!({"name": "Upper", "to": 3})).unwrap();
     s.run("map.setTiles", &json!({"name": "Lower", "to": 4})).unwrap();
     for t in &mut s.map_mut().tiles {
         t.id.clear();
     }
     let before = stack_names(&s);
-    assert!(before.iter().position(|n| n == "~Upper") < before.iter().position(|n| n == "~Lower"), "{before:?}");
+    assert_eq!(before, ["Cities", "Rivers", "~Upper", "Lakes", "~Lower", "Countries"]);
     s.run("layer.group", &json!({"layer": "Lakes", "group": null, "before": "Countries"})).unwrap();
     assert_eq!(stack_names(&s), before);
+}
+
+/// A tile layer over a group, after a move inside the group, stays over it when the group's
+/// bottom layer is taken out in place: its place is the group's top as it is, not the layer
+/// that was the top before the move.
+#[test]
+fn a_tile_layer_over_a_group_stays_when_its_bottom_layer_leaves_in_place() {
+    let mut s = world();
+    s.run("group.add", &json!({"name": "Water", "layers": ["Rivers", "Lakes"]})).unwrap();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 1})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Rivers", "Lakes", "Countries"]);
+    s.run("layer.move", &json!({"layer": "Lakes", "to": 1})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Lakes", "Rivers", "Countries"]);
+    s.run("layer.group", &json!({"layer": "Rivers", "group": null, "before": "Countries"})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Lakes", "Rivers", "Countries"]);
 }
 
 /// A tile layer added as data (an archive, a GeoTIFF read in place) goes on top as an overlay
