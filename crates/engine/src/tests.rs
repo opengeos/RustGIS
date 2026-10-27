@@ -16376,12 +16376,9 @@ fn tile_layers_without_ids_keep_their_places_when_nothing_moves() {
 fn tile_layers_are_listed_in_drawing_order_after_a_move_in_place() {
     let mut s = world();
     // (`to` is the place among the other layers: the tile layer goes above the one there.)
-    for (name, to) in [("Over Countries", 3), ("Over Lakes", 2)] {
-        s.run(
-            "map.addTiles",
-            &json!({"url": format!("https://{}.example.org/{{z}}/{{x}}/{{y}}.png", name.len()), "name": name, "overlay": true}),
-        )
-        .unwrap();
+    for (i, (name, to)) in [("Over Countries", 3), ("Over Lakes", 2)].into_iter().enumerate() {
+        let url = format!("https://tiles{i}.example.org/{{z}}/{{x}}/{{y}}.png");
+        s.run("map.addTiles", &json!({"url": url, "name": name, "overlay": true})).unwrap();
         s.run("map.setTiles", &json!({"name": name, "to": to})).unwrap();
     }
     // The list out of the drawing order (as a change to the groups, which re-seats the tile
@@ -16391,6 +16388,25 @@ fn tile_layers_are_listed_in_drawing_order_after_a_move_in_place() {
     let in_stack: Vec<String> = stack_names(&s).into_iter().filter_map(|n| n.strip_prefix('~').map(String::from)).collect();
     let listed: Vec<String> = s.map().tiles.iter().map(|t| t.name.clone()).collect();
     assert_eq!(listed, in_stack);
+}
+
+/// Two tile layers whose places merge in a move that leaves the layers where they are (a layer
+/// put in the group below it) keep the order they were drawn in, even with the list out of order
+/// before (as a change to the groups can leave it).
+#[test]
+fn tile_layers_keep_their_drawing_order_when_their_places_merge_in_place() {
+    let mut s = world();
+    for (i, (name, to)) in [("Over Rivers", 1), ("Over Lakes", 3)].into_iter().enumerate() {
+        let url = format!("https://tiles{i}.example.org/{{z}}/{{x}}/{{y}}.png");
+        s.run("map.addTiles", &json!({"url": url, "name": name, "overlay": true})).unwrap();
+        s.run("map.setTiles", &json!({"name": name, "to": to})).unwrap();
+    }
+    assert_eq!(stack_names(&s), ["Cities", "~Over Rivers", "Rivers", "~Over Lakes", "Lakes", "Countries"]);
+    s.run("group.add", &json!({"name": "Water", "layers": ["Lakes"]})).unwrap();
+    s.map_mut().tiles.reverse();
+    // Rivers joins the group, above Lakes, where it is: both tile layers now sit over it.
+    s.run("layer.group", &json!({"layer": "Rivers", "group": "Water", "before": "Lakes"})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Over Rivers", "~Over Lakes", "Rivers", "Lakes", "Countries"]);
 }
 
 /// Layers sharing an id (a project may repeat one) are told apart by their places: a real move of

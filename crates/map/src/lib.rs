@@ -1596,16 +1596,21 @@ impl Map {
         self.sort_tiles(0);
     }
 
-    /// The tile layers in their order and places, each pinned to the layer it is drawn over now
+    /// The tile layers in their drawing order and places, each pinned to the layer it is drawn over now
     /// under the groups as they are (a move inside a group leaves `over` on a layer that is no
-    /// longer the group's top), as [`Map::release_tiles`] pins them. `None` when no tile layer
-    /// has a place. Kept whole: a tile layer's `id` may be empty or shared, so it can't tell them
+    /// longer the group's top), as [`Map::release_tiles`] pins them, and sorted into the drawing
+    /// order (`self.tiles` itself, so tile layer indices may change, as `release_tiles` changes
+    /// them too). `None` when no tile layer has a place. Kept whole: a tile layer's `id` may be empty or shared, so it can't tell them
     /// apart.
     fn pin_tile_places(&mut self) -> Option<Vec<TileLayer>> {
         if self.tiles.iter().all(|t| t.over.is_none()) {
             return None;
         }
         self.pin_tiles();
+        // In the drawing order as it is, which a later merge of their places (a layer put in a
+        // group) keeps: the list may be out of it (a change to the groups re-seats tile layers
+        // without sorting them).
+        self.sort_tiles(0);
         Some(self.tiles.clone())
     }
 
