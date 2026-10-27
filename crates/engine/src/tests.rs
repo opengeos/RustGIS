@@ -16370,6 +16370,45 @@ fn tile_layers_without_ids_keep_their_places_when_nothing_moves() {
     assert_eq!(stack_names(&s), before);
 }
 
+/// The tile layers' list follows the drawing order after a move that leaves the layers where
+/// they were, as after any other (map.tiles, the pop-ups and the AI Assistant read it).
+#[test]
+fn tile_layers_are_listed_in_drawing_order_after_a_move_in_place() {
+    let mut s = world();
+    // (`to` is the place among the other layers: the tile layer goes above the one there.)
+    for (name, to) in [("Over Countries", 3), ("Over Lakes", 2)] {
+        s.run(
+            "map.addTiles",
+            &json!({"url": format!("https://{}.example.org/{{z}}/{{x}}/{{y}}.png", name.len()), "name": name, "overlay": true}),
+        )
+        .unwrap();
+        s.run("map.setTiles", &json!({"name": name, "to": to})).unwrap();
+    }
+    // The list out of the drawing order (as a change to the groups, which re-seats the tile
+    // layers without sorting them, can leave it), then a layer placed where it is.
+    s.map_mut().tiles.reverse();
+    s.run("layer.group", &json!({"layer": "Countries", "group": null, "before": null})).unwrap();
+    let in_stack: Vec<String> = stack_names(&s).into_iter().filter_map(|n| n.strip_prefix('~').map(String::from)).collect();
+    let listed: Vec<String> = s.map().tiles.iter().map(|t| t.name.clone()).collect();
+    assert_eq!(listed, in_stack);
+}
+
+/// Layers sharing an id (a project may repeat one) are told apart by their places: a real move of
+/// one of them hands the tile layer over it on, as any move does.
+#[test]
+fn a_move_among_layers_sharing_an_id_still_hands_tile_layers_on() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 0})).unwrap();
+    assert_eq!(stack_names(&s), ["~Depths", "Cities", "Rivers", "Lakes", "Countries"]);
+    let m = s.map_mut();
+    let (x, lakes) = (m.layers[0].id, m.layers[2].id);
+    m.layers[1].id = x;
+    // Cities (the first with the id) goes above Lakes: the tile layer over it goes on to Lakes.
+    m.place_layer(x, None, Some(lakes)).unwrap();
+    assert_eq!(stack_names(&s), ["Rivers", "Cities", "~Depths", "Lakes", "Countries"]);
+}
+
 /// A tile layer over a group, after a move inside the group, stays over it when the group's
 /// bottom layer is taken out in place: its place is the group's top as it is, not the layer
 /// that was the top before the move.
