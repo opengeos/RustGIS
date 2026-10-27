@@ -85,7 +85,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_tool",
-            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, whose name the result gives (use it as the input of a next step). One undo step.",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -97,19 +97,19 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "read_features",
-            description: "Read a vector layer's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Returns the number matching and up to `limit` rows, each with its row number (_row, for select.rows) and location (_lon, _lat).",
+            description: "Read a vector layer's or a standalone table's attribute rows, optionally only those matching a where clause (SQL-like: pop_max > 1000000 AND continent = 'Asia'). Returns the number matching and up to `limit` rows, each with its row number (_row; a layer's for select.rows) and a layer's location (_lon, _lat).",
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "layer": {"type": "string", "description": "Layer name or id"},
+                    "layer": {"type": "string", "description": "Layer name or id (or a standalone table's name, when no layer has it)"},
+                    "table": {"type": "string", "description": "A standalone table's name or id, such as a tool's output table (instead of layer)"},
                     "where": {"type": "string", "description": "A where clause; empty for all rows"},
                     "fields": {"type": "array", "items": {"type": "string"}, "description": "Only these fields (default all)"},
                     "order_by": {"type": "string", "description": "Sort by this field"},
                     "descending": {"type": "boolean"},
                     "selected": {"type": "boolean", "description": "Only the selected rows"},
                     "limit": {"type": "integer", "description": "At most this many rows (default 20, at most 200)"}
-                },
-                "required": ["layer"]
+                }
             }),
         },
         ToolDef {
@@ -577,16 +577,55 @@ fn describe_tool(a: &Value) -> Result<Value, String> {
     Ok(json!({"id": t.id, "name": t.name, "toolbox": t.toolbox, "summary": t.summary, "params": params}))
 }
 
-fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
-    let layer = a.get("layer").cloned().ok_or("layer is required")?;
-    let id = s.layer_id(&json!({"layer": layer}))?;
+/// The rows `read_features` reads: a vector layer's or a standalone table's.
+struct RowSource<'a> {
+    /// The reply's key for the name: `layer` or `table`.
+    kind: &'static str,
+    name: &'a str,
+    ds: &'a rustgis_engine::data::Dataset,
+    /// The layer's selected rows; a standalone table has no selection.
+    selection: Option<&'a [usize]>,
+}
+
+/// Resolves `read_features`' `table` (a standalone table's name or id) or `layer` (a layer's name
+/// or id). A `layer` text that names no layer but a standalone table reads the table: a tool's
+/// output table comes back by name, and a model passes that name as `layer` as readily as `table`.
+/// Layers come first, so a layer and a table sharing a name read the layer.
+fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
+    let table = |i: usize| {
+        s.project.tables.get(i).map(|t| RowSource { kind: "table", name: &t.name, ds: &t.dataset, selection: None }).ok_or("no such table")
+    };
+    if let Some(t) = a.get("table") {
+        return Ok(table(s.table_index(&json!({"table": t}))?)?);
+    }
+    let layer = a.get("layer").cloned().ok_or("layer (or table) is required")?;
+    let id = match s.layer_id(&json!({"layer": layer})) {
+        Ok(id) => id,
+        Err(e) => {
+            let by_name = layer.as_str().and_then(|n| s.project.tables.iter().position(|t| t.name.eq_ignore_ascii_case(n.trim())));
+            return match by_name {
+                Some(i) => Ok(table(i)?),
+                None => Err(e),
+            };
+        }
+    };
     let l = s.map().layer(id).ok_or("no such layer")?;
     if l.is_raster() {
         return Err(format!("{} is a raster layer; it has no rows (try the raster.info command)", l.name));
     }
-    let ds = &l.dataset;
+    Ok(RowSource { kind: "layer", name: &l.name, ds: &l.dataset, selection: Some(&l.selection) })
+}
+
+/// `read_features`: the rows of a layer or standalone table ([`row_source`]) that match `where` and
+/// `selected`, ordered by `order_by`, as `{layer | table, total, matched, rows}`. Only the first
+/// `limit` rows are returned, each with its `_row`, the chosen `fields` and a layer feature's
+/// `_lon`/`_lat`.
+fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
+    let src = row_source(s, a)?;
+    let (name, ds) = (src.name, src.ds);
     let mut rows: Vec<usize> = if a.get("selected").and_then(Value::as_bool) == Some(true) {
-        l.selection.iter().copied().filter(|&r| r < ds.features.len()).collect()
+        let sel = src.selection.ok_or_else(|| format!("{name} is a standalone table; it has no selection"))?;
+        sel.iter().copied().filter(|&r| r < ds.features.len()).collect()
     } else {
         (0..ds.features.len()).collect()
     };
@@ -599,11 +638,8 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
             let mut v = Vec::new();
             for n in names {
                 let n = n.as_str().ok_or("fields must be field names (strings)")?;
-                let i = ds
-                    .fields
-                    .iter()
-                    .position(|f| f.name.eq_ignore_ascii_case(n))
-                    .ok_or_else(|| format!("{} has no field '{n}'", l.name))?;
+                let i =
+                    ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("{name} has no field '{n}'"))?;
                 v.push(i);
             }
             v
@@ -620,8 +656,7 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
         } else {
             (by, a.get("descending").and_then(Value::as_bool) == Some(true))
         };
-        let fi =
-            ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{} has no field '{by}'", l.name))?;
+        let fi = ds.fields.iter().position(|f| f.name.eq_ignore_ascii_case(&by)).ok_or_else(|| format!("{name} has no field '{by}'"))?;
         // A total order (a partial one can make `sort_by` panic): numbers, then text, then empty
         // values.
         let key = |r: usize| -> (u8, f64, String) {
@@ -671,7 +706,11 @@ fn read_features(s: &Session, a: &Value) -> Result<Value, String> {
             Some(Value::Object(o))
         })
         .collect();
-    Ok(json!({"layer": l.name, "total": ds.features.len(), "matched": rows.len(), "rows": out}))
+    let mut v = json!({"total": ds.features.len(), "matched": rows.len(), "rows": out});
+    if let Some(o) = v.as_object_mut() {
+        o.insert(src.kind.into(), json!(name));
+    }
+    Ok(v)
 }
 
 /// The map as the model sees it at the start of a request: one line per layer.

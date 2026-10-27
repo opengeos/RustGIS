@@ -385,6 +385,53 @@ fn map_switch_and_remove_do_not_report_layers_added() {
     assert!(added.is_some_and(|a| !a.is_empty()), "buffer must name the layer it added: {buffered}");
 }
 
+/// A tool's output table is read back by the name `run_tool` gives, as `table` or as `layer` (the
+/// name a model passes as readily), without a layer's location columns; a table has no selection,
+/// and a map layer keeps its name over a table sharing it.
+#[test]
+fn read_features_reads_a_tools_output_table() {
+    let mut s = sample();
+    let t = |name: &str, args: Value| ToolCall { id: "x".into(), name: name.into(), args };
+    let stats = json!({"tool": "summaryStatistics", "params": {"input": "Countries", "field": "pop_est", "case": "continent"}});
+    let ran: Value = serde_json::from_str(&tools::run(&mut s, &t("run_tool", stats)).unwrap()).unwrap();
+    let name = ran["table"].as_str().map(str::to_string).unwrap_or_default();
+    assert!(!name.is_empty(), "run_tool must name the table it added: {ran}");
+    let groups = s.project.tables.last().map(|t| t.features.len()).unwrap_or_default();
+    assert!(groups > 1);
+    let id = s.project.tables.last().map(|t| t.id).unwrap_or_default();
+    for args in [
+        json!({"table": name}),
+        json!({"table": id}),
+        json!({"layer": name.to_uppercase()}),
+        json!({"layer": name, "where": "COUNT_pop_est > 0", "order_by": "SUM_pop_est DESC"}),
+    ] {
+        let read: Value = serde_json::from_str(&tools::run(&mut s, &t("read_features", args.clone())).unwrap()).unwrap();
+        assert_eq!(read["table"], json!(name), "{args}: {read}");
+        assert!(read.get("layer").is_none(), "{read}");
+        assert_eq!(read["total"].as_u64(), Some(groups as u64), "{read}");
+        let rows = read["rows"].as_array().cloned().unwrap_or_default();
+        assert!(!rows.is_empty() && rows.iter().all(|r| r.get("_lon").is_none() && r["continent"].is_string()), "{read}");
+    }
+    let sorted: Value =
+        serde_json::from_str(&tools::run(&mut s, &t("read_features", json!({"table": name, "order_by": "SUM_pop_est DESC"}))).unwrap())
+            .unwrap();
+    let sums: Vec<f64> = sorted["rows"].as_array().unwrap().iter().filter_map(|r| r["SUM_pop_est"].as_f64()).collect();
+    assert!(sums.windows(2).all(|w| w[0] >= w[1]), "{sums:?}");
+    let sel = tools::run(&mut s, &t("read_features", json!({"table": name, "selected": true})));
+    assert!(sel.as_ref().is_err_and(|e| e.contains("no selection")), "{sel:?}");
+    let missing = tools::run(&mut s, &t("read_features", json!({"layer": "No such thing"})));
+    assert!(missing.as_ref().is_err_and(|e| e.contains("no layer named")), "{missing:?}");
+    assert!(tools::run(&mut s, &t("read_features", json!({"table": "Countries"}))).is_err(), "a layer is not a table");
+    assert!(tools::run(&mut s, &t("read_features", json!({}))).is_err());
+    // A table named like a layer: `layer` reads the layer.
+    s.run("layer.addDataText", &json!({"fileName": "Cities.csv", "text": "k,v\na,1\n"})).unwrap();
+    let city: Value =
+        serde_json::from_str(&tools::run(&mut s, &t("read_features", json!({"layer": "Cities", "limit": 1}))).unwrap()).unwrap();
+    assert_eq!(city["layer"], json!("Cities"), "{city}");
+    let tab: Value = serde_json::from_str(&tools::run(&mut s, &t("read_features", json!({"table": "Cities"}))).unwrap()).unwrap();
+    assert_eq!((tab["table"].as_str(), tab["total"].as_u64()), (Some("Cities"), Some(1)), "{tab}");
+}
+
 #[test]
 fn geoprocessing_and_reading_data() {
     let mut s = sample();
