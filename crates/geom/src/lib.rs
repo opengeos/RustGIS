@@ -516,7 +516,7 @@ mod tests {
         assert!(perimeter_broken.is_nan() && area_broken.is_nan());
         // A single vertex keeps its zero; two vertices are a segment there and back (2d, no area).
         assert_eq!(wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0)]), (0.0, 0.0));
-        let (perimeter_two, area_two) = wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0), Coord::new(0.0, 1.0)]);
+        let (perimeter_two, area_two) = wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0), Coord::new(1.0, 0.0)]);
         assert!((perimeter_two - 2.0 * 111_319.490_8).abs() < 0.01, "{perimeter_two}");
         assert_eq!(area_two, 0.0);
         // Degenerate rings keep their zero, unless a vertex is broken: that is NaN, even in a short ring.

@@ -139,10 +139,13 @@ Spatial Join's **Largest overlap** still measures area on a sphere of radius 6,3
 differ from the ellipsoid by up to about 0.9 % (a small area near a pole). The same WGS 84
 measure backs the attribute table's **Calculate Geometry** (`edit.calculateGeometry`), the map's
 **Measure** tools on the Earth, and every network tool's edge and route lengths, so all of these
-read the same number for the same geometry, with one exception: a polygon ring with a full-turn
-(-180° to 180°) edge, such as a globe-wide band. The attribute table and the Measure tools
-measure it on the sphere, while **Calculate Geometry Attributes** unwraps it, so it reads near
-zero there. On the Moon or another body, the Measure tools measure on that body's sphere.
+read the same number for the same geometry, with two exceptions. A polygon ring with a full-turn
+(-180° to 180°) edge, such as a globe-wide band, is measured on the sphere by the attribute table
+and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it reads near zero
+there. A ring winding around a pole is measured as the region it traces by the attribute table
+(a ring that goes all the way round at 60° N gives the larger region), while **Calculate Geometry
+Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
+that body's sphere.
 
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
