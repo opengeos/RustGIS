@@ -18,12 +18,17 @@ Select a layer in Layers and open **Style › Symbology** (or the Symbology pane
   is not fully transparent. A layout legend can leave it out with **Hide other values** (see
   [Layouts](layouts.md)).
 - **Graduated Colors**: 1 to 12 classes of a numeric field by natural breaks (Jenks), equal
-  interval, quantile, geometric interval or standard deviation. Geometric interval makes class
+  interval, quantile, geometric interval, standard deviation, arithmetic progression or head/tail
+  breaks (the Method list is in alphabetical order). Geometric interval makes class
   widths grow by one ratio, for values piled up at the low end; for a field that reaches zero or
   below, the minimum is taken as if it sat at a hundredth of the range, so the widths grow by
   101^(1/classes). Standard deviation makes classes one deviation wide about the mean, and leaves
-  out a class no value falls in, so a skewed field can get fewer classes than asked. Manual keeps the
-  bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
+  out a class no value falls in, so a skewed field can get fewer classes than asked. Arithmetic
+  progression makes class widths grow by one step (1, 2, 3… units), for more detail among the low
+  values. Head/tail breaks splits at the mean, then at the mean of the values above it, and so on
+  while those stay under 40% of the values they were taken from: for a few very large values among
+  many small ones (city sizes, incomes). It sets its own number of classes, at most the number
+  asked. Manual keeps the bounds you type: each class's upper bound is a number to edit or take out, **Split the widest
   class** adds one, and the field's largest value closes the last class. If no field is
   chosen, the current renderer's field is kept when it is numeric; otherwise the first numeric
   field is used. If the layer has no numeric field, or the
@@ -302,6 +307,27 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Halo and letter spacing**: a halo is white behind dark text and dark behind light, and thin,
+  unless it is given a colour and a width of its own (Labeling pane › Symbol › **Halo color**,
+  **Halo width**: how far it reaches beyond the letters, 0–10 points). The letters can be set
+  apart, or closer with a negative spacing (**Letter spacing**, −5 to 50 points), along lines
+  too. The width and the spacing grow with the labels at a reference scale
+  (`labels.style={"layer": "Rivers", "haloColor": "#FFFFFF", "haloWidth": 1.4, "spacing": 0.5}`;
+  `"haloColor": ""` and `"haloWidth": null` go back to the automatic colour and the thin halo).
+- **Background**: a rectangle behind the text (Labeling pane › Symbol › **Background**), white
+  with a thin dark outline when turned on: its **Fill** and **Outline** (each can be none), the
+  outline's width, its padding across and up and down (how far it reaches past the text, 0–50
+  points) and its **Corner radius**. Other labels keep off it as they keep off a halo, and it
+  turns with a label along a line; a label curved along a line, character by character, has
+  none. Its sizes grow with the labels at a reference scale
+  (`labels.style={"layer": "Roads", "background": {"fill": "#FFFFFF", "stroke": "#262626", "strokeWidth": 0.3, "padding": [1.2, 0.3], "radius": 0.7}}`;
+  `"background": true` turns on the default one, `false` takes it away, and what an object leaves
+  out is kept).
+- **Offset**: a label moved from where its position puts it, right and down in points
+  (Labeling pane › Position › **Offset right**, **Offset down**, −200 to 200; negative moves it
+  left or up), growing with the labels at a reference scale. A label along a line isn't moved
+  (`labels.placement={"layer": "Cities", "position": "aboveRight", "offset": [5.7, -2.8]}`; an
+  offset can be given without a position).
 - **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol
   › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
   italic take the family's own bold and italic faces where it has them. The family is saved by

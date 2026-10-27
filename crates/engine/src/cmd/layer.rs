@@ -109,7 +109,7 @@ pub fn commands() -> Vec<C> {
         .when(need_layer),
         C::new("layer.symbology", "Symbology", "Style › Drawing", symbology)
             .when(need_feature_layer)
-            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
+            .params(r#"{"layer"?, "type": "single"|"unique"|"graduated"|"proportional", "field"?, "classes"?: 1..12, "method"?: "naturalBreaks"|"equalInterval"|"quantile"|"geometricInterval"|"standardDeviation"|"arithmeticProgression"|"headTailBreaks"|"manual", "breaks"?: [numbers] (manual: the classes' upper bounds, closed by the field's largest value), "ramp"?: string}"#),
         C::new("layer.ramp", "Color Scheme", "Style › Drawing", |s, p| {
             let r = s.ramp(s_req(p, "ramp")?)?;
             with(s, p, |l| match &mut l.raster {
@@ -333,7 +333,45 @@ pub fn commands() -> Vec<C> {
             // A family by name, whether or not this machine has it: the project may be drawn on
             // one that does. Blank goes back to the label font.
             let font = ps(p, "font").map(rustgis_map::symbology::font_name);
+            // A halo's own colour ("" or null: one standing out from the text), its width in points
+            // (null: the thin halo), and the letter spacing.
+            let halo_color = match p.get("haloColor") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(Value::String(c)) if c.trim().is_empty() => Some(None),
+                Some(_) => Some(Some(s.get_color(p, "haloColor")?.ok_or("haloColor must be #RRGGBB or #RRGGBBAA")?)),
+            };
+            let hw = rustgis_map::symbology::HALO_WIDTH;
+            let sp = (rustgis_map::layout::MIN_LETTER_SPACING, rustgis_map::layout::MAX_LETTER_SPACING);
+            let halo_width = match p.get("haloWidth") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(_) => {
+                    let w = f(p, "haloWidth").ok_or("haloWidth must be a number of points, or null")?;
+                    Some(Some(w.clamp(*hw.start(), *hw.end()) as f32))
+                }
+            };
+            let spacing = match p.get("spacing") {
+                None => None,
+                Some(_) => Some(f(p, "spacing").ok_or("spacing must be a number of points")?.clamp(sp.0, sp.1) as f32),
+            };
+            let background = match p.get("background") {
+                None => None,
+                Some(v) => Some(super::labels::background_change(v)?),
+            };
             super::labels::with_class(s, p, |c| {
+                if let Some(change) = &background {
+                    c.background = change(c.background.clone());
+                }
+                if let Some(v) = halo_color {
+                    c.halo_color = v;
+                }
+                if let Some(v) = halo_width {
+                    c.halo_width = v;
+                }
+                if let Some(v) = spacing {
+                    c.spacing = v;
+                }
                 if let Some(name) = font.clone() {
                     c.font = name;
                 }
@@ -355,7 +393,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font)}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "haloColor"?: "#RRGGBB"|"#RRGGBBAA"|"" (""/null: white or dark, whichever stands out from the text), "haloWidth"?: points 0-10|null (null: the thin halo), "spacing"?: points between letters (-5 to 50), "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font), "background"?: false|null (none) | true (white, a thin dark outline) | {"fill"?: "#RRGGBB"|"#RRGGBBAA"|"" ("": none), "stroke"?: colour|"" (the outline; "": none), "strokeWidth"?: points 0-10, "padding"?: [across, up and down] points 0-50, "radius"?: corner radius in points 0-50} (a rectangle behind the text; what isn't given is kept, or the default's)}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;

@@ -736,10 +736,24 @@ fn union_of(inp: &dyn Inputs, p: &Json, k: &str) -> Result<MultiPolygon<f64>, St
     Ok(union_all(polys.iter().flat_map(|m| m.0.iter())))
 }
 
-/// The part of a feature inside `mask` (polygons in Web Mercator, oriented as `union_all` leaves
-/// them), or outside it when `inside` is false. Inside, a polygon's overlap with it, a line's
-/// stretches in it, the points in it or on its edge; outside, the rest. `None` when nothing is
-/// left, or only a shared edge or corner.
+/// A feature as the overlay can take it: a feature of several polygons, which may overlap, unioned
+/// into one; any other as it is, so a single polygon's edges stay exactly where they are.
+fn dissolved(g: &Geometry) -> std::borrow::Cow<'_, Geometry> {
+    match g {
+        Geometry::Polygon(polys) if polys.len() > 1 => to_multipolygon(g)
+            .and_then(|m| from_multipolygon(&union_all(m.0.iter())))
+            .map_or(std::borrow::Cow::Borrowed(g), std::borrow::Cow::Owned),
+        _ => std::borrow::Cow::Borrowed(g),
+    }
+}
+
+/// The part of a feature inside `mask`, or outside it when `inside` is false. Inside, a polygon's
+/// overlap with it, a line's stretches in it, the points in it or on its edge; outside, the rest.
+/// `None` when nothing is left, or only a shared edge or corner.
+///
+/// The mask's polygons are in Web Mercator, oriented as `union_all` leaves them. The feature's may
+/// wind either way (the reference corpus has a clockwise parcel), but must not overlap each other:
+/// pass a feature of several polygons through [`dissolved`] first, once for all its masks.
 fn part(g: &Geometry, mask: &MultiPolygon<f64>, inside: bool) -> Option<Geometry> {
     match g {
         Geometry::Polygon(_) => {
@@ -775,7 +789,7 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let mut out = copy_schema(ds, out_name(p, format!("{}_Clip", ds.name)), ds.geometry_type);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(c) = f.geometry.as_ref().and_then(|g| part(g, &mask, true)) {
+        if let Some(c) = f.geometry.as_ref().and_then(|g| part(&dissolved(g), &mask, true)) {
             out.push(Some(c), f.attrs.clone());
         }
     }
@@ -798,7 +812,7 @@ fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 }
 
 /// An overlay polygon: its row in the overlay layer, its extent and its polygons in Web Mercator,
-/// oriented for the overlay.
+/// oriented for the overlay, its parts unioned when it has several (as Clip's mask is).
 struct Zone {
     row: usize,
     ext: Extent,
@@ -807,7 +821,7 @@ struct Zone {
 
 /// The overlay layer of an overlay tool (its `overlay` parameter), which must be polygons, and its
 /// (selected) features with geometry as [`Zone`]s, in order.
-fn zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
+fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
     let ov = input(inp, p, "overlay")?;
     if ov.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", ov.name));
@@ -816,7 +830,11 @@ fn zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), 
         .into_iter()
         .filter_map(|row| {
             let g = ov.features.get(row)?.geometry.as_ref()?;
-            Some(Zone { row, ext: g.extent(), poly: to_multipolygon(g)?.orient(Direction::Default) })
+            // Parts of one feature may overlap, which the overlay can't take as they are; one
+            // polygon is only oriented, so its edges stay exactly where they are.
+            let poly = to_multipolygon(g)?;
+            let poly = if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) };
+            Some(Zone { row, ext: g.extent(), poly })
         })
         .collect();
     Ok((ov, zones))
@@ -870,7 +888,8 @@ impl Overlay {
 /// polygon, in overlay order, with the attributes of both; then (Identity, Union) its part outside
 /// them all, with empty overlay attributes. Union then adds each overlay polygon's part outside
 /// every input polygon, with empty input attributes. Parts that only touch are left out, and
-/// features of one layer that overlap each other are not split against each other.
+/// features of one layer that overlap each other are not split against each other. Intersect
+/// leaves out input features without geometry; Identity and Union keep them, as they are.
 fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -879,20 +898,28 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
     if op == Overlay::Union && ds.geometry_type != GeometryType::Polygon {
         return Err(format!("'{}' is not a polygon layer", ds.name));
     }
-    let (ov, zones) = zones(inp, p)?;
+    let (ov, zones) = overlay_zones(inp, p)?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = overlay_schema(ds, ov, out_name(p, format!("{}_{}", ds.name, op.name())), ds.geometry_type);
     let zone_attrs = |z: &Zone| ov.features.get(z.row).map(|o| o.attrs.as_slice());
-    // For Union, the input polygons that overlap each zone.
-    let mut covering: Vec<Vec<MultiPolygon<f64>>> = vec![Vec::new(); if op == Overlay::Union { zones.len() } else { 0 }];
+    // For Union, the rows of the input polygons that overlap each zone.
+    let mut covering: Vec<Vec<usize>> = vec![Vec::new(); zones.len()];
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        let Some(g) = &f.geometry else { continue };
+        let Some(g) = &f.geometry else {
+            // Identity and Union keep every input feature: one without geometry, as it is.
+            if op != Overlay::Intersect {
+                out.push_next(None, overlay_row(ds, Some(&f.attrs), ov, None));
+            }
+            continue;
+        };
         let ext = g.extent();
+        // A feature of overlapping parts is unioned once, for all the zones it meets.
+        let whole = dissolved(g);
         let mut hit: Vec<usize> = Vec::new();
         for zi in index.candidates(&ext) {
             let Some(z) = zones.get(zi).filter(|z| ext.intersects(&z.ext)) else { continue };
-            if let Some(inside) = part(g, &z.poly, true) {
+            if let Some(inside) = part(&whole, &z.poly, true) {
                 out.push_next(Some(inside), overlay_row(ds, Some(&f.attrs), ov, zone_attrs(z)));
                 hit.push(zi);
             }
@@ -903,29 +930,36 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
         let rest = if hit.is_empty() {
             Some(g.clone())
         } else {
-            part(g, &union_all(hit.iter().filter_map(|zi| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false)
+            // The same mask the inside part was cut with, when one zone was hit: a union would move its
+            // edges by a rounding error, and a line along one could come out on both sides.
+            match hit.as_slice() {
+                [only] => zones.get(*only).and_then(|z| part(&whole, &z.poly, false)),
+                _ => part(&whole, &union_all(hit.iter().filter_map(|zi| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false),
+            }
         };
         if let Some(rest) = rest {
             out.push_next(Some(rest), overlay_row(ds, Some(&f.attrs), ov, None));
         }
-        if op == Overlay::Union
-            && let Some(poly) = to_multipolygon(g)
-        {
+        if op == Overlay::Union {
             for zi in hit {
                 if let Some(c) = covering.get_mut(zi) {
-                    c.push(poly.clone());
+                    c.push(r);
                 }
             }
         }
     }
-    for (z, inputs) in zones.iter().zip(&covering) {
-        let rest = if inputs.is_empty() {
-            from_multipolygon(&z.poly)
-        } else {
-            from_multipolygon(&z.poly.difference(&union_all(inputs.iter().flat_map(|m| m.0.iter()))))
-        };
-        if let Some(rest) = rest {
-            out.push_next(Some(rest), overlay_row(ds, None, ov, zone_attrs(z)));
+    if op == Overlay::Union {
+        for (z, inputs) in zones.iter().zip(&covering) {
+            let rest = if inputs.is_empty() {
+                from_multipolygon(&z.poly)
+            } else {
+                let polys: Vec<MultiPolygon<f64>> =
+                    inputs.iter().filter_map(|r| ds.features.get(*r)?.geometry.as_ref()).filter_map(to_multipolygon).collect();
+                from_multipolygon(&z.poly.difference(&union_all(polys.iter().flat_map(|m| m.0.iter()))))
+            };
+            if let Some(rest) = rest {
+                out.push_next(Some(rest), overlay_row(ds, None, ov, zone_attrs(z)));
+            }
         }
     }
     let n = out.features.len();
@@ -1761,7 +1795,11 @@ impl ExtentIndex {
         if !ext.intersects(&self.total) {
             return Vec::new();
         }
-        let ((x0, y0), (x1, y1)) = (self.key(ext.min_x, ext.min_y), self.key(ext.max_x, ext.max_y));
+        // Only the part of `ext` over the grid: a feature far larger than the indexed layer would
+        // otherwise reach cells up to the clamp, past the grid's own.
+        let t = &self.total;
+        let (min_x, min_y, max_x, max_y) = (ext.min_x.max(t.min_x), ext.min_y.max(t.min_y), ext.max_x.min(t.max_x), ext.max_y.min(t.max_y));
+        let ((x0, y0), (x1, y1)) = (self.key(min_x, min_y), self.key(max_x, max_y));
         let mut found = Vec::new();
         for x in x0..=x1 {
             for y in y0..=y1 {
@@ -3489,6 +3527,27 @@ mod tests {
     }
 
     #[test]
+    fn intersect_unions_an_overlay_feature_whose_parts_overlap() {
+        // One zone of two overlapping squares (x 0–2 and 1–3), as a file can hold it.
+        let ring =
+            |x: f64| vec![Coord::new(x, 0.0), Coord::new(x + 2.0, 0.0), Coord::new(x + 2.0, 2.0), Coord::new(x, 2.0), Coord::new(x, 0.0)];
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]])), vec![]);
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(sq(-1.0, 0.0, 5.0)), vec![]);
+        let m = Map(HashMap::from([("zones".to_string(), zones), ("parcels".to_string(), parcels)]));
+        let out = layer(crate::run("intersect", &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+        assert_eq!(out.features.len(), 1);
+        // The part is the zone's whole outline, x 0–3, once: the overlap is neither lost nor doubled.
+        use geo::Area;
+        let part = to_multipolygon(out.features[0].geometry.as_ref().unwrap()).unwrap();
+        let outline = vec![Coord::new(0.0, 0.0), Coord::new(3.0, 0.0), Coord::new(3.0, 2.0), Coord::new(0.0, 2.0), Coord::new(0.0, 0.0)];
+        let want = to_multipolygon(&Geometry::Polygon(vec![vec![outline]])).unwrap();
+        assert_eq!(part.0.len(), 1, "{part:?}");
+        assert!((part.unsigned_area() - want.unsigned_area()).abs() < 1e-6 * want.unsigned_area(), "{part:?}");
+    }
+
+    #[test]
     fn intersect_splits_points_by_each_polygon_they_fall_in() {
         let m = inputs();
         let out = layer(crate::run("intersect", &m, &serde_json::json!({"input": "pts", "overlay": "polys"})).unwrap());
@@ -3500,6 +3559,19 @@ mod tests {
             .map(|f| (f.attrs[0].as_f64().unwrap(), if let Value::Text(t) = &f.attrs[1] { t.as_str() } else { "" }))
             .collect();
         assert_eq!(rows, [(1.0, "a"), (2.0, "a"), (2.0, "a")]);
+    }
+
+    #[test]
+    fn extent_index_looks_only_at_its_own_cells() {
+        // 20 small extents in a 1° row: a grid of about 4 cells a side.
+        let index = ExtentIndex::new((0..20).map(|i| Extent::new(f64::from(i) * 0.05, 0.0, f64::from(i) * 0.05 + 0.01, 0.01)));
+        assert!(index.cell_size().is_some());
+        // A query far larger than the layer finds every feature once, in order.
+        assert_eq!(index.candidates(&Extent::new(-170.0, -80.0, 170.0, 80.0)), (0..20).collect::<Vec<_>>());
+        // A small one finds the features of its cell, not the whole row.
+        let near_start = index.candidates(&Extent::new(0.0, 0.0, 0.02, 0.005));
+        assert!(near_start.first() == Some(&0) && near_start.len() < 20, "{near_start:?}");
+        assert!(index.candidates(&Extent::new(5.0, 5.0, 6.0, 6.0)).is_empty());
     }
 
     #[test]
@@ -3529,6 +3601,66 @@ mod tests {
         assert!((rest.min_x - 0.0).abs() < 1e-9 && (rest.max_x - 1.0).abs() < 1e-9, "{rest:?}");
         assert_eq!(out.features[1].attrs[2..], [Value::Null, Value::Null]);
         assert_eq!(out.features[2].geometry, m.0["parcels"].features[1].geometry);
+    }
+
+    #[test]
+    fn identity_and_union_keep_input_features_without_geometry() {
+        let mut m = parcels_and_zones();
+        m.0.get_mut("parcels").unwrap().push(None, vec![Value::Text("p3".into()), Value::Text("lot".into())]);
+        for (tool, keys) in [("identity", vec!["p1|z1", "p1|", "p2|", "p3|"]), ("union", vec!["p1|z1", "p1|", "p2|", "p3|", "|z1", "|z2"])]
+        {
+            let out = layer(crate::run(tool, &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+            assert_eq!(overlay_keys(&out), keys, "{tool}");
+            let p3 = out.features.iter().find(|f| f.attrs.first() == Some(&Value::Text("p3".into()))).unwrap();
+            assert_eq!((p3.geometry.is_none(), &p3.attrs[1]), (true, &Value::Text("lot".into())), "{tool}");
+        }
+        let out = layer(crate::run("intersect", &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+        assert_eq!(overlay_keys(&out), ["p1|z1"]);
+    }
+
+    #[test]
+    fn identity_unions_an_input_feature_whose_parts_overlap() {
+        // One parcel of two overlapping squares (x 0–2 and 1–3), and a zone over its right edge.
+        let ring =
+            |x: f64| vec![Coord::new(x, 0.0), Coord::new(x + 2.0, 0.0), Coord::new(x + 2.0, 2.0), Coord::new(x, 2.0), Coord::new(x, 0.0)];
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]])), vec![]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(2.5, 0.0, 2.0)), vec![]);
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("identity", &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+        assert_eq!(out.features.len(), 2);
+        // The part outside is x 0–2.5 whole, the overlap (x 1–2) included.
+        use geo::Area;
+        let rest = to_multipolygon(out.features[1].geometry.as_ref().unwrap()).unwrap();
+        let outline = vec![Coord::new(0.0, 0.0), Coord::new(2.5, 0.0), Coord::new(2.5, 2.0), Coord::new(0.0, 2.0), Coord::new(0.0, 0.0)];
+        let want = to_multipolygon(&Geometry::Polygon(vec![vec![outline]])).unwrap();
+        assert_eq!(rest.0.len(), 1, "{rest:?}");
+        assert!((rest.unsigned_area() - want.unsigned_area()).abs() < 1e-6 * want.unsigned_area(), "{rest:?}");
+    }
+
+    #[test]
+    fn identity_keeps_a_line_along_a_zone_edge_once() {
+        // A road along the top edge of a zone, and on past its corner.
+        let mut roads = Dataset::new("roads", GeometryType::Polyline, vec![Field::new("id", FieldType::Text)]);
+        roads.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 2.0), Coord::new(3.0, 2.0)]])), vec![Value::Text("r".into())]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("zone", FieldType::Text)]);
+        zones.push(Some(sq(0.0, 0.0, 2.0)), vec![Value::Text("z".into())]);
+        let m = Map(HashMap::from([("roads".to_string(), roads), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("identity", &m, &serde_json::json!({"input": "roads", "overlay": "zones"})).unwrap());
+        // The stretch on the edge is inside (x 0–2), once; the rest (x 2–3) outside.
+        let spans: Vec<(f64, f64, &Value)> = out
+            .features
+            .iter()
+            .map(|f| {
+                let e = f.geometry.as_ref().unwrap().extent();
+                (e.min_x, e.max_x, &f.attrs[1])
+            })
+            .collect();
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(near(spans[0].0, 0.0) && near(spans[0].1, 2.0) && *spans[0].2 == Value::Text("z".into()), "{spans:?}");
+        assert!(near(spans[1].0, 2.0) && near(spans[1].1, 3.0) && *spans[1].2 == Value::Null, "{spans:?}");
     }
 
     #[test]

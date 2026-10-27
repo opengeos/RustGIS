@@ -278,7 +278,7 @@ pub fn commands() -> Vec<C> {
                 .iter()
                 .filter_map(|(id, c)| s.map().layer(*id).map(|l| json!({"layer": l.name, "added": c.added, "modified": c.modified, "deleted": c.deleted})))
                 .collect();
-            Ok(json!({"unsaved": s.dirty, "layers": rows}))
+            Ok(json!({"unsaved": s.dirty(), "layers": rows}))
         })
         .view(),
         C::new("edit.template", "Manage Templates", "Edit › Manage Edits", template).when(need_feature_layer).params(
