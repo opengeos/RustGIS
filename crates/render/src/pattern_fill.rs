@@ -67,7 +67,7 @@ impl Ctx<'_> {
                         1.0,
                         t,
                     );
-                    let fill = Paint { shader, anti_alias: true, ..Paint::default() };
+                    let fill = Paint { shader, anti_alias: crate::antialiased(), ..Paint::default() };
                     pm.fill_path(&path, &fill, FillRule::EvenOdd, Transform::identity(), None);
                 }
             }
@@ -94,7 +94,7 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
             let period = spacing * ppp;
             let k = (MAX_TILE_PX / period).min(1.0);
             let h = (period * k).ceil().max(1.0);
-            let tile = tile(&key(&pattern, color, ppp), 4.0, h, |pm| {
+            let tile = tile(&key(&pattern, color, ppp), true, 4.0, h, |pm| {
                 let w = (width * ppp * k).max(0.0);
                 let mid = h / 2.0;
                 if let Some(r) = tiny_skia::Rect::from_ltrb(-1.0, mid - w / 2.0, 5.0, mid + w / 2.0) {
@@ -116,7 +116,13 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
             let k = (MAX_TILE_PX / tw.max(th)).min(1.0);
             let symbol =
                 Symbol { fill: color, stroke: outline.unwrap_or(Rgba::new(0, 0, 0, 0)), stroke_width: outline_width, size, marker };
-            let tile = tile(&key(&pattern, color, ppp), (tw * k).ceil().max(1.0), (th * k).ceil().max(1.0), |pm| {
+            // A character marker drawn while the installed families are still being indexed is
+            // in the label font for now (as `glyphs::shape` keeps none then): not kept either.
+            let settled = match marker {
+                Marker::Char(g) => crate::text::marker_font(g.font.as_str()).1,
+                _ => true,
+            };
+            let tile = tile(&key(&pattern, color, ppp), settled, (tw * k).ceil().max(1.0), (th * k).ceil().max(1.0), |pm| {
                 for (col, row) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                     // A marker in each cell's middle, odd rows shifted across, odd columns down;
                     // drawn again a tile away each way where it crosses the tile's edges.
@@ -214,9 +220,9 @@ fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Key {
     Key { bits, marker }
 }
 
-/// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time; `None` for
-/// one that can't be made.
-fn tile(key: &Key, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
+/// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time (and kept
+/// when `keep`); `None` for one that can't be made.
+fn tile(key: &Key, keep: bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
     if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
         return t;
     }
@@ -227,6 +233,9 @@ fn tile(key: &Key, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc
             draw(&mut pm);
             Arc::new(pm)
         });
+    if !keep {
+        return made;
+    }
     let size = made.as_ref().map_or(0, |pm| pm.data().len());
     TILES.with(|t| {
         let mut t = t.borrow_mut();
@@ -254,7 +263,7 @@ mod tests {
         let hatch = |i: u32| key(&FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 }, Rgba(i.to_le_bytes()), 1.0);
         let kept = |i: u32| TILES.with(|t| t.borrow().by_key.contains_key(&hatch(i)));
         for i in 0..=MAX_TILES as u32 {
-            assert!(tile(&hatch(i), 4.0, 4.0, |_| {}).is_some());
+            assert!(tile(&hatch(i), true, 4.0, 4.0, |_| {}).is_some());
         }
         assert!(!kept(0), "the oldest made room");
         assert!(kept(1) && kept(MAX_TILES as u32), "the rest stay");
@@ -274,6 +283,11 @@ mod tests {
         };
         let red = Rgba::rgb(255, 0, 0);
         assert!(key(&dots(Marker::Circle), red, 1.0) != key(&dots(Marker::Square), red, 1.0));
+        // One not to keep (a character marker drawn before the fonts are indexed) is drawn and
+        // not kept.
+        let unsettled = hatch(u32::MAX);
+        assert!(tile(&unsettled, false, 4.0, 4.0, |_| {}).is_some());
+        assert!(!kept(u32::MAX));
     }
 
     #[test]

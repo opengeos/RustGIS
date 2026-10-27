@@ -36,7 +36,7 @@ pub struct FillLayer {
 
 /// What a fill draws inside its polygon.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum FillPattern {
     /// The whole polygon in its colour.
     #[default]
