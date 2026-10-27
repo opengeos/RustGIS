@@ -337,7 +337,10 @@ fn offset(p: Node, geometry: Option<&str>, layer: &str, report: &mut Report) -> 
             [x, y].map(|v| within(points(v, unit, "label offsets", layer, report)))
         }
         "0" | "6" if geometry == Some("Point") => match num("dist").filter(|d| *d != 0.0) {
-            Some(d) => [0.0, -within(points(d, p.attribute("distUnits").unwrap_or("MM"), "label distances", layer, report))],
+            Some(d) => {
+                report.approximated(layer, "label distances round points, moved straight up");
+                [0.0, -within(points(d, p.attribute("distUnits").unwrap_or("MM"), "label distances", layer, report))]
+            }
             None => [0.0; 2],
         },
         _ => [0.0; 2],

@@ -3270,6 +3270,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                 // view, wherever its label point is.
                 let along_line = |placement: LabelPlacement, g: &Geometry| placement.along_line() && matches!(g, Geometry::Line(_));
                 let any_along = labels.in_order().zip(&label_fields).any(|(c, f)| f.is_some() && c.placement.along_line());
+                // How far a class moves its labels at most (points, as placed below): a point that
+                // far out of view may still have its label in it.
+                let offset_reach = labels
+                    .in_order()
+                    .zip(&label_fields)
+                    .filter(|(_, f)| f.is_some())
+                    .map(|(c, _)| c.offset[0].abs().max(c.offset[1].abs()) * 1.33 * label_factor)
+                    .filter(|r| r.is_finite())
+                    .fold(0.0, f32::max);
+                let offset_reach = f64::from(offset_reach);
+                let (vw, vh) = (ctx.view.width, ctx.view.height);
                 for (row, g) in geoms.iter().enumerate() {
                     let Some(g) = g else { continue };
                     if rows.get(row) != Some(&true) {
@@ -3279,7 +3290,14 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // Where the label point is on the screen, `None` when it is out of view (or
                     // behind the globe): then only a line labelled along it can be, on its
                     // stretch in view.
-                    let point = if globe.is_some() || ctx.cull.contains(c) { ctx.screen(c) } else { None };
+                    let point = if globe.is_some() || ctx.cull.contains(c) {
+                        ctx.screen(c)
+                    } else if offset_reach > 0.0 {
+                        let r = offset_reach;
+                        ctx.screen(c).filter(|&(x, y)| x >= -r && y >= -r && x <= vw + r && y <= vh + r)
+                    } else {
+                        None
+                    };
                     let line_in_view = || globe.is_some() || ctx.cull.intersects(&extents.get(row).copied().unwrap_or_else(|| g.extent()));
                     if point.is_none() && !(any_along && matches!(g, Geometry::Line(_)) && line_in_view()) {
                         continue;
@@ -4192,9 +4210,11 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         let th = text::block_height(&l.text, l.size);
         // A halo drawn at a width of its own reaches past the letters (points × 1.33, as the text's
         // size and the drawing have it): another label's text must not fall under it. A width
-        // kept with the halo turned off reserves nothing.
-        let halo = text::drawn_halo_reach(l).max(text::background_reach(l));
-        let p = l.collide.text_padding.clamp(0.0, 100.0) + halo;
+        // kept with the halo turned off reserves nothing. A background reaches as far as its
+        // padding across, and up and down.
+        let halo = text::drawn_halo_reach(l);
+        let [across, up_down] = text::background_reach(l).map(|r| l.collide.text_padding.clamp(0.0, 100.0) + halo.max(r));
+        let p = across.max(up_down);
         let cx = l.center_x();
         if !l.glyphs.is_empty() {
             // A curved label: a square round each character, as tall as the text.
@@ -4220,7 +4240,7 @@ fn label_boxes(l: &PlacedLabel) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
                     text.push([x - r, y - r, x + r, y + r]);
                 }
             }
-            None => text.push([cx - tw / 2.0 - p, l.y - th / 2.0 - p, cx + tw / 2.0 + p, l.y + th / 2.0 + p]),
+            None => text.push([cx - tw / 2.0 - across, l.y - th / 2.0 - up_down, cx + tw / 2.0 + across, l.y + th / 2.0 + up_down]),
         }
     }
     let icon = l
@@ -6723,7 +6743,7 @@ mod tests {
         assert!(!plain.pixels().iter().any(|p| yellow(*p)));
         let nothing = rustgis_map::LabelBackground { fill: None, stroke: None, ..bg.clone() };
         assert_eq!(drawn(&label(Some(nothing.clone()))).data(), plain.data());
-        assert_eq!(text::background_reach(&label(Some(nothing))), 0.0);
+        assert_eq!(text::background_reach(&label(Some(nothing))), [0.0; 2]);
         // Turned along a line, it turns with the text.
         let turned = drawn(&PlacedLabel { angle: Some(0.6), ..l.clone() });
         assert!(turned.pixel(60, 50).is_some_and(|p| yellow(p) || p.red() < 40), "{:?}", turned.pixel(60, 50));
@@ -6735,11 +6755,13 @@ mod tests {
         assert!(!drawn(&curved).pixels().iter().any(|p| yellow(*p)));
         // Its reach widens the box other labels keep off: a label just past the text but on the
         // background is placed beside the plain one, not beside the one with a background.
-        let reach = text::background_reach(&l);
+        let [reach, up_down] = text::background_reach(&l);
         assert!((reach - (6.0 * 1.33 + 0.75 * 1.33)).abs() < 0.01, "{reach}");
         let (plain_box, _) = label_boxes(&label(None));
         let (bg_box, _) = label_boxes(&l);
         assert!((plain_box[0][0] - bg_box[0][0] - reach).abs() < 0.01, "{plain_box:?} {bg_box:?}");
+        // Up and down only as far as it reaches there: less padding than across, less kept off.
+        assert!(up_down < reach && (plain_box[0][1] - bg_box[0][1] - up_down).abs() < 0.01, "{up_down} {plain_box:?} {bg_box:?}");
         let beside = |first: PlacedLabel| {
             let next = PlacedLabel { x: first.x + w + 4.0, ..label(None) };
             place_labels(vec![(first, 2.0, (0, 0, 0)), (next, 1.0, (0, 1, 0))], Vec::new(), 400.0, 100.0, false).labels.len()
@@ -6787,6 +6809,18 @@ mod tests {
         m.layer_mut(id).unwrap().labels.default.offset = [6.0, -3.0];
         let (big2, _) = at(&mut m);
         assert!((big2.0 - big.0 - 2.0 * 6.0 * 1.33).abs() < 0.01, "{big:?} → {big2:?}");
+        // A point 30 points left of the view (past the culling margin) is labelled when its offset
+        // brings the label into it.
+        let mut d = Dataset::new("edge", GeometryType::Point, vec![Field::new("name", FieldType::Text)]);
+        d.push(Some(Geometry::Point(Coord::new(-3.1, 0.0))), vec![Value::Text("Elgg".into())]);
+        let edge = m.add_dataset(d);
+        let l = m.layer_mut(edge).unwrap();
+        l.labels.enabled = true;
+        l.labels.default.field = "name".into();
+        let shown = |m: &mut Map| render(m, &view).unwrap().labels.iter().find(|l| l.text == "Elgg").map(|l| l.x);
+        assert_eq!(shown(&mut m), None);
+        m.layer_mut(edge).unwrap().labels.default.offset = [100.0, 0.0];
+        assert!(shown(&mut m).is_some_and(|x| x > 0.0 && x < 400.0), "{:?}", shown(&mut m));
     }
 
     #[test]

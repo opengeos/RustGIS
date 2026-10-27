@@ -123,7 +123,7 @@ near as it can, or left out, and said: the import's notes list, layer by layer, 
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
 over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
-and polygons, and wrapping, values outside a graduated renderer's ranges in its first or last class, file options
+and polygons, a distance around points moved straight up, and wrapping, values outside a graduated renderer's ranges in its first or last class, file options
 such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS

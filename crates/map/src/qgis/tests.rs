@@ -441,7 +441,8 @@ fn a_labels_background_and_offset_carry_over_in_their_units() {
     assert_eq!(c.offset, [0.0; 2]);
     assert!(report.notes.iter().any(|n| n.text.contains("label distances")), "{:?}", report.notes);
 
-    // In a project, a point layer's distance round its points: the label (above them) that far up.
+    // In a project, a point layer's distance round its points: the label (above them) that far up,
+    // noted, as QGIS puts it out diagonally.
     let qgs = |geometry: &str| {
         format!(
             r#"<qgis version="4.2.3"><projectlayers><maplayer type="vector" geometry="{geometry}" labelsEnabled="1"><id>p</id><datasource>/d/p.shp</datasource><layername>P</layername><provider>ogr</provider>
@@ -452,7 +453,7 @@ fn a_labels_background_and_offset_carry_over_in_their_units() {
     let p = read_project(&qgs("Point"), "", &mut report).unwrap();
     let c = &p.layers[0].style.labels.as_ref().unwrap().default;
     assert!(c.offset[0] == 0.0 && near(c.offset[1], -mm(1.5)), "{:?}", c.offset);
-    assert!(!report.notes.iter().any(|n| n.text.contains("label distances")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.text == "label distances round points, moved straight up"), "{:?}", report.notes);
     let mut report = Report::default();
     let p = read_project(&qgs("Polygon"), "", &mut report).unwrap();
     assert_eq!(p.layers[0].style.labels.as_ref().unwrap().default.offset, [0.0; 2]);

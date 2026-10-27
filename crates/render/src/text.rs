@@ -449,13 +449,14 @@ pub fn background_box(l: &PlacedLabel) -> Option<[f32; 4]> {
 }
 
 /// How far a label's background, its outline's outer half included, reaches past the box its
-/// text collides with (points), none without one: other labels keep off it as off a halo.
-pub fn background_reach(l: &PlacedLabel) -> f32 {
-    let (Some([x0, y0, _, y1]), Some(b)) = (background_box(l), l.background.as_ref()) else { return 0.0 };
+/// text collides with (points: across, and up and down), none without one: other labels keep off
+/// it as off a halo.
+pub fn background_reach(l: &PlacedLabel) -> [f32; 2] {
+    let (Some([x0, y0, _, y1]), Some(b)) = (background_box(l), l.background.as_ref()) else { return [0.0; 2] };
     let outline = if b.stroke.is_some_and(|s| s.a() > 0) { b.stroke_width * 1.33 / 2.0 } else { 0.0 };
     let across = l.center_x() - label_width(l) / 2.0 - x0;
     let up_down = (y1 - y0) / 2.0 - block_height(&l.text, l.size) / 2.0;
-    (across.max(up_down) + outline).max(0.0)
+    [across, up_down].map(|r| (r + outline).max(0.0))
 }
 
 /// Draws a label's background (logical coordinates, upright) at `ppp` pixels a point.
@@ -642,7 +643,10 @@ fn draw_turned(pm: &mut Pixmap, l: &PlacedLabel, angle: f32, ppp: f32, ink: Ink)
     let (w, h) = (label_width(l), block_height(&l.text, l.size).max(line_pitch(l.size)));
     // Room for the halo, and for the glyphs reaching past the line.
     // (The halo is drawn at most MAX_HALO_PX wide, so no more room is kept for it.)
-    let pad = 4.0 + l.size * 0.5 + drawn_halo_reach(l).min(MAX_HALO_PX / ppp.max(f32::EPSILON)) + background_reach(l);
+    let pad = 4.0
+        + l.size * 0.5
+        + drawn_halo_reach(l).min(MAX_HALO_PX / ppp.max(f32::EPSILON))
+        + background_reach(l).into_iter().fold(0.0, f32::max);
     let (pw, ph) = (((w + 2.0 * pad) * ppp).ceil(), ((h + 2.0 * pad) * ppp).ceil());
     if !(pw.is_finite() && ph.is_finite()) || pw > 4096.0 || ph > 4096.0 {
         return;
