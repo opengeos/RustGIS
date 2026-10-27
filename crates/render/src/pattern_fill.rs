@@ -6,25 +6,36 @@
 //! hatch's angle.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use rustgis_geom::Coord;
 use rustgis_map::fills::{FillLayer, FillPattern};
-use rustgis_map::{Rgba, Symbol};
+use rustgis_map::{Marker, Rgba, Symbol};
 use tiny_skia::{FillRule, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::{Ctx, paint};
 
-/// The most pattern tiles kept (they are kept between frames: a map's patterns are few).
-const MAX_TILES: usize = 64;
+/// The most pattern tiles kept between frames, and the most bytes they take: past either, the
+/// oldest go first (a map with many hatched classes, each colour a tile, keeps most of them
+/// rather than drawing them again each frame).
+const MAX_TILES: usize = 1024;
+const MAX_TILE_BYTES: usize = 64 << 20;
 /// The longest side of a tile in pixels: a coarser pattern is drawn at a lower resolution and
 /// scaled up, so a tile never takes more than a megabyte.
 const MAX_TILE_PX: f32 = 512.0;
 
+/// The pattern tiles drawn so far, by what they draw at what size, the order they were made in,
+/// and the bytes they take.
+#[derive(Default)]
+struct Tiles {
+    by_key: HashMap<Key, Option<Arc<Pixmap>>>,
+    order: VecDeque<Key>,
+    bytes: usize,
+}
+
 thread_local! {
-    /// Pattern tiles drawn so far, by what they draw at what size.
-    static TILES: RefCell<HashMap<Vec<u32>, Option<Arc<Pixmap>>>> = RefCell::new(HashMap::new());
+    static TILES: RefCell<Tiles> = RefCell::new(Tiles::default());
 }
 
 impl Ctx<'_> {
@@ -132,26 +143,42 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
     }
 }
 
-/// What a tile draws at what size (and whether antialiased), as its cache key.
-fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Vec<u32> {
-    let mut k = vec![u32::from_le_bytes(color.0), ppp.to_bits(), u32::from(crate::antialiased())];
-    match *pattern {
-        FillPattern::Solid => k.push(0),
-        FillPattern::Hatch { spacing, width, .. } => k.extend([1, spacing.to_bits(), width.to_bits()]),
-        FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, .. } => {
-            k.extend([2, size.to_bits(), outline_width.to_bits(), outline.map_or(0, |o| u32::from_le_bytes(o.0))]);
-            k.extend(spacing.iter().chain(&displacement).map(|v| v.to_bits()));
-            // (The marker's shape, by its debug form: a few kinds and a character.)
-            k.extend(format!("{marker:?}").bytes().map(u32::from));
+/// What a tile draws at what size (and whether antialiased): its colour, size and kind, and the
+/// pattern's numbers by their bits; a dot's marker.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Key {
+    bits: [u32; 11],
+    marker: Option<Marker>,
+}
+
+/// The cache key of a tile (made for each polygon drawn: no allocation).
+fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Key {
+    let mut bits = [0; 11];
+    bits[..3].copy_from_slice(&[u32::from_le_bytes(color.0), ppp.to_bits(), u32::from(crate::antialiased())]);
+    let marker = match *pattern {
+        FillPattern::Solid => None,
+        FillPattern::Hatch { spacing, width, .. } => {
+            bits[3..6].copy_from_slice(&[1, spacing.to_bits(), width.to_bits()]);
+            None
         }
-    }
-    k
+        FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, .. } => {
+            bits[3..7].copy_from_slice(&[2, size.to_bits(), outline_width.to_bits(), outline.map_or(0, |o| u32::from_le_bytes(o.0))]);
+            bits[7..11].copy_from_slice(&[
+                spacing[0].to_bits(),
+                spacing[1].to_bits(),
+                displacement[0].to_bits(),
+                displacement[1].to_bits(),
+            ]);
+            Some(marker)
+        }
+    };
+    Key { bits, marker }
 }
 
 /// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time; `None` for
 /// one that can't be made.
-fn tile(key: &[u32], w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
-    if let Some(t) = TILES.with(|t| t.borrow().get(key).cloned()) {
+fn tile(key: &Key, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
+    if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
         return t;
     }
     let made = (w.is_finite() && h.is_finite() && w <= MAX_TILE_PX + 1.0 && h <= MAX_TILE_PX + 1.0)
@@ -161,12 +188,52 @@ fn tile(key: &[u32], w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<A
             draw(&mut pm);
             Arc::new(pm)
         });
+    let size = made.as_ref().map_or(0, |pm| pm.data().len());
     TILES.with(|t| {
         let mut t = t.borrow_mut();
-        if t.len() >= MAX_TILES {
-            t.clear();
+        // The oldest make room, one at a time, so the rest stay.
+        while !t.order.is_empty() && (t.order.len() >= MAX_TILES || t.bytes + size > MAX_TILE_BYTES) {
+            if let Some(old) = t.order.pop_front()
+                && let Some(Some(pm)) = t.by_key.remove(&old)
+            {
+                t.bytes = t.bytes.saturating_sub(pm.data().len());
+            }
         }
-        t.insert(key.to_vec(), made.clone());
+        t.bytes += size;
+        t.order.push_back(key.clone());
+        t.by_key.insert(key.clone(), made.clone());
     });
     made
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_full_tile_cache_lets_its_oldest_go_and_keeps_the_rest() {
+        let hatch = |i: u32| key(&FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 }, Rgba(i.to_le_bytes()), 1.0);
+        let kept = |i: u32| TILES.with(|t| t.borrow().by_key.contains_key(&hatch(i)));
+        for i in 0..=MAX_TILES as u32 {
+            assert!(tile(&hatch(i), 4.0, 4.0, |_| {}).is_some());
+        }
+        assert!(!kept(0), "the oldest made room");
+        assert!(kept(1) && kept(MAX_TILES as u32), "the rest stay");
+        TILES.with(|t| {
+            let t = t.borrow();
+            assert_eq!((t.by_key.len(), t.order.len(), t.bytes), (MAX_TILES, MAX_TILES, MAX_TILES * 4 * 4 * 4));
+        });
+        // The key of a dot pattern tells its markers apart.
+        let dots = |marker| FillPattern::Dots {
+            marker,
+            size: 3.0,
+            outline: None,
+            outline_width: 0.0,
+            spacing: [10.0, 10.0],
+            displacement: [5.0, 0.0],
+            offset: [0.0, 0.0],
+        };
+        let red = Rgba::rgb(255, 0, 0);
+        assert!(key(&dots(Marker::Circle), red, 1.0) != key(&dots(Marker::Square), red, 1.0));
+    }
 }

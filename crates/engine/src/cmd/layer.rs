@@ -646,9 +646,10 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
             match o.get(k) {
                 None | Some(Value::Null) => Ok(default),
                 Some(Value::Array(a)) => match a.as_slice() {
-                    [x, y] => Ok([number(x), number(y)])
-                        .and_then(|[x, y]| Ok([x.ok_or(())?, y.ok_or(())?]))
-                        .map_err(|()| format!("fill {n}: {k} is a number or [across, down]")),
+                    [x, y] => match (number(x), number(y)) {
+                        (Some(x), Some(y)) => Ok([x, y]),
+                        _ => Err(format!("fill {n}: {k} is a number or [across, down]")),
+                    },
                     _ => Err(format!("fill {n}: {k} is a number or [across, down]")),
                 },
                 Some(v) => number(v).map(|x| [x, x]).ok_or_else(|| format!("fill {n}: {k} is a number or [across, down]")),

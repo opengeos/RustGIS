@@ -140,7 +140,7 @@ impl FillLayer {
             FillPattern::Solid => shown,
             FillPattern::Hatch { width, .. } => shown && width > 0.0,
             FillPattern::Dots { size, outline, outline_width, .. } => {
-                size > 0.0 && (shown || outline.is_some_and(|o| o.a() > 0) && outline_width > 0.0)
+                size > 0.0 && (shown || (outline.is_some_and(|o| o.a() > 0) && outline_width > 0.0))
             }
         }
     }

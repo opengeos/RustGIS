@@ -3158,12 +3158,17 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         }
                         // Its symbol, and the layer's stacked strokes or the feature's class's own.
                         let (sym, strokes) = layer.style(row);
+                        // A polygon's stacked fills (its class's, else the layer's), looked up once;
+                        // none in wireframe, which draws outlines only.
+                        let fills = if has_fills && !ctx.wireframe && matches!(g, Geometry::Polygon(_)) { layer.fills(row) } else { &[] };
                         // A feature under a pixel across: blend its coverage into the pixels it touches
                         // (a dense layer seen whole is mostly these, and a path each is slow).
-                        // Not stacked strokes: a splat would draw them unshifted, in one colour.
+                        // Not stacked strokes or fills: a splat would draw them unshifted, or in the
+                        // symbol's fill colour.
                         if globe.is_none()
                             && !layer.graphics
                             && strokes.is_empty()
+                            && fills.is_empty()
                             && let Some(e) = extents.get(row)
                             && ctx.splat(dest, e, g, &sym)
                         {
@@ -3178,9 +3183,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             }
                             Geometry::Line(parts) if !strokes.is_empty() && levels => stacked.push((parts, sym, strokes)),
                             Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(ctx, dest, parts, &sym, strokes),
-                            Geometry::Polygon(polys) if has_fills && !ctx.wireframe && !layer.fills(row).is_empty() => {
-                                ctx.filled(dest, polys, &sym, layer.fills(row))
-                            }
+                            Geometry::Polygon(polys) if !fills.is_empty() => ctx.filled(dest, polys, &sym, fills),
                             _ => ctx.feature(dest, g, &sym),
                         }
                     }
@@ -6066,6 +6069,42 @@ mod tests {
         m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol::default_for(GeometryType::Polygon, id));
         m.layer_mut(id).unwrap().fill_layers.clear();
         assert_eq!(rgb(&render(&mut m, &view).unwrap(), 100, 100), plain);
+    }
+
+    #[test]
+    fn a_polygon_under_a_pixel_is_drawn_with_its_stacked_fills() {
+        // Smaller than a pixel (about 0.7 across), it isn't blended in the symbol's fill colour:
+        // its own solid fill shows.
+        use rustgis_map::fills::{FillLayer, FillPattern};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("specks", GeometryType::Polygon, vec![]);
+        let (x0, x1, y0, y1) = (-0.0045, 0.0045, -0.0045, 0.0045);
+        let ring = vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 20.0, height: 20.0, pixels_per_point: 1.0, camera, sky: false };
+        let symbol = rustgis_map::Symbol {
+            fill: Rgba::rgb(0, 0, 255),
+            stroke_width: 0.0,
+            ..rustgis_map::Symbol::default_for(GeometryType::Polygon, id)
+        };
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol);
+        let ink = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            r.pixmap
+                .pixels()
+                .iter()
+                .filter(|p| p.red() < 250 || p.green() < 250 || p.blue() < 250)
+                .map(|p| (p.red(), p.blue()))
+                .collect::<Vec<_>>()
+        };
+        let plain = ink(&mut m);
+        assert!(!plain.is_empty() && plain.iter().all(|(r, b)| b >= r), "the symbol's blue: {plain:?}");
+        m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(Rgba::rgb(255, 0, 0)), pattern: FillPattern::Solid }];
+        let filled = ink(&mut m);
+        assert!(!filled.is_empty() && filled.iter().all(|(r, b)| r > b), "its red fill: {filled:?}");
     }
 
     #[test]

@@ -94,7 +94,7 @@ pub(crate) fn fills_editor(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tok
                         for (k, label, _) in &classes {
                             // A class with fills of its own is marked.
                             let has_own = l.renderer.class_fills(k).is_ok_and(|f| !f.is_empty());
-                            let text = if has_own { format!("{label} •") } else { label.clone() };
+                            let text = if has_own { crate::i18n::fmt("{label} •", &[("label", label)]) } else { label.clone() };
                             if ui.selectable_label(class == Some(k), text).clicked() {
                                 ui.data_mut(|d| d.insert_temp(picked_id, Some(k.clone())));
                             }

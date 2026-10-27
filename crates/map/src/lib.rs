@@ -569,6 +569,10 @@ impl Layer {
         if self.graphics {
             return &[];
         }
+        // (A layer whose classes have none of their own isn't classed for them.)
+        if !self.renderer.has_class_fills() {
+            return &self.fill_layers;
+        }
         self.renderer.fills_for(&self.dataset, row).unwrap_or(&self.fill_layers)
     }
 
