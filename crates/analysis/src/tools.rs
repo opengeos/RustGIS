@@ -2045,7 +2045,10 @@ fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let (t_ext, t_geo) = (g.extent(), to_geo(g));
             let (idx, d) = nearby.closest(g, &t_ext, &t_geo, limit, same.then_some(r))?;
             let j = feats.get(idx)?;
-            let at = if d > 0.0 { crate::join::nearest_points(g, j.geom).map(|(_, q)| q) } else { shared_point(g, &t_geo, j.geom, &j.geo) };
+            // Where they touch, a point they share; else, or when none is found in the map's plane (the
+            // same place at −180° and 180°), the nearest points' pair.
+            let shared = if d > 0.0 { None } else { shared_point(g, &t_geo, j.geom, &j.geo) };
+            let at = shared.or_else(|| crate::join::nearest_points(g, j.geom).map(|(_, q)| q));
             // The plane's longitudes run on past ±180°, and so can a shared point's: back within
             // [−180°, 180°).
             let at = at.map(|c| Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y));
@@ -3882,6 +3885,16 @@ mod tests {
         assert_eq!((fid, d), (Some(1), Some(0.0)));
         // 200° is the meridian of −160°: the shared point comes back in [−180°, 180°) as the nearest points do.
         assert!((x.unwrap() + 160.0).abs() < 1e-7 && y.unwrap().abs() < 1e-7, "{x:?} {y:?}");
+    }
+
+    #[test]
+    fn near_gives_a_point_for_the_same_place_on_both_sides_of_the_antimeridian() {
+        let m = Map(HashMap::from([("a".to_string(), points("a", &[(180.0, 0.0)])), ("b".to_string(), points("b", &[(-180.0, 0.0)]))]));
+        let out = layer(crate::run("near", &m, &serde_json::json!({"input": "a", "near": "b", "units": "Meters"})).unwrap());
+        let (fid, d, x, y) = near_fields(&out, 0);
+        assert_eq!(fid, Some(1));
+        assert!(d.is_some_and(|d| d.abs() < 1e-6), "{d:?}");
+        assert!(x.is_some_and(|x| (x.abs() - 180.0).abs() < 1e-7) && y.is_some_and(|y| y.abs() < 1e-7), "{x:?} {y:?}");
     }
 
     #[test]
