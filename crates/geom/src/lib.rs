@@ -151,11 +151,18 @@ impl Extent {
 /// (as `geodesic_interpolate` and `Aeqd::inverse` keep one) projects onto the world, never metres
 /// past its ±20,037,508.34 m edge (#940).
 pub fn lonlat_to_merc(c: Coord) -> Coord {
-    let lat = c.y.clamp(-MAX_LAT, MAX_LAT).to_radians();
     // A finite longitude outside −180..180 folds into that range; a non-finite one stays broken
     // rather than quietly becoming the prime meridian.
     let lon = if !c.x.is_finite() || (c.x >= -180.0 && c.x <= 180.0) { c.x } else { wrap_lon(c.x) };
-    Coord::new(MERCATOR_R * lon.to_radians(), MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat / 2.0).tan().ln())
+    lonlat_to_merc_unfolded(Coord::new(lon, c.y))
+}
+
+/// Longitude/latitude (degrees) → Web Mercator metres, without folding the longitude: one past
+/// ±180° lands past the world's edge. Geometry operations use it, so a shape kept unwrapped across
+/// the antimeridian stays the sliver it is. Latitude is clamped to ±85.05°.
+pub fn lonlat_to_merc_unfolded(c: Coord) -> Coord {
+    let lat = c.y.clamp(-MAX_LAT, MAX_LAT).to_radians();
+    Coord::new(MERCATOR_R * c.x.to_radians(), MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat / 2.0).tan().ln())
 }
 
 /// Web Mercator metres → longitude/latitude (degrees).
@@ -173,11 +180,16 @@ pub fn extent_to_merc(e: &Extent) -> Extent {
     // The west edge folds into the world, and the east edge keeps the extent's own width from it, so
     // an extent kept unwrapped across the antimeridian (179.9° to 180.1°, a geodesic buffer) stays
     // the sliver it is, just past the world's edge, rather than folding its east corner to the far
-    // west and spanning the whole world (#940). Within −180..180 nothing changes.
+    // west and spanning the whole world (#940). Within −180..180 nothing changes. A span of a full
+    // turn or more is the whole world, whichever edge it starts from.
     let (sw, ne) = (lonlat_to_merc(Coord::new(e.min_x, e.min_y)), lonlat_to_merc(Coord::new(e.max_x, e.max_y)));
-    let width = (MERCATOR_R * (e.max_x - e.min_x).to_radians()).min(2.0 * MERCATOR_R * std::f64::consts::PI);
-    let east = if e.max_x.is_finite() && e.min_x.is_finite() { sw.x + width } else { ne.x };
-    Extent::from_points(sw, Coord::new(east, ne.y))
+    let world = MERCATOR_R * std::f64::consts::PI;
+    let (west, east) = if e.max_x.is_finite() && e.min_x.is_finite() {
+        if e.max_x - e.min_x >= 360.0 { (-world, world) } else { (sw.x, sw.x + MERCATOR_R * (e.max_x - e.min_x).to_radians()) }
+    } else {
+        (sw.x, ne.x)
+    };
+    Extent::from_points(Coord::new(west, sw.y), Coord::new(east, ne.y))
 }
 
 /// Great-circle distance between two lon/lat points (metres); NaN for non-finite coordinates.
@@ -281,7 +293,10 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
 /// WGS 84 ellipsoid. The ring is closed along a geodesic to its first point, whatever its winding,
 /// so the perimeter and area come from one pass over the ring, not two. A ring gives the
 /// region it traces (so polar rings and globe-wide bands follow their own edges, as the sphere's
-/// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude.
+/// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude. A ring with a
+/// full-turn edge (-180° to 180°) is the exception: a geodesic cannot tell that edge from no edge,
+/// so the ring is measured on the sphere, as [`geodesic_ring_area_m2`] measures it, which differs
+/// from the ellipsoid by up to about 0.5 %.
 pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // A broken vertex is no place: NaN, never a plausible number (see [`haversine_m`]).
     if !ring.iter().all(|c| c.is_finite()) {
@@ -299,9 +314,24 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // a ring is measured on the sphere, as it always was.
     let full_turn = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| (b.x - a.x).abs() >= 360.0);
     if full_turn {
-        let mut closed = ring.to_vec();
-        closed.extend(ring.first().copied());
-        return (geodesic_length_m(&closed), geodesic_ring_area_m2(ring));
+        // A full-turn edge runs along its parallel, so it is measured as one-degree steps along it
+        // (at most 3600 for a hostile edge); a single geodesic between its ends would be zero.
+        let perimeter: f64 = ring
+            .iter()
+            .zip(ring.iter().cycle().skip(1))
+            .map(|(a, b)| {
+                if (b.x - a.x).abs() < 360.0 {
+                    return haversine_m(*a, *b);
+                }
+                let steps = (b.x - a.x).abs().ceil().min(3600.0) as usize;
+                let at = |i: usize| {
+                    let f = i as f64 / steps as f64;
+                    Coord::new(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
+                };
+                (0..steps).map(|i| haversine_m(at(i), at(i + 1))).sum::<f64>()
+            })
+            .sum();
+        return (perimeter, geodesic_ring_area_m2(ring));
     }
     let mut polygon = PolygonArea::new(&WGS84, Winding::Clockwise);
     for c in ring {
@@ -512,6 +542,10 @@ mod tests {
         assert!((plain.width() - 2.0 * MERCATOR_R * 10f64.to_radians()).abs() < 1e-6);
         let all = extent_to_merc(&Extent::new(-540.0, 0.0, 540.0, 1.0));
         assert!((all.width() - 2.0 * MERCATOR_R * std::f64::consts::PI).abs() < 1e-6);
+        // A full turn from Greenwich is the world too, at the world's edges, not 0 to twice the edge.
+        let turn = extent_to_merc(&Extent::new(0.0, 0.0, 360.0, 1.0));
+        let world = MERCATOR_R * std::f64::consts::PI;
+        assert!((turn.min_x + world).abs() < 1e-6 && (turn.max_x - world).abs() < 1e-6, "{turn:?}");
     }
 
     #[test]
