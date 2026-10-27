@@ -32,6 +32,7 @@ mod earthaccessui;
 mod editpanes;
 mod embeddingsui;
 mod failureui;
+mod fieldmenu;
 mod geocodeui;
 mod geometrycalc;
 mod globe_drape;
@@ -617,6 +618,8 @@ pub struct UiState {
     pub stac: stacui::State,
     /// WMS and WMTS layers' legend pictures, as the Layers pane shows them (#942).
     pub tile_legends: tilelegend::Legends,
+    /// A text field's right-click menu: the field it's open on, and the row picked.
+    pub field_menu: fieldmenu::FieldMenu,
     /// S3…: the connection form, the bucket browsed and the listing under way.
     pub s3: s3ui::State,
     /// New/Edit Connection: the form and the Test under way.
@@ -764,6 +767,7 @@ impl Default for UiState {
             csw: Default::default(),
             stac: Default::default(),
             tile_legends: Default::default(),
+            field_menu: Default::default(),
             s3: Default::default(),
             connection: Default::default(),
             s3_chooser: Default::default(),
@@ -3703,6 +3707,8 @@ impl RustGisApp {
         }
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
+        // Before the shortcuts and the fields: the row picked in a text field's menu, as its keys.
+        fieldmenu::play(self, &ctx);
         chrome::shortcuts(self, &ctx);
         panes::follow_layer_filter(self);
         if self.ui.backstage {
@@ -3735,6 +3741,8 @@ impl RustGisApp {
         #[cfg(not(target_arch = "wasm32"))]
         agentthreads::windows(self, &ctx);
         chrome::notices(self, &ctx);
+        // After every field is drawn: one right-clicked opens its menu.
+        fieldmenu::show(self, &ctx);
         if let Some(text) = self.ui.copy_out.take() {
             ctx.copy_text(text);
         }
