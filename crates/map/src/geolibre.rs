@@ -146,7 +146,8 @@ fn camera(v: &Value) -> Camera {
 
 /// Recognises the current and legacy file names, without claiming unrelated JSON files.
 pub fn is_project_file(name: &str) -> bool {
-    let name = name.split(['?', '#']).next().unwrap_or(name).to_ascii_lowercase();
+    let name = if crate::tiles::is_web(name) { name.split(['?', '#']).next().unwrap_or(name) } else { name };
+    let name = name.to_ascii_lowercase();
     name.ends_with(".geolibre") || name.ends_with(".geolibre.json")
 }
 
@@ -262,5 +263,57 @@ mod boundary_tests {
         assert_eq!(layer.symbol(2).fill, crate::Rgba::rgb(0, 255, 0));
         assert_eq!(layer.symbol(3).fill, crate::Rgba::rgb(0, 0, 255));
         assert_eq!(layer.symbol(4).fill, crate::Rgba::rgb(0, 0, 255));
+    }
+}
+
+#[cfg(test)]
+mod review_regressions {
+    use super::*;
+    use serde_json::json;
+
+    /// A point with both fields, so scale and class assertions exercise real symbols.
+    fn point() -> crate::Layer {
+        let (ds, _) = rustgis_data::io::read_bytes("point.geojson", br#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"value":50,"kind":"a"}}]}"#).unwrap();
+        crate::Layer::new(1, ds)
+    }
+
+    #[test]
+    fn geolibre_layer_and_label_zoom_limits_allow_the_interval() {
+        let mut l = point();
+        style::apply(
+            &mut l,
+            &json!({"style":{"minZoom":3,"maxZoom":10,"labels":{"enabled":true,"field":"kind","minZoom":3,"maxZoom":10}}}),
+            &mut Report::default(),
+        );
+        for (zoom, expected) in [(1.0, false), (3.0, true), (5.0, true), (10.0, true), (15.0, false)] {
+            let scale = resolution(zoom) / 0.00028;
+            assert_eq!(l.in_scale_range(scale), expected, "layer at zoom {zoom}");
+            assert_eq!(l.labels.default.in_range(scale, 0.0), expected, "labels at zoom {zoom}");
+        }
+    }
+
+    #[test]
+    fn geolibre_class_fallback_applies_fill_opacity_once() {
+        for mode in ["categorized", "graduated"] {
+            for color in [serde_json::Value::Null, json!("rgb(10,20,30)"), json!("#33669980")] {
+                let mut l = point();
+                style::apply(
+                    &mut l,
+                    &json!({"style":{"fillColor":"#33669980","fillOpacity":0.6,"vectorStyleMode":mode,"vectorStyleProperty":if mode == "categorized" {"kind"} else {"value"},"vectorStyleStops":[{"value":if mode == "categorized" {json!("a")} else {json!(0)},"color":color},{"value":100,"color":color}]}}),
+                    &mut Report::default(),
+                );
+                assert_eq!(l.renderer.symbol_for(&l.dataset, 0).fill.a(), 77, "{mode}: {color}");
+            }
+        }
+    }
+
+    #[test]
+    fn geolibre_file_names_distinguish_local_punctuation_from_url_queries() {
+        for name in ["plan#2.geolibre", "plan?2.geolibre.json", "MAP.GEOLIBRE", "https://example.org/map.geolibre?download=1#top"] {
+            assert!(is_project_file(name), "{name}");
+        }
+        assert!(!is_project_file("plan.geolibre#2.json"));
+        assert!(!is_project_file("plain.json"));
+        assert_eq!(download_url("https://share.geolibre.app/user/map"), "https://share.geolibre.app/user/map.geolibre.json");
     }
 }

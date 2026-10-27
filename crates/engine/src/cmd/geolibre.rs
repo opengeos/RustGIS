@@ -133,7 +133,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     }
     for g in &project.groups {
         let mut group = rustgis_map::LayerGroup::new(string(g, "name"));
-        group.children = groups.remove(string(g, "id")).unwrap_or_default();
+        group.children = if string(g, "id").is_empty() { Vec::new() } else { groups.remove(string(g, "id")).unwrap_or_default() };
         group.expanded = !boolean(g, "collapsed", false);
         let (visible, opacity) = group_look(&project.groups, string(g, "id"));
         group.visible = visible;
@@ -384,6 +384,10 @@ pub(crate) fn finish_layer(s: &mut Session, p: &Value, name: String, bytes: Vec<
         let pos = s.map().layers.iter().position(|l| l.id == id).ok_or("download added no layer")?;
         let mut loaded = s.map_mut().layers.remove(pos);
         loaded.id = target.1;
+        if let Some(old) = s.map().layer(target.1) {
+            loaded.name = old.name.clone();
+            loaded.dataset.name = old.name.clone();
+        }
         let mut report = Report::default();
         geolibre::style::apply(&mut loaded, &pending["record"], &mut report);
         let dest = s.map_mut().layer_mut(target.1).ok_or("GeoLibre layer was removed")?;

@@ -18202,10 +18202,11 @@ fn geolibre_moved_local_source_uses_project_directory() {
 #[test]
 fn geolibre_download_finishes_in_its_original_map_and_position() {
     let mut s = world();
-    let mut ds = rustgis_data::Dataset::new("Pending", rustgis_data::GeometryType::Point, Vec::new());
+    let mut ds = rustgis_data::Dataset::new("Points", rustgis_data::GeometryType::Point, Vec::new());
     ds.source = Some("geolibre-pending:test".into());
     let target = s.project.active_map;
     let id = s.map_mut().add_dataset(ds);
+    s.map_mut().layer_mut(id).unwrap().name = "Renamed while downloading".into();
     let camera = s.map().camera;
     s.run("map.new", &json!({"name":"Other"})).unwrap();
     let active = s.project.active_map;
@@ -18217,6 +18218,8 @@ fn geolibre_download_finishes_in_its_original_map_and_position() {
     let map = &s.project.maps[target];
     let loaded = map.layer(id).unwrap();
     assert_eq!(loaded.dataset.features.len(), 1);
+    assert_eq!(loaded.name, "Renamed while downloading");
+    assert_eq!(loaded.dataset.name, loaded.name);
     assert_eq!(loaded.renderer.base_symbol().size, 18.0);
     assert_eq!(map.camera, camera);
     assert!(s.map().layers.is_empty());
@@ -18344,4 +18347,15 @@ fn geolibre_failed_download_discards_only_its_own_reservation() {
     assert_eq!(s.project.maps[0].layers.len(), original);
     assert!(s.project.maps[0].groups.iter().all(|g| !g.children.contains(&id)));
     assert_eq!(s.map().name, "Other");
+}
+
+#[test]
+fn geolibre_group_without_id_does_not_claim_ungrouped_layers() {
+    let mut s = world();
+    let text = json!({"version":"0.2.0","name":"Groups","mapView":{"center":[0,0],"zoom":3},"basemapStyleUrl":"","layerGroups":[{"name":"Malformed","visible":false}],"layers":[{"id":"p","name":"Point","type":"geojson","geojson":{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}]}}]}).to_string();
+    s.run("project.importGeolibre", &json!({"text":text})).unwrap();
+    assert_eq!(s.map().layers.len(), 1);
+    assert!(s.map().groups.iter().all(|g| g.children.is_empty()));
+    let id = s.map().layers[0].id;
+    assert!(s.map().group_of(id).is_none());
 }

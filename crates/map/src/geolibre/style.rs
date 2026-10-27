@@ -10,8 +10,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
     let st = &record["style"];
     layer.visible = boolean(record, "visible", true);
     layer.transparency = (100.0 * (1.0 - number(record, "opacity", 1.0).clamp(0.0, 1.0))) as f32;
-    layer.min_scale = scale(st, "maxZoom", 24.0);
-    layer.max_scale = scale(st, "minZoom", 0.0);
+    layer.min_scale = scale(st, "minZoom", 0.0);
+    layer.max_scale = scale(st, "maxZoom", 24.0);
     if layer.is_raster() {
         report.approximated(&name, "raster colouring uses RustGIS defaults");
         return;
@@ -19,6 +19,7 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
     let mut symbol = Symbol::default_for(layer.geometry_type(), 0);
     symbol.fill = color(st, "fillColor", Rgba::rgb(0x3b, 0x82, 0xf6), report, &name);
     symbol.stroke = color(st, "strokeColor", Rgba::rgb(0x1e, 0x40, 0xaf), report, &name);
+    let fill = symbol.fill;
     symbol.fill = symbol.fill.with_alpha((symbol.fill.a() as f64 * number(st, "fillOpacity", 0.6).clamp(0.0, 1.0)).round() as u8);
     symbol.stroke_width = number(st, "strokeWidth", 2.0).clamp(0.0, 100.0) as f32;
     symbol.size = (2.0 * number(st, "circleRadius", 6.0).clamp(0.0, 128.0)) as f32;
@@ -41,7 +42,7 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
                     Some(v) => v.to_string(),
                     None => String::new(),
                 };
-                (value, painted(symbol, color(stop, "color", symbol.fill, report, &name), layer.geometry_type()))
+                (value, painted(symbol, color(stop, "color", fill, report, &name), layer.geometry_type(), number(st, "fillOpacity", 0.6)))
             })
             .collect();
         layer.renderer = Renderer::Unique {
@@ -63,11 +64,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
             other_strokes: Vec::new(),
         };
     } else if mode == "graduated" {
-        let mut pairs: Vec<_> = stops
-            .iter()
-            .take(256)
-            .filter_map(|s| Some((s.get("value")?.as_f64()?, color(s, "color", symbol.fill, report, &name))))
-            .collect();
+        let mut pairs: Vec<_> =
+            stops.iter().take(256).filter_map(|s| Some((s.get("value")?.as_f64()?, color(s, "color", fill, report, &name)))).collect();
         pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
         pairs.dedup_by(|a, b| a.0 == b.0);
         if let Some(first) = pairs.first().filter(|_| pairs.len() >= 2) {
@@ -78,7 +76,7 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
                 // GeoLibre stores class lower bounds and switches at equality. RustGIS
                 // stores inclusive upper bounds: the previous float preserves that boundary.
                 breaks: pairs.iter().skip(1).map(|p| p.0.next_down()).chain(std::iter::once(f64::MAX)).collect(),
-                symbols: pairs.iter().map(|p| painted(symbol, p.1, layer.geometry_type())).collect(),
+                symbols: pairs.iter().map(|p| painted(symbol, p.1, layer.geometry_type(), number(st, "fillOpacity", 0.6))).collect(),
                 ramp: Default::default(),
                 method: ClassMethod::Manual,
                 class_labels: pairs
@@ -132,8 +130,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
     c.size = number(labels, "size", 13.0).clamp(1.0, 128.0) as f32;
     c.color = color(labels, "color", Rgba::rgb(0x11, 0x18, 0x27), report, &name);
     c.halo = number(labels, "haloWidth", 1.5) > 0.0;
-    c.min_scale = scale(labels, "maxZoom", 24.0);
-    c.max_scale = scale(labels, "minZoom", 0.0);
+    c.min_scale = scale(labels, "minZoom", 0.0);
+    c.max_scale = scale(labels, "maxZoom", 24.0);
     c.placement = if string(labels, "placement") == "line" { LabelPlacement::Curved } else { LabelPlacement::Auto };
     if layer.labels.enabled && layer.dataset.field_index(&c.field).is_none() {
         layer.labels.enabled = false;
@@ -180,8 +178,8 @@ fn color(v: &Value, key: &str, default: Rgba, report: &mut Report, name: &str) -
     default
 }
 /// Changes the class colour without changing the saved outline or fill opacity.
-fn painted(mut s: Symbol, c: Rgba, g: rustgis_data::GeometryType) -> Symbol {
-    s.fill = c.with_alpha((u16::from(c.a()) * u16::from(s.fill.a()) / 255) as u8);
+fn painted(mut s: Symbol, c: Rgba, g: rustgis_data::GeometryType, opacity: f64) -> Symbol {
+    s.fill = c.with_alpha((f64::from(c.a()) * opacity.clamp(0.0, 1.0)).round() as u8);
     if g == rustgis_data::GeometryType::Polyline {
         s.stroke = c;
     }

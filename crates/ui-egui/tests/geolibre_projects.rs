@@ -32,7 +32,7 @@ fn geolibre_card_picker_completion_imports_a_map_without_replacing_work() {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "GeoLibre Project…").click();
     h.step();
     h.step();
-    assert_eq!(*calls.lock().unwrap(), vec!["item"]);
+    assert_eq!(*calls.lock().unwrap(), vec!["project"]);
     h.state_mut().open_picked("map.geolibre", &project()).unwrap();
     h.step();
     assert_eq!(h.state().session.project.maps.len(), maps + 1);
@@ -43,7 +43,7 @@ fn geolibre_card_picker_completion_imports_a_map_without_replacing_work() {
 
 #[test]
 fn geolibre_drop_and_legacy_name_share_the_import_path() {
-    for name in ["MAP.GEOLIBRE", "map.geolibre.json"] {
+    for name in ["MAP.GEOLIBRE", "map.geolibre.json", "plan#2.geolibre", "plan?2.geolibre.json"] {
         let mut app = RustGisApp::with_sample();
         let maps = app.session.project.maps.len();
         app.open_bytes(name, &project()).unwrap();

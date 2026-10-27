@@ -2515,12 +2515,10 @@ impl RustGisApp {
                 ) {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
-                    let cmd = if lower.ends_with(".geolibre") || lower.ends_with(".geolibre.json") {
-                        "project.importGeolibre"
-                    } else if lower.ends_with(".qgs") || lower.ends_with(".qgz") {
+                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") {
                         "project.importQgis"
                     } else {
-                        "project.open"
+                        rustgis_engine::project::open_command(&path)
                     };
                     let r = self.run_by_user(cmd, json!({"path": path}));
                     // Asking to save first: the Project tab stays until the answer, so Cancel
@@ -2686,7 +2684,11 @@ impl RustGisApp {
                 };
                 if let Some(open) = &self.services.open_async {
                     self.ui.pending_open = Some(cmd);
-                    open(if kind == "ramps" { "ramp" } else { "item" });
+                    open(match kind {
+                        "ramps" => "ramp",
+                        "geolibreProject" => "project",
+                        _ => "item",
+                    });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
                     let r = self.run_by_user(cmd, json!({"path": path}));
                     self.map.invalidate();
