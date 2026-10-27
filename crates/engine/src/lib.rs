@@ -1436,6 +1436,7 @@ impl Session {
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
+        self.keep_tile_pick(&cur);
         self.redo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files));
         self.touch_all_geometry();
         true
@@ -1454,6 +1455,7 @@ impl Session {
         self.project.keep_table_ids(&cur);
         self.reopen_layout(open, saved);
         self.keep_time_position(&cur);
+        self.keep_tile_pick(&cur);
         self.undo.push((cur, was, label, actor, std::mem::replace(&mut self.state, state), files));
         self.touch_all_geometry();
         true
@@ -1470,6 +1472,24 @@ impl Session {
         }
         // Zarr layers that follow the slider read the step it is back at.
         cmd::zarr::follow_time(self);
+    }
+
+    /// After undo or redo swaps the project: the tile layer picked in the Layers pane stays the one
+    /// picked (picking isn't an undo step), found again by its address and kind (and name, when
+    /// several share them); the restored project's own picks are dropped.
+    fn keep_tile_pick(&mut self, before: &Project) {
+        for t in self.project.maps.iter_mut().flat_map(|m| m.tiles.iter_mut()) {
+            t.selected = false;
+        }
+        for (m, old) in self.project.maps.iter_mut().zip(&before.maps).filter(|(m, o)| m.name == o.name) {
+            let Some(p) = old.tiles.iter().find(|t| t.selected) else { continue };
+            let same = |t: &&mut rustgis_map::tiles::TileLayer| t.url == p.url && t.kind == p.kind;
+            let mut like: Vec<_> = m.tiles.iter_mut().filter(same).collect();
+            let at = like.iter().position(|t| t.name == p.name).unwrap_or(0);
+            if let Some(t) = like.get_mut(at) {
+                t.selected = true;
+            }
+        }
     }
 
     fn open_layout_name(&self) -> Option<String> {
@@ -1584,6 +1604,15 @@ impl Session {
         map.layers.iter().map(|l| l.id).filter(|id| picked.contains(id) || self.active_layer == Some(*id)).collect()
     }
 
+    /// The tile layer picked in the Layers pane (`map.selectTiles`): the topmost one marked, while
+    /// no map layer is active (making one active ends it).
+    pub fn selected_tile(&self) -> Option<usize> {
+        if self.active_layer.is_some() {
+            return None;
+        }
+        self.map().tiles.iter().position(|t| t.selected)
+    }
+
     /// Makes `ids` the layer selection with `active` the active layer (one of them, else none).
     pub(crate) fn set_layer_selection(&mut self, mut ids: Vec<u32>, active: Option<u32>) {
         let mut seen = std::collections::HashSet::new();
@@ -1627,6 +1656,13 @@ impl Session {
         }
         if self.table_standalone.is_some_and(|id| self.project.table(id).is_none()) {
             self.table_standalone = None;
+        }
+        // A tile layer picked in the Layers pane stops being picked once a map layer is active,
+        // for good, as a layer selection does.
+        if self.active_layer.is_some() && self.project.map().tiles.iter().any(|t| t.selected) {
+            for t in &mut self.project.map_mut().tiles {
+                t.selected = false;
+            }
         }
     }
 

@@ -562,6 +562,13 @@ pub fn follow_layer_filter(app: &mut RustGisApp) {
         },
         _ => {}
     }
+    // So does a tile layer picked: one the filter hides isn't picked any more (for good, as the
+    // pick isn't kept to come back).
+    if let Some(i) = app.session.selected_tile()
+        && app.session.map().tiles.get(i).is_some_and(|t| !filter_shows(&q, &t.name))
+    {
+        app.session.map_mut().tiles[i].selected = false;
+    }
 }
 
 /// Clears the Layers filter if it hides layer `id`, which would otherwise stop being the active
@@ -1495,7 +1502,8 @@ fn visibility_box(ui: &Ui, cb: Rect, visible: bool, t: &Tokens) {
     }
 }
 
-/// A web tile layer's row (index `i` of `count`, top first as the map lists them): its checkbox
+/// A web tile layer's row (index `i` of `count`, top first as the map lists them): a click picks
+/// it (`map.selectTiles`: the Selected in Layers pop-up mode identifies it); its checkbox
 /// shows or hides it; right-click zooms to it (known bounds, an archive or GeoTIFF), sets its
 /// opacity, moves it up or down (not with `reorder` off: the list is filtered), or removes it.
 fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reorder: bool, tile: &TileLayer, t: &Tokens) -> Rect {
@@ -1510,9 +1518,14 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         egui::DragAndDrop::set_payload(ui.ctx(), DraggedTile(i));
     }
     let dragging = egui::DragAndDrop::payload::<DraggedTile>(ui.ctx()).is_some_and(|d| d.0 == i);
-    if resp.hovered() || dragging {
+    // Picked, it looks as an active layer's row does.
+    let picked = app.session.selected_tile() == Some(i);
+    if picked {
+        ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.selection);
+    } else if resp.hovered() || dragging {
         ui.painter().rect_filled(r.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), t.hover);
     }
+    active_outline(ui, r, picked, t);
     // Lined up with the layer rows' arrows, checkboxes, icons and names.
     let cy = r.min.y + 13.0;
     // A WMS or WMTS layer's legend opens under it, as a feature layer's classes do.
@@ -1550,6 +1563,10 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         action = Some(("map.setTiles", json!({"index": i, "visible": !tile.visible})));
     } else if ar_resp.is_some_and(|a| a.clicked()) {
         action = Some(("map.expandTiles", json!({"index": i})));
+    } else if resp.clicked() && !picked {
+        action = Some(("map.selectTiles", json!({"index": i})));
+        // A layer the filter hid isn't made active again once it shows: this was picked since.
+        app.ui.layer_filter_hid = None;
     }
     let mut hover = if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() };
     if let Some(error) = &tile.error {
@@ -6017,6 +6034,42 @@ mod tests {
         h.run_steps(2);
         assert_eq!(names(&h), ["Cities", "Rivers", "Lakes", "Depths", "Countries"]);
         assert!(y(&h, "Lakes") < y(&h, "Depths") && y(&h, "Depths") < y(&h, "Countries"));
+    }
+
+    /// A tile layer's row is picked with a click, as a layer's is (the Selected in Layers pop-up
+    /// mode identifies it), and clicking a layer's row picks that instead.
+    #[test]
+    fn a_tile_layers_row_is_picked_with_a_click() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = RustGisApp::with_sample();
+        app.run("map.addTiles", json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).with_max_steps(64).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        h.get_by_label("Depths").click();
+        h.run_steps(2);
+        let depths = h.state().session.map().tiles.iter().position(|t| t.name == "Depths");
+        assert_eq!((h.state().session.active_layer, h.state().session.selected_tile()), (None, depths));
+        // Hidden by the filter, it isn't picked any more, as an active layer isn't.
+        h.state_mut().ui.layer_filter = "Cit".into();
+        h.run_steps(2);
+        assert_eq!(h.state().session.selected_tile(), None);
+        h.state_mut().ui.layer_filter.clear();
+        h.run_steps(2);
+        assert_eq!(h.state().session.selected_tile(), None, "not picked again");
+        h.get_by_label("Depths").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.selected_tile(), depths);
+        h.get_by_label("Cities").click();
+        h.run_steps(2);
+        let cities = h.state().session.map().layer_by_name("Cities").map(|l| l.id);
+        assert_eq!((h.state().session.active_layer, h.state().session.selected_tile()), (cities, None));
     }
 
     /// #836: both halves of the whole visible block accept drops, including multi-class

@@ -8241,6 +8241,15 @@ fn identify_reports_vector_tile_features() {
     assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0, "mode": "selectable"})).unwrap().is_null());
     s.run("map.setTiles", &json!({"index": 0, "visible": false})).unwrap();
     assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0})).unwrap().is_null());
+    // A basemap from the catalog isn't identified, unless picked in Layers with Selected in Layers.
+    s.run("map.setTiles", &json!({"index": 0, "visible": true})).unwrap();
+    (s.map_mut().tiles[0].id, s.map_mut().tiles[0].overlay) = ("parks-base".into(), false);
+    assert!(s.run("identify", &json!({"lon": 1.0, "lat": 1.0})).unwrap().is_null());
+    let at = json!({"lon": 1.0, "lat": 1.0, "mode": "selectedInContents"});
+    assert!(s.run("identify", &at).unwrap().is_null(), "not picked");
+    s.run("map.selectTiles", &json!({"index": 0})).unwrap();
+    let r = s.run("identify", &at).unwrap();
+    assert_eq!((&r["tileLayer"], &r["attributes"]["name"]), (&json!("parks"), &json!("Central")), "{r}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -9157,6 +9166,80 @@ fn identify_asks_wms_layers() {
     assert!(v.is_null(), "{v}");
     let r = s.run("identify.featureInfo", &json!({"layer": "Roads", "lon": 8.5, "lat": 47.4, "request": true})).unwrap();
     assert_eq!(r, json!({"results": []}));
+}
+
+/// A tile layer picked in Layers (`map.selectTiles`, view state like `layer.select`) is the one
+/// Selected in Layers identifies, whichever it is (a basemap too, which the other modes leave
+/// out); it stays picked when moved, and a map layer made active ends the pick for good.
+#[test]
+fn selected_in_layers_asks_the_tile_layer_picked() {
+    use rustgis_data::{Dataset, GeometryType};
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/info?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS})).unwrap();
+    // A basemap from the catalog, of the same service.
+    let base = "https://maps.example.com/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image/png";
+    s.run("map.addTiles", &json!({"url": base, "name": "Base", "id": "base-wms"})).unwrap();
+    let points = s.map_mut().add_dataset(Dataset::new("Points", GeometryType::Point, vec![]));
+    s.run("layer.select", &json!({"layer": points})).unwrap();
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let identify = |s: &mut Session, mode: &str| s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": mode})).unwrap();
+    let asked = |v: &Value| -> Vec<String> {
+        v["featureInfo"].as_array().into_iter().flatten().map(|a| a["tileLayer"].as_str().unwrap_or_default().to_string()).collect()
+    };
+    // The active layer has nothing there, and no tile layer is asked; the visible mode leaves the
+    // basemap out.
+    assert!(identify(&mut s, "selectedInContents").is_null());
+    assert_eq!(asked(&identify(&mut s, "visible")), ["Roads"]);
+
+    let tiles = |s: &mut Session| s.run("map.tiles", &json!({})).unwrap();
+    let at = |s: &mut Session, name: &str| tiles(s).as_array().unwrap().iter().position(|t| t["name"] == name).unwrap();
+    let (steps, dirty) = (s.undo_depth(), s.dirty());
+    s.run("map.selectTiles", &json!({"name": "Base"})).unwrap();
+    assert_eq!((s.undo_depth(), s.dirty()), (steps, dirty), "no undo step, nothing to save");
+    assert_eq!((s.active_layer, s.selected_tile()), (None, Some(at(&mut s, "Base"))));
+    let listed = tiles(&mut s);
+    let picked: Vec<_> = listed.as_array().unwrap().iter().filter(|t| t["selected"] == true).map(|t| t["name"].clone()).collect();
+    assert_eq!(picked, [json!("Base")], "{listed}");
+    let v = identify(&mut s, "selectedInContents");
+    assert_eq!(asked(&v), ["Base"], "{v}");
+    assert!(v.get("results").is_none(), "{v}");
+    // Only Selected in Layers asks it alone.
+    assert!(identify(&mut s, "selectable").is_null());
+    assert_eq!(asked(&identify(&mut s, "visible")), ["Roads"]);
+
+    // Picking another ends the first pick; moved, it stays picked.
+    s.run("map.selectTiles", &json!({"name": "Roads"})).unwrap();
+    assert_eq!(asked(&identify(&mut s, "selectedInContents")), ["Roads"]);
+    let before = at(&mut s, "Roads");
+    s.run("map.setTiles", &json!({"name": "Roads", "move": "bottom"})).unwrap();
+    assert_ne!(at(&mut s, "Roads"), before, "moved");
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Roads")));
+    assert_eq!(s.map().tiles.iter().filter(|t| t.selected).count(), 1);
+    assert!(s.run("map.selectTiles", &json!({"name": "Nope"})).is_err());
+    assert!(s.run("map.selectTiles", &json!({})).is_err());
+    // Undo and redo leave the pick as it is: picking isn't a step of theirs.
+    s.run("map.setTiles", &json!({"name": "Base", "opacity": 0.5})).unwrap();
+    s.run("map.selectTiles", &json!({"name": "Base"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.map().tiles.iter().find(|t| t.name == "Base").map(|t| t.opacity), Some(1.0), "undone");
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Base")));
+    s.run("map.selectTiles", &json!({"name": "Roads"})).unwrap();
+    s.run("edit.redo", &json!({})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Roads")));
+    assert_eq!(s.map().tiles.iter().filter(|t| t.selected).count(), 1);
+
+    // A map layer made active ends it, and no active layer later brings it back.
+    s.run("layer.select", &json!({"layer": points})).unwrap();
+    assert_eq!(s.selected_tile(), None);
+    s.run("layer.remove", &json!({"layer": points})).unwrap();
+    assert_eq!((s.active_layer, s.selected_tile()), (None, None));
+    assert!(identify(&mut s, "selectedInContents").is_null());
 }
 
 /// A service whose answer in one format is its error (swisstopo's MapServer fails to write GeoJSON
