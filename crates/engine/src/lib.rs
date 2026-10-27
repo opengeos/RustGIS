@@ -829,7 +829,9 @@ impl Session {
     /// requests the next is refused rather than silently dropping one already promised.
     pub fn request_url(&mut self, p: &serde_json::Value) -> Result<serde_json::Value, String> {
         let url = p.get("url").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
-        if !self.url_requests.iter().any(|q| q.get("url").and_then(serde_json::Value::as_str) == Some(url.as_str())) {
+        if !self.url_requests.iter().any(|q| {
+            q.get("url").and_then(serde_json::Value::as_str) == Some(url.as_str()) && q.get("geolibreLayer") == p.get("geolibreLayer")
+        }) {
             if self.url_requests.len() >= MAX_URL_REQUESTS {
                 return Err(format!("{url}: {MAX_URL_REQUESTS} downloads are already waiting; try again when they have landed"));
             }

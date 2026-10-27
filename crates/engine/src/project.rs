@@ -32,9 +32,16 @@ pub fn opens_as_project(name: &str) -> bool {
 }
 
 /// The command that opens a file given by its path, as the desktop app's command line and a file
-/// dropped on its window do: `project.open` for a project or a package, `layer.addData` otherwise.
+/// dropped on its window do: native projects replace it, GeoLibre projects import a map, and
+/// other files are added as data.
 pub fn open_command(path: &str) -> &'static str {
-    if opens_as_project(path) { "project.open" } else { "layer.addData" }
+    if rustgis_map::geolibre::is_project_file(path) {
+        "project.importGeolibre"
+    } else if opens_as_project(path) {
+        "project.open"
+    } else {
+        "layer.addData"
+    }
 }
 /// Format version written to files.
 pub const FORMAT: u32 = 1;

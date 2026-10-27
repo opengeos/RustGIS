@@ -119,6 +119,10 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         if card(ui, t, "Open…", "Open a .rgis project", "open") {
             let _ = app.run("ui.open", Value::Null);
         }
+        if card(ui, t, "GeoLibre Project…", "A .geolibre project as a map", "open") {
+            let _ = app.run("ui.openItem", json!({"kind": "geolibreProject"}));
+            app.ui.backstage = false;
+        }
         if card(ui, t, "QGIS Project…", "A .qgs or .qgz project as a map", "open") {
             let _ = app.run("ui.openItem", json!({"kind": "qgisProject"}));
             app.ui.backstage = false;
@@ -143,8 +147,10 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     });
 }
 
+/// A project choice whose visible title is also its accessible button name.
 fn card(ui: &mut Ui, t: &Tokens, title: &str, sub: &str, icon: &str) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 160.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(title)));
     ui.painter().rect_filled(r, CornerRadius::same(10), if resp.hovered() { t.hover } else { t.pane });
     ui.painter().rect_stroke(
         r,

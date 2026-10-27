@@ -202,9 +202,11 @@ No. GeoLibre plugins are TypeScript modules for its web interface. RustGIS has i
 WebAssembly and native process-plugin interfaces, including Python process plugins.
 
 **Can I open a GeoLibre project in RustGIS?**
-Not yet; it is planned
-([#962](https://github.com/opengeos/RustGIS/issues/962)). Until then, export
-the layers (GeoPackage or GeoParquet keep the most) and add them to RustGIS.
+Yes. **Open** or **Project › New › GeoLibre Project…** imports a `.geolibre` (or
+`.geolibre.json`) as a new map, preserving supported data, styles and the saved view.
+The command `project.importGeolibre` also accepts a URL, text or base64 JSON. It reports
+unsupported sources and appearance differences per layer; see
+[GeoLibre projects](../user-guide/workspace.md#geolibre-projects) for the limits.
 
 ## See also
 

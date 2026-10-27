@@ -33,6 +33,7 @@ mod editpanes;
 mod embeddingsui;
 mod failureui;
 mod geocodeui;
+mod geolibreui;
 mod geometrycalc;
 mod globe_drape;
 mod graphicformat;
@@ -654,6 +655,8 @@ pub struct UiState {
     pub raster_defaults_saved: rustgis_engine::map::RasterDefaults,
     /// Home › Add › Add Data › Zarr…: its store, choices and fetches.
     pub zarr: zarrui::State,
+    /// Independent Zarr reads for imported GeoLibre layers; does not share the picker state.
+    pub geolibre_zarr: Vec<geolibreui::Read>,
     /// A layout picture waiting for its image file (web).
     pub pending_layout_picture: bool,
     /// The corners of a picture graphic waiting for its image file.
@@ -780,6 +783,7 @@ impl Default for UiState {
             connections_saved: 0,
             raster_defaults_saved: Default::default(),
             zarr: Default::default(),
+            geolibre_zarr: Vec::new(),
             hidden_tabs: Vec::new(),
             quick_access: Vec::new(),
             titlebar: None,
@@ -1231,6 +1235,8 @@ impl RustGisApp {
         }
         // Project items picked or dropped in the browser.
         let item = [
+            (".geolibre", "project.importGeolibre"),
+            (".geolibre.json", "project.importGeolibre"),
             (".rgismap", "map.import"),
             (".rgismpk", "map.import"),
             (".rgislyr", "layer.addLayerFile"),
@@ -2197,10 +2203,17 @@ impl RustGisApp {
             // when it lands, in place of the open project (see `poll_downloads`).
             "ui.openUrl" => {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
+                let url = rustgis_engine::map::geolibre::download_url(url);
+                let url = url.as_str();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download(
+                rustgis_engine::render::rustgis_tiles::cache::download_limited(
                     url,
+                    if rustgis_engine::map::geolibre::is_project_file(url) {
+                        rustgis_engine::map::geolibre::MAX_TEXT
+                    } else {
+                        rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD
+                    },
                     Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                 );
                 self.session.notify(i18n::fmt("Opening {url}…", &[("url", url)]), false);
@@ -2232,6 +2245,13 @@ impl RustGisApp {
             // Data by its web address: the dialog, then (with an address) the download, off the
             // frame; it's added when it lands. A PMTiles archive is a tile layer, never downloaded.
             "ui.addUrl" => {
+                if p.get("geolibreZarr").and_then(Value::as_bool) == Some(true) {
+                    if let Err(e) = geolibreui::start(self, p) {
+                        rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, p);
+                        return Err(e);
+                    }
+                    return Ok(Value::Null);
+                }
                 // The connection a Connections tree add is for (named in Recent once it is added).
                 let origin = connectiontree::take_origin(self);
                 let Some(url) = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
@@ -2281,8 +2301,13 @@ impl RustGisApp {
                 let url = url.to_string();
                 let slot: Slot<Result<Vec<u8>, String>> = Slot::default();
                 let land = slot.clone();
-                rustgis_engine::render::rustgis_tiles::cache::download(
+                rustgis_engine::render::rustgis_tiles::cache::download_limited(
                     &url,
+                    if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
+                        rustgis_engine::map::geolibre::MAX_TEXT
+                    } else {
+                        rustgis_engine::render::rustgis_tiles::cache::MAX_DOWNLOAD
+                    },
                     Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
                 );
                 let mut q = json!({});
@@ -2297,6 +2322,11 @@ impl RustGisApp {
                 for k in ["service", "coverage"] {
                     if p.get(k).and_then(Value::as_bool) == Some(true) {
                         q[k] = json!(true);
+                    }
+                }
+                for key in ["geolibreProject", "geolibreLayer"] {
+                    if let Some(value) = p.get(key) {
+                        q[key] = value.clone();
                     }
                 }
                 if let Some(origin) = &origin {
@@ -2463,11 +2493,19 @@ impl RustGisApp {
                     self.ui.pending_open = None;
                     open("project");
                     self.ui.backstage = false;
-                } else if let Some(path) = dialogs::pick_open(&["rgis", "rgisx", "rgispkg", "qgs", "qgz"], tl!("Projects (RustGIS, QGIS)"))
-                {
+                } else if let Some(path) = dialogs::pick_open(
+                    &["rgis", "rgisx", "rgispkg", "qgs", "qgz", "geolibre", "json"],
+                    tl!("Projects (RustGIS, QGIS, GeoLibre)"),
+                ) {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
-                    let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
+                    let cmd = if lower.ends_with(".geolibre") || lower.ends_with(".geolibre.json") {
+                        "project.importGeolibre"
+                    } else if lower.ends_with(".qgs") || lower.ends_with(".qgz") {
+                        "project.importQgis"
+                    } else {
+                        "project.open"
+                    };
                     let r = self.run(cmd, json!({"path": path}));
                     self.ui.backstage = false;
                     self.map.invalidate();
@@ -2614,6 +2652,7 @@ impl RustGisApp {
                     "styles" => ("style.add", &["rgisstyle"], "RustGIS styles"),
                     "ramps" => ("ramp.add", &["rgisramp", "xml", "qml", "txt", "clr", "cpt"], "Colour ramps (RustGIS, QGIS, GDAL, GMT)"),
                     "importStyles" => ("style.import", &["rgislyr", "rgismap", "rgis", "rgisx"], "RustGIS layers, maps and projects"),
+                    "geolibreProject" => ("project.importGeolibre", &["geolibre", "json"], "GeoLibre project"),
                     "qgisProject" => ("project.importQgis", &["qgs", "qgz"], "QGIS project"),
                     "qgisStyle" => ("style.importQgis", &["qml"], "QGIS layer style"),
                     "template" => ("project.fromTemplate", &["rgistemplate"], "RustGIS project template"),
@@ -3218,6 +3257,15 @@ impl RustGisApp {
     /// keeping its own name when the address has none). Unlike [`Self::open_bytes`], it never takes
     /// a picker's pending item: the download isn't the file the user is picking.
     fn open_project_bytes(&mut self, file: Option<&str>, bytes: &[u8]) -> Result<Value, String> {
+        if file.is_some_and(|f| {
+            let f = f.to_ascii_lowercase();
+            f.ends_with(".geolibre") || f.ends_with(".geolibre.json")
+        }) {
+            let text = std::str::from_utf8(bytes).map_err(|_| tl!("Not a GeoLibre project").to_string())?;
+            let result = self.run("project.importGeolibre", json!({"text":text}));
+            self.map.invalidate();
+            return result;
+        }
         let package = file.is_some_and(|f| f.to_ascii_lowercase().ends_with(".rgispkg"));
         let text = if package {
             rustgis_engine::cmd::items::package_text(bytes)?
@@ -3283,6 +3331,7 @@ impl RustGisApp {
                 Ok(bytes) => self.add_landed(serviceui::Landed { id, url, params: p, origin }, bytes),
                 Err(e) => {
                     self.session.download_failed(id);
+                    rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &p);
                     self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
                 }
             }
@@ -3304,6 +3353,7 @@ impl RustGisApp {
             p["zoom"] = json!(false);
         }
         let before = self.session.sources.generation;
+        let pending = p.clone();
         match self.run("layer.addDownload", p) {
             Ok(r) => {
                 connectiontree::name_recent(self, before, origin.as_deref());
@@ -3312,7 +3362,10 @@ impl RustGisApp {
                 }
                 self.map.invalidate();
             }
-            Err(e) => self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true),
+            Err(e) => {
+                rustgis_engine::cmd::geolibre::discard_pending(&mut self.session, &pending);
+                self.session.notify(if e.starts_with(&url) { e } else { format!("{url}: {e}") }, true);
+            }
         }
     }
 
@@ -3518,6 +3571,7 @@ impl RustGisApp {
         geocodeui::poll(self, ctx);
         navui::poll(self, ctx);
         zarrui::poll(self, ctx);
+        geolibreui::poll(self, ctx);
         pluginsui::poll(self, ctx);
         assistantpane::poll(self, ctx);
         // A project the MCP relay, the assistant or a plugin opened or saved this frame (they run
@@ -3711,7 +3765,7 @@ impl RustGisApp {
 fn project_file_name(url: &str) -> Option<&str> {
     let path = url.split(['?', '#']).next().unwrap_or("");
     let last = path.rsplit('/').next().unwrap_or("");
-    rustgis_engine::project::opens_as_project(last).then_some(last)
+    (rustgis_engine::project::opens_as_project(last) || rustgis_engine::map::geolibre::is_project_file(last)).then_some(last)
 }
 
 #[cfg(test)]

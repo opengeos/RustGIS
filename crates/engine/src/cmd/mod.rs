@@ -14,6 +14,7 @@ pub mod edit;
 pub mod effects;
 pub mod embeddings;
 pub mod geocode;
+pub mod geolibre;
 pub mod gp;
 pub mod graphics;
 pub mod group;
@@ -60,6 +61,7 @@ pub fn all() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(project::commands());
     v.extend(qgis::commands());
+    v.extend(geolibre::commands());
     v.extend(navigate::commands());
     v.extend(geocode::commands());
     v.extend(directions::commands());

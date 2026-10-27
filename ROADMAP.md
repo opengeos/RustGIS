@@ -191,8 +191,8 @@ Open questions rather than plans; discuss before building.
   standalone tables; geotagged photos and KML ground overlays; geocoding (Find Place, address
   tables); a Data Sources pane (favourites, recent, saved services, a library, reusable
   connections and dataset browsing) and an SQL pane (DuckDB Spatial); layer, map, style,
-  template, task and package files; supported QGIS `.qgs`/`.qgz` projects opened as maps, with
-  layer styles.
+  template, task and package files; supported QGIS `.qgs`/`.qgz` and GeoLibre `.geolibre` projects opened as maps,
+  with supported layer styles and notes on import differences.
 - Open data: STAC search (Planetary Computer assets), NASA Earthdata (desktop), Hugging Face,
   Overture Maps, Source Cooperative, OpenStreetMap by area (Overpass), geoBoundaries, CKAN,
   Socrata and ArcGIS Hub portals, and S3 buckets with signed connections and a bucket browser.

@@ -188,6 +188,7 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
             }
             // Whether given a path, text or data: the project names the files and web addresses
             // its layers are added from.
+            "project.importGeolibre" => "it adds the files and web addresses a GeoLibre project names".into(),
             "project.importQgis" => "it adds the files and web addresses a QGIS project names".into(),
             _ => "it is reserved to you (plugins, scripts, tasks, models and the GeoLibre runner)".into(),
         });

@@ -52,6 +52,35 @@ one's copy; it says so as it starts. Nor does RustGIS autosave when its settings
 files (some network or synced folders), where it can't tell a second copy apart. The browser app
 doesn't autosave yet; it warns before you leave a page with unsaved changes.
 
+### GeoLibre projects
+
+**Open** on desktop or **Project › New › GeoLibre Project…** opens a `.geolibre` or legacy
+`.geolibre.json` file as a new map in the current project. Existing maps stay in place.
+The same import is available to scripts:
+
+```text
+project.importGeolibre={"path":"watershed.geolibre"}
+project.importGeolibre={"url":"https://example.org/watershed.geolibre"}
+```
+
+The command also accepts JSON `text`, base64 `data`, and `dir` for moved local data files.
+An absolute data path is tried first, then its filename under `dir` (the project's folder by
+default). Browser imports can use inline GeoJSON and web addresses; local paths need desktop.
+A web app link such as `?project=https://example.org/watershed.geolibre` imports the same map.
+
+The map keeps its view, bookmarks, background, layer visibility and opacity, and supported vector
+styles and field labels. The result includes `map`, `layers` and per-layer `notes`, distinguishing
+approximated presentation from skipped sources. Newer format versions are read as far as possible
+with a note. Unsupported layer kinds and project sections are reported rather than silently lost.
+
+Colour classes and proportional sizes are supported separately. Combined colour-and-size styles
+keep colour and use a fixed size; graduated colour class boundaries are retained; proportional
+sizes use RustGIS's area scaling. Label halos use RustGIS defaults. Tile overlays draw above feature
+layers, and nested groups become flat folders with inherited visibility and opacity retained.
+URL data downloaded in the browser fills its reserved layer position when it arrives; wait for
+those downloads before saving. Zarr sources use their saved variable and dimension indices,
+or the first supported variable when those choices are absent.
+
 ### QGIS projects and styles
 
 A QGIS project (`.qgs`, or a `.qgz` archive) opens as a new map of the current project: **Open**

@@ -17945,3 +17945,214 @@ fn a_raster_projected_onto_a_chosen_grid() {
     let e = s.run("raster.project", &json!({"layer": "the", "crs": 31983, "cellSize": 0.001})).unwrap_err();
     assert!(e.contains("give a larger cellSize"), "{e}");
 }
+
+/// Importing a project must preserve the current map, styles, inherited opacity and undo.
+#[test]
+fn geolibre_import_inline_styles_groups_and_undo() {
+    let mut s = world();
+    let maps = s.project.maps.len();
+    let original = s.map().name.clone();
+    let feature = json!({"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"kind":"a","value":10}}]});
+    let text=json!({"version":"0.2.0","name":"Imported","mapView":{"center":[10,20],"zoom":5,"bearing":15},"basemapStyleUrl":"","layerGroups":[{"id":"g","name":"Half","opacity":0.5,"visible":false}],"layers":[{"id":"a","name":"Points","type":"geojson","geojson":feature,"groupId":"g","opacity":0.5,"style":{"vectorStyleMode":"categorized","vectorStyleProperty":"kind","vectorStyleStops":[{"value":"a","color":"#ff0000"}],"labels":{"enabled":true,"field":"kind"}}}],"bookmarks":[{"name":"Place","lng":1,"lat":2,"zoom":3}]}).to_string();
+    let out = s.run("project.importGeolibre", &json!({"text":text})).unwrap();
+    assert_eq!(out["layers"], json!(["Points"]));
+    assert_eq!(s.project.maps.len(), maps + 1);
+    let layer = &s.map().layers[0];
+    assert!(layer.visible);
+    assert_eq!(layer.transparency, 50.0);
+    assert!(!s.map().groups[0].visible);
+    assert_eq!(s.map().groups[0].transparency, 50.0);
+    assert!(matches!(layer.renderer, rustgis_map::Renderer::Unique { .. }));
+    assert!(layer.labels.enabled);
+    assert_eq!(s.map().groups[0].children, vec![layer.id]);
+    assert_eq!(s.map().bookmarks[0].name, "Place");
+    assert_eq!(s.map().camera.bearing, 15.0);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.project.maps.len(), maps);
+    assert_eq!(s.map().name, original);
+    assert!(crate::cmd::plugins::user_only("project.importGeolibre"));
+}
+
+#[test]
+fn geolibre_input_channels_missing_sources_and_malformed_data() {
+    use base64::Engine;
+    let text=json!({"version":"0.2.0","name":"Empty","mapView":{},"basemapStyleUrl":"","layers":[{"name":"Missing","type":"geojson","sourcePath":"/no/such/geolibre-data.geojson"},{"name":"Video","type":"video"}]}).to_string();
+    for p in [json!({"text":text}), json!({"data":base64::engine::general_purpose::STANDARD.encode(&text)})] {
+        let mut s = world();
+        let out = s.run("project.importGeolibre", &p).unwrap();
+        assert_eq!(out["layers"], json!([]));
+        assert_eq!(out["notes"].as_array().unwrap().len(), 2);
+    }
+    let mut s = world();
+    let maps = s.project.maps.len();
+    for p in [json!({"text":"{"}), json!({"text":"null"}), json!({"data":"!!!!"}), json!({"url":"file:///etc/passwd"})] {
+        assert!(s.run("project.importGeolibre", &p).is_err());
+        assert_eq!(s.project.maps.len(), maps);
+    }
+}
+
+#[test]
+fn geolibre_moved_local_source_uses_project_directory() {
+    let dir = std::env::temp_dir().join(format!("rustgis-geolibre-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let data = dir.join("points.geojson");
+    std::fs::write(
+        &data,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}]}"#,
+    )
+    .unwrap();
+    let path = dir.join("map.geolibre");
+    std::fs::write(&path,json!({"version":"0.2.0","name":"Moved","mapView":{},"basemapStyleUrl":"","layers":[{"name":"Points","type":"geojson","sourcePath":"C:/old/place/points.geojson"}]}).to_string()).unwrap();
+    let mut s = world();
+    let out = s.run("project.importGeolibre", &json!({"path":path})).unwrap();
+    assert_eq!(out["layers"], json!(["Points"]));
+    assert_eq!(s.map().layers[0].dataset.features.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn geolibre_download_finishes_in_its_original_map_and_position() {
+    let mut s = world();
+    let mut ds = rustgis_data::Dataset::new("Pending", rustgis_data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:test".into());
+    let target = s.project.active_map;
+    let id = s.map_mut().add_dataset(ds);
+    let camera = s.map().camera;
+    s.run("map.new", &json!({"name":"Other"})).unwrap();
+    let active = s.project.active_map;
+    let download = s.download_started();
+    s.download_landed(download,br#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"value":1}}]}"#.to_vec());
+    let out=s.run("layer.addDownload",&json!({"id":download,"url":"https://example.org/points.geojson","name":"Points","geolibreLayer":{"token":"geolibre-pending:test","record":{"style":{"circleRadius":9}}}})).unwrap();
+    assert_eq!(out["layer"], id);
+    assert_eq!(s.project.active_map, active);
+    let map = &s.project.maps[target];
+    let loaded = map.layer(id).unwrap();
+    assert_eq!(loaded.dataset.features.len(), 1);
+    assert_eq!(loaded.renderer.base_symbol().size, 18.0);
+    assert_eq!(map.camera, camera);
+    assert!(s.map().layers.is_empty());
+}
+
+#[test]
+fn geolibre_tile_sources_keep_visibility_opacity_and_order() {
+    let mut s = world();
+    let layers:Vec<_>=["xyz","wms","wmts","vector-tiles"].into_iter().enumerate().map(|(i,kind)|json!({"id":kind,"name":kind,"type":kind,"visible":false,"opacity":0.3,"source":{"tiles":[format!("https://example.org/{i}/{{z}}/{{x}}/{{y}}.png")]}})).collect();
+    let out = s
+        .run(
+            "project.importGeolibre",
+            &json!({"text":json!({"version":"0.2.0","name":"Tiles","mapView":{},"basemapStyleUrl":"","layers":layers}).to_string()}),
+        )
+        .unwrap();
+    assert_eq!(out["layers"].as_array().unwrap().len(), 4);
+    assert_eq!(s.map().tiles.len(), 4);
+    assert!(s.map().tiles.iter().all(|t| !t.visible && t.opacity == 0.3));
+    assert_eq!(s.map().tiles[0].name, "vector-tiles");
+    assert_eq!(s.map().tiles[3].name, "xyz");
+}
+
+/// Sources authored by this test exercise the dispatch for every supported local data kind.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn geolibre_local_source_kinds_and_archives() {
+    let dir = std::env::temp_dir().join(format!("rustgis-geolibre-kinds-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (ds,_)=rustgis_data::io::read_bytes("points.geojson",br#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"value":1}}]}"#).unwrap();
+    for (file, ext) in [("points.fgb", "fgb"), ("points.parquet", "parquet")] {
+        std::fs::write(dir.join(file), rustgis_data::io::write_bytes(&ds, ext).unwrap().0).unwrap();
+    }
+    std::fs::write(dir.join("points.las"), las_bytes(&[(10.5, 50.5, 300.0, 2)])).unwrap();
+    let raster = rustgis_data::raster::ascii::read(
+        "ncols 2\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\nNODATA_value -9999\n1 2\n3 4\n",
+        "grid",
+        Some(rustgis_data::raster::Crs::LonLat),
+    )
+    .unwrap();
+    let tif = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    std::fs::write(dir.join("grid.tif"), &tif).unwrap();
+    let mut tile = tiny_skia::Pixmap::new(1, 1).unwrap();
+    tile.fill(tiny_skia::Color::from_rgba8(10, 20, 30, 255));
+    let png = tile.encode_png().unwrap();
+    let archive = crate::render::rustgis_tiles::pmtiles::NewArchive {
+        tile_type: crate::render::rustgis_tiles::pmtiles::TileType::Png,
+        gzipped_tiles: false,
+        bounds: [-180.0, -85.0, 180.0, 85.0],
+        metadata: json!({}),
+    };
+    std::fs::write(
+        dir.join("tiles.pmtiles"),
+        crate::render::rustgis_tiles::pmtiles::write(vec![(0, 0, 0, png.clone())], &archive).unwrap(),
+    )
+    .unwrap();
+    let db = rusqlite::Connection::open(dir.join("tiles.mbtiles")).unwrap();
+    db.execute_batch("CREATE TABLE metadata(name TEXT,value TEXT); CREATE TABLE tiles(zoom_level INTEGER,tile_column INTEGER,tile_row INTEGER,tile_data BLOB); INSERT INTO metadata VALUES('format','png'),('minzoom','0'),('maxzoom','0');").unwrap();
+    db.execute("INSERT INTO tiles VALUES(0,0,0,?1)", [png]).unwrap();
+    drop(db);
+    let store = dir.join("grid.zarr");
+    std::fs::create_dir_all(&store).unwrap();
+    let arr = |shape: Value, chunks: Value| json!({"zarr_format":2,"shape":shape,"chunks":chunks,"dtype":"<f8","compressor":null,"filters":null,"order":"C","fill_value":null});
+    let meta = json!({"zarr_consolidated_format":1,"metadata":{
+        ".zgroup":{"zarr_format":2},
+        "value/.zarray":arr(json!([2,2]),json!([2,2])),"value/.zattrs":{"_ARRAY_DIMENSIONS":["lat","lon"]},
+        "lat/.zarray":arr(json!([2]),json!([2])),"lat/.zattrs":{"_ARRAY_DIMENSIONS":["lat"],"units":"degrees_north"},
+        "lon/.zarray":arr(json!([2]),json!([2])),"lon/.zattrs":{"_ARRAY_DIMENSIONS":["lon"],"units":"degrees_east"}
+    }});
+    std::fs::write(store.join(".zmetadata"), meta.to_string()).unwrap();
+    for (path, values) in [("value/0.0", vec![1.0f64, 2.0, 3.0, 4.0]), ("lat/0", vec![0.5, 1.5]), ("lon/0", vec![0.5, 1.5])] {
+        let path = store.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()).unwrap();
+    }
+    let sources = [
+        ("flatgeobuf", "points.fgb"),
+        ("geoparquet", "points.parquet"),
+        ("lidar", "points.las"),
+        ("raster", "grid.tif"),
+        ("cog", "grid.tif"),
+        ("zarr", "grid.zarr"),
+        ("pmtiles", "tiles.pmtiles"),
+        ("mbtiles", "tiles.mbtiles"),
+    ];
+    let layers: Vec<_> = sources
+        .iter()
+        .map(|(kind, file)| json!({"id":kind,"name":kind,"type":kind,"sourcePath":file,"source":{"variable":"value"}}))
+        .collect();
+    let mut s = world();
+    let out=s.run("project.importGeolibre",&json!({"dir":dir,"text":json!({"version":"0.2.0","name":"Sources","mapView":{},"basemapStyleUrl":"","layers":layers}).to_string()})).unwrap();
+    assert_eq!(out["layers"].as_array().unwrap().len(), sources.len(), "{out}");
+    assert_eq!(s.map().layers.len(), 6);
+    assert_eq!(s.map().tiles.len(), 2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn geolibre_saved_order_overrides_automatic_geometry_ranking() {
+    let mut s = world();
+    let features = [
+        ("point", json!({"type":"Point","coordinates":[0,0]})),
+        ("polygon", json!({"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]})),
+    ];
+    let layers:Vec<_>=features.into_iter().map(|(name,geometry)|json!({"id":name,"name":name,"type":"geojson","geojson":{"type":"FeatureCollection","features":[{"type":"Feature","geometry":geometry,"properties":{}}]}})).collect();
+    s.run(
+        "project.importGeolibre",
+        &json!({"text":json!({"version":"0.2.0","name":"Order","mapView":{},"basemapStyleUrl":"","layers":layers}).to_string()}),
+    )
+    .unwrap();
+    assert_eq!(s.map().layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["polygon", "point"]);
+}
+
+#[test]
+fn geolibre_failed_download_discards_only_its_own_reservation() {
+    let mut s = world();
+    let original = s.map().layers.len();
+    let mut ds = rustgis_data::Dataset::new("Pending", rustgis_data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:failure".into());
+    let id = s.map_mut().add_dataset(ds);
+    let mut group = rustgis_map::LayerGroup::new("Group");
+    group.children.push(id);
+    s.map_mut().add_group(group);
+    s.run("map.new", &json!({"name":"Other"})).unwrap();
+    crate::cmd::geolibre::discard_pending(&mut s, &json!({"geolibreLayer":{"token":"geolibre-pending:failure"}}));
+    assert_eq!(s.project.maps[0].layers.len(), original);
+    assert!(s.project.maps[0].groups.iter().all(|g| !g.children.contains(&id)));
+    assert_eq!(s.map().name, "Other");
+}

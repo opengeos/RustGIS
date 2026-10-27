@@ -270,6 +270,7 @@ const NEVER: &[&str] = &[
     // A QGIS project names the files and web addresses its layers come from, and the import
     // adds them without each one passing a plugin's permissions.
     "project.importQgis",
+    "project.importGeolibre",
     "edit.undo",
     "edit.redo",
     // Credentials: a plugin never sets where the user's are sent.
