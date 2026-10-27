@@ -662,7 +662,7 @@ pub fn measured_crs(g: &Grid, map: &Map, center: Coord) -> Option<rustgis_data::
     let named = g.crs.as_deref().map(str::trim).filter(|c| !c.is_empty());
     let crs = match named {
         // (One longer than a command keeps, from a crafted project, isn't read each frame.)
-        Some(c) if c.len() > rustgis_map::layout::MAX_GRID_CRS => return None,
+        Some(c) if c.chars().count() > rustgis_map::layout::MAX_GRID_CRS => return None,
         Some(c) => Crs::parse(c).ok()?,
         // The map's own: its code (a preset, EPSG:, ESRI: or local:) as its PROJ definition.
         None => match &map.projection {

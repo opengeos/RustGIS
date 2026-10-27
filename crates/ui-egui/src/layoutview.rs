@@ -1230,6 +1230,7 @@ fn grid_properties(app: &mut RustGisApp, ui: &mut Ui, grid: Option<&Grid>, id: u
                     format!("{v}°")
                 }
             }))
+            .on_hover_text(if measured { tl!("In the coordinate system's units: metres for UTM.") } else { tl!("In degrees.") })
             .labelled_by(input_label.id);
         if drag.settled(ui, &r, &mut step) && (step - g.step).abs() > 1e-9 {
             set(app, json!({"step": step}));

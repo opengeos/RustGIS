@@ -2324,7 +2324,7 @@ fn grid_params(p: &Value, base: Grid) -> Result<Grid, String> {
         None => {}
         Some(Value::Null) => g.crs = None,
         Some(Value::String(c)) if c.trim().is_empty() => g.crs = None,
-        Some(Value::String(c)) if c.trim().len() > rustgis_map::layout::MAX_GRID_CRS => {
+        Some(Value::String(c)) if c.trim().chars().count() > rustgis_map::layout::MAX_GRID_CRS => {
             return Err(format!("crs: at most {} characters", rustgis_map::layout::MAX_GRID_CRS));
         }
         Some(Value::String(c)) => {

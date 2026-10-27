@@ -160,7 +160,7 @@ impl GridKind {
 pub const MAX_MEASURED_STEP: f64 = 10_000_000.0;
 /// The narrowest step of a measured grid, in its units (a metre).
 pub const MIN_MEASURED_STEP: f64 = 1.0;
-/// The longest coordinate system a measured grid keeps (a WKT's characters).
+/// The longest coordinate system a measured grid keeps (a WKT's characters, counted as such).
 pub const MAX_GRID_CRS: usize = 4096;
 /// The widest step of a graticule, in degrees.
 pub const MAX_GRATICULE_STEP: f64 = 90.0;
@@ -1290,7 +1290,13 @@ impl Layout {
                         }
                     }
                     if let Some(g) = grid {
-                        g.step = finite_or(g.step, 0.0).clamp(0.0, 90.0);
+                        // A graticule's step in degrees, a measured grid's in its system's units.
+                        let step = finite_or(g.step, 0.0);
+                        g.step = match g.kind {
+                            GridKind::Graticule => step.clamp(0.0, MAX_GRATICULE_STEP),
+                            GridKind::Measured if step <= 0.0 => 0.0,
+                            GridKind::Measured => step.clamp(MIN_MEASURED_STEP, MAX_MEASURED_STEP),
+                        };
                         g.tick_length = finite_or(g.tick_length, tick_length()).clamp(0.0, MAX_TICK_MM);
                         g.width = finite_or(g.width, grid_width()).clamp(0.0, MAX_GRID_WIDTH);
                     }
@@ -1809,5 +1815,20 @@ mod tests {
         let Some(ElementKind::MapFrame { grid: Some(g), .. }) = l.element(1).map(|e| &e.kind) else { panic!() };
         assert_eq!((g.tick_length, g.width), (MAX_TICK_MM, 0.0));
         assert!(matches!(l.element(2).map(|e| &e.kind), Some(ElementKind::ScaleBar { divisions: MAX_SCALE_DIVISIONS, .. })));
+        // A step in degrees for a graticule, in the system's units for a measured grid: 1 km
+        // kept, and limited as `layout.setGrid` limits it.
+        let step = |kind: &str, step: f64| {
+            let text = text.replace(r#""step":10"#, &format!(r#""step":{step},"kind":"{kind}""#));
+            let mut l: Layout = serde_json::from_str(&text).unwrap();
+            l.clamp();
+            let Some(ElementKind::MapFrame { grid: Some(g), .. }) = l.element(1).map(|e| &e.kind) else { panic!() };
+            g.step
+        };
+        assert_eq!((step("graticule", 1000.0), step("graticule", -1.0)), (MAX_GRATICULE_STEP, 0.0));
+        assert_eq!(
+            (step("measured", 1000.0), step("measured", 1e12), step("measured", 0.25)),
+            (1000.0, MAX_MEASURED_STEP, MIN_MEASURED_STEP)
+        );
+        assert_eq!(step("measured", 0.0), 0.0, "Auto");
     }
 }
