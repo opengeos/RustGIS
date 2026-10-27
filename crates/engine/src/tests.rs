@@ -9233,6 +9233,22 @@ fn selected_in_layers_asks_the_tile_layer_picked() {
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(s.selected_tile(), Some(at(&mut s, "Roads")));
     assert_eq!(s.map().tiles.iter().filter(|t| t.selected).count(), 1);
+    // Renamed and picked, then the rename undone: the one layer at its address stays picked.
+    s.run("map.setTiles", &json!({"name": "Base", "rename": "Base 2"})).unwrap();
+    s.run("map.selectTiles", &json!({"name": "Base 2"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Base")));
+    // Another at the same address and of the same kind: the name tells which, and with neither
+    // name matching none is picked rather than the wrong one.
+    s.run("map.addTiles", &json!({"url": base, "name": "Twin", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Base", "rename": "Base 2"})).unwrap();
+    s.run("map.selectTiles", &json!({"name": "Base 2"})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.selected_tile(), None);
+    s.run("map.selectTiles", &json!({"name": "Twin"})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Base", "opacity": 0.2})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Twin")));
 
     // A map layer made active ends it, and no active layer later brings it back.
     s.run("layer.select", &json!({"layer": points})).unwrap();

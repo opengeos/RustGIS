@@ -545,6 +545,11 @@ pub fn follow_layer_filter(app: &mut RustGisApp) {
             let _ = app.run("layer.select", json!({"layer": keep}));
         }
     }
+    // A tile layer picked since the filter hid the active layer (a row's click, a command or a
+    // script) is picked instead: the hidden layer isn't made active again once it shows.
+    if app.session.selected_tile().is_some() {
+        app.ui.layer_filter_hid = None;
+    }
     match (app.session.active_layer, app.ui.layer_filter_hid) {
         (Some(id), _) if shown(&app.session, id) == Some(false) => {
             // No command clears the active layer; it is view state, like a click on an empty row.
@@ -566,8 +571,9 @@ pub fn follow_layer_filter(app: &mut RustGisApp) {
     // pick isn't kept to come back).
     if let Some(i) = app.session.selected_tile()
         && app.session.map().tiles.get(i).is_some_and(|t| !filter_shows(&q, &t.name))
+        && let Some(t) = app.session.map_mut().tiles.get_mut(i)
     {
-        app.session.map_mut().tiles[i].selected = false;
+        t.selected = false;
     }
 }
 
@@ -1565,8 +1571,6 @@ fn tile_row(app: &mut RustGisApp, ui: &mut Ui, i: usize, moves: [bool; 2], reord
         action = Some(("map.expandTiles", json!({"index": i})));
     } else if resp.clicked() && !picked {
         action = Some(("map.selectTiles", json!({"index": i})));
-        // A layer the filter hid isn't made active again once it shows: this was picked since.
-        app.ui.layer_filter_hid = None;
     }
     let mut hover = if elided { format!("{shown}\n{}", tile.url) } else { tile.url.clone() };
     if let Some(error) = &tile.error {
@@ -6066,6 +6070,16 @@ mod tests {
         h.get_by_label("Depths").click();
         h.run_steps(2);
         assert_eq!(h.state().session.selected_tile(), depths);
+        // An active layer the filter hides isn't made active again when a tile layer was picked
+        // meanwhile by a command, as by a click.
+        h.state_mut().run("layer.select", json!({"layer": "Cities"})).unwrap();
+        h.state_mut().ui.layer_filter = "Dep".into();
+        h.run_steps(2);
+        assert_eq!(h.state().session.active_layer, None, "hidden");
+        h.state_mut().run("map.selectTiles", json!({"name": "Depths"})).unwrap();
+        h.state_mut().ui.layer_filter.clear();
+        h.run_steps(2);
+        assert_eq!((h.state().session.active_layer, h.state().session.selected_tile()), (None, depths));
         h.get_by_label("Cities").click();
         h.run_steps(2);
         let cities = h.state().session.map().layer_by_name("Cities").map(|l| l.id);

@@ -398,7 +398,6 @@ fn lists_features(t: &rustgis_map::tiles::TileLayer, picked: bool) -> bool {
 /// its tile layer's index (only those `keep` takes; only the first layer with any when
 /// `first_layer`): those [`lists_features`] takes, or with `picked` (the tile layer picked in the
 /// Layers pane) only that one. The tiles looked at are those drawn there.
-#[allow(clippy::too_many_arguments)]
 fn tile_features(
     s: &Session,
     lon: f64,

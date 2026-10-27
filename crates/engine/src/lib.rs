@@ -1475,8 +1475,9 @@ impl Session {
     }
 
     /// After undo or redo swaps the project: the tile layer picked in the Layers pane stays the one
-    /// picked (picking isn't an undo step), found again by its address and kind (and name, when
-    /// several share them); the restored project's own picks are dropped.
+    /// picked (picking isn't an undo step), found again by its address, kind and name (by address
+    /// and kind alone when only one layer has them: a rename undone); the restored project's own
+    /// picks are dropped.
     fn keep_tile_pick(&mut self, before: &Project) {
         for t in self.project.maps.iter_mut().flat_map(|m| m.tiles.iter_mut()) {
             t.selected = false;
@@ -1485,8 +1486,8 @@ impl Session {
             let Some(p) = old.tiles.iter().find(|t| t.selected) else { continue };
             let same = |t: &&mut rustgis_map::tiles::TileLayer| t.url == p.url && t.kind == p.kind;
             let mut like: Vec<_> = m.tiles.iter_mut().filter(same).collect();
-            let at = like.iter().position(|t| t.name == p.name).unwrap_or(0);
-            if let Some(t) = like.get_mut(at) {
+            let at = like.iter().position(|t| t.name == p.name).or_else(|| (like.len() == 1).then_some(0));
+            if let Some(t) = at.and_then(|at| like.get_mut(at)) {
                 t.selected = true;
             }
         }
