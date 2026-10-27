@@ -99,8 +99,9 @@ pub fn shortest_route(
                 Some((i, t, q, haversine_m(q, p)))
             })
             .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
-            // The scan ranks segments by the cheap great-circle distance (it orders them as the
-            // ellipsoid does, to well under a snap tolerance); only the winner is solved exactly.
+            // The scan ranks segments by the cheap great-circle distance, which differs from the
+            // ellipsoid's by up to about 0.7 %; only the winner is solved exactly, so the segment
+            // chosen is approximate near the snap tolerance.
             .map(|(i, t, q, _)| (i, t, q, wgs84_distance_m(q, p)))
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.

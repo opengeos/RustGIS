@@ -274,8 +274,12 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     if !ring.iter().all(|c| c.is_finite()) {
         return (f64::NAN, f64::NAN);
     }
-    if ring.len() < 3 {
+    if ring.len() < 2 {
         return (0.0, 0.0);
+    }
+    // A two-vertex ring is a segment there and back: twice its length, and no area.
+    if let [a, b] = ring {
+        return (2.0 * wgs84_distance_m(*a, *b), 0.0);
     }
     // An edge of a full turn of longitude (-180° to 180°, as a globe-wide band has) joins two
     // coordinates that name the same place, which a geodesic cannot tell from no edge at all: such
@@ -510,8 +514,12 @@ mod tests {
         let (perimeter_broken, area_broken) =
             wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0), Coord::new(0.0, 1.0), Coord::new(f64::NAN, 0.0)]);
         assert!(perimeter_broken.is_nan() && area_broken.is_nan());
-        // Degenerate rings keep their zero, unless a vertex is broken: that is NaN, even in a short ring.
+        // A single vertex keeps its zero; two vertices are a segment there and back (2d, no area).
         assert_eq!(wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0)]), (0.0, 0.0));
+        let (perimeter_two, area_two) = wgs84_ring_perimeter_area_m2(&[Coord::new(0.0, 0.0), Coord::new(0.0, 1.0)]);
+        assert!((perimeter_two - 2.0 * 111_319.490_8).abs() < 0.01, "{perimeter_two}");
+        assert_eq!(area_two, 0.0);
+        // Degenerate rings keep their zero, unless a vertex is broken: that is NaN, even in a short ring.
         let (perimeter_short, area_short) = wgs84_ring_perimeter_area_m2(&[Coord::new(f64::NAN, f64::NAN), Coord::new(0.0, 0.0)]);
         assert!(perimeter_short.is_nan() && area_short.is_nan());
     }
