@@ -1794,7 +1794,8 @@ fn is_left(a: &crate::layout::TextAlign) -> bool {
 
 /// `text` broken into lines as `wrap_char` and `wrap_length` say: at each wrap character (left
 /// out), then each line longer than `wrap_length` characters between its words (a word longer
-/// than that keeps a line of its own). Lines the text already has stay lines.
+/// than that keeps a line of its own). Lines the text already has stay lines. A line that fits keeps
+/// its spacing; a longer one is rebuilt from its words, so its extra spaces are dropped.
 pub fn wrapped(text: &str, wrap_char: Option<&str>, wrap_length: u32) -> String {
     let broken = match wrap_char.filter(|c| !c.is_empty()) {
         Some(c) => text.replace(c, "\n"),

@@ -194,10 +194,10 @@ impl Line {
         let mut out = Vec::with_capacity(advances.len());
         let mut last: Option<f32> = None;
         for adv in advances {
-            let mid = d + adv / 2.0;
+            let char_mid = d + adv / 2.0;
             // A character's angle: across its own width, so it sits on the bend rather than a vertex.
-            let (a, b) = (path.at(mid - adv.max(0.5) / 2.0)?, path.at(mid + adv.max(0.5) / 2.0)?);
-            let (p, turn) = (path.at(mid)?, angle(a, b));
+            let (a, b) = (path.at(char_mid - adv.max(0.5) / 2.0)?, path.at(char_mid + adv.max(0.5) / 2.0)?);
+            let (p, turn) = (path.at(char_mid)?, angle(a, b));
             if !turn.is_finite() {
                 return None;
             }
