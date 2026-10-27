@@ -19230,3 +19230,33 @@ fn geolibre_remote_plain_tiff_folder_opacity_is_not_baked_twice() {
     assert_eq!(group.transparency, 50.0);
     assert!(s.map().tiles.is_empty());
 }
+
+/// Tile names need not be unique; parser notes on skipped sources must not inflate the count.
+#[test]
+fn geolibre_summary_counts_completed_records_instead_of_note_names() {
+    let projects = [
+        (
+            json!([
+                {"id":"a","name":"Same","type":"xyz","source":{"url":"https://example.org/a/{z}/{x}/{y}.png"}},
+                {"id":"b","name":"Same","type":"xyz","source":{"url":"https://example.org/b/{z}/{x}/{y}.png"}}
+            ]),
+            "2 drawn differently, 0 left out",
+        ),
+        (
+            json!([
+                {"id":"good","name":"Good","type":"geojson","geojson":{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}]}},
+                {"id":"bad","name":"Dropped","type":"deckgl-viz","beforeId":"unsupported-anchor"}
+            ]),
+            "0 drawn differently, 1 left out",
+        ),
+    ];
+    for (layers, summary) in projects {
+        let mut s = world();
+        let text = json!({"version":"0.2.0","name":"Summary","mapView":{},"basemapStyleUrl":"","layers":layers}).to_string();
+        let out = s.run("project.importGeolibre", &json!({"text":text})).unwrap();
+        let expected = if summary.starts_with("2 ") { 2 } else { 1 };
+        assert_eq!(out["layers"].as_array().unwrap().len(), expected, "{out}");
+        let notices: Vec<_> = s.notices.iter().map(|n| n.text.as_str()).collect();
+        assert!(notices.iter().any(|n| n.contains(summary)), "expected {summary}, got {notices:?}");
+    }
+}

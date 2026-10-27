@@ -181,7 +181,7 @@ pub fn gate(s: &Session, call: &ToolCall) -> Option<String> {
     if id.starts_with(rustgis_engine::plugins::PREFIX) {
         return Some("it runs a plugin's command".into());
     }
-    if id == "ui.addUrl" && params.get("geolibreProject").is_some() {
+    if id == "ui.addUrl" && ["geolibreProject", "geolibreLayer", "geolibreZarr"].iter().any(|key| params.get(key).is_some()) {
         return Some("it adds the files and web addresses a GeoLibre project names".into());
     }
     if user_only(&id) && !matches!(id.as_str(), "edit.undo" | "edit.redo") {

@@ -4084,4 +4084,10 @@ fn geolibre_download_callbacks_require_import_approval() {
         let call = ToolCall { id: "callback".into(), name: "run_command".into(), args: json!({"command":command,"params":params}) };
         assert!(tools::gate(&s, &call).is_some(), "{command}");
     }
+    for key in ["geolibreProject", "geolibreLayer", "geolibreZarr"] {
+        let mut params = json!({"url":"https://example.org/data"});
+        params[key] = json!(true);
+        let call = ToolCall { id: key.into(), name: "run_command".into(), args: json!({"command":"ui.addUrl","params":params}) };
+        assert!(tools::gate(&s, &call).is_some(), "{key}");
+    }
 }

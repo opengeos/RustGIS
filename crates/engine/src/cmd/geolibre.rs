@@ -95,6 +95,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         group_index.entry(string(group, "id")).or_insert(group);
     }
     let mut added = Vec::new();
+    let mut changed = 0usize;
     let mut groups: std::collections::HashMap<String, Vec<u32>> = Default::default();
     let mut order = Vec::new();
     for record in project.layers.iter().rev() {
@@ -107,11 +108,13 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         let active = s.active_layer;
         let requests = s.url_requests.len();
         let folder = group_look(&group_index, string(record, "groupId"));
-        match add_layer(s, record, dir.as_deref(), &mut report, folder) {
+        let mut layer_report = Report::default();
+        let completed = match add_layer(s, record, dir.as_deref(), &mut layer_report, folder) {
             Ok(Added::Feature(id)) => {
                 added.push(name.to_string());
                 order.push(id);
                 groups.entry(string(record, "groupId").into()).or_default().push(id);
+                s.map().layer(id).is_some_and(|l| !l.dataset.source.as_deref().unwrap_or("").starts_with("geolibre-pending:"))
             }
             Ok(Added::Tile(index)) => {
                 let (visible, opacity) = folder;
@@ -120,12 +123,25 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
                     tile.opacity *= opacity as f32;
                 }
                 added.push(name.to_string());
+                s.map().tiles.get(index).is_some_and(|t| !t.id.starts_with("geolibre-pending:"))
             }
             Err(e) => {
                 s.project = before;
                 s.active_layer = active;
                 s.url_requests.truncate(requests);
                 report.skipped(name, format!("layer: {e}"));
+                false
+            }
+        };
+        if completed
+            && (!string(record, "beforeId").is_empty() || layer_report.notes.iter().any(|n| n.kind == geolibre::NoteKind::Approximated))
+        {
+            changed += 1;
+        }
+        // Keep per-record summary accounting separate from Report's name/text deduplication.
+        for note in layer_report.notes {
+            for _ in 0..note.count {
+                report.note(&note.layer, note.kind, note.text.clone());
             }
         }
     }
@@ -147,18 +163,12 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     s.map_mut().camera = project.camera;
     s.map_mut().bookmarks = project.bookmarks;
     let skipped = project.layers.len().saturating_sub(added.len());
-    let changed: std::collections::HashSet<_> = report
-        .notes
-        .iter()
-        .filter(|n| n.kind == geolibre::NoteKind::Approximated && !n.layer.is_empty())
-        .map(|n| n.layer.as_str())
-        .collect();
     s.notify(
         format!(
             "Imported {} of {} GeoLibre layers; {} drawn differently, {skipped} left out (see the import's notes)",
             added.len(),
             project.layers.len(),
-            changed.len()
+            changed
         ),
         false,
     );
