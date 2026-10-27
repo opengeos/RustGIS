@@ -440,6 +440,14 @@ fn read_features_reads_a_tools_output_table() {
         assert_eq!(by_layer, tools::run(&mut s, &t("read_features", json!({"table": name}))).unwrap(), "{name}");
         assert!(by_layer.contains(&format!("\"table\":\"{name}\"")), "{by_layer}");
     }
+    // Names are matched as written, by `layer` as by `table`: no trimming.
+    for name in ["stats ", " Stats"] {
+        let (by_layer, by_table) = (
+            tools::run(&mut s, &t("read_features", json!({"layer": name}))),
+            tools::run(&mut s, &t("read_features", json!({"table": name}))),
+        );
+        assert_eq!(by_layer.is_ok(), by_table.is_ok(), "{name:?}: {by_layer:?} / {by_table:?}");
+    }
     let id = s.project.tables.last().map(|t| t.id).unwrap_or_default();
     // A layer with that id reads; otherwise it's an error, never the table.
     let by_id = tools::run(&mut s, &t("read_features", json!({"layer": id.to_string()})));

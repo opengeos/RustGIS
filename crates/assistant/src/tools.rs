@@ -85,7 +85,7 @@ pub fn defs() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "run_tool",
-            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step.",
+            description: "Run a geoprocessing tool. Its output is added to the map as a new layer, or to the project as a standalone table (for example Summary Statistics), whose name the result gives (use it as the input of a next step; read a table with read_features). One undo step.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -606,8 +606,10 @@ fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
     let id = match s.layer_id(&json!({"layer": layer})) {
         Ok(id) => id,
         Err(e) => {
-            let Some(n) = layer.as_str().map(str::trim) else { return Err(e) };
+            // Untrimmed, as `table` and layer names are matched: `stats` and `stats ` can both exist.
+            let Some(n) = layer.as_str() else { return Err(e) };
             let tables = &s.project.tables;
+            // `find_table` falls back to an id; keep only a name match, so `layer: "7"` can't read table 7.
             let by_name = project::find_table(tables, n).filter(|&i| tables.get(i).is_some_and(|t| t.name.eq_ignore_ascii_case(n)));
             return match by_name {
                 Some(i) => Ok(table(i)?),
