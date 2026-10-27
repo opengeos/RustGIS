@@ -314,14 +314,24 @@ pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {
     // a ring is measured on the sphere, as it always was.
     let full_turn = ring.iter().zip(ring.iter().cycle().skip(1)).any(|(a, b)| (b.x - a.x).abs() >= 360.0);
     if full_turn {
-        // A full-turn edge runs along its parallel, so it is measured as one-degree steps along it
-        // (at most 3600 for a hostile edge); a single geodesic between its ends would be zero.
+        // A ring whose last vertex names its first one's place (a parallel traced from -180° round
+        // to 180°, back to its start) has a closing edge of no length: measured as a full turn, it
+        // would count the parallel twice.
+        let same_place = |a: &Coord, b: &Coord| a.y == b.y && (a.x - b.x) % 360.0 == 0.0;
+        let closing = ring.last().zip(ring.first()).filter(|&(l, f)| !same_place(l, f));
+        // A full-turn edge along a parallel has the parallel's length, in closed form. One that
+        // changes latitude runs along its parallels in one-degree steps (at most 3600 for a hostile
+        // edge); a single geodesic between its ends would be zero.
         let perimeter: f64 = ring
             .iter()
-            .zip(ring.iter().cycle().skip(1))
+            .zip(ring.iter().skip(1))
+            .chain(closing)
             .map(|(a, b)| {
                 if (b.x - a.x).abs() < 360.0 {
                     return haversine_m(*a, *b);
+                }
+                if a.y == b.y {
+                    return EARTH_RADIUS_M * a.y.to_radians().cos() * (b.x - a.x).abs().to_radians();
                 }
                 let steps = (b.x - a.x).abs().ceil().min(3600.0) as usize;
                 let at = |i: usize| {

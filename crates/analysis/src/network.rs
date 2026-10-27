@@ -109,6 +109,9 @@ pub fn shortest_route(
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
+        if !p.is_finite() {
+            return Err("a route end has no place".into());
+        }
         let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
         // A NaN distance (a broken end) fails the check too, rather than snapping to a random segment.
         if d.is_nan() || d > snap_m {
@@ -467,6 +470,14 @@ mod tests {
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
         let r = shortest_route(&ds, &[0, 1], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
         assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
+    }
+
+    #[test]
+    fn a_route_end_with_no_place_is_named_as_such() {
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.1, 0.0)]])), vec![]);
+        let err = shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.05, 0.0), None, 100.0).unwrap_err();
+        assert_eq!(err, "a route end has no place");
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {
