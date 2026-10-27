@@ -122,7 +122,9 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
                     // drawn again a tile away each way where it crosses the tile's edges.
                     let x = (col as f32 + 0.5) * dx + if row == 1 { sx } else { 0.0 };
                     let y = (row as f32 + 0.5) * dy + if col == 1 { sy } else { 0.0 };
-                    for (ox, oy) in [-1.0, 0.0, 1.0].into_iter().flat_map(|i| [-1.0, 0.0, 1.0].map(|j| (i * tw, j * th))) {
+                    // Copies two tiles out each way: a marker up to about three times its spacing
+                    // still reaches across the tile's edge whole.
+                    for (ox, oy) in (-2..=2).flat_map(|i| (-2..=2).map(move |j| (i as f32 * tw, j as f32 * th))) {
                         crate::draw_marker(pm, (x + ox) * k, (y + oy) * k, &symbol, 1.0, None, ppp * k);
                     }
                 }

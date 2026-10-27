@@ -20,10 +20,19 @@ fn fill_json(f: &FillLayer) -> Value {
         FillPattern::Hatch { angle, spacing, width, offset } => {
             json!({"color": color, "pattern": "hatch", "angle": angle, "spacing": spacing, "width": width, "offset": offset})
         }
-        FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, offset } => json!({
-            "color": color, "pattern": "dots", "marker": marker.label(), "size": size, "outline": outline.map(|c| c.hex()),
-            "outlineWidth": outline_width, "spacing": spacing, "displacement": displacement, "offset": offset,
-        }),
+        FillPattern::Dots { marker, size, outline, outline_width, spacing, displacement, offset } => {
+            let mut o = json!({
+                "color": color, "pattern": "dots", "marker": marker.label(), "size": size, "outline": outline.map(|c| c.hex()),
+                "outlineWidth": outline_width, "spacing": spacing, "displacement": displacement, "offset": offset,
+            });
+            // A character of a font (from a QGIS font marker): its char and family, as the command takes them.
+            if let Marker::Char(g) = marker {
+                o["marker"] = Value::Null;
+                o["char"] = json!(g.ch.to_string());
+                o["font"] = json!(g.font.as_str());
+            }
+            o
+        }
     }
 }
 
@@ -292,7 +301,8 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
                 }
             }
             FillPattern::Dots { size, spacing, displacement, .. } => {
-                let [dx, dy] = spacing.map(|s| s.max(1.0));
+                // (No finer than 4 points in the swatch: it is a picture, not every dot.)
+                let [dx, dy] = spacing.map(|s| s.max(4.0));
                 let (mut y, mut row) = (r.min.y + dy / 2.0, 0);
                 while y < r.max.y + dy {
                     let shift = if row % 2 == 1 { displacement[0] } else { 0.0 };

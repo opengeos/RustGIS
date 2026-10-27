@@ -378,6 +378,14 @@ fn fill_layers_stack_and_survive_save_and_undo() {
     let f = got(&s);
     assert_eq!(f[0].pattern, FillPattern::Hatch { angle: 315.0, spacing: 500.0, width: 0.0, offset: 0.0 });
     assert!(matches!(f[1].pattern, FillPattern::Dots { spacing: [500.0, 500.0], .. }), "{f:?}");
+    // A character of a font as the dots (a QGIS font marker's), kept with its family; not with a
+    // shape too.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "dots", "char": "★", "font": "Noto Sans"}]})).unwrap();
+    let FillPattern::Dots { marker: rustgis_map::Marker::Char(g), .. } = got(&s)[0].pattern else { panic!("{:?}", got(&s)) };
+    assert_eq!((g.ch, g.font.as_str()), ('★', "Noto Sans"));
+    assert!(
+        s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "dots", "marker": "square", "char": "x"}]})).is_err()
+    );
     // A class's own (Unique Values), then back to the layer's.
     s.run("layer.symbology", &json!({"layer": "Countries", "type": "unique", "field": "continent"})).unwrap();
     let value = match &s.map().layer_by_name("Countries").unwrap().renderer {
