@@ -1187,7 +1187,10 @@ fn add_tiles(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             .labelled_by(input_label.id);
         ui.end_row();
     });
-    ui.checkbox(&mut app.dialogs.flag, tl!("Overlay (a transparent layer kept on top, such as labels or roads)"));
+    ui.checkbox(
+        &mut app.dialogs.flag,
+        tl!("Overlay (on top of the map's layers, such as labels, roads or a WMS layer; otherwise a basemap under them)"),
+    );
     buttons(app, ui, "Add", |app| {
         let mut p = json!({"url": app.dialogs.text.trim(), "overlay": app.dialogs.flag});
         if !matches!(app.dialogs.mode, "auto" | "new") {

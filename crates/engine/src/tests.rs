@@ -1580,8 +1580,8 @@ fn custom_projections_switch_keep_scale_query_and_render() {
 #[test]
 fn raster_layers_open_style_identify_and_round_trip() {
     let mut s = with_raster();
-    let l = s.map().layers.last().unwrap();
-    assert!(l.is_raster(), "rasters go under the vector layers");
+    let l = s.map().layers.first().unwrap();
+    assert!(l.is_raster(), "a new raster goes on top, as every new layer does (#808)");
     assert_eq!(l.name, "scene");
     assert_eq!(s.active_layer, Some(l.id));
     let e = l.extent();
@@ -1608,7 +1608,7 @@ fn raster_layers_open_style_identify_and_round_trip() {
     s.run("raster.resampling", &json!({"type": "bilinear"})).unwrap();
     s.run("raster.enhance", &json!({"brightness": 20, "contrast": -10, "gamma": 1.4})).unwrap();
     s.run("layer.ramp", &json!({"ramp": "Aurora"})).unwrap();
-    let st = s.map().layers.last().unwrap().raster.as_ref().unwrap().style.clone();
+    let st = s.map().layers.first().unwrap().raster.as_ref().unwrap().style.clone();
     assert_eq!(st.renderer, rustgis_map::RasterRenderer::Rgb { red: 2, green: 1, blue: 0 });
     assert!(st.dra && st.gamma == 1.4);
     // Feature-only commands are off for rasters, and layer conditions follow a named layer.
@@ -4856,7 +4856,7 @@ fn custom_colour_ramps_add_apply_save_and_travel() {
     let mut r = with_raster();
     r.run("ramp.add", &json!({"path": path("mine.rgisramp")})).unwrap();
     r.run("raster.symbology", &json!({"type": "stretch", "ramp": "Phosphor Frostfire"})).unwrap();
-    let style = |r: &Session| r.map().layers.last().unwrap().raster.as_ref().unwrap().style.renderer.clone();
+    let style = |r: &Session| r.map().layers.first().unwrap().raster.as_ref().unwrap().style.renderer.clone();
     assert!(matches!(style(&r), RasterRenderer::Stretch { ramp: Ramp::Custom(_), .. }));
     r.run("raster.symbology", &json!({"type": "classify", "classes": 3})).unwrap();
     assert!(matches!(style(&r), RasterRenderer::Classify { ramp: Ramp::Custom(_), .. }), "classify keeps the ramp");
@@ -8285,6 +8285,12 @@ fn mbtiles_archives_become_tile_layers() {
     u.run("layer.addDataBytes", &json!({"fileName": "uploaded.mbtiles", "data": b64})).unwrap();
     assert_eq!(u.map().tiles[0].url, "upload:uploaded.mbtiles");
     draws_red(&mut u);
+
+    // Added as data to a map with layers, it goes on top of them (#808), and draws there.
+    let mut w = world();
+    w.run("layer.addData", &json!({"path": p})).unwrap();
+    assert_eq!(stack_names(&w)[0], "~red");
+    draws_red(&mut w);
 
     // Not an archive, a relative path, a network share, an upload never made.
     let junk = dir.join("junk.mbtiles");
@@ -15781,11 +15787,11 @@ fn raster_stretch_custom_bounds_per_band() {
     use rustgis_map::Stretch;
     let mut s = with_raster();
     let layer = |s: &Session, i: usize| s.map().layers.get(i).and_then(|l| l.raster.as_ref()).unwrap().clone();
-    let stretch = |s: &Session| layer(s, s.map().layers.len() - 1).style.stretch;
+    let stretch = |s: &Session| layer(s, 0).style.stretch;
     // Three bands with ranges of their own.
     let ranges = [[0.0, 100.0], [0.0, 200.0], [10.0, 50.0]];
     {
-        let rl = s.map_mut().layers.last_mut().and_then(|l| l.raster.as_mut()).unwrap();
+        let rl = s.map_mut().layers.first_mut().and_then(|l| l.raster.as_mut()).unwrap();
         let mut d = (**rl.data.as_ref().unwrap()).clone();
         assert!(d.bands.len() >= 3);
         for (b, [lo, hi]) in d.bands.iter_mut().zip(ranges) {
@@ -15861,8 +15867,8 @@ fn raster_stretch_custom_bounds() {
     let mut s = with_raster();
     // One band: a missing bound is that band's own statistic (on RGB it is the range drawn now).
     s.run("raster.symbology", &json!({"type": "stretch", "band": 1})).unwrap();
-    let stretch = |s: &Session| s.map().layers.last().unwrap().raster.as_ref().unwrap().style.stretch;
-    let stats = s.map().layers.last().unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].stats.clone();
+    let stretch = |s: &Session| s.map().layers.first().unwrap().raster.as_ref().unwrap().style.stretch;
+    let stats = s.map().layers.first().unwrap().raster.as_ref().unwrap().data.as_ref().unwrap().bands[0].stats.clone();
     s.run("raster.stretch", &json!({"type": "custom", "min": 10, "max": 200})).unwrap();
     assert_eq!(stretch(&s), Stretch::custom(10.0, 200.0));
     // A missing bound is the layer's own statistic.
@@ -15885,7 +15891,7 @@ fn raster_stretch_custom_bounds() {
     let mut flat = with_raster();
     flat.run("raster.symbology", &json!({"type": "stretch", "band": 1})).unwrap();
     {
-        let rl = flat.map_mut().layers.last_mut().and_then(|l| l.raster.as_mut()).unwrap();
+        let rl = flat.map_mut().layers.first_mut().and_then(|l| l.raster.as_mut()).unwrap();
         let mut d = (**rl.data.as_ref().unwrap()).clone();
         d.bands[0].stats.min = 7.0;
         d.bands[0].stats.max = 7.0;
@@ -15895,7 +15901,7 @@ fn raster_stretch_custom_bounds() {
     assert_eq!(stretch(&flat), Stretch::custom(6.5, 7.5));
     // The padding follows the value's size, and statistics that aren't numbers are refused.
     let set_stats = |s: &mut Session, v: f64| {
-        let rl = s.map_mut().layers.last_mut().and_then(|l| l.raster.as_mut()).unwrap();
+        let rl = s.map_mut().layers.first_mut().and_then(|l| l.raster.as_mut()).unwrap();
         let mut d = (**rl.data.as_ref().unwrap()).clone();
         d.bands[0].stats.min = v;
         d.bands[0].stats.max = v;
@@ -16127,13 +16133,150 @@ fn hand_edited_layer_groups_open_bounded_and_unambiguous() {
 fn a_new_layer_goes_above_a_group_rather_than_into_it() {
     let mut s = world();
     let names = |s: &Session| s.map().layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
-    // Rivers (lines) over Countries (polygons) in one group: a new polygon layer ranks just above
-    // Countries, which would split the group.
-    s.run("group.add", &json!({"name": "Base", "layers": ["Rivers", "Countries"]})).unwrap();
-    assert_eq!(names(&s), ["Cities", "Rivers", "Countries", "Lakes"]);
+    // A group at the top of the drawing order: a new layer goes on top (#808), above the group.
+    s.run("group.add", &json!({"name": "Base", "layers": ["Cities", "Rivers"]})).unwrap();
+    assert_eq!(names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
     let square = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
     s.run("layer.addDataText", &json!({"fileName": "p.geojson", "text": square, "name": "Square"})).unwrap();
-    assert_eq!(names(&s), ["Cities", "Square", "Rivers", "Countries", "Lakes"]);
+    assert_eq!(names(&s), ["Square", "Cities", "Rivers", "Lakes", "Countries"]);
+    assert!(s.map().groups[0].children.iter().all(|c| s.map().layer(*c).is_some_and(|l| l.name != "Square")));
+}
+
+/// The drawing order of all the active map's layers, top first: map layers by name, tile layers
+/// as `~name`.
+fn stack_names(s: &Session) -> Vec<String> {
+    let m = s.map();
+    m.stack()
+        .into_iter()
+        .map(|d| match d {
+            rustgis_map::Drawn::Layer(i) => m.layers[i].name.clone(),
+            rustgis_map::Drawn::Tile(i) => format!("~{}", m.tiles[i].name),
+        })
+        .collect()
+}
+
+const SQUARE: &str = r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}]}"#;
+const POINT: &str =
+    r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0,0]}}]}"#;
+
+/// Every new layer goes on top of the drawing order, whatever its kind, as GeoLibre adds them
+/// (#808): polygons over points, rasters over vectors, a web overlay (a WMS layer, Add Tile
+/// Layer's Overlay) over the map's layers, and a later layer over it. A basemap stays under them.
+#[test]
+fn new_layers_go_on_top_whatever_their_kind() {
+    let mut s = world();
+    assert_eq!(stack_names(&s), ["Cities", "Rivers", "Lakes", "Countries"]);
+    s.run("layer.addDataText", &json!({"fileName": "p.geojson", "text": SQUARE, "name": "Square"})).unwrap();
+    assert_eq!(stack_names(&s)[0], "Square", "a polygon layer over the points");
+    s.run("layer.addDataBytes", &json!({"fileName": "scene.tif", "data": utm_tiff_b64()})).unwrap();
+    assert_eq!(stack_names(&s)[..2], ["scene", "Square"], "a raster over the vectors");
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    assert_eq!(stack_names(&s)[..2], ["~Depths", "scene"], "an overlay over the map's layers");
+    s.run("layer.addDataText", &json!({"fileName": "q.geojson", "text": POINT, "name": "Pin"})).unwrap();
+    assert_eq!(stack_names(&s)[..3], ["Pin", "~Depths", "scene"], "a later layer over the overlay");
+    assert_eq!(s.map().layer_by_name("Pin").map(|l| l.id), s.active_layer, "and active");
+    s.run("map.addTiles", &json!({"url": "https://base.example.org/{z}/{x}/{y}.png", "name": "Streets"})).unwrap();
+    assert_eq!(stack_names(&s).last().map(String::as_str), Some("~Streets"), "a basemap under them all");
+    // The layers already there kept their order.
+    assert_eq!(stack_names(&s)[3..], ["Square", "Cities", "Rivers", "Lakes", "Countries", "~Streets"]);
+}
+
+/// A tile layer moves past map layers (a group's at once), by a step or to a place, and keeps its
+/// place when the layer under it moves or goes.
+#[test]
+fn tile_layers_move_among_the_map_layers() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    let mv = |s: &mut Session, to: Value| s.run("map.setTiles", &json!({"name": "Depths", "move": to})).map(|_| stack_names(s));
+    assert!(mv(&mut s, json!("up")).is_err(), "already on top");
+    assert_eq!(mv(&mut s, json!("down")).unwrap(), ["Cities", "~Depths", "Rivers", "Lakes", "Countries"]);
+    s.run("group.add", &json!({"name": "Water", "layers": ["Rivers", "Lakes"]})).unwrap();
+    assert_eq!(mv(&mut s, json!("down")).unwrap(), ["Cities", "Rivers", "Lakes", "~Depths", "Countries"], "past the group");
+    assert_eq!(mv(&mut s, json!("up")).unwrap(), ["Cities", "~Depths", "Rivers", "Lakes", "Countries"]);
+    assert_eq!(mv(&mut s, json!("bottom")).unwrap(), ["Cities", "Rivers", "Lakes", "Countries", "~Depths"]);
+    assert!(mv(&mut s, json!("down")).is_err(), "already at the bottom");
+    assert_eq!(mv(&mut s, json!("top")).unwrap(), ["~Depths", "Cities", "Rivers", "Lakes", "Countries"]);
+    // To a place among the other layers.
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 3})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "Rivers", "Lakes", "~Depths", "Countries"]);
+    // Into a group's run: above the group.
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 2})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Rivers", "Lakes", "Countries"]);
+    // The layer under it moves away, or goes: it stays where it was.
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 4})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "Rivers", "Lakes", "Countries", "~Depths"]);
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 3})).unwrap();
+    s.run("layer.move", &json!({"layer": "Countries", "to": 0})).unwrap();
+    assert_eq!(stack_names(&s), ["Countries", "Cities", "Rivers", "Lakes", "~Depths"]);
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 1})).unwrap();
+    assert_eq!(stack_names(&s), ["Countries", "~Depths", "Cities", "Rivers", "Lakes"]);
+    s.run("layer.remove", &json!({"layer": "Cities"})).unwrap();
+    assert_eq!(stack_names(&s), ["Countries", "~Depths", "Rivers", "Lakes"]);
+    s.undo();
+    assert_eq!(stack_names(&s), ["Countries", "~Depths", "Cities", "Rivers", "Lakes"]);
+    assert!(s.run("map.setTiles", &json!({"name": "Depths", "move": "sideways"})).is_err());
+    for bad in [json!({"to": -1}), json!({"to": "3"}), json!({"to": 1, "move": "up"})] {
+        let mut p = bad.clone();
+        p["name"] = json!("Depths");
+        assert!(s.run("map.setTiles", &p).is_err(), "{bad}");
+    }
+}
+
+/// A tile layer put into a group's run sits above the group, and stays there when the group is
+/// dissolved or a layer leaves it; the tile layers are listed in their drawing order (index 0
+/// on top) whatever moves them.
+#[test]
+fn tile_layers_keep_their_place_when_groups_change() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://base.example.org/{z}/{x}/{y}.png", "name": "Streets"})).unwrap();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    s.run("group.add", &json!({"name": "Water", "layers": ["Rivers", "Lakes"]})).unwrap();
+    // Between Rivers and Lakes, inside the group's run.
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 2})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Rivers", "Lakes", "Countries", "~Streets"]);
+    let group = s.map().groups[0].id;
+    s.run("group.ungroup", &json!({"group": group})).unwrap();
+    assert_eq!(stack_names(&s), ["Cities", "~Depths", "Rivers", "Lakes", "Countries", "~Streets"]);
+    s.undo();
+    s.run("layer.group", &json!({"layer": "Rivers", "group": null})).unwrap();
+    assert_eq!(stack_names(&s)[..2], ["Cities", "~Depths"]);
+    // The basemap goes under the overlay: the list follows the drawing order.
+    s.run("map.setTiles", &json!({"name": "Streets", "move": "top"})).unwrap();
+    let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Streets", "Depths"]);
+    s.run("map.setTiles", &json!({"index": 0, "move": "bottom"})).unwrap();
+    let names: Vec<&str> = s.map().tiles.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Depths", "Streets"]);
+}
+
+/// A tile layer added as data (an archive, a GeoTIFF read in place) goes on top as an overlay
+/// does, without being one.
+#[test]
+fn a_tile_layer_added_as_data_goes_on_top() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://data.example.org/{z}/{x}/{y}.png", "name": "Archive", "top": true})).unwrap();
+    assert_eq!(stack_names(&s)[0], "~Archive");
+    assert!(!s.map().tiles[0].overlay);
+}
+
+/// A project saved before tile layers had places draws them under its layers, as then; a place
+/// is saved and read back.
+#[test]
+fn a_saved_projects_tile_layers_keep_their_place() {
+    let mut s = world();
+    s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Depths", "overlay": true})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Depths", "to": 2})).unwrap();
+    let placed = stack_names(&s);
+    let mut v = serde_json::to_value(&s.project).unwrap();
+    let text = v.to_string();
+    let read = Session::new(Project::from_json(&text).unwrap());
+    assert_eq!(stack_names(&read), placed);
+    // Without `over`, as saved before: under every layer.
+    for t in v["maps"][0]["tiles"].as_array_mut().unwrap() {
+        t.as_object_mut().unwrap().remove("over");
+    }
+    let old = Session::new(Project::from_json(&v.to_string()).unwrap());
+    assert_eq!(stack_names(&old), ["Cities", "Rivers", "Lakes", "Countries", "~Depths"]);
 }
 
 #[test]

@@ -964,7 +964,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             return Err(format!("{path}: the web app reads PMTiles archives from web addresses (Home › Add › Basemap › Add Tile Layer)"));
         }
         let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
-        let mut q = json!({"url": full, "kind": "pmtiles"});
+        let mut q = json!({"url": full, "kind": "pmtiles", "top": true});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);
         }
@@ -978,7 +978,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
         let full = std::path::absolute(path).map(|p| p.display().to_string()).map_err(|e| format!("{path}: {e}"))?;
         // Read now, so a file that isn't an archive is said at once rather than when it draws.
         crate::render::rustgis_tiles::mbtiles::info(&full)?;
-        let mut q = json!({"url": full, "kind": "mbtiles"});
+        let mut q = json!({"url": full, "kind": "mbtiles", "top": true});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);
         }
@@ -2418,7 +2418,7 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
         if scan {
             return Err(format!("{url}: a PMTiles archive is tiles, not a picture: it can't be opened as a scan"));
         }
-        let mut q = json!({"url": url, "kind": "pmtiles"});
+        let mut q = json!({"url": url, "kind": "pmtiles", "top": true});
         if let Some(n) = ps(p, "name") {
             q["name"] = json!(n);
         }
@@ -2522,7 +2522,7 @@ pub fn is_tiff_url(url: &str) -> bool {
 pub(crate) fn add_cog(s: &mut Session, p: &Value, url: &str) -> CmdResult {
     let stem = cog_name(url);
     let name = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&stem);
-    let mut q = json!({"url": url, "kind": "cog", "name": name});
+    let mut q = json!({"url": url, "kind": "cog", "name": name, "top": true});
     // A dated address's span and steps (see map.addTiles).
     for k in ["start", "end", "unit", "interval", "dates"] {
         if let Some(v) = p.get(k) {
@@ -2725,6 +2725,8 @@ pub(crate) fn legends_follow_layer(s: &mut Session, old: &str, new: Option<&str>
 pub(crate) fn drop_layers(s: &mut Session, ids: &[u32]) {
     let m = s.map_mut();
     let names: Vec<String> = m.layers.iter().filter(|l| ids.contains(&l.id)).map(|l| l.name.clone()).collect();
+    // The tile layers drawn over them keep their place.
+    m.release_tiles(ids);
     m.layers.retain(|l| !ids.contains(&l.id));
     for n in &names {
         legends_follow_layer(s, n, None);
@@ -2736,6 +2738,8 @@ fn remove(s: &mut Session, p: &Value) -> CmdResult {
     let m = s.map_mut();
     // The layer that takes the place of the topmost one removed becomes the active layer.
     let at = ids.iter().filter_map(|id| m.layer_index(*id)).min().ok_or("no such layer")?;
+    // The tile layers drawn over them keep their place.
+    m.release_tiles(&ids);
     let mut names = Vec::new();
     for id in ids {
         if let Some(i) = m.layer_index(id) {

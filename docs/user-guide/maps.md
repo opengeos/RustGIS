@@ -216,12 +216,16 @@ which opens the Plugin Manager at the
 [Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/); it adds a tab of public
 basemaps. Add any other with **Add Tile Layer…** at the bottom of the Basemap gallery.
 The gallery lists the map's tile layers: show or hide them, change their opacity and order, or
-remove them. The Layers pane lists them too, under the map's layers and above the basemap: tick
+remove them. The Layers pane lists them too, at their place in the drawing order: a basemap
+under the map's layers and above the built-in basemap; an overlay (a WMS or WMTS layer, a vector
+tile service, **Overlay** ticked in Add Tile Layer) on top of the map's layers when added, as
+every new layer goes. Drag one, or right-click it and choose **Move up** or **Move down**, to put it
+between the map's layers (above a layer group, never inside one). Tick
 one to show or hide it, and right-click it for **Zoom To Layer** (when its bounds are known), opacity,
 **Blend** mode, order and **Remove**.
 A blend mode (Multiply, Screen, Overlay, Darken, Lighten, Difference) combines a tile layer with
-the tile layers and basemap beneath it: stack imagery over a hillshade and set it to Multiply to
-let the terrain show through. Overlays (labels, roads) stay on top of the basemaps; choosing a built-in basemap
+what is drawn beneath it (tile layers, the basemap, and map layers when it's placed over them): stack imagery over a hillshade and set it to Multiply to
+let the terrain show through. Overlays stay over the basemaps; choosing a built-in basemap
 removes the web basemaps but keeps the overlays. Tile layers are saved with the project, and
 their credits are shown in the corner of the map and drawn on exports.
 

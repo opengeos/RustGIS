@@ -27,7 +27,8 @@ This guide walks through RustGIS by task. Each page covers one part of the app:
   (Start, New, Open, Save, Save As and About).
 - **Quick Access Toolbar** (top left): New, Open, Save, Undo and Redo, plus any commands you add
   under **Settings › Customize › Quick Access**.
-- **Layers pane** (left): the map's layers in drawing order, with their legends. Tick a layer to
+- **Layers pane** (left): the map's layers in drawing order, with their legends. A new layer goes
+  on top, whatever its kind (a feature, raster or web layer, an analysis result). Tick a layer to
   show or hide it; drag it up or down to change the drawing order; right-click it to zoom to it,
   rename or remove it and more. The entire layer block, including its expanded legend and
   classes, is split 50/50: drop in its upper half to insert above, or its lower half to insert

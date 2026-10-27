@@ -2817,26 +2817,43 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         }
     }
 
-    // Web tile layers, over the built-in basemap and its graticule.
-    let tile_place = match &globe {
-        Some(g) => raster::Place::Globe(g),
-        None => raster::Place::Flat(&flat, &key),
-    };
-    // Hidden tile layers draw nothing: marking dirty anyway would emit an empty full-screen
-    // Image command (a pointless upload, and it poisons the camera fast path's `has_images`).
-    // On the GPU raster tile layers are placed as tiles, which move with the camera.
-    let tile_gpu = (gpu && map.tiles.iter().any(|t| t.draws() && t.opacity > 0.0)).then_some(tiles::Gpu {
-        cmds: &mut cmds,
-        dirty: &mut cpu_dirty,
-        // A tilted view's bands are drawn at their own densities: their tiles as pictures.
-        meshes: !matches!(labels_to, Labels::Tilted(..)),
-        // Only a frame for the view itself (not a turned or tilted view's north-up stand-in).
-        live: backend == Backend::GpuLive && matches!(labels_to, Labels::Own),
-    });
-    let tile_out = tiles::draw(&mut pm, map, view, tile_place, !map.label_display.paused && map.label_lock.is_none(), tile_gpu);
-    if !gpu {
-        cpu_dirty |= map.tiles.iter().any(|t| t.draws());
+    // Web tile layers, at their places in the drawing order (#808): those under all the map's
+    // layers here, over the built-in basemap and its graticule; the others over their layer.
+    let tile_labels = !map.label_display.paused && map.label_lock.is_none();
+    let mut tile_out = tiles::TileOutput::default();
+    // Each tile layer's place, worked out once a frame.
+    let tile_slots = map.tile_slots();
+    macro_rules! draw_tiles {
+        ($over:expr) => {{
+            let over: Option<u32> = $over;
+            let which: Vec<usize> = tile_slots.iter().enumerate().filter(|(_, s)| **s == over).map(|(i, _)| i).collect();
+            if !which.is_empty() {
+                let tile_place = match &globe {
+                    Some(g) => raster::Place::Globe(g),
+                    None => raster::Place::Flat(&flat, &key),
+                };
+                let drawn = |t: &&rustgis_map::TileLayer| t.draws();
+                let shown = which.iter().filter_map(|i| map.tiles.get(*i)).filter(drawn).any(|t| t.opacity > 0.0);
+                // Hidden tile layers draw nothing: marking dirty anyway would emit an empty
+                // full-screen Image command (a pointless upload, and it poisons the camera fast
+                // path's `has_images`). On the GPU raster tile layers are placed as tiles, which
+                // move with the camera.
+                let tile_gpu = (gpu && shown).then_some(tiles::Gpu {
+                    cmds: &mut cmds,
+                    dirty: &mut cpu_dirty,
+                    // A tilted view's bands are drawn at their own densities: their tiles as pictures.
+                    meshes: !matches!(labels_to, Labels::Tilted(..)),
+                    // Only a frame for the view itself (not a turned or tilted view's north-up stand-in).
+                    live: backend == Backend::GpuLive && matches!(labels_to, Labels::Own),
+                });
+                tile_out.add(tiles::draw(&mut pm, map, &which, view, tile_place, tile_labels, tile_gpu));
+                if !gpu {
+                    cpu_dirty |= which.iter().filter_map(|i| map.tiles.get(*i)).any(|t| t.draws());
+                }
+            }
+        }};
     }
+    draw_tiles!(None);
 
     // Layers, bottom first.
     let mut label_candidates: Vec<Candidate> = Vec::new();
@@ -2871,7 +2888,13 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
     };
     // Extrusion heights are metres on the map's body.
     let body = map.body().ratio();
+    // The layer drawn last, whose tile layers go over it before the next.
+    let mut below: Option<u32> = None;
     for li in order {
+        if let Some(id) = below.take() {
+            draw_tiles!(Some(id));
+        }
+        below = map.layers.get(li).map(|l| l.id);
         let Some(layer) = map.layers.get_mut(li) else { continue };
         if !layer.visible || !layer.in_scale_range(scale) || held.contains(&layer.id) {
             continue;
@@ -3508,6 +3531,9 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             ctx.highlight(&mut pm, &geometry, &symbol, &strokes, turn);
             cpu_dirty = true;
         }
+    }
+    if let Some(id) = below {
+        draw_tiles!(Some(id));
     }
     if let Some(g) = &globe {
         globe_shading(&mut pm, g, water, space(view, map), view.pixels_per_point as f32);
@@ -5255,6 +5281,23 @@ mod tests {
         let last_image = kinds.iter().rposition(|k| *k == "image").expect("the blended layer's cpu image");
         assert!(kinds[..last_image].contains(&"mesh"), "a mesh below the blended layer: {kinds:?}");
         assert!(kinds[last_image + 1..].contains(&"mesh"), "a mesh above the blended layer: {kinds:?}");
+    }
+
+    /// On the GPU too a tile layer draws at its place among the map's layers (#808).
+    #[test]
+    fn gpu_backend_draws_tile_layers_at_their_place() {
+        let mut m = Map::new("Map");
+        m.graticule = false;
+        let below = square_layer(&mut m, "below", 0.0, 0.0, 10.0);
+        square_layer(&mut m, "above", 20.0, 0.0, 10.0);
+        let mut t = rustgis_map::TileLayer::new("tiles", rustgis_map::TileKind::Raster, "https://example.invalid/{z}/{x}/{y}.png");
+        t.over = Some(below);
+        m.tiles.push(t);
+        let view = View { width: 400.0, height: 300.0, pixels_per_point: 1.0, camera: Camera::world(), sky: false };
+        let Some(RenderOutput::Gpu(scene)) = render_backend(&mut m, &view, Backend::GpuLive) else { panic!("gpu scene") };
+        let kinds = cmd_kinds(&scene);
+        let tiles = kinds.iter().position(|k| *k == "live tiles").expect("the tile layer");
+        assert!(kinds[..tiles].contains(&"mesh") && kinds[tiles + 1..].contains(&"mesh"), "between the two layers: {kinds:?}");
     }
 
     #[test]
