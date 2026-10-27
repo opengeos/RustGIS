@@ -22,6 +22,8 @@ pub struct Read {
     got: HashMap<String, Vec<u8>>,
     phase: Option<(zarr::Store, zarr::Plan)>,
     bytes: usize,
+    /// Missing keys can return 403; report access denial only if no metadata was readable.
+    forbidden: usize,
 }
 
 /// Starts an import read; the engine has already reserved its layer and drawing position.
@@ -40,6 +42,7 @@ pub fn start(app: &mut RustGisApp, p: &Value) -> Result<(), String> {
         got: HashMap::new(),
         phase: None,
         bytes: 0,
+        forbidden: 0,
     });
     Ok(())
 }
@@ -58,8 +61,10 @@ impl Read {
                 false
             }
             Some(Err(e)) => {
-                if !rustgis_engine::cmd::zarr::is_absent(&e) || cache::http_status(&e) == Some(403) {
+                if !rustgis_engine::cmd::zarr::is_absent(&e) {
                     error = Some(e);
+                } else if cache::http_status(&e) == Some(403) {
+                    self.forbidden += 1;
                 }
                 false
             }
@@ -103,6 +108,10 @@ impl Read {
                     .and_then(|r| geotiff::write(&r, 0).map_err(|e| e.to_string())),
             );
         }
+        if self.got.is_empty() && self.forbidden > 0 {
+            return Some(Err(crate::i18n::fmt("{url}: access denied (HTTP 403)", &[("url", &self.root)])));
+        }
+        self.forbidden = 0;
         let docs = std::mem::take(&mut self.got).into_iter().collect::<Vec<_>>();
         let result = (|| {
             let store = zarr::parse_store(&docs).map_err(|e| e.to_string())?;
@@ -150,8 +159,8 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn geolibre_zarr_completion_replaces_reserved_layer_after_map_switch() {
+    /// A minimal consolidated store with geographic coordinates and one value array.
+    fn metadata() -> Value {
         let array = |shape: Value| json!({"zarr_format":2,"shape":shape,"chunks":shape,"dtype":"<f8","compressor":null,"filters":null,"order":"C","fill_value":null});
         let metadata = json!({"zarr_consolidated_format":1,"metadata":{
             ".zgroup":{"zarr_format":2},
@@ -159,6 +168,62 @@ mod tests {
             "lat/.zarray":array(json!([2])),"lat/.zattrs":{"_ARRAY_DIMENSIONS":["lat"],"units":"degrees_north"},
             "lon/.zarray":array(json!([2])),"lon/.zattrs":{"_ARRAY_DIMENSIONS":["lon"],"units":"degrees_east"}
         }});
+        metadata
+    }
+
+    /// Ready callback slots exercise HTTP handling without issuing network requests.
+    fn reader(answers: Vec<(&str, Result<Vec<u8>, String>)>) -> Read {
+        Read {
+            id: 0,
+            params: json!({"variable":"value"}),
+            root: "https://example.org/grid.zarr".into(),
+            queue: Vec::new(),
+            waiting: answers
+                .into_iter()
+                .map(|(key, answer)| {
+                    let slot = Slot::default();
+                    *slot.lock().unwrap() = Some(answer);
+                    (key.into(), slot)
+                })
+                .collect(),
+            got: HashMap::new(),
+            phase: None,
+            bytes: 0,
+            forbidden: 0,
+        }
+    }
+
+    #[test]
+    fn geolibre_zarr_missing_metadata_403_keeps_readable_store() {
+        let mut read = reader(vec![(".zmetadata", Ok(metadata().to_string().into_bytes())), ("zarr.json", Err("HTTP 403".into()))]);
+        assert!(read.poll().is_none());
+        assert!(read.phase.is_some());
+        assert!(!read.queue.is_empty());
+    }
+
+    #[test]
+    fn geolibre_zarr_unreadable_metadata_reports_access_denied() {
+        let mut read = reader(vec![(".zmetadata", Err("HTTP 403".into())), ("zarr.json", Err("HTTP 404".into()))]);
+        assert!(read.poll().unwrap().unwrap_err().contains("access denied (HTTP 403)"));
+    }
+
+    #[test]
+    fn geolibre_zarr_missing_chunk_403_preserves_fill_values() {
+        let mut metadata = metadata();
+        metadata["metadata"]["value/.zarray"]["chunks"] = json!([1, 2]);
+        let store = zarr::parse_store(&[(".zmetadata".into(), metadata.to_string().into_bytes())]).unwrap();
+        let plan = zarr::plan(&store, &zarr::Selection { variable: "value".into(), index: Vec::new() }).unwrap();
+        let mut read = reader(vec![("value/1.0", Err("HTTP 403".into()))]);
+        for (key, values) in [("value/0.0", vec![1.0f64, 2.0]), ("lat/0", vec![0.5, 1.5]), ("lon/0", vec![0.5, 1.5])] {
+            read.got.insert(key.into(), values.iter().flat_map(|v| v.to_le_bytes()).collect());
+        }
+        read.phase = Some((store, plan));
+        assert!(!read.poll().unwrap().unwrap().is_empty());
+    }
+
+    #[test]
+    fn geolibre_zarr_completion_replaces_reserved_layer_after_map_switch() {
+        let metadata = metadata();
         let store = zarr::parse_store(&[(".zmetadata".into(), metadata.to_string().into_bytes())]).unwrap();
         let plan = zarr::plan(&store, &zarr::Selection { variable: "value".into(), index: Vec::new() }).unwrap();
         let mut got = HashMap::new();
@@ -183,6 +248,7 @@ mod tests {
             got,
             phase: Some((store, plan)),
             bytes: 0,
+            forbidden: 0,
         });
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
@@ -210,6 +276,7 @@ mod tests {
                 got: HashMap::new(),
                 phase: None,
                 bytes: 0,
+                forbidden: 0,
             });
         }
         let target = app.session.project.active_map;
@@ -249,6 +316,7 @@ mod tests {
             got: HashMap::new(),
             phase: None,
             bytes: MAX_IMPORT_BYTES,
+            forbidden: 0,
         });
         start(&mut app, &json!({"url":"https://example.org/queued.zarr"})).unwrap();
         let ctx = egui::Context::default();
