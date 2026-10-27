@@ -485,6 +485,17 @@ fn home_tab(app: &mut RustGisApp, ui: &mut Ui) {
                 menu_item(ui, app, "graphics_layer", "Graphics Layer", "graphics.newLayer", Value::Null);
                 #[cfg(not(target_arch = "wasm32"))]
                 menu_item(ui, app, "add_folder", "Add Folder…", "ui.addFolder", Value::Null);
+                // A file with several layers (a geodatabase, a GeoPackage) asks which to add.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let mut ask = app.ui.ask_layers;
+                    let resp = ui
+                        .checkbox(&mut ask, tl!("Ask Which Layers to Add"))
+                        .on_hover_text(tl!("When a file holds several layers, choose the ones to add instead of adding them all."));
+                    if resp.clicked() {
+                        let _ = app.run("ui.askLayers", json!({"on": ask}));
+                    }
+                }
                 ui.separator();
                 sample_data_gallery(ui, app);
             },

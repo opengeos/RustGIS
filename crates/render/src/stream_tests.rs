@@ -540,6 +540,7 @@ fn chunked_label_compaction_keeps_late_priorities_stable_ties_and_nan_order() {
                     size: 10.0,
                     color: Rgba::rgb(0, 0, 0),
                     halo: None,
+                    halo_width: None,
                     bold: false,
                     icon: None,
                     align: 0.0,

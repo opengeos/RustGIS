@@ -190,7 +190,10 @@ fn check(case: &Json, layers: &Layers) -> Vec<String> {
         let want: Vec<String> = ids.iter().filter_map(json_text).collect();
         let got: Vec<String> = match result.output {
             Output::Selection { layer, rows } => match layers.0.get(&layer) {
-                Some(ds) => rows.iter().filter_map(|r| text(ds, *r, "id")).collect(),
+                Some(ds) => {
+                    let key = key_fields(expect);
+                    rows.iter().map(|r| key_text(ds, *r, key.as_deref())).collect()
+                }
                 None => return vec![format!("a selection in '{layer}', which isn't a reference layer")],
             },
             other => match layer_of(other) {

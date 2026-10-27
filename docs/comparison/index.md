@@ -5,8 +5,8 @@ platforms people most often ask about: **QGIS**, **ArcGIS Pro** and **ArcGIS Onl
 
 RustGIS is not trying to replace any of these. It fills a narrower spot: a **free and
 open-source desktop GIS compiled to a single native program**, with a ribbon interface familiar
-from desktop GIS, every action available as a scriptable command, and the same app running in a
-browser tab through WebAssembly.
+from desktop GIS, almost every action available as a scriptable command, and the same app running
+in a browser tab through WebAssembly.
 
 !!! note "How to read this"
     Comparisons like this age quickly and are written by an interested party. The RustGIS
@@ -38,10 +38,11 @@ They differ in how they are built and who they suit:
   out in the order of the work, and an engine whose commands run the
   same way from the ribbon, `rustgis-cli`, Python, notebooks, models and the AI Assistant.
 
-If you want the widest data access and the most platforms, choose GeoLibre. If you want a
-compact native desktop GIS with a classic ribbon workflow and a scriptable command
-engine, choose RustGIS. Both work on local files on your machine; remote features, such as web
-data and AI providers, send requests over the network. See
+They complement each other rather than compete: GeoLibre is web and mobile first, RustGIS
+desktop first and built for automation and AI agents. If you want the widest data access and the
+most platforms, choose GeoLibre. If you want a compact native desktop GIS with a classic ribbon
+workflow and a scriptable command engine, choose RustGIS. Both work on local files on your
+machine; remote features, such as web data and AI providers, send requests over the network. See
 [RustGIS and GeoLibre](geolibre.md) for a closer look.
 
 ## At a glance
@@ -105,7 +106,7 @@ data and AI providers, send requests over the network. See
 | **Plugins** | Permission-controlled WebAssembly plugins on desktop, CLI and web; unsandboxed process/Python plugins on desktop and CLI; a registry, custom ribbon tabs and panels, assistant skills | TypeScript plugin API, a registry | **Largest**: thousands of Python plugins | .NET add-ins, Python toolboxes | App templates |
 | **AI assistant** | Acts through engine commands, with undo for project edits; Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; bring your own key or sign in with ChatGPT; also on the command line; MCP for external agents | Natural-language assistant with undoable operations; bring your own key | Via plugins | Copilot features | AI assistants |
 | **Collaboration** | — | Real-time (MVP), review comments | No | No | Shared hosted layers |
-| **Self-hosting** | Serve the static web build anywhere | Docker image or static build | QGIS Server | ArcGIS Enterprise (paid) | — |
+| **Self-hosting** | Dockerfile or static build of the web app | Docker image or static build | QGIS Server | ArcGIS Enterprise (paid) | — |
 
 ## Where each one is the right choice
 
