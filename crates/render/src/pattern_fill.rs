@@ -237,15 +237,16 @@ fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Key {
 /// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time; `None` for
 /// one that can't be made. Not kept yet, `settled` says whether it may be kept among the tiles:
 /// a character marker drawn while the installed families are being indexed (in the label font
-/// for now) is kept among the provisional ones instead, which all go once one is settled (the
-/// index is done, for every family).
+/// for now) is kept among the provisional ones instead, which all go once one of a named family
+/// is settled (the index is done, for every family; the label font's, unnamed, is settled from
+/// the start and says nothing about it).
 fn tile(key: &Key, settled: impl FnOnce() -> bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
     if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
         return t;
     }
     let keep = settled();
     if keep {
-        if key.marker.is_some_and(|m| matches!(m, Marker::Char(_))) {
+        if key.marker.is_some_and(|m| matches!(m, Marker::Char(g) if !g.font.as_str().trim().is_empty())) {
             PROVISIONAL.with(|p| p.borrow_mut().clear());
         }
     } else if let Some(t) = PROVISIONAL.with(|p| p.borrow().get(key).cloned()) {

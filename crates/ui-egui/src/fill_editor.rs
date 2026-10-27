@@ -303,13 +303,15 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
             FillPattern::Dots { size, spacing, displacement, .. } => {
                 // (No finer than 4 points in the swatch: it is a picture, not every dot.)
                 let [dx, dy] = spacing.map(|s| s.max(4.0));
+                // (Shifts widened with the spacing, so a half shift stays a half.)
+                let shift = [0, 1].map(|i| displacement[i] * if spacing[i] > 0.0 { [dx, dy][i] / spacing[i] } else { 1.0 });
                 // As the map lays them: odd rows shifted across, odd columns down (a row and a
                 // column more each way for the shifts).
                 let (cols, rows) = ((r.width() / dx).ceil() as i32 + 1, (r.height() / dy).ceil() as i32 + 1);
                 for row in -1..=rows {
                     for col in -1..=cols {
-                        let x = r.min.x + (col as f32 + 0.5) * dx + if row.rem_euclid(2) == 1 { displacement[0] } else { 0.0 };
-                        let y = r.min.y + (row as f32 + 0.5) * dy + if col.rem_euclid(2) == 1 { displacement[1] } else { 0.0 };
+                        let x = r.min.x + (col as f32 + 0.5) * dx + if row.rem_euclid(2) == 1 { shift[0] } else { 0.0 };
+                        let y = r.min.y + (row as f32 + 0.5) * dy + if col.rem_euclid(2) == 1 { shift[1] } else { 0.0 };
                         p.circle_filled(pos2(x, y), (size / 2.0).max(0.5), c);
                     }
                 }
