@@ -474,8 +474,8 @@ fn field(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class) {
 fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
     let labels = &l.labels;
     // One note, about what decides the labels first: labels off, then a hidden class, then
-    // the other classes. Each is a whole sentence, as joined ones would read in the wrong
-    // order right to left.
+    // other visible classes (those the map draws, Default included). Each is a whole sentence,
+    // as joined ones would read in the wrong order right to left.
     if !labels.enabled {
         ui.label(RichText::new(tl!("Labels are off for this layer: the clause applies once they are on.")).small().color(t.text_dim));
     } else if !c.it.visible {
@@ -485,7 +485,7 @@ fn sql(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, c: &Class, t: &Tokens) {
                 run(app, "labels.class.update", c.params(json!({"visible": true})));
             }
         });
-    } else if !labels.classes.is_empty() {
+    } else if labels.in_order().filter(|k| k.visible).count() > 1 {
         let said = tl!("Each class labels the features its own clause matches, so a feature can get a label from more than one.");
         ui.label(RichText::new(said).small().color(t.text_dim));
     }
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     /// The SQL Query section of the Content tab has one note, on what decides the labels first:
-    /// labels off, then a hidden Default (Show labels shows it again), then the other classes.
+    /// labels off, then a hidden Default (Show labels shows it again), then other visible classes.
     #[test]
     fn the_sql_tab_says_what_else_decides_the_labels() {
         let mut app = with_cities();
@@ -1271,6 +1271,10 @@ mod tests {
         let l = &h.state().session.map().layer(h.state().session.active_layer.unwrap()).unwrap().labels;
         assert!(l.default.visible);
         assert!(h.query_by_label_contains(rule).is_some());
+        // A hidden extra class labels nothing, so only Default labels: no rule either.
+        h.state_mut().run("labels.class.update", json!({"class": "Big", "visible": false})).unwrap();
+        h.run();
+        assert!(h.query_by_label_contains(rule).is_none(), "no rule note with one visible class");
     }
 
     /// A draft belongs to its layer in its project: another project, though it reuses the
