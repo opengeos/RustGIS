@@ -7,14 +7,13 @@
 #
 # with the tags
 #
-#   edge, sha-<commit>            every update to main
-#   <version>, <major>.<minor>,   every published release (a pre-release gets only its version)
-#   latest
+#   latest, edge, sha-<commit>    every update to main
+#   <version>, <major>.<minor>    every published release (a pre-release gets only its version)
 #
-# A pull request that changes an image builds and smoke-tests both without publishing. The web app
-# is WebAssembly, so its build stage runs once, on the runner's platform, for both platforms; the
-# command line is native code, so each platform is built on a runner of its own and the two are
-# then published under one multi-platform tag.
+# A pull request that changes an image, or a manual run on another branch, builds and smoke-tests
+# both without publishing. The web app is WebAssembly, so its build stage runs once, on the
+# runner's platform, for both platforms; the command line is native code, so each platform is
+# built on a runner of its own and the two are then published under one multi-platform tag.
 name: Docker images
 
 on:
@@ -52,15 +51,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Only main and releases publish; a pull request, or a manual run on another branch, only builds
+  # and smoke-tests. (cli-manifest repeats this in its `if`, where env isn't available.)
+  PUBLISH: ${{ github.event_name == 'release' || github.ref == 'refs/heads/main' }}
   WEB_IMAGE: ghcr.io/opengeos/rustgis
   CLI_IMAGE: ghcr.io/opengeos/rustgis-cli
-  # The tags of both images (docker/metadata-action); `latest` follows releases, not main.
+  # The tags of both images (docker/metadata-action); `latest` follows main, as `edge` does.
   TAGS: |
     type=edge,branch=main
     type=sha,enable=${{ github.event_name != 'release' }}
     type=semver,pattern={{version}}
     type=semver,pattern={{major}}.{{minor}}
-    type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   web:
@@ -129,7 +131,7 @@ jobs:
         run: docker logs rustgis || true
 
       - name: Sign in to the GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -138,7 +140,7 @@ jobs:
 
       # Both platforms; the build stage is the smoke test's, from the builder's cache.
       - name: Publish
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -211,7 +213,7 @@ jobs:
           echo "The image runs the command line."
 
       - name: Sign in to the GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -221,7 +223,7 @@ jobs:
       # Pushed by digest only; the manifest job tags the two platforms' images together.
       - name: Publish by digest
         id: push
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -232,7 +234,7 @@ jobs:
           cache-from: type=gha,scope=cli-${{ matrix.arch }}
 
       - name: Record the digest
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
@@ -241,7 +243,7 @@ jobs:
           touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
 
       - name: Upload the digest
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: cli-digest-${{ matrix.arch }}
@@ -252,7 +254,7 @@ jobs:
   cli-manifest:
     name: Command line image (publish)
     needs: cli
-    if: github.repository == 'opengeos/RustGIS' && github.event_name != 'pull_request'
+    if: github.repository == 'opengeos/RustGIS' && (github.event_name == 'release' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
