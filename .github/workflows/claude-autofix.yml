@@ -70,6 +70,7 @@ jobs:
       threads: ${{ steps.threads.outputs.count }}
       conflicts: ${{ steps.merge.outputs.conflicts }}
       base_sha: ${{ steps.merge.outputs.base_sha }}
+      fixed: ${{ steps.fixcommit.outputs.committed == 'true' }}
     env:
       FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       SHA: ${{ github.event.pull_request.head.sha }}
@@ -126,7 +127,12 @@ jobs:
         run: |
           set -euo pipefail
           # `rm -rf` unlinks a symlink rather than following it, so a branch that ships its own
-          # `.autofix` can't redirect these writes. It's excluded so it never lands in a commit.
+          # `.autofix` can't redirect these writes. It's excluded so it never lands in a commit,
+          # which holds only while the branch doesn't track anything there.
+          if [ -n "$(git ls-files -- .autofix)" ]; then
+            echo "::error::The branch tracks files in .autofix/, which autofix uses for its own."
+            exit 1
+          fi
           rm -rf .autofix
           mkdir .autofix
           echo /.autofix/ >> .git/info/exclude
@@ -237,7 +243,10 @@ jobs:
         with:
           # GITHUB_TOKEN rather than the OIDC exchange, which fails under pull_request_target (see
           # claude-code-review.yml). Setting allowed_non_write_users also turns on the action's
-          # subprocess env scrub, which keeps the tokens out of the commands Claude runs.
+          # subprocess env scrub, which keeps the tokens out of the commands Claude runs. The
+          # Claude process holds its own token, so reads of process environments and the runner's
+          # files are denied: a fork's text could otherwise talk Claude into quoting it in a
+          # reply. "Bundle the commits" checks for it as well.
           github_token: ${{ github.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_non_write_users: "*"
@@ -256,6 +265,7 @@ jobs:
           claude_args: |
             --model claude-haiku-5-5
             --max-turns 120
+            --disallowedTools "Read(//proc/**),Read(//sys/**),Read(/${{ runner.temp }}/**),Read(~/.claude/**)"
             --allowedTools "Read,Grep,Glob,Edit,Write${{ github.event.pull_request.head.repo.full_name == github.repository && ',Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo test:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)' || '' }}"
 
       - name: Commit the merge
@@ -309,9 +319,11 @@ jobs:
           claude_args: |
             --model claude-haiku-5-5
             --max-turns 120
+            --disallowedTools "Read(//proc/**),Read(//sys/**),Read(/${{ runner.temp }}/**),Read(~/.claude/**)"
             --allowedTools "Read,Grep,Glob,Edit,Write${{ github.event.pull_request.head.repo.full_name == github.repository && ',Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo clippy:*),Bash(cargo test:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)' || '' }}"
 
       - name: Commit the fix
+        id: fixcommit
         if: steps.threads.outputs.count != '0'
         run: |
           set -euo pipefail
@@ -327,12 +339,20 @@ jobs:
           if [ ! -s "$msg" ]; then printf 'fix: address review comments\n' > "$msg"; fi
           printf '\nApplied by the claude-autofix workflow.\n' >> "$msg"
           git commit -q -F "$msg"
+          echo "committed=true" >> "$GITHUB_OUTPUT"
           git log -1 --stat
 
       - name: Bundle the commits
         if: steps.merge.outputs.conflicts != '0' || steps.threads.outputs.count != '0'
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
+          # Nothing Claude wrote may carry its token, in the replies or in the commits.
+          if [ -n "$TOKEN" ] && { cat .autofix/report.json 2> /dev/null; git diff "$SHA" HEAD; } | grep -qF -- "$TOKEN"; then
+            echo "::error::Claude's output contains its token; nothing is pushed."
+            exit 1
+          fi
           if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
             git branch -f autofix HEAD
             git bundle create .autofix/autofix.bundle autofix --not "$SHA"
@@ -375,6 +395,7 @@ jobs:
           path: ${{ runner.temp }}/autofix
 
       - name: Push the commits
+        id: push
         env:
           SHA: ${{ github.event.pull_request.head.sha }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -406,13 +427,16 @@ jobs:
           done
           git log --oneline "$SHA..$new" --first-parent
           git push origin "$new:refs/heads/$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
 
-      # Replies go out only for threads that were staged, whatever ids the report holds.
+      # Replies go out only for threads that were staged, whatever ids the report holds. A thread
+      # Claude calls fixed is resolved only when a fix commit was pushed.
       - name: Reply to and resolve the threads
         if: needs.fix.outputs.threads != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           DIR: ${{ runner.temp }}/autofix
+          LANDED: ${{ needs.fix.outputs.fixed == 'true' && steps.push.outputs.pushed == 'true' }}
         run: |
           set -euo pipefail
           jq -c --slurpfile t "$DIR/threads.json" \
@@ -422,7 +446,12 @@ jobs:
           while read -r entry; do
             id=$(jq -r .id <<< "$entry")
             status=$(jq -r .status <<< "$entry")
-            body="**Claude autofix ($status):** $(jq -r .reply <<< "$entry")"
+            reply=$(jq -r .reply <<< "$entry")
+            if [ "$status" = fixed ] && [ "$LANDED" != true ]; then
+              status=unclear
+              reply="Claude reported a fix, but no change was pushed for it. $reply"
+            fi
+            body="**Claude autofix ($status):** $reply"
             gh api graphql -f thread="$id" -f body="$body" -f query='
               mutation($thread: ID!, $body: String!) {
                 addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $thread, body: $body}) {
@@ -444,6 +473,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.ref }}
           CONFLICTS: ${{ needs.fix.outputs.conflicts }}
           THREADS: ${{ needs.fix.outputs.threads }}
+          LANDED: ${{ needs.fix.outputs.fixed == 'true' && steps.push.outputs.pushed == 'true' }}
           DIR: ${{ runner.temp }}/autofix
         run: |
           set -euo pipefail
@@ -453,8 +483,11 @@ jobs:
               echo "- Merged \`$BASE\` and resolved conflicts in $CONFLICTS file(s)."
             fi
             if [ "$THREADS" != 0 ]; then
-              jq -r '"- Review threads: " + (group_by(.status) | map("\(length) \(.[0].status)") | join(", ")) + "."' \
+              jq -r --arg landed "$LANDED" '
+                map(if .status == "fixed" and $landed != "true" then .status = "unclear" else . end)
+                | "- Review threads: " + (group_by(.status) | map("\(length) \(.[0].status)") | join(", ")) + "."' \
                 "$DIR/report.json"
+              if [ "$LANDED" != true ]; then echo "- No fix commit was pushed."; fi
             fi
           } > "$RUNNER_TEMP/summary.md"
           cat "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
@@ -473,9 +506,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.html_url }}
           WORK: ${{ needs.fix.outputs.work }}
+          FAILED: ${{ needs.fix.result == 'failure' || needs.push.result == 'failure' }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --remove-label claude-autofix
-          if [ "$WORK" = false ]; then
+          if [ "$FAILED" = true ]; then
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+              --body "Claude autofix stopped without finishing; the reason is in [the run]($RUN)."
+          elif [ "$WORK" = false ]; then
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
               --body "Claude autofix: no conflicts with the base branch and no open review threads."
           fi
