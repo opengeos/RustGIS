@@ -1475,18 +1475,26 @@ impl Session {
     }
 
     /// After undo or redo swaps the project: the tile layer picked in the Layers pane stays the one
-    /// picked (picking isn't an undo step), found again by its address, kind and name (by address
-    /// and kind alone when only one layer has them: a rename undone); the restored project's own
-    /// picks are dropped.
+    /// picked (picking isn't an undo step), found again on the map of its name by its address,
+    /// kind, role and name (without the name when only one layer has the rest: a rename undone);
+    /// the restored project's own picks are dropped.
     fn keep_tile_pick(&mut self, before: &Project) {
         for t in self.project.maps.iter_mut().flat_map(|m| m.tiles.iter_mut()) {
             t.selected = false;
         }
-        for (m, old) in self.project.maps.iter_mut().zip(&before.maps).filter(|(m, o)| m.name == o.name) {
+        for m in &mut self.project.maps {
+            let Some(old) = before.maps.iter().find(|o| o.name == m.name) else { continue };
             let Some(p) = old.tiles.iter().find(|t| t.selected) else { continue };
-            let same = |t: &&mut rustgis_map::tiles::TileLayer| t.url == p.url && t.kind == p.kind;
+            // Of the same address, kind and role (a basemap and an overlay of one service can
+            // both be there); a name that leaves more than one is too unsure to pick any.
+            let same = |t: &&mut rustgis_map::tiles::TileLayer| t.url == p.url && t.kind == p.kind && t.overlay == p.overlay;
             let mut like: Vec<_> = m.tiles.iter_mut().filter(same).collect();
-            let at = like.iter().position(|t| t.name == p.name).or_else(|| (like.len() == 1).then_some(0));
+            let named: Vec<usize> = like.iter().enumerate().filter(|(_, t)| t.name == p.name).map(|(i, _)| i).collect();
+            let at = match named[..] {
+                [at] => Some(at),
+                [] if like.len() == 1 => Some(0),
+                _ => None,
+            };
             if let Some(t) = at.and_then(|at| like.get_mut(at)) {
                 t.selected = true;
             }

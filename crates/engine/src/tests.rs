@@ -9238,17 +9238,23 @@ fn selected_in_layers_asks_the_tile_layer_picked() {
     s.run("map.selectTiles", &json!({"name": "Base 2"})).unwrap();
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(s.selected_tile(), Some(at(&mut s, "Base")));
-    // Another at the same address and of the same kind: the name tells which, and with neither
-    // name matching none is picked rather than the wrong one.
+    // An overlay at the same address and of the same kind isn't taken for it: the role tells.
     s.run("map.addTiles", &json!({"url": base, "name": "Twin", "overlay": true})).unwrap();
     s.run("map.setTiles", &json!({"name": "Base", "rename": "Base 2"})).unwrap();
     s.run("map.selectTiles", &json!({"name": "Base 2"})).unwrap();
     s.run("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.selected_tile(), None);
+    assert_eq!(s.selected_tile(), Some(at(&mut s, "Base")));
     s.run("map.selectTiles", &json!({"name": "Twin"})).unwrap();
     s.run("map.setTiles", &json!({"name": "Base", "opacity": 0.2})).unwrap();
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(s.selected_tile(), Some(at(&mut s, "Twin")));
+    // With the same name too.
+    s.run("map.setTiles", &json!({"name": "Twin", "rename": "Base"})).unwrap();
+    let base_layer = s.map().tiles.iter().position(|t| t.name == "Base" && !t.overlay);
+    s.run("map.selectTiles", &json!({"index": base_layer})).unwrap();
+    s.run("map.setTiles", &json!({"index": base_layer, "opacity": 0.3})).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.selected_tile(), s.map().tiles.iter().position(|t| t.name == "Base" && !t.overlay));
 
     // A map layer made active ends it, and no active layer later brings it back.
     s.run("layer.select", &json!({"layer": points})).unwrap();
