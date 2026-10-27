@@ -919,7 +919,7 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
             continue;
         };
         let ext = g.extent();
-        let near: Vec<(usize, &Zone)> = index
+        let meets: Vec<(usize, &Zone)> = index
             .candidates(&ext)
             .into_iter()
             .filter_map(|zi| Some((zi, zones.get(zi)?)))
@@ -927,9 +927,9 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
             .collect();
         // A feature of overlapping parts is unioned once, for all the zones it may meet, and only
         // when it may meet one.
-        let whole = if near.is_empty() { std::borrow::Cow::Borrowed(g) } else { dissolved(g) };
+        let whole = if meets.is_empty() { std::borrow::Cow::Borrowed(g) } else { dissolved(g) };
         let mut hit: Vec<usize> = Vec::new();
-        for (zi, z) in near {
+        for (zi, z) in meets {
             if let Some(inside) = part(&whole, &z.poly, true) {
                 out.push_next(Some(inside), overlay_row(ds, Some(&f.attrs), ov, zone_attrs(z)));
                 hit.push(zi);
@@ -1954,8 +1954,11 @@ fn shared_point(a: &Geometry, a_geo: &geo::Geometry<f64>, b: &Geometry, b_geo: &
     if let Some(c) = overlap.as_ref().and_then(crate::join::first_coord) {
         return Some(c);
     }
-    // Lines, or polygons that only touch: edges by their west end, so each of `a`'s is tried only
-    // against those of `b` whose boxes may meet it.
+    // Lines, or polygons that only touch: the first point where an edge of `a` meets one of `b`. `b`'s
+    // edges are sorted by their west end, so the search for each of `a`'s stops at the first that
+    // starts east of it, and a pair whose boxes don't meet is skipped before the exact test; pairs
+    // within that window are still each tried, so two long touching borders cost about the product
+    // of their edges. This runs once per output row, for the nearest feature only.
     let edges = |g: &geo::Geometry<f64>| -> Vec<geo::Line<f64>> {
         let mut v: Vec<geo::Line<f64>> = match g {
             geo::Geometry::MultiLineString(m) => m.lines_iter().collect(),
@@ -2042,11 +2045,7 @@ fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let (t_ext, t_geo) = (g.extent(), to_geo(g));
             let (idx, d) = nearby.closest(g, &t_ext, &t_geo, limit, same.then_some(r))?;
             let j = feats.get(idx)?;
-            let at = if d > 0.0 {
-                crate::join::nearest_points(g, j.geom).map(|(_, q)| q)
-            } else {
-                shared_point(g, &t_geo, j.geom, &j.geo)
-            };
+            let at = if d > 0.0 { crate::join::nearest_points(g, j.geom).map(|(_, q)| q) } else { shared_point(g, &t_geo, j.geom, &j.geo) };
             // The plane's longitudes run on past ±180°, and so can a shared point's: back within
             // [−180°, 180°).
             let at = at.map(|c| Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y));
@@ -3674,6 +3673,29 @@ mod tests {
         let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
         assert!(near(spans[0].0, 0.0) && near(spans[0].1, 2.0) && *spans[0].2 == Value::Text("z".into()), "{spans:?}");
         assert!(near(spans[1].0, 2.0) && near(spans[1].1, 3.0) && *spans[1].2 == Value::Null, "{spans:?}");
+    }
+
+    #[test]
+    fn identity_and_union_copy_an_uncut_input_feature_unchanged() {
+        // Two overlapping squares as one parcel, far from the zone; and a triangle whose extent
+        // meets the zone's but whose shape doesn't reach it.
+        let ring = |x: f64| {
+            vec![Coord::new(x, 10.0), Coord::new(x + 2.0, 10.0), Coord::new(x + 2.0, 12.0), Coord::new(x, 12.0), Coord::new(x, 10.0)]
+        };
+        let overlapping = Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]]);
+        let triangle =
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(4.0, 0.0), Coord::new(0.0, 4.0), Coord::new(0.0, 0.0)]]]);
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(overlapping.clone()), vec![]);
+        parcels.push(Some(triangle.clone()), vec![]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(3.0, 3.0, 1.0)), vec![]);
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        for tool in ["identity", "union"] {
+            let out = layer(crate::run(tool, &m, &serde_json::json!({"input": "parcels", "overlay": "zones"})).unwrap());
+            let got: Vec<Option<&Geometry>> = out.features.iter().take(2).map(|f| f.geometry.as_ref()).collect();
+            assert_eq!(got, [Some(&overlapping), Some(&triangle)], "{tool}: copied as they are, parts and coordinates");
+        }
     }
 
     #[test]
