@@ -52,7 +52,8 @@ fn read_limited(r: impl Read, limit: usize, what: &str) -> Result<Vec<u8>, Strin
 /// Where `plugin.json` is in a package: at its root (`""`), else in exactly one top-level
 /// folder (`"name/"`).
 pub(crate) fn root_of<R: std::io::Read + std::io::Seek>(zip: &zip::ZipArchive<R>) -> Result<String, String> {
-    let names: Vec<_> = zip.file_names().collect::<Result<_, _>>().map_err(|e| format!("not a plugin package: {e}"))?;
+    // An entry name that is not UTF-8 cannot be `plugin.json`, so it is skipped.
+    let names: Vec<_> = zip.file_names().filter_map(Result::ok).collect();
     if names.iter().any(|n| n == "plugin.json") {
         return Ok(String::new());
     }
