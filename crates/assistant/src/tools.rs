@@ -596,11 +596,15 @@ struct RowSource<'a> {
 /// otherwise it is read instead of `layer`.
 fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
     let table = |i: usize| {
-        s.project.tables.get(i).map(|t| RowSource { kind: "table", name: &t.name, ds: &t.dataset, selection: None }).ok_or("no such table")
+        s.project
+            .tables
+            .get(i)
+            .map(|t| RowSource { kind: "table", name: &t.name, ds: &t.dataset, selection: None })
+            .ok_or_else(|| "no such table".to_string())
     };
     let given = |v: &&Value| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty());
     if let Some(t) = a.get("table").filter(given) {
-        return Ok(table(s.table_index(&json!({"table": t}))?)?);
+        return table(s.table_index(&json!({"table": t}))?);
     }
     let layer = a.get("layer").cloned().ok_or("layer (or table) is required")?;
     let id = match s.layer_id(&json!({"layer": layer})) {
@@ -612,7 +616,7 @@ fn row_source<'a>(s: &'a Session, a: &Value) -> Result<RowSource<'a>, String> {
             // `find_table` falls back to an id; keep only a name match, so `layer: "7"` can't read table 7.
             let by_name = project::find_table(tables, n).filter(|&i| tables.get(i).is_some_and(|t| t.name.eq_ignore_ascii_case(n)));
             return match by_name {
-                Some(i) => Ok(table(i)?),
+                Some(i) => table(i),
                 None => Err(format!("no layer or standalone table named '{n}'")),
             };
         }

@@ -440,20 +440,33 @@ fn read_features_reads_a_tools_output_table() {
         assert_eq!(by_layer, tools::run(&mut s, &t("read_features", json!({"table": name}))).unwrap(), "{name}");
         assert!(by_layer.contains(&format!("\"table\":\"{name}\"")), "{by_layer}");
     }
-    // Names are matched as written, by `layer` as by `table`: no trimming.
-    for name in ["stats ", " Stats"] {
-        let (by_layer, by_table) = (
-            tools::run(&mut s, &t("read_features", json!({"layer": name}))),
-            tools::run(&mut s, &t("read_features", json!({"table": name}))),
-        );
-        assert_eq!(by_layer.is_ok(), by_table.is_ok(), "{name:?}: {by_layer:?} / {by_table:?}");
+    // Names are matched as written, by `layer` as by `table`: `stats ` and ` Stats` are tables of
+    // their own beside `stats` and `Stats`, and a name with a space nothing has is neither.
+    for (name, v) in [("stats ", 3), (" Stats", 4)] {
+        use rustgis_engine::data::{Dataset, Field, FieldType, GeometryType, Value as V};
+        let mut ds = Dataset::new(name, GeometryType::None, vec![Field::new("v", FieldType::Integer)]);
+        ds.push(None, vec![V::Int(v)]);
+        s.project.add_table(ds);
+    }
+    for (name, v) in [("stats", 1.0), ("Stats", 2.0), ("stats ", 3.0), (" Stats", 4.0)] {
+        for arg in ["layer", "table"] {
+            let args = Value::Object([(arg.to_string(), json!(name))].into_iter().collect());
+            let read: Value = serde_json::from_str(&tools::run(&mut s, &t("read_features", args)).unwrap()).unwrap();
+            assert_eq!((read["table"].as_str(), read["rows"][0]["v"].as_f64()), (Some(name), Some(v)), "{arg} {name:?}: {read}");
+        }
+    }
+    for name in ["stats  ", "  Stats"] {
+        let by_layer = tools::run(&mut s, &t("read_features", json!({"layer": name})));
+        assert!(by_layer.as_ref().is_err_and(|e| e.contains("no layer or standalone table named")), "{name:?}: {by_layer:?}");
+        let by_table = tools::run(&mut s, &t("read_features", json!({"table": name})));
+        assert!(by_table.as_ref().is_err_and(|e| e.contains("no standalone table named")), "{name:?}: {by_table:?}");
     }
     let id = s.project.tables.last().map(|t| t.id).unwrap_or_default();
     // A layer with that id reads; otherwise it's an error, never the table.
     let by_id = tools::run(&mut s, &t("read_features", json!({"layer": id.to_string()})));
     let read_a_layer = match &by_id {
         Ok(r) => r.contains("\"layer\"") && !r.contains("\"table\""),
-        Err(_) => true,
+        Err(e) => e.contains("no layer or standalone table named"),
     };
     assert!(read_a_layer, "{by_id:?}");
     assert!(tools::run(&mut s, &t("read_features", json!({"table": id.to_string()}))).is_ok());
