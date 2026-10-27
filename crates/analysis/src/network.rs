@@ -4,7 +4,7 @@
 use std::collections::{BinaryHeap, HashMap};
 
 use rustgis_data::{Dataset, Geometry};
-use rustgis_geom::{Coord, wgs84_distance_m};
+use rustgis_geom::{Coord, haversine_m, wgs84_distance_m};
 
 /// A shortest route: its path, length in metres, cost, and the line rows it uses.
 #[derive(Clone, Debug, PartialEq)]
@@ -96,9 +96,12 @@ pub fn shortest_route(
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-                Some((i, t, q, wgs84_distance_m(q, p)))
+                Some((i, t, q, haversine_m(q, p)))
             })
             .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
+            // The scan ranks segments by the cheap great-circle distance (it orders them as the
+            // ellipsoid does, to well under a snap tolerance); only the winner is solved exactly.
+            .map(|(i, t, q, _)| (i, t, q, wgs84_distance_m(q, p)))
     };
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {

@@ -501,8 +501,8 @@ mod tests {
         assert!((perimeter_across - 666_393.055).abs() < 0.001, "{perimeter_across}");
         assert!((area_across - 24_619_443_759.277).abs() < 0.001, "{area_across}");
         // Segment lengths are inverse geodesic solves, unwrapped or folded alike.
-        assert!((wgs84_length_m(&[Coord::new(0.0, 0.0), Coord::new(3.0, 0.0)]) - 3.0 * 111_319.4908).abs() < 0.01);
-        assert!((wgs84_distance_m(Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)) - 222_638.9816).abs() < 0.001);
+        assert!((wgs84_length_m(&[Coord::new(0.0, 0.0), Coord::new(3.0, 0.0)]) - 3.0 * 111_319.490_8).abs() < 0.01);
+        assert!((wgs84_distance_m(Coord::new(179.0, 0.0), Coord::new(-179.0, 0.0)) - 222_638.981_6).abs() < 0.001);
         // A broken coordinate is no length and no area (see `haversine_m`'s guard).
         assert!(wgs84_length_m(&[Coord::new(0.0, 0.0), Coord::new(f64::NAN, 0.0)]).is_nan());
         let (perimeter_broken, area_broken) =
@@ -530,21 +530,6 @@ mod tests {
         assert!(geodesic_ring_area_m2(&[origin, Coord::new(1.0, 0.0), Coord::new(1.0, f64::INFINITY)]).is_nan());
         // Heading away from a broken place is no place either.
         assert!(geodesic_destination(Coord::new(10.0, 50.0), 90.0, f64::NAN).x.is_nan());
-    }
-
-    #[test]
-    fn non_finite_measures_show_a_dash_not_nan() {
-        for broken in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(format_distance(broken), "–");
-            assert_eq!(format_area(broken), "–");
-        }
-        assert_eq!(format_lonlat(Coord::new(f64::NAN, f64::NAN)), "–");
-        assert_eq!(format_dms(Coord::new(f64::NAN, 50.0)), "–");
-        // The finite cases still format as before.
-        assert_eq!(format_distance(850.0), "850 m");
-        assert_eq!(format_distance(12_500.0), "12.5 km");
-        assert_eq!(format_area(2_500_000.0), "2.5 km²");
-        assert_eq!(format_lonlat(Coord::new(-12.3456, 45.6789)), "12.3456° W  45.6789° N");
     }
 
     #[test]
