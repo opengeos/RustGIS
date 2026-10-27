@@ -266,7 +266,7 @@ pub fn wgs84_length_m(pts: &[Coord]) -> f64 {
 
 /// The perimeter (metres) and the unsigned enclosed area (square metres) of a lon/lat ring on the
 /// WGS 84 ellipsoid. The ring is closed along a geodesic to its first point, whatever its winding,
-/// so a ring of many vertices needs one accumulation, not a solve per vertex. A ring gives the
+/// so the perimeter and area come from one pass over the ring, not two. A ring gives the
 /// region it traces (so polar rings and globe-wide bands follow their own edges, as the sphere's
 /// [`geodesic_ring_area_m2`] does); reversing the ring gives the same magnitude.
 pub fn wgs84_ring_perimeter_area_m2(ring: &[Coord]) -> (f64, f64) {

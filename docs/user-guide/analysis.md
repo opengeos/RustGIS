@@ -145,7 +145,8 @@ and the Measure tools, while **Calculate Geometry Attributes** unwraps it, so it
 there. A ring winding around a pole is measured as the region it traces by the attribute table
 (a ring that goes all the way round at 60° N gives the larger region), while **Calculate Geometry
 Attributes** gives the smaller polar cap. On the Moon or another body, the Measure tools measure on
-that body's sphere.
+that body's sphere. The Radius tools still measure a local Mercator distance, and **Mensuration
+Tools** (`raster.measure`) still measure on the sphere, so those can differ from the numbers above.
 
 **IDW Interpolation** works like the QGIS tool of the same name: every point weighs on every
 cell by 1/distanceᴾ, where P is the distance coefficient (2 by default). Lines and polygons
