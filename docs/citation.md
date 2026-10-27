@@ -13,15 +13,15 @@ To cite a specific version instead, open the
 
 ## Recommended citation
 
-> Wu, Q., Rincón Albarracín, J. G., Filho, E., Hofbauer, D., & Fitzgerald, M. (2026). RustGIS: A
-> fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data.
-> Zenodo. <https://doi.org/10.5281/zenodo.23633281>
+> Wu, Q., Rincón Albarracín, J. G., Filho, E., Hofbauer, D., Fitzgerald, M., & Strebel, D. (2026).
+> RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing
+> geospatial data. Zenodo. <https://doi.org/10.5281/zenodo.23633281>
 
 ## BibTeX
 
 ```bibtex
 @software{wu_rustgis,
-  author    = {Wu, Qiusheng and Rincón Albarracín, José Gregorio and Filho, Elpidio and Hofbauer, Daniel and Fitzgerald, Mavrick},
+  author    = {Wu, Qiusheng and Rincón Albarracín, José Gregorio and Filho, Elpidio and Hofbauer, Daniel and Fitzgerald, Mavrick and Strebel, Dominik},
   title     = {{RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data}},
   year      = {2026},
   publisher = {Zenodo},
@@ -32,9 +32,21 @@ To cite a specific version instead, open the
 
 ## APA
 
-> Wu, Q., Rincón Albarracín, J. G., Filho, E., Hofbauer, D., & Fitzgerald, M. (2026). RustGIS: A
-> fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing geospatial data
-> [Computer software]. Zenodo. <https://doi.org/10.5281/zenodo.23633281>
+> Wu, Q., Rincón Albarracín, J. G., Filho, E., Hofbauer, D., Fitzgerald, M., & Strebel, D. (2026).
+> RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing
+> geospatial data [Computer software]. Zenodo. <https://doi.org/10.5281/zenodo.23633281>
+
+## Authors
+
+The authors, in the order [`CITATION.cff`](https://github.com/opengeos/RustGIS/blob/main/CITATION.cff)
+lists them, with their ORCID iDs where they have given one:
+
+- Qiusheng Wu, University of Tennessee, Knoxville, USA ([ORCID 0000-0001-5437-4073](https://orcid.org/0000-0001-5437-4073))
+- José Gregorio Rincón Albarracín
+- Elpidio Filho
+- Daniel Hofbauer
+- Mavrick Fitzgerald
+- Dominik Strebel ([ORCID 0000-0002-3529-1798](https://orcid.org/0000-0002-3529-1798))
 
 ## Citation metadata file
 
