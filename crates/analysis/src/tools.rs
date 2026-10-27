@@ -819,6 +819,13 @@ struct Zone {
     poly: MultiPolygon<f64>,
 }
 
+/// A feature's polygons as a mask for the overlay: parts of one feature may overlap, which the
+/// overlay can't take as they are, so several are unioned; one polygon is only oriented, so its
+/// edges stay exactly where they are.
+fn mask_of(poly: MultiPolygon<f64>) -> MultiPolygon<f64> {
+    if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) }
+}
+
 /// The overlay layer of an overlay tool (its `overlay` parameter), which must be polygons, and its
 /// (selected) features with geometry as [`Zone`]s, in order.
 fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<Zone>), String> {
@@ -830,11 +837,7 @@ fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json) -> Result<(&'a Dataset, Vec<
         .into_iter()
         .filter_map(|row| {
             let g = ov.features.get(row)?.geometry.as_ref()?;
-            // Parts of one feature may overlap, which the overlay can't take as they are; one
-            // polygon is only oriented, so its edges stay exactly where they are.
-            let poly = to_multipolygon(g)?;
-            let poly = if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) };
-            Some(Zone { row, ext: g.extent(), poly })
+            Some(Zone { row, ext: g.extent(), poly: mask_of(to_multipolygon(g)?) })
         })
         .collect();
     Ok((ov, zones))
@@ -889,7 +892,9 @@ impl Overlay {
 /// them all, with empty overlay attributes. Union then adds each overlay polygon's part outside
 /// every input polygon, with empty input attributes. Parts that only touch are left out, and
 /// features of one layer that overlap each other are not split against each other. Intersect
-/// leaves out input features without geometry; Identity and Union keep them, as they are.
+/// leaves out input features without geometry; Identity and Union keep them, as they are, and an
+/// input feature no overlay polygon meets too, coordinates untouched (a feature that is cut comes
+/// out rebuilt, its overlapping parts unioned).
 fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -914,11 +919,17 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
             continue;
         };
         let ext = g.extent();
-        // A feature of overlapping parts is unioned once, for all the zones it meets.
-        let whole = dissolved(g);
+        let near: Vec<(usize, &Zone)> = index
+            .candidates(&ext)
+            .into_iter()
+            .filter_map(|zi| Some((zi, zones.get(zi)?)))
+            .filter(|(_, z)| ext.intersects(&z.ext))
+            .collect();
+        // A feature of overlapping parts is unioned once, for all the zones it may meet, and only
+        // when it may meet one.
+        let whole = if near.is_empty() { std::borrow::Cow::Borrowed(g) } else { dissolved(g) };
         let mut hit: Vec<usize> = Vec::new();
-        for zi in index.candidates(&ext) {
-            let Some(z) = zones.get(zi).filter(|z| ext.intersects(&z.ext)) else { continue };
+        for (zi, z) in near {
             if let Some(inside) = part(&whole, &z.poly, true) {
                 out.push_next(Some(inside), overlay_row(ds, Some(&f.attrs), ov, zone_attrs(z)));
                 hit.push(zi);
@@ -1936,8 +1947,8 @@ fn shared_point(a: &Geometry, a_geo: &geo::Geometry<f64>, b: &Geometry, b_geo: &
         return found;
     }
     let overlap = match (a_geo, b_geo) {
-        (_, geo::Geometry::MultiPolygon(m)) => part(a, &m.orient(Direction::Default), true),
-        (geo::Geometry::MultiPolygon(m), _) => part(b, &m.orient(Direction::Default), true),
+        (_, geo::Geometry::MultiPolygon(m)) => part(&dissolved(a), &mask_of(m.clone()), true),
+        (geo::Geometry::MultiPolygon(m), _) => part(&dissolved(b), &mask_of(m.clone()), true),
         _ => None,
     };
     if let Some(c) = overlap.as_ref().and_then(crate::join::first_coord) {
@@ -1982,9 +1993,9 @@ fn shared_point(a: &Geometry, a_geo: &geo::Geometry<f64>, b: &Geometry, b_geo: &
 /// With one layer as both, a feature's nearest is another feature.
 fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
-    let near = input(inp, p, "near")?;
-    if ds.geometry_type == GeometryType::None || near.geometry_type == GeometryType::None {
-        return Err(format!("'{}' has no geometry", if ds.geometry_type == GeometryType::None { &ds.name } else { &near.name }));
+    let near_ds = input(inp, p, "near")?;
+    if ds.geometry_type == GeometryType::None || near_ds.geometry_type == GeometryType::None {
+        return Err(format!("'{}' has no geometry", if ds.geometry_type == GeometryType::None { &ds.name } else { &near_ds.name }));
     }
     let given = p.get("distance").filter(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
     let limit = match given {
@@ -1999,16 +2010,16 @@ fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     };
     let unit_m = to_metres(1.0, s(p, "units"))?;
     // The same layer as both: leave each feature out of its own search.
-    let same = std::ptr::eq(ds, near);
+    let same = std::ptr::eq(ds, near_ds);
 
     // In layer order, whatever order the selection was made in: of equally near features, the
     // first in the layer wins.
-    let mut near_rows = rows(inp, p, "near", near);
+    let mut near_rows = rows(inp, p, "near", near_ds);
     near_rows.sort_unstable();
     let feats: Vec<Located<'_>> = near_rows
         .into_iter()
         .filter_map(|row| {
-            let g = near.features.get(row)?.geometry.as_ref()?;
+            let g = near_ds.features.get(row)?.geometry.as_ref()?;
             Some(Located { row, ext: g.extent(), geo: to_geo(g), geom: g })
         })
         .collect();
@@ -2037,7 +2048,7 @@ fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             } else {
                 shared_point(g, &t_geo, j.geom, &j.geo)
             };
-            Some((near.features.get(j.row)?.id, d, at))
+            Some((near_ds.features.get(j.row)?.id, d, at))
         });
         let mut attrs: Vec<Value> = (0..ds.fields.len()).map(|i| f.attrs.get(i).cloned().unwrap_or(Value::Null)).collect();
         match hit {

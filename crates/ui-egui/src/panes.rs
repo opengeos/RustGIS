@@ -3415,6 +3415,7 @@ pub fn tool_icon(id: &str) -> &'static str {
         "intersect" => "intersect",
         "identity" => "identity",
         "union" => "union",
+        "near" => "near",
         "dissolve" => "dissolve",
         "convexHull" => "hull",
         "featureToPoint" => "centroid",
