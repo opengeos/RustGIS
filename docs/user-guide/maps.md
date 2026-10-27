@@ -216,12 +216,16 @@ which opens the Plugin Manager at the
 [Basemaps plugin](https://plugins.rustgis.app/catalog/basemaps/); it adds a tab of public
 basemaps. Add any other with **Add Tile Layer…** at the bottom of the Basemap gallery.
 The gallery lists the map's tile layers: show or hide them, change their opacity and order, or
-remove them. The Layers pane lists them too, under the map's layers and above the basemap: tick
+remove them. The Layers pane lists them too, at their place in the drawing order: a basemap
+under the map's layers and above the built-in basemap; an overlay (a WMS or WMTS layer, a vector
+tile service, **Overlay** ticked in Add Tile Layer) on top of the map's layers when added, as
+every new layer goes. Drag one, or right-click it and choose **Move up** or **Move down**, to put it
+between the map's layers (above a layer group, never inside one). Tick
 one to show or hide it, and right-click it for **Zoom To Layer** (when its bounds are known), opacity,
 **Blend** mode, order and **Remove**.
 A blend mode (Multiply, Screen, Overlay, Darken, Lighten, Difference) combines a tile layer with
-the tile layers and basemap beneath it: stack imagery over a hillshade and set it to Multiply to
-let the terrain show through. Overlays (labels, roads) stay on top of the basemaps; choosing a built-in basemap
+what is drawn beneath it (tile layers, the basemap, and map layers when it's placed over them): stack imagery over a hillshade and set it to Multiply to
+let the terrain show through. Overlays stay over the basemaps; choosing a built-in basemap
 removes the web basemaps but keeps the overlays. Tile layers are saved with the project, and
 their credits are shown in the corner of the map and drawn on exports.
 
@@ -240,6 +244,24 @@ north]` in longitude/latitude; `service.add` retains the bounds advertised by ma
 Explicit bounds must form a finite, ordered geographic rectangle; an invalid value rejects the
 command without adding or replacing a layer. Invalid or malformed bounds in a saved project
 are instead discarded, leaving the project and tile layer usable without that coverage metadata.
+
+**Legends.** A WMS or WMTS layer added from its service has its legend in the Layers pane, as
+ArcGIS Pro's Contents pane shows a map service layer's: the arrow beside it opens the legend under
+the layer, indented as a feature layer's classes are, at the size the service draws it (one wider
+than the pane scrolls across). A WMS layer's legend is the one its service draws from the layer's
+styling (GetLegendGraphic, when the service offers it in PNG or JPEG), else the picture of its
+default style (its `LegendURL`: the style named `default`, else its first, inherited from the
+layers above it as WMS has it); when one can't be shown the next is. A WMTS layer's comes from
+its default style, which may give one per range of scales: the one for the map's scale shows,
+and "No legend at this scale" where none is for it. The pictures are fetched when first shown
+and kept (one that couldn't be fetched is asked for again a minute later). Any tile layer can be given one: `map.addTiles` and `map.setTiles` take
+`"legend"` (an address, or a list of addresses and `{"url", "minScale", "maxScale"}`; `null` takes
+it away), and `map.expandTiles` shows or hides it (as `layer.expand` does a layer's classes: not
+an edit to undo). A project keeps a layer's legends and whether they show.
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://wms.geo.admin.ch/","layer":"ch.swisstopo.geologie-swissgeocover2d_lines"}' --cmd 'map.tiles={}'
+```
 
 ### Other worlds
 

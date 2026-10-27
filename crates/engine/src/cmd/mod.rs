@@ -28,6 +28,7 @@ pub mod layout;
 pub mod navigate;
 pub mod nldi;
 pub mod notebook;
+pub mod pg;
 pub mod plugins;
 pub mod portals;
 pub mod presentation;
@@ -57,6 +58,7 @@ use serde_json::Value;
 
 use crate::{CommandSpec, Session};
 
+/// Collects the engine command registry, including project importers, for every front end.
 pub fn all() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(project::commands());
@@ -100,6 +102,7 @@ pub fn all() -> Vec<CommandSpec> {
     v.extend(history::commands());
     v.extend(share::commands());
     v.extend(sql::commands());
+    v.extend(pg::commands());
     v.extend(plugins::commands());
     v.extend(sharing::commands());
     v.extend(stac::commands());

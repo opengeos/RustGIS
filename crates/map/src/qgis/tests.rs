@@ -1,6 +1,7 @@
 //! A small QGIS project and style, written by hand in the shapes QGIS writes them.
 
 use super::*;
+use crate::layout::TextAlign;
 use crate::symbology::{Glyph, LabelPlacement, LineCap, LineMark, Marker, Placements};
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
@@ -351,6 +352,179 @@ fn a_labels_buffer_and_letter_spacing_carry_over_in_their_units() {
 }
 
 #[test]
+fn a_labels_background_and_offset_carry_over_in_their_units() {
+    let qml = |settings: &str| {
+        format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="marker" name="0" alpha="1"><layer class="SimpleMarker" enabled="1"/></symbol></symbols></renderer-v2>
+            <labeling type="simple"><settings>{settings}</settings></labeling></qgis>"#
+        )
+    };
+    let read = |settings: &str| {
+        let mut report = Report::default();
+        let s = read_style(&qml(settings), "Roads", &mut report).unwrap();
+        (s.labels.unwrap().default, report)
+    };
+    let mm = |v: f32| v * 72.0 / 25.4;
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    // SMV25's road numbers: a white box with a dark outline from its fill symbol (a marker symbol
+    // beside it is for marker backgrounds), padded in millimetres, its corners rounded.
+    let (c, report) = read(
+        r#"<text-style fieldName="nr"><background shapeDraw="1" shapeType="0" shapeSizeType="0" shapeSizeX="0.4304" shapeSizeY="0.0988" shapeSizeUnit="MM"
+            shapeRadiiX="0.25" shapeRadiiY="0.25" shapeRadiiUnit="MM" shapeFillColor="255,255,255,255" shapeBorderColor="38,38,38,255" shapeBorderWidth="0.0988"
+            shapeBorderWidthUnit="MM" shapeOffsetX="0" shapeOffsetY="0" shapeRotation="0" shapeOpacity="1" shapeJoinStyle="64" shapeBlendMode="0">
+            <symbol type="marker" name="markerSymbol" alpha="1"><layer class="SimpleMarker" enabled="1"><Option type="Map"><Option name="color" value="232,113,141,255"/></Option></layer></symbol>
+            <symbol type="fill" name="fillSymbol" alpha="1"><layer class="SimpleFill" enabled="1"><Option type="Map"><Option name="color" value="250,250,250,255,rgb:1,1,1,1"/>
+              <Option name="outline_color" value="38,38,38,255"/><Option name="outline_style" value="solid"/><Option name="outline_width" value="0.1"/>
+              <Option name="outline_width_unit" value="MM"/><Option name="style" value="solid"/></Option></layer></symbol>
+          </background></text-style><placement placement="2"/>"#,
+    );
+    let b = c.background.unwrap();
+    assert_eq!((b.fill, b.stroke), (Some(Rgba::rgb(250, 250, 250)), Some(Rgba::rgb(38, 38, 38))));
+    assert!(
+        near(b.stroke_width, mm(0.1)) && near(b.padding[0], mm(0.4304)) && near(b.padding[1], mm(0.0988)) && near(b.radius, mm(0.25)),
+        "{b:?}"
+    );
+    assert_eq!(c.offset, [0.0; 2]);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // Without a fill symbol (older files): its colours, half see-through; no outline width, no
+    // outline; padding in points; an ellipse drawn as a rectangle, and what else it can't do noted.
+    let (c, report) = read(
+        r#"<text-style fieldName="nr"><background shapeDraw="1" shapeType="2" shapeSizeX="2" shapeSizeY="1" shapeSizeUnit="Point" shapeFillColor="0,0,255,255"
+            shapeBorderColor="0,0,0,255" shapeBorderWidth="0" shapeOpacity="0.5" shapeOffsetX="1" shapeRotation="30" shapeBlendMode="6"/></text-style>"#,
+    );
+    let b = c.background.unwrap();
+    assert_eq!((b.fill, b.stroke, b.padding, b.radius), (Some(Rgba::new(0, 0, 255, 128)), None, [2.0, 1.0], 0.0));
+    for part in ["drawn as rectangles", "moved off their text", "turned on their own", "blended"] {
+        assert!(report.notes.iter().any(|n| n.text.contains(part)), "{part}: {:?}", report.notes);
+    }
+    // Corners rounded by a share of its size (QGIS's `Percentage`): square, and said so.
+    let (c, report) = read(
+        r#"<text-style fieldName="nr"><background shapeDraw="1" shapeRadiiX="10" shapeRadiiY="10" shapeRadiiUnit="Percentage"/></text-style>"#,
+    );
+    assert_eq!(c.background.map(|b| b.radius), Some(0.0));
+    assert!(report.notes.iter().any(|n| n.text.contains("drawn square")), "{:?}", report.notes);
+    assert!(!report.notes.iter().any(|n| n.text.contains("map units")), "{:?}", report.notes);
+    // A fixed size, a picture, one switched off, a symbol filled otherwise.
+    let (c, report) =
+        read(r#"<text-style fieldName="nr"><background shapeDraw="1" shapeSizeType="1" shapeSizeX="20" shapeSizeY="10"/></text-style>"#);
+    assert_eq!(c.background.map(|b| b.padding), Some([0.0; 2]));
+    assert!(report.notes.iter().any(|n| n.text.contains("size of their own")), "{:?}", report.notes);
+    let (c, report) = read(r#"<text-style fieldName="nr"><background shapeDraw="1" shapeType="4" shapeSVGFile="x.svg"/></text-style>"#);
+    assert!(c.background.is_none() && report.notes.iter().any(|n| n.text.contains("SVG pictures")), "{:?}", report.notes);
+    let (c, _) = read(r#"<text-style fieldName="nr"><background shapeDraw="0" shapeType="0"/></text-style>"#);
+    assert!(c.background.is_none());
+    let (c, report) = read(
+        r#"<text-style fieldName="nr"><background shapeDraw="1" shapeFillColor="1,2,3,255"><symbol type="fill" name="f" alpha="1"><layer class="GradientFill" enabled="1"/></symbol></background></text-style>"#,
+    );
+    assert_eq!(c.background.and_then(|b| b.fill), Some(Rgba::rgb(1, 2, 3)));
+    assert!(report.notes.iter().any(|n| n.text.contains("patterns or gradients")), "{:?}", report.notes);
+    // Crafted sizes stay within RustGIS's ranges.
+    let (c, _) = read(
+        r#"<text-style fieldName="nr"><background shapeDraw="1" shapeSizeX="1e30" shapeSizeY="-5" shapeBorderWidth="1e30" shapeRadiiX="1e30" shapeRadiiY="1e30"/></text-style>"#,
+    );
+    let b = c.background.unwrap();
+    assert_eq!((b.padding, b.stroke_width, b.radius), ([50.0, 0.0], 10.0, 50.0));
+
+    // An offset from the point, in its units (down is positive, as QGIS has it); the distance
+    // QGIS doesn't use there isn't noted.
+    let (c, report) =
+        read(r#"<text-style fieldName="nr"/><placement placement="1" quadOffset="2" xOffset="2" yOffset="-1" offsetUnits="MM" dist="3"/>"#);
+    assert_eq!(c.placement, LabelPlacement::AboveRight);
+    assert!(near(c.offset[0], mm(2.0)) && near(c.offset[1], mm(-1.0)), "{:?}", c.offset);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    let (c, _) = read(r#"<text-style fieldName="nr"/><placement placement="1" xOffset="1e30" yOffset="4" offsetUnits="Point"/>"#);
+    assert_eq!(c.offset, [200.0, 4.0]);
+    // An offset QGIS doesn't use (a label along a line) isn't read.
+    let (c, _) = read(r#"<text-style fieldName="nr"/><placement placement="2" xOffset="2" yOffset="2"/>"#);
+    assert_eq!(c.offset, [0.0; 2]);
+    // A style doesn't say what its layer holds: a distance round its features is noted.
+    let (c, report) = read(r#"<text-style fieldName="nr"/><placement placement="0" dist="1.5" distUnits="MM"/>"#);
+    assert_eq!(c.offset, [0.0; 2]);
+    assert!(report.notes.iter().any(|n| n.text.contains("label distances")), "{:?}", report.notes);
+
+    // In a project, a point layer's distance round its points: the label (above them) that far up,
+    // noted, as QGIS puts it out diagonally.
+    let qgs = |geometry: &str| {
+        format!(
+            r#"<qgis version="4.2.3"><projectlayers><maplayer type="vector" geometry="{geometry}" labelsEnabled="1"><id>p</id><datasource>/d/p.shp</datasource><layername>P</layername><provider>ogr</provider>
+            <labeling type="simple"><settings><text-style fieldName="nr"/><placement placement="6" dist="1.5" distUnits="MM"/></settings></labeling></maplayer></projectlayers></qgis>"#
+        )
+    };
+    let mut report = Report::default();
+    let p = read_project(&qgs("Point"), "", &mut report).unwrap();
+    let c = &p.layers[0].style.labels.as_ref().unwrap().default;
+    assert!(c.offset[0] == 0.0 && near(c.offset[1], -mm(1.5)), "{:?}", c.offset);
+    assert!(report.notes.iter().any(|n| n.text == "label distances round points, moved straight up"), "{:?}", report.notes);
+    let mut report = Report::default();
+    let p = read_project(&qgs("Polygon"), "", &mut report).unwrap();
+    assert_eq!(p.layers[0].style.labels.as_ref().unwrap().default.offset, [0.0; 2]);
+    assert!(report.notes.iter().any(|n| n.text.contains("label distances")), "{:?}", report.notes);
+}
+
+#[test]
+fn a_labels_wrapping_and_repeat_carry_over() {
+    let read = |settings: &str| {
+        let qml = format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1"/></symbol></symbols></renderer-v2>
+            <labeling type="simple"><settings><text-style fieldName="name"/>{settings}</settings></labeling></qgis>"#
+        );
+        let mut report = Report::default();
+        let s = read_style(&qml, "Roads", &mut report).unwrap();
+        (s.labels.unwrap().default, report)
+    };
+    // The corpus's: a space as the wrap character, ten characters a line, centred lines.
+    let (c, report) = read(
+        r#"<text-format wrapChar=" " autoWrapLength="10" useMaxLineLengthForAutoWrap="1" multilineAlign="1"/><placement placement="2"/>"#,
+    );
+    assert_eq!((c.wrap_char.as_deref(), c.wrap_length, c.line_align), (Some(" "), 10, TextAlign::Center));
+    assert_eq!(c.wrap("Ober Winterthur"), "Ober\nWinterthur");
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // Lines following the placement: right-aligned left of the feature, left-aligned right of it.
+    let follow =
+        |quad: &str| read(&format!(r#"<text-format multilineAlign="3"/><placement placement="1" quadOffset="{quad}"/>"#)).0.line_align;
+    assert_eq!((follow("3"), follow("5"), follow("4")), (TextAlign::Right, TextAlign::Left, TextAlign::Center));
+    // Without a `<text-format>` too, as QGIS defaults to following the placement.
+    assert_eq!(read(r#"<placement placement="1" quadOffset="3"/>"#).0.line_align, TextAlign::Right);
+    // A shortest line length, and justified lines: as near as RustGIS draws them, and noted.
+    let (c, report) = read(r#"<text-format autoWrapLength="1e9" useMaxLineLengthForAutoWrap="0" multilineAlign="4"/>"#);
+    assert_eq!((c.wrap_length, c.line_align), (crate::symbology::MAX_WRAP_LENGTH, TextAlign::Center));
+    for part in ["shortest line length", "justified"] {
+        assert!(report.notes.iter().any(|n| n.text.contains(part)), "{part}: {:?}", report.notes);
+    }
+    // A repeat along curved labels, in millimetres (the corpus's 30 mm); none for labels off lines.
+    let (c, _) = read(r#"<placement placement="3" repeatDistance="30" repeatDistanceUnits="MM"/>"#);
+    assert!(c.repeat.is_some_and(|r| (r - 30.0 * 72.0 / 25.4).abs() < 1e-3), "{:?}", c.repeat);
+    let (c, report) = read(r#"<placement placement="1" repeatDistance="30"/>"#);
+    assert_eq!(c.repeat, None);
+    assert!(report.notes.is_empty(), "QGIS repeats no label off a line: {:?}", report.notes);
+    // Within RustGIS's range; one of no number is none.
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="0.001" repeatDistanceUnits="Point"/>"#);
+    assert_eq!(c.repeat, Some(10.0));
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="lots"/>"#);
+    assert_eq!(c.repeat, None);
+    // A unit saved before QGIS 3, as a number: 0 points, else millimetres.
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="30" repeatDistanceUnit="0"/>"#);
+    assert_eq!(c.repeat, Some(30.0));
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="30" repeatDistanceUnit="1"/>"#);
+    assert!(c.repeat.is_some_and(|r| (r - 30.0 * 72.0 / 25.4).abs() < 1e-3), "{:?}", c.repeat);
+    // Round polygons RustGIS labels once, and says so.
+    let (c, report) = read(r#"<placement placement="7" repeatDistance="30"/>"#);
+    assert_eq!(c.repeat, None);
+    assert!(report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+    let qgs = r#"<qgis version="4.2.3"><projectlayers><maplayer type="vector" geometry="Polygon" labelsEnabled="1"><id>p</id><datasource>/d/p.shp</datasource><layername>P</layername><provider>ogr</provider>
+        <labeling type="simple"><settings><text-style fieldName="nr"/><placement placement="2" repeatDistance="30"/></settings></labeling></maplayer></projectlayers></qgis>"#;
+    let mut report = Report::default();
+    let p = read_project(qgs, "", &mut report).unwrap();
+    assert_eq!(p.layers[0].style.labels.as_ref().unwrap().default.repeat, None);
+    assert!(report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+    // A placement QGIS doesn't repeat (horizontal, inside the polygon) keeps the distance unused:
+    // not noted.
+    let mut report = Report::default();
+    read_project(&qgs.replace(r#"placement="2""#, r#"placement="4""#), "", &mut report).unwrap();
+    assert!(!report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+}
+
+#[test]
 fn files_of_qgis_1_and_2_read_by_their_old_names() {
     // Before QGIS 3: no layer tree but a legend, the canvas's coordinate system, scale limits named
     // the other way round, opacity as transparency, and QGIS 2's names for line and fill settings.
@@ -423,7 +597,7 @@ fn what_rustgis_has_no_place_for_is_noted() {
           <labeling type="simple"><settings calloutType="simple">
             <text-style fieldName="name"><text-buffer bufferDraw="1" bufferSize="1" bufferColor="255,255,255,255"/></text-style>
             <text-format wrapChar="" autoWrapLength="12"/>
-            <placement placement="1" dist="2" xOffset="1" yOffset="0" repeatDistance="0" priority="8"/>
+            <placement placement="2" dist="2" xOffset="1" yOffset="0" repeatDistance="0" priority="8"/>
             <dd_properties><Option type="Map"><Option name="properties" type="Map"><Option name="Size" type="Map"><Option name="active" value="true"/><Option name="field" value="size"/></Option></Option></Option></dd_properties>
             <callout type="simple"><Option type="Map"><Option name="enabled" value="1"/></Option></callout>
           </settings></labeling>
@@ -450,9 +624,7 @@ fn what_rustgis_has_no_place_for_is_noted() {
         "diagrams",
         "order-by",
         "draw effects",
-        "wrapped labels",
         "label distances",
-        "label offsets",
         "label priorities",
         "callouts",
         "data-defined label settings",
@@ -461,7 +633,8 @@ fn what_rustgis_has_no_place_for_is_noted() {
     }
     // The renderer's effect is noted once; the symbol layer's, only plain drawing, isn't an effect.
     assert_eq!(report.notes.iter().find(|n| n.text.contains("draw effects")).map(|n| n.count), Some(1));
-    assert!(!said("A", "repeated"), "a repeat distance of 0 is none");
+    // Wrapping and repeats along lines are read now, not noted.
+    assert!(!said("A", "wrapped") && !said("A", "repeated"), "{:?}", report.notes);
 }
 
 /// A raster style file with `renderer` as its renderer and `pipe` after it in the pipe.

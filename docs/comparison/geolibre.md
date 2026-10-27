@@ -161,9 +161,9 @@ The two read and write the same open formats, so data moves between them without
 GeoPackage, GeoParquet, FlatGeobuf, Shapefile, GeoJSON, KML/KMZ, GPX, CSV and cloud-optimised
 GeoTIFF (GeoPackage export is desktop only in RustGIS).
 
-Neither opens the other's project file yet; for now, move the data across and restyle it. The
-plan is for RustGIS to open `.geolibre` projects first
-([#962](https://github.com/opengeos/RustGIS/issues/962)). GeoLibre opening `.rgis` projects
+RustGIS imports `.geolibre` projects as new maps, keeping supported data, styles and views
+and reporting differences. See [GeoLibre projects](../user-guide/workspace.md#geolibre-projects)
+for supported content and limits. GeoLibre opening `.rgis` projects
 comes later, once RustGIS's project format and the data types it supports settle: RustGIS is
 still changing quickly, and GeoLibre would otherwise be reading a moving target.
 

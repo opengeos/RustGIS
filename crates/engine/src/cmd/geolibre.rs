@@ -69,6 +69,8 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     let text = project_text(p)?;
     let mut report = Report::default();
     let project = geolibre::read_project(&text, &mut report)?;
+    #[cfg(target_arch = "wasm32")]
+    ensure_download_capacity(s, &project.layers)?;
     let dir = ps(p, "dir").filter(|d| !d.trim().is_empty()).map(str::to_string).or_else(|| {
         ps(p, "path")
             .and_then(|p| std::path::Path::new(p).parent())
@@ -167,6 +169,61 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
     Ok(json!({"map":project.name,"layers":added,"notes":report.notes}))
 }
 
+/// Inline features take precedence over saved paths for GeoJSON layers.
+fn inline_data(r: &Value) -> Option<&Value> {
+    r.get("geojson")
+        .filter(|v| v.is_object() || v.is_string())
+        .or_else(|| r.get("metadata").and_then(|m| m.get("embeddedGeoJSON")).filter(|v| v.is_object() || v.is_string()))
+        .or_else(|| r.get("source").and_then(|s| s.get("data")).filter(|d| d.is_object()))
+}
+
+/// Resolves the saved address fields in the same order for loading and browser admission.
+fn source_address(r: &Value) -> &str {
+    let kind = string(r, "type");
+    let src = &r["source"];
+    let path = string(r, "sourcePath");
+    if !path.is_empty() {
+        return path;
+    }
+    let tile = array(src, "tiles").first().and_then(Value::as_str).unwrap_or("");
+    if matches!(kind, "xyz" | "wms" | "wmts" | "vector-tiles" | "raster") && !tile.is_empty() {
+        return tile;
+    }
+    let url = string(src, "url");
+    if !url.is_empty() {
+        url
+    } else if !tile.is_empty() {
+        tile
+    } else {
+        src.get("data").and_then(Value::as_str).unwrap_or("")
+    }
+}
+
+/// Refuses a browser import before creating its map when its whole-file requests cannot all
+/// be queued. Streaming tiles/COGs and inline features consume no whole-file request slots.
+#[cfg(any(target_arch = "wasm32", test))]
+fn ensure_download_capacity(s: &Session, layers: &[Value]) -> Result<(), String> {
+    let count = layers
+        .iter()
+        .filter(|r| {
+            let kind = string(r, "type");
+            let address = source_address(r);
+            rustgis_map::tiles::is_web(address)
+                && !(kind == "geojson" && inline_data(r).is_some())
+                && (matches!(kind, "geojson" | "flatgeobuf" | "geoparquet" | "zarr" | "lidar" | "mbtiles")
+                    || (kind == "raster" && array(&r["source"], "tiles").is_empty() && !super::layer::is_tiff_url(address)))
+        })
+        .count();
+    let available = crate::MAX_URL_REQUESTS.saturating_sub(s.url_requests.len());
+    if count > available {
+        return Err(format!(
+            "GeoLibre import needs {count} downloads, but only {available} of {} browser download slots are available; split the project or wait for pending downloads before importing",
+            crate::MAX_URL_REQUESTS
+        ));
+    }
+    Ok(())
+}
+
 /// Adds data or tiles, retaining the original layer's presentation. Tile layers have their own
 /// order in RustGIS, so mixing them with features is explicitly reported.
 fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report) -> Result<Option<u32>, String> {
@@ -178,26 +235,14 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
     {
         return Err(format!("unsupported {kind} layer"));
     }
-    let inline = r
-        .get("geojson")
-        .filter(|v| v.is_object() || v.is_string())
-        .or_else(|| r.get("metadata").and_then(|m| m.get("embeddedGeoJSON")).filter(|v| v.is_object() || v.is_string()))
-        .or_else(|| src.get("data").filter(|d| d.is_object()));
+    let inline = inline_data(r);
     let before: std::collections::HashSet<_> = s.map().layers.iter().map(|l| l.id).collect();
     let result = if kind == "geojson" && inline.is_some() {
         let data = inline.ok_or("missing GeoJSON")?;
         let text = if let Some(t) = data.as_str() { t.to_string() } else { data.to_string() };
         s.run_part("layer.addDataText", &json!({"fileName":"geolibre.geojson","text":text,"name":name}))?
     } else {
-        let address = string(r, "sourcePath");
-        let address = if address.is_empty() && matches!(kind, "xyz" | "wms" | "wmts" | "vector-tiles" | "raster") {
-            array(src, "tiles").first().and_then(Value::as_str).unwrap_or("")
-        } else {
-            address
-        };
-        let address = if address.is_empty() { string(src, "url") } else { address };
-        let address = if address.is_empty() { array(src, "tiles").first().and_then(Value::as_str).unwrap_or("") } else { address };
-        let address = if address.is_empty() { src.get("data").and_then(Value::as_str).unwrap_or("") } else { address };
+        let address = source_address(r);
         if address.is_empty() {
             return Err("no inline data, path or URL".into());
         }
@@ -266,7 +311,7 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
         let mut q = json!({"name":name,"zoom":false});
         q[if remote { "url" } else { "path" }] = json!(address);
         #[cfg(target_arch = "wasm32")]
-        if remote && kind != "cog" {
+        if remote && kind != "cog" && !(kind == "raster" && super::layer::is_tiff_url(&address)) {
             // Reserve the final position and group membership before downloads can finish in
             // arbitrary order. The token follows the layer across map switches and reordering.
             let token = pending_token();
@@ -481,4 +526,45 @@ fn group_look(groups: &[Value], id: &str) -> (bool, f64) {
         id = string(group, "parentId");
     }
     (visible, opacity)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn geolibre_browser_import_refuses_an_oversized_download_batch_before_mutation() {
+        let mut s = Session::new(crate::project::Project::default());
+        let layers: Vec<_> =
+            (0..17).map(|i| json!({"type":"geojson","source":{"url":format!("https://example.org/{i}.geojson")}})).collect();
+        let before = s.project.clone();
+        assert!(ensure_download_capacity(&s, &layers).unwrap_err().contains("needs 17 downloads"));
+        assert_eq!(s.project.maps.len(), before.maps.len());
+        assert!(s.url_requests.is_empty());
+        assert!(ensure_download_capacity(&s, &layers[..16]).is_ok());
+        s.request_url(&json!({"url":"https://example.org/other.geojson"})).unwrap();
+        assert!(ensure_download_capacity(&s, &layers[..16]).is_err());
+        assert!(ensure_download_capacity(&s, &layers[..15]).is_ok());
+    }
+
+    #[test]
+    fn geolibre_browser_streaming_and_inline_sources_need_no_download_slots() {
+        let mut s = Session::new(crate::project::Project::default());
+        for i in 0..crate::MAX_URL_REQUESTS {
+            s.request_url(&json!({"url":format!("https://example.org/{i}.geojson")})).unwrap();
+        }
+        let layers = vec![
+            json!({"type":"geojson","sourcePath":"https://example.org/ignored.geojson","geojson":{"type":"FeatureCollection","features":[]}}),
+            json!({"type":"cog","source":{"url":"https://example.org/image.tif"}}),
+            json!({"type":"raster","source":{"url":"https://example.org/image.tiff?sig=1"}}),
+            json!({"type":"raster","source":{"tiles":["https://example.org/{z}/{x}/{y}.png"]}}),
+            json!({"type":"pmtiles","source":{"url":"https://example.org/archive.pmtiles"}}),
+            json!({"type":"geojson","sourcePath":"local.geojson"}),
+        ];
+        assert!(ensure_download_capacity(&s, &layers).is_ok());
+        for kind in ["flatgeobuf", "geoparquet", "zarr", "lidar", "mbtiles", "raster"] {
+            assert!(ensure_download_capacity(&s, &[json!({"type":kind,"source":{"url":"https://example.org/data"}})]).is_err(), "{kind}");
+        }
+    }
 }

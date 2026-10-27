@@ -708,6 +708,10 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "connection.resolveS3" => Command("ui.s3Connections"),
         "layer.addSql" => Pane(RightPane::Sql),
         "layer.addDatabase" => Dialog("addDatabase"),
+        // Add From Database with Load for editing ticked.
+        "pg.connect" | "pg.addLayer" => Dialog("pgAddLayer"),
+        "pg.saveEdits" => Dialog("pgSave"),
+        "pg.discardEdits" => Dialog("pgDiscard"),
         "layer.addZarr" => Command("ui.addZarr"),
         "layer.addLayerFile" => OpenItem("layer"),
         "layer.save" => SaveItem("layer"),
@@ -814,6 +818,7 @@ fn search_platform_disabled(id: &str, web: bool) -> Option<&'static str> {
     match id {
         "project.addFolder" => Some("folder connections need the desktop app"),
         "layer.addDatabase" => Some("databases are read through DuckDB, a program the browser can't run"),
+        "pg.connect" | "pg.addLayer" | "pg.saveEdits" | "pg.discardEdits" => Some("PostGIS tables are edited in the desktop app"),
         _ => None,
     }
 }
@@ -1197,7 +1202,7 @@ mod tests {
 
     #[test]
     fn desktop_only_search_actions_are_disabled_only_on_the_web() {
-        for id in ["project.addFolder", "layer.addDatabase"] {
+        for id in ["project.addFolder", "layer.addDatabase", "pg.addLayer", "pg.saveEdits"] {
             assert!(search_platform_disabled(id, true).is_some(), "{id} must explain its web restriction");
             assert_eq!(search_platform_disabled(id, false), None, "{id} stays available on desktop");
         }

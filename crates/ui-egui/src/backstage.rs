@@ -93,6 +93,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
     });
 }
 
+/// Draws the project start choices; import cards dispatch commands without replacing the project.
 fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());

@@ -32,6 +32,7 @@ mod earthaccessui;
 mod editpanes;
 mod embeddingsui;
 mod failureui;
+mod fieldmenu;
 mod geocodeui;
 mod geolibreui;
 mod geometrycalc;
@@ -77,6 +78,7 @@ mod table;
 mod textform;
 pub mod theme;
 mod tilelayer;
+mod tilelegend;
 mod tilt_drape;
 mod tilt_settle;
 mod timebar;
@@ -251,6 +253,10 @@ pub struct Services {
     /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
     /// running alongside the first, which mustn't touch its copy.
     pub recovery: Option<Box<dyn RecoveryStore>>,
+    /// Reads the system clipboard's text into the slot (the browser's `navigator.clipboard`,
+    /// which may ask the user first), for a text field's Paste; `None` where the window sends
+    /// it (the desktop) or the browser can't read it (a page not served over HTTPS).
+    pub read_clipboard: Option<Box<dyn Fn(Slot<Result<String, String>>)>>,
     /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
     /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
     /// slot (the browser; the desktop runs `arcgis.signIn`).
@@ -615,6 +621,10 @@ pub struct UiState {
     pub csw: cswui::State,
     /// STAC Search: its choices, results and the request under way.
     pub stac: stacui::State,
+    /// WMS and WMTS layers' legend pictures, as the Layers pane shows them (#942).
+    pub tile_legends: tilelegend::Legends,
+    /// A text field's right-click menu: the field it's open on, and the row picked.
+    pub field_menu: fieldmenu::FieldMenu,
     /// S3…: the connection form, the bucket browsed and the listing under way.
     pub s3: s3ui::State,
     /// New/Edit Connection: the form and the Test under way.
@@ -709,6 +719,7 @@ impl UiState {
 }
 
 impl Default for UiState {
+    /// Starts on Home with no pending picker or download, keeping transient imports out of saved state.
     fn default() -> Self {
         UiState {
             tab: "Home".into(),
@@ -763,6 +774,8 @@ impl Default for UiState {
             service_group_name: "My OGC Layer".into(),
             csw: Default::default(),
             stac: Default::default(),
+            tile_legends: Default::default(),
+            field_menu: Default::default(),
             s3: Default::default(),
             connection: Default::default(),
             s3_chooser: Default::default(),
@@ -2511,7 +2524,7 @@ impl RustGisApp {
                     self.ui.backstage = false;
                 } else if let Some(path) = dialogs::pick_open(
                     &["rgis", "rgisx", "rgispkg", "qgs", "qgz", "geolibre", "json"],
-                    tl!("Projects (RustGIS, QGIS, GeoLibre)"),
+                    tl!("Projects and JSON data (RustGIS, QGIS, GeoLibre)"),
                 ) {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
@@ -2687,6 +2700,7 @@ impl RustGisApp {
                     open(match kind {
                         "ramps" => "ramp",
                         "geolibreProject" => "project",
+                        "qgisProject" => "qgisProject",
                         _ => "item",
                     });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
@@ -3306,6 +3320,8 @@ impl RustGisApp {
         r
     }
 
+    /// Consumes completed probes and downloads on the app frame, finalizing imports in their
+    /// reserved map or discarding failed reservations even when another map is active.
     fn poll_data_downloads(&mut self) {
         // GeoTIFFs, FlatGeobufs and GeoParquets whose headers are in: read in place, or
         // downloaded whole.
@@ -3755,6 +3771,8 @@ impl RustGisApp {
         }
         i18n::set_current(self.lang());
         let t = theme::Tokens::get(&ctx);
+        // Before the shortcuts and the fields: the row picked in a text field's menu, as its keys.
+        fieldmenu::play(self, &ctx);
         chrome::shortcuts(self, &ctx);
         panes::follow_layer_filter(self);
         if self.ui.backstage {
@@ -3787,6 +3805,8 @@ impl RustGisApp {
         #[cfg(not(target_arch = "wasm32"))]
         agentthreads::windows(self, &ctx);
         chrome::notices(self, &ctx);
+        // After every field is drawn: one right-clicked opens its menu.
+        fieldmenu::show(self, &ctx);
         if let Some(text) = self.ui.copy_out.take() {
             ctx.copy_text(text);
         }
@@ -3898,6 +3918,8 @@ const DEFAULTS_TO_ACTIVE_LAYER: &[&str] = &[
     "share.webLayer",
     "share.webStyle",
     "share.locator",
+    "pg.saveEdits",
+    "pg.discardEdits",
     "zarr.reduce",
     "cube.trend",
     "cube.reduce",

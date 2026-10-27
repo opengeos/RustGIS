@@ -97,20 +97,27 @@ keep colour and use a fixed size; graduated colour class boundaries are retained
 sizes use RustGIS's area scaling. Label halos use RustGIS defaults. Tile overlays draw above feature
 layers, and nested groups become flat folders with inherited visibility and opacity retained.
 URL data downloaded in the browser fills its reserved layer position when it arrives; wait for
-those downloads before saving. Zarr sources use their saved variable and dimension indices,
+those downloads before saving. A browser import can queue at most 16 whole-file downloads
+(fewer if other downloads are waiting); a larger batch is refused before creating its map.
+Split that project into smaller imports or use the desktop app. Streaming tiles and COGs do
+not consume those download slots. Desktop URL imports run synchronously, like Add Data from URL;
+a slow source can delay completion. Zarr sources use their saved variable and dimension indices,
 or the first supported variable when those choices are absent.
 
 ### QGIS projects and styles
 
 A QGIS project (`.qgs`, or a `.qgz` archive) opens as a new map of the current project: **Open**
 on the desktop, or **Project › New › QGIS Project…** (`project.importQgis={"path": "…/towns.qgs"}`).
+The QGIS Project picker filters for `.qgs` and `.qgz` files on both desktop and web.
 Its layers come in the layer tree's order, each from its file (GeoPackage, Shapefile, GeoJSON,
-GeoTIFF and the other formats RustGIS reads, relative paths from the project's folder), a CSV of
+GeoTIFF and the other formats RustGIS reads), a CSV of
 points, XYZ tiles or a WMS layer, unchecked layers and groups hidden. The map takes the project's
 coordinate system and its saved view (or its layers' extent, when that view shows none of them),
 with no basemap and no graticule, as QGIS draws it. A project in degrees (EPSG:4326 and other supported
 longitude/latitude systems) opens in the Equirectangular projection, the plate carrée QGIS draws
 it in. The import is one undo step.
+Relative layer paths resolve from the project's folder on desktop. In the browser, relative
+file sources cannot be resolved and are listed in the import notes.
 
 Each layer keeps its look:
 
@@ -137,8 +144,13 @@ Each layer keeps its look:
 - **Labels**: simple and rule-based, each rule a label class whose SQL clause is its filter and
   its parents' (an else rule's: none of its siblings'), with the text's field, size, colour,
   bold, italic and letter spacing, its font family (drawn in it where it is installed, else in
-  RustGIS's label font), its buffer as a halo of its colour, opacity and size, its placement
-  (Parallel and Curved along lines, around and over points) and its scale range.
+  RustGIS's label font), its buffer as a halo of its colour, opacity and size, its background as
+  a rectangle (filled and outlined as its fill symbol says, padded by its size, its corners
+  rounded), its wrapping (its wrap character and length, and how its lines line up, "follow
+  placement", QGIS's default, as the side the label sits on: centred over a point, so a value
+  of several lines comes in centred as QGIS draws it), its placement (Parallel and Curved along lines,
+  around and over points), its repeat distance along lines, its offset from a point (and on a
+  point layer, its distance around the point, as an offset upwards) and its scale range.
 
 Projects and styles from QGIS 1 and 2 read too: their legend gives the layers' order, and the
 older names of the same settings are read.
@@ -148,7 +160,9 @@ QGIS expressions carry over where they are SQL: fields compared with values, `LI
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
-over the map, label offsets and wrapping, values outside a graduated renderer's ranges in its first or last class, file options
+over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
+and polygons, a distance around points moved straight up, labels wrapped at a shortest line
+length or justified, values outside a graduated renderer's ranges in its first or last class, file options
 such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS

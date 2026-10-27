@@ -288,6 +288,10 @@ const NEVER: &[&str] = &[
     "s3.disconnect",
     "earthdata.login",
     "earthdata.logout",
+    "pg.connect",
+    "pg.disconnect",
+    // Writes to a database: the user's to do, asked each time.
+    "pg.saveEdits",
 ];
 
 /// Commands that write files without naming one in their parameters.
@@ -310,6 +314,9 @@ const DATABASES: &[&str] = &[
     "sql.schema",
     "raster.zarrInfo",
     "layer.addZarr",
+    "pg.tables",
+    "pg.addLayer",
+    "pg.discardEdits",
     "zarr.series",
     "zarr.reduce",
     "cube.trend",

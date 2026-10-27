@@ -78,7 +78,7 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-There are 22 built-in tools; GeoLibre and plugin tools join them when available.
+There are 24 built-in tools; GeoLibre and plugin tools join them when available.
 Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
 | Tool | Id | Toolbox |
@@ -87,6 +87,8 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Clip | `clip` | Analysis › Extract |
 | Erase | `erase` | Analysis › Overlay |
 | Intersect | `intersect` | Analysis › Overlay |
+| Identity | `identity` | Analysis › Overlay |
+| Union | `union` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
@@ -170,6 +172,17 @@ the result:
 ```text
 gp.run={"tool":"intersect","params":{"input":"parcels","overlay":"floodplain","output":"parcels_in_floodplain"}}
 ```
+
+**Identity** (`identity`) takes the same parameters. Each input feature gives its Intersect
+features, then its part outside every overlay polygon, with empty overlay attributes. Every parcel
+is then in the result, in or out of the floodplain; one without geometry is kept as it is (Intersect
+leaves it out). **Union** (`union`) takes two polygon
+layers and adds, after Identity's features, each overlay polygon's part outside every input polygon,
+with empty input attributes: together the features cover everything either layer covers. Both
+follow Intersect's rules for field names, touching parts and selections. Where overlay polygons
+overlap each other, an input feature's part in both comes out once for each, and Union adds each
+overlay polygon's own remainder, so the overlay's overlap outside the input comes out once for each
+too.
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is

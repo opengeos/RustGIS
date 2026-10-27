@@ -1728,6 +1728,209 @@ pub struct LabelClass {
     /// spacing; negative draws them tighter.
     #[serde(default, deserialize_with = "de_letter_spacing", skip_serializing_if = "is_zero")]
     pub spacing: f32,
+    /// How far the label is moved from where its placement puts it (points, right and down, each
+    /// within [`LABEL_OFFSET`]), as QGIS's offset from a point; a label along a line isn't moved.
+    #[serde(default, deserialize_with = "de_label_offset", skip_serializing_if = "is_no_offset")]
+    pub offset: [f32; 2],
+    /// A shape drawn behind the text, as QGIS's label background; none draws the text alone.
+    #[serde(default, deserialize_with = "de_background", skip_serializing_if = "Option::is_none")]
+    pub background: Option<LabelBackground>,
+    /// Breaks the text into lines wherever this occurs, left out (QGIS's wrap character, a
+    /// character or a few: a space puts each word on a line of its own); none breaks none.
+    #[serde(default, deserialize_with = "de_wrap_char", skip_serializing_if = "Option::is_none")]
+    pub wrap_char: Option<String>,
+    /// Breaks lines longer than this many characters between their words, as QGIS's automatic
+    /// wrap length (at most [`MAX_WRAP_LENGTH`]); 0 breaks none.
+    #[serde(default, deserialize_with = "de_wrap_length", skip_serializing_if = "is_zero_u32")]
+    pub wrap_length: u32,
+    /// How a label's lines line up: left, as labels always have, centred or right.
+    #[serde(default, skip_serializing_if = "is_left")]
+    pub line_align: crate::layout::TextAlign,
+    /// Along a line, a label every this many points (within [`LABEL_REPEAT`]), spaced out from
+    /// the one at its middle, as QGIS's repeat distance; none is the one at its middle.
+    #[serde(default, deserialize_with = "de_repeat", skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<f32>,
+}
+
+/// The longest wrap character kept (characters).
+pub const MAX_WRAP_CHAR: usize = 8;
+/// The longest line length wrapping keeps to (characters).
+pub const MAX_WRAP_LENGTH: u32 = 500;
+/// How far apart repeated labels along a line may be (points): from about a word to a few metres
+/// of paper.
+pub const LABEL_REPEAT: std::ops::RangeInclusive<f64> = 10.0..=10_000.0;
+
+/// A wrap character as a class keeps it: at most [`MAX_WRAP_CHAR`] characters, line breaks left
+/// out, none when empty (a space is one: it is a character to break at).
+pub fn wrap_char(c: &str) -> Option<String> {
+    let c: String = c.chars().filter(|c| *c != '\n' && *c != '\r').take(MAX_WRAP_CHAR).collect();
+    (!c.is_empty()).then_some(c)
+}
+
+fn de_wrap_char<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(lenient::<D, String>(d)?.and_then(|c| wrap_char(&c)))
+}
+
+fn de_wrap_length<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    Ok(lenient::<D, f64>(d)?.filter(|v| v.is_finite() && *v > 0.0).map_or(0, |v| (v.min(f64::from(MAX_WRAP_LENGTH))) as u32))
+}
+
+/// A repeat distance, within [`LABEL_REPEAT`]; one that isn't a positive number is none.
+pub fn label_repeat(v: f64) -> Option<f32> {
+    (v.is_finite() && v > 0.0).then(|| v.clamp(*LABEL_REPEAT.start(), *LABEL_REPEAT.end()) as f32)
+}
+
+fn de_repeat<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    Ok(lenient::<D, f64>(d)?.and_then(label_repeat))
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+fn is_left(a: &crate::layout::TextAlign) -> bool {
+    *a == crate::layout::TextAlign::Left
+}
+
+/// `text` broken into lines as `wrap_char` and `wrap_length` say: at each wrap character (left
+/// out), then each line longer than `wrap_length` characters between its words (a word longer
+/// than that keeps a line of its own). Lines the text already has stay lines. A line that fits keeps
+/// its spacing; a longer one is rebuilt from its words, so its extra spaces are dropped.
+pub fn wrapped(text: &str, wrap_char: Option<&str>, wrap_length: u32) -> String {
+    let broken = match wrap_char.filter(|c| !c.is_empty()) {
+        Some(c) => text.replace(c, "\n"),
+        None => text.to_string(),
+    };
+    if wrap_length == 0 {
+        return broken;
+    }
+    let most = wrap_length as usize;
+    let mut out: Vec<String> = Vec::new();
+    for line in broken.split('\n') {
+        // A line that fits stays as it is, as QGIS's word wrap keeps it.
+        if line.chars().count() <= most {
+            out.push(line.to_string());
+            continue;
+        }
+        let mut current = String::new();
+        for word in line.split_whitespace() {
+            let (have, add) = (current.chars().count(), word.chars().count());
+            if have > 0 && have + 1 + add > most {
+                out.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        out.push(current);
+    }
+    out.join("\n")
+}
+
+/// How far a label's offset moves it each way (points).
+pub const LABEL_OFFSET: std::ops::RangeInclusive<f64> = -200.0..=200.0;
+
+/// A rectangle behind a label's text, as QGIS's rectangle background: the text's block grown by
+/// its padding, filled and outlined, its corners rounded.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LabelBackground {
+    /// Its fill; none leaves it see-through.
+    #[serde(deserialize_with = "de_halo_color")]
+    pub fill: Option<Rgba>,
+    /// Its outline's colour; none draws no outline.
+    #[serde(deserialize_with = "de_halo_color")]
+    pub stroke: Option<Rgba>,
+    /// Its outline's width (points, within [`BACKGROUND_STROKE`]).
+    #[serde(deserialize_with = "de_background_stroke")]
+    pub stroke_width: f32,
+    /// How far it reaches past the text's block, across and up and down (points, each within
+    /// [`BACKGROUND_PADDING`]).
+    #[serde(deserialize_with = "de_background_padding")]
+    pub padding: [f32; 2],
+    /// Its corners' radius (points, within [`BACKGROUND_PADDING`]); 0 is square.
+    #[serde(deserialize_with = "de_background_radius")]
+    pub radius: f32,
+}
+
+impl Default for LabelBackground {
+    /// White, with a thin dark outline (SMV25's road numbers): what Background turns on.
+    fn default() -> Self {
+        LabelBackground {
+            fill: Some(Rgba::rgb(255, 255, 255)),
+            stroke: Some(Rgba::rgb(38, 38, 38)),
+            stroke_width: 0.3,
+            padding: [1.0, 0.5],
+            radius: 0.0,
+        }
+    }
+}
+
+impl LabelBackground {
+    /// Kept within its ranges (a command's or a crafted file's numbers).
+    pub fn checked(self) -> LabelBackground {
+        // (One past f32's range, infinite, is the most; none of no number.)
+        let within = |v: f32, r: &std::ops::RangeInclusive<f64>| if v.is_nan() { 0.0 } else { v.clamp(*r.start() as f32, *r.end() as f32) };
+        LabelBackground {
+            stroke_width: within(self.stroke_width, &BACKGROUND_STROKE),
+            padding: self.padding.map(|p| within(p, &BACKGROUND_PADDING)),
+            radius: within(self.radius, &BACKGROUND_PADDING),
+            ..self
+        }
+    }
+
+    /// Grown `factor` times, as its label is by a reference scale.
+    pub fn scaled(&self, factor: f32) -> LabelBackground {
+        LabelBackground {
+            stroke_width: self.stroke_width * factor,
+            padding: self.padding.map(|p| p * factor),
+            radius: self.radius * factor,
+            ..self.clone()
+        }
+    }
+
+    /// Whether it draws anything: a fill or an outline that shows.
+    pub fn draws(&self) -> bool {
+        self.fill.is_some_and(|f| f.a() > 0) || (self.stroke.is_some_and(|s| s.a() > 0) && self.stroke_width > 0.0)
+    }
+}
+
+/// The widths a label background's outline takes (points).
+pub const BACKGROUND_STROKE: std::ops::RangeInclusive<f64> = 0.0..=10.0;
+/// The paddings and corner radii a label background takes (points).
+pub const BACKGROUND_PADDING: std::ops::RangeInclusive<f64> = 0.0..=50.0;
+
+/// A label's offset, each way within [`LABEL_OFFSET`]; one that isn't two numbers is none.
+fn de_label_offset<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D::Error> {
+    let within = |v: f64| if v.is_finite() { v.clamp(*LABEL_OFFSET.start(), *LABEL_OFFSET.end()) as f32 } else { 0.0 };
+    Ok(lenient::<D, [f64; 2]>(d)?.map_or([0.0; 2], |o| o.map(within)))
+}
+
+fn is_no_offset(o: &[f32; 2]) -> bool {
+    *o == [0.0; 2]
+}
+
+/// A label's background, kept within its ranges; one that isn't a background is none.
+fn de_background<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<LabelBackground>, D::Error> {
+    Ok(lenient::<D, LabelBackground>(d)?.map(LabelBackground::checked))
+}
+
+fn de_background_stroke<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    Ok(lenient::<D, f64>(d)?
+        .filter(|v| v.is_finite())
+        .map_or(0.0, |v| v.clamp(*BACKGROUND_STROKE.start(), *BACKGROUND_STROKE.end()) as f32))
+}
+
+fn de_background_padding<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; 2], D::Error> {
+    let within = |v: f64| if v.is_finite() { v.clamp(*BACKGROUND_PADDING.start(), *BACKGROUND_PADDING.end()) as f32 } else { 0.0 };
+    Ok(lenient::<D, [f64; 2]>(d)?.map_or([0.0; 2], |p| p.map(within)))
+}
+
+fn de_background_radius<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    Ok(lenient::<D, f64>(d)?
+        .filter(|v| v.is_finite())
+        .map_or(0.0, |v| v.clamp(*BACKGROUND_PADDING.start(), *BACKGROUND_PADDING.end()) as f32))
 }
 
 /// The widths a label's halo takes (points).
@@ -1946,7 +2149,18 @@ impl LabelClass {
             halo_color: None,
             halo_width: None,
             spacing: 0.0,
+            offset: [0.0; 2],
+            background: None,
+            wrap_char: None,
+            wrap_length: 0,
+            line_align: crate::layout::TextAlign::Left,
+            repeat: None,
         }
+    }
+
+    /// `text` broken into lines as this class wraps it ([`wrapped`]).
+    pub fn wrap(&self, text: &str) -> String {
+        wrapped(text, self.wrap_char.as_deref(), self.wrap_length)
     }
 
     /// The halo's colour behind text of colour `text`: its own, else one that stands out.
@@ -1972,9 +2186,10 @@ impl LabelClass {
     }
 }
 
-/// A label on the map, as (layer id, row, label class in `Labeling::in_order`): a feature has a
-/// label for each class labelling it (#732).
-pub type LabelKey = (u32, usize, usize);
+/// A label on the map, as (layer id, row, label class in `Labeling::in_order`, repeat): a feature
+/// has a label for each class labelling it (#732), and along a line each repeat is one of its own
+/// (0 for the one at the line's middle, and for every label not repeated).
+pub type LabelKey = (u32, usize, usize, usize);
 
 /// A layer's label classes read against its data, in `Labeling::in_order`: every class whose
 /// clause takes a row labels it.
@@ -2136,6 +2351,106 @@ mod tests {
         assert_eq!(l.default.halo_color_for(Rgba::rgb(0, 0, 0)), Rgba::rgb(255, 238, 0));
         assert_eq!(old.default.halo_color_for(Rgba::rgb(0, 0, 0)), Rgba::new(255, 255, 255, 225));
         assert_eq!(old.default.halo_color_for(Rgba::rgb(255, 255, 255)), Rgba::new(20, 22, 26, 210));
+    }
+
+    /// Wrapping breaks a text at its wrap character and between words past its length; with the
+    /// lines' alignment and a repeat along lines it is kept, a label without them is written as it
+    /// always was, and a crafted value reads as none (or within its range).
+    #[test]
+    fn a_labels_wrapping_and_repeat_are_kept_and_old_labels_save_as_before() {
+        // At each wrap character (left out), then between words past the length.
+        assert_eq!(wrapped("Winterthur Altstadt", Some(" "), 0), "Winterthur\nAltstadt");
+        assert_eq!(wrapped("Zürich/Winterthur", Some("/"), 0), "Zürich\nWinterthur");
+        assert_eq!(wrapped("the quick brown fox jumps", None, 10), "the quick\nbrown fox\njumps");
+        assert_eq!(wrapped("Kantonsspital Winterthur", None, 5), "Kantonsspital\nWinterthur", "a long word keeps its own line");
+        assert_eq!(wrapped("Höhe über Meer", None, 9), "Höhe über\nMeer", "characters, not bytes");
+        assert_eq!(wrapped("a\nb c d", None, 3), "a\nb c\nd", "lines it has stay lines");
+        assert_eq!(wrapped(" Ober  Winterthur", None, 20), " Ober  Winterthur", "a line that fits stays as it is");
+        assert_eq!(wrapped("unchanged text", None, 0), "unchanged text");
+        let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
+        let read = |extra: serde_json::Value| {
+            let mut v = base.clone();
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            serde_json::from_value::<Labeling>(v).unwrap()
+        };
+        let old = read(serde_json::json!({}));
+        let c = &old.default;
+        assert_eq!((c.wrap_char.as_deref(), c.wrap_length, c.line_align, c.repeat), (None, 0, crate::layout::TextAlign::Left, None));
+        let saved = serde_json::to_value(&old).unwrap();
+        for k in ["wrap_char", "wrap_length", "line_align", "repeat"] {
+            assert!(saved.get(k).is_none(), "{k} written for a label without it");
+        }
+        let l = read(serde_json::json!({"wrap_char": " ", "wrap_length": 12, "line_align": "Center", "repeat": 85.0}));
+        let c = &l.default;
+        assert_eq!(
+            (c.wrap_char.as_deref(), c.wrap_length, c.line_align, c.repeat),
+            (Some(" "), 12, crate::layout::TextAlign::Center, Some(85.0))
+        );
+        assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&l).unwrap()).unwrap(), l);
+        assert_eq!(c.wrap("Ober Winterthur"), "Ober\nWinterthur");
+        // Crafted: none, or within range.
+        let junk = read(serde_json::json!({"wrap_char": 7, "wrap_length": "long", "repeat": "often"}));
+        let c = &junk.default;
+        assert_eq!((c.wrap_char.as_deref(), c.wrap_length, c.repeat, c.field.as_str()), (None, 0, None, "name"));
+        let far = read(serde_json::json!({"wrap_char": "\n\n".to_string() + &"x".repeat(50), "wrap_length": 1e30, "repeat": 1e30}));
+        let c = &far.default;
+        assert_eq!(
+            (c.wrap_char.as_ref().map(|w| w.chars().count()), c.wrap_length, c.repeat),
+            (Some(MAX_WRAP_CHAR), MAX_WRAP_LENGTH, Some(10_000.0))
+        );
+        assert_eq!((label_repeat(0.5), label_repeat(-1.0), label_repeat(f64::NAN)), (Some(10.0), None, None));
+        assert_eq!(wrap_char(""), None);
+        assert_eq!(wrap_char("\n"), None, "a line break isn't a character to break at");
+    }
+
+    /// An offset and a background are kept; a label without them is written as it always was; a
+    /// crafted value reads as none (or within its range) and the rest of the labels still read.
+    #[test]
+    fn a_labels_offset_and_background_are_kept_and_old_labels_save_as_before() {
+        let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
+        let read = |extra: serde_json::Value| {
+            let mut v = base.clone();
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            serde_json::from_value::<Labeling>(v).unwrap()
+        };
+        let old = read(serde_json::json!({}));
+        assert_eq!((old.default.offset, old.default.background.as_ref()), ([0.0; 2], None));
+        let saved = serde_json::to_value(&old).unwrap();
+        for k in ["offset", "background"] {
+            assert!(saved.get(k).is_none(), "{k} written for a label without it");
+        }
+        let bg = serde_json::json!({"fill": [255, 255, 255, 255], "stroke": null, "stroke_width": 0.28, "padding": [1.22, 0.28], "radius": 0.71});
+        let l = read(serde_json::json!({"offset": [5.67, -2.83], "background": bg}));
+        assert_eq!(l.default.offset, [5.67, -2.83]);
+        let want =
+            LabelBackground { fill: Some(Rgba::rgb(255, 255, 255)), stroke: None, stroke_width: 0.28, padding: [1.22, 0.28], radius: 0.71 };
+        assert_eq!(l.default.background.as_ref(), Some(&want));
+        assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&l).unwrap()).unwrap(), l);
+        // What a background leaves out is the default's.
+        let part = read(serde_json::json!({"background": {"radius": 2}}));
+        assert_eq!(part.default.background, Some(LabelBackground { radius: 2.0, ..LabelBackground::default() }));
+        // Crafted values: none, or within their ranges.
+        let junk = read(serde_json::json!({"offset": "far", "background": "box"}));
+        assert_eq!((junk.default.offset, junk.default.background.as_ref(), junk.default.field.as_str()), ([0.0; 2], None, "name"));
+        let far = read(
+            serde_json::json!({"offset": [1e30, -1e30], "background": {"fill": "pink", "stroke_width": 99, "padding": [-1, 1e9], "radius": "round"}}),
+        );
+        assert_eq!(far.default.offset, [200.0, -200.0]);
+        let b = far.default.background.unwrap();
+        assert_eq!((b.fill, b.stroke_width, b.padding, b.radius), (None, 10.0, [0.0, 50.0], 0.0));
+        assert!(read(serde_json::json!({"offset": [1]})).default.offset == [0.0; 2]);
+        // A background shows with a fill or an outline that shows.
+        assert!(LabelBackground::default().draws());
+        assert!(!LabelBackground { fill: None, stroke: None, ..LabelBackground::default() }.draws());
+        assert!(!LabelBackground { fill: None, stroke_width: 0.0, ..LabelBackground::default() }.draws());
+        assert!(!LabelBackground { fill: Some(Rgba::new(0, 0, 0, 0)), stroke: None, ..LabelBackground::default() }.draws());
+        // Grown with its label.
+        let g = want.scaled(2.0);
+        assert_eq!((g.stroke_width, g.padding, g.radius, g.fill), (0.56, [2.44, 0.56], 1.42, want.fill));
     }
 
     /// The shapes are written as they always were; a character with its family, which a crafted

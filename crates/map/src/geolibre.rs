@@ -277,6 +277,8 @@ mod review_regressions {
         crate::Layer::new(1, ds)
     }
 
+    /// Checks both interval endpoints and the surrounding zooms: layer and label scale
+    /// denominators must use the same direction despite zoom increasing as scale decreases.
     #[test]
     fn geolibre_layer_and_label_zoom_limits_allow_the_interval() {
         let mut l = point();
@@ -292,6 +294,8 @@ mod review_regressions {
         }
     }
 
+    /// A translucent base makes a second alpha multiplication observable for both missing
+    /// and unsupported stop colours, as well as an explicit matching translucent stop.
     #[test]
     fn geolibre_class_fallback_applies_fill_opacity_once() {
         for mode in ["categorized", "graduated"] {
@@ -307,6 +311,8 @@ mod review_regressions {
         }
     }
 
+    /// Local punctuation is part of a filename; only HTTP addresses treat it as a query or
+    /// fragment. Unrelated JSON must remain eligible for the ordinary data-opening path.
     #[test]
     fn geolibre_file_names_distinguish_local_punctuation_from_url_queries() {
         for name in ["plan#2.geolibre", "plan?2.geolibre.json", "MAP.GEOLIBRE", "https://example.org/map.geolibre?download=1#top"] {

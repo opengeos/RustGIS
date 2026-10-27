@@ -1,21 +1,27 @@
 //! QGIS labels (`<labeling type="simple|rule-based">`) as RustGIS label classes: each rule a
 //! class whose SQL clause is its filter (and its parents'), an else rule the features no other
 //! rule takes; the text's field, size, colour, weight, slant and letter spacing, its buffer as a
-//! halo of its colour and size, its placement and its scale range.
+//! halo of its colour and size, its background as a rectangle behind it, its wrapping and how its
+//! lines line up, its placement, offset and repeat along lines, and its scale range.
 
 use roxmltree::Node;
 
 use super::{QGIS_SCALE, Report, child, color, data_defined_on, expr, prop, props};
 use crate::Rgba;
-use crate::symbology::{DEFAULT_LABEL_CLASS, HALO_WIDTH, LABEL_SIZE, LabelClass, LabelPlacement, Labeling, MAX_LABEL_CLASSES};
+use crate::layout::TextAlign;
+use crate::symbology::{
+    DEFAULT_LABEL_CLASS, HALO_WIDTH, LABEL_OFFSET, LABEL_SIZE, LabelBackground, LabelClass, LabelPlacement, Labeling, MAX_LABEL_CLASSES,
+    MAX_WRAP_LENGTH,
+};
 
-/// A layer's labels from its `<labeling>`, or `None` when none can be carried over.
-pub(super) fn read(l: Node, layer: &str, report: &mut Report) -> Option<Labeling> {
+/// A layer's labels from its `<labeling>`, or `None` when none can be carried over. `geometry` is
+/// the layer's (`Point`, `Line`, `Polygon`), when its file says.
+pub(super) fn read(l: Node, geometry: Option<&str>, layer: &str, report: &mut Report) -> Option<Labeling> {
     let mut classes: Vec<LabelClass> = Vec::new();
     match l.attribute("type") {
         Some("simple") => {
             let settings = child(l, "settings")?;
-            classes.extend(class(settings, DEFAULT_LABEL_CLASS, None, (None, None), layer, report));
+            classes.extend(class(settings, DEFAULT_LABEL_CLASS, None, (None, None), geometry, layer, report));
         }
         Some("rule-based") => {
             let mut rules = Vec::new();
@@ -57,7 +63,7 @@ pub(super) fn read(l: Node, layer: &str, report: &mut Report) -> Option<Labeling
                     );
                     continue;
                 };
-                classes.extend(class(settings, &name, where_, r.scales, layer, report));
+                classes.extend(class(settings, &name, where_, r.scales, geometry, layer, report));
             }
         }
         Some(other) => {
@@ -142,6 +148,7 @@ fn class(
     name: &str,
     where_: Option<String>,
     scales: (Option<f64>, Option<f64>),
+    geometry: Option<&str>,
     layer: &str,
     report: &mut Report,
 ) -> Option<LabelClass> {
@@ -202,14 +209,17 @@ fn class(
             report.approximated(layer, "label halos blended into the map, drawn over it");
         }
     }
-    if child(text, "background").is_some_and(|b| b.attribute("shapeDraw") == Some("1")) {
-        report.approximated(layer, "label backgrounds (shapes behind the text), left out");
-    }
+    let background = background(text, layer, report);
     if child(text, "shadow").is_some_and(|b| b.attribute("shadowDraw") == Some("1")) {
         report.approximated(layer, "label shadows, left out");
     }
     let placement = child(settings, "placement").map_or(LabelPlacement::Auto, |p| placement(p, layer, report));
-    unread(settings, layer, report);
+    let offset = child(settings, "placement").map_or([0.0; 2], |p| offset(p, geometry, layer, report));
+    // (Without a `<text-format>`, QGIS's lines follow the placement too.)
+    let (wrap_char, wrap_length, line_align) =
+        child(settings, "text-format").map_or((None, 0, follow_placement(placement)), |f| wrapping(f, placement, layer, report));
+    let repeat = child(settings, "placement").and_then(|p| repeat(p, placement, geometry, layer, report));
+    unread(settings, geometry, layer, report);
     // The settings' own scale range, else the rule's.
     let rendering = child(settings, "rendering");
     let (mut min_scale, mut max_scale) = scales;
@@ -236,7 +246,174 @@ fn class(
         halo_color,
         halo_width,
         spacing: spacing.clamp(spacing_min, spacing_max) as f32,
+        offset,
+        background,
+        wrap_char,
+        wrap_length,
+        line_align,
+        repeat,
     })
+}
+
+/// A label's wrapping (QGIS's `<text-format>`): its wrap character, its automatic wrap length
+/// (characters), and how its lines line up (QGIS's "follow placement" as the side the label
+/// sits on: right-aligned left of its feature, left-aligned right of it, centred otherwise).
+fn wrapping(f: Node, placement: LabelPlacement, layer: &str, report: &mut Report) -> (Option<String>, u32, TextAlign) {
+    let num = |k: &str| f.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let wrap_char = f.attribute("wrapChar").and_then(crate::symbology::wrap_char);
+    let length = num("autoWrapLength").filter(|v| *v > 0.0).map_or(0, |v| v.min(f64::from(MAX_WRAP_LENGTH)) as u32);
+    if length > 0 && f.attribute("useMaxLineLengthForAutoWrap") == Some("0") {
+        report.approximated(layer, "labels wrapped at a shortest line length, wrapped at that length at most");
+    }
+    let align = match f.attribute("multilineAlign").unwrap_or("3") {
+        "0" => TextAlign::Left,
+        "1" => TextAlign::Center,
+        "2" => TextAlign::Right,
+        "4" => {
+            report.approximated(layer, "justified label lines, centred");
+            TextAlign::Center
+        }
+        _ => follow_placement(placement),
+    };
+    (wrap_char, length, align)
+}
+
+/// QGIS's "follow placement" for a label's lines: right-aligned left of its feature, left-aligned
+/// right of it, centred otherwise.
+fn follow_placement(placement: LabelPlacement) -> TextAlign {
+    match placement {
+        LabelPlacement::Left | LabelPlacement::AboveLeft | LabelPlacement::BelowLeft => TextAlign::Right,
+        LabelPlacement::Right | LabelPlacement::AboveRight | LabelPlacement::BelowRight => TextAlign::Left,
+        _ => TextAlign::Center,
+    }
+}
+
+/// A label's repeat along its line, in points: QGIS's repeat distance in its units, for a label
+/// placed along a line. Round a polygon's outline (QGIS's placement along a polygon layer's lines,
+/// or round its perimeter) RustGIS labels it once, and says so.
+fn repeat(p: Node, placement: LabelPlacement, geometry: Option<&str>, layer: &str, report: &mut Report) -> Option<f32> {
+    let d = p.attribute("repeatDistance").and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0)?;
+    // (QGIS repeats only along lines: a polygon's outline with Line or Curved, or round its
+    // perimeter, curved.)
+    let placed = p.attribute("placement");
+    let round_polygons = (geometry == Some("Polygon") && matches!(placed, Some("2" | "3"))) || placed == Some("7");
+    if round_polygons {
+        report.approximated(layer, "labels repeated round polygons, drawn once");
+        return None;
+    }
+    if !placement.along_line() {
+        return None;
+    }
+    // Before QGIS 3 the unit was a number (0 points, 1 millimetres, 2 map units), which QGIS
+    // reads when the named one isn't there.
+    let unit = p.attribute("repeatDistanceUnits").unwrap_or(match p.attribute("repeatDistanceUnit") {
+        Some("0") => "Point",
+        Some("2") => "MapUnit",
+        _ => "MM",
+    });
+    crate::symbology::label_repeat(points(d, unit, "label repeat distances", layer, report))
+}
+
+/// A label's background as RustGIS's rectangle: QGIS's rectangle (its square, ellipse and circle
+/// drawn as one), padded by its size, filled and outlined as its fill symbol says (else its own
+/// colours), its corners rounded.
+fn background(text: Node, layer: &str, report: &mut Report) -> Option<LabelBackground> {
+    let b = child(text, "background").filter(|b| b.attribute("shapeDraw") == Some("1"))?;
+    let num = |n: Node, k: &str| n.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    match b.attribute("shapeType").unwrap_or("0") {
+        "0" => {}
+        "1" | "2" | "3" => report.approximated(layer, "label backgrounds of squares, ellipses or circles, drawn as rectangles"),
+        _ => {
+            report.approximated(layer, "label backgrounds of SVG pictures or markers, left out");
+            return None;
+        }
+    }
+    let what = "label backgrounds";
+    // Its size added round the text (a fixed size or a share of the text's, as padding of none).
+    let padding = if b.attribute("shapeSizeType").unwrap_or("0") == "0" {
+        let unit = b.attribute("shapeSizeUnit").unwrap_or("MM");
+        ["shapeSizeX", "shapeSizeY"].map(|k| num(b, k).map_or(0.0, |v| points(v, unit, what, layer, report)) as f32)
+    } else {
+        report.approximated(layer, "label backgrounds of a size of their own, fitted to the text");
+        [0.0; 2]
+    };
+    let radius = match b.attribute("shapeRadiiUnit").unwrap_or("MM") {
+        // (QGIS writes `Percentage`.)
+        "Percentage" | "Percent" => {
+            report.approximated(layer, "label backgrounds' corners rounded by a share of their size, drawn square");
+            0.0
+        }
+        unit => {
+            let r = num(b, "shapeRadiiX").unwrap_or(0.0).min(num(b, "shapeRadiiY").unwrap_or(0.0));
+            if r > 0.0 { points(r, unit, what, layer, report) as f32 } else { 0.0 }
+        }
+    };
+    // QGIS 3 fills it with a fill symbol; older files, and a symbol of another kind, by its colours.
+    let fill_layer = b
+        .children()
+        .find(|c| c.has_tag_name("symbol") && c.attribute("type") == Some("fill"))
+        .and_then(|sym| sym.children().find(|c| c.has_tag_name("layer")).map(|l| (sym, l)));
+    let (fill, stroke, stroke_width) = match fill_layer {
+        Some((sym, l)) if l.attribute("class") == Some("SimpleFill") => {
+            let pr = props(l);
+            let alpha = num(sym, "alpha").unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+            let faded = |c: Rgba| c.with_alpha((f32::from(c.a()) * alpha).round() as u8);
+            let fill = (prop(&pr, "style") != Some("no")).then(|| prop(&pr, "color").and_then(color)).flatten().map(faded);
+            let stroke =
+                (prop(&pr, "outline_style") != Some("no")).then(|| prop(&pr, "outline_color").and_then(color)).flatten().map(faded);
+            let width = prop(&pr, "outline_width").and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(0.26);
+            let unit = prop(&pr, "outline_width_unit").unwrap_or("MM");
+            (fill, stroke, points(width, unit, what, layer, report))
+        }
+        other => {
+            if other.is_some() {
+                report.approximated(layer, "label backgrounds filled with patterns or gradients, drawn in their colours");
+            }
+            let fill = b.attribute("shapeFillColor").and_then(color).or(Some(Rgba::rgb(255, 255, 255)));
+            let stroke = b.attribute("shapeBorderColor").and_then(color);
+            let width = num(b, "shapeBorderWidth").unwrap_or(0.0);
+            (fill, stroke, points(width, b.attribute("shapeBorderWidthUnit").unwrap_or("MM"), what, layer, report))
+        }
+    };
+    let opacity = num(b, "shapeOpacity").unwrap_or(1.0).clamp(0.0, 1.0) as f32;
+    let faded = |c: Rgba| c.with_alpha((f32::from(c.a()) * opacity).round() as u8);
+    if num(b, "shapeOffsetX").is_some_and(|v| v != 0.0) || num(b, "shapeOffsetY").is_some_and(|v| v != 0.0) {
+        report.approximated(layer, "label backgrounds moved off their text, drawn behind it");
+    }
+    if num(b, "shapeRotation").is_some_and(|v| v != 0.0) {
+        report.approximated(layer, "label backgrounds turned on their own, drawn with their text");
+    }
+    if !matches!(b.attribute("shapeBlendMode"), None | Some("0")) {
+        report.approximated(layer, "label backgrounds blended into the map, drawn over it");
+    }
+    let stroke = stroke.map(faded).filter(|_| stroke_width > 0.0);
+    Some(LabelBackground { fill: fill.map(faded), stroke, stroke_width: stroke_width as f32, padding, radius }.checked())
+}
+
+/// How far a label is moved from where its placement puts it (points, right and down): QGIS's
+/// offset from a point (or a polygon's centroid), and on a point layer its distance around the
+/// point, the label above it that far out (RustGIS's Auto puts it above).
+fn offset(p: Node, geometry: Option<&str>, layer: &str, report: &mut Report) -> [f32; 2] {
+    let num = |k: &str| p.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let within = |v: f64| v.clamp(*LABEL_OFFSET.start(), *LABEL_OFFSET.end()) as f32;
+    match p.attribute("placement").unwrap_or("0") {
+        "1" => {
+            let (x, y) = (num("xOffset").unwrap_or(0.0), num("yOffset").unwrap_or(0.0));
+            if x == 0.0 && y == 0.0 {
+                return [0.0; 2];
+            }
+            let unit = p.attribute("offsetUnits").unwrap_or("MM");
+            [x, y].map(|v| within(points(v, unit, "label offsets", layer, report)))
+        }
+        "0" | "6" if geometry == Some("Point") => match num("dist").filter(|d| *d != 0.0) {
+            Some(d) => {
+                report.approximated(layer, "label distances round points, moved straight up");
+                [0.0, -within(points(d, p.attribute("distUnits").unwrap_or("MM"), "label distances", layer, report))]
+            }
+            None => [0.0; 2],
+        },
+        _ => [0.0; 2],
+    }
 }
 
 /// A QGIS length (`what`'s, for the report) in typographic points: map units taken at 1:25,000.
@@ -254,26 +431,23 @@ fn points(v: f64, unit: &str, what: &str, layer: &str, report: &mut Report) -> f
 }
 
 /// Notes the label settings RustGIS has no place for, where they are set off QGIS's defaults.
-fn unread(settings: Node, layer: &str, report: &mut Report) {
+fn unread(settings: Node, geometry: Option<&str>, layer: &str, report: &mut Report) {
     let num =
         |n: Option<Node>, k: &str| n.and_then(|n| n.attribute(k)).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
     let p = child(settings, "placement");
-    if num(p, "dist").is_some_and(|d| d != 0.0) {
+    // A distance from a line, or round a polygon (or a layer of unknown kind); offset from a
+    // point, QGIS doesn't use it, and round a point it is the label's offset.
+    let placed = p.and_then(|p| p.attribute("placement")).unwrap_or("0");
+    let used = match placed {
+        "0" | "6" => geometry != Some("Point"),
+        "2" | "3" | "7" | "8" => true,
+        _ => false,
+    };
+    if used && num(p, "dist").is_some_and(|d| d != 0.0) {
         report.approximated(layer, "label distances from their features, left out");
-    }
-    if num(p, "xOffset").is_some_and(|d| d != 0.0) || num(p, "yOffset").is_some_and(|d| d != 0.0) {
-        report.approximated(layer, "label offsets, left out");
-    }
-    if num(p, "repeatDistance").is_some_and(|d| d > 0.0) {
-        report.approximated(layer, "labels repeated along lines, drawn once");
     }
     if num(p, "priority").is_some_and(|d| d != 5.0) {
         report.approximated(layer, "label priorities, left out");
-    }
-    let format = child(settings, "text-format");
-    if format.and_then(|f| f.attribute("wrapChar")).is_some_and(|w| !w.is_empty()) || num(format, "autoWrapLength").is_some_and(|w| w > 0.0)
-    {
-        report.approximated(layer, "wrapped labels, drawn on one line");
     }
     if child(settings, "callout").is_some_and(|c| prop(&props(c), "enabled") == Some("1")) {
         report.skipped(layer, "label callouts (lines from a label to its feature)");
