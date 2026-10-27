@@ -36,18 +36,6 @@ To cite a specific version instead, open the
 > RustGIS: A fast, free and open-source GIS in pure Rust for mapping, analyzing and sharing
 > geospatial data [Computer software]. Zenodo. <https://doi.org/10.5281/zenodo.23633281>
 
-## Authors
-
-The authors, in the order [`CITATION.cff`](https://github.com/opengeos/RustGIS/blob/main/CITATION.cff)
-lists them, with their ORCID iDs where they have given one:
-
-- Qiusheng Wu, University of Tennessee, Knoxville, USA ([ORCID 0000-0001-5437-4073](https://orcid.org/0000-0001-5437-4073))
-- José Gregorio Rincón Albarracín
-- Elpidio Filho
-- Daniel Hofbauer
-- Mavrick Fitzgerald
-- Dominik Strebel ([ORCID 0000-0002-3529-1798](https://orcid.org/0000-0002-3529-1798))
-
 ## Citation metadata file
 
 The repository ships a [`CITATION.cff`](https://github.com/opengeos/RustGIS/blob/main/CITATION.cff)
