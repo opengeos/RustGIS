@@ -8611,6 +8611,87 @@ fn an_arcgis_token_in_a_service_address_reaches_its_layers() {
     assert!(kept.is_none() && arcgis_auth::authorization(wms).is_none());
 }
 
+/// A WMS layer added from its service takes its legends (the service's GetLegendGraphic, then
+/// its style's picture); any tile layer can be given one, or several for their scales; they and
+/// whether they show are kept with the project and undo; junk is refused.
+#[test]
+fn tile_layers_take_their_services_legends() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetLegendGraphic><Format>image/png</Format></GetLegendGraphic></Request>
+<Layer><CRS>EPSG:3857</CRS><Layer><Name>roads</Name><Title>Roads</Title>
+<Style><Name>default</Name><LegendURL><Format>image/png</Format><OnlineResource xlink:href="https://maps.example.com/legends/roads.png"/></LegendURL></Style></Layer>
+<Layer><Name>bare</Name><Title>Bare</Title></Layer></Layer></Capability></WMS_Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "roads", "text": WMS})).unwrap();
+    let legends = |s: &Session, name: &str| {
+        let t = s.map().tiles.iter().find(|t| t.name == name).unwrap();
+        (t.legends.iter().map(|l| l.url.clone()).collect::<Vec<_>>(), t.expanded)
+    };
+    assert_eq!(
+        legends(&s, "Roads"),
+        (
+            vec![
+                "https://maps.example.com/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetLegendGraphic&LAYER=roads&FORMAT=image%2Fpng&SLD_VERSION=1.1.0"
+                    .to_string(),
+                "https://maps.example.com/legends/roads.png".to_string()
+            ],
+            false
+        )
+    );
+    // Listed, and shown when expanded: what the pane shows, not an edit (as a layer's classes).
+    let listed = s.run("map.tiles", &json!({})).unwrap();
+    let roads = listed.as_array().unwrap().iter().find(|t| t["name"] == "Roads").unwrap().clone();
+    assert_eq!(roads["legends"][1]["url"], "https://maps.example.com/legends/roads.png");
+    assert_eq!(roads["expanded"], false);
+    let steps = s.undo_depth();
+    let dirty = s.dirty();
+    s.run("map.expandTiles", &json!({"name": "Roads"})).unwrap();
+    assert!(legends(&s, "Roads").1);
+    assert_eq!((s.undo_depth(), s.dirty()), (steps, dirty), "no undo step, nothing to save");
+    s.run("map.expandTiles", &json!({"name": "Roads", "on": true})).unwrap();
+    assert!(legends(&s, "Roads").1, "on keeps it shown");
+    s.run("map.expandTiles", &json!({"name": "Roads"})).unwrap();
+    assert!(!legends(&s, "Roads").1, "toggles");
+    s.run("map.expandTiles", &json!({"name": "Roads", "on": true})).unwrap();
+    assert!(s.run("map.expandTiles", &json!({"name": "Nope"})).is_err());
+    // A layer the service gives no legend has none, and none is listed.
+    s.run("service.add", &json!({"url": "https://maps.example.com/wms", "layer": "bare", "text": WMS.replace("<GetLegendGraphic><Format>image/png</Format></GetLegendGraphic>", "")})).unwrap();
+    assert_eq!(legends(&s, "Bare").0, Vec::<String>::new());
+    let listed = s.run("map.tiles", &json!({})).unwrap();
+    assert!(listed.as_array().unwrap().iter().find(|t| t["name"] == "Bare").unwrap().get("legends").is_none());
+    // Given by hand: an address, or a list with scales; set again, or taken away.
+    s.run(
+        "map.addTiles",
+        &json!({"url": "https://tiles.example.com/{z}/{x}/{y}.png", "name": "Topo", "legend": "https://tiles.example.com/legend.png"}),
+    )
+    .unwrap();
+    assert_eq!(legends(&s, "Topo").0, ["https://tiles.example.com/legend.png"]);
+    let scaled = json!(["https://t.example.com/near.png", {"url": "https://t.example.com/far.png", "minScale": "50000"}]);
+    s.run("map.setTiles", &json!({"name": "Topo", "legend": scaled})).unwrap();
+    let t = s.map().tiles.iter().find(|t| t.name == "Topo").unwrap();
+    assert_eq!((t.legends.len(), t.legends[1].min_scale), (2, Some(50_000.0)));
+    // Kept with the project.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(legends(&reopened, "Roads"), legends(&s, "Roads"));
+    assert_eq!(legends(&reopened, "Topo"), legends(&s, "Topo"));
+    s.run("map.setTiles", &json!({"name": "Topo", "legend": null})).unwrap();
+    assert_eq!(legends(&s, "Topo").0, Vec::<String>::new());
+    for bad in [
+        json!("file:///etc/legend.png"),
+        json!(7),
+        json!([{"url": 3}]),
+        json!([{"href": "https://x.org/l.png"}]),
+        json!((0..20).map(|i| format!("https://x.org/{i}.png")).collect::<Vec<_>>()),
+    ] {
+        assert!(s.run("map.setTiles", &json!({"name": "Topo", "legend": bad})).is_err(), "{bad}");
+        assert!(s.run("map.addTiles", &json!({"url": "https://other.example.com/{z}/{x}/{y}.png", "legend": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(legends(&s, "Topo").0, Vec::<String>::new(), "a refusal changes nothing");
+}
+
 /// Identify asks a WMS layer what is at the point (GetFeatureInfo): the request from the
 /// capabilities, the answer read as results; a project's layer, which doesn't keep the request,
 /// reads its service's capabilities again; a layer that isn't queryable isn't asked.
@@ -12183,7 +12264,9 @@ fn recovery_copies_keep_no_layer_tokens_and_restore_none() {
 fn saved_projects_keep_no_layer_tokens() {
     let mut s = world();
     let url = "https://gis.example/arcgis/rest/services/a/MapServer/tile/{z}/{y}/{x}?token=s3cret";
-    s.run("map.addTiles", &json!({"url":url,"name":"Secured"})).unwrap();
+    // Its legend, built from the service's address, with the key in it too.
+    let legend = "https://gis.example/wms?key=l3g&SERVICE=WMS&REQUEST=GetLegendGraphic&LAYER=a";
+    s.run("map.addTiles", &json!({"url":url,"name":"Secured","legend":legend})).unwrap();
     let layer = s.map().layers[0].id;
     s.map_mut().layers[0].dataset.source = Some("https://u:pw@gis.example/f?f=json&access_token=tok2".into());
     s.map_mut().service_groups.push(rustgis_map::ServiceGroup {
@@ -12201,10 +12284,10 @@ fn saved_projects_keep_no_layer_tokens() {
     let path = std::env::temp_dir().join(format!("rustgis-token-audit-{}.rgis", std::process::id()));
     let result = s.run("project.saveAs", &json!({"path":path})).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    for secret in ["s3cret", "pw@", "tok2", "k3y", "sig=x"] {
+    for secret in ["s3cret", "pw@", "tok2", "k3y", "sig=x", "l3g"] {
         assert!(!text.contains(secret), "{secret} leaked into the file");
     }
-    assert!(text.contains("MapServer/tile/{z}/{y}/{x}") && text.contains("map=m"));
+    assert!(text.contains("MapServer/tile/{z}/{y}/{x}") && text.contains("map=m") && text.contains("REQUEST=GetLegendGraphic"));
     assert!(result["stripped"].as_u64().unwrap() >= 4);
     assert!(s.notices.iter().any(|n| n.text.contains("saved without their keys")));
     assert!(s.map().tiles.iter().any(|t| t.url == url));
@@ -12212,7 +12295,7 @@ fn saved_projects_keep_no_layer_tokens() {
         let (_, bytes) = crate::cmd::items::item_bytes(&mut s, kind, &Value::Null).unwrap();
         let packaged =
             if kind == "map" { String::from_utf8(bytes.clone()).unwrap() } else { crate::cmd::items::package_text(&bytes).unwrap() };
-        for secret in ["s3cret", "pw@", "tok2", "k3y", "sig=x"] {
+        for secret in ["s3cret", "pw@", "tok2", "k3y", "sig=x", "l3g"] {
             assert!(!packaged.contains(secret), "{kind} leaked {secret}");
         }
         if kind == "projectPackage" {
