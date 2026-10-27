@@ -6746,7 +6746,9 @@ mod tests {
         assert_eq!(text::background_reach(&label(Some(nothing))), [0.0; 2]);
         // Turned along a line, it turns with the text.
         let turned = drawn(&PlacedLabel { angle: Some(0.6), ..l.clone() });
-        assert!(turned.pixel(60, 50).is_some_and(|p| yellow(p) || p.red() < 40), "{:?}", turned.pixel(60, 50));
+        // Its middle is the background, the text or the text's edge blended over it (whose glyphs
+        // fall there depends on the platform's font): never the grey map.
+        assert!(turned.pixel(60, 50).is_some_and(|p| p.blue() < 40), "{:?}", turned.pixel(60, 50));
         assert!(turned.pixels().iter().filter(|p| yellow(**p)).count() > 100);
         // Curved character by character: none.
         let glyph = LabelGlyph { text: "H".into(), dx: 0.0, dy: 0.0, angle: 0.0 };
