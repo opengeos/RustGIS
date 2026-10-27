@@ -31,8 +31,8 @@ pub use color::{Ramp, RampGroup, Rgba};
 pub use globe::{Globe, Projection};
 pub use raster::{RasterDefaults, RasterLayer, RasterRenderer, RasterStyle, Resampling, Stretch};
 pub use symbology::{
-    ClassMethod, FontName, Glyph, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin, LineMark, LineMarkers,
-    LineStroke, Marker, MarkerRotation, Placements, Renderer, Symbol,
+    ClassMethod, FontName, Glyph, LabelBackground, LabelClass, LabelKey, LabelMatcher, LabelPlacement, Labeling, LineCap, LineJoin,
+    LineMark, LineMarkers, LineStroke, Marker, MarkerRotation, Placements, Renderer, Symbol,
 };
 pub use tiles::{TileKind, TileLayer};
 

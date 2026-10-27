@@ -654,6 +654,10 @@ pub fn web_style(l: &Layer) -> Value {
         if c.spacing != 0.0 && c.size > 0.0 {
             layout["text-letter-spacing"] = json!(f64::from(c.spacing) / f64::from(c.size));
         }
+        // Its offset in ems too (a background has no MapLibre equivalent: left out).
+        if c.offset != [0.0; 2] && c.size > 0.0 {
+            layout["text-offset"] = json!(c.offset.map(|o| f64::from(o) / f64::from(c.size)));
+        }
         layers.push(json!({"id": format!("{src}-labels"), "type": "symbol", "source": src, "layout": layout,
             "paint": {"text-color": c.color.hex(), "text-halo-color": halo_color, "text-halo-width": halo_width}}));
     }

@@ -2183,6 +2183,81 @@ fn labels_take_a_halo_colour_and_width_and_letter_spacing() {
     }
 }
 
+/// A label class takes an offset with its placement and a background with its text symbol; junk
+/// is refused, numbers kept within their ranges, and each change undoes.
+#[test]
+fn labels_take_an_offset_and_a_background() {
+    use rustgis_map::{LabelBackground, Rgba};
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Cities").unwrap().labels.default;
+        (c.placement, c.offset, c.background.clone())
+    };
+    let (placement, offset, background) = class(&s);
+    assert_eq!((offset, background), ([0.0; 2], None));
+    // An offset alone keeps the placement; both together set both.
+    let mark = s.notice_mark();
+    s.run("labels.placement", &json!({"layer": "Cities", "offset": [3, "-2.5"]})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("ignores")), "every key is read");
+    assert_eq!((class(&s).0, class(&s).1), (placement, [3.0, -2.5]));
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "right", "offset": [1e9, -1e9]})).unwrap();
+    assert_eq!((class(&s).0, class(&s).1), (rustgis_map::LabelPlacement::Right, [200.0, -200.0]));
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "below"})).unwrap();
+    assert_eq!(class(&s).1, [200.0, -200.0], "a position alone keeps the offset");
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s).0, rustgis_map::LabelPlacement::Right, "undoes");
+    for bad in [json!({}), json!({"offset": "far"}), json!({"offset": [1]}), json!({"offset": [1, "x"]}), json!({"offset": null})] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Cities");
+        assert!(s.run("labels.placement", &p).is_err(), "{bad}");
+    }
+    // A background: on (the default's), parts set on it, off.
+    s.run("labels.style", &json!({"layer": "Cities", "background": true})).unwrap();
+    assert_eq!(class(&s).2, Some(LabelBackground::default()));
+    let mark = s.notice_mark();
+    let parts = json!({"fill": "#FFEE00", "stroke": "", "strokeWidth": 99, "padding": [2, "1"], "radius": -1});
+    s.run("labels.style", &json!({"layer": "Cities", "background": parts})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("ignores")), "every key is read");
+    let want = LabelBackground { fill: Some(Rgba::rgb(0xFF, 0xEE, 0)), stroke: None, stroke_width: 10.0, padding: [2.0, 1.0], radius: 0.0 };
+    assert_eq!(class(&s).2, Some(want.clone()));
+    s.run("labels.style", &json!({"layer": "Cities", "background": {"radius": 1e300}})).unwrap();
+    assert_eq!(class(&s).2.map(|b| b.radius), Some(50.0), "past f32's range: the most");
+    s.run("labels.style", &json!({"layer": "Cities", "background": {"radius": 3}})).unwrap();
+    assert_eq!(class(&s).2, Some(LabelBackground { radius: 3.0, ..want.clone() }), "what isn't given is kept");
+    s.run("labels.style", &json!({"layer": "Cities", "background": true})).unwrap();
+    assert_eq!(class(&s).2.map(|b| b.radius), Some(3.0), "on again keeps it");
+    s.run("labels.style", &json!({"layer": "Cities", "size": 12})).unwrap();
+    assert!(class(&s).2.is_some(), "other settings leave it");
+    s.run("labels.style", &json!({"layer": "Cities", "background": false})).unwrap();
+    assert_eq!(class(&s).2, None);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(class(&s).2.is_some(), "undoes");
+    s.run("labels.style", &json!({"layer": "Cities", "background": null})).unwrap();
+    assert_eq!(class(&s).2, None);
+    // Set on none, the parts go on the default's.
+    s.run("labels.style", &json!({"layer": "Cities", "background": {"fill": ""}})).unwrap();
+    assert_eq!(class(&s).2, Some(LabelBackground { fill: None, ..LabelBackground::default() }));
+    for bad in [
+        json!({"background": "box"}),
+        json!({"background": 1}),
+        json!({"background": {"fill": "pink"}}),
+        json!({"background": {"stroke": 7}}),
+        json!({"background": {"strokeWidth": "wide"}}),
+        json!({"background": {"padding": 2}}),
+        json!({"background": {"padding": [2]}}),
+        json!({"background": {"radius": null}}),
+    ] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Cities");
+        assert!(s.run("labels.style", &p).is_err(), "{bad}");
+    }
+    // The project keeps them.
+    s.run("labels.placement", &json!({"layer": "Cities", "offset": [1, 2]})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(class(&reopened), class(&s));
+}
+
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
 /// moved or removed) locks the labels again on the next frame, a change within a class keeps the
 /// lock (#732).
@@ -7303,6 +7378,16 @@ fn web_style_carries_the_layers_scale_limits_as_zooms() {
     assert_eq!(halo(&s), "rgba(20,22,26,0.824)");
     s.map_mut().layer_mut(id).unwrap().labels.default.halo_color = Some(rustgis_map::Rgba::new(255, 0, 0, 128));
     assert_eq!(halo(&s), "rgba(255,0,0,0.502)");
+    // An offset in ems, as MapLibre has it; none without one.
+    let offset = |s: &Session| {
+        let style = crate::cmd::sharing::web_style(s.map().layer(id).unwrap());
+        let label = style["layers"].as_array().unwrap().iter().find(|l| l["type"] == "symbol").cloned().unwrap();
+        label["layout"].get("text-offset").cloned()
+    };
+    assert_eq!(offset(&s), None);
+    let c = &mut s.map_mut().layer_mut(id).unwrap().labels.default;
+    (c.size, c.offset) = (10.0, [5.0, -2.5]);
+    assert_eq!(offset(&s), Some(json!([0.5, -0.25])));
     s.map_mut().layer_mut(id).unwrap().labels.default.visible = false;
     assert!(!labelled(&s));
 }

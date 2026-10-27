@@ -417,7 +417,7 @@ pub fn expand(t: &str, layout: &Layout, info: &PageInfo, frame: Option<(&Map, ru
 
 /// A rectangle with its corners rounded by `rad` pixels (at most half its shorter side), each a
 /// quarter circle drawn as a cubic; `None` for square corners, drawn as the plain rectangle.
-fn rounded_rect(r: tiny_skia::Rect, rad: f32) -> Option<tiny_skia::Path> {
+pub(crate) fn rounded_rect(r: tiny_skia::Rect, rad: f32) -> Option<tiny_skia::Path> {
     let rad = rad.min(r.width() / 2.0).min(r.height() / 2.0);
     if rad.is_nan() || rad <= 0.0 {
         return None;
