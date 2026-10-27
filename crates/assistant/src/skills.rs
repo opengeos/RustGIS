@@ -546,7 +546,7 @@ mod local {
         let mut all = Vec::new();
         for index in 0..zip.len() {
             let entry = zip.by_index_raw(index).map_err(|e| format!("{}: {e}", path.display()))?;
-            let name = entry.name().replace('\\', "/");
+            let name = entry.name().map_err(|e| format!("{}: {e}", path.display()))?.replace('\\', "/");
             if name.rsplit('/').next().is_none_or(|n| !n.eq_ignore_ascii_case("SKILL.md")) {
                 continue;
             }
