@@ -101,13 +101,19 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
             let period = spacing * ppp;
             let k = (MAX_TILE_PX / period).min(1.0);
             let h = (period * k).ceil().max(1.0);
-            let tile = tile(&key(&pattern, color, ppp), true, 4.0, h, |pm| {
-                let w = (width * ppp * k).max(0.0);
-                let mid = h / 2.0;
-                if let Some(r) = tiny_skia::Rect::from_ltrb(-1.0, mid - w / 2.0, 5.0, mid + w / 2.0) {
-                    pm.fill_rect(r, &paint(color, 1.0), Transform::identity(), None);
-                }
-            })?;
+            let tile = tile(
+                &key(&pattern, color, ppp),
+                || true,
+                4.0,
+                h,
+                |pm| {
+                    let w = (width * ppp * k).max(0.0);
+                    let mid = h / 2.0;
+                    if let Some(r) = tiny_skia::Rect::from_ltrb(-1.0, mid - w / 2.0, 5.0, mid + w / 2.0) {
+                        pm.fill_rect(r, &paint(color, 1.0), Transform::identity(), None);
+                    }
+                },
+            )?;
             let rad = -angle.to_radians();
             // The lattice across the lines (their normal) through the origin, shifted by the offset.
             let (nx, ny) = (-f64::from(rad.sin()), f64::from(rad.cos()));
@@ -124,8 +130,9 @@ fn pattern_tile(pattern: FillPattern, color: Rgba, ppp: f32, origin: (f64, f64))
             let symbol =
                 Symbol { fill: color, stroke: outline.unwrap_or(Rgba::new(0, 0, 0, 0)), stroke_width: outline_width, size, marker };
             // A character marker drawn while the installed families are still being indexed is
-            // in the label font for now (as `glyphs::shape` keeps none then): not kept either.
-            let settled = match marker {
+            // in the label font for now (as `glyphs::shape` keeps none then): not kept among the
+            // tiles. (Asked only when the tile isn't kept yet.)
+            let settled = || match marker {
                 Marker::Char(g) => crate::text::marker_font(g.font.as_str()).1,
                 _ => true,
             };
@@ -228,16 +235,18 @@ fn key(pattern: &FillPattern, color: Rgba, ppp: f32) -> Key {
 }
 
 /// The tile `key` names, drawn by `draw` on a `w` × `h` pixel picture the first time; `None` for
-/// one that can't be made. Kept among the tiles when `keep`; otherwise (a character marker
-/// before the fonts are indexed) among the provisional ones, until its family is settled.
-fn tile(key: &Key, keep: bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
+/// one that can't be made. Not kept yet, `settled` says whether it may be kept among the tiles:
+/// a character marker drawn while the installed families are being indexed (in the label font
+/// for now) is kept among the provisional ones instead, which all go once one is settled (the
+/// index is done, for every family).
+fn tile(key: &Key, settled: impl FnOnce() -> bool, w: f32, h: f32, draw: impl FnOnce(&mut Pixmap)) -> Option<Arc<Pixmap>> {
+    if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
+        return t;
+    }
+    let keep = settled();
     if keep {
-        // Settled now: the provisional one, if any, is left behind.
         if key.marker.is_some_and(|m| matches!(m, Marker::Char(_))) {
-            PROVISIONAL.with(|p| p.borrow_mut().remove(key));
-        }
-        if let Some(t) = TILES.with(|t| t.borrow().by_key.get(key).cloned()) {
-            return t;
+            PROVISIONAL.with(|p| p.borrow_mut().clear());
         }
     } else if let Some(t) = PROVISIONAL.with(|p| p.borrow().get(key).cloned()) {
         return t;
@@ -286,7 +295,7 @@ mod tests {
         let hatch = |i: u32| key(&FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 }, Rgba(i.to_le_bytes()), 1.0);
         let kept = |i: u32| TILES.with(|t| t.borrow().by_key.contains_key(&hatch(i)));
         for i in 0..=MAX_TILES as u32 {
-            assert!(tile(&hatch(i), true, 4.0, 4.0, |_| {}).is_some());
+            assert!(tile(&hatch(i), || true, 4.0, 4.0, |_| {}).is_some());
         }
         assert!(!kept(0), "the oldest made room");
         assert!(kept(1) && kept(MAX_TILES as u32), "the rest stay");
@@ -311,13 +320,30 @@ mod tests {
         let glyph = |c| key(&dots(Marker::Char(rustgis_map::Glyph::new(c, "Noto Sans"))), red, 1.0);
         let mut drawn = 0;
         for _ in 0..3 {
-            assert!(tile(&glyph('x'), false, 4.0, 4.0, |_| drawn += 1).is_some());
+            assert!(tile(&glyph('x'), || false, 4.0, 4.0, |_| drawn += 1).is_some());
         }
+        assert!(tile(&glyph('y'), || false, 4.0, 4.0, |_| {}).is_some());
         assert_eq!(drawn, 1, "drawn once while the fonts are indexed");
         assert!(TILES.with(|t| !t.borrow().by_key.contains_key(&glyph('x'))));
-        assert!(tile(&glyph('x'), true, 4.0, 4.0, |_| drawn += 1).is_some());
+        assert!(tile(&glyph('x'), || true, 4.0, 4.0, |_| drawn += 1).is_some());
         assert_eq!(drawn, 2, "drawn again once settled");
-        assert!(PROVISIONAL.with(|p| p.borrow().is_empty()));
+        assert!(PROVISIONAL.with(|p| p.borrow().is_empty()), "every provisional tile left behind");
+        // Kept, it isn't asked again whether it may be.
+        let mut asked = false;
+        assert!(
+            tile(
+                &glyph('x'),
+                || {
+                    asked = true;
+                    true
+                },
+                4.0,
+                4.0,
+                |_| drawn += 1
+            )
+            .is_some()
+        );
+        assert!(!asked && drawn == 2);
     }
 
     #[test]
