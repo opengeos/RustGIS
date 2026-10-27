@@ -724,9 +724,8 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "layer.repairSource" => Dialog("repairSource"),
         "ui.importShapefile" => Dialog("addShapefile"),
         "layer.definitionQuery" => Dialog("definitionQuery"),
-        "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.ramp" => {
-            Pane(RightPane::Symbology)
-        }
+        "layer.symbology" | "raster.symbology" | "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers"
+        | "layer.ramp" => Pane(RightPane::Symbology),
         "select.byAttributes" => Dialog("selectByAttributes"),
         "select.rows" => Command("table.open"),
         "edit.addField" => Dialog("addField"),

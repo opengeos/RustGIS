@@ -342,6 +342,83 @@ fn editing_features_and_fields() {
     assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n - 1);
 }
 
+/// A polygon layer stacks fills (a colour, hatch lines, markers on a grid), for the layer or a
+/// class of its own; junk is refused and numbers held within range; each change undoes, and the
+/// project keeps them (a layer without them saves as before).
+#[test]
+fn fill_layers_stack_and_survive_save_and_undo() {
+    use rustgis_map::Rgba;
+    use rustgis_map::fills::{FillLayer, FillPattern, MAX_FILLS};
+    let mut s = world();
+    let before = serde_json::to_string(&s.project).unwrap();
+    assert!(!before.contains("fill_layers") && !before.contains("class_fills"), "nothing written for layers without them");
+    let depth = s.undo_depth();
+    let fills = json!([
+        {"color": "#E8F0D0", "pattern": "solid"},
+        {"color": "#336633", "pattern": "hatch", "angle": 45, "spacing": 6, "width": 0.75},
+        {"pattern": "dots", "marker": "square", "size": 2, "spacing": [8, 6], "displacement": [4, 0], "outline": "#000000", "outlineWidth": 0.5}
+    ]);
+    assert_eq!(s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": fills})).unwrap(), json!({"fills": 3}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    let got = |s: &Session| s.map().layer_by_name("Countries").unwrap().fill_layers.clone();
+    let f = got(&s);
+    assert_eq!(f[0], FillLayer { color: Some(Rgba::rgb(0xE8, 0xF0, 0xD0)), pattern: FillPattern::Solid });
+    assert_eq!(f[1].pattern, FillPattern::Hatch { angle: 45.0, spacing: 6.0, width: 0.75, offset: 0.0 });
+    let FillPattern::Dots { marker, spacing, outline, .. } = f[2].pattern else { panic!("{f:?}") };
+    assert_eq!((marker, spacing, outline, f[2].color), (rustgis_map::Marker::Square, [8.0, 6.0], Some(Rgba::rgb(0, 0, 0)), None));
+    // Kept with the project, and undone.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(got(&reopened), f);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(got(&s).is_empty());
+    // Held within range; a number given for both ways.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "hatch", "spacing": 1e300, "width": -4, "angle": -45}, {"pattern": "dots", "spacing": 1e9}]}))
+        .unwrap();
+    let f = got(&s);
+    assert_eq!(f[0].pattern, FillPattern::Hatch { angle: 315.0, spacing: 500.0, width: 0.0, offset: 0.0 });
+    assert!(matches!(f[1].pattern, FillPattern::Dots { spacing: [500.0, 500.0], .. }), "{f:?}");
+    // A character of a font as the dots (a QGIS font marker's), kept with its family; not with a
+    // shape too.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "dots", "char": "★", "font": "Noto Sans"}]})).unwrap();
+    let FillPattern::Dots { marker: rustgis_map::Marker::Char(g), .. } = got(&s)[0].pattern else { panic!("{:?}", got(&s)) };
+    assert_eq!((g.ch, g.font.as_str()), ('★', "Noto Sans"));
+    assert!(
+        s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "dots", "marker": "square", "char": "x"}]})).is_err()
+    );
+    // A class's own (Unique Values), then back to the layer's.
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "unique", "field": "continent"})).unwrap();
+    let value = match &s.map().layer_by_name("Countries").unwrap().renderer {
+        rustgis_map::Renderer::Unique { classes, .. } => classes[0].0.clone(),
+        r => panic!("{r:?}"),
+    };
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "value": value, "fills": [{"pattern": "hatch"}]})).unwrap();
+    let class_fills = |s: &Session| match &s.map().layer_by_name("Countries").unwrap().renderer {
+        rustgis_map::Renderer::Unique { class_fills, .. } => class_fills.clone(),
+        _ => Default::default(),
+    };
+    assert_eq!(class_fills(&s).get(&value).map(Vec::len), Some(1));
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "value": value, "fills": []})).unwrap();
+    assert!(class_fills(&s).is_empty());
+    assert!(s.run("layer.fillLayers", &json!({"layer": "Countries", "value": "no such class", "fills": []})).is_err());
+    // Junk, and a layer that isn't polygons.
+    let many: Vec<Value> = (0..=MAX_FILLS).map(|_| json!({})).collect();
+    for bad in [
+        json!({"layer": "Countries"}),
+        json!({"layer": "Countries", "fills": "hatch"}),
+        json!({"layer": "Countries", "fills": many}),
+        json!({"layer": "Countries", "fills": [7]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "stripes"}]}),
+        json!({"layer": "Countries", "fills": [{"color": "red"}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "hatch", "spacing": "wide"}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "dots", "spacing": [1]}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "dots", "marker": "blob"}]}),
+        json!({"layer": "Rivers", "fills": []}),
+    ] {
+        assert!(s.run("layer.fillLayers", &bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn line_strokes_stack_and_survive_save_and_undo() {
     use rustgis_map::{LineCap, LineJoin, LineStroke, Rgba};
@@ -18977,12 +19054,17 @@ fn geolibre_local_source_kinds_and_archives() {
     let arr = |shape: Value, chunks: Value| json!({"zarr_format":2,"shape":shape,"chunks":chunks,"dtype":"<f8","compressor":null,"filters":null,"order":"C","fill_value":null});
     let meta = json!({"zarr_consolidated_format":1,"metadata":{
         ".zgroup":{"zarr_format":2},
-        "value/.zarray":arr(json!([2,2]),json!([2,2])),"value/.zattrs":{"_ARRAY_DIMENSIONS":["lat","lon"]},
+        "value/.zarray":arr(json!([2,2,2]),json!([1,2,2])),"value/.zattrs":{"_ARRAY_DIMENSIONS":["time","lat","lon"]},
         "lat/.zarray":arr(json!([2]),json!([2])),"lat/.zattrs":{"_ARRAY_DIMENSIONS":["lat"],"units":"degrees_north"},
         "lon/.zarray":arr(json!([2]),json!([2])),"lon/.zattrs":{"_ARRAY_DIMENSIONS":["lon"],"units":"degrees_east"}
     }});
     std::fs::write(store.join(".zmetadata"), meta.to_string()).unwrap();
-    for (path, values) in [("value/0.0", vec![1.0f64, 2.0, 3.0, 4.0]), ("lat/0", vec![0.5, 1.5]), ("lon/0", vec![0.5, 1.5])] {
+    for (path, values) in [
+        ("value/0.0.0", vec![1.0f64, 2.0, 3.0, 4.0]),
+        ("value/1.0.0", vec![101.0f64, 102.0, 103.0, 104.0]),
+        ("lat/0", vec![0.5, 1.5]),
+        ("lon/0", vec![0.5, 1.5]),
+    ] {
         let path = store.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()).unwrap();
@@ -18999,13 +19081,15 @@ fn geolibre_local_source_kinds_and_archives() {
     ];
     let layers: Vec<_> = sources
         .iter()
-        .map(|(kind, file)| json!({"id":kind,"name":kind,"type":kind,"sourcePath":file,"source":{"variable":"value"}}))
+        .map(|(kind, file)| json!({"id":kind,"name":kind,"type":kind,"sourcePath":file,"source":{"variable":"value","index":{"time":1}}}))
         .collect();
     let mut s = world();
     let out=s.run("project.importGeolibre",&json!({"dir":dir,"text":json!({"version":"0.2.0","name":"Sources","mapView":{},"basemapStyleUrl":"","layers":layers}).to_string()})).unwrap();
     assert_eq!(out["layers"].as_array().unwrap().len(), sources.len(), "{out}");
     assert_eq!(s.map().layers.len(), 6);
     assert_eq!(s.map().tiles.len(), 2);
+    let raster = s.map().layer_by_name("zarr").unwrap().raster.as_ref().unwrap().data.as_ref().unwrap();
+    assert!(raster.bands[0].data.iter().all(|v| *v >= 101.0 && *v <= 104.0), "saved time slice must survive native import");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

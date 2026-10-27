@@ -62,6 +62,8 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
     } else if mode == "graduated" {
         let mut pairs: Vec<_> =
@@ -94,6 +96,7 @@ pub fn apply(layer: &mut Layer, record: &Value, report: &mut Report) {
                     })
                     .collect(),
                 class_strokes: Default::default(),
+                class_fills: Default::default(),
             };
         } else {
             report.approximated(&name, "graduated style has no numeric stops; using base symbol");

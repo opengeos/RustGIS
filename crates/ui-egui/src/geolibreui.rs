@@ -9,6 +9,9 @@ use std::collections::HashMap;
 
 type Answer = Slot<Result<Vec<u8>, String>>;
 
+/// One active imported store shares this budget between retained bytes and its download batch.
+const MAX_IMPORT_BYTES: usize = 128 << 20;
+
 /// One bounded metadata/chunk batch, followed by a single layer download completion.
 pub struct Read {
     id: u64,
@@ -24,7 +27,7 @@ pub struct Read {
 /// Starts an import read; the engine has already reserved its layer and drawing position.
 pub fn start(app: &mut RustGisApp, p: &Value) -> Result<(), String> {
     if app.ui.geolibre_zarr.len() >= 16 {
-        return Err(tl!("16 imported Zarr stores are already being read").into());
+        return Err(tl!("16 imported Zarr stores are already queued").into());
     }
     let root = p.get("url").and_then(Value::as_str).ok_or(tl!("Zarr URL is required"))?.trim_end_matches('/').to_string();
     let id = app.session.download_started();
@@ -48,8 +51,8 @@ impl Read {
         self.waiting.retain(|(key, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             Some(Ok(bytes)) => {
                 self.bytes = self.bytes.saturating_add(bytes.len());
-                if self.bytes as u64 > zarr::MAX_READ {
-                    error = Some(tl!("Imported Zarr slice exceeds the read limit").into());
+                if self.bytes > MAX_IMPORT_BYTES {
+                    error = Some(tl!("Imported Zarr slice exceeds the 128 MiB download limit").into());
                 }
                 self.got.insert(key.clone(), bytes);
                 false
@@ -65,12 +68,23 @@ impl Read {
         if let Some(e) = error {
             return Some(Err(e));
         }
-        while self.waiting.len() < 6
+        // Wait for the entire batch before reserving another: partially finished batches
+        // still own their byte allowance in callback slots, even before we consume them.
+        if !self.waiting.is_empty() {
+            return None;
+        }
+        let count = self.queue.len().min(6);
+        let allowance = MAX_IMPORT_BYTES.saturating_sub(self.bytes) / count.max(1);
+        if count > 0 && allowance == 0 {
+            return Some(Err(tl!("Imported Zarr slice exceeds the 128 MiB download limit").into()));
+        }
+        while self.waiting.len() < count
             && let Some(key) = self.queue.pop()
         {
             let slot: Answer = Slot::default();
             let land = slot.clone();
-            let limit = if self.phase.is_none() { zarr::MAX_METADATA } else { zarr::MAX_CHUNK_FILE as usize };
+            let file_limit = if self.phase.is_none() { zarr::MAX_METADATA } else { zarr::MAX_CHUNK_FILE as usize };
+            let limit = file_limit.min(allowance);
             cache::download_limited(
                 &format!("{}/{key}", self.root),
                 limit,
@@ -106,13 +120,14 @@ impl Read {
 /// Finishes through the same target-layer replacement as other imported URL data.
 pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut done = Vec::new();
-    app.ui.geolibre_zarr.retain_mut(|job| match job.poll() {
-        Some(result) => {
-            done.push((job.id, job.root.clone(), job.params.clone(), result));
-            false
-        }
-        None => true,
-    });
+    // Serial reads bound aggregate buffers and assembly to one store. Queued jobs hold
+    // parameters only; they cannot start downloads until earlier stores complete.
+    if let Some(job) = app.ui.geolibre_zarr.first_mut()
+        && let Some(result) = job.poll()
+    {
+        done.push((job.id, job.root.clone(), job.params.clone(), result));
+        app.ui.geolibre_zarr.remove(0);
+    }
     for (id, url, mut params, result) in done {
         match result {
             Ok(bytes) => {
@@ -219,5 +234,36 @@ mod tests {
         assert!(app.session.project.maps[target].groups.iter().all(|g| !g.children.contains(&id)));
         assert_eq!(app.ui.geolibre_zarr.len(), 16);
         assert!(app.session.take_url_requests().is_empty());
+    }
+
+    /// A full active reader must not let queued stores issue downloads or retain chunk buffers.
+    #[test]
+    fn geolibre_zarr_waiting_store_does_not_multiply_the_active_byte_budget() {
+        let mut app = RustGisApp::with_sample();
+        app.ui.geolibre_zarr.push(Read {
+            id: 0,
+            params: json!({}),
+            root: "https://example.org/active.zarr".into(),
+            queue: vec!["next".into()],
+            waiting: vec![("pending".into(), Slot::default())],
+            got: HashMap::new(),
+            phase: None,
+            bytes: MAX_IMPORT_BYTES,
+        });
+        start(&mut app, &json!({"url":"https://example.org/queued.zarr"})).unwrap();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
+        output.textures_delta.clear();
+        assert_eq!(app.ui.geolibre_zarr.len(), 2);
+        let queued = &app.ui.geolibre_zarr[1];
+        assert!(queued.waiting.is_empty());
+        assert!(queued.got.is_empty());
+        assert_eq!(queued.bytes, 0);
+        assert_eq!(queued.queue.len(), zarr::METADATA_KEYS.len());
+        // Once the active batch lands, an exhausted budget fails before another request.
+        let active = &mut app.ui.geolibre_zarr[0];
+        active.waiting.clear();
+        assert!(active.poll().unwrap().is_err());
+        assert!(active.waiting.is_empty());
     }
 }

@@ -421,5 +421,5 @@ GPU Rendering is off by default and remembered across sessions (`ui.map.gpu` is 
 `RUSTGIS_GPU=1` forces it on for development). The globe, view effects and colour-vision
 simulation stay on the CPU, and exports are unaffected. A rotated or tilted map uses the GPU
 only when every visible layer can be drawn there: tiles, rasters, terrain, transparency,
-masking, swipe, blending, aggregation, graphics, stacked strokes or labels with icons keep it
+masking, swipe, blending, aggregation, graphics, stacked strokes, fills or labels with icons keep it
 on the CPU. Extrusions use the GPU only on a tilted map.

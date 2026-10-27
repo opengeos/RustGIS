@@ -16,6 +16,7 @@ mod line_labels;
 mod line_markers;
 pub mod logo;
 mod mesh;
+mod pattern_fill;
 pub mod pdf;
 mod picture;
 mod point_marks;
@@ -380,6 +381,11 @@ impl Drop for Antialias {
     }
 }
 
+/// Whether the map being drawn is antialiased.
+fn antialiased() -> bool {
+    ANTIALIAS.with(|a| a.get())
+}
+
 fn paint(c: Rgba, opacity: f32) -> Paint<'static> {
     let mut p = Paint::default();
     let a = (c.a() as f32 * opacity).round().clamp(0.0, 255.0) as u8;
@@ -595,21 +601,32 @@ impl Ctx<'_> {
     }
 
     fn polygon(&self, pm: &mut Pixmap, polys: &[Vec<Vec<Coord>>], fill: Option<Paint>, stroke: Option<(Paint, f32)>) {
+        let Some(path) = self.polygon_path(polys) else { return };
+        if let Some(f) = fill {
+            pm.fill_path(&path, &f, FillRule::EvenOdd, Transform::identity(), None);
+        }
+        if let Some((s, w)) = stroke {
+            self.outline(pm, &path, &s, w);
+        }
+    }
+
+    /// A polygon's rings as one path (its holes cut out by the even-odd rule); `None` for one
+    /// with nothing to draw.
+    pub(crate) fn polygon_path(&self, polys: &[Vec<Vec<Coord>>]) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
         for rings in polys {
             for r in rings {
                 self.ring_path(&mut pb, r, true);
             }
         }
-        let Some(path) = pb.finish() else { return };
-        if let Some(f) = fill {
-            pm.fill_path(&path, &f, FillRule::EvenOdd, Transform::identity(), None);
-        }
-        if let Some((s, w)) = stroke
-            && w > 0.0
-        {
+        pb.finish()
+    }
+
+    /// A polygon's outline `w` points wide (round joins); none for no width.
+    pub(crate) fn outline(&self, pm: &mut Pixmap, path: &tiny_skia::Path, p: &Paint, w: f32) {
+        if w > 0.0 {
             let st = Stroke { width: w * self.ppp, line_join: LineJoin::Round, ..Stroke::default() };
-            pm.stroke_path(&path, &s, &st, Transform::identity(), None);
+            pm.stroke_path(path, p, &st, Transform::identity(), None);
         }
     }
 
@@ -2054,6 +2071,7 @@ pub fn gpu_may_turn(map: &Map, view: &View) -> bool {
             && l.aggregation.is_none()
             && !l.graphics
             && !l.has_strokes()
+            && !l.has_fills()
             && l.marker_rotation.is_none()
             && (l.extrusion.is_none() || view.camera.pitch != 0.0)
             && !(view.camera.pitch != 0.0 && l.renderer.has_char_markers() && stands_up(map, l))
@@ -3066,13 +3084,15 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             // GPU-eligible: a plain vector layer drawn at full opacity with no mask, blend,
             // aggregation, extrusion or per-row graphics (an inert aggregation/extrusion on the
             // "wrong" geometry type still falls back — conservative and correct).
-            // Stacked line strokes are offset in screen space, which the GPU meshes don't do.
+            // Stacked line strokes are offset in screen space, and stacked fills draw patterns:
+            // the GPU meshes do neither.
             let gpu_layer = gpu
                 && !offscreen
                 && layer.aggregation.is_none()
                 && layer.extrusion.is_none()
                 && !layer.graphics
                 && !layer.has_strokes()
+                && !layer.has_fills()
                 && layer.marker_rotation.is_none()
                 && !upright.contains(&layer.id);
             // Lyon refuses degenerate geometry tiny-skia draws fine, a layer too dense to mesh
@@ -3136,6 +3156,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     // Symbol levels: lines with stacked strokes wait, and go down a level at a time
                     // after the rest (each batch of a streamed layer on its own).
                     let levels = layer.stroke_levels && layer.has_strokes();
+                    // Polygons with stacked fills (patterns) draw them in place of their single fill.
+                    let has_fills = layer.has_fills();
                     let mut stacked: Vec<(&[Vec<Coord>], Symbol, &[LineStroke])> = Vec::new();
                     for (row, g) in drawn.iter().enumerate() {
                         let Some(g) = g else { continue };
@@ -3168,16 +3190,25 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             }
                             continue;
                         }
-                        // Its symbol, and the layer's stacked strokes or the feature's class's own.
-                        let (sym, strokes) = layer.style(row);
+                        // Its symbol, and the layer's stacked strokes or the feature's class's own; a
+                        // polygon's stacked fills too (none in wireframe, which draws outlines only),
+                        // the feature classed once for all.
+                        let (sym, strokes, fills) = if has_fills && !ctx.wireframe && matches!(g, Geometry::Polygon(_)) {
+                            layer.style_and_fills(row)
+                        } else {
+                            let (sym, strokes) = layer.style(row);
+                            (sym, strokes, &[] as &[rustgis_map::fills::FillLayer])
+                        };
                         // A feature under a pixel across: blend its coverage into the pixels it touches
-                        // (a dense layer seen whole is mostly these, and a path each is slow).
-                        // Not stacked strokes: a splat would draw them unshifted, in one colour.
+                        // (a dense layer seen whole is mostly these, and a path each is slow). Not
+                        // stacked strokes: a splat would draw them unshifted, in one colour. Stacked
+                        // fills show as the colour they make together at that size.
+                        let splat_sym = if fills.is_empty() { sym } else { Symbol { fill: pattern_fill::tint(fills, sym.fill), ..sym } };
                         if globe.is_none()
                             && !layer.graphics
                             && strokes.is_empty()
                             && let Some(e) = extents.get(row)
-                            && ctx.splat(dest, e, g, &sym)
+                            && ctx.splat(dest, e, g, &splat_sym)
                         {
                             continue;
                         }
@@ -3190,6 +3221,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             }
                             Geometry::Line(parts) if !strokes.is_empty() && levels => stacked.push((parts, sym, strokes)),
                             Geometry::Line(parts) if !strokes.is_empty() => stroke_paths.draw(ctx, dest, parts, &sym, strokes),
+                            Geometry::Polygon(polys) if !fills.is_empty() => ctx.filled(dest, polys, &sym, fills),
                             _ => ctx.feature(dest, g, &sym),
                         }
                     }
@@ -6019,6 +6051,166 @@ mod tests {
     }
 
     #[test]
+    fn stacked_fills_hatch_and_dot_polygons_anchored_to_the_map() {
+        use rustgis_map::fills::{FillLayer, FillPattern};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("fields", GeometryType::Polygon, vec![Field::new("kind", FieldType::Text)]);
+        let square = |x0: f64, x1: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(x0, -0.5),
+                Coord::new(x1, -0.5),
+                Coord::new(x1, 0.5),
+                Coord::new(x0, 0.5),
+                Coord::new(x0, -0.5),
+            ]]])
+        };
+        d.push(Some(square(-0.6, 0.6)), vec![Value::Text("a".into())]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
+        let rgb = |r: &Rendered, x: u32, y: u32| r.pixmap.pixel(x, y).map(|p| (p.red(), p.green(), p.blue())).unwrap();
+        let before = render(&mut m, &view).unwrap();
+        let plain = rgb(&before, 100, 100);
+        // Hatched: red lines 6 points apart across the square's light fill, nothing outside it.
+        m.layer_mut(id).unwrap().fill_layers = vec![
+            FillLayer { color: Some(Rgba::rgb(240, 240, 240)), pattern: FillPattern::Solid },
+            FillLayer { color: Some(red), pattern: FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 } },
+        ];
+        let r = render(&mut m, &view).unwrap();
+        let rows: Vec<u32> = (60..140).filter(|&y| rgb(&r, 100, y).0 > 200 && rgb(&r, 100, y).1 < 120).collect();
+        assert!(rows.len() >= 10, "hatch rows: {rows:?}");
+        let starts: Vec<u32> = rows.iter().copied().filter(|y| !rows.contains(&(y - 1))).collect();
+        assert!(starts.windows(2).all(|w| w[1] - w[0] == 6), "6 points apart: {starts:?}");
+        assert_eq!(rgb(&r, 100, 5), rgb(&before, 100, 5), "nothing outside the polygon");
+        assert!((60..140).any(|y| rgb(&r, 100, y) == (240, 240, 240)), "the solid fill under the lines");
+        // Anchored to the map: panned 3 points, the lines move 3 points with it.
+        let panned = View { camera: Camera { center: Coord::new(camera.center.x, camera.center.y + 3.0 * camera.res), ..camera }, ..view };
+        let r2 = render(&mut m, &panned).unwrap();
+        let moved: Vec<u32> = (60..140).filter(|&y| rgb(&r2, 100, y).0 > 200 && rgb(&r2, 100, y).1 < 120).collect();
+        assert!(moved.iter().all(|y| rows.contains(&(y - 3)) || *y < 63 || *y > 137), "{rows:?} → {moved:?}");
+        // Turned 90°: the lines run up and down.
+        if let FillPattern::Hatch { angle, .. } = &mut m.layer_mut(id).unwrap().fill_layers[1].pattern {
+            *angle = 90.0;
+        }
+        let r = render(&mut m, &view).unwrap();
+        let red_at = |x: u32, y: u32| rgb(&r, x, y).0 > 200 && rgb(&r, x, y).1 < 120;
+        let cols = (60..140).filter(|&x| red_at(x, 100)).count();
+        // Between the lines, a column with no red at all.
+        let clear = (60..140).any(|x| (60..140).all(|y| !red_at(x, y)));
+        assert!(cols >= 10 && clear, "vertical: {cols} columns");
+        // Dots: blue markers on a grid, in the feature's colour when the fill has none.
+        let dots = FillPattern::Dots {
+            marker: rustgis_map::Marker::Circle,
+            size: 3.0,
+            outline: None,
+            outline_width: 0.0,
+            spacing: [10.0, 10.0],
+            displacement: [5.0, 0.0],
+            offset: [0.0, 0.0],
+        };
+        m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(blue), pattern: dots }];
+        let r = render(&mut m, &view).unwrap();
+        let bluish = (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).filter(|&(x, y)| rgb(&r, x, y) == (0, 0, 255)).count();
+        assert!(bluish > 20, "dots: {bluish}");
+        // A class's own fills over the layer's (Unique Values).
+        let base = rustgis_map::Symbol::default_for(GeometryType::Polygon, id);
+        m.layer_mut(id).unwrap().renderer =
+            rustgis_map::Renderer::unique(&m.layer(id).unwrap().dataset, &[], "kind", rustgis_map::Ramp::default(), base).unwrap();
+        if let rustgis_map::Renderer::Unique { class_fills, .. } = &mut m.layer_mut(id).unwrap().renderer {
+            class_fills.insert("a".into(), vec![FillLayer { color: Some(red), pattern: FillPattern::Solid }]);
+        }
+        let r = render(&mut m, &view).unwrap();
+        assert_eq!(rgb(&r, 100, 100), (255, 0, 0), "its class's fill");
+        // None: the symbol's fill, as before.
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol::default_for(GeometryType::Polygon, id));
+        m.layer_mut(id).unwrap().fill_layers.clear();
+        assert_eq!(rgb(&render(&mut m, &view).unwrap(), 100, 100), plain);
+    }
+
+    #[test]
+    fn a_polygon_under_a_pixel_is_drawn_with_its_stacked_fills() {
+        // Smaller than a pixel (about 0.7 across), it isn't blended in the symbol's fill colour:
+        // its own solid fill shows.
+        use rustgis_map::fills::{FillLayer, FillPattern};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("specks", GeometryType::Polygon, vec![]);
+        let (x0, x1, y0, y1) = (-0.0045, 0.0045, -0.0045, 0.0045);
+        let ring = vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 20.0, height: 20.0, pixels_per_point: 1.0, camera, sky: false };
+        let symbol = rustgis_map::Symbol {
+            fill: Rgba::rgb(0, 0, 255),
+            stroke_width: 0.0,
+            ..rustgis_map::Symbol::default_for(GeometryType::Polygon, id)
+        };
+        m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(symbol);
+        let ink = |m: &mut Map| {
+            let r = render(m, &view).unwrap();
+            r.pixmap
+                .pixels()
+                .iter()
+                .filter(|p| p.red() < 250 || p.green() < 250 || p.blue() < 250)
+                .map(|p| (p.red(), p.blue()))
+                .collect::<Vec<_>>()
+        };
+        let plain = ink(&mut m);
+        assert!(!plain.is_empty() && plain.iter().all(|(r, b)| b >= r), "the symbol's blue: {plain:?}");
+        m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(Rgba::rgb(255, 0, 0)), pattern: FillPattern::Solid }];
+        let filled = ink(&mut m);
+        assert!(!filled.is_empty() && filled.iter().all(|(r, b)| r > b), "its red fill: {filled:?}");
+        // Far smaller (0.15 across), still blended in, not lost as a path of no area.
+        let mut small = Map::new("Map");
+        small.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("specks", GeometryType::Polygon, vec![]);
+        let t = 0.0045 * 0.15 / 0.67;
+        let ring = vec![Coord::new(-t, -t), Coord::new(t, -t), Coord::new(t, t), Coord::new(-t, t), Coord::new(-t, -t)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let tiny = small.add_dataset(d);
+        let l = small.layer_mut(tiny).unwrap();
+        l.renderer = rustgis_map::Renderer::Single(symbol);
+        l.fill_layers = vec![FillLayer { color: Some(Rgba::rgb(255, 0, 0)), pattern: FillPattern::Solid }];
+        // (A faint speck: about 2 % of a pixel's area.)
+        let r = render(&mut small, &view).unwrap();
+        let specks: Vec<_> = r.pixmap.pixels().iter().filter(|p| p.green() < 255).map(|p| (p.red(), p.green(), p.blue())).collect();
+        assert!(!specks.is_empty() && specks.iter().all(|(r, g, b)| r > g && g == b), "a speck of red: {specks:?}");
+    }
+
+    #[test]
+    fn reference_scaled_hatch_stays_on_the_map_as_it_pans() {
+        // With a reference scale twice the map's, a hatch 6 points apart is drawn 12 apart; panned
+        // 3 points, its lines move 3 points with the polygons, not 6.
+        use rustgis_map::fills::{FillLayer, FillPattern};
+        let mut m = Map::new("Map");
+        m.basemap = rustgis_map::Basemap::Blank;
+        let mut d = Dataset::new("fields", GeometryType::Polygon, vec![]);
+        let ring = vec![Coord::new(-0.6, -0.5), Coord::new(0.6, -0.5), Coord::new(0.6, 0.5), Coord::new(-0.6, 0.5), Coord::new(-0.6, -0.5)];
+        d.push(Some(Geometry::Polygon(vec![vec![ring]])), vec![]);
+        let id = m.add_dataset(d);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let scale = m.ground_res_at(&camera) / rustgis_geom::PIXEL_M;
+        let red = Rgba::rgb(255, 0, 0);
+        let l = m.layer_mut(id).unwrap();
+        l.reference_scale = Some(scale * 2.0);
+        l.fill_layers =
+            vec![FillLayer { color: Some(red), pattern: FillPattern::Hatch { angle: 0.0, spacing: 6.0, width: 1.5, offset: 0.0 } }];
+        let starts = |r: &Rendered| -> Vec<u32> {
+            let red_at = |y: u32| r.pixmap.pixel(100, y).is_some_and(|p| p.red() > 200 && p.green() < 120);
+            (68..132).filter(|&y| red_at(y) && !red_at(y - 1)).collect()
+        };
+        let before = starts(&render(&mut m, &view).unwrap());
+        assert!(before.len() >= 4 && before.windows(2).all(|w| w[1] - w[0] == 12), "12 points apart: {before:?}");
+        let panned = View { camera: Camera { center: Coord::new(camera.center.x, camera.center.y + 3.0 * camera.res), ..camera }, ..view };
+        let after = starts(&render(&mut m, &panned).unwrap());
+        assert!(after.iter().filter(|y| (71..129).contains(*y)).all(|y| before.contains(&(y - 3))), "{before:?} → {after:?}");
+    }
+
+    #[test]
     fn stacked_line_strokes_draw_offset_by_direction() {
         // Two copies of one line in opposite directions (#478): with a stroke offset to the right
         // they land on opposite sides, and nothing draws on the shared centreline.
@@ -6301,6 +6493,8 @@ mod tests {
             other_label: None,
             class_strokes: [("road".to_string(), vec![stroke(black, 9.0), stroke(red, 3.0)])].into_iter().collect(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         l.line_strokes = vec![stroke(green, 3.0)];
         // 0.3° is about 22 px from the centre at this resolution.

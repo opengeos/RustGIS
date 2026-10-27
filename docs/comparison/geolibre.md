@@ -36,8 +36,8 @@ classic desktop GIS jobs of data design, reports and print layouts. RustGIS is y
 changing quickly: expect frequent releases, new capabilities and some significant changes.
 
 The two complement each other. Both can run the 1,000+ GeoLibre/Whitebox geoprocessing suite,
-both read and write common open formats, and the plan is for RustGIS to open `.geolibre`
-projects first and for GeoLibre to open `.rgis` projects later (see
+both read and write common open formats, RustGIS imports `.geolibre` projects as new maps,
+and GeoLibre opening `.rgis` projects is planned for later (see
 [Using them together](#using-them-together)). Choose GeoLibre for web-first work, phones and
 notebooks, choose RustGIS for a scriptable desktop GIS, or use both.
 

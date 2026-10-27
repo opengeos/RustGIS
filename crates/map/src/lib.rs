@@ -6,6 +6,7 @@ pub mod camera;
 pub mod color;
 pub mod design;
 pub mod effects;
+pub mod fills;
 pub mod geolibre;
 pub mod globe;
 pub mod graphics;
@@ -150,6 +151,11 @@ pub struct Layer {
     /// [`LineStroke`]); a stroke without markers draws nothing there.
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "symbology::de_strokes")]
     pub line_strokes: Vec<symbology::LineStroke>,
+    /// A polygon layer's stacked fills, drawn bottom first inside each polygon in place of its
+    /// symbol's fill (none: that fill alone); the outline is drawn over them (see
+    /// [`fills::FillLayer`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "fills::de_fills")]
+    pub fill_layers: Vec<fills::FillLayer>,
     /// Draws the stacked strokes in levels (symbol levels): every feature's strokes of one
     /// [`LineStroke::level`] before any of the next, so road casings join under the cores
     /// instead of cutting across them where lines meet.
@@ -318,6 +324,7 @@ impl Layer {
             aggregation: None,
             extrusion: None,
             line_strokes: Vec::new(),
+            fill_layers: Vec::new(),
             stroke_levels: false,
             marker_rotation: None,
             reference_scale: None,
@@ -560,6 +567,36 @@ impl Layer {
     /// Whether some feature may be drawn with stacked strokes ([`Layer::strokes`]).
     pub fn has_strokes(&self) -> bool {
         !self.graphics && (!self.line_strokes.is_empty() || self.renderer.has_class_strokes())
+    }
+
+    /// A polygon row's stacked fills: its class's own, else the layer's `fill_layers` (none: its
+    /// symbol's single fill).
+    pub fn fills(&self, row: usize) -> &[fills::FillLayer] {
+        if self.graphics {
+            return &[];
+        }
+        // A class without fills of its own takes the layer's: a layer with no class fills isn't
+        // classed for them.
+        if !self.renderer.has_class_fills() {
+            return &self.fill_layers;
+        }
+        self.renderer.fills_for(&self.dataset, row).unwrap_or(&self.fill_layers)
+    }
+
+    /// A polygon row's symbol, stacked strokes and stacked fills ([`Layer::style`],
+    /// [`Layer::fills`]), the feature classed once for all three.
+    pub fn style_and_fills(&self, row: usize) -> (Symbol, &[LineStroke], &[fills::FillLayer]) {
+        if self.graphics || !self.renderer.has_class_fills() {
+            let (symbol, strokes) = self.style(row);
+            return (symbol, strokes, self.fills(row));
+        }
+        let (symbol, strokes, fills) = self.renderer.style_fills_for(&self.dataset, row);
+        (symbol, strokes.unwrap_or(&self.line_strokes), fills.unwrap_or(&self.fill_layers))
+    }
+
+    /// Whether some feature may be drawn with stacked fills ([`Layer::fills`]).
+    pub fn has_fills(&self) -> bool {
+        !self.graphics && (!self.fill_layers.is_empty() || self.renderer.has_class_fills())
     }
 
     pub fn is_raster(&self) -> bool {
@@ -2124,6 +2161,8 @@ mod tests {
             other_label: None,
             class_strokes: [("a".to_string(), wild.clone()), ("b".to_string(), Vec::new())].into_iter().collect(),
             other_strokes: wild.clone(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
         let Renderer::Unique { class_strokes, other_strokes, .. } = &back.renderer else { panic!("unique renderer expected") };
@@ -2138,6 +2177,7 @@ mod tests {
             classes: 1,
             class_labels: Default::default(),
             class_strokes: [(0, wild)].into_iter().collect(),
+            class_fills: Default::default(),
         };
         let back: Layer = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
         let Renderer::Graduated { class_strokes, .. } = &back.renderer else { panic!("graduated renderer expected") };
@@ -2356,6 +2396,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let labels = |l: &Layer, scale| l.shown_legend(scale).map(|v| v.into_iter().map(|e| e.label).collect::<Vec<_>>());
         assert_eq!(labels(l, 1e6), Some(vec!["1".to_string(), "2".to_string()]), "no 9, no <all other values>");

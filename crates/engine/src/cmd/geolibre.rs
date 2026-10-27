@@ -90,6 +90,10 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             t.visible = project.basemap_visible;
         }
     }
+    let mut group_index: std::collections::HashMap<&str, &Value> = Default::default();
+    for group in &project.groups {
+        group_index.entry(string(group, "id")).or_insert(group);
+    }
     let mut added = Vec::new();
     let mut groups: std::collections::HashMap<String, Vec<u32>> = Default::default();
     let mut order = Vec::new();
@@ -109,7 +113,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             || (kind == "raster" && !array(source, "tiles").is_empty())
             || (matches!(kind, "cog" | "raster") && super::layer::is_tiff_url(address) && rustgis_map::tiles::is_web(address));
         if tile {
-            let (visible, opacity) = group_look(&project.groups, string(&record, "groupId"));
+            let (visible, opacity) = group_look(&group_index, string(&record, "groupId"));
             record["opacity"] = json!(number(&record, "opacity", 1.0).clamp(0.0, 1.0) * opacity);
             record["visible"] = json!(boolean(&record, "visible", true) && visible);
         }
@@ -137,7 +141,7 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
         let mut group = rustgis_map::LayerGroup::new(string(g, "name"));
         group.children = if string(g, "id").is_empty() { Vec::new() } else { groups.remove(string(g, "id")).unwrap_or_default() };
         group.expanded = !boolean(g, "collapsed", false);
-        let (visible, opacity) = group_look(&project.groups, string(g, "id"));
+        let (visible, opacity) = group_look(&group_index, string(g, "id"));
         group.visible = visible;
         group.transparency = (100.0 * (1.0 - opacity)) as f32;
         s.map_mut().add_group(group);
@@ -345,6 +349,9 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
             if let Some(v) = src.get("variable") {
                 q["variable"] = v.clone();
             }
+            if let Some(index) = src.get("index") {
+                q["index"] = index.clone();
+            }
             s.run_part("layer.addZarr", &q)?
         } else {
             s.run_part(if remote { "layer.addUrl" } else { "layer.addData" }, &q)?
@@ -386,7 +393,9 @@ fn resolve(address: &str, dir: Option<&str>) -> Result<String, String> {
     if let Some(dir) = dir {
         let name = address.rsplit(['/', '\\']).next().unwrap_or(address);
         let path = if crate::map::qgis::is_relative(address) {
-            std::path::Path::new(dir).join(address)
+            rustgis_map::paths::resolve(dir, address)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::Path::new(dir).join(address))
         } else {
             std::path::Path::new(dir).join(name)
         };
@@ -515,12 +524,12 @@ pub fn discard_pending(s: &mut Session, p: &Value) {
 }
 
 /// Effective visibility and opacity of one folder, including bounded, possibly cyclic ancestry.
-fn group_look(groups: &[Value], id: &str) -> (bool, f64) {
+fn group_look(groups: &std::collections::HashMap<&str, &Value>, id: &str) -> (bool, f64) {
     let mut seen = std::collections::HashSet::new();
     let mut id = id;
     let (mut visible, mut opacity) = (true, 1.0);
     while !id.is_empty() && seen.insert(id) {
-        let Some(group) = groups.iter().find(|g| string(g, "id") == id) else { break };
+        let Some(group) = groups.get(id).copied() else { break };
         visible &= boolean(group, "visible", true);
         opacity *= number(group, "opacity", 1.0).clamp(0.0, 1.0);
         id = string(group, "parentId");
@@ -566,5 +575,18 @@ mod admission_tests {
         for kind in ["flatgeobuf", "geoparquet", "zarr", "lidar", "mbtiles", "raster"] {
             assert!(ensure_download_capacity(&s, &[json!({"type":kind,"source":{"url":"https://example.org/data"}})]).is_err(), "{kind}");
         }
+    }
+
+    /// A long ancestry and a cycle exercise indexed lookup without recursion or repeated scans.
+    #[test]
+    fn geolibre_group_ancestry_is_indexed_and_cycles_apply_each_folder_once() {
+        let groups: Vec<_> = (0..1000).map(|i| json!({"id":i.to_string(),"parentId":if i == 0 {String::new()} else {(i-1).to_string()},"opacity":if i == 0 {0.5} else {1.0}})).collect();
+        let index: std::collections::HashMap<_, _> = groups.iter().map(|g| (string(g, "id"), g)).collect();
+        for i in 0..1000 {
+            assert_eq!(group_look(&index, &i.to_string()), (true, 0.5));
+        }
+        let cycle = [json!({"id":"a","parentId":"b","opacity":0.5}), json!({"id":"b","parentId":"a","opacity":0.25,"visible":false})];
+        let index = cycle.iter().map(|g| (string(g, "id"), g)).collect();
+        assert_eq!(group_look(&index, "a"), (false, 0.125));
     }
 }

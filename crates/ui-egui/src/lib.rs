@@ -33,6 +33,7 @@ mod editpanes;
 mod embeddingsui;
 mod failureui;
 mod fieldmenu;
+mod fill_editor;
 mod geocodeui;
 mod geolibreui;
 mod geometrycalc;
@@ -1807,10 +1808,11 @@ impl RustGisApp {
         // updates its step; anything else, a second selection on the same layer included, is a
         // step of its own.
         if let Some(last) = steps.last_mut()
-            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.transparency")
+            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers" | "layer.transparency")
             && last.command == id
             && params.get("layer").is_some()
             && last.params.get("layer") == params.get("layer")
+            && ["value", "index", "other"].iter().all(|k| last.params.get(*k) == params.get(*k))
         {
             last.params = params.clone();
             return;
@@ -2229,7 +2231,7 @@ impl RustGisApp {
                 }
             }
             // A project by its web address (a `?project=` link): downloaded off the frame, opened
-            // when it lands, in place of the open project (see `poll_downloads`).
+            // when it lands: native projects replace it; GeoLibre imports add a map (see `poll_downloads`).
             "ui.openUrl" => {
                 let url = p.get("url").and_then(Value::as_str).map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
                 let url = rustgis_engine::map::geolibre::download_url(url);

@@ -86,6 +86,8 @@ The command also accepts JSON `text`, base64 `data`, and `dir` for moved local d
 An absolute data path is tried first, then its filename under `dir` (the project's folder by
 default). Browser imports can use inline GeoJSON and web addresses; local paths need desktop.
 A web app link such as `?project=https://example.org/watershed.geolibre` imports the same map.
+This startup link takes precedence over other data/style links so download timing cannot change
+which map receives them.
 
 The map keeps its view, bookmarks, background, layer visibility and opacity, and supported vector
 styles and field labels. The result includes `map`, `layers` and per-layer `notes`, distinguishing
@@ -102,7 +104,9 @@ those downloads before saving. A browser import can queue at most 16 whole-file 
 Split that project into smaller imports or use the desktop app. Streaming tiles and COGs do
 not consume those download slots. Desktop URL imports run synchronously, like Add Data from URL;
 a slow source can delay completion. Zarr sources use their saved variable and dimension indices,
-or the first supported variable when those choices are absent.
+or the first supported variable when those choices are absent. Imported Zarr stores are read
+one at a time with a 128 MiB download-buffer limit; larger slices must be reduced or opened
+through the desktop data workflow.
 
 ### QGIS projects and styles
 
@@ -132,7 +136,11 @@ Each layer keeps its look:
   middle), turned with the line, their markers' offsets and angles kept; font markers as
   characters of their font, on points and along lines; a marker symbol of several layers, or one
   shifted, turned or anchored off its centre, as a point's marks; a marker angle taken from a
-  field (`"field"` or `- "field"`) as the layer's rotation field.
+  field (`"field"` or `- "field"`) as the layer's rotation field; a fill symbol of several layers
+  as stacked fills, its brush patterns (horizontal, vertical, diagonal, cross) and line pattern
+  fills as hatch lines, point pattern fills as markers on their grid, and the fills not drawn yet
+  (gradient and shapeburst fills in their first colour; dense brushes, SVG, raster and random fills as
+  a tint of their colour).
 - **Layer settings**: opacity, blending, visibility range, filter (subset string), and the
   reference scale.
 - **Rasters**: singleband grey as a stretch from black to white, singleband pseudocolour as a
@@ -158,7 +166,7 @@ older names of the same settings are read.
 QGIS expressions carry over where they are SQL: fields compared with values, `LIKE`, `IN`,
 `IS NULL`, joined by `AND`, `OR` and `NOT`. What RustGIS doesn't draw as QGIS does is drawn as
 near as it can, or left out, and said: the import's notes list, layer by layer, what was
-approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
+approximated (gradient and shapeburst fills drawn in their first colour, SVG, raster and random fills and dense brushes as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
 over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
 and polygons, a distance around points moved straight up, labels wrapped at a shortest line
