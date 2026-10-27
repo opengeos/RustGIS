@@ -62,6 +62,7 @@ mod repairsource;
 mod reportpane;
 mod ribbon;
 mod s3ui;
+mod saveprompt;
 mod scriptcolor;
 mod scriptcomplete;
 mod searchbox;
@@ -835,6 +836,8 @@ pub struct RustGisApp {
     pub services: Services,
     /// Autosave's interval, its last copy, and the copy an earlier run left (#873).
     pub(crate) autosave: autosave::AutosaveState,
+    /// The question asked before unsaved changes are discarded, and a quit the user agreed to.
+    pub(crate) save_prompt: saveprompt::SavePromptState,
     /// The MCP relay for `rustgis-cli mcp --attach`: a loopback listener on the session this app
     /// already has open, started by the `ui.mcpRelay` command and off until then.
     #[cfg(not(target_arch = "wasm32"))]
@@ -983,6 +986,7 @@ impl RustGisApp {
             shown_lang: i18n::Lang::EN,
             seen_project: None,
             autosave: Default::default(),
+            save_prompt: Default::default(),
         }
     }
 
@@ -1371,7 +1375,7 @@ impl RustGisApp {
                 false,
             );
         }
-        self.session.dirty = false;
+        self.session.mark_saved();
         self.ui.web_file = Some(file);
         Ok(())
     }
@@ -1417,7 +1421,7 @@ impl RustGisApp {
         rustgis_engine::sample::apply_worldview(if cfg!(test) { "default" } else { i18n::AUTO });
         let mut s = Session::new(Project::default());
         let _ = s.run("project.sample", &Value::Null);
-        s.dirty = false;
+        s.mark_saved();
         RustGisApp::new(s)
     }
 
@@ -1547,6 +1551,18 @@ impl RustGisApp {
             save("last_project", &path);
         }
         self.ui.last_project = Some(path);
+    }
+
+    /// Runs a command the user asked for in the interface (a button, a menu, a shortcut, Command
+    /// Search, a file dropped on the window): one that would replace a project with unsaved
+    /// changes asks to save them first, and runs once answered. Scripts, the AI Assistant and
+    /// attached agents run commands without asking ([`Self::run`]).
+    pub fn run_by_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if saveprompt::asks(self, id) {
+            saveprompt::ask(self, saveprompt::Discard::Replace(id.to_string(), params));
+            return Ok(Value::Null);
+        }
+        self.run(id, params)
     }
 
     /// Runs a command by id: `ui.*` here, everything else in the engine.
@@ -2468,9 +2484,13 @@ impl RustGisApp {
                     // A QGIS project opens as a new map of this one.
                     let lower = path.to_ascii_lowercase();
                     let cmd = if lower.ends_with(".qgs") || lower.ends_with(".qgz") { "project.importQgis" } else { "project.open" };
-                    let r = self.run(cmd, json!({"path": path}));
-                    self.ui.backstage = false;
-                    self.map.invalidate();
+                    let r = self.run_by_user(cmd, json!({"path": path}));
+                    // Asking to save first: the Project tab stays until the answer, so Cancel
+                    // goes back to it.
+                    if !saveprompt::waiting(self) {
+                        self.ui.backstage = false;
+                        self.map.invalidate();
+                    }
                     return r;
                 }
             }
@@ -2629,7 +2649,7 @@ impl RustGisApp {
                     self.ui.pending_open = Some(cmd);
                     open(if kind == "ramps" { "ramp" } else { "item" });
                 } else if let Some(path) = dialogs::pick_open(exts, tl!(label)) {
-                    let r = self.run(cmd, json!({"path": path}));
+                    let r = self.run_by_user(cmd, json!({"path": path}));
                     self.map.invalidate();
                     return r;
                 }
@@ -3524,6 +3544,7 @@ impl RustGisApp {
         // on the session directly) becomes Last Project now, not a frame later the app may not
         // reach.
         self.note_last_project();
+        saveprompt::close_requested(self, ctx);
         autosave::tick(self, ctx);
         self.ensure_script_font();
         // Fonts downloaded by the web app.
@@ -3601,10 +3622,18 @@ impl RustGisApp {
         // Files dropped on the desktop window arrive as paths. (The web shell reads browser drops
         // asynchronously and passes them through the inbox instead.)
         if !cfg!(target_arch = "wasm32") {
-            let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            let mut dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            // A project first, so the data dropped with it goes into that project, not the one
+            // it replaces. While the save prompt asks about replacing this one, the rest wait.
+            dropped.sort_by_key(|f| rustgis_engine::project::open_command(&f.path().display().to_string()) != "project.open");
+            let mut held = 0usize;
             for f in dropped {
                 let p = f.path().display().to_string();
                 if p.is_empty() {
+                    continue;
+                }
+                if saveprompt::waiting(self) {
+                    held += 1;
                     continue;
                 }
                 if p.to_ascii_lowercase().ends_with(".rgplugin") {
@@ -3616,6 +3645,18 @@ impl RustGisApp {
                 }
                 let _ = layerchooser::add_file(self, &p);
                 self.map.invalidate();
+            }
+            if held == 1 {
+                self.session.notify(
+                    tl!("Another dropped file wasn't opened: drop it again once you've answered about the unsaved changes."),
+                    false,
+                );
+            } else if held > 1 {
+                let text = crate::i18n::fmt(
+                    "{n} other dropped files weren't opened: drop them again once you've answered about the unsaved changes.",
+                    &[("n", &held.to_string())],
+                );
+                self.session.notify(text, false);
             }
         }
         if self.fonts_frames == 0 {
@@ -3681,6 +3722,7 @@ impl RustGisApp {
         layerchooser::show(self, &ctx);
         mapview::confirm_delete(self, &ctx);
         autosave::offer(self, &ctx);
+        saveprompt::show(self, &ctx);
         pluginsui::show(self, &ctx);
         update::show(self, &ctx);
         showme::tick(self, &ctx);
@@ -3698,7 +3740,7 @@ impl RustGisApp {
         if let Some(url) = self.ui.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
-        let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty { " •" } else { "" });
+        let title = format!("{}{} - RustGIS", self.session.project.name, if self.session.dirty() { " •" } else { "" });
         if title != self.sent_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.sent_title = title;

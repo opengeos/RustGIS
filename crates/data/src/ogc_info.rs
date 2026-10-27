@@ -55,23 +55,35 @@ impl FeatureInfo {
 
     /// The answer format asked for: GeoJSON, then GML, then other XML, plain text and HTML.
     pub fn info_format(&self) -> Option<&str> {
-        let rank = |f: &str| {
-            let f = f.to_ascii_lowercase();
-            if f.contains("geojson") || f.contains("geo+json") || f == "application/json" {
-                0
-            } else if f.contains("gml") {
-                1
-            } else if f.contains("xml") && !f.contains("html") {
-                2
-            } else if f.starts_with("text/plain") {
-                3
-            } else if f.contains("html") {
-                4
-            } else {
-                5
-            }
-        };
-        self.formats.iter().filter(|f| rank(f) < 5).min_by_key(|f| rank(f)).map(String::as_str)
+        self.formats.iter().filter(|f| format_rank(f) < 5).min_by_key(|f| format_rank(f)).map(String::as_str)
+    }
+
+    /// The answer format (one the layer offers) a request of the layer asked in: its INFO_FORMAT.
+    fn format_of(&self, request: &str) -> Option<&str> {
+        let asked = query_value(request, "info_format")?;
+        self.formats.iter().find(|f| super::encode(f).eq_ignore_ascii_case(asked)).map(String::as_str)
+    }
+
+    /// After the service answered `request` with its error: the request in the formats read after
+    /// the one it asked in (those of its kind left out too: a service whose GeoJSON fails for a
+    /// layer offers it under two names). `None` when no other format is left.
+    pub fn retry_after(&self, request: &str) -> Option<FeatureInfo> {
+        let rank = format_rank(self.format_of(request)?);
+        let formats: Vec<String> = self.formats.iter().filter(|f| format_rank(f) > rank).cloned().collect();
+        let next = FeatureInfo { formats, ..self.clone() };
+        next.info_format().is_some().then_some(next)
+    }
+
+    /// After the service answered `request`: when it asked in a format read after the layer's (a
+    /// retry that worked), the layer asking in that one from then on, the formats before it left
+    /// out. `None` when the layer keeps its request.
+    pub fn answered(&self, request: &str) -> Option<FeatureInfo> {
+        let rank = format_rank(self.format_of(request)?);
+        if self.info_format().is_none_or(|f| format_rank(f) >= rank) {
+            return None;
+        }
+        let formats: Vec<String> = self.formats.iter().filter(|f| format_rank(f) >= rank).cloned().collect();
+        Some(FeatureInfo { formats, ..self.clone() })
     }
 
     /// The GetFeatureInfo address for a point (`x`, `y` in Web Mercator metres) of a map drawn at
@@ -202,6 +214,58 @@ pub fn answer_text(body: &[u8]) -> Result<Cow<'_, str>, String> {
         Err(_) if !body.iter().any(|&b| control(b)) => Ok(Cow::Owned(body.iter().map(|&b| char::from(b)).collect())),
         Err(_) => Err("the service's answer isn't text (perhaps an image)".to_string()),
     }
+}
+
+/// An answer format's place in [`FeatureInfo::info_format`]'s order: 5 for one not read.
+fn format_rank(f: &str) -> u8 {
+    let f = f.to_ascii_lowercase();
+    if f.contains("geojson") || f.contains("geo+json") || f == "application/json" {
+        0
+    } else if f.contains("gml") {
+        1
+    } else if f.contains("xml") && !f.contains("html") {
+        2
+    } else if f.starts_with("text/plain") {
+        3
+    } else if f.contains("html") {
+        4
+    } else {
+        5
+    }
+}
+
+/// Exception codes (WMS 1.3.0 Annex E, OWS) that another answer format won't change.
+const NOT_THE_FORMAT: [&str; 10] = [
+    "LayerNotDefined",
+    "LayerNotQueryable",
+    "InvalidPoint",
+    "InvalidCRS",
+    "InvalidSRS",
+    "StyleNotDefined",
+    "MissingDimensionValue",
+    "InvalidDimensionValue",
+    "CurrentUpdateSequence",
+    "InvalidUpdateSequence",
+];
+
+/// Whether a GetFeatureInfo answer is the service's error that another answer format may not meet
+/// (MapServer's GeoJSON output fails for some layers its GML answers): an exception report
+/// without a code saying the layer, the point or the request is at fault.
+pub fn may_answer_in_another_format(body: &[u8]) -> bool {
+    let Ok(text) = answer_text(body) else { return false };
+    let text = text.trim_start_matches('\u{feff}').trim();
+    if !text.starts_with('<') {
+        return false;
+    }
+    let Ok(doc) = xml(text, 1_000_000) else { return false };
+    let root = doc.root_element();
+    matches!(local(&root), "ServiceExceptionReport" | "ExceptionReport")
+        && !root.descendants().any(|n| {
+            n.is_element()
+                && ["code", "exceptionCode"]
+                    .iter()
+                    .any(|a| n.attribute(*a).is_some_and(|c| NOT_THE_FORMAT.iter().any(|k| k.eq_ignore_ascii_case(c))))
+        })
 }
 
 /// Reads a GetFeatureInfo answer, whatever its format (found from the answer itself): its
@@ -627,6 +691,69 @@ mod tests {
         let err = read_feature_info(e).unwrap_err();
         assert!(err.contains("not queryable"), "{err}");
         assert!(read_feature_info(&[0x89, b'P', b'N', b'G', 0xff, 0xfe]).is_err());
+    }
+
+    #[test]
+    fn a_format_the_service_fails_in_gives_way_to_the_next() {
+        // swisstopo's MapServer: GeoJSON fails for some layers ("OGR_DS_CreateLayer failed … with
+        // driver 'GEOJSON'"), its GML answers.
+        let ms = br#"<?xml version='1.0' encoding="UTF-8" standalone="no" ?>
+<ServiceExceptionReport version="1.3.0" xmlns="http://www.opengis.net/ogc"><ServiceException>msOGRWriteFromQuery(): General error message.</ServiceException></ServiceExceptionReport>"#;
+        assert!(may_answer_in_another_format(ms));
+        assert!(may_answer_in_another_format(br#"<!-- x --><ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1"/>"#));
+        assert!(may_answer_in_another_format("\u{feff}<ServiceExceptionReport/>".as_bytes()));
+        let invalid_format =
+            br#"<ServiceExceptionReport><ServiceException code="InvalidFormat">no</ServiceException></ServiceExceptionReport>"#;
+        assert!(may_answer_in_another_format(invalid_format));
+        // An error no format changes: the layer, the point.
+        for code in ["LayerNotQueryable", "InvalidPoint"] {
+            let e = format!(r#"<ServiceExceptionReport><ServiceException code="{code}">no</ServiceException></ServiceExceptionReport>"#);
+            assert!(!may_answer_in_another_format(e.as_bytes()), "{code}");
+        }
+        let ows = br#"<ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/1.1"><ows:Exception exceptionCode="LayerNotDefined"/></ows:ExceptionReport>"#;
+        assert!(!may_answer_in_another_format(ows));
+        // Features, empty answers, text and HTML that mention exceptions aren't errors.
+        assert!(!may_answer_in_another_format(
+            br#"<msGMLOutput><r_layer><r_feature><n>ServiceExceptionReport</n></r_feature></r_layer></msGMLOutput>"#
+        ));
+        assert!(!may_answer_in_another_format(br#"{"type": "FeatureCollection", "features": []}"#));
+        assert!(!may_answer_in_another_format(b"Search returned no results. <ServiceExceptionReport>"));
+        assert!(!may_answer_in_another_format(b""));
+
+        let formats = ["application/json", "application/json; subtype=geojson", "application/vnd.ogc.gml", "text/plain", "text/html"];
+        let fi = FeatureInfo {
+            url: "https://wms.example.org/".into(),
+            version: "1.3.0".into(),
+            layer: "lines".into(),
+            map_format: "image/png".into(),
+            formats: formats.iter().map(|f| f.to_string()).collect(),
+        };
+        let ask = |fi: &FeatureInfo| fi.request(971_712.0, 6_021_494.0, 2.0).unwrap();
+        assert_eq!(fi.info_format(), Some("application/json"));
+        // Both names of GeoJSON go, then GML, then plain text, then HTML; nothing after the last.
+        let gml = fi.retry_after(&ask(&fi)).unwrap();
+        assert_eq!(gml.info_format(), Some("application/vnd.ogc.gml"));
+        assert_eq!(gml.formats, ["application/vnd.ogc.gml", "text/plain", "text/html"]);
+        assert_eq!(gml.layer, "lines");
+        assert!(ask(&gml).contains("&INFO_FORMAT=application%2Fvnd.ogc.gml&"));
+        let plain = fi.retry_after(&ask(&gml)).unwrap();
+        assert_eq!(plain.info_format(), Some("text/plain"));
+        let html = fi.retry_after(&ask(&plain)).unwrap();
+        assert_eq!(html.info_format(), Some("text/html"));
+        assert!(fi.retry_after(&ask(&html)).is_none());
+        // The format comes from the request answered, not from the layer: a second error to a
+        // GeoJSON request leads to GML again.
+        assert_eq!(fi.retry_after(&ask(&fi)), Some(gml.clone()));
+        // A request in no format the layer offers isn't retried.
+        assert!(fi.retry_after("https://wms.example.org/?INFO_FORMAT=text%2Fcsv").is_none());
+        assert!(fi.retry_after("https://wms.example.org/").is_none());
+        // Answered in GML, the layer asks in GML; answered in its own format, it keeps its request.
+        assert_eq!(fi.answered(&ask(&gml)), Some(gml.clone()));
+        assert!(fi.answered(&ask(&fi)).is_none());
+        assert!(gml.answered(&ask(&fi)).is_none());
+        // Formats RustGIS doesn't read don't count as left.
+        let odd = FeatureInfo { formats: vec!["text/xml".into(), "image/png".into()], ..fi.clone() };
+        assert!(odd.retry_after(&ask(&odd)).is_none());
     }
 
     #[test]

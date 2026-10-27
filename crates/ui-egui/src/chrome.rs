@@ -203,7 +203,7 @@ pub fn header(app: &mut RustGisApp, ui: &mut Ui) {
                 }
                 // Title: centred when it fits, otherwise in the free gap; the map name and then the
                 // project name drop out when there is no room.
-                let title = format!("{}{}", app.session.project.name, if app.session.dirty { " •" } else { "" });
+                let title = format!("{}{}", app.session.project.name, if app.session.dirty() { " •" } else { "" });
                 let sub = format!("  —  {}", app.session.map().name);
                 let (title_w, sub_w) = (text_w(ui, &title, semibold(12.5)), text_w(ui, &sub, regular(12.0)));
                 let (a, b) = (qat_end + 8.0, sr.min.x - 16.0);
@@ -486,6 +486,12 @@ fn parse_scale(text: &str) -> Option<f64> {
 
 /// Global keyboard shortcuts.
 pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
+    // Behind a dialog (Save changes?, Recover unsaved work?, Command Search…) the keys are the
+    // dialog's: Escape answers it rather than switching tools, and Ctrl+N can't start what it
+    // asks about.
+    if ctx.memory(|m| m.top_modal_layer()).is_some() {
+        return;
+    }
     crate::modelbuilder::shortcuts(app, ctx);
     // The search box was typed in until egui took its focus away on Escape: that Escape clears
     // the box, not the tool.
@@ -548,10 +554,6 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
         if id == "tool.set" {
             app.map.cancel_sketch();
             app.layout.cancel_tool();
-            if app.ui.command_search.is_some() {
-                app.ui.command_search = None;
-                continue;
-            }
         }
         // An arrow key nudged the selected layout element (unless it's locked): a held key, or
         // taps close together, are one step to undo.
@@ -626,7 +628,7 @@ pub fn shortcuts(app: &mut RustGisApp, ctx: &egui::Context) {
             }
             continue;
         }
-        let _ = app.run(id, p);
+        let _ = app.run_by_user(id, p);
     }
 }
 
@@ -1003,7 +1005,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
             let _ = app.run("ui.pane.workflows", json!({"section": section}));
         } else if let Some(action) = search_action(&id) {
             let _ = match action {
-                SearchAction::Command(command) => app.run(command, Value::Null),
+                SearchAction::Command(command) => app.run_by_user(command, Value::Null),
                 SearchAction::Dialog(name) => app.run("ui.dialog", json!({"name": name})),
                 SearchAction::OpenItem(kind) => app.run("ui.openItem", json!({"kind": kind})),
                 SearchAction::SaveItem(kind) => app.run("ui.saveItem", json!({"kind": kind})),
@@ -1014,7 +1016,7 @@ pub fn command_search(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
             };
         } else {
-            let _ = app.run(&id, Value::Null);
+            let _ = app.run_by_user(&id, Value::Null);
         }
     }
     if keep {

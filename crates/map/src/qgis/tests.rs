@@ -309,6 +309,48 @@ fn merged_categories_and_dashes_carry_over() {
 }
 
 #[test]
+fn a_labels_buffer_and_letter_spacing_carry_over_in_their_units() {
+    let qml = |text: &str| {
+        format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1"/></symbol></symbols></renderer-v2>
+            <labeling type="simple"><settings>{text}</settings></labeling></qgis>"#
+        )
+    };
+    let read = |text: &str| {
+        let mut report = Report::default();
+        let s = read_style(&qml(text), "Water", &mut report).unwrap();
+        (s.labels.unwrap().default, report)
+    };
+    // SMV25's: 0.5 mm of white, letters 0.5 pt apart.
+    let (c, report) = read(
+        r#"<text-style fieldName="name" fontSize="9" fontSizeUnit="Point" fontLetterSpacing="0.5">
+        <text-buffer bufferDraw="1" bufferSize="0.5" bufferSizeUnits="MM" bufferColor="255,255,255,255,rgb:1,1,1,1" bufferOpacity="1" bufferJoinStyle="128"/></text-style>"#,
+    );
+    assert!(c.halo && c.halo_color == Some(Rgba::rgb(255, 255, 255)) && c.spacing == 0.5, "{c:?}");
+    assert!((c.halo_width.unwrap() - 0.5 * 72.0 / 25.4).abs() < 1e-4, "{:?}", c.halo_width);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // Half see-through yellow, in points; spacing in the size's millimetres; corners not round.
+    let (c, report) = read(
+        r#"<text-style fieldName="name" fontSize="3" fontSizeUnit="MM" fontLetterSpacing="1">
+        <text-buffer bufferDraw="1" bufferSize="2" bufferSizeUnits="Point" bufferColor="255,238,0,255" bufferOpacity="0.5" bufferJoinStyle="64" bufferBlendMode="13"/></text-style>"#,
+    );
+    assert_eq!((c.halo_color, c.halo_width), (Some(Rgba::new(255, 238, 0, 128)), Some(2.0)));
+    assert!((c.spacing - 72.0 / 25.4).abs() < 1e-4, "{}", c.spacing);
+    assert!(report.notes.iter().any(|n| n.text.contains("drawn round")), "{:?}", report.notes);
+    assert!(report.notes.iter().any(|n| n.text.contains("blended")), "{:?}", report.notes);
+    // A buffer that says nothing: QGIS's own, 1 mm of white; one switched off: no halo at all.
+    let (c, _) = read(r#"<text-style fieldName="name"><text-buffer bufferDraw="1"/></text-style>"#);
+    assert_eq!(c.halo_color, Some(Rgba::rgb(255, 255, 255)));
+    assert!((c.halo_width.unwrap() - 72.0 / 25.4).abs() < 1e-4);
+    let (c, _) = read(r#"<text-style fieldName="name" fontLetterSpacing="junk"><text-buffer bufferDraw="0" bufferSize="3"/></text-style>"#);
+    assert_eq!((c.halo, c.halo_color, c.halo_width, c.spacing), (false, None, None, 0.0));
+    // Crafted sizes stay within RustGIS's ranges.
+    let (c, _) =
+        read(r#"<text-style fieldName="name" fontLetterSpacing="1e30"><text-buffer bufferDraw="1" bufferSize="1e30"/></text-style>"#);
+    assert_eq!((c.halo_width, c.spacing), (Some(10.0), 50.0));
+}
+
+#[test]
 fn files_of_qgis_1_and_2_read_by_their_old_names() {
     // Before QGIS 3: no layer tree but a legend, the canvas's coordinate system, scale limits named
     // the other way round, opacity as transparency, and QGIS 2's names for line and fill settings.
@@ -408,7 +450,6 @@ fn what_rustgis_has_no_place_for_is_noted() {
         "diagrams",
         "order-by",
         "draw effects",
-        "label halos",
         "wrapped labels",
         "label distances",
         "label offsets",

@@ -23,7 +23,7 @@ const MAX_TEXT: usize = 2 * ogc::MAX_INFO_BYTES;
 pub(super) fn commands() -> Vec<C> {
     vec![
         C::new("identify.featureInfo", "Identify WMS Layer", "Home › Inspect", feature_info).view().params(
-            r#"{"layer": "a WMS tile layer's name", "lon"?, "lat"?: the point (for a request), "text"?: "the GetFeatureInfo answer, when already fetched (identify lists the requests)", "capabilities"?: "the service's capabilities document, when the layer doesn't know its request (identify then asks for it)", "request"?: bool (only say what to fetch next: {url} or {capabilities})} → results, as identify's (with "tileLayer"), or with request, what to fetch"#,
+            r#"{"layer": "a WMS tile layer's name", "lon"?, "lat"?: the point (for a request), "text"?: "the GetFeatureInfo answer, when already fetched (identify lists the requests)", "url"?: "the request text answers: with lon and lat, the service's error in its format gives the request in the next format the layer offers ({url}), and features answered in a later format keep the layer asking in it", "capabilities"?: "the service's capabilities document, when the layer doesn't know its request (identify then asks for it)", "request"?: bool (only say what to fetch next: {url} or {capabilities})} → results, as identify's (with "tileLayer"), or with request or after an error, what to fetch"#,
         ),
     ]
 }
@@ -67,17 +67,21 @@ fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, 
         return None;
     }
     match &t.feature_info {
-        // The request's address comes from the capabilities (hostile input): it must not reach
-        // into the local network from a service on the web.
-        Some(fi) => fi
-            .request(at.x, at.y, m_per_px)
-            .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
-            .map(|url| json!({"tileLayer": t.name, "url": url})),
+        Some(fi) => ask(t, fi, at, m_per_px),
         // The capabilities address comes from the layer's template (a project's, untrusted too).
         None => ogc::wms_layer_of(&t.url)
             .filter(|(caps, _)| crate::render::rustgis_tiles::address::check(caps, Some(&t.url)).is_ok())
             .map(|(caps, _)| json!({"tileLayer": t.name, "capabilities": caps})),
     }
+}
+
+/// A WMS tile layer's GetFeatureInfo request for a point, in `fi`'s terms.
+fn ask(t: &rustgis_map::tiles::TileLayer, fi: &FeatureInfo, at: Coord, m_per_px: f64) -> Option<Value> {
+    // The request's address comes from the capabilities (hostile input): it must not reach into
+    // the local network from a service on the web.
+    fi.request(at.x, at.y, m_per_px)
+        .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
+        .map(|url| json!({"tileLayer": t.name, "url": url}))
 }
 
 /// The WMS tile layers drawn at a point to ask what is there, topmost first (only the topmost
@@ -157,7 +161,26 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
         if text.len() > MAX_TEXT {
             return Err(named(format!("the answer is larger than {} MB", MAX_TEXT >> 20)));
         }
-        return Ok(results(&name, ogc::read_feature_info(text.as_bytes()).map_err(named)?));
+        let asked = ps(p, "url");
+        return match ogc::read_feature_info(text.as_bytes()) {
+            Ok(features) => {
+                if let Some(request) = asked {
+                    answered(s, index, request);
+                }
+                Ok(results(&name, features))
+            }
+            // The service's error in the format asked in: the request in the next, for the point.
+            Err(e) => {
+                let point = f(p, "lon").zip(f(p, "lat")).and_then(|(lon, lat)| merc_at(s, lon, lat).map(|m| (lon, lat, m)));
+                let retry = match (asked, point) {
+                    (Some(request), Some((lon, lat, (at, m_per_px)))) if ogc::may_answer_in_another_format(text.as_bytes()) => {
+                        retry(s, index, request, lon, lat, at, m_per_px)
+                    }
+                    _ => None,
+                };
+                retry.ok_or_else(|| named(e))
+            }
+        };
     }
     let lon = f(p, "lon").ok_or("lon is required")?;
     let lat = f(p, "lat").ok_or("lat is required")?;
@@ -182,9 +205,42 @@ fn feature_info(s: &mut Session, p: &Value) -> CmdResult {
             learn(s, index, &fetch(&caps)?).map_err(named)?;
             step = next(s);
         }
-        match step.as_ref().and_then(|v| v["url"].as_str()) {
-            Some(url) => Ok(results(&name, ogc::read_feature_info(&fetch(url)?).map_err(named)?)),
-            None => Ok(json!({"results": []})),
+        // Each of the service's errors asks in a format read after the last, so this ends.
+        loop {
+            let Some(url) = step.as_ref().and_then(|v| v["url"].as_str()).map(str::to_string) else {
+                return Ok(json!({"results": []}));
+            };
+            let answer = fetch(&url)?;
+            match ogc::read_feature_info(&answer) {
+                Ok(features) => {
+                    answered(s, index, &url);
+                    return Ok(results(&name, features));
+                }
+                Err(e) => match retry(s, index, &url, lon, lat, at, m_per_px) {
+                    Some(next) if ogc::may_answer_in_another_format(&answer) => step = Some(next),
+                    _ => return Err(named(e)),
+                },
+            }
         }
+    }
+}
+
+/// After the service answered `request` with its error: the request in the next answer format
+/// the layer offers, when there is one. The layer keeps its own until another format answers.
+fn retry(s: &Session, index: usize, request: &str, lon: f64, lat: f64, at: Coord, m_per_px: f64) -> Option<Value> {
+    let t = s.map().tiles.get(index)?;
+    if t.bounds.is_some_and(|[w, s, e, n]| !(w <= lon && lon <= e && s <= lat && lat <= n)) {
+        return None;
+    }
+    let next = t.feature_info.as_ref()?.retry_after(request)?;
+    ask(t, &next, at, m_per_px)
+}
+
+/// After the service answered `request` with features (or none): a layer asked in a later format
+/// than its own (a retry that worked) asks in that one for the rest of the session.
+fn answered(s: &mut Session, index: usize, request: &str) {
+    let Some(t) = s.map_mut().tiles.get_mut(index) else { return };
+    if let Some(next) = t.feature_info.as_ref().and_then(|fi| fi.answered(request)) {
+        t.feature_info = Some(next);
     }
 }

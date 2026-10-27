@@ -232,13 +232,13 @@ fn later_rule_rejection_rolls_back_the_whole_batch() {
     s.run("edit.undo", &Value::Null).unwrap();
     let before = serde_json::to_value(&s.project).unwrap();
     let counts = s.edit_counts.clone();
-    let dirty = s.dirty;
+    let dirty = s.dirty();
     assert!(s.can_redo());
     let error = s.run("edit.moveSharedVertex", &json!({"layer":id,"row":0,"index":0,"lon":0.2,"lat":0.3})).unwrap_err();
     assert!(error.contains("reject later parcel"));
     assert_eq!(serde_json::to_value(&s.project).unwrap(), before);
     assert_eq!(s.edit_counts, counts);
-    assert_eq!(s.dirty, dirty);
+    assert_eq!(s.dirty(), dirty);
     assert_eq!(s.undo_depth(), 0);
     assert!(s.can_redo());
 }
@@ -250,7 +250,7 @@ fn same_position_runs_calculations_and_keeps_existing_undo_behaviour() {
     assert_eq!(move_to(&mut s, id, Coord::new(0., 0.))["modified"], 0);
     assert_eq!(s.edit_counts[&id].modified, 4);
     assert_eq!(s.undo_depth(), 1);
-    assert!(s.dirty);
+    assert!(s.dirty());
     s.map_mut().layer_mut(id).unwrap().design.rules.push(AttributeRule {
         name: "increment".into(),
         kind: RuleKind::Calculation,

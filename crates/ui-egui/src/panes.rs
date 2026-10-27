@@ -2288,7 +2288,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
                 } else if rustgis_engine::project::opens_as_project(&name) {
-                    let _ = app.run("project.open", json!({"path": path.display().to_string()}));
+                    let _ = app.run_by_user("project.open", json!({"path": path.display().to_string()}));
                     app.map.invalidate();
                 } else if name.ends_with(".rgismap") || name.ends_with(".rgismpk") {
                     let _ = app.run("map.import", json!({"path": path.display().to_string()}));
@@ -3393,6 +3393,7 @@ pub fn tool_icon(id: &str) -> &'static str {
         "buffer" => "buffer",
         "clip" => "clip",
         "erase" => "erase",
+        "intersect" => "intersect",
         "dissolve" => "dissolve",
         "convexHull" => "hull",
         "featureToPoint" => "centroid",
@@ -3642,13 +3643,15 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             legend_list(app, ui, &l, t);
         }
         Renderer::Graduated { field, breaks, ramp, method, min, .. } => {
+            // Re-classing keeps the classes asked for, not the fewer some methods found.
+            let asked = l.renderer.classes_asked();
             field_combo(app, ui, "Field", field, &numeric, "graduated");
             ui.horizontal(|ui| {
                 let input_label = ui.label(tl!("Method"));
                 egui::ComboBox::from_id_salt("sym_method").selected_text(tl!(method.label())).width(180.0).show_ui(ui, |ui| {
-                    for m in ClassMethod::ALL {
+                    for m in methods_by_name() {
                         if ui.selectable_label(m == *method, tl!(m.label())).clicked() {
-                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": breaks.len(), "ramp": ramp.name()}));
+                            let _ = app.run("layer.symbology", json!({"type": "graduated", "field": field, "method": format!("{m:?}"), "classes": asked, "ramp": ramp.name()}));
                         }
                     }
                 }).response.labelled_by(input_label.id);
@@ -3658,7 +3661,7 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             } else {
                 ui.horizontal(|ui| {
                     let input_label = ui.label(tl!("Classes"));
-                    let mut k = breaks.len();
+                    let mut k = asked;
                     if ui.add(egui::DragValue::new(&mut k).range(1..=12)).labelled_by(input_label.id).changed() {
                         let _ = app.run(
                             "layer.symbology",
@@ -3755,6 +3758,13 @@ fn transparency_drag(app: &mut RustGisApp, ui: &Ui, r: &egui::Response, l: &Laye
             let _ = app.run("layer.transparency", json!({"value": x}));
         },
     );
+}
+
+/// The classification methods in alphabetical order of their names in the interface language.
+fn methods_by_name() -> Vec<ClassMethod> {
+    let mut m = ClassMethod::ALL.to_vec();
+    m.sort_by_cached_key(|m| crate::i18n::t_raw(m.label()).to_lowercase());
+    m
 }
 
 fn field_combo(app: &mut RustGisApp, ui: &mut Ui, label: &str, cur: &str, fields: &[String], kind: &str) {
@@ -5060,7 +5070,7 @@ fn save_history_script(app: &mut RustGisApp) {
                 return;
             }
             // The script opens the project's saved file, which lacks what changed since.
-            if app.session.dirty || app.session.path.is_none() {
+            if app.session.dirty() || app.session.path.is_none() {
                 app.session.notify(tl!("Save the project too: the script opens its saved file, without changes made since."), false);
             }
         }
@@ -5368,7 +5378,7 @@ fn raster_symbology(app: &mut RustGisApp, ui: &mut Ui, l: &Layer, t: &Tokens) {
                     .width(180.0)
                     .show_ui(ui, |ui| {
                         // Manual bounds are for Graduated Colors; a raster's are worked out.
-                        for mm in ClassMethod::ALL.into_iter().filter(|m| *m != ClassMethod::Manual) {
+                        for mm in methods_by_name().into_iter().filter(|m| *m != ClassMethod::Manual) {
                             if ui.selectable_label(mm == m, tl!(mm.label())).clicked() {
                                 let _ = app.run(
                                     "raster.symbology",

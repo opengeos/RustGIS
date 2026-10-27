@@ -801,7 +801,7 @@ fn start_up_preferences() {
     app.start(&Default::default()).unwrap();
     assert!(app.session.map().layers.is_empty());
     assert_eq!(app.session.map().projection.code(), "EPSG:3010");
-    assert!(!app.session.dirty && !app.session.can_undo());
+    assert!(!app.session.dirty() && !app.session.can_undo());
 
     // The web app's `?projection=robinson` without `?blank`: the sample still goes when the
     // preference says blank; an explicit `Some(false)` keeps it.
@@ -929,7 +929,7 @@ fn start_with_a_project_file_or_the_last_one() {
     assert_eq!(started.session.path.as_deref(), Some(a.as_path()));
     assert_eq!(started.session.map().projection.code(), "EPSG:3010");
     assert!(started.ui.start_view.is_none(), "the Start-up extent isn't applied");
-    assert!(!started.session.dirty && !started.session.can_undo());
+    assert!(!started.session.dirty() && !started.session.can_undo());
     // A shell's blank wins: a file on the command line (true) or --sample (false).
     for (blank, sample) in [(true, false), (false, true)] {
         let mut shell = RustGisApp::with_sample().with_services(services());
@@ -2219,7 +2219,7 @@ fn web_save_asks_for_the_file_name() {
     assert_eq!(h.state().dialogs.open, None);
     assert_eq!(names(&got), ["Trip plan.rgis"]);
     assert_eq!(h.state().session.project.name, "Trip plan");
-    assert!(!h.state().session.dirty);
+    assert!(!h.state().session.dirty());
     // Saved once: Save downloads under that name again without asking; Save As asks.
     h.state_mut().run("ui.save", json!(null)).unwrap();
     assert_eq!(h.state().dialogs.open, None);
@@ -2261,7 +2261,7 @@ fn save_project_dialog_needs_downloads() {
     h.step();
     assert!(h.state().dialogs.error.is_some());
     assert_eq!(h.state().session.project.name, "World Atlas");
-    assert!(h.state().session.dirty);
+    assert!(h.state().session.dirty());
 }
 
 #[test]
