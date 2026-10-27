@@ -144,7 +144,7 @@ fn picture(ui: &mut Ui, index: usize, name: &str, id: egui::TextureId, size: egu
         let room = (ui.available_width() - 8.0).max(16.0);
         let image = |ui: &mut Ui| {
             ui.add(egui::Image::new(egui::load::SizedTexture::new(id, size)).sense(Sense::hover()))
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, format!("{}: {name}", tl!("Legend"))));
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, crate::i18n::fmt("Legend: {name}", &[("name", name)])));
         };
         if size.x > room {
             // Its own scroll for each layer, even two showing the same picture.
