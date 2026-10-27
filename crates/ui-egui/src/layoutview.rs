@@ -6,7 +6,7 @@
 
 use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use rustgis_engine::map::layout::{
-    ArrowStyle, CoordFormat, ElementKind, Grid, GridStyle, Layout, LineHead, MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH,
+    Arrange, ArrowStyle, CoordFormat, ElementKind, Grid, GridStyle, Layout, LineHead, MAX_COLORBAR_TICKS, MAX_FRAME_SCALE, MAX_GRID_WIDTH,
     MAX_SCALE_DIVISIONS, MAX_TICK_MM, MIN_FRAME_SCALE, Orientation, PT_PER_MM, ScaleBarStyle, ScaleUnits, TickSide, frame_camera,
     line_angle, line_length,
 };
@@ -172,6 +172,12 @@ fn pan_preview(app: &mut RustGisApp, ctx: &egui::Context, layout: &Layout, id: u
 const FRAME_ZOOM_SETTLE: f64 = 0.35;
 
 impl LayoutView {
+    /// Draws the page again on the next frame, though the project hasn't changed (the installed
+    /// fonts a text names have just been indexed).
+    pub fn redraw(&mut self) {
+        self.key = None;
+    }
+
     /// Stops drawing a polygon or lasso frame, or navigating map frames (Esc).
     pub fn cancel_tool(&mut self) {
         self.navigate = false;
@@ -1648,11 +1654,11 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
         );
     });
     // A layout's text: the form a text graphic has too (#516, #535), with the page's dynamic text.
-    if let ElementKind::Text { text, size, color, bold, italic, align, letter_spacing, font } = &e.kind {
+    if let ElementKind::Text { text, size, color, bold, italic, align, letter_spacing, font, font_name } = &e.kind {
         let key = (li, id, "text");
         let mut buf = app.layout.typing.remove(&key).unwrap_or_else(|| text.clone());
         let (mut sz, mut c, mut bb) = (*size, crate::theme::c32(*color), *bold);
-        let (mut it, mut al, mut ls, mut fam) = (*italic, *align, *letter_spacing, *font);
+        let (mut it, mut al, mut ls, mut fam, mut named) = (*italic, *align, *letter_spacing, *font, font_name.clone());
         let tokens = [rustgis_engine::map::graphics::TOKENS, rustgis_engine::map::layout::PAGE_TOKENS];
         let fields = crate::textform::Fields {
             text: &mut buf,
@@ -1663,6 +1669,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             align: Some(&mut al),
             letter_spacing: Some(&mut ls),
             font: Some(&mut fam),
+            font_name: Some(&mut named),
+            named_fonts: true,
             select: false,
         };
         let settled = crate::textform::section(ui, "Text", |ui| crate::textform::show(ui, ("layout_text", li, id), &tokens, fields))
@@ -1691,7 +1699,12 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
             update(app, json!({"letterSpacing": ls}));
         }
         if settled.font {
-            update(app, json!({"font": fam.code()}));
+            // A named family with its fallback (#762), else the generic one.
+            let font = match &named {
+                Some(n) => json!({"font": n, "fallback": fam.code()}),
+                None => json!({"font": fam.code()}),
+            };
+            update(app, font);
         }
     }
     // The layers a legend lists: a checkbox for each vector layer of its frame's map, ticked when
@@ -1789,7 +1802,8 @@ fn properties(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize) {
 }
 
 /// Duplicate and Delete, under the properties: a locked element can be copied (the copy isn't
-/// locked) but not deleted, nor a frame with a locked surround.
+/// locked) but not deleted, nor a frame with a locked surround. Then the drawing order: Bring to
+/// Front, Bring Forward, Send Backward, Send to Back.
 fn element_actions(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize, id: u32) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -1806,6 +1820,27 @@ fn element_actions(app: &mut RustGisApp, ui: &mut Ui, layout: &Layout, li: usize
         {
             let _ = app.run("layout.removeElement", json!({"layout": li, "element": id}));
             app.layout.selected = None;
+        }
+    });
+    // The drawing order: a legend brought to the front is drawn over the map frame under it.
+    // A step it can't take (already on top, or at the bottom) is greyed, as is a locked element.
+    let Some((at, n)) = layout.draw_order(id) else { return };
+    let locked = layout.element(id).is_some_and(|e| e.locked);
+    ui.horizontal_wrapped(|ui| {
+        for to in Arrange::ALL {
+            let can = match to {
+                Arrange::Front | Arrange::Forward => at + 1 < n,
+                Arrange::Backward | Arrange::Back => at > 0,
+            };
+            let tip = match to {
+                Arrange::Front => "Draw it over every other element",
+                Arrange::Forward => "Draw it over the element above it",
+                Arrange::Backward => "Draw it under the element below it",
+                Arrange::Back => "Draw it under every other element",
+            };
+            if ui.add_enabled(can && !locked, egui::Button::new(tl!(to.label()))).on_hover_text(tl!(tip)).clicked() {
+                let _ = app.run("layout.arrange", json!({"layout": li, "element": id, "to": to.code()}));
+            }
         }
     });
 }
@@ -2264,6 +2299,39 @@ mod tests {
         h.event(key(Key::ArrowUp, Modifiers::NONE, false));
         h.step();
         assert_eq!(at(&h), (0.0, 0.0));
+    }
+
+    /// The selected element's Bring to Front and Send to Back buttons move it in the drawing
+    /// order; a step it can't take is greyed.
+    #[test]
+    fn the_arrange_buttons_move_an_element_up_and_down() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut app = RustGisApp::with_sample();
+        app.run("layout.new", json!({"name": "Arrange"})).unwrap();
+        let li = app.session.active_layout.unwrap();
+        let frame = app.session.project.layouts[li].first_frame().unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(600.0, 200.0)).build_ui_state(
+            move |ui, app: &mut RustGisApp| {
+                let layout = app.session.project.layouts[li].clone();
+                super::element_actions(app, ui, &layout, li, frame);
+            },
+            app,
+        );
+        h.run_steps(2);
+        let at = |h: &egui_kittest::Harness<'_, RustGisApp>| h.state().session.project.layouts[li].draw_order(frame).unwrap();
+        let n = at(&h).1;
+        h.get_by_label("Bring to Front").click();
+        h.run_steps(2);
+        assert_eq!(at(&h), (n - 1, n));
+        // On top, it can't go further up.
+        assert!(h.get_by_label("Bring Forward").accesskit_node().is_disabled());
+        h.get_by_label("Send Backward").click();
+        h.run_steps(2);
+        assert_eq!(at(&h).0, n - 2);
+        h.get_by_label("Send to Back").click();
+        h.run_steps(2);
+        assert_eq!(at(&h).0, 0);
+        assert!(h.get_by_label("Send to Back").accesskit_node().is_disabled());
     }
 
     /// Ctrl+D (Cmd+D) duplicates the selected element and selects the copy; Backspace, the Mac's

@@ -423,6 +423,46 @@ impl LineDir {
     }
 }
 
+/// Where [`Layout::arrange`] moves an element in the drawing order, in which later elements are
+/// drawn over earlier ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Arrange {
+    /// Over every other element.
+    Front,
+    /// Over the element above it.
+    Forward,
+    /// Under the element below it.
+    Backward,
+    /// Under every other element.
+    Back,
+}
+
+impl Arrange {
+    pub const ALL: [Arrange; 4] = [Arrange::Front, Arrange::Forward, Arrange::Backward, Arrange::Back];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Arrange::Front => "front",
+            Arrange::Forward => "forward",
+            Arrange::Backward => "backward",
+            Arrange::Back => "back",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Arrange::Front => "Bring to Front",
+            Arrange::Forward => "Bring Forward",
+            Arrange::Backward => "Send Backward",
+            Arrange::Back => "Send to Back",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Arrange> {
+        Arrange::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
 /// Which ends of a line element carry an arrowhead: of the ends [`LineDir::ends`] gives, the
 /// start is the first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -813,9 +853,15 @@ pub enum ElementKind {
         /// Space added between letters, in points (spaced-out ocean names); negative tightens.
         #[serde(default, skip_serializing_if = "is_zero")]
         letter_spacing: f64,
-        /// Sans-serif or serif; left out when sans, so layouts saved before keep their bytes.
+        /// Sans-serif or serif; left out when sans, so layouts saved before keep their bytes. With
+        /// `font_name`, the family drawn where that one isn't installed.
         #[serde(default, skip_serializing_if = "is_sans")]
         font: FontFamily,
+        /// An installed font family, by the name the font gives it ("Garamond", #762): drawn in
+        /// it where it is installed, else in `font`. Left out when none; kept as a label's font is
+        /// (trimmed, bounded, none when not a name).
+        #[serde(default, deserialize_with = "crate::symbology::de_font", skip_serializing_if = "Option::is_none")]
+        font_name: Option<String>,
     },
     Picture {
         /// Base64 PNG or JPEG.
@@ -877,6 +923,7 @@ impl ElementKind {
             align: TextAlign::Left,
             letter_spacing: 0.0,
             font: FontFamily::Sans,
+            font_name: None,
         }
     }
 
@@ -1060,6 +1107,28 @@ impl Layout {
     /// The topmost element at a page point (mm).
     pub fn hit(&self, x: f64, y: f64) -> Option<u32> {
         self.elements.iter().rev().find(|e| e.visible && e.contains(x, y)).map(|e| e.id)
+    }
+
+    /// Where element `id` is drawn among the others, and how many there are: 0 is drawn first,
+    /// under the rest, and the last over them.
+    pub fn draw_order(&self, id: u32) -> Option<(usize, usize)> {
+        Some((self.elements.iter().position(|e| e.id == id)?, self.elements.len()))
+    }
+
+    /// Moves element `id` in the drawing order: over every other, one place up, one down, or
+    /// under every other. Its new place, or None when there's no such element.
+    pub fn arrange(&mut self, id: u32, to: Arrange) -> Option<usize> {
+        let (i, n) = self.draw_order(id)?;
+        let last = n - 1;
+        let j = match to {
+            Arrange::Front => last,
+            Arrange::Forward => (i + 1).min(last),
+            Arrange::Backward => i.saturating_sub(1),
+            Arrange::Back => 0,
+        };
+        let e = self.elements.remove(i);
+        self.elements.insert(j, e);
+        Some(j)
     }
 
     /// The locked element that removing `id` would take with it: the element itself, or one of
@@ -1341,6 +1410,29 @@ pub fn color_scale(rl: &RasterLayer) -> Option<ColorScale> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elements_are_arranged_in_the_drawing_order() {
+        let mut l = Layout::new("L", 100.0, 100.0);
+        let rect = || ElementKind::Rectangle { fill: Rgba::rgb(0, 0, 0), outline: Rgba::rgb(0, 0, 0), width: 0.0, radius: 0.0 };
+        let ids: Vec<u32> = (0..4).map(|i| l.add(format!("E{i}"), (10.0, 10.0, 50.0, 50.0), rect())).collect();
+        let order = |l: &Layout| l.elements.iter().map(|e| e.id).collect::<Vec<_>>();
+        // All four overlap: the one drawn last is the one a click picks.
+        assert_eq!(l.hit(20.0, 20.0), Some(ids[3]));
+        assert_eq!(l.arrange(ids[0], Arrange::Front), Some(3));
+        assert_eq!(order(&l), [ids[1], ids[2], ids[3], ids[0]]);
+        assert_eq!(l.hit(20.0, 20.0), Some(ids[0]), "brought to the front, it's on top");
+        assert_eq!(l.arrange(ids[0], Arrange::Backward), Some(2));
+        assert_eq!(l.arrange(ids[0], Arrange::Back), Some(0));
+        assert_eq!(l.arrange(ids[0], Arrange::Forward), Some(1));
+        assert_eq!(order(&l), [ids[1], ids[0], ids[2], ids[3]]);
+        // At an end, a step that way stays put.
+        assert_eq!(l.arrange(ids[3], Arrange::Forward), Some(3));
+        assert_eq!(l.arrange(ids[1], Arrange::Backward), Some(0));
+        assert_eq!(l.arrange(999, Arrange::Front), None);
+        assert_eq!(l.draw_order(ids[0]), Some((1, 4)));
+        assert_eq!(Arrange::from_name(" Back "), Some(Arrange::Back));
+    }
 
     #[test]
     fn lines_turn_to_any_angle_and_keep_their_length() {

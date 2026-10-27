@@ -1953,7 +1953,7 @@ mod tests {
         assert!(h.keys.starts_with(" {layer?, class?, size?"), "{}", h.keys);
         assert_eq!(h.label, "Text Symbol");
         assert!(h.params.iter().any(|p| p == r#""size"?: number"#), "{:?}", h.params);
-        assert_eq!(h.location, "Style › Text Symbol");
+        assert_eq!(h.location, "Labeling › Text Symbol");
         // Required keys go bare.
         assert!(super::help(&app.session, "labels.field").unwrap().keys.contains("field}"));
         // No parameters: the id alone.

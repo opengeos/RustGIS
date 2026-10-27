@@ -74,6 +74,59 @@ pub struct Popup {
     /// The map it was opened on (the project's `active_map` then): layer and feature ids belong to
     /// a map, and a duplicated map has the same ones.
     pub map: usize,
+    /// The project it was opened on (`Session::opened`): answers still on their way when another
+    /// project opens are dropped.
+    pub opened: u64,
+    /// The WMS layers being asked what is at the point, whose features join the list.
+    pub asks: Vec<Ask>,
+}
+
+/// A WMS layer asked what is at a popup's point (GetFeatureInfo), its answer on the way: the
+/// request's, or first its service's capabilities (a layer from a project doesn't know its request).
+pub struct Ask {
+    layer: String,
+    /// The other layers waiting for the same capabilities: fetched and read once for all.
+    also: Vec<String>,
+    capabilities: bool,
+    /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
+    /// ask next after the service's error.
+    request: Option<String>,
+    slot: crate::Slot<Result<Vec<u8>, String>>,
+}
+
+impl Popup {
+    /// A popup for what identify found at `at`, asking the WMS layers it lists.
+    pub fn new(info: Value, at: Coord, map: usize, opened: u64) -> Popup {
+        let mut asks: Vec<Ask> = Vec::new();
+        // The capabilities each fetch is for: layers of one service share it.
+        let mut fetched: Vec<(String, usize)> = Vec::new();
+        for a in info["featureInfo"].as_array().into_iter().flatten() {
+            let Some(layer) = a["tileLayer"].as_str().map(str::to_string) else { continue };
+            let (url, capabilities) = match (a["url"].as_str(), a["capabilities"].as_str()) {
+                (Some(u), _) => (u, false),
+                (None, Some(c)) => (c, true),
+                _ => continue,
+            };
+            if capabilities && let Some(&(_, i)) = fetched.iter().find(|(c, _)| c == url) {
+                if let Some(ask) = asks.get_mut(i) {
+                    ask.also.push(layer);
+                }
+                continue;
+            }
+            if capabilities {
+                fetched.push((url.to_string(), asks.len()));
+            }
+            let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+            let request = (!capabilities).then(|| url.to_string());
+            asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
+        }
+        Popup { info, at, index: 0, map, opened, asks }
+    }
+}
+
+/// Whether a popup's value is a feature or pixel found, not only WMS layers still being asked.
+fn is_found(v: &Value) -> bool {
+    v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
 /// A notice shown as a toast.
@@ -147,6 +200,8 @@ pub struct MapView {
     pub vertex_drag: Option<crate::vertexedit::VertexDrag>,
     /// Non-owning source identity for the held vertex gesture; never persisted with the project.
     pub(crate) vertex_drag_owner: Option<crate::vertexedit::DragOwner>,
+    /// Session-only opt-in for coincident polygon moves; never saved with a project or preference.
+    pub move_shared_vertices: bool,
     /// The magnifying lens follows the pointer.
     pub magnifier: bool,
     pub popup: Option<Popup>,
@@ -243,6 +298,7 @@ impl Default for MapView {
             vertex: None,
             vertex_drag: None,
             vertex_drag_owner: None,
+            move_shared_vertices: false,
             magnifier: false,
             popup: None,
             popup_rev: 0,
@@ -1288,10 +1344,10 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
                 .with_override_text_color(color)
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
-        if let Some(h) = l.halo.filter(|_| halo) {
-            let hc = c32(h);
-            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-                p.add(shape(vec2(dx, dy), hc));
+        if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
+            let (offsets, hc) = halo_coats(l, h);
+            for offset in offsets {
+                p.add(shape(offset, hc));
             }
         }
         if text {
@@ -1305,15 +1361,57 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
         let cyan = c32(rustgis_engine::render::SELECTION);
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
-    if let Some(h) = l.halo.filter(|_| halo) {
-        let hc = c32(h);
-        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-            p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
+    if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
+        let (offsets, hc) = halo_coats(l, h);
+        for offset in offsets {
+            p.galley_with_override_text_color(pos + offset, galley.clone(), hc);
         }
     }
     if text {
         p.galley_with_override_text_color(pos, galley, c32(l.color));
     }
+}
+
+/// The most copies of a label's text a halo of its own width is drawn with.
+const MAX_HALO_COATS: usize = 64;
+
+/// Where a label's halo of colour `h` is drawn round its text (points), and in what colour each
+/// copy: a thin ring, or for a halo of its own width rings about 1.5 points apart out to that
+/// width (1.33 × in screen points, as the text's size), copies about a point apart round each
+/// (at most [`MAX_HALO_COATS`] in all, shared among the rings by their length), in a see-through
+/// colour shared among the rings. A halo of a few points (QGIS's usual buffer) is solid with few
+/// copies; a very wide one is approximated, and a see-through one is about one coat (copies
+/// overlap near the letters, so it is a little darker there): an export draws both exactly.
+fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>, Color32) {
+    let Some(width) = l.halo_width else {
+        let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
+        return (ring.into_iter().map(|(x, y)| vec2(x, y)).collect(), c32(h));
+    };
+    let reach = rustgis_engine::render::halo_reach(width) * 1.33;
+    // No width, or one that isn't a number: no halo.
+    if reach.is_nan() || reach <= 0.0 {
+        return (Vec::new(), c32(h));
+    }
+    let rings = ((reach / 1.5).ceil() as usize).clamp(1, 6);
+    let step = reach / rings as f32;
+    // Ring i (outermost first) has radius reach - i·step; copies go to each by its length.
+    let radii: Vec<f32> = (0..rings).map(|i| reach - i as f32 * step).collect();
+    let total: f32 = radii.iter().sum();
+    let mut out = Vec::new();
+    for r in radii {
+        // A copy about a point apart round the ring, within its share of the budget (rounded down,
+        // so the copies stay within it; the innermost of at most six rings still gets three).
+        let share = ((MAX_HALO_COATS as f32 * r / total).floor() as usize).max(3);
+        let n = ((std::f32::consts::TAU * r).ceil() as usize).clamp(3, share);
+        out.extend((0..n).map(|k| {
+            let (sin, cos) = (std::f32::consts::TAU * k as f32 / n as f32).sin_cos();
+            vec2(r * cos, r * sin)
+        }));
+    }
+    // About one copy of each ring covers a pixel of the halo.
+    let a = f32::from(h.a()) / 255.0;
+    let each = if a < 1.0 { 1.0 - (1.0 - a).powf(1.0 / rings as f32) } else { 1.0 };
+    (out, c32(h.with_alpha((each * 255.0).round() as u8)))
 }
 
 /// The globe as seen in this view, when the map is a globe.
@@ -2206,8 +2304,12 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
                     Ok(v) if !v.is_null() => {
                         if let (Some(id), Some(row)) = (v["layerId"].as_u64(), v["row"].as_u64()) {
                             let _ = app.session.run("select.rows", &json!({"layer": id, "rows": [row]}));
+                        } else if !is_found(&v) {
+                            // Only WMS layers being asked: the click found nothing yet, so it clears
+                            // the selection as an empty click does.
+                            let _ = app.session.run("select.clear", &Value::Null);
                         }
-                        Some(Popup { info: v, at: c, index: 0, map: app.session.project.active_map })
+                        Some(Popup::new(v, c, app.session.project.active_map, app.session.opened))
                     }
                     _ => {
                         let _ = app.session.run("select.clear", &Value::Null);
@@ -2786,7 +2888,102 @@ fn follow_popup(app: &mut RustGisApp) {
     pp.info = info;
 }
 
+/// Adds what the WMS layers asked answer to the popup, asking a layer from a project once its
+/// service's capabilities say how; failures are told. The popup closes when nothing was found.
+fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
+    let (active, opened) = (app.session.project.active_map, app.session.opened);
+    let Some(pp) = &mut app.map.popup else { return };
+    if pp.asks.is_empty() {
+        return;
+    }
+    // Another map in view, or another project: the answers belong to layers no longer shown, and
+    // a layer of the same name there must not take them.
+    if pp.map != active || pp.opened != opened {
+        app.map.popup = None;
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let (lon, lat) = (pp.at.x, pp.at.y);
+    let mut landed = Vec::new();
+    pp.asks.retain_mut(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => {
+            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, a.request.take(), r));
+            false
+        }
+        None => true,
+    });
+    if landed.is_empty() {
+        return;
+    }
+    let mut found = Vec::new();
+    let mut next = Vec::new();
+    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
+    for (layer, also, capabilities, request, r) in landed {
+        // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
+        // first of a service's layers still there takes the capabilities for the rest.
+        let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
+        let Some(layer) = group.next() else { continue };
+        let also: Vec<String> = group.collect();
+        // The fetch's failure, or an answer that isn't text, is told here; the command tells its
+        // own errors (naming the layer).
+        let text = match r.and_then(|bytes| rustgis_engine::data::ogc::answer_text(&bytes).map(std::borrow::Cow::into_owned)) {
+            Ok(text) => text,
+            Err(e) => {
+                app.session.notify(crate::i18n::fmt("{layer}: {e}", &[("layer", &layer), ("e", &e)]), true);
+                continue;
+            }
+        };
+        let mut replies = Vec::new();
+        if capabilities {
+            let p = json!({"layer": layer, "lon": lon, "lat": lat, "capabilities": text, "request": true});
+            replies.push((layer, app.session.run("identify.featureInfo", &p)));
+            // The service's other layers learned their requests from the same capabilities.
+            if replies.iter().all(|(_, r)| r.is_ok()) {
+                for other in also {
+                    let p = json!({"layer": other, "lon": lon, "lat": lat, "request": true});
+                    let r = app.session.run("identify.featureInfo", &p);
+                    replies.push((other, r));
+                }
+            }
+        } else {
+            // With the request and the point: the service's error in one answer format asks again
+            // in the next.
+            let p = json!({"layer": layer, "text": text, "url": request, "lon": lon, "lat": lat});
+            replies.push((layer.clone(), app.session.run("identify.featureInfo", &p)));
+        }
+        for (layer, r) in replies {
+            let Ok(v) = r else { continue };
+            if let Some(url) = v["url"].as_str() {
+                let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
+                next.push(Ask { layer, also: Vec::new(), capabilities: false, request: Some(url.to_string()), slot });
+            }
+            found.extend(v["results"].as_array().cloned().unwrap_or_default());
+        }
+    }
+    let Some(pp) = &mut app.map.popup else { return };
+    pp.asks.extend(next);
+    if !found.is_empty() {
+        let mut all: Vec<Value> = match pp.info["results"].as_array() {
+            Some(r) => r.clone(),
+            None if is_found(&pp.info) => vec![pp.info.clone()],
+            None => Vec::new(),
+        };
+        all.extend(found);
+        if let Some(mut info) = all.first().cloned() {
+            if let Value::Object(o) = &mut info {
+                o.remove("featureInfo");
+                o.insert("results".into(), Value::Array(all));
+            }
+            pp.info = info;
+        }
+    }
+    if pp.asks.is_empty() && !is_found(&pp.info) {
+        app.map.popup = None;
+    }
+}
+
 fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
+    follow_asks(app, ui.ctx());
     follow_popup(app);
     let Some(pp) = &app.map.popup else { return };
     let t = Tokens::get(ui.ctx());
@@ -2801,12 +2998,20 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     let mut zoom = false;
     // The feature shown, as its layer id and feature id (a raster pixel has neither).
     let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
-    let layer = info["layer"].as_str().unwrap_or("").to_string();
+    // Only WMS layers being asked so far: their names.
+    let waiting = !is_found(&info);
+    let layer = if waiting {
+        pp.asks.iter().map(|a| a.layer.as_str()).collect::<Vec<_>>().join(", ")
+    } else {
+        info["layer"].as_str().unwrap_or("").to_string()
+    };
     let mut attrs = info["attributes"].as_object().cloned().unwrap_or_default();
     // A picture value (a photo's thumbnail) shows as the picture, not as its text.
     let picture_key = attrs.iter().find(|(_, v)| v.as_str().is_some_and(is_picture)).map(|(k, _)| k.clone());
     let picture = picture_key.and_then(|k| attrs.remove(&k)).and_then(|v| v.as_str().map(|s| picture_texture(app, ui.ctx(), s)));
-    let title = if info["raster"].as_bool() == Some(true) {
+    let title = if waiting {
+        tl!("Asking the map service…").to_string()
+    } else if info["raster"].as_bool() == Some(true) {
         tl!("Pixel").to_string()
     } else {
         {
@@ -2849,40 +3054,40 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
                     .corner_radius(CornerRadius { nw: 10, ne: 10, sw: 0, se: 0 })
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(egui::RichText::new(&title).font(semibold(14.0)));
-                                ui.label(egui::RichText::new(&layer).size(11.0).color(t.text_dim));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                                if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
-                                    close = true;
+                        // Lay out controls first; the title and layer share only the width left.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            if ui.add(egui::Button::new(tl!("×")).frame(false)).clicked() {
+                                close = true;
+                            }
+                            // A feature (not a raster pixel): zoom to it.
+                            if shown.is_some() {
+                                let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                                let ink = if resp.hovered() { t.text } else { t.icon };
+                                crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
+                                if resp.on_hover_text(tl!("Zoom To")).clicked() {
+                                    zoom = true;
                                 }
-                                // A feature (not a raster pixel): zoom to it.
-                                if shown.is_some() {
-                                    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-                                    let ink = if resp.hovered() { t.text } else { t.icon };
-                                    crate::icons::paint(ui.painter(), r, "zoom_sel", ink, t.accent);
-                                    if resp.on_hover_text(tl!("Zoom To")).clicked() {
-                                        zoom = true;
-                                    }
+                            }
+                            // Several features identified: step through them.
+                            if results > 1 {
+                                if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
+                                    step = Some(index + 1);
                                 }
-                                // Several features identified: step through them.
-                                if results > 1 {
-                                    if ui.add_enabled(index + 1 < results, egui::Button::new("›").frame(false)).clicked() {
-                                        step = Some(index + 1);
-                                    }
-                                    let n = (index + 1).to_string();
-                                    let total = results.to_string();
-                                    ui.label(
-                                        egui::RichText::new(crate::i18n::fmt("{n} of {total}", &[("n", &n), ("total", &total)]))
-                                            .size(11.0)
-                                            .color(t.text_dim),
-                                    );
-                                    if ui.add_enabled(index > 0, egui::Button::new("‹").frame(false)).clicked() {
-                                        step = Some(index.saturating_sub(1));
-                                    }
+                                let n = (index + 1).to_string();
+                                let total = results.to_string();
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::fmt("{n} of {total}", &[("n", &n), ("total", &total)]))
+                                        .size(11.0)
+                                        .color(t.text_dim),
+                                );
+                                if ui.add_enabled(index > 0, egui::Button::new("‹").frame(false)).clicked() {
+                                    step = Some(index.saturating_sub(1));
                                 }
+                            }
+                            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&title).font(semibold(14.0))).truncate()).on_hover_text(&title);
+                                ui.add(egui::Label::new(egui::RichText::new(&layer).size(11.0).color(t.text_dim)).truncate())
+                                    .on_hover_text(&layer);
                             });
                         });
                     });
@@ -3410,6 +3615,74 @@ mod tile_redraw_tests {
         }
         assert_eq!(started, 0);
         assert_eq!(shown, Some(key(28)));
+    }
+}
+
+#[cfg(test)]
+mod halo_tests {
+    use super::*;
+    use rustgis_engine::map::Rgba;
+
+    fn label(halo_width: Option<f32>) -> PlacedLabel {
+        PlacedLabel {
+            text: "A".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 10.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo: Some(Rgba::rgb(255, 255, 255)),
+            halo_width,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed: false,
+            italic: false,
+            spacing: 0.0,
+            font: None,
+            line_align: TextAlign::Left,
+            angle: None,
+            collide: Default::default(),
+            glyphs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_halos_copies_reach_its_width_and_stay_few_and_one_coat_see_through() {
+        // The thin halo as it always was: eight copies a point round, in its own colour.
+        let (thin, c) = halo_coats(&label(None), Rgba::new(255, 255, 255, 225));
+        assert_eq!((thin.len(), c), (8, Color32::from_rgba_unmultiplied(255, 255, 255, 225)));
+        for w in [0.5, 1.42, 3.0, 10.0, 1e9] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let far = offsets.iter().map(|o| o.length()).fold(0.0, f32::max);
+            let reach = rustgis_engine::render::halo_reach(w) * 1.33;
+            assert!((far - reach).abs() < 1e-3 && offsets.len() <= MAX_HALO_COATS, "{w}: {far} of {reach}, {}", offsets.len());
+        }
+        assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");
+        // QGIS's usual buffer (0.5 mm, 1.42 pt) is solid: neighbouring copies on a ring are well
+        // under a pixel apart. On every ring, at any width, the copies stand evenly round it.
+        // ... with few copies: about as many as the thin halo's two or three times over.
+        assert!(halo_coats(&label(Some(1.42)), Rgba::rgb(255, 255, 255)).0.len() <= 24);
+        for w in [1.42, 3.0, 10.0] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let mut rings: Vec<(f32, Vec<egui::Vec2>)> = Vec::new();
+            for o in offsets {
+                match rings.iter_mut().find(|(r, _)| (r - o.length()).abs() < 1e-3) {
+                    Some((_, ring)) => ring.push(o),
+                    None => rings.push((o.length(), vec![o])),
+                }
+            }
+            for (r, ring) in &rings {
+                let gap = std::f32::consts::TAU * r / ring.len() as f32;
+                let next = (ring[1] - ring[0]).length();
+                assert!((next - 2.0 * r * (gap / (2.0 * r)).sin()).abs() < 1e-3, "{w}: uneven ring {r}");
+                if w < 2.0 {
+                    assert!(gap <= 1.0, "{w}: ring {r} has gaps of {gap}");
+                }
+            }
+        }
+        // Half see-through, shared among its rings: each copy fainter, about one coat in all.
+        let (offsets, c) = halo_coats(&label(Some(3.0)), Rgba::new(255, 0, 0, 128));
+        assert!(offsets.len() > 8 && c.a() < 128 && c.a() > 0, "{c:?}");
     }
 }
 

@@ -173,7 +173,7 @@ pub fn extent_to_merc(e: &Extent) -> Extent {
     Extent::from_points(lonlat_to_merc(Coord::new(e.min_x, e.min_y)), lonlat_to_merc(Coord::new(e.max_x, e.max_y)))
 }
 
-/// Great-circle distance between two lon/lat points (metres).
+/// Great-circle distance between two lon/lat points (metres); NaN for non-finite coordinates.
 pub fn haversine_m(a: Coord, b: Coord) -> f64 {
     // A non-finite coordinate is no place on the Earth: no distance is defined, and one that
     // pretends otherwise measured a corrupt file's vertex as a quarter of the globe (#937) or, as
@@ -185,7 +185,7 @@ pub fn haversine_m(a: Coord, b: Coord) -> f64 {
     let dlat = la2 - la1;
     let dlon = (b.x - a.x).to_radians();
     let h = (dlat / 2.0).sin().powi(2) + la1.cos() * la2.cos() * (dlon / 2.0).sin().powi(2);
-    2.0 * EARTH_RADIUS_M * h.sqrt().min(1.0).asin()
+    2.0 * EARTH_RADIUS_M * h.sqrt().clamp(0.0, 1.0).asin()
 }
 
 /// Length of a lon/lat polyline along great circles (metres).
@@ -379,14 +379,15 @@ pub fn nice_distance(d: f64) -> f64 {
 
 /// Formats a distance in metres as `0.2 mm` / `5 mm` / `20 cm` / `850 m` / `12.5 km`: under a
 /// metre in centimetres or millimetres, so a scale bar on a site plan (#902) doesn't read `0 m`.
+/// Non-finite values display as `—`.
 pub fn format_distance(m: f64) -> String {
-    // Each unit is picked, and shown, by the value rounded as it shows: formatting alone rounds
-    // halves to even.
     if !m.is_finite() {
         // A distance that isn't finite isn't a distance (a corrupt geometry can make one): an em
         // dash, never "NaN km", which the router's formatter also avoids.
-        return "–".into();
+        return "—".to_string();
     }
+    // Each unit is picked, and shown, by the value rounded as it shows: formatting alone rounds
+    // halves to even.
     let (mm, cm) = ((m * 1000.0).round(), (m * 100.0).round());
     if m != 0.0 && mm == 0.0 {
         // Under half a millimetre, which the closest zoom spreads over pixels: tenths, then a
@@ -407,27 +408,26 @@ pub fn format_distance(m: f64) -> String {
     }
 }
 
-/// Formats an area in square metres as `km²` or `m²`.
+/// Formats an area in square metres as `km²` or `m²`; `—` for non-finite values.
 pub fn format_area(m2: f64) -> String {
-    // See `format_distance`.
     if !m2.is_finite() {
-        return "–".into();
+        return "—".to_string();
     }
     if m2.round() < 1.0e6 { format!("{m2:.0} m²") } else { format!("{:.1} km²", m2 / 1.0e6) }
 }
 
 /// Formats a lon/lat pair in decimal degrees with hemispheres: `12.345° E 45.678° N`.
+/// Displays `—` if either coordinate is non-finite.
 pub fn format_lonlat(c: Coord) -> String {
-    // See `format_distance`.
     if !c.is_finite() {
-        return "–".into();
+        return "—".to_string();
     }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
     format!("{:.4}° {ew}  {:.4}° {ns}", c.x.abs(), c.y.abs())
 }
 
-/// Formats a lon/lat pair as degrees-minutes-seconds.
+/// Formats a lon/lat pair as degrees-minutes-seconds; `—` if either coordinate is non-finite.
 pub fn format_dms(c: Coord) -> String {
     fn dms(v: f64) -> String {
         let tenths = (v.abs() * 36_000.0).round();
@@ -436,9 +436,8 @@ pub fn format_dms(c: Coord) -> String {
         let s = (tenths % 600.0) / 10.0;
         format!("{d:.0}°{m:02.0}′{s:04.1}″")
     }
-    // See `format_distance`.
     if !c.is_finite() {
-        return "–".into();
+        return "—".to_string();
     }
     let ew = if c.x < 0.0 { 'W' } else { 'E' };
     let ns = if c.y < 0.0 { 'S' } else { 'N' };
@@ -524,11 +523,11 @@ mod tests {
     #[test]
     fn non_finite_measures_show_a_dash_not_nan() {
         for broken in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(format_distance(broken), "–");
-            assert_eq!(format_area(broken), "–");
+            assert_eq!(format_distance(broken), "—");
+            assert_eq!(format_area(broken), "—");
         }
-        assert_eq!(format_lonlat(Coord::new(f64::NAN, f64::NAN)), "–");
-        assert_eq!(format_dms(Coord::new(f64::NAN, 50.0)), "–");
+        assert_eq!(format_lonlat(Coord::new(f64::NAN, f64::NAN)), "—");
+        assert_eq!(format_dms(Coord::new(f64::NAN, 50.0)), "—");
         // The finite cases still format as before.
         assert_eq!(format_distance(850.0), "850 m");
         assert_eq!(format_distance(12_500.0), "12.5 km");
@@ -608,9 +607,44 @@ mod tests {
     }
 
     #[test]
+    fn nonfinite_coordinates_do_not_become_valid_distances() {
+        let c = Coord::new;
+        let origin = c(0.0, 0.0);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for invalid in [c(value, 0.0), c(0.0, value)] {
+                assert!(haversine_m(origin, invalid).is_nan());
+                assert!(haversine_m(invalid, origin).is_nan());
+                assert!(geodesic_length_m(&[origin, invalid, c(1.0, 0.0)]).is_nan());
+                assert!(geodesic_ring_area_m2(&[origin, invalid, c(1.0, 1.0)]).is_nan());
+            }
+        }
+        assert_eq!(haversine_m(origin, origin), 0.0);
+        let antipodal = haversine_m(origin, c(180.0, 0.0));
+        assert!((antipodal - std::f64::consts::PI * EARTH_RADIUS_M).abs() < 1e-6);
+        let across = haversine_m(c(179.0, 0.0), c(-179.0, 0.0));
+        let unwrapped = haversine_m(c(179.0, 0.0), c(181.0, 0.0));
+        assert!((across - unwrapped).abs() < 1e-6);
+    }
+
+    #[test]
     fn haversine_paris_london() {
         let d = haversine_m(Coord::new(2.3522, 48.8566), Coord::new(-0.1276, 51.5072));
         assert!((d - 343_500.0).abs() < 2_000.0, "{d}");
+    }
+
+    #[test]
+    fn nonfinite_measurements_display_as_unavailable() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_distance(value), "—");
+            assert_eq!(format_area(value), "—");
+            for coord in [Coord::new(value, 50.0), Coord::new(12.0, value), Coord::new(value, value)] {
+                assert_eq!(format_lonlat(coord), "—");
+                assert_eq!(format_dms(coord), "—");
+            }
+        }
+        assert_eq!(format_area(0.0), "0 m²");
+        assert_eq!(format_lonlat(Coord::new(-12.5, 45.25)), "12.5000° W  45.2500° N");
+        assert_eq!(format_lonlat(Coord::new(0.0, 0.0)), "0.0000° E  0.0000° N");
     }
 
     #[test]
