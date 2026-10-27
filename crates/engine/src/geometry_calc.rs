@@ -35,7 +35,8 @@ pub fn units(property: &str) -> &'static [(&'static str, &'static str)] {
 fn measure(g: &Geometry, property: &str) -> Option<f64> {
     match (g, property) {
         // On the WGS 84 ellipsoid, like every other measurement named geodesic (#939): the same
-        // numbers the geoprocessing tools give.
+        // numbers the geoprocessing tools give, except a ring with a full-turn (-180° to 180°) edge,
+        // which is measured on the sphere here but unwrapped (so near zero for a band) there.
         (Geometry::Polygon(polys), "area") => Some(
             polys
                 .iter()
