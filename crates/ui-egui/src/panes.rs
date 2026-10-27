@@ -3709,6 +3709,10 @@ fn symbology(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         ui.add_space(8.0);
         line_strokes_editor(app, ui, &l, t);
     }
+    if g == GeometryType::Polygon && !l.graphics {
+        ui.add_space(8.0);
+        crate::fill_editor::fills_editor(app, ui, &l, t);
+    }
     ui.add_space(10.0);
     ui.separator();
     ui.label(egui::RichText::new(tl!("Layer")).size(11.5).color(t.text_dim));
@@ -4366,7 +4370,7 @@ fn set_strokes(app: &mut RustGisApp, class: Option<&ClassRef>, strokes: &[LineSt
 }
 
 /// The classes a line layer's strokes can be set for, with their legend labels and symbols.
-fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
+pub(crate) fn stroke_classes(r: &Renderer) -> Vec<(ClassRef, String, Symbol)> {
     match r {
         Renderer::Unique { classes, other, class_labels, other_label, .. } => {
             // A value listed twice is drawn with its first class, as the legend shows it.
@@ -5821,6 +5825,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let listed = stroke_classes(&r);
         let refs: Vec<&ClassRef> = listed.iter().map(|(c, ..)| c).collect();

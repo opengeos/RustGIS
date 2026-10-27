@@ -217,6 +217,31 @@ start, back from its end, on from its middle), `"averageAngle"` turns a mark at 
 the line over that stretch of it (smoother on a line of many short bends), `"rotate": false`
 keeps marks upright, and `"outline"` gives markers an outline as wide as the stroke.
 
+### Fills
+
+A polygon layer fills with one colour by default. The **Fills** section of the Symbology pane
+stacks fills inside the outline, as a wetland gets a pale green under blue hatch lines: **Add
+Fill** puts one on top (the first is the symbol's colour, the next hatch lines over it), the
+arrows move one up or down and the cross removes it; the top fill is listed first. **Draw** picks
+**Solid**, **Hatch lines** (parallel lines at an **Angle**, anticlockwise from east, **Spacing**
+apart, of a **Line width**, shifted across by an **Offset**) or **Markers** (a **Marker** shape
+of a **Size** on a grid **Spacing across** and **Spacing down** apart, **Rows shifted** to
+stagger them). A colour set to **From symbol** follows the renderer, so the fills take each
+class's colour. The polygon's outline is drawn over the fills. Patterns are fixed to the map, so
+neighbouring polygons' hatch lines meet, and keep their size in points as the map zooms. A Unique
+Values or Graduated Colors class can stack fills of its own, picked under **Fills for** as for
+strokes. By command, `layer.fillLayers`:
+
+```text
+layer.fillLayers={"layer":"Wetlands","fills":[{"color":"#DDEEDD"},{"color":"#3366CC","pattern":"hatch","angle":0,"spacing":6,"width":0.8}]}
+layer.fillLayers={"layer":"Orchards","fills":[{"color":"#F2F5E6"},{"color":"#4E7A2E","pattern":"dots","marker":"circle","size":3,"spacing":[8,8],"displacement":[4,0]}]}
+layer.fillLayers={"layer":"Land use","value":"Forest","fills":[{"color":null},{"color":"#2D5A27","pattern":"hatch","angle":45}]}
+```
+
+`[]` goes back to the single fill (for a class, to the layer's fills). Fills draw on the CPU (on the
+globe, patterns keep to the screen rather than the map as it turns); the
+legend shows the symbol's colour.
+
 ### Reference scale
 
 Symbol and label sizes are set in points, and normally keep that size on screen at every scale.

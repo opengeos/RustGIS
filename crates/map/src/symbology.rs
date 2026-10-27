@@ -7,6 +7,7 @@ use rustgis_data::{Dataset, FieldType, GeometryType};
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Ramp, Rgba};
+use crate::fills::FillLayer;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Marker {
@@ -686,6 +687,13 @@ pub enum Renderer {
         /// The stacked strokes of `other`; empty takes the layer's.
         #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "de_strokes")]
         other_strokes: Vec<LineStroke>,
+        /// A polygon layer's stacked fills for one class, by class value: drawn for that class's
+        /// features instead of the layer's `fill_layers`. A class without its own takes the layer's.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "crate::fills::de_class_fills")]
+        class_fills: BTreeMap<String, Vec<FillLayer>>,
+        /// The stacked fills of `other`; empty takes the layer's.
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::fills::de_fills")]
+        other_fills: Vec<FillLayer>,
     },
     /// Upper bounds of each class (ascending) and one symbol per class.
     Graduated {
@@ -707,6 +715,9 @@ pub enum Renderer {
         /// A line layer's stacked strokes for one class, by class index, as Unique Values'.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "de_class_strokes")]
         class_strokes: BTreeMap<usize, Vec<LineStroke>>,
+        /// A polygon layer's stacked fills for one class, by class index, as Unique Values'.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "crate::fills::de_class_fills")]
+        class_fills: BTreeMap<usize, Vec<FillLayer>>,
     },
     /// Marker size grows with the value.
     Proportional {
@@ -828,6 +839,8 @@ impl Renderer {
             other_label: None,
             class_strokes: BTreeMap::new(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         })
     }
 
@@ -915,6 +928,7 @@ impl Renderer {
             classes: n,
             class_labels: BTreeMap::new(),
             class_strokes: BTreeMap::new(),
+            class_fills: Default::default(),
         })
     }
 
@@ -1004,12 +1018,54 @@ impl Renderer {
         (!strokes.is_empty()).then_some(strokes.as_slice())
     }
 
+    /// The stacked fills a polygon feature row's class has of its own (`class_fills`), or `None`
+    /// when its class has none (the layer's `fill_layers` apply).
+    pub fn fills_for(&self, ds: &Dataset, row: usize) -> Option<&[FillLayer]> {
+        let fills = match (self, self.class_of(ds, row)?) {
+            (Renderer::Unique { classes, class_fills, .. }, Slot::Class(i)) => class_fills.get(&classes.get(i)?.0)?,
+            (Renderer::Unique { other_fills, .. }, Slot::Other) => other_fills,
+            (Renderer::Graduated { class_fills, .. }, Slot::Class(i)) => class_fills.get(&i)?,
+            _ => return None,
+        };
+        (!fills.is_empty()).then_some(fills.as_slice())
+    }
+
+    /// Whether any class has stacked fills of its own.
+    pub fn has_class_fills(&self) -> bool {
+        match self {
+            Renderer::Unique { class_fills, other_fills, .. } => !class_fills.is_empty() || !other_fills.is_empty(),
+            Renderer::Graduated { class_fills, .. } => !class_fills.is_empty(),
+            Renderer::Single(_) | Renderer::Proportional { .. } => false,
+        }
+    }
+
     /// Whether any class has stacked strokes of its own.
     pub fn has_class_strokes(&self) -> bool {
         match self {
             Renderer::Unique { class_strokes, other_strokes, .. } => !class_strokes.is_empty() || !other_strokes.is_empty(),
             Renderer::Graduated { class_strokes, .. } => !class_strokes.is_empty(),
             Renderer::Single(_) | Renderer::Proportional { .. } => false,
+        }
+    }
+
+    /// One class's own stacked fills (empty: it takes the layer's), as [`Renderer::class_strokes`].
+    pub fn class_fills(&self, class: &ClassRef) -> Result<&[FillLayer], String> {
+        let none: &[FillLayer] = &[];
+        match (self, class) {
+            (Renderer::Unique { classes, class_fills, .. }, ClassRef::Value(v)) => {
+                if !classes.iter().any(|(k, _)| k == v) {
+                    return Err(format!("no class with the value '{v}'"));
+                }
+                Ok(class_fills.get(v).map_or(none, Vec::as_slice))
+            }
+            (Renderer::Unique { other_fills, .. }, ClassRef::Other) => Ok(other_fills),
+            (Renderer::Graduated { symbols, class_fills, .. }, ClassRef::Index(i)) => {
+                if *i >= symbols.len() {
+                    return Err(no_class(*i, symbols.len()));
+                }
+                Ok(class_fills.get(i).map_or(none, Vec::as_slice))
+            }
+            _ => Err(class_mismatch(self)),
         }
     }
 
@@ -1032,6 +1088,41 @@ impl Renderer {
             }
             _ => Err(class_mismatch(self)),
         }
+    }
+
+    /// Sets one class's stacked fills (empty: the layer's again), as [`Renderer::set_class_strokes`]
+    /// does strokes.
+    pub fn set_class_fills(&mut self, class: &ClassRef, fills: Vec<FillLayer>) -> Result<(), String> {
+        use crate::fills::MAX_FILLS;
+        if fills.len() > MAX_FILLS {
+            return Err(format!("at most {MAX_FILLS} fills"));
+        }
+        let fills: Vec<FillLayer> = fills.into_iter().map(FillLayer::clamped).collect();
+        match (&mut *self, class) {
+            (Renderer::Unique { classes, class_fills, .. }, ClassRef::Value(v)) => {
+                if !classes.iter().any(|(k, _)| k == v) {
+                    return Err(format!("no class with the value '{v}'"));
+                }
+                if fills.is_empty() {
+                    class_fills.remove(v);
+                } else {
+                    class_fills.insert(v.clone(), fills);
+                }
+            }
+            (Renderer::Unique { other_fills, .. }, ClassRef::Other) => *other_fills = fills,
+            (Renderer::Graduated { symbols, class_fills, .. }, ClassRef::Index(i)) => {
+                if *i >= symbols.len() {
+                    return Err(no_class(*i, symbols.len()));
+                }
+                if fills.is_empty() {
+                    class_fills.remove(i);
+                } else {
+                    class_fills.insert(*i, fills);
+                }
+            }
+            _ => return Err(class_mismatch(self)),
+        }
+        Ok(())
     }
 
     /// Sets one class's own stacked strokes, at most [`MAX_STROKES`], each brought into range;
@@ -1305,7 +1396,18 @@ impl Renderer {
     pub fn carry_edits_from(&mut self, old: &Renderer, g: GeometryType) {
         match (self, old) {
             (
-                Renderer::Unique { field, classes, other, ramp, class_labels, other_label, class_strokes, other_strokes },
+                Renderer::Unique {
+                    field,
+                    classes,
+                    other,
+                    ramp,
+                    class_labels,
+                    other_label,
+                    class_strokes,
+                    other_strokes,
+                    class_fills,
+                    other_fills,
+                },
                 Renderer::Unique {
                     field: of,
                     classes: oc,
@@ -1315,18 +1417,25 @@ impl Renderer {
                     other_label: ool,
                     class_strokes: ost,
                     other_strokes: oos,
+                    class_fills: ocf,
+                    other_fills: oof,
                 },
             ) if field == of => {
                 let same_scheme = ramp == or;
                 let n = oc.len();
-                // Strokes are drawn by hand, as labels are: a class keeps them whatever the scheme.
+                // Strokes and fills are drawn by hand, as labels are: a class keeps them whatever
+                // the scheme.
                 other_strokes.clone_from(oos);
+                other_fills.clone_from(oof);
                 for (k, s) in classes.iter_mut() {
                     if let Some(t) = ol.get(k.as_str()) {
                         class_labels.insert(k.clone(), t.clone());
                     }
                     if let Some(st) = ost.get(k.as_str()) {
                         class_strokes.insert(k.clone(), st.clone());
+                    }
+                    if let Some(f) = ocf.get(k.as_str()) {
+                        class_fills.insert(k.clone(), f.clone());
                     }
                     if same_scheme
                         && let Some(j) = oc.iter().position(|(ok, _)| ok == k)
@@ -1341,8 +1450,18 @@ impl Renderer {
                 }
             }
             (
-                Renderer::Graduated { field, breaks, symbols, ramp, min, class_labels, class_strokes, .. },
-                Renderer::Graduated { field: of, breaks: ob, symbols: os, ramp: or, min: om, class_labels: ol, class_strokes: ost, .. },
+                Renderer::Graduated { field, breaks, symbols, ramp, min, class_labels, class_strokes, class_fills, .. },
+                Renderer::Graduated {
+                    field: of,
+                    breaks: ob,
+                    symbols: os,
+                    ramp: or,
+                    min: om,
+                    class_labels: ol,
+                    class_strokes: ost,
+                    class_fills: ocf,
+                    ..
+                },
             ) if field == of => {
                 // A Graduated Colors edit belongs to a range: it stays only while the ranges do.
                 if breaks != ob || min != om {
@@ -1350,6 +1469,7 @@ impl Renderer {
                 }
                 class_labels.clone_from(ol);
                 class_strokes.clone_from(ost);
+                class_fills.clone_from(ocf);
                 if ramp == or && symbols.len() == os.len() {
                     let n = os.len();
                     for (i, (s, o)) in symbols.iter_mut().zip(os).enumerate() {
@@ -2602,6 +2722,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let labels = |rows: &[bool]| r.legend_for(&d, rows).into_iter().map(|e| e.label).collect::<Vec<_>>();
         assert_eq!(labels(&[]), ["a", "b", "<all other values>"]);
@@ -2621,6 +2743,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let shown = twice.legend_for(&d, &[]);
         assert_eq!(shown.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), ["a", "b", "<all other values>"]);
@@ -2635,6 +2759,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         assert_eq!(gone.legend_for(&d, &[]).len(), 1);
         // The fallback row is marked as such, whatever a class is called.
@@ -2647,6 +2773,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let mut d2 = d.clone();
         d2.push(None, vec![Value::Text(OTHER_VALUES.into())]);
@@ -2678,6 +2806,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let labels = |r: &Renderer, rows: &[bool]| r.legend_for(&d, rows).into_iter().map(|e| e.label).collect::<Vec<_>>();
         assert_eq!(labels(&r, &[]), ["a"], "z falls in the invisible fallback");
@@ -2694,6 +2824,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         assert_eq!(labels(&r2, &[]), ["a", OTHER_VALUES]);
         // A line's fill draws nothing: a fallback with only a fill is invisible on lines.
@@ -2710,6 +2842,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         assert!(r3.legend_for(&lines, &[]).is_empty());
         assert_eq!(labels(&r3, &[]), ["a", OTHER_VALUES], "a polygon fill still shows");
@@ -2738,6 +2872,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         };
         let legend = renderer.legend();
         assert_eq!(
@@ -2974,6 +3110,8 @@ mod tests {
             other_label: None,
             class_strokes: Default::default(),
             other_strokes: Vec::new(),
+            class_fills: Default::default(),
+            other_fills: Vec::new(),
         }
     }
 
@@ -2988,6 +3126,7 @@ mod tests {
             classes: breaks.len(),
             class_labels: Default::default(),
             class_strokes: Default::default(),
+            class_fills: Default::default(),
         }
     }
 

@@ -33,6 +33,7 @@ mod editpanes;
 mod embeddingsui;
 mod failureui;
 mod fieldmenu;
+mod fill_editor;
 mod geocodeui;
 mod geometrycalc;
 mod globe_drape;
@@ -1796,10 +1797,11 @@ impl RustGisApp {
         // updates its step; anything else, a second selection on the same layer included, is a
         // step of its own.
         if let Some(last) = steps.last_mut()
-            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.transparency")
+            && matches!(id, "layer.color" | "layer.outline" | "layer.lineStrokes" | "layer.fillLayers" | "layer.transparency")
             && last.command == id
             && params.get("layer").is_some()
             && last.params.get("layer") == params.get("layer")
+            && ["value", "index", "other"].iter().all(|k| last.params.get(*k) == params.get(*k))
         {
             last.params = params.clone();
             return;

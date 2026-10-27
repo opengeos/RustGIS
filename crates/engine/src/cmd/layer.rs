@@ -179,6 +179,11 @@ pub fn commands() -> Vec<C> {
             .params(
                 r##"{"layer"?, "strokes": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the renderer's line colour), "width"?: points|null (null: the renderer's width), "offset"?: points (positive: right of the line's direction, negative: left), "cap"?: "round"|"flat"|"square", "join"?: "round"|"miter"|"bevel", "level"?: 0..255|null (with layer.strokeLevels: the level it draws at; null: its place in the stack), "dash"?: [points, …]|null (dash, gap, … in turn, at most 8; null: solid), "markers"?: {"mark"?: "circle"|"square"|"triangle"|"diamond"|"star"|"character"|"hash" (a mark across the line), "char"?: text (a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: points (a marker's size, a hash mark's length; default 4), "at"?: "interval"|"vertices"|"innerVertices"|"first"|"last"|"middle"|"segmentMiddles" or a list of them (default "interval"), "interval"?: points (default 12), "offsetAlong"?: points (from the start, back from the end, on from the middle), "rotate"?: bool (turned with the line; default true), "averageAngle"?: points (the stretch of line a marker at an interval turns with; 0: its segment), "angle"?: degrees clockwise (a hash mark at 0 crosses the line square), "outline"?: "#RRGGBB"|"#RRGGBBAA" (the markers' outline, as wide as the stroke)}|null (markers or hash marks along the line in the stroke's colour, instead of a line; cap, join and dash don't apply)}] (drawn bottom first; [] goes back to the single stroke, or for a class to the layer's strokes; on a point layer they are its marks: each stroke's markers drawn at the point in place of the symbol's, "offsetAlong" shifting a mark right and "offset" down, both turned with its "angle", and "rotate" turning it by layer.markerRotation's field), "value"?: text|number (a Unique Values class's own strokes), "index"?: number (a Graduated Colors class's, 0 = the lowest), "other"?: true (Unique Values' <all other values>)}"##,
             ),
+        C::new("layer.fillLayers", "Fill Layers", "Style › Drawing", fill_layers)
+            .when(need_polygons)
+            .params(
+                r##"{"layer"?, "value"?|"index"?|"other"?: a class of Unique Values (its value, or other: true) or Graduated Colors (its index) to set its own fills (none: the layer's), "fills": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the feature's fill colour, so the fills follow the classes), "pattern"?: "solid" (default)|"hatch" (parallel lines)|"dots" (markers on a grid), "angle"?: degrees anticlockwise from east (hatch), "spacing"?: points between lines (hatch, 1 to 500; default 8) or points across and down between markers, a number or [across, down] (dots), "width"?: a hatch line's width in points (0 to 50; default 1), "offset"?: points across the lines (hatch) or [across, down] (dots), "marker"?: "circle"|"square"|"triangle"|"diamond"|"star" (dots), "size"?: a marker's size in points (default 3), "outline"?: a marker's outline colour or null, "outlineWidth"?: points, "displacement"?: [across, down] points every other row and column are shifted by (dots)}] (bottom first, at most 8; [] for the symbol's single fill; the outline is drawn over them)}"##,
+            ),
         C::new("layer.markerRotation", "Marker Rotation", "Style › Drawing", |s, p| {
             let field = match p.get("field") {
                 None | Some(Value::Null) => None,
@@ -606,6 +611,91 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
         None => l.line_strokes = strokes,
     }
     Ok(json!({"strokes": n}))
+}
+
+/// `layer.fillLayers`: a polygon layer's stacked fills (or a class's own, with `value`, `index`
+/// or `other`), bottom first; `[]` goes back to the symbol's single fill.
+fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
+    use rustgis_map::fills::{FillLayer, FillPattern, MAX_FILLS};
+    let class = class_ref(p)?;
+    let list = p.get("fills").and_then(Value::as_array).ok_or("fills is a list of fills ([] for the symbol's single fill)")?;
+    if list.len() > MAX_FILLS {
+        return Err(format!("at most {MAX_FILLS} fills"));
+    }
+    let mut fills = Vec::with_capacity(list.len());
+    for (i, v) in list.iter().enumerate() {
+        let n = i + 1;
+        let o = v.as_object().ok_or_else(|| format!("fill {n} is not an object"))?;
+        let hex = |k: &str| -> Result<Option<Rgba>, String> {
+            match o.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::String(c)) => Rgba::from_hex(c).map(Some).ok_or_else(|| format!("fill {n}: {k} must be #RRGGBB or #RRGGBBAA")),
+                Some(_) => Err(format!("fill {n}: {k} must be #RRGGBB or #RRGGBBAA")),
+            }
+        };
+        // Brought into range before narrowing, so 1e300 is the largest, not infinity.
+        let number = |v: &Value| v.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(-1e6, 1e6) as f32);
+        let num = |k: &str, default: f32| -> Result<f32, String> {
+            match o.get(k) {
+                None | Some(Value::Null) => Ok(default),
+                Some(v) => number(v).ok_or_else(|| format!("fill {n}: {k} is a number")),
+            }
+        };
+        // A number for both ways, or [across, down].
+        let pair = |k: &str, default: [f32; 2]| -> Result<[f32; 2], String> {
+            match o.get(k) {
+                None | Some(Value::Null) => Ok(default),
+                Some(Value::Array(a)) => match a.as_slice() {
+                    [x, y] => Ok([number(x), number(y)])
+                        .and_then(|[x, y]| Ok([x.ok_or(())?, y.ok_or(())?]))
+                        .map_err(|()| format!("fill {n}: {k} is a number or [across, down]")),
+                    _ => Err(format!("fill {n}: {k} is a number or [across, down]")),
+                },
+                Some(v) => number(v).map(|x| [x, x]).ok_or_else(|| format!("fill {n}: {k} is a number or [across, down]")),
+            }
+        };
+        let pattern = match o.get("pattern").map(|v| v.as_str()) {
+            None | Some(Some("solid")) => FillPattern::Solid,
+            Some(Some("hatch")) => FillPattern::Hatch {
+                angle: num("angle", 0.0)?,
+                spacing: num("spacing", 8.0)?,
+                width: num("width", 1.0)?,
+                offset: num("offset", 0.0)?,
+            },
+            Some(Some("dots")) => {
+                let marker = match o.get("marker") {
+                    None | Some(Value::Null) => Marker::Circle,
+                    Some(Value::String(m)) => Marker::ALL
+                        .into_iter()
+                        .find(|s| s.label().eq_ignore_ascii_case(m.trim()))
+                        .ok_or_else(|| format!("fill {n}: unknown marker '{m}'"))?,
+                    Some(_) => return Err(format!("fill {n}: marker is \"circle\", \"square\", \"triangle\", \"diamond\" or \"star\"")),
+                };
+                FillPattern::Dots {
+                    marker,
+                    size: num("size", 3.0)?,
+                    outline: hex("outline")?,
+                    outline_width: num("outlineWidth", 0.0)?,
+                    spacing: pair("spacing", [8.0, 8.0])?,
+                    displacement: pair("displacement", [0.0, 0.0])?,
+                    offset: pair("offset", [0.0, 0.0])?,
+                }
+            }
+            Some(_) => return Err(format!("fill {n}: pattern is \"solid\", \"hatch\" or \"dots\"")),
+        };
+        fills.push(FillLayer { color: hex("color")?, pattern }.clamped());
+    }
+    let id = s.layer_id(p)?;
+    let l = s.map_mut().layer_mut(id).ok_or("no such layer")?;
+    if l.geometry_type() != GeometryType::Polygon || l.graphics || l.is_raster() {
+        return Err("this works on polygon layers".into());
+    }
+    let count = fills.len();
+    match class {
+        Some(c) => l.renderer.set_class_fills(&c, fills)?,
+        None => l.fill_layers = fills,
+    }
+    Ok(json!({"fills": count}))
 }
 
 /// A character marker's `char` (its first character), if given.
@@ -1262,6 +1352,8 @@ fn apply_styles(s: &mut Session, id: u32, styles: &[(String, rustgis_data::kml::
         other_label: None,
         class_strokes: Default::default(),
         other_strokes: Vec::new(),
+        class_fills: Default::default(),
+        other_fills: Vec::new(),
     };
 }
 

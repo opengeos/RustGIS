@@ -342,6 +342,75 @@ fn editing_features_and_fields() {
     assert_eq!(s.map().layer_by_name("Cities").unwrap().dataset.features.len(), n - 1);
 }
 
+/// A polygon layer stacks fills (a colour, hatch lines, markers on a grid), for the layer or a
+/// class of its own; junk is refused and numbers held within range; each change undoes, and the
+/// project keeps them (a layer without them saves as before).
+#[test]
+fn fill_layers_stack_and_survive_save_and_undo() {
+    use rustgis_map::Rgba;
+    use rustgis_map::fills::{FillLayer, FillPattern, MAX_FILLS};
+    let mut s = world();
+    let before = serde_json::to_string(&s.project).unwrap();
+    assert!(!before.contains("fill_layers") && !before.contains("class_fills"), "nothing written for layers without them");
+    let depth = s.undo_depth();
+    let fills = json!([
+        {"color": "#E8F0D0", "pattern": "solid"},
+        {"color": "#336633", "pattern": "hatch", "angle": 45, "spacing": 6, "width": 0.75},
+        {"pattern": "dots", "marker": "square", "size": 2, "spacing": [8, 6], "displacement": [4, 0], "outline": "#000000", "outlineWidth": 0.5}
+    ]);
+    assert_eq!(s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": fills})).unwrap(), json!({"fills": 3}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    let got = |s: &Session| s.map().layer_by_name("Countries").unwrap().fill_layers.clone();
+    let f = got(&s);
+    assert_eq!(f[0], FillLayer { color: Some(Rgba::rgb(0xE8, 0xF0, 0xD0)), pattern: FillPattern::Solid });
+    assert_eq!(f[1].pattern, FillPattern::Hatch { angle: 45.0, spacing: 6.0, width: 0.75, offset: 0.0 });
+    let FillPattern::Dots { marker, spacing, outline, .. } = f[2].pattern else { panic!("{f:?}") };
+    assert_eq!((marker, spacing, outline, f[2].color), (rustgis_map::Marker::Square, [8.0, 6.0], Some(Rgba::rgb(0, 0, 0)), None));
+    // Kept with the project, and undone.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(got(&reopened), f);
+    s.run("edit.undo", &json!({})).unwrap();
+    assert!(got(&s).is_empty());
+    // Held within range; a number given for both ways.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "hatch", "spacing": 1e300, "width": -4, "angle": -45}, {"pattern": "dots", "spacing": 1e9}]}))
+        .unwrap();
+    let f = got(&s);
+    assert_eq!(f[0].pattern, FillPattern::Hatch { angle: 315.0, spacing: 500.0, width: 0.0, offset: 0.0 });
+    assert!(matches!(f[1].pattern, FillPattern::Dots { spacing: [500.0, 500.0], .. }), "{f:?}");
+    // A class's own (Unique Values), then back to the layer's.
+    s.run("layer.symbology", &json!({"layer": "Countries", "type": "unique", "field": "continent"})).unwrap();
+    let value = match &s.map().layer_by_name("Countries").unwrap().renderer {
+        rustgis_map::Renderer::Unique { classes, .. } => classes[0].0.clone(),
+        r => panic!("{r:?}"),
+    };
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "value": value, "fills": [{"pattern": "hatch"}]})).unwrap();
+    let class_fills = |s: &Session| match &s.map().layer_by_name("Countries").unwrap().renderer {
+        rustgis_map::Renderer::Unique { class_fills, .. } => class_fills.clone(),
+        _ => Default::default(),
+    };
+    assert_eq!(class_fills(&s).get(&value).map(Vec::len), Some(1));
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "value": value, "fills": []})).unwrap();
+    assert!(class_fills(&s).is_empty());
+    assert!(s.run("layer.fillLayers", &json!({"layer": "Countries", "value": "no such class", "fills": []})).is_err());
+    // Junk, and a layer that isn't polygons.
+    let many: Vec<Value> = (0..=MAX_FILLS).map(|_| json!({})).collect();
+    for bad in [
+        json!({"layer": "Countries"}),
+        json!({"layer": "Countries", "fills": "hatch"}),
+        json!({"layer": "Countries", "fills": many}),
+        json!({"layer": "Countries", "fills": [7]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "stripes"}]}),
+        json!({"layer": "Countries", "fills": [{"color": "red"}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "hatch", "spacing": "wide"}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "dots", "spacing": [1]}]}),
+        json!({"layer": "Countries", "fills": [{"pattern": "dots", "marker": "blob"}]}),
+        json!({"layer": "Rivers", "fills": []}),
+    ] {
+        assert!(s.run("layer.fillLayers", &bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn line_strokes_stack_and_survive_save_and_undo() {
     use rustgis_map::{LineCap, LineJoin, LineStroke, Rgba};
