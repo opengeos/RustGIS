@@ -311,14 +311,15 @@ jobs:
 
             For each thread, read the code it points at and decide:
               - `fixed` — the comment is right: make the smallest change that addresses it, in the style of the surrounding code. A bug fix gets a regression test where the crate has tests.
-              - `declined` — the comment is wrong, already addressed, or not worth the change: say why in one or two sentences.
+              - `addressed` — the code already does what the comment asks (an earlier commit fixed it, or the comment misread the code): say where, in one sentence. The thread is resolved.
+              - `declined` — the comment is wrong or not worth the change: say why in one or two sentences. The thread stays open for a maintainer.
               - `unclear` — you can't tell what is wanted, or the fix needs a design decision a maintainer should make.
             Don't change anything no thread asks for, don't touch `.github/`, and don't add dependencies.
 
             ${{ github.event.pull_request.head.repo.full_name != github.repository && 'You have no shell here: the change is checked by the pull request''s CI after it is pushed. Keep it to edits you are sure compile, formatted the way rustfmt would format them, and mark a thread `unclear` rather than guess.' || 'Then check your changes: `cargo fmt --all`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --locked -p <crate>` for every crate you changed. Fix what they report in code you changed. If a check still fails, mark the threads behind it `unclear` and undo their changes, so what is left passes.' }}
 
             Don't commit or push; the workflow does. Finish by writing two files:
-              - `.autofix/report.json` — a JSON array with one object per thread: `{"id": "<thread id>", "status": "fixed" | "declined" | "unclear", "reply": "<what you changed, or why not>"}`. Replies are posted on the threads as written: plain, short, no greetings.
+              - `.autofix/report.json` — a JSON array with one object per thread: `{"id": "<thread id>", "status": "fixed" | "addressed" | "declined" | "unclear", "reply": "<what you changed, or why not>"}`. Replies are posted on the threads as written: plain, short, no greetings.
               - `.autofix/commit-message.txt` — a commit message for the change: a subject line under 72 characters in the repository's style (for example `fix(labels): …`), a blank line, then a short body wrapped at 72 columns.
           claude_args: |
             --model claude-haiku-5-5
@@ -434,7 +435,8 @@ jobs:
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
       # Replies go out only for threads that were staged, whatever ids the report holds. A thread
-      # Claude calls fixed is resolved only when a fix commit was pushed.
+      # Claude calls fixed is resolved only when a fix commit was pushed; one it calls addressed
+      # needs no commit. Declined and unclear threads stay open for a maintainer.
       - name: Reply to the threads
         if: needs.fix.outputs.threads != '0'
         env:
@@ -446,7 +448,7 @@ jobs:
           : > "$RUNNER_TEMP/to-resolve"
           jq -c --slurpfile t "$DIR/threads.json" \
             '($t[0] | map(.id)) as $ids | .[] | select(.id as $i | $ids | index($i))
-             | select(.status | IN("fixed", "declined", "unclear"))' \
+             | select(.status | IN("fixed", "addressed", "declined", "unclear"))' \
             "$DIR/report.json" |
           while read -r entry; do
             id=$(jq -r .id <<< "$entry")
@@ -464,7 +466,7 @@ jobs:
                 }
               }' --silent || echo "::warning::Couldn't reply to $id."
             # The loop runs in a pipe's subshell, so the threads to resolve go to a file.
-            if [ "$status" = fixed ]; then echo "$id" >> "$RUNNER_TEMP/to-resolve"; fi
+            case "$status" in fixed|addressed) echo "$id" >> "$RUNNER_TEMP/to-resolve" ;; esac
           done
 
       # Its own step so only these calls see the maintainer's token, which resolving takes:
