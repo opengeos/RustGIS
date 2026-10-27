@@ -110,9 +110,11 @@ Each layer keeps its look:
   bold, italic and letter spacing, its font family (drawn in it where it is installed, else in
   RustGIS's label font), its buffer as a halo of its colour, opacity and size, its background as
   a rectangle (filled and outlined as its fill symbol says, padded by its size, its corners
-  rounded), its placement (Parallel and Curved along lines, around and over points), its offset
-  from a point (and on a point layer, its distance around the point, as an offset upwards) and
-  its scale range.
+  rounded), its wrapping (its wrap character and length, and how its lines line up, "follow
+  placement", QGIS's default, as the side the label sits on: centred over a point, so a value
+  of several lines comes in centred as QGIS draws it), its placement (Parallel and Curved along lines,
+  around and over points), its repeat distance along lines, its offset from a point (and on a
+  point layer, its distance around the point, as an offset upwards) and its scale range.
 
 Projects and styles from QGIS 1 and 2 read too: their legend gives the layers' order, and the
 older names of the same settings are read.
@@ -123,7 +125,8 @@ near as it can, or left out, and said: the import's notes list, layer by layer, 
 approximated (pattern fills drawn as a tint of their colour, SVG markers as circles,
 dashed polygon outlines solid, label halos with sharp corners drawn round and blended ones drawn
 over the map, label backgrounds of other shapes drawn as rectangles, label distances from lines
-and polygons, a distance around points moved straight up, and wrapping, values outside a graduated renderer's ranges in its first or last class, file options
+and polygons, a distance around points moved straight up, labels wrapped at a shortest line
+length or justified, values outside a graduated renderer's ranges in its first or last class, file options
 such as `layerid` that RustGIS doesn't read) and what was skipped (arrow lines, other data-defined
 settings, draw effects, label callouts, labels from expressions, contours and other raster
 renderers RustGIS has no match for, PostGIS, WFS

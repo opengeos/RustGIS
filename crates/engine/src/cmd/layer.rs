@@ -359,9 +359,44 @@ pub fn commands() -> Vec<C> {
                 None => None,
                 Some(v) => Some(super::labels::background_change(v)?),
             };
+            // Wrapping: a character to break lines at ("" or null: none), a longest line in
+            // characters (0: none), and how the lines line up.
+            let wrap_char = match p.get("wrapChar") {
+                None => None,
+                Some(Value::Null) => Some(None),
+                Some(Value::String(c)) => Some(rustgis_map::symbology::wrap_char(c)),
+                Some(_) => return Err("wrapChar must be text (\"\" for none)".into()),
+            };
+            let wrap_length = match p.get("wrapLength") {
+                None => None,
+                Some(Value::Null) => Some(0),
+                Some(_) => {
+                    let n = f(p, "wrapLength").filter(|n| *n >= 0.0).ok_or("wrapLength must be a number of characters (0 for none)")?;
+                    Some(n.min(f64::from(rustgis_map::symbology::MAX_WRAP_LENGTH)) as u32)
+                }
+            };
+            let line_align = match ps(p, "lineAlign") {
+                None if p.get("lineAlign").is_some() => return Err("lineAlign must be left, center or right".into()),
+                None => None,
+                Some(a) => Some(
+                    rustgis_map::layout::TextAlign::ALL
+                        .into_iter()
+                        .find(|t| t.code().eq_ignore_ascii_case(a.trim()))
+                        .ok_or_else(|| format!("unknown lineAlign '{a}' (left, center or right)"))?,
+                ),
+            };
             super::labels::with_class(s, p, |c| {
                 if let Some(change) = &background {
                     c.background = change(c.background.clone());
+                }
+                if let Some(v) = wrap_char.clone() {
+                    c.wrap_char = v;
+                }
+                if let Some(v) = wrap_length {
+                    c.wrap_length = v;
+                }
+                if let Some(v) = line_align {
+                    c.line_align = v;
                 }
                 if let Some(v) = halo_color {
                     c.halo_color = v;
@@ -393,7 +428,7 @@ pub fn commands() -> Vec<C> {
             })
         })
         .when(need_feature_layer)
-        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "haloColor"?: "#RRGGBB"|"#RRGGBBAA"|"" (""/null: white or dark, whichever stands out from the text), "haloWidth"?: points 0-10|null (null: the thin halo), "spacing"?: points between letters (-5 to 50), "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font), "background"?: false|null (none) | true (white, a thin dark outline) | {"fill"?: "#RRGGBB"|"#RRGGBBAA"|"" ("": none), "stroke"?: colour|"" (the outline; "": none), "strokeWidth"?: points 0-10, "padding"?: [across, up and down] points 0-50, "radius"?: corner radius in points 0-50} (a rectangle behind the text; what isn't given is kept, or the default's)}"##),
+        .params(r##"{"layer"?, "class"?: name (none: the Default class, by whatever name it has), "size"?: number, "color"?: "#RRGGBB"|"#RRGGBBAA", "halo"?: bool, "haloColor"?: "#RRGGBB"|"#RRGGBBAA"|"" (""/null: white or dark, whichever stands out from the text), "haloWidth"?: points 0-10|null (null: the thin halo), "spacing"?: points between letters (-5 to 50), "bold"?: bool, "italic"?: bool, "font"?: installed family name (labels.fonts lists them; "" is the label font), "background"?: false|null (none) | true (white, a thin dark outline) | {"fill"?: "#RRGGBB"|"#RRGGBBAA"|"" ("": none), "stroke"?: colour|"" (the outline; "": none), "strokeWidth"?: points 0-10, "padding"?: [across, up and down] points 0-50, "radius"?: corner radius in points 0-50} (a rectangle behind the text; what isn't given is kept, or the default's), "wrapChar"?: text (a line break wherever it occurs, left out; a space puts each word on its own line; "" for none), "wrapLength"?: characters (a longest line, broken between words; 0 for none; at most 500), "lineAlign"?: "left"|"center"|"right" (how a label's lines line up)}"##),
         C::new("layer.definitionQuery", "Definition Query", "Data › Definition Query", |s, p| {
             let q = ps(p, "where").map(str::trim).unwrap_or("").to_string();
             let id = s.layer_id(p)?;

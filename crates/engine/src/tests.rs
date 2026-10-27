@@ -2183,6 +2183,62 @@ fn labels_take_a_halo_colour_and_width_and_letter_spacing() {
     }
 }
 
+/// A label class takes wrapping and its lines' alignment with its text symbol, and a repeat along
+/// lines with its placement; junk is refused, numbers kept within their ranges, each change undoes
+/// and the project keeps them.
+#[test]
+fn labels_take_wrapping_and_a_repeat_along_lines() {
+    use rustgis_map::layout::TextAlign;
+    let mut s = world();
+    let class = |s: &Session| {
+        let c = &s.map().layer_by_name("Rivers").unwrap().labels.default;
+        (c.wrap_char.clone(), c.wrap_length, c.line_align, c.repeat, c.placement)
+    };
+    let placement = class(&s).4;
+    assert_eq!(class(&s), (None, 0, TextAlign::Left, None, placement));
+    let mark = s.notice_mark();
+    s.run("labels.style", &json!({"layer": "Rivers", "wrapChar": " ", "wrapLength": "12", "lineAlign": "CENTER"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 144})).unwrap();
+    assert!(s.notices_since(mark).iter().all(|n| !n.text.contains("ignores")), "every key is read");
+    assert_eq!(class(&s), (Some(" ".into()), 12, TextAlign::Center, Some(144.0), placement), "a repeat alone keeps the position");
+    // Within their ranges; none again.
+    s.run("labels.style", &json!({"layer": "Rivers", "wrapChar": "abcdefghijk", "wrapLength": 1e9})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 0.5})).unwrap();
+    let c = class(&s);
+    assert_eq!((c.0.as_deref(), c.1, c.3), (Some("abcdefgh"), rustgis_map::symbology::MAX_WRAP_LENGTH, Some(10.0)));
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 1e9})).unwrap();
+    assert_eq!(class(&s).3, Some(10_000.0));
+    s.run("labels.style", &json!({"layer": "Rivers", "wrapChar": "", "wrapLength": 0})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": null})).unwrap();
+    assert_eq!((class(&s).0, class(&s).1, class(&s).3), (None, 0, None));
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(class(&s).3, Some(10_000.0), "undoes");
+    s.run("labels.placement", &json!({"layer": "Rivers", "repeat": 0})).unwrap();
+    assert_eq!(class(&s).3, None, "0 is none");
+    for bad in [
+        json!({"wrapChar": 7}),
+        json!({"wrapLength": -3}),
+        json!({"wrapLength": "long"}),
+        json!({"lineAlign": "justify"}),
+        json!({"lineAlign": 1}),
+    ] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Rivers");
+        assert!(s.run("labels.style", &p).is_err(), "{bad}");
+    }
+    for bad in [json!({"repeat": -5}), json!({"repeat": "often"}), json!({"repeat": [1]})] {
+        let mut p = bad.clone();
+        p["layer"] = json!("Rivers");
+        assert!(s.run("labels.placement", &p).is_err(), "{bad}");
+    }
+    // Kept with the project.
+    s.run("labels.style", &json!({"layer": "Rivers", "wrapChar": "/", "lineAlign": "right"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Rivers", "position": "curved", "repeat": 200})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(class(&reopened), class(&s));
+}
+
 /// A label class takes an offset with its placement and a background with its text symbol; junk
 /// is refused, numbers kept within their ranges, and each change undoes.
 #[test]
@@ -15444,7 +15500,7 @@ fn ogc_group_refresh_keeps_children_across_rotated_keys_and_rejects_bad_answers(
     let group = added["group"].clone();
     let ids: Vec<u32> = s.map().service_groups[0].children.iter().map(|c| c.layer).collect();
     s.run("layer.rename", &json!({"layer":ids[0], "name":"Renamed"})).unwrap();
-    s.map_mut().label_lock = Some(vec![(ids[0], 0, 0), (ids[1], 0, 0)]);
+    s.map_mut().label_lock = Some(vec![(ids[0], 0, 0, 0), (ids[1], 0, 0, 0)]);
 
     // A rotated key changes every source address but not the collections: the children stay.
     let mut q = doc("rotated-key");

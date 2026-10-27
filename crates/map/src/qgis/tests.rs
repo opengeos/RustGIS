@@ -1,6 +1,7 @@
 //! A small QGIS project and style, written by hand in the shapes QGIS writes them.
 
 use super::*;
+use crate::layout::TextAlign;
 use crate::symbology::{Glyph, LabelPlacement, LineCap, LineMark, Marker, Placements};
 
 const PROJECT: &str = r#"<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
@@ -461,6 +462,57 @@ fn a_labels_background_and_offset_carry_over_in_their_units() {
 }
 
 #[test]
+fn a_labels_wrapping_and_repeat_carry_over() {
+    let read = |settings: &str| {
+        let qml = format!(
+            r#"<qgis version="4.2.3"><renderer-v2 type="singleSymbol"><symbols><symbol type="line" name="0" alpha="1"><layer class="SimpleLine" enabled="1"/></symbol></symbols></renderer-v2>
+            <labeling type="simple"><settings><text-style fieldName="name"/>{settings}</settings></labeling></qgis>"#
+        );
+        let mut report = Report::default();
+        let s = read_style(&qml, "Roads", &mut report).unwrap();
+        (s.labels.unwrap().default, report)
+    };
+    // The corpus's: a space as the wrap character, ten characters a line, centred lines.
+    let (c, report) = read(
+        r#"<text-format wrapChar=" " autoWrapLength="10" useMaxLineLengthForAutoWrap="1" multilineAlign="1"/><placement placement="2"/>"#,
+    );
+    assert_eq!((c.wrap_char.as_deref(), c.wrap_length, c.line_align), (Some(" "), 10, TextAlign::Center));
+    assert_eq!(c.wrap("Ober Winterthur"), "Ober\nWinterthur");
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // Lines following the placement: right-aligned left of the feature, left-aligned right of it.
+    let follow =
+        |quad: &str| read(&format!(r#"<text-format multilineAlign="3"/><placement placement="1" quadOffset="{quad}"/>"#)).0.line_align;
+    assert_eq!((follow("3"), follow("5"), follow("4")), (TextAlign::Right, TextAlign::Left, TextAlign::Center));
+    // A shortest line length, and justified lines: as near as RustGIS draws them, and noted.
+    let (c, report) = read(r#"<text-format autoWrapLength="1e9" useMaxLineLengthForAutoWrap="0" multilineAlign="4"/>"#);
+    assert_eq!((c.wrap_length, c.line_align), (crate::symbology::MAX_WRAP_LENGTH, TextAlign::Center));
+    for part in ["shortest line length", "justified"] {
+        assert!(report.notes.iter().any(|n| n.text.contains(part)), "{part}: {:?}", report.notes);
+    }
+    // A repeat along curved labels, in millimetres (the corpus's 30 mm); none for labels off lines.
+    let (c, _) = read(r#"<placement placement="3" repeatDistance="30" repeatDistanceUnits="MM"/>"#);
+    assert!(c.repeat.is_some_and(|r| (r - 30.0 * 72.0 / 25.4).abs() < 1e-3), "{:?}", c.repeat);
+    let (c, report) = read(r#"<placement placement="1" repeatDistance="30"/>"#);
+    assert_eq!(c.repeat, None);
+    assert!(report.notes.is_empty(), "QGIS repeats no label off a line: {:?}", report.notes);
+    // Within RustGIS's range; one of no number is none.
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="0.001" repeatDistanceUnits="Point"/>"#);
+    assert_eq!(c.repeat, Some(10.0));
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="lots"/>"#);
+    assert_eq!(c.repeat, None);
+    // Round polygons RustGIS labels once, and says so.
+    let (c, report) = read(r#"<placement placement="7" repeatDistance="30"/>"#);
+    assert_eq!(c.repeat, None);
+    assert!(report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+    let qgs = r#"<qgis version="4.2.3"><projectlayers><maplayer type="vector" geometry="Polygon" labelsEnabled="1"><id>p</id><datasource>/d/p.shp</datasource><layername>P</layername><provider>ogr</provider>
+        <labeling type="simple"><settings><text-style fieldName="nr"/><placement placement="2" repeatDistance="30"/></settings></labeling></maplayer></projectlayers></qgis>"#;
+    let mut report = Report::default();
+    let p = read_project(qgs, "", &mut report).unwrap();
+    assert_eq!(p.layers[0].style.labels.as_ref().unwrap().default.repeat, None);
+    assert!(report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+}
+
+#[test]
 fn files_of_qgis_1_and_2_read_by_their_old_names() {
     // Before QGIS 3: no layer tree but a legend, the canvas's coordinate system, scale limits named
     // the other way round, opacity as transparency, and QGIS 2's names for line and fill settings.
@@ -560,7 +612,6 @@ fn what_rustgis_has_no_place_for_is_noted() {
         "diagrams",
         "order-by",
         "draw effects",
-        "wrapped labels",
         "label distances",
         "label priorities",
         "callouts",
@@ -570,7 +621,8 @@ fn what_rustgis_has_no_place_for_is_noted() {
     }
     // The renderer's effect is noted once; the symbol layer's, only plain drawing, isn't an effect.
     assert_eq!(report.notes.iter().find(|n| n.text.contains("draw effects")).map(|n| n.count), Some(1));
-    assert!(!said("A", "repeated"), "a repeat distance of 0 is none");
+    // Wrapping and repeats along lines are read now, not noted.
+    assert!(!said("A", "wrapped") && !said("A", "repeated"), "{:?}", report.notes);
 }
 
 /// A raster style file with `renderer` as its renderer and `pipe` after it in the pipe.

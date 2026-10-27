@@ -328,6 +328,21 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
   left or up), growing with the labels at a reference scale. A label along a line isn't moved
   (`labels.placement={"layer": "Cities", "position": "aboveRight", "offset": [5.7, -2.8]}`; an
   offset can be given without a position).
+- **Wrapping**: a label's text broken into lines (Labeling pane › Symbol): **Wrap at** a
+  character (or a few, up to 8), a line break wherever it occurs, left out (a space puts each
+  word on its own line, `/` breaks `Zürich/Winterthur`), and **Wrap length**, the longest line in characters, broken
+  between words (a longer word keeps a line of its own). **Line alignment** lines the lines up
+  left (as labels always have), centred or right. A label curved along a line, character by
+  character, isn't wrapped
+  (`labels.style={"layer": "Cities", "wrapChar": " ", "wrapLength": 12, "lineAlign": "center"}`;
+  `""` and `0` wrap none).
+- **Repeat along lines**: a label placed along a line (Parallel or Curved) repeated every so many
+  points (Labeling pane › Position › **Repeat**, 10 to 10,000): the one at the line's middle where
+  it always is, and more either side of it, nearest first, at most 32 a line. Each is a label of
+  its own: it collides like any other (one that doesn't fit is left out, the others stay), and
+  Lock keeps the ones placed. The distance grows with the labels at a reference scale
+  (`labels.placement={"layer": "Rivers", "position": "curved", "repeat": 144}`; `null` or `0` is
+  the one at the middle).
 - **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol
   › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
   italic take the family's own bold and italic faces where it has them. The family is saved by
