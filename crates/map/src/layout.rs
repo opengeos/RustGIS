@@ -73,10 +73,13 @@ impl FrameShape {
     }
 }
 
-/// A graticule drawn over a map frame, labelled at the frame's edges.
+/// A grid drawn over a map frame, labelled at the frame's edges: a graticule of latitudes and
+/// longitudes, or (as ArcGIS Pro's measured grid) eastings and northings in a projected
+/// coordinate system.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Grid {
-    /// Degrees between lines; 0 picks a step from the frame's extent.
+    /// Between lines: degrees for a graticule, the coordinate system's units (metres) for a
+    /// measured grid; 0 picks a step from the frame's extent.
     #[serde(default)]
     pub step: f64,
     pub color: Rgba,
@@ -103,6 +106,71 @@ pub struct Grid {
     /// Vertical runs the left and right labels along their edge.
     #[serde(default)]
     pub label_orientation: Orientation,
+    /// A graticule, or a measured grid.
+    #[serde(default, skip_serializing_if = "GridKind::is_graticule")]
+    pub kind: GridKind,
+    /// A measured grid's coordinate system (`EPSG:25832`, WKT or a PROJ string): none is the map's
+    /// own when it is projected, else the UTM zone (WGS 84) at the frame's centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crs: Option<String>,
+    /// A measured grid's labels shortened as topographic maps print them: the kilometres' last two
+    /// digits (`43` for 543,000 m); off, the whole value.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub short: bool,
+}
+
+/// What a grid's lines are.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GridKind {
+    /// Latitudes and longitudes.
+    #[default]
+    Graticule,
+    /// Eastings and northings in a projected coordinate system, its units apart.
+    Measured,
+}
+
+impl GridKind {
+    pub const ALL: [GridKind; 2] = [GridKind::Graticule, GridKind::Measured];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            GridKind::Graticule => "graticule",
+            GridKind::Measured => "measured",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GridKind::Graticule => "Graticule",
+            GridKind::Measured => "Measured grid",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<GridKind> {
+        GridKind::ALL.into_iter().find(|v| v.code().eq_ignore_ascii_case(s.trim()))
+    }
+
+    fn is_graticule(&self) -> bool {
+        *self == GridKind::Graticule
+    }
+}
+
+/// The widest step of a measured grid, in its units.
+pub const MAX_MEASURED_STEP: f64 = 10_000_000.0;
+/// The narrowest step of a measured grid, in its units (a metre).
+pub const MIN_MEASURED_STEP: f64 = 1.0;
+/// The longest coordinate system a measured grid keeps (a WKT's characters).
+pub const MAX_GRID_CRS: usize = 4096;
+/// The widest step of a graticule, in degrees.
+pub const MAX_GRATICULE_STEP: f64 = 90.0;
+
+/// The WGS 84 UTM zone's EPSG code at a point (32601–32660 north of the Equator, 32701–32760
+/// south): a measured grid's coordinate system when neither it nor the map names one.
+pub fn utm_epsg(lon: f64, lat: f64) -> u32 {
+    // (A longitude past ±180°, on a copy of the world, wraps round.)
+    let zone = if lon.is_finite() { ((lon + 180.0).rem_euclid(360.0) / 6.0).floor().clamp(0.0, 59.0) as u32 + 1 } else { 31 };
+    if lat < 0.0 { 32_700 + zone } else { 32_600 + zone }
 }
 
 impl Default for Grid {
@@ -118,6 +186,9 @@ impl Default for Grid {
             hemisphere: true,
             edges: GridEdges::default(),
             label_orientation: Orientation::default(),
+            kind: GridKind::Graticule,
+            crs: None,
+            short: false,
         }
     }
 }
@@ -165,6 +236,24 @@ impl Grid {
         } else {
             d
         }
+    }
+}
+
+impl Grid {
+    /// A measured grid's label: easting or northing `v` on lines `step` apart, whole (`543000`),
+    /// or [`short`](Grid::short) its kilometres' last two digits (`43`, `43.5` for a 500 m step).
+    pub fn measured_label(&self, v: f64, step: f64) -> String {
+        // Off by rounding error from the stepped loop: put back on the step.
+        let v = if step > 0.0 { (v / step).round() * step } else { v };
+        // (Short labels of a step of 100 km or more would all read 0: whole ones.)
+        if self.short && step < 100_000.0 {
+            let km = (v / 1000.0).rem_euclid(100.0);
+            // (99.9999… after rounding error is 0 again.)
+            let km = if (km - 100.0).abs() < 1e-6 { 0.0 } else { km };
+            return decimal(km, step / 1000.0);
+        }
+        let s = decimal(v.abs(), step);
+        if v < 0.0 && s.chars().any(|c| c.is_ascii_digit() && c != '0') { format!("-{s}") } else { s }
     }
 }
 
@@ -1610,6 +1699,46 @@ mod tests {
         l.clamp();
         assert_eq!(l.guides.x.len(), MAX_GUIDES);
         assert_eq!(l.guides.y, vec![-20.0, 50.0]);
+    }
+
+    /// A measured grid's labels: whole values, or the kilometres' last two digits; a graticule
+    /// saved before measured grids is written as it was; the UTM zone at a point.
+    #[test]
+    fn measured_grids_label_eastings_and_northings() {
+        let g = Grid { kind: GridKind::Measured, ..Grid::default() };
+        assert_eq!(g.measured_label(543_000.0, 1000.0), "543000");
+        assert_eq!(g.measured_label(5_262_000.0, 1000.0), "5262000");
+        assert_eq!(g.measured_label(2_500.5, 0.5), "2500.5");
+        assert_eq!(g.measured_label(-1_000.0, 1000.0), "-1000");
+        // Off the step by rounding error from the stepped loop: back on it.
+        assert_eq!(g.measured_label(543_000.000_000_1, 1000.0), "543000");
+        assert_eq!(g.measured_label(-0.000_000_1, 1000.0), "0");
+        let short = Grid { short: true, ..g.clone() };
+        assert_eq!(short.measured_label(543_000.0, 1000.0), "43");
+        assert_eq!(short.measured_label(5_262_000.0, 1000.0), "62");
+        assert_eq!(short.measured_label(5_200_000.0, 1000.0), "0");
+        assert_eq!(short.measured_label(543_500.0, 500.0), "43.5");
+        assert_eq!(short.measured_label(-1_000.0, 1000.0), "99");
+        // The UTM zone (WGS 84) at a point, north and south of the Equator.
+        assert_eq!(utm_epsg(8.73, 47.5), 32632);
+        assert_eq!(utm_epsg(-180.0, 10.0), 32601);
+        assert_eq!(utm_epsg(179.9, -10.0), 32760);
+        assert_eq!(utm_epsg(180.0, -10.0), 32701, "the antimeridian is -180°, zone 1's west edge");
+        assert_eq!(utm_epsg(151.2, -33.9), 32756);
+        assert_eq!(utm_epsg(f64::NAN, 0.0), 32631);
+        assert_eq!(utm_epsg(190.0, 10.0), 32602, "a world copy east of the antimeridian");
+        assert_eq!(short.measured_label(500_000.0, 100_000.0), "500000", "too wide a step for short labels");
+        // A graticule saved as it always was; a measured grid keeps its type, system and labels.
+        let saved = serde_json::to_value(Grid::default()).unwrap();
+        for k in ["kind", "crs", "short"] {
+            assert!(saved.get(k).is_none(), "{k} written for a graticule");
+        }
+        let m = Grid { kind: GridKind::Measured, crs: Some("EPSG:25832".into()), short: true, step: 1000.0, ..Grid::default() };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!((v["kind"].as_str(), v["crs"].as_str(), v["short"].as_bool()), (Some("measured"), Some("EPSG:25832"), Some(true)));
+        assert_eq!(serde_json::from_value::<Grid>(v).unwrap(), m);
+        assert_eq!(GridKind::from_name(" Measured "), Some(GridKind::Measured));
+        assert_eq!(GridKind::from_name("utm"), None);
     }
 
     #[test]

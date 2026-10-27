@@ -3532,6 +3532,77 @@ fn layout_legends_list_what_the_frame_draws() {
     assert!(matches!(old, rustgis_map::layout::ElementKind::Legend { all_classes: false, hide_other: false, .. }));
 }
 
+/// A map frame's grid can be a measured grid (#1008): eastings and northings in a projected
+/// system its step apart in metres, with whole or short labels; a system that isn't projected, or
+/// isn't one, is refused; a change of type starts its step afresh.
+#[test]
+fn a_frames_grid_can_be_a_measured_grid() {
+    use rustgis_map::layout::{ElementKind, GridKind};
+    let mut s = world();
+    s.run("layout.new", &json!({"page": "a4", "template": "map"})).unwrap();
+    let frame = s.project.layouts[0].elements.iter().find(|e| e.kind.code() == "mapFrame").unwrap().id;
+    let grid = |s: &Session| match &s.project.layouts[0].element(frame).unwrap().kind {
+        ElementKind::MapFrame { grid, .. } => grid.clone(),
+        k => panic!("{k:?}"),
+    };
+    s.run("layout.addElement", &json!({"kind": "grid", "step": 15})).unwrap();
+    assert_eq!(grid(&s).unwrap().step, 15.0);
+    // Measured: the step in metres (a graticule's 15° isn't carried over), the system named.
+    s.run("layout.update", &json!({"element": frame, "grid": {"type": "measured", "crs": " EPSG:25832 "}})).unwrap();
+    let g = grid(&s).unwrap();
+    assert_eq!((g.kind, g.step, g.crs.as_deref(), g.short), (GridKind::Measured, 0.0, Some("EPSG:25832"), false));
+    s.run("layout.update", &json!({"element": frame, "grid": {"step": 1000, "short": true}})).unwrap();
+    let g = grid(&s).unwrap();
+    assert_eq!((g.step, g.short), (1000.0, true));
+    // Steps in metres: from a metre to 10,000 km, 0 picks one; past 90 isn't a graticule's limit.
+    for (step, want) in [(0.25, 1.0), (1e12, rustgis_map::layout::MAX_MEASURED_STEP), (-5.0, 0.0), (250_000.0, 250_000.0)] {
+        s.run("layout.update", &json!({"element": frame, "grid": {"step": step}})).unwrap();
+        assert_eq!(grid(&s).unwrap().step, want, "{step}");
+    }
+    // A system by WKT or PROJ string too; "" goes back to the map's (or the UTM zone).
+    s.run("layout.update", &json!({"element": frame, "grid": {"crs": "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"}})).unwrap();
+    assert!(grid(&s).unwrap().crs.unwrap().starts_with("+proj=utm"));
+    s.run("layout.update", &json!({"element": frame, "grid": {"crs": ""}})).unwrap();
+    assert_eq!(grid(&s).unwrap().crs, None);
+    let before = grid(&s);
+    for bad in [
+        json!({"type": "utm"}),
+        json!({"crs": "EPSG:4326"}),
+        json!({"crs": "EPSG:1"}),
+        json!({"crs": "not a system"}),
+        json!({"crs": 25832}),
+        json!({"crs": format!("EPSG:25832 {}", "x".repeat(rustgis_map::layout::MAX_GRID_CRS))}),
+    ] {
+        assert!(s.run("layout.update", &json!({"element": frame, "grid": bad})).is_err(), "{bad}");
+        let mut p = bad.clone();
+        p["kind"] = json!("grid");
+        assert!(s.run("layout.addElement", &p).is_err(), "{bad}");
+    }
+    assert_eq!(grid(&s), before, "a refusal changes nothing");
+    // Back to a graticule: degrees again, the step starting afresh; kept with the project.
+    s.run("layout.update", &json!({"element": frame, "grid": {"type": "measured", "crs": "EPSG:2056", "step": 500}})).unwrap();
+    let text = serde_json::to_string(&s.project).unwrap();
+    let reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert_eq!(
+        match &reopened.project.layouts[0].element(frame).unwrap().kind {
+            ElementKind::MapFrame { grid, .. } => grid.clone(),
+            _ => None,
+        },
+        grid(&s)
+    );
+    s.run("layout.update", &json!({"element": frame, "grid": {"type": "graticule"}})).unwrap();
+    let g = grid(&s).unwrap();
+    assert_eq!((g.kind, g.step), (GridKind::Graticule, 0.0));
+    s.run("layout.update", &json!({"element": frame, "grid": {"step": 500}})).unwrap();
+    assert_eq!(grid(&s).unwrap().step, 90.0, "a graticule's step is degrees");
+    // It draws (a PNG of the page).
+    let path = std::env::temp_dir().join(format!("rustgis-measured-{}.png", std::process::id()));
+    s.run("layout.update", &json!({"element": frame, "grid": {"type": "measured", "step": 1000000}})).unwrap();
+    s.run("layout.export", &json!({"path": path, "dpi": 72})).unwrap();
+    assert!(std::fs::metadata(&path).is_ok_and(|m| m.len() > 1000));
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Grids, north arrows and scale bars take their cartographic options through commands (#327):
 /// checked before anything changes, kept when other options change, and saved with the layout.
 #[test]
