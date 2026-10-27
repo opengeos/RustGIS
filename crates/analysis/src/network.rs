@@ -96,7 +96,10 @@ pub fn shortest_route(
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 > 0.0 { (((p.x - a.x) * k * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
                 let q = Coord::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y));
-                Some((i, t, q, haversine_m(q, p)))
+                let d = haversine_m(q, p);
+                // A NaN distance (a broken segment) ranks last: `min_by` treats NaN as equal to
+                // everything, so it could keep one as the minimum and hide the valid segments.
+                Some((i, t, q, if d.is_nan() { f64::INFINITY } else { d }))
             })
             .min_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal))
             // The scan ranks segments by the cheap great-circle distance, which differs from the
@@ -454,6 +457,16 @@ mod tests {
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
         assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
+    }
+
+    #[test]
+    fn a_broken_segment_listed_first_does_not_hide_a_valid_one() {
+        // The NaN vertex makes the first segment's distance NaN, which the snap must not keep.
+        let mut ds = Dataset::new("roads", GeometryType::Polyline, vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.5), Coord::new(f64::NAN, 0.5)]])), vec![]);
+        ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
+        let r = shortest_route(&ds, &[0, 1], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
+        assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {
