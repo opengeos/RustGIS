@@ -163,7 +163,8 @@ jobs:
             [ .[]
               | select(.isResolved | not)
               | select(.comments.nodes[0] | trusted)
-              | select(.comments.nodes[-1].body | startswith("**Claude autofix (") | not)
+              | select(.comments.nodes[-1]
+                       | (.author.__typename == "Bot" and (.body | startswith("**Claude autofix ("))) | not)
               | { id, path, line: (.line // .originalLine), outdated: .isOutdated,
                   comments: [ .comments.nodes[] | select(trusted)
                               | { author: (.author.login // "ghost"), body } ] } ]
@@ -433,18 +434,16 @@ jobs:
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
       # Replies go out only for threads that were staged, whatever ids the report holds. A thread
-      # Claude calls fixed is resolved only when a fix commit was pushed. Resolving takes the
-      # maintainer's token: GITHUB_TOKEN can reply to a thread but not resolve it ("Resource not
-      # accessible by integration").
-      - name: Reply to and resolve the threads
+      # Claude calls fixed is resolved only when a fix commit was pushed.
+      - name: Reply to the threads
         if: needs.fix.outputs.threads != '0'
         env:
           GH_TOKEN: ${{ github.token }}
-          RESOLVE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           DIR: ${{ runner.temp }}/autofix
           LANDED: ${{ needs.fix.outputs.fixed == 'true' && steps.push.outputs.pushed == 'true' }}
         run: |
           set -euo pipefail
+          : > "$RUNNER_TEMP/to-resolve"
           jq -c --slurpfile t "$DIR/threads.json" \
             '($t[0] | map(.id)) as $ids | .[] | select(.id as $i | $ids | index($i))
              | select(.status | IN("fixed", "declined", "unclear"))' \
@@ -464,17 +463,31 @@ jobs:
                   comment { id }
                 }
               }' --silent || echo "::warning::Couldn't reply to $id."
-            if [ "$status" = fixed ]; then
-              GH_TOKEN="$RESOLVE_TOKEN" gh api graphql -f thread="$id" -f query='
-                mutation($thread: ID!) {
-                  resolveReviewThread(input: {threadId: $thread}) { thread { id } }
-                }' --silent || { echo "::error::Couldn't resolve $id."; touch "$RUNNER_TEMP/unresolved"; }
-            fi
+            # The loop runs in a pipe's subshell, so the threads to resolve go to a file.
+            if [ "$status" = fixed ]; then echo "$id" >> "$RUNNER_TEMP/to-resolve"; fi
           done
-          # A fixed thread left open is staged again next round, and Claude answers it twice.
-          test ! -e "$RUNNER_TEMP/unresolved"
 
+      # Its own step so only these calls see the maintainer's token, which resolving takes:
+      # GITHUB_TOKEN can reply to a thread but not resolve it ("Resource not accessible by
+      # integration"). A fixed thread left open is staged again next round and answered twice, so
+      # a failed resolve fails the step.
+      - name: Resolve the fixed threads
+        if: needs.fix.outputs.threads != '0'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+        run: |
+          failed=0
+          while read -r id; do
+            gh api graphql -f thread="$id" -f query='
+              mutation($thread: ID!) {
+                resolveReviewThread(input: {threadId: $thread}) { thread { id } }
+              }' --silent || { echo "::error::Couldn't resolve $id."; failed=1; }
+          done < "$RUNNER_TEMP/to-resolve"
+          exit "$failed"
+
+      # Posted once the push went through, even when a reply or a resolve failed after it.
       - name: Summarise
+        if: ${{ !cancelled() && steps.push.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.html_url }}
