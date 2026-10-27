@@ -254,7 +254,7 @@ jobs:
 
             Don't commit, push or run git commands that change the index; the workflow commits the merge.
           claude_args: |
-            --model claude-sonnet-5-5
+            --model claude-haiku-5-5
             --max-turns 120
             --allowedTools "Read,Grep,Glob,Edit,Write${{ github.event.pull_request.head.repo.full_name == github.repository && ',Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo test:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)' || '' }}"
 
@@ -307,7 +307,7 @@ jobs:
               - `.autofix/report.json` — a JSON array with one object per thread: `{"id": "<thread id>", "status": "fixed" | "declined" | "unclear", "reply": "<what you changed, or why not>"}`. Replies are posted on the threads as written: plain, short, no greetings.
               - `.autofix/commit-message.txt` — a commit message for the change: a subject line under 72 characters in the repository's style (for example `fix(labels): …`), a blank line, then a short body wrapped at 72 columns.
           claude_args: |
-            --model claude-sonnet-5-5
+            --model claude-haiku-5-5
             --max-turns 120
             --allowedTools "Read,Grep,Glob,Edit,Write${{ github.event.pull_request.head.repo.full_name == github.repository && ',Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo clippy:*),Bash(cargo test:*),Bash(git diff:*),Bash(git status:*),Bash(git log:*),Bash(git show:*)' || '' }}"
 
