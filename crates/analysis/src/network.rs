@@ -107,7 +107,8 @@ pub fn shortest_route(
     // Each end becomes a node on its segment, joined to the segment's two ends.
     let attach = |p: Coord, nodes: &mut Vec<Coord>, adj: &mut Vec<Vec<(usize, f64, f64, usize)>>| -> Result<(usize, usize, f64), String> {
         let (si, t, q, d) = nearest(p, nodes).ok_or("the layer has no lines")?;
-        if d > snap_m {
+        // A NaN distance (a broken end) fails the check too, rather than snapping to a random segment.
+        if d.is_nan() || d > snap_m {
             return Err(format!("a route end is more than {} from the network", rustgis_geom::format_distance(snap_m)));
         }
         let &(a, b, weight, row) = segs.get(si).ok_or("the layer has no lines")?;
@@ -452,6 +453,7 @@ mod tests {
         assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
+        assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {

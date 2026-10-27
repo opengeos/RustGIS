@@ -52,7 +52,7 @@ fn selected_units_overwrite_and_undo() {
 #[test]
 fn areas_are_on_the_wgs84_ellipsoid() {
     // An equator 1° × 1° box measured by GeographicLib itself (pyproj.Geod / Polygon.Compute on
-    // WGS 84), so the attribute table and the geoprocessing tool agree with each other (#939).
+    // WGS 84); the attribute table's Calculate Geometry values are checked against those (#939).
     let ring = vec![Coord::new(0.0, 0.0), Coord::new(1.0, 0.0), Coord::new(1.0, 1.0), Coord::new(0.0, 1.0)];
     let (mut s, id) = session(GeometryType::Polygon, vec![Some(Geometry::Polygon(vec![vec![ring]]))]);
     s.run("edit.calculateGeometry", &json!({"layer":id,"field":"result","overwrite":true,"property":"area","unit":"m2","scope":"all"}))
