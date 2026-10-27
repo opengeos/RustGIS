@@ -467,16 +467,18 @@ mod tests {
     #[test]
     fn wgs84_rings_keep_full_turn_edges_and_large_areas() {
         let c = Coord::new;
-        // A globe-wide band: its -180° to 180° edges are parallels, not zero-length hops.
+        // A globe-wide band: its -180° to 180° edges are parallels, not zero-length hops. Measured
+        // on the sphere: 2πR²(sin 10° − sin −10°) ≈ 8.85e13 m².
         let band = [c(-180.0, -10.0), c(180.0, -10.0), c(180.0, 10.0), c(-180.0, 10.0)];
         let (_, area) = wgs84_ring_perimeter_area_m2(&band);
-        let sphere = geodesic_ring_area_m2(&band);
-        assert!(area > 1.0e13 && (area / sphere - 1.0).abs() < 0.01, "{area} {sphere}");
-        // A ring around the North Pole's complement: the southern cap of latitude < 60° is more
-        // than half the Earth; it must not come back as the northern cap.
-        let big: Vec<Coord> = (0..=36).map(|i| c(-180.0 + f64::from(i) * 10.0, 60.0)).collect();
-        let small = wgs84_ring_perimeter_area_m2(&big).1;
-        assert!(small < WGS84_AREA_M2 / 2.0, "{small}");
+        assert!(area > 8.5e13 && area < 9.2e13, "{area}");
+        // A ring of 36 vertices at 60° N, closed by a wrapped 10° edge (no full-turn edge): it traces
+        // the southern cap of latitude < 60°, more than half the Earth, so it must not come back as
+        // the northern cap. Its area agrees with the sphere's, as the ring's own edges define it.
+        let big: Vec<Coord> = (0..36).map(|i| c(-180.0 + f64::from(i) * 10.0, 60.0)).collect();
+        let area = wgs84_ring_perimeter_area_m2(&big).1;
+        assert!(area > WGS84_AREA_M2 / 2.0, "{area}");
+        assert!((area / geodesic_ring_area_m2(&big) - 1.0).abs() < 0.01, "{area}");
         // A broken latitude is no pole.
         assert!(wgs84_length_m(&[c(0.0, 0.0), c(0.0, f64::INFINITY)]).is_nan());
         assert!(wgs84_distance_m(c(0.0, f64::NEG_INFINITY), c(0.0, 0.0)).is_nan());
