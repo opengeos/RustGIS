@@ -175,7 +175,8 @@ gp.run={"tool":"intersect","params":{"input":"parcels","overlay":"floodplain","o
 
 **Identity** (`identity`) takes the same parameters. Each input feature gives its Intersect
 features, then its part outside every overlay polygon, with empty overlay attributes. Every parcel
-is then in the result, in or out of the floodplain. **Union** (`union`) takes two polygon
+is then in the result, in or out of the floodplain; one without geometry is kept as it is (Intersect
+leaves it out). **Union** (`union`) takes two polygon
 layers and adds, after Identity's features, each overlay polygon's part outside every input polygon,
 with empty input attributes: together the features cover everything either layer covers. Both
 follow Intersect's rules for field names, touching parts and selections. Where overlay polygons
