@@ -158,9 +158,12 @@ jobs:
           jq -s '
             def trusted: (.author.__typename == "Bot")
               or (.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"));
+            # A thread whose last comment is an autofix reply was answered in an earlier round;
+            # it comes back once a reviewer replies to it.
             [ .[]
               | select(.isResolved | not)
               | select(.comments.nodes[0] | trusted)
+              | select(.comments.nodes[-1].body | startswith("**Claude autofix (") | not)
               | { id, path, line: (.line // .originalLine), outdated: .isOutdated,
                   comments: [ .comments.nodes[] | select(trusted)
                               | { author: (.author.login // "ghost"), body } ] } ]
@@ -430,11 +433,14 @@ jobs:
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
       # Replies go out only for threads that were staged, whatever ids the report holds. A thread
-      # Claude calls fixed is resolved only when a fix commit was pushed.
+      # Claude calls fixed is resolved only when a fix commit was pushed. Resolving takes the
+      # maintainer's token: GITHUB_TOKEN can reply to a thread but not resolve it ("Resource not
+      # accessible by integration").
       - name: Reply to and resolve the threads
         if: needs.fix.outputs.threads != '0'
         env:
           GH_TOKEN: ${{ github.token }}
+          RESOLVE_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           DIR: ${{ runner.temp }}/autofix
           LANDED: ${{ needs.fix.outputs.fixed == 'true' && steps.push.outputs.pushed == 'true' }}
         run: |
@@ -459,12 +465,14 @@ jobs:
                 }
               }' --silent || echo "::warning::Couldn't reply to $id."
             if [ "$status" = fixed ]; then
-              gh api graphql -f thread="$id" -f query='
+              GH_TOKEN="$RESOLVE_TOKEN" gh api graphql -f thread="$id" -f query='
                 mutation($thread: ID!) {
                   resolveReviewThread(input: {threadId: $thread}) { thread { id } }
-                }' --silent || echo "::warning::Couldn't resolve $id."
+                }' --silent || { echo "::error::Couldn't resolve $id."; touch "$RUNNER_TEMP/unresolved"; }
             fi
           done
+          # A fixed thread left open is staged again next round, and Claude answers it twice.
+          test ! -e "$RUNNER_TEMP/unresolved"
 
       - name: Summarise
         env:
