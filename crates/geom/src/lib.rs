@@ -151,10 +151,15 @@ impl Extent {
 /// (as `geodesic_interpolate` and `Aeqd::inverse` keep one) projects onto the world, never metres
 /// past its ±20,037,508.34 m edge (#940).
 pub fn lonlat_to_merc(c: Coord) -> Coord {
-    let lat = c.y.clamp(-MAX_LAT, MAX_LAT).to_radians();
     // A finite longitude outside −180..180 folds into that range; a non-finite one stays broken
     // rather than quietly becoming the prime meridian.
     let lon = if !c.x.is_finite() || (c.x >= -180.0 && c.x <= 180.0) { c.x } else { wrap_lon(c.x) };
+    merc_unfolded(lon, c.y)
+}
+
+/// Longitude/latitude (degrees) → Web Mercator metres, with the longitude taken as it is: no fold.
+fn merc_unfolded(lon: f64, lat: f64) -> Coord {
+    let lat = lat.clamp(-MAX_LAT, MAX_LAT).to_radians();
     Coord::new(MERCATOR_R * lon.to_radians(), MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat / 2.0).tan().ln())
 }
 
@@ -165,12 +170,16 @@ pub fn merc_to_lonlat(c: Coord) -> Coord {
     Coord::new(lon, lat)
 }
 
-/// Projects a lon/lat extent to Web Mercator.
+/// Projects a lon/lat extent to Web Mercator. An extent kept unwrapped across the antimeridian
+/// (179.9° to 180.1°) moves both edges by the same whole turn, so its west edge lands in
+/// −180..180, and projects without folding: a folded east edge would span the whole world (#940).
 pub fn extent_to_merc(e: &Extent) -> Extent {
     if e.is_empty() {
         return *e;
     }
-    Extent::from_points(lonlat_to_merc(Coord::new(e.min_x, e.min_y)), lonlat_to_merc(Coord::new(e.max_x, e.max_y)))
+    let turns = if e.min_x.is_finite() { ((e.min_x + 180.0) / 360.0).floor() } else { 0.0 };
+    let (west, east) = (e.min_x - 360.0 * turns, e.max_x - 360.0 * turns);
+    Extent::from_points(merc_unfolded(west, e.min_y), merc_unfolded(east, e.max_y))
 }
 
 /// Great-circle distance between two lon/lat points (metres); NaN for non-finite coordinates.
@@ -468,6 +477,19 @@ mod tests {
         // A broken longitude stays broken, never a plausible place near Greenwich.
         assert!(lonlat_to_merc(Coord::new(f64::NAN, 0.0)).x.is_nan());
         assert!(lonlat_to_merc(Coord::new(f64::INFINITY, 0.0)).x.is_infinite());
+    }
+
+    #[test]
+    fn extent_across_the_antimeridian_keeps_its_width() {
+        // 179.9° to 180.1° is 0.2° wide: a sliver past the edge, not the whole world (#940). Written
+        // folded (−180.1° to −179.9°), it is the same place.
+        let across = extent_to_merc(&Extent::new(179.9, -1.0, 180.1, 1.0));
+        assert!((across.width() - MERCATOR_R * 0.2_f64.to_radians()).abs() < 1e-6, "{}", across.width());
+        let folded = extent_to_merc(&Extent::new(-180.1, -1.0, -179.9, 1.0));
+        assert!((folded.min_x - across.min_x).abs() < 1e-6 && (folded.max_x - across.max_x).abs() < 1e-6);
+        // An extent inside the world projects as before.
+        let plain = extent_to_merc(&Extent::new(-10.0, -5.0, 20.0, 5.0));
+        assert_eq!(plain, Extent::from_points(lonlat_to_merc(Coord::new(-10.0, -5.0)), lonlat_to_merc(Coord::new(20.0, 5.0))));
     }
 
     #[test]

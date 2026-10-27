@@ -850,6 +850,11 @@ impl Flat {
         {
             return crate::antimeridian::cut_with_margin(g, edge.lon - 180.0, &|lat| edge.stray_at(lat)).map_coords(&f);
         }
+        // Mercator's edge is the antimeridian: a run unwrapped across it is cut there (#940), so the
+        // part past it is drawn on the far side rather than as a line across the map.
+        if let Flat::Mercator = self {
+            return crate::antimeridian::cut(g, 0.0).map_coords(&f);
+        }
         g.map_coords(&f)
     }
 
@@ -1312,6 +1317,19 @@ mod tests {
         assert_eq!(strays[EDGE_SAMPLES - 1], 0.0);
         let expected = 1.5 * 0.001 / 85.0_f64.to_radians().cos(); // 80°N's, scaled to 85°N
         assert!((strays[EDGE_SAMPLES - 2] - expected).abs() / expected < 0.01, "{}", strays[EDGE_SAMPLES - 2]);
+    }
+
+    #[test]
+    fn mercator_features_unwrapped_across_the_antimeridian_are_cut_there() {
+        use rustgis_data::Geometry;
+        // A line unwrapped from 179° to 181° is two pieces, one on each edge of the world, and
+        // neither reaches past it (#940).
+        let line = Geometry::Line(vec![vec![Coord::new(179.0, 0.0), Coord::new(181.0, 0.0)]]);
+        let Geometry::Line(parts) = Flat::Mercator.project(&line) else { panic!("a line") };
+        assert_eq!(parts.len(), 2, "one piece on each side: {parts:?}");
+        let half = rustgis_geom::MERCATOR_R * std::f64::consts::PI;
+        assert!(parts.iter().flatten().all(|c| c.x.abs() <= half + 1e-6), "{parts:?}");
+        assert!(parts.iter().any(|p| p.iter().all(|c| c.x > 0.0)) && parts.iter().any(|p| p.iter().all(|c| c.x < 0.0)), "{parts:?}");
     }
 
     #[test]

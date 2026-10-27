@@ -11,8 +11,8 @@ field from an expression; **Calculate Geometry** (in the attribute table's toolb
 existing numeric field with each feature's area, perimeter, length or X/Y coordinate, in the units
 you choose, for all features or the selected ones. Length and perimeter include feet and miles;
 area includes square feet (`ft2`), acres (`ac`) and square miles (`mi2`). Every edit is one undo
-step. Areas, perimeters and lengths measure on the WGS 84 ellipsoid, the same measure the
-geoprocessing tools use.
+step. Areas, perimeters and lengths measure on the WGS 84 ellipsoid, the same measure the WGS 84
+geoprocessing tools use. Spatial Join's **Largest overlap** is the exception: it measures on a sphere.
 
 Undo (++ctrl+z++) and Redo (++ctrl+y++ or ++ctrl+shift+z++) restore project changes, not just
 feature edits; use ++cmd++ instead of ++ctrl++ on macOS. While typing in a text field, those
