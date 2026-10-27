@@ -84,7 +84,8 @@ project.importGeolibre={"url":"https://example.org/watershed.geolibre"}
 
 The command also accepts JSON `text`, base64 `data`, and `dir` for moved local data files.
 An absolute data path is tried first, then its filename under `dir` (the project's folder by
-default). Browser imports can use inline GeoJSON and web addresses; local paths need desktop.
+default). A desktop project may reference files outside that folder; import projects you trust
+to select those files. Browser imports can use inline GeoJSON and web addresses; local paths need desktop.
 A web app link such as `?project=https://example.org/watershed.geolibre` imports the same map.
 This startup link takes precedence over other data/style links so download timing cannot change
 which map receives them.
@@ -100,7 +101,7 @@ sizes use RustGIS's area scaling. Label halos use RustGIS defaults. Tile overlay
 layers, and nested groups become flat folders with inherited visibility and opacity retained.
 URL data downloaded in the browser fills its reserved layer position when it arrives; wait for
 those downloads before saving. A browser import can queue at most 16 whole-file downloads
-(fewer if other downloads are waiting); a larger batch is refused before creating its map.
+(fewer if other downloads are queued, active, or awaiting completion); a larger batch is refused before creating its map.
 Split that project into smaller imports or use the desktop app. Streaming tiles and COGs do
 not consume those download slots. Desktop URL imports run synchronously, like Add Data from URL;
 a slow source can delay completion. Zarr sources use their saved variable and dimension indices,

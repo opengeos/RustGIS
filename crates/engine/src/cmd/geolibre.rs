@@ -103,30 +103,22 @@ fn import_project(s: &mut Session, p: &Value) -> CmdResult {
             report.skipped("", "malformed layer record");
             continue;
         }
-        let mut record = record.clone();
-        // Feature layers retain their own settings; their flat RustGIS folder applies the
-        // inherited settings. Tiles cannot belong to folders, so bake the effective look there.
-        let kind = string(&record, "type");
-        let source = &record["source"];
-        let address = if string(&record, "sourcePath").is_empty() { string(source, "url") } else { string(&record, "sourcePath") };
-        let tile = matches!(kind, "xyz" | "wms" | "wmts" | "vector-tiles" | "pmtiles" | "mbtiles")
-            || (kind == "raster" && !array(source, "tiles").is_empty())
-            || (matches!(kind, "cog" | "raster") && super::layer::is_tiff_url(address) && rustgis_map::tiles::is_web(address));
-        if tile {
-            let (visible, opacity) = group_look(&group_index, string(&record, "groupId"));
-            record["opacity"] = json!(number(&record, "opacity", 1.0).clamp(0.0, 1.0) * opacity);
-            record["visible"] = json!(boolean(&record, "visible", true) && visible);
-        }
         let before = s.project.clone();
         let active = s.active_layer;
         let requests = s.url_requests.len();
-        match add_layer(s, &record, dir.as_deref(), &mut report) {
-            Ok(Some(id)) => {
+        let folder = group_look(&group_index, string(record, "groupId"));
+        match add_layer(s, record, dir.as_deref(), &mut report, folder) {
+            Ok(Added::Feature(id)) => {
                 added.push(name.to_string());
                 order.push(id);
-                groups.entry(string(&record, "groupId").into()).or_default().push(id);
+                groups.entry(string(record, "groupId").into()).or_default().push(id);
             }
-            Ok(None) => {
+            Ok(Added::Tile(index)) => {
+                let (visible, opacity) = folder;
+                if let Some(tile) = s.map_mut().tiles.get_mut(index) {
+                    tile.visible &= visible;
+                    tile.opacity *= opacity as f32;
+                }
                 added.push(name.to_string());
             }
             Err(e) => {
@@ -218,7 +210,10 @@ fn ensure_download_capacity(s: &Session, layers: &[Value]) -> Result<(), String>
                     || (kind == "raster" && array(&r["source"], "tiles").is_empty() && !super::layer::is_tiff_url(address)))
         })
         .count();
-    let available = crate::MAX_URL_REQUESTS.saturating_sub(s.url_requests.len());
+    // Once the UI drains url_requests, each Zarr reader (including a queued reader)
+    // owns a session download id. Count all stages so a second import sees those slots.
+    let occupied = s.url_requests.len().saturating_add(s.downloading.len()).saturating_add(s.downloaded.len());
+    let available = crate::MAX_URL_REQUESTS.saturating_sub(occupied);
     if count > available {
         return Err(format!(
             "GeoLibre import needs {count} downloads, but only {available} of {} browser download slots are available; split the project or wait for pending downloads before importing",
@@ -228,9 +223,15 @@ fn ensure_download_capacity(s: &Session, layers: &[Value]) -> Result<(), String>
     Ok(())
 }
 
+/// The actual storage chosen by a source loader determines whether a folder owns its look.
+enum Added {
+    Feature(u32),
+    Tile(usize),
+}
+
 /// Adds data or tiles, retaining the original layer's presentation. Tile layers have their own
 /// order in RustGIS, so mixing them with features is explicitly reported.
-fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report) -> Result<Option<u32>, String> {
+fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report, _folder: (bool, f64)) -> Result<Added, String> {
     let name = string(r, "name");
     let kind = string(r, "type");
     let src = &r["source"];
@@ -252,11 +253,14 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
         }
         let address = resolve(address, dir)?;
         if kind == "mbtiles" && rustgis_map::tiles::is_web(&address) {
+            let index;
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let bytes = crate::render::rustgis_tiles::cache::download_blocking(&address)?;
                 let out = super::raster::add_named_bytes(s, &json!({"name":name}), format!("{}.mbtiles", pending_token()), bytes)?;
-                if let Some(t) = out.get("index").and_then(Value::as_u64).and_then(|i| s.map_mut().tiles.get_mut(i as usize)) {
+                index =
+                    out.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or("archive added no tile layer")?;
+                if let Some(t) = s.map_mut().tiles.get_mut(index) {
                     t.visible = boolean(r, "visible", true);
                     t.opacity = number(r, "opacity", 1.0).clamp(0.0, 1.0) as f32;
                 }
@@ -268,11 +272,15 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
                 tile.id = token.clone();
                 tile.visible = false;
                 s.map_mut().tiles.insert(0, tile);
-                s.request_url(&json!({"url":address,"whole":true,"name":name,"geolibreLayer":{"token":token,"record":r}}))?;
+                index = 0;
+                let mut saved = r.clone();
+                saved["visible"] = json!(boolean(r, "visible", true) && _folder.0);
+                saved["opacity"] = json!(number(r, "opacity", 1.0).clamp(0.0, 1.0) * _folder.1);
+                s.request_url(&json!({"url":address,"whole":true,"name":name,"geolibreLayer":{"token":token,"record":saved}}))?;
                 report.approximated(name, "MBTiles archive is downloading; wait before saving");
             }
             report.approximated(name, "tile overlays draw above feature layers; tile vector styling uses RustGIS defaults");
-            return Ok(None);
+            return Ok(Added::Tile(index));
         }
         if matches!(kind, "xyz" | "wms" | "wmts" | "vector-tiles" | "pmtiles" | "mbtiles")
             || (kind == "raster" && !array(src, "tiles").is_empty())
@@ -299,14 +307,16 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
                 q["tms"] = json!(true);
             }
             let out = s.run_part("map.addTiles", &q)?;
-            if let Some(t) = out.get("index").and_then(Value::as_u64).and_then(|i| s.map_mut().tiles.get_mut(i as usize)) {
+            let index =
+                out.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or("source added no tile layer")?;
+            if let Some(t) = s.map_mut().tiles.get_mut(index) {
                 t.visible = boolean(r, "visible", true);
             }
             report.approximated(name, "tile overlays draw above feature layers; feature/tile interleaving is not retained");
             if matches!(kind, "vector-tiles" | "pmtiles" | "mbtiles") {
                 report.approximated(name, "tile vector styling uses RustGIS defaults");
             }
-            return Ok(None);
+            return Ok(Added::Tile(index));
         }
         if !matches!(kind, "geojson" | "cog" | "raster" | "flatgeobuf" | "geoparquet" | "zarr" | "lidar") {
             return Err(format!("unsupported {kind} layer"));
@@ -337,15 +347,13 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
                 }
             }
             q["geolibreLayer"] = json!({"token":token,"record":r});
-            if kind == "zarr" {
-                s.request_url(&q)?;
-            } else {
-                s.run_part("layer.addUrl", &q)?;
-            }
+            s.request_url(&q)?;
             report.approximated(name, "URL data is downloading; its saved style is applied when the download completes");
-            return Ok(Some(id));
+            return Ok(Added::Feature(id));
         }
-        if kind == "zarr" {
+        if kind == "cog" && remote {
+            super::layer::add_cog(s, &q, &address)?
+        } else if kind == "zarr" {
             if let Some(v) = src.get("variable") {
                 q["variable"] = v.clone();
             }
@@ -365,7 +373,7 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
             t.visible = boolean(r, "visible", true);
             t.opacity = number(r, "opacity", 1.0).clamp(0.0, 1.0) as f32;
         }
-        return Ok(None);
+        return Ok(Added::Tile(index));
     }
     let ids: Vec<_> = s.map().layers.iter().filter(|l| !before.contains(&l.id)).map(|l| l.id).collect();
     if ids.len() != 1 {
@@ -374,7 +382,7 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report)
     let id = ids.first().copied().ok_or("source added no map layer")?;
     let layer = s.map_mut().layer_mut(id).ok_or("source added no map layer")?;
     geolibre::style::apply(layer, r, report);
-    Ok(Some(id))
+    Ok(Added::Feature(id))
 }
 
 /// Absolute saved paths are tried first, then their basename in the supplied project folder.
@@ -588,5 +596,26 @@ mod admission_tests {
         let cycle = [json!({"id":"a","parentId":"b","opacity":0.5}), json!({"id":"b","parentId":"a","opacity":0.25,"visible":false})];
         let index = cycle.iter().map(|g| (string(g, "id"), g)).collect();
         assert_eq!(group_look(&index, "a"), (false, 0.125));
+    }
+
+    /// Moving an earlier import from engine requests into UI-owned downloads must not free slots.
+    #[test]
+    fn geolibre_browser_admission_counts_zarr_reads_after_the_ui_takes_requests() {
+        let mut s = Session::new(crate::project::Project::default());
+        let before = s.project.maps.len();
+        let layers: Vec<_> = (0..10).map(|i| json!({"type":"zarr","source":{"url":format!("https://example.org/{i}.zarr")}})).collect();
+        for i in 0..10 {
+            s.request_url(&json!({"url":format!("https://example.org/{i}.zarr"),"geolibreZarr":true})).unwrap();
+        }
+        let requests = s.take_url_requests();
+        let ids: Vec<_> = requests.iter().map(|_| s.download_started()).collect();
+        assert!(ensure_download_capacity(&s, &layers).is_err());
+        assert!(ensure_download_capacity(&s, &layers[..6]).is_ok());
+        // Landed bytes still await their completion callback and retain the slot.
+        assert!(s.download_landed(ids[0], Vec::new()));
+        assert!(ensure_download_capacity(&s, &layers).is_err());
+        assert!(ensure_download_capacity(&s, &layers[..6]).is_ok());
+        assert_eq!(s.project.maps.len(), before);
+        assert!(s.url_requests.is_empty());
     }
 }

@@ -19136,3 +19136,97 @@ fn geolibre_group_without_id_does_not_claim_ungrouped_layers() {
     let id = s.map().layers[0].id;
     assert!(s.map().group_of(id).is_none());
 }
+
+/// Declared COGs stream even without a TIFF suffix; a tile's folder look is baked only once.
+#[test]
+fn geolibre_extensionless_cog_uses_tile_storage_and_inherited_opacity() {
+    let mut s = world();
+    let text = json!({"version":"0.2.0","name":"COG","mapView":{},"basemapStyleUrl":"","layerGroups":[{"id":"g","name":"Folder","opacity":0.5}],"layers":[{"id":"c","name":"Coverage","type":"cog","groupId":"g","opacity":0.6,"source":{"url":"http://127.0.0.1:9/extensionless-coverage"}}]}).to_string();
+    let out = s.run("project.importGeolibre", &json!({"text":text})).unwrap();
+    assert_eq!(out["layers"], json!(["Coverage"]));
+    assert!(s.map().layers.is_empty());
+    assert_eq!(s.map().tiles.len(), 1);
+    assert_eq!(s.map().tiles[0].kind, rustgis_map::tiles::TileKind::Cog);
+    assert!((s.map().tiles[0].opacity - 0.3).abs() < 1e-6);
+    assert!(s.map().groups.iter().all(|g| g.children.is_empty()));
+    assert!(s.take_url_requests().is_empty());
+}
+
+/// Public fetches cannot smuggle importer callbacks past the dedicated user-only command.
+#[test]
+fn geolibre_callback_state_is_rejected_by_public_url_fetches() {
+    let mut s = world();
+    for key in ["geolibreProject", "geolibreLayer", "geolibreZarr"] {
+        let mut p = json!({"url":"http://127.0.0.1:9/data.geojson"});
+        p[key] = json!(true);
+        assert!(s.run("layer.addUrl", &p).unwrap_err().contains("state is internal"));
+    }
+    assert!(crate::cmd::plugins::user_only("layer.addDownload"));
+    assert!(s.take_url_requests().is_empty());
+}
+
+/// A non-tiled TIFF must remain a grouped raster after the native COG probe falls back.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn geolibre_remote_plain_tiff_folder_opacity_is_not_baked_twice() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let raster = rustgis_data::raster::ascii::read(
+        "ncols 2\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\n1 2\n3 4\n",
+        "plain",
+        Some(rustgis_data::raster::Crs::LonLat),
+    )
+    .unwrap();
+    let bytes = rustgis_data::raster::geotiff::write(&raster, 0).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}/plain.tif", listener.local_addr().unwrap());
+    let stop = Arc::new(AtomicBool::new(false));
+    let shutdown = stop.clone();
+    let server = std::thread::spawn(move || {
+        while !shutdown.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    continue;
+                }
+                Err(_) => break,
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            let mut input = [0; 8192];
+            let n = stream.read(&mut input).unwrap_or(0);
+            let request = String::from_utf8_lossy(&input[..n]).to_ascii_lowercase();
+            let range = request.lines().find_map(|line| line.strip_prefix("range: bytes="));
+            let (start, end) = range
+                .and_then(|r| r.split_once('-'))
+                .map(|(a, b)| (a.parse::<usize>().unwrap_or(0), b.parse::<usize>().unwrap_or(bytes.len() - 1).min(bytes.len() - 1)))
+                .unwrap_or((0, bytes.len() - 1));
+            let body = bytes.get(start..=end).unwrap_or_default();
+            let status = if range.is_some() { "206 Partial Content" } else { "200 OK" };
+            let head = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",
+                body.len(),
+                bytes.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    let mut s = world();
+    let text = json!({"version":"0.2.0","name":"Plain TIFF","mapView":{},"basemapStyleUrl":"","layerGroups":[{"id":"g","name":"Folder","opacity":0.5}],"layers":[{"id":"r","name":"Raster","type":"raster","groupId":"g","opacity":0.6,"source":{"url":url}}]}).to_string();
+    let result = s.run("project.importGeolibre", &json!({"text":text}));
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    let out = result.unwrap();
+    assert_eq!(out["layers"], json!(["Raster"]), "{out}");
+    let layer = s.map().layer_by_name("Raster").unwrap();
+    assert!(layer.is_raster());
+    assert!((layer.transparency - 40.0).abs() < 1e-5);
+    let group = s.map().group_of(layer.id).unwrap();
+    assert_eq!(group.transparency, 50.0);
+    assert!(s.map().tiles.is_empty());
+}

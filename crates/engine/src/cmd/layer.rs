@@ -2504,6 +2504,9 @@ pub fn url_file_name(url: &str, bytes: &[u8]) -> Result<String, String> {
 /// request is kept for the app ([`Session::request_url`]), which downloads and adds it as its own
 /// Home › Add › Add Data › From URL does, so a plugin, a script or the assistant can add data by address too.
 pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
+    if ["geolibreProject", "geolibreLayer", "geolibreZarr"].iter().any(|key| p.get(key).is_some()) {
+        return Err("GeoLibre download state is internal; use project.importGeolibre".into());
+    }
     let url = ps(p, "url").map(str::trim).filter(|u| !u.is_empty()).ok_or("url is required")?;
     // An address read through a saved S3 connection is judged by the address it wraps; the whole
     // address stays what is fetched and kept.
@@ -2685,8 +2688,11 @@ fn add_download(s: &mut Session, p: &Value) -> CmdResult {
     let i = s.downloaded.iter().position(|(d, _)| *d == id).ok_or("no such download (it was dropped when another project opened)")?;
     let (_, bytes) = s.downloaded.remove(i);
     if p.get("geolibreProject").and_then(Value::as_bool) == Some(true) {
-        use base64::Engine;
-        return s.run_part("project.importGeolibre", &json!({"data": base64::engine::general_purpose::STANDARD.encode(bytes)}));
+        if bytes.len() > rustgis_map::geolibre::MAX_TEXT {
+            return Err("GeoLibre project exceeds 64 MiB".into());
+        }
+        let text = String::from_utf8(bytes).map_err(|_| "GeoLibre project must be UTF-8 JSON")?;
+        return s.run_part("project.importGeolibre", &json!({"text":text}));
     }
     if p.get("geolibreLayer").is_some() {
         let name = if b(p, "geolibreZarr") == Some(true) { "zarr.tif".into() } else { url_file_name(&url, &bytes)? };

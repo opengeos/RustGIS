@@ -32,13 +32,13 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
     if text.len() > MAX_TEXT {
         return Err("GeoLibre project exceeds 64 MiB".into());
     }
-    let v: Value = serde_json::from_str(text).map_err(|e| format!("not a GeoLibre project: {e}"))?;
-    let name = string(&v, "name");
-    let version = string(&v, "version");
+    let mut v: Value = serde_json::from_str(text).map_err(|e| format!("not a GeoLibre project: {e}"))?;
+    let name = string(&v, "name").to_string();
+    let version = string(&v, "version").to_string();
     if name.is_empty() || version.is_empty() || !v.get("mapView").is_some_and(Value::is_object) {
         return Err("GeoLibre project requires name, version and mapView".into());
     }
-    if !matches!(version, "0.1.0" | "0.2.0") {
+    if !matches!(version.as_str(), "0.1.0" | "0.2.0") {
         report.approximated("", format!("unrecognised project version {version}; reading supported fields"));
     }
     for key in ["layers", "layerGroups", "bookmarks"] {
@@ -50,8 +50,7 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
     if layers.len() > MAX_ITEMS {
         return Err("GeoLibre project has more than 1000 layers".into());
     }
-    let groups = array(&v, "layerGroups");
-    if groups.len() > MAX_ITEMS {
+    if array(&v, "layerGroups").len() > MAX_ITEMS {
         return Err("GeoLibre project has more than 1000 groups".into());
     }
     let mut ids = std::collections::HashSet::new();
@@ -61,7 +60,10 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
             return Err(format!("duplicate GeoLibre layer id {id}"));
         }
     }
-    let mut layers = layers.to_vec();
+    let mut layers = match v.get_mut("layers").map(Value::take) {
+        Some(Value::Array(layers)) => layers,
+        _ => Vec::new(),
+    };
     for layer in &mut layers {
         // Top-level styles override only the fields they explicitly supply.
         if let Some(top) = (!string(layer, "id").is_empty())
@@ -101,10 +103,10 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
         Bookmark::new(string(b,"name"), camera(&view))
     }).collect();
     Ok(Project {
-        name: name.to_string(),
+        name,
         camera: camera(v.get("mapView").unwrap_or(&Value::Null)),
         layers,
-        groups: groups.to_vec(),
+        groups: array(&v, "layerGroups").to_vec(),
         bookmarks,
         basemap: v.get("basemapStyleUrl").and_then(Value::as_str).unwrap_or("https://tiles.openfreemap.org/styles/liberty").to_string(),
         basemap_visible: boolean(&v, "basemapVisible", true),

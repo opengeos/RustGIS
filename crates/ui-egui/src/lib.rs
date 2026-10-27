@@ -3295,10 +3295,7 @@ impl RustGisApp {
     /// keeping its own name when the address has none). Unlike [`Self::open_bytes`], it never takes
     /// a picker's pending item: the download isn't the file the user is picking.
     fn open_project_bytes(&mut self, file: Option<&str>, bytes: &[u8]) -> Result<Value, String> {
-        if file.is_some_and(|f| {
-            let f = f.to_ascii_lowercase();
-            f.ends_with(".geolibre") || f.ends_with(".geolibre.json")
-        }) {
+        if file.is_some_and(rustgis_engine::map::geolibre::is_project_file) {
             let text = std::str::from_utf8(bytes).map_err(|_| tl!("Not a GeoLibre project").to_string())?;
             let result = self.run("project.importGeolibre", json!({"text":text}));
             self.map.invalidate();
