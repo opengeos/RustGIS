@@ -522,6 +522,11 @@ fn hostile_arguments_never_panic() {
         json!({"tool": "nope", "params": {"input": "Nope"}}),
         json!({"layer": "Cities", "where": "pop_max >", "limit": 1e20, "order_by": "", "fields": [1, null]}),
         json!({"layer": 99999, "selected": true}),
+        json!({"table": {"a": 1}, "layer": [1], "limit": 1e20}),
+        json!({"table": 1e20, "where": "x > 1"}),
+        json!({"table": [1], "selected": true, "order_by": 3}),
+        json!({"table": true, "layer": "  "}),
+        json!({"table": -1, "fields": [{"a": 1}]}),
         json!({"query": "∑≈ç√ 🙂 a b c d e f g h i j k l m n o p", "limit": 100000}),
         json!({"tool": "buffer", "params": {"input": "Cities", "distance": "far"}}),
     ];
