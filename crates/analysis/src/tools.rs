@@ -2043,11 +2043,13 @@ fn near(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             let (idx, d) = nearby.closest(g, &t_ext, &t_geo, limit, same.then_some(r))?;
             let j = feats.get(idx)?;
             let at = if d > 0.0 {
-                // The plane's longitudes run on past ±180°: back within them.
-                crate::join::nearest_points(g, j.geom).map(|(_, q)| Coord::new((q.x + 180.0).rem_euclid(360.0) - 180.0, q.y))
+                crate::join::nearest_points(g, j.geom).map(|(_, q)| q)
             } else {
                 shared_point(g, &t_geo, j.geom, &j.geo)
             };
+            // The plane's longitudes run on past ±180°, and so can a shared point's: back within
+            // [−180°, 180°).
+            let at = at.map(|c| Coord::new((c.x + 180.0).rem_euclid(360.0) - 180.0, c.y));
             Some((near_ds.features.get(j.row)?.id, d, at))
         });
         let mut attrs: Vec<Value> = (0..ds.fields.len()).map(|i| f.attrs.get(i).cloned().unwrap_or(Value::Null)).collect();
@@ -3846,6 +3848,18 @@ mod tests {
         let want = rustgis_geom::wgs84_distance_m(Coord::new(179.9, 0.0), Coord::new(-179.9, 0.0));
         assert!((d.unwrap() - want).abs() < 1e-6 * want, "{d:?} vs {want}");
         assert!((x.unwrap() + 179.9).abs() < 1e-7 && y.unwrap().abs() < 1e-7, "{x:?} {y:?}");
+    }
+
+    #[test]
+    fn near_gives_a_shared_point_within_180_degrees_of_the_meridian() {
+        let mut polys = Dataset::new("polys", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(190.0, -1.0, 20.0)), vec![]);
+        let m = Map(HashMap::from([("a".to_string(), points("a", &[(200.0, 0.0)])), ("b".to_string(), polys)]));
+        let out = layer(crate::run("near", &m, &serde_json::json!({"input": "a", "near": "b"})).unwrap());
+        let (fid, d, x, y) = near_fields(&out, 0);
+        assert_eq!((fid, d), (Some(1), Some(0.0)));
+        // 200° is the meridian of −160°: the shared point comes back in [−180°, 180°) as the nearest points do.
+        assert!((x.unwrap() + 160.0).abs() < 1e-7 && y.unwrap().abs() < 1e-7, "{x:?} {y:?}");
     }
 
     #[test]

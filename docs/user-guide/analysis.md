@@ -188,7 +188,7 @@ too.
 **Near** (`near`) copies `input` and adds, for each feature, the nearest feature of `near`: its
 OID as the attribute table shows it (`near_fid`), the distance to it (`near_dist`, in `units`,
 Kilometers by default) and the point on it nearest the input feature (`near_x` and `near_y`, in
-longitude and latitude). Distances are measured as Spatial Join's **Closest** measures them: on the
+longitude from −180° up to 180° and latitude). Distances are measured as Spatial Join's **Closest** measures them: on the
 ground, between the features' nearest points, and zero for features that intersect, whose point is
 one they share. The point is found as the distance is, in a plane centred between the features,
 so on a long edge it can sit off the geodesic by up to about 0.01 % of the distance (5 m at 50 km).
