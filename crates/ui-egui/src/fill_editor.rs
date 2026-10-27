@@ -281,7 +281,8 @@ fn preview(ui: &Ui, r: Rect, fills: &[FillLayer], base: &Symbol) {
     let p = ui.painter().with_clip_rect(r);
     let one = [FillLayer::default()];
     let shown = if fills.is_empty() { &one[..] } else { fills };
-    for f in shown {
+    // (Only what the map draws: a hatch of no width, a marker of no size, no colour to show.)
+    for f in shown.iter().filter(|f| f.draws(base.fill)) {
         let c = c32(f.color.unwrap_or(base.fill));
         match f.pattern {
             FillPattern::Solid => {
