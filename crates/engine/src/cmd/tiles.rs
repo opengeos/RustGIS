@@ -533,9 +533,10 @@ fn legends(v: &Value) -> Result<Vec<rustgis_data::ogc::Legend>, String> {
             _ => return Err(bad()),
         };
         // Kept as a tile layer keeps it, or refused: an address the layer wouldn't keep.
-        rustgis_map::tiles::checked_legends([legend.clone()])
-            .pop()
-            .ok_or_else(|| format!("{}: a legend is a web address (http or https)", legend.url.chars().take(200).collect::<String>()))
+        rustgis_map::tiles::checked_legends([legend.clone()]).pop().ok_or_else(|| {
+            let url: String = legend.url.chars().take(200).collect();
+            format!("{url}: a legend is a web address (http or https) of at most {} bytes", rustgis_map::tiles::MAX_LEGEND_URL)
+        })
     };
     let list = match v {
         Value::Array(list) if list.len() <= MAX_LEGENDS => list.iter().map(one).collect::<Result<Vec<_>, _>>()?,

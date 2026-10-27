@@ -8,6 +8,7 @@
 use roxmltree::{Node, ParsingOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use std::rc::Rc;
 
 #[path = "ogc_info.rs"]
 mod info;
@@ -467,17 +468,22 @@ fn wms(url: &str, root: &Node) -> Service {
     // The SLD profile's GetLegendGraphic (WMS 1.3.0 with SLD 1.1, 1.1.1 with SLD 1.0), when the
     // service offers it in a format RustGIS shows: a layer's legend, drawn from its default style.
     let legend_graphic = wms_legend_graphic(root, url, &get_map, version);
-    let mut stack: Vec<(Node, Vec<String>, Option<[f64; 4]>, bool, Vec<Node>)> = root
+    // (What a layer passes on is shared by its sublayers, not copied for each: a hostile document
+    // may give one layer a great many.)
+    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>);
+    let mut stack: Vec<Inherited<'_, '_>> = root
         .descendants()
         .filter(|n| n.is_element() && local(n) == "Capability")
         .flat_map(|c| children(&c, "Layer").collect::<Vec<_>>())
-        .map(|l| (l, Vec::new(), None, false, Vec::new()))
+        .map(|l| (l, Rc::from([]), None, false, Rc::from([])))
         .collect();
-    while let Some((layer, mut crs, inherited_bbox, inherited_queryable, inherited_styles)) = stack.pop() {
+    while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles)) = stack.pop() {
         if service.layers.len() >= MAX_LAYERS {
             break;
         }
+        let mut crs = inherited_crs.to_vec();
         crs.extend(layer.children().filter(|c| c.is_element() && matches!(local(c), "CRS" | "SRS")).map(|c| text_of(&c)));
+        let crs: Rc<[String]> = crs.into();
         let bbox = child(&layer, "EX_GeographicBoundingBox")
             .and_then(|b| {
                 let f = |k: &str| child_text(&b, k).and_then(|t| t.parse::<f64>().ok());
@@ -492,9 +498,9 @@ fn wms(url: &str, root: &Node) -> Service {
         let queryable =
             layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim().eq_ignore_ascii_case("true"));
         // Its own styles first, then those it inherits (a few: its parents' are each kept).
-        let styles: Vec<Node> = children(&layer, "Style").chain(inherited_styles).take(MAX_STYLES).collect();
+        let styles: Rc<[Node]> = children(&layer, "Style").chain(inherited_styles.iter().copied()).take(MAX_STYLES).collect();
         for sub in children(&layer, "Layer") {
-            stack.push((sub, crs.clone(), bbox, queryable, styles.clone()));
+            stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles)));
         }
         let Some(name) = child_text(&layer, "Name") else { continue };
         if !crs.iter().any(|c| c.split_whitespace().any(is_web_mercator)) {

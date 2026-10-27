@@ -79,7 +79,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui, index: usize, tile: &TileLayer, t
                 return;
             }
             Shown::Ready(id, [w, h]) => {
-                picture(ui, index, id, vec2(w as f32, h as f32));
+                picture(ui, index, &tile.name, id, vec2(w as f32, h as f32));
                 return;
             }
             // The next, if there is one.
@@ -135,15 +135,16 @@ fn pic(app: &mut RustGisApp, ctx: &egui::Context, url: &str, layer: &str) -> Sho
     }
 }
 
-/// A legend picture `size` points across and down under the tile layer at `index`, indented as a
-/// feature layer's classes; one wider than the pane scrolls across.
-fn picture(ui: &mut Ui, index: usize, id: egui::TextureId, size: egui::Vec2) {
+/// A legend picture `size` points across and down under the tile layer at `index` (named `name`,
+/// for screen readers), indented as a feature layer's classes; one wider than the pane scrolls
+/// across.
+fn picture(ui: &mut Ui, index: usize, name: &str, id: egui::TextureId, size: egui::Vec2) {
     ui.horizontal(|ui| {
         ui.add_space(INDENT);
         let room = (ui.available_width() - 8.0).max(16.0);
         let image = |ui: &mut Ui| {
             ui.add(egui::Image::new(egui::load::SizedTexture::new(id, size)).sense(Sense::hover()))
-                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Legend")));
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, format!("{}: {name}", tl!("Legend"))));
         };
         if size.x > room {
             // Its own scroll for each layer, even two showing the same picture.
@@ -216,7 +217,7 @@ mod tests {
         let both = json!({"name": "Walls", "legend": ["http://127.0.0.1/legend.png", url]});
         h.state_mut().session.run("map.setTiles", &both).unwrap();
         h.run_steps(4);
-        let image = h.get_by_label("Legend");
+        let image = h.get_by_label("Legend: Walls");
         assert!(h.query_by_label("The legend couldn't be loaded.").is_none());
         // At its own size, indented as a feature layer's classes are.
         assert!((image.rect().width() - 30.0).abs() < 0.5 && (image.rect().height() - 12.0).abs() < 0.5, "{:?}", image.rect());
