@@ -215,8 +215,8 @@ Registry for x86-64 and arm64, so you need only [Docker](https://docs.docker.com
 docker run --rm -p 8080:8080 ghcr.io/opengeos/rustgis   # http://localhost:8080
 ```
 
-`latest` is the newest release, `0.5.0` or `0.5` a given one (releases have images from 0.5.0
-on), and `edge` the newest build of `main`.
+`latest` (also tagged `edge`) is the newest build of `main`; `0.5.0` or `0.5` is a given
+release (releases have images from 0.5.0 on).
 
 To build the image yourself, the `Dockerfile` at the root of the repository builds the web app
 the way the deploy does:
