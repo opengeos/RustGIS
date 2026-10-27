@@ -63,7 +63,8 @@ Correct, robust and recoverable, with the foundations other themes stand on.
   administrator can fix for a managed install (no AI Assistant, plugins or web services).
 - Extend the OS keychain secret store to service connections (database passwords, S3 keys,
   AI provider keys and the ChatGPT sign-in's tokens are already kept there).
-- Overlay tools beside Clip and Erase: intersect, union, identity and near _(open)_.
+- Overlay tools beside Clip, Erase and Intersect: union, identity and near
+  ([#959](https://github.com/opengeos/RustGIS/issues/959)).
 - Spatial Join by distance, closest, centre in and largest overlap, with merge rules (sum, mean,
   first…) for one-to-one joins ([#851](https://github.com/opengeos/RustGIS/issues/851)).
 - Vector tools, each writing a new layer: join field (a one-off attribute join), merge (append
@@ -127,8 +128,7 @@ And alongside it:
   a line layer).
 - Hot-spot statistics (Getis-Ord Gi\*), and emerging hot spots on the time slider.
 - Charts linked to the selection: histogram, scatter, bar and box plots of a layer's fields.
-- Tabulate intersection: one layer's counts and totals shared out to another by area overlap,
-  once intersect exists.
+- Tabulate intersection: one layer's counts and totals shared out to another by area overlap.
 - Reverse geocoding, and the US Census geocoder beside Nominatim and Photon; a DEM downloader so
   viewshed works without a loaded elevation raster _(open)_.
 
@@ -155,7 +155,6 @@ built-in version must justify itself on one of those.
   only used by tests ([#557](https://github.com/opengeos/RustGIS/issues/557)).
 - A catalog of data cubes for the time slider
   ([#683](https://github.com/opengeos/RustGIS/issues/683)).
-- A Dockerfile for self-hosting the web app.
 - Rebindable keyboard shortcuts ([#562](https://github.com/opengeos/RustGIS/issues/562)).
 
 ## Exploratory
@@ -176,9 +175,9 @@ Open questions rather than plans; discuss before building.
   Data Source for layers and tile archives ([#879](https://github.com/opengeos/RustGIS/issues/879)).
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
   web app (WebAssembly, installable with offline start, opened with a project or data by its
-  web address), 18 interface languages; a ribbon laid out in the order of the work (Home, Data,
-  Style, Edit, Analyze, View, Publish), start-up preferences, Check for Updates, autosave and
-  crash recovery in the desktop app.
+  web address, self-hostable with the `Dockerfile`), 18 interface languages; a ribbon laid out in
+  the order of the work (Home, Data, Style, Edit, Analyze, View, Publish), start-up preferences,
+  Check for Updates, autosave and crash recovery in the desktop app.
 - Data: files by their web address; GeoJSON, CSV/TSV (x/y in any EPSG system, or WKT), Excel
   and OpenDocument spreadsheets, GeoRSS, LandXML, encoded polylines, Shapefile (zipped too,
   with the coordinate system in its `.prj`), GeoPackage, GeoParquet, FlatGeobuf, KML/KMZ
@@ -221,11 +220,11 @@ Open questions rather than plans; discuss before building.
   templates, elevation, topology; domains, subtypes, attribute rules, contingent values,
   relationships, archiving.
 - Analysis: selection by attributes and location; polygon, lasso and radius on the map; overlay
-  (clip, erase), proximity (buffer) and summary tools, spatial join, zonal statistics, A5 grids,
-  kriging and Calculate Geometry with metric or imperial units; guided workflows (viewshed, line
-  of sight, IDW, shortest path, suitability); ModelBuilder on a node canvas, scripts with command,
-  parameter and value completion, and history copied as code; the GeoLibre and Whitebox suite
-  (1,000+ tools) natively and in the browser.
+  (clip, erase, intersect), proximity (buffer) and summary tools, spatial join, zonal statistics,
+  A5 grids, kriging and Calculate Geometry with metric or imperial units; guided workflows
+  (viewshed, line of sight, IDW, shortest path, suitability); ModelBuilder on a node canvas,
+  scripts with command, parameter and value completion, and history copied as code; the GeoLibre
+  and Whitebox suite (1,000+ tools) natively and in the browser.
 - Layouts (map frames, surrounds, map series, publication sheets and figures in one command,
   format panes, guides, snapping, element locking and PDF), reports, presentations and
   notebooks; the web app embeddable in a page (`?embed`).

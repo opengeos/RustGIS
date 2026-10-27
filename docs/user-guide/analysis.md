@@ -78,7 +78,7 @@ written some other way (a token typed into a SQL query, say) can still be there:
 before sharing it. A point buffered where the
 map was clicked is copied as the command that buffered it, with the point.
 
-There are 20 built-in tools; GeoLibre and plugin tools join them when available.
+There are 22 built-in tools; GeoLibre and plugin tools join them when available.
 Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available tools and their parameters):
 
 | Tool | Id | Toolbox |
@@ -86,6 +86,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Buffer | `buffer` | Analysis › Proximity |
 | Clip | `clip` | Analysis › Extract |
 | Erase | `erase` | Analysis › Overlay |
+| Intersect | `intersect` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
@@ -101,6 +102,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Summarize Within | `countPoints` | Analysis › Summarize |
 | Summary Statistics | `summaryStatistics` | Analysis › Statistics |
 | Export Features | `exportFeatures` | Conversion |
+| Zonal Statistics | `zonalStats` | Analysis › Raster |
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 
@@ -151,6 +153,23 @@ third of the extent's diagonal. Coordinates, `range`, `extent` and `pixelSize` a
 lines and polygons contribute their bounding-box centres. At least two distinct locations with
 numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the prediction,
 named by `output`, and `<output>_variance`.
+
+**Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
+input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
+first. A parcel crossed by two flood zones gives two features, one for each zone, and a point in two
+overlapping polygons gives two. Input features outside every overlay polygon are left out. An
+overlay polygon's edge counts as inside it, as for Clip: a point on the edge and a stretch of line
+along it are kept, but polygons that only share an edge or a corner, and a line that only touches
+one, give nothing. The input can be points, lines or polygons and keeps its geometry type; the
+overlay must be polygons. An overlay field whose name the input already has gets a suffix (`id_2`).
+Overlapping features within one layer are not split against each other. Like Clip and Erase, the
+overlay works on the map's Web Mercator coordinates, so the parts' edges are straight on the map.
+Selections in both layers are honoured. To measure each part, run Calculate Geometry Attributes on
+the result:
+
+```text
+gp.run={"tool":"intersect","params":{"input":"parcels","overlay":"floodplain","output":"parcels_in_floodplain"}}
+```
 
 **Spatial Join** (`spatialJoin`, also `gp.spatialJoin`) copies attributes from `join` features
 to `target` features. Layers may have different source coordinate systems: their geometry is
@@ -480,8 +499,9 @@ The Analyze tab's imagery groups open their tools in the Workflows pane:
     exactly, instead of `crs`, `cellSize`, `origin` and `extent`.
   - **Resampling:** `nearest` (the default: it never invents a value, which is right for classes),
     `bilinear` or `cubic` sample each cell at its centre. `average` and `mode` take every pixel whose
-    centre falls in the cell (no-data skipped), its mean or its most frequent value (the least of
-    those tied), which is what a coarser grid of elevation or land-cover classes should hold. A
+    centre falls in the cell (no-data skipped), its mean or its most frequent value (of those
+    tied, the one that reaches the top count first, the pixels taken row by row, as in GDAL), which
+    is what a coarser grid of elevation or land-cover classes should hold. A
     cell no pixel centre falls in, on a grid finer than the raster, takes the pixel under its
     centre. Classes take `nearest` or `mode`, continuous values `bilinear` or `cubic`, or `average`
     going coarser. A whole-number pixel type keeps its type, so its mean is rounded. On a colour

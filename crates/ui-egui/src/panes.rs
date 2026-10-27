@@ -2288,7 +2288,7 @@ fn folder_browser(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 if is_dir {
                     app.table.folder = Some(path.clone());
                 } else if rustgis_engine::project::opens_as_project(&name) {
-                    let _ = app.run("project.open", json!({"path": path.display().to_string()}));
+                    let _ = app.run_by_user("project.open", json!({"path": path.display().to_string()}));
                     app.map.invalidate();
                 } else if name.ends_with(".rgismap") || name.ends_with(".rgismpk") {
                     let _ = app.run("map.import", json!({"path": path.display().to_string()}));
@@ -3393,6 +3393,7 @@ pub fn tool_icon(id: &str) -> &'static str {
         "buffer" => "buffer",
         "clip" => "clip",
         "erase" => "erase",
+        "intersect" => "intersect",
         "dissolve" => "dissolve",
         "convexHull" => "hull",
         "featureToPoint" => "centroid",
@@ -5069,7 +5070,7 @@ fn save_history_script(app: &mut RustGisApp) {
                 return;
             }
             // The script opens the project's saved file, which lacks what changed since.
-            if app.session.dirty || app.session.path.is_none() {
+            if app.session.dirty() || app.session.path.is_none() {
                 app.session.notify(tl!("Save the project too: the script opens its saved file, without changes made since."), false);
             }
         }

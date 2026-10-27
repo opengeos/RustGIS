@@ -107,14 +107,18 @@ fn start(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
         if card(ui, t, "Map", "A blank map with a basemap", "new_map") {
-            let _ = app.run("project.new", Value::Null);
-            app.ui.backstage = false;
-            app.map.invalidate();
+            let _ = app.run_by_user("project.new", Value::Null);
+            if !crate::saveprompt::waiting(app) {
+                app.ui.backstage = false;
+                app.map.invalidate();
+            }
         }
         if card(ui, t, "World Atlas", "Countries, cities, rivers and lakes", "basemap") {
-            let _ = app.run("project.sample", Value::Null);
-            app.ui.backstage = false;
-            app.map.invalidate();
+            let _ = app.run_by_user("project.sample", Value::Null);
+            if !crate::saveprompt::waiting(app) {
+                app.ui.backstage = false;
+                app.map.invalidate();
+            }
         }
         if card(ui, t, "Open…", "Open a .rgis project", "open") {
             let _ = app.run("ui.open", Value::Null);

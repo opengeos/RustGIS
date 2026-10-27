@@ -166,8 +166,8 @@ _GeoLibre: docs/features.md › Attribute data and expressions; docs/arcgis-edit
 _GeoLibre: docs/features.md › Processing and analysis; docs/user-guide/processing.md,
 model-builder.md, segmentation.md, obia.md_
 
-- [ ] **Spatial join, intersect, union**. Partial: spatial join, clip and erase are built in;
-  intersect, union, identity and near are missing (_Roadmap: solid ground_).
+- [ ] **Spatial join, intersect, union**. Partial: spatial join, clip, erase and intersect are
+  built in; union, identity and near are missing (_Roadmap: solid ground_).
 - [ ] **More built-in vector tools**: attribute join, merge, extract vertices, points along lines,
   fix/check geometry, random extract, buffer options. Partial (_Roadmap: solid ground_).
 - [ ] **Routing services**: isochrones, service areas, OD matrix, multi-stop routing,
@@ -267,8 +267,9 @@ deployment-capabilities.md, ui-profiles.md_
   GeoLibre, which covers field work on phones.
 - [ ] **PWA and offline basemap tile pre-caching**. Partial: the web app is installable with
   offline start; offline data areas with sync. Tile pre-caching unverified.
-- [ ] **Docker self-hosting image with runtime config**. Partial: the static web build (_Roadmap:
-  any time_).
+- [ ] **Docker self-hosting image with runtime config**. Partial: a Dockerfile for the web app and
+  published images (ghcr.io/opengeos/rustgis, and rustgis-cli for the command line); runtime config
+  (settings from the container's environment) is missing.
 - [ ] **Deployment capabilities, policies and UI profiles**: restrict edit, add, run and export per
   deployment. Missing.
 - [ ] **Package-manager and store channels**: winget, a Homebrew Cask, the Mac App Store. Partial:

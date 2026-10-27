@@ -1510,6 +1510,7 @@ const GALLERY: &[(&str, &str, &str)] = &[
     ("buffer", "buffer", "Buffer"),
     ("clip", "clip", "Clip"),
     ("erase", "erase", "Erase"),
+    ("intersect", "intersect", "Intersect"),
     ("dissolve", "dissolve", "Dissolve"),
     ("countPoints", "count", "Summarize\nWithin"),
     ("convexHull", "hull", "Bounding\nGeometry"),

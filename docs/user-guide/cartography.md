@@ -307,6 +307,13 @@ Turn labels on per layer (Labeling › Labels › **Label**), then:
 - **Label field and text**: the field the labels show
   (`labels.field={"layer": "Cities", "field": "name"}`), and the text symbol's size (4–72 points),
   colour, halo, bold and italic (`labels.style={"layer": "Cities", "size": 12, "color": "#5A1E0A", "halo": true}`).
+- **Halo and letter spacing**: a halo is white behind dark text and dark behind light, and thin,
+  unless it is given a colour and a width of its own (Labeling pane › Symbol › **Halo color**,
+  **Halo width**: how far it reaches beyond the letters, 0–10 points). The letters can be set
+  apart, or closer with a negative spacing (**Letter spacing**, −5 to 50 points), along lines
+  too. The width and the spacing grow with the labels at a reference scale
+  (`labels.style={"layer": "Rivers", "haloColor": "#FFFFFF", "haloWidth": 1.4, "spacing": 0.5}`;
+  `"haloColor": ""` and `"haloWidth": null` go back to the automatic colour and the thin halo).
 - **Font**: the labels' font family, any installed on the computer (Labeling pane › Symbol
   › **Font**; type part of a name to find it), or the label font the interface uses. Bold and
   italic take the family's own bold and italic faces where it has them. The family is saved by

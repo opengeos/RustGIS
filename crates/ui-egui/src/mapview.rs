@@ -88,6 +88,9 @@ pub struct Ask {
     /// The other layers waiting for the same capabilities: fetched and read once for all.
     also: Vec<String>,
     capabilities: bool,
+    /// The GetFeatureInfo request asked (none for capabilities): its answer format tells what to
+    /// ask next after the service's error.
+    request: Option<String>,
     slot: crate::Slot<Result<Vec<u8>, String>>,
 }
 
@@ -114,7 +117,8 @@ impl Popup {
                 fetched.push((url.to_string(), asks.len()));
             }
             let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
-            asks.push(Ask { layer, also: Vec::new(), capabilities, slot });
+            let request = (!capabilities).then(|| url.to_string());
+            asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
         Popup { info, at, index: 0, map, opened, asks }
     }
@@ -1340,10 +1344,10 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
                 .with_override_text_color(color)
                 .with_angle_and_anchor(angle, Align2::CENTER_CENTER)
         };
-        if let Some(h) = l.halo.filter(|_| halo) {
-            let hc = c32(h);
-            for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-                p.add(shape(vec2(dx, dy), hc));
+        if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
+            let (offsets, hc) = halo_coats(l, h);
+            for offset in offsets {
+                p.add(shape(offset, hc));
             }
         }
         if text {
@@ -1357,15 +1361,57 @@ fn draw_label_ink(p: &egui::Painter, l: &PlacedLabel, at: Pos2, halo: bool, text
         let cyan = c32(rustgis_engine::render::SELECTION);
         p.rect(r.expand(3.0), 0.0, cyan.gamma_multiply(40.0 / 255.0), Stroke::new(2.0, cyan), egui::StrokeKind::Outside);
     }
-    if let Some(h) = l.halo.filter(|_| halo) {
-        let hc = c32(h);
-        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)] {
-            p.galley_with_override_text_color(pos + vec2(dx, dy), galley.clone(), hc);
+    if let Some(h) = l.halo.filter(|h| halo && h.a() > 0) {
+        let (offsets, hc) = halo_coats(l, h);
+        for offset in offsets {
+            p.galley_with_override_text_color(pos + offset, galley.clone(), hc);
         }
     }
     if text {
         p.galley_with_override_text_color(pos, galley, c32(l.color));
     }
+}
+
+/// The most copies of a label's text a halo of its own width is drawn with.
+const MAX_HALO_COATS: usize = 64;
+
+/// Where a label's halo of colour `h` is drawn round its text (points), and in what colour each
+/// copy: a thin ring, or for a halo of its own width rings about 1.5 points apart out to that
+/// width (1.33 × in screen points, as the text's size), copies about a point apart round each
+/// (at most [`MAX_HALO_COATS`] in all, shared among the rings by their length), in a see-through
+/// colour shared among the rings. A halo of a few points (QGIS's usual buffer) is solid with few
+/// copies; a very wide one is approximated, and a see-through one is about one coat (copies
+/// overlap near the letters, so it is a little darker there): an export draws both exactly.
+fn halo_coats(l: &PlacedLabel, h: rustgis_engine::map::Rgba) -> (Vec<egui::Vec2>, Color32) {
+    let Some(width) = l.halo_width else {
+        let ring = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-0.8, -0.8), (0.8, 0.8), (-0.8, 0.8), (0.8, -0.8)];
+        return (ring.into_iter().map(|(x, y)| vec2(x, y)).collect(), c32(h));
+    };
+    let reach = rustgis_engine::render::halo_reach(width) * 1.33;
+    // No width, or one that isn't a number: no halo.
+    if reach.is_nan() || reach <= 0.0 {
+        return (Vec::new(), c32(h));
+    }
+    let rings = ((reach / 1.5).ceil() as usize).clamp(1, 6);
+    let step = reach / rings as f32;
+    // Ring i (outermost first) has radius reach - i·step; copies go to each by its length.
+    let radii: Vec<f32> = (0..rings).map(|i| reach - i as f32 * step).collect();
+    let total: f32 = radii.iter().sum();
+    let mut out = Vec::new();
+    for r in radii {
+        // A copy about a point apart round the ring, within its share of the budget (rounded down,
+        // so the copies stay within it; the innermost of at most six rings still gets three).
+        let share = ((MAX_HALO_COATS as f32 * r / total).floor() as usize).max(3);
+        let n = ((std::f32::consts::TAU * r).ceil() as usize).clamp(3, share);
+        out.extend((0..n).map(|k| {
+            let (sin, cos) = (std::f32::consts::TAU * k as f32 / n as f32).sin_cos();
+            vec2(r * cos, r * sin)
+        }));
+    }
+    // About one copy of each ring covers a pixel of the halo.
+    let a = f32::from(h.a()) / 255.0;
+    let each = if a < 1.0 { 1.0 - (1.0 - a).powf(1.0 / rings as f32) } else { 1.0 };
+    (out, c32(h.with_alpha((each * 255.0).round() as u8)))
 }
 
 /// The globe as seen in this view, when the map is a globe.
@@ -2853,7 +2899,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut landed = Vec::new();
     pp.asks.retain_mut(|a| match a.slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
         Some(r) => {
-            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, r));
+            landed.push((a.layer.clone(), std::mem::take(&mut a.also), a.capabilities, a.request.take(), r));
             false
         }
         None => true,
@@ -2864,7 +2910,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     let mut found = Vec::new();
     let mut next = Vec::new();
     let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
-    for (layer, also, capabilities, r) in landed {
+    for (layer, also, capabilities, request, r) in landed {
         // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
         // first of a service's layers still there takes the capabilities for the rest.
         let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
@@ -2892,13 +2938,16 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
                 }
             }
         } else {
-            replies.push((layer.clone(), app.session.run("identify.featureInfo", &json!({"layer": layer, "text": text}))));
+            // With the request and the point: the service's error in one answer format asks again
+            // in the next.
+            let p = json!({"layer": layer, "text": text, "url": request, "lon": lon, "lat": lat});
+            replies.push((layer.clone(), app.session.run("identify.featureInfo", &p)));
         }
         for (layer, r) in replies {
             let Ok(v) = r else { continue };
             if let Some(url) = v["url"].as_str() {
                 let slot = crate::fetch_into_limited(url, rustgis_engine::data::ogc::MAX_INFO_BYTES);
-                next.push(Ask { layer, also: Vec::new(), capabilities: false, slot });
+                next.push(Ask { layer, also: Vec::new(), capabilities: false, request: Some(url.to_string()), slot });
             }
             found.extend(v["results"].as_array().cloned().unwrap_or_default());
         }
@@ -3558,6 +3607,74 @@ mod tile_redraw_tests {
         }
         assert_eq!(started, 0);
         assert_eq!(shown, Some(key(28)));
+    }
+}
+
+#[cfg(test)]
+mod halo_tests {
+    use super::*;
+    use rustgis_engine::map::Rgba;
+
+    fn label(halo_width: Option<f32>) -> PlacedLabel {
+        PlacedLabel {
+            text: "A".into(),
+            x: 0.0,
+            y: 0.0,
+            size: 10.0,
+            color: Rgba::rgb(0, 0, 0),
+            halo: Some(Rgba::rgb(255, 255, 255)),
+            halo_width,
+            bold: false,
+            icon: None,
+            align: 0.0,
+            framed: false,
+            italic: false,
+            spacing: 0.0,
+            font: None,
+            line_align: TextAlign::Left,
+            angle: None,
+            collide: Default::default(),
+            glyphs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_halos_copies_reach_its_width_and_stay_few_and_one_coat_see_through() {
+        // The thin halo as it always was: eight copies a point round, in its own colour.
+        let (thin, c) = halo_coats(&label(None), Rgba::new(255, 255, 255, 225));
+        assert_eq!((thin.len(), c), (8, Color32::from_rgba_unmultiplied(255, 255, 255, 225)));
+        for w in [0.5, 1.42, 3.0, 10.0, 1e9] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let far = offsets.iter().map(|o| o.length()).fold(0.0, f32::max);
+            let reach = rustgis_engine::render::halo_reach(w) * 1.33;
+            assert!((far - reach).abs() < 1e-3 && offsets.len() <= MAX_HALO_COATS, "{w}: {far} of {reach}, {}", offsets.len());
+        }
+        assert!(halo_coats(&label(Some(0.0)), Rgba::rgb(255, 255, 255)).0.is_empty(), "no width, no halo");
+        // QGIS's usual buffer (0.5 mm, 1.42 pt) is solid: neighbouring copies on a ring are well
+        // under a pixel apart. On every ring, at any width, the copies stand evenly round it.
+        // ... with few copies: about as many as the thin halo's two or three times over.
+        assert!(halo_coats(&label(Some(1.42)), Rgba::rgb(255, 255, 255)).0.len() <= 24);
+        for w in [1.42, 3.0, 10.0] {
+            let (offsets, _) = halo_coats(&label(Some(w)), Rgba::rgb(255, 255, 255));
+            let mut rings: Vec<(f32, Vec<egui::Vec2>)> = Vec::new();
+            for o in offsets {
+                match rings.iter_mut().find(|(r, _)| (r - o.length()).abs() < 1e-3) {
+                    Some((_, ring)) => ring.push(o),
+                    None => rings.push((o.length(), vec![o])),
+                }
+            }
+            for (r, ring) in &rings {
+                let gap = std::f32::consts::TAU * r / ring.len() as f32;
+                let next = (ring[1] - ring[0]).length();
+                assert!((next - 2.0 * r * (gap / (2.0 * r)).sin()).abs() < 1e-3, "{w}: uneven ring {r}");
+                if w < 2.0 {
+                    assert!(gap <= 1.0, "{w}: ring {r} has gaps of {gap}");
+                }
+            }
+        }
+        // Half see-through, shared among its rings: each copy fainter, about one coat in all.
+        let (offsets, c) = halo_coats(&label(Some(3.0)), Rgba::new(255, 0, 0, 128));
+        assert!(offsets.len() > 8 && c.a() < 128 && c.a() > 0, "{c:?}");
     }
 }
 

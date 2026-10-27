@@ -1716,6 +1716,63 @@ pub struct LabelClass {
     /// them in the label font too.
     #[serde(default, deserialize_with = "de_font", skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// The halo's colour, as QGIS's buffer has one; none picks one that stands out from the text
+    /// (white behind dark text, dark behind light).
+    #[serde(default, deserialize_with = "de_halo_color", skip_serializing_if = "Option::is_none")]
+    pub halo_color: Option<Rgba>,
+    /// How far the halo reaches beyond the letters (points, within [`HALO_WIDTH`]), as QGIS's
+    /// buffer size; none is RustGIS's thin halo.
+    #[serde(default, deserialize_with = "de_halo_width", skip_serializing_if = "Option::is_none")]
+    pub halo_width: Option<f32>,
+    /// Space added between letters (points, within a layout text's range), as QGIS's letter
+    /// spacing; negative draws them tighter.
+    #[serde(default, deserialize_with = "de_letter_spacing", skip_serializing_if = "is_zero")]
+    pub spacing: f32,
+}
+
+/// The widths a label's halo takes (points).
+pub const HALO_WIDTH: std::ops::RangeInclusive<f64> = 0.0..=10.0;
+
+/// A label's halo width as `labels.style` would leave it: within [`HALO_WIDTH`]; one that isn't a
+/// number (a crafted file's) is none, the thin halo.
+fn de_halo_width<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    Ok(lenient::<D, f64>(d)?.filter(|w| w.is_finite()).map(|w| w.clamp(*HALO_WIDTH.start(), *HALO_WIDTH.end()) as f32))
+}
+
+/// A label's halo colour; one that isn't a colour is none, the automatic one.
+fn de_halo_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Rgba>, D::Error> {
+    lenient::<D, Rgba>(d)
+}
+
+/// A label's letter spacing, within a layout text's range; one that isn't a number is none.
+fn de_letter_spacing<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    use crate::layout::{MAX_LETTER_SPACING, MIN_LETTER_SPACING};
+    Ok(lenient::<D, f64>(d)?.filter(|s| s.is_finite()).map_or(0.0, |s| s.clamp(MIN_LETTER_SPACING, MAX_LETTER_SPACING) as f32))
+}
+
+/// A value of type `T`, or none for anything else, so a damaged setting doesn't make the project
+/// unreadable.
+fn lenient<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Read<T> {
+        Value(T),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Option::<Read<T>>::deserialize(d)? {
+        Some(Read::Value(v)) => Some(v),
+        Some(Read::Other(_)) | None => None,
+    })
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// A halo that stands out from text of colour `text`: white behind dark text, dark behind light.
+pub fn auto_halo(text: Rgba) -> Rgba {
+    let lum = 0.299 * text.r() as f32 + 0.587 * text.g() as f32 + 0.114 * text.b() as f32;
+    if lum < 140.0 { Rgba::new(255, 255, 255, 225) } else { Rgba::new(20, 22, 26, 210) }
 }
 
 /// The longest font family name kept (characters).
@@ -1886,7 +1943,15 @@ impl LabelClass {
             placement: LabelPlacement::Auto,
             italic: false,
             font: None,
+            halo_color: None,
+            halo_width: None,
+            spacing: 0.0,
         }
+    }
+
+    /// The halo's colour behind text of colour `text`: its own, else one that stands out.
+    pub fn halo_color_for(&self, text: Rgba) -> Rgba {
+        self.halo_color.unwrap_or_else(|| auto_halo(text))
     }
 
     /// Whether labels draw at a scale denominator and viewing distance (metres).
@@ -2037,6 +2102,40 @@ mod tests {
             assert!(serde_json::to_value(&l).unwrap().get("font").is_none());
         }
         assert_eq!(read("x".repeat(10_000).into()).default.font.map(|f| f.chars().count()), Some(MAX_FONT_NAME));
+    }
+
+    /// A halo's colour and width and the letter spacing are kept; a label saved before them, or
+    /// one without them, is written as it always was; a crafted value reads as none (or within its
+    /// range) and the rest of the labels still read.
+    #[test]
+    fn a_labels_halo_and_letter_spacing_are_kept_and_old_labels_save_as_before() {
+        let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
+        let read = |extra: serde_json::Value| {
+            let mut v = base.clone();
+            if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            serde_json::from_value::<Labeling>(v).unwrap()
+        };
+        let old = read(serde_json::json!({}));
+        assert_eq!((old.default.halo_color, old.default.halo_width, old.default.spacing), (None, None, 0.0));
+        let saved = serde_json::to_value(&old).unwrap();
+        for k in ["halo_color", "halo_width", "spacing"] {
+            assert!(saved.get(k).is_none(), "{k} written for a label without it");
+        }
+        let l = read(serde_json::json!({"halo_color": [255, 238, 0, 255], "halo_width": 1.42, "spacing": 0.5}));
+        assert_eq!((l.default.halo_color, l.default.halo_width, l.default.spacing), (Some(Rgba::rgb(255, 238, 0)), Some(1.42), 0.5));
+        assert_eq!(serde_json::from_value::<Labeling>(serde_json::to_value(&l).unwrap()).unwrap(), l);
+        let junk = read(serde_json::json!({"halo_color": "pink", "halo_width": "wide", "spacing": [1]}));
+        assert_eq!((junk.default.halo_color, junk.default.halo_width, junk.default.spacing), (None, None, 0.0));
+        assert_eq!(junk.default.field, "name");
+        let far = read(serde_json::json!({"halo_width": 1e30, "spacing": -1e30}));
+        assert_eq!((far.default.halo_width, far.default.spacing), (Some(10.0), -5.0));
+        assert_eq!(read(serde_json::json!({"halo_width": -3})).default.halo_width, Some(0.0));
+        // The automatic colour is the one labels always had.
+        assert_eq!(l.default.halo_color_for(Rgba::rgb(0, 0, 0)), Rgba::rgb(255, 238, 0));
+        assert_eq!(old.default.halo_color_for(Rgba::rgb(0, 0, 0)), Rgba::new(255, 255, 255, 225));
+        assert_eq!(old.default.halo_color_for(Rgba::rgb(255, 255, 255)), Rgba::new(20, 22, 26, 210));
     }
 
     /// The shapes are written as they always were; a character with its family, which a crafted

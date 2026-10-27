@@ -79,7 +79,7 @@ machine; remote features, such as web data and AI providers, send requests over 
 |---|---|---|---|---|---|
 | **Geoprocessing tools** | Built-in tools plus the optional **1,000+** GeoLibre/Whitebox suite (the available list comes from the runner) | **1,000+** (GeoLibre and Whitebox) | **1,000+** (native, GDAL, GRASS, SAGA) | **Most mature and complete**, plus paid extensions | A useful subset, credit-metered |
 | **Where analysis runs** | Your machine; in the browser on WebAssembly | Your browser (WASM); optional Python sidecar on desktop | Your machine | Your machine, or a server | Vendor cloud |
-| **Vector analysis** | Geodesic buffer, clip, erase, dissolve, spatial join, summarize within, statistics, selection by location, A5 grids and aggregation; optional GeoLibre vector tools | Buffer, overlay, dissolve, joins, topology checks | Comprehensive | Comprehensive | Common tools |
+| **Vector analysis** | Geodesic buffer, clip, erase, intersect, dissolve, spatial join, summarize within, statistics, selection by location, A5 grids and aggregation; optional GeoLibre vector tools | Buffer, overlay, dissolve, joins, topology checks | Comprehensive | Comprehensive | Common tools |
 | **Raster analysis** | Raster functions, band math, indices, change detection, classification, viewshed, IDW and ordinary kriging; time-series summaries and trends; optional GeoLibre terrain and hydrology tools | Hillshade, slope, zonal stats, raster calculator, reclassify | Comprehensive (GDAL/GRASS/SAGA) | Comprehensive; Spatial Analyst | Limited |
 | **Query language** | SQL `WHERE` clauses for selection and definition queries; DuckDB Spatial queries over files, web addresses and databases in an SQL pane (desktop) | DuckDB Spatial, PGlite/PostGIS, Sedona, all in the browser | Virtual layers, PostGIS | SQL against geodatabases | — |
 | **Model / batch chaining** | ModelBuilder (a node canvas; models from history), tasks, scripts | Visual Model Builder, batch runner | Graphical Model Designer | ModelBuilder | — |
@@ -106,7 +106,7 @@ machine; remote features, such as web data and AI providers, send requests over 
 | **Plugins** | Permission-controlled WebAssembly plugins on desktop, CLI and web; unsandboxed process/Python plugins on desktop and CLI; a registry, custom ribbon tabs and panels, assistant skills | TypeScript plugin API, a registry | **Largest**: thousands of Python plugins | .NET add-ins, Python toolboxes | App templates |
 | **AI assistant** | Acts through engine commands, with undo for project edits; Anthropic, OpenAI, Gemini, OpenRouter, Ollama or any OpenAI-compatible model; bring your own key or sign in with ChatGPT; also on the command line; MCP for external agents | Natural-language assistant with undoable operations; bring your own key | Via plugins | Copilot features | AI assistants |
 | **Collaboration** | — | Real-time (MVP), review comments | No | No | Shared hosted layers |
-| **Self-hosting** | Serve the static web build anywhere | Docker image or static build | QGIS Server | ArcGIS Enterprise (paid) | — |
+| **Self-hosting** | Dockerfile or static build of the web app | Docker image or static build | QGIS Server | ArcGIS Enterprise (paid) | — |
 
 ## Where each one is the right choice
 
@@ -143,8 +143,8 @@ Stated plainly, so the tables above are worth trusting:
 - **Coordinate systems.** Vector data is stored in longitude/latitude; there is no full PROJ.
 - **Editing depth.** Vertex move, insert and delete are supported, but not versioned or
   multi-user database editing. Edits are kept in the project and exported, not written back to databases.
-- **Specialized analysis.** Built-in spatial joins and shortest paths on line networks are
-  available, but full network datasets, overlay union/intersect tools and advanced spatial
+- **Specialized analysis.** Built-in spatial joins, intersect and shortest paths on line networks
+  are available, but full network datasets, overlay union and identity tools and advanced spatial
   statistics depend on the external suite or another GIS.
 - **Python.** The [`rustgis` package](../python.md) runs commands headlessly, but there is no
   Python console inside the app. Python process plugins are supported on desktop and CLI, without a sandbox.

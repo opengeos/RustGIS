@@ -47,8 +47,10 @@ pub fn lists_layers(path: &str) -> bool {
 /// Adds a file the user dropped, picked or double-clicked: a project opens, and a file with
 /// several layers asks which first (when the setting says to).
 pub fn add_file(app: &mut RustGisApp, path: &str) -> Result<Value, String> {
+    // Opening a project replaces this one: asked about first when it has unsaved changes. Only
+    // the interface comes here (drops, Add Data, the Browser pane, `ui.addFile`).
     if rustgis_engine::project::opens_as_project(path) {
-        return app.run("project.open", json!({"path": path}));
+        return app.run_by_user("project.open", json!({"path": path}));
     }
     if !(app.ui.ask_layers && lists_layers(path)) {
         return app.run("layer.addData", json!({"path": path}));
