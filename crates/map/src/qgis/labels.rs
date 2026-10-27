@@ -215,8 +215,9 @@ fn class(
     }
     let placement = child(settings, "placement").map_or(LabelPlacement::Auto, |p| placement(p, layer, report));
     let offset = child(settings, "placement").map_or([0.0; 2], |p| offset(p, geometry, layer, report));
+    // (Without a `<text-format>`, QGIS's lines follow the placement too.)
     let (wrap_char, wrap_length, line_align) =
-        child(settings, "text-format").map_or((None, 0, TextAlign::Left), |f| wrapping(f, placement, layer, report));
+        child(settings, "text-format").map_or((None, 0, follow_placement(placement)), |f| wrapping(f, placement, layer, report));
     let repeat = child(settings, "placement").and_then(|p| repeat(p, placement, geometry, layer, report));
     unread(settings, geometry, layer, report);
     // The settings' own scale range, else the rule's.
@@ -264,11 +265,6 @@ fn wrapping(f: Node, placement: LabelPlacement, layer: &str, report: &mut Report
     if length > 0 && f.attribute("useMaxLineLengthForAutoWrap") == Some("0") {
         report.approximated(layer, "labels wrapped at a shortest line length, wrapped at that length at most");
     }
-    let follow = || match placement {
-        LabelPlacement::Left | LabelPlacement::AboveLeft | LabelPlacement::BelowLeft => TextAlign::Right,
-        LabelPlacement::Right | LabelPlacement::AboveRight | LabelPlacement::BelowRight => TextAlign::Left,
-        _ => TextAlign::Center,
-    };
     let align = match f.attribute("multilineAlign").unwrap_or("3") {
         "0" => TextAlign::Left,
         "1" => TextAlign::Center,
@@ -277,9 +273,19 @@ fn wrapping(f: Node, placement: LabelPlacement, layer: &str, report: &mut Report
             report.approximated(layer, "justified label lines, centred");
             TextAlign::Center
         }
-        _ => follow(),
+        _ => follow_placement(placement),
     };
     (wrap_char, length, align)
+}
+
+/// QGIS's "follow placement" for a label's lines: right-aligned left of its feature, left-aligned
+/// right of it, centred otherwise.
+fn follow_placement(placement: LabelPlacement) -> TextAlign {
+    match placement {
+        LabelPlacement::Left | LabelPlacement::AboveLeft | LabelPlacement::BelowLeft => TextAlign::Right,
+        LabelPlacement::Right | LabelPlacement::AboveRight | LabelPlacement::BelowRight => TextAlign::Left,
+        _ => TextAlign::Center,
+    }
 }
 
 /// A label's repeat along its line, in points: QGIS's repeat distance in its units, for a label
@@ -287,7 +293,10 @@ fn wrapping(f: Node, placement: LabelPlacement, layer: &str, report: &mut Report
 /// or round its perimeter) RustGIS labels it once, and says so.
 fn repeat(p: Node, placement: LabelPlacement, geometry: Option<&str>, layer: &str, report: &mut Report) -> Option<f32> {
     let d = p.attribute("repeatDistance").and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0)?;
-    let round_polygons = geometry == Some("Polygon") || p.attribute("placement") == Some("7");
+    // (QGIS repeats only along lines: a polygon's outline with Line or Curved, or round its
+    // perimeter, curved.)
+    let placed = p.attribute("placement");
+    let round_polygons = (geometry == Some("Polygon") && matches!(placed, Some("2" | "3"))) || placed == Some("7");
     if round_polygons {
         report.approximated(layer, "labels repeated round polygons, drawn once");
         return None;
@@ -295,7 +304,14 @@ fn repeat(p: Node, placement: LabelPlacement, geometry: Option<&str>, layer: &st
     if !placement.along_line() {
         return None;
     }
-    crate::symbology::label_repeat(points(d, p.attribute("repeatDistanceUnits").unwrap_or("MM"), "label repeat distances", layer, report))
+    // Before QGIS 3 the unit was a number (0 points, 1 millimetres, 2 map units), which QGIS
+    // reads when the named one isn't there.
+    let unit = p.attribute("repeatDistanceUnits").unwrap_or(match p.attribute("repeatDistanceUnit") {
+        Some("0") => "Point",
+        Some("2") => "MapUnit",
+        _ => "MM",
+    });
+    crate::symbology::label_repeat(points(d, unit, "label repeat distances", layer, report))
 }
 
 /// A label's background as RustGIS's rectangle: QGIS's rectangle (its square, ellipse and circle

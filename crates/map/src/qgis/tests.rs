@@ -483,6 +483,8 @@ fn a_labels_wrapping_and_repeat_carry_over() {
     let follow =
         |quad: &str| read(&format!(r#"<text-format multilineAlign="3"/><placement placement="1" quadOffset="{quad}"/>"#)).0.line_align;
     assert_eq!((follow("3"), follow("5"), follow("4")), (TextAlign::Right, TextAlign::Left, TextAlign::Center));
+    // Without a `<text-format>` too, as QGIS defaults to following the placement.
+    assert_eq!(read(r#"<placement placement="1" quadOffset="3"/>"#).0.line_align, TextAlign::Right);
     // A shortest line length, and justified lines: as near as RustGIS draws them, and noted.
     let (c, report) = read(r#"<text-format autoWrapLength="1e9" useMaxLineLengthForAutoWrap="0" multilineAlign="4"/>"#);
     assert_eq!((c.wrap_length, c.line_align), (crate::symbology::MAX_WRAP_LENGTH, TextAlign::Center));
@@ -500,6 +502,11 @@ fn a_labels_wrapping_and_repeat_carry_over() {
     assert_eq!(c.repeat, Some(10.0));
     let (c, _) = read(r#"<placement placement="2" repeatDistance="lots"/>"#);
     assert_eq!(c.repeat, None);
+    // A unit saved before QGIS 3, as a number: 0 points, else millimetres.
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="30" repeatDistanceUnit="0"/>"#);
+    assert_eq!(c.repeat, Some(30.0));
+    let (c, _) = read(r#"<placement placement="2" repeatDistance="30" repeatDistanceUnit="1"/>"#);
+    assert!(c.repeat.is_some_and(|r| (r - 30.0 * 72.0 / 25.4).abs() < 1e-3), "{:?}", c.repeat);
     // Round polygons RustGIS labels once, and says so.
     let (c, report) = read(r#"<placement placement="7" repeatDistance="30"/>"#);
     assert_eq!(c.repeat, None);
@@ -510,6 +517,11 @@ fn a_labels_wrapping_and_repeat_carry_over() {
     let p = read_project(qgs, "", &mut report).unwrap();
     assert_eq!(p.layers[0].style.labels.as_ref().unwrap().default.repeat, None);
     assert!(report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
+    // A placement QGIS doesn't repeat (horizontal, inside the polygon) keeps the distance unused:
+    // not noted.
+    let mut report = Report::default();
+    read_project(&qgs.replace(r#"placement="2""#, r#"placement="4""#), "", &mut report).unwrap();
+    assert!(!report.notes.iter().any(|n| n.text.contains("repeated round polygons")), "{:?}", report.notes);
 }
 
 #[test]

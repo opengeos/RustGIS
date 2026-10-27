@@ -3312,8 +3312,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                     }
                     let is_point = g.kind() == GeometryType::Point;
                     // A line's longest part on the screen, for the classes placed along it: worked
-                    // out once, for the first that asks.
-                    let mut screen_line: Option<Option<Vec<(f32, f32)>>> = None;
+                    // out once (its path each way too), for the first that asks.
+                    let mut screen_line: Option<Option<line_labels::Line>> = None;
                     let marker = if is_point { layer.symbol(row).size } else { 0.0 };
                     // Bigger polygons get priority.
                     let area = match g {
@@ -3369,17 +3369,18 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                         // a line at its middle and, repeated, every so far either side.
                         let mut places: Vec<(usize, f32, f32, Option<f32>, Vec<LabelGlyph>)> = Vec::new();
                         if let (LabelPlacement::Parallel | LabelPlacement::Curved, Geometry::Line(parts)) = (class.placement, g) {
-                            let line = screen_line.get_or_insert_with(|| longest_on_screen(ctx, parts));
-                            let Some(line) = line.as_deref() else { continue };
+                            let line =
+                                screen_line.get_or_insert_with(|| longest_on_screen(ctx, parts).and_then(|l| line_labels::Line::new(&l)));
+                            let Some(line) = line.as_ref() else { continue };
                             // It may run past the line's ends by about a letter, as QGIS's overrun.
                             let overrun = size;
                             let repeat = class.repeat.map(|r| r * 1.33 * label_factor);
-                            let along = line_labels::repeats(line_labels::length(line), repeat);
+                            let along = line_labels::repeats(line.length(), repeat);
                             // A text too long to curve character by character goes straight.
                             if !curving {
                                 let width = text::spaced_block_width(&text, size, face, spacing);
                                 for (i, at) in along {
-                                    if let Some((cx, cy, a)) = line_labels::parallel(line, width, overrun, Some(at)) {
+                                    if let Some((cx, cy, a)) = line.parallel(width, overrun, Some(at)) {
                                         places.push((i, cx, cy, Some(a), Vec::new()));
                                     }
                                 }
@@ -3388,8 +3389,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                                 let chars: Vec<String> = text.graphemes(true).map(String::from).collect();
                                 let advances: Vec<f32> = chars.iter().map(|c| text::measure_in(c, size, face)).collect();
                                 for (i, at) in along {
-                                    let Some(((cx, cy), turns)) = line_labels::curved(line, &advances, spacing * 1.33, overrun, Some(at))
-                                    else {
+                                    let Some(((cx, cy), turns)) = line.curved(&advances, spacing * 1.33, overrun, Some(at)) else {
                                         continue;
                                     };
                                     let glyphs = chars

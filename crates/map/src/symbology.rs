@@ -1806,6 +1806,11 @@ pub fn wrapped(text: &str, wrap_char: Option<&str>, wrap_length: u32) -> String 
     let most = wrap_length as usize;
     let mut out: Vec<String> = Vec::new();
     for line in broken.split('\n') {
+        // A line that fits stays as it is, as QGIS's word wrap keeps it.
+        if line.chars().count() <= most {
+            out.push(line.to_string());
+            continue;
+        }
         let mut current = String::new();
         for word in line.split_whitespace() {
             let (have, add) = (current.chars().count(), word.chars().count());
@@ -2359,6 +2364,7 @@ mod tests {
         assert_eq!(wrapped("Kantonsspital Winterthur", None, 5), "Kantonsspital\nWinterthur", "a long word keeps its own line");
         assert_eq!(wrapped("Höhe über Meer", None, 9), "Höhe über\nMeer", "characters, not bytes");
         assert_eq!(wrapped("a\nb c d", None, 3), "a\nb c\nd", "lines it has stay lines");
+        assert_eq!(wrapped(" Ober  Winterthur", None, 20), " Ober  Winterthur", "a line that fits stays as it is");
         assert_eq!(wrapped("unchanged text", None, 0), "unchanged text");
         let base = serde_json::json!({"enabled": true, "field": "name", "size": 9.0, "color": [0, 0, 0, 255], "halo": true, "bold": false});
         let read = |extra: serde_json::Value| {

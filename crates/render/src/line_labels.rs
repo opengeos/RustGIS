@@ -1,5 +1,5 @@
-//! Labels along lines, in screen points: straight and turned to the line ([`parallel`]), or each
-//! character turned with it where it bends ([`curved`]), at the line's middle and kept upright,
+//! Labels along lines, in screen points: straight and turned to the line ([`Line::parallel`]), or each
+//! character turned with it where it bends ([`Line::curved`]), at the line's middle and kept upright,
 //! as QGIS's Parallel and Curved line placements put text on the line.
 
 /// The most a curved label's text turns from one character to the next (radians): QGIS's
@@ -126,29 +126,95 @@ fn angle(a: (f32, f32), b: (f32, f32)) -> f32 {
     (b.1 - a.1).atan2(b.0 - a.0)
 }
 
-/// The line as text `len` points long, centred `at` points along it as drawn (its middle when
-/// `None`), reads along it, left to right: reversed when that stretch runs leftward, so the text
-/// is never upside down; with where its centre is along the path returned (from its other end when
-/// reversed). A vertical stretch reads downward, as street labels turned with the map do
-/// ([`rustgis_tiles::symbols::upright`]), whichever way the line was drawn. `None` when the line,
-/// with `overrun` past each end, is shorter than the text, or the text there runs past an end by
-/// more than that.
-fn upright(line: &[(f32, f32)], len: f32, overrun: f32, at: Option<f32>) -> Option<(Path, f32)> {
-    let path = Path::new(line, false)?;
-    let total = path.length();
-    let overrun = overrun.max(0.0);
-    if !(len.is_finite() && len > 0.0) || len > total + 2.0 * overrun {
-        return None;
+/// A line in screen points as labels go along it: its path each way, built once for all the
+/// labels (and repeats) placed along it.
+pub(super) struct Line {
+    fwd: Path,
+    rev: Path,
+}
+
+impl Line {
+    /// `None` for a line of fewer than two distinct points.
+    pub(super) fn new(line: &[(f32, f32)]) -> Option<Line> {
+        Some(Line { fwd: Path::new(line, false)?, rev: Path::new(line, true)? })
     }
-    let d = at.unwrap_or(total / 2.0);
-    if !d.is_finite() || d - len / 2.0 < -overrun || d + len / 2.0 > total + overrun {
-        return None;
+
+    /// Its length in screen points.
+    pub(super) fn length(&self) -> f32 {
+        self.fwd.length()
     }
-    let (a, b) = (path.at(d - len / 2.0)?, path.at(d + len / 2.0)?);
-    let a_to_b = angle(a, b);
-    // Turned half round to stand upright: read from the other end.
-    let flipped = (rustgis_tiles::symbols::upright(a_to_b) - a_to_b).abs() > 1.0;
-    if flipped { Some((Path::new(line, true)?, total - d)) } else { Some((path, d)) }
+
+    /// The line as text `len` points long, centred `at` points along it as drawn (its middle when
+    /// `None`), reads along it, left to right: reversed when that stretch runs leftward, so the
+    /// text is never upside down; with where its centre is along the path returned (from its other
+    /// end when reversed). A vertical stretch reads downward, as street labels turned with the map
+    /// do ([`rustgis_tiles::symbols::upright`]), whichever way the line was drawn. `None` when the
+    /// line, with `overrun` past each end, is shorter than the text, or the text there runs past an
+    /// end by more than that.
+    fn upright(&self, len: f32, overrun: f32, at: Option<f32>) -> Option<(&Path, f32)> {
+        let total = self.fwd.length();
+        let overrun = overrun.max(0.0);
+        if !(len.is_finite() && len > 0.0) || len > total + 2.0 * overrun {
+            return None;
+        }
+        let d = at.unwrap_or(total / 2.0);
+        if !d.is_finite() || d - len / 2.0 < -overrun || d + len / 2.0 > total + overrun {
+            return None;
+        }
+        let (a, b) = (self.fwd.at(d - len / 2.0)?, self.fwd.at(d + len / 2.0)?);
+        let a_to_b = angle(a, b);
+        // Turned half round to stand upright: read from the other end.
+        let flipped = (rustgis_tiles::symbols::upright(a_to_b) - a_to_b).abs() > 1.0;
+        if flipped { Some((&self.rev, total - d)) } else { Some((&self.fwd, d)) }
+    }
+
+    /// Text `len` points long straight along the line, centred `at` points along it (its middle when
+    /// `None`): its centre and angle (radians, clockwise, upright). `None` when the line (with
+    /// `overrun` past each end) is shorter, or the text there runs past an end by more than that.
+    pub(super) fn parallel(&self, len: f32, overrun: f32, at: Option<f32>) -> Option<(f32, f32, f32)> {
+        let (path, d) = self.upright(len, overrun, at)?;
+        let (a, b) = (path.at(d - len / 2.0)?, path.at(d + len / 2.0)?);
+        let a_to_b = angle(a, b);
+        a_to_b.is_finite().then_some(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, a_to_b))
+    }
+
+    /// Characters `advances` wide, `gap` apart (letter spacing; both in the label's units, points ×
+    /// 1.33, as its text's size), in turn along the line, centred `at` points along it (its middle when
+    /// `None`): the label's centre, and each character's centre relative to it and angle (radians,
+    /// clockwise, upright). `None` when the line (with `overrun` past each end) is shorter than the
+    /// text, the text there runs past an end by more than that, or the line turns more than
+    /// [`MAX_TURN`] from one character to the next.
+    pub(super) fn curved(&self, advances: &[f32], gap: f32, overrun: f32, at: Option<f32>) -> Option<((f32, f32), Vec<(f32, f32, f32)>)> {
+        // Each step from a character to the next: its advance and the letter spacing (never back).
+        let step = |adv: f32| (adv + gap).max(0.0);
+        let len: f32 = advances.iter().map(|a| step(*a)).sum::<f32>() - advances.last().map_or(0.0, |a| step(*a) - a);
+        let (path, mid) = self.upright(len, overrun, at)?;
+        let centre = path.at(mid)?;
+        let mut d = mid - len / 2.0;
+        let mut out = Vec::with_capacity(advances.len());
+        let mut last: Option<f32> = None;
+        for adv in advances {
+            let mid = d + adv / 2.0;
+            // A character's angle: across its own width, so it sits on the bend rather than a vertex.
+            let (a, b) = (path.at(mid - adv.max(0.5) / 2.0)?, path.at(mid + adv.max(0.5) / 2.0)?);
+            let (p, turn) = (path.at(mid)?, angle(a, b));
+            if !turn.is_finite() {
+                return None;
+            }
+            if let Some(prev) = last {
+                let mut step = turn - prev;
+                // Wrapped to within half a turn either way.
+                step = (step + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                if step.abs() > MAX_TURN {
+                    return None;
+                }
+            }
+            last = Some(turn);
+            out.push((p.0 - centre.0, p.1 - centre.1, turn));
+            d += step(*adv);
+        }
+        Some((centre, out))
+    }
 }
 
 /// The most labels a line repeats a label in (the one at its middle among them).
@@ -175,68 +241,23 @@ pub(super) fn repeats(total: f32, repeat: Option<f32>) -> Vec<(usize, f32)> {
     out
 }
 
-/// A line's length in screen points (0 for one of fewer than two distinct points).
-pub(super) fn length(line: &[(f32, f32)]) -> f32 {
-    Path::new(line, false).map_or(0.0, |p| p.length())
-}
-
-/// Text `len` points long straight along `line`, centred `at` points along it (its middle when
-/// `None`): its centre and angle (radians, clockwise, upright). `None` when the line (with
-/// `overrun` past each end) is shorter, or the text there runs past an end by more than that.
-pub(super) fn parallel(line: &[(f32, f32)], len: f32, overrun: f32, at: Option<f32>) -> Option<(f32, f32, f32)> {
-    let (path, d) = upright(line, len, overrun, at)?;
-    let (a, b) = (path.at(d - len / 2.0)?, path.at(d + len / 2.0)?);
-    let a_to_b = angle(a, b);
-    a_to_b.is_finite().then_some(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, a_to_b))
-}
-
-/// Characters `advances` wide, `gap` apart (letter spacing; both in the label's units, points ×
-/// 1.33, as its text's size), in turn along `line`, centred `at` points along it (its middle when
-/// `None`): the label's centre, and each character's centre relative to it and angle (radians,
-/// clockwise, upright). `None` when the line (with `overrun` past each end) is shorter than the
-/// text, the text there runs past an end by more than that, or the line turns more than
-/// [`MAX_TURN`] from one character to the next.
-pub(super) fn curved(
-    line: &[(f32, f32)],
-    advances: &[f32],
-    gap: f32,
-    overrun: f32,
-    at: Option<f32>,
-) -> Option<((f32, f32), Vec<(f32, f32, f32)>)> {
-    // Each step from a character to the next: its advance and the letter spacing (never back).
-    let step = |adv: f32| (adv + gap).max(0.0);
-    let len: f32 = advances.iter().map(|a| step(*a)).sum::<f32>() - advances.last().map_or(0.0, |a| step(*a) - a);
-    let (path, mid) = upright(line, len, overrun, at)?;
-    let centre = path.at(mid)?;
-    let mut d = mid - len / 2.0;
-    let mut out = Vec::with_capacity(advances.len());
-    let mut last: Option<f32> = None;
-    for adv in advances {
-        let mid = d + adv / 2.0;
-        // A character's angle: across its own width, so it sits on the bend rather than a vertex.
-        let (a, b) = (path.at(mid - adv.max(0.5) / 2.0)?, path.at(mid + adv.max(0.5) / 2.0)?);
-        let (p, turn) = (path.at(mid)?, angle(a, b));
-        if !turn.is_finite() {
-            return None;
-        }
-        if let Some(prev) = last {
-            let mut step = turn - prev;
-            // Wrapped to within half a turn either way.
-            step = (step + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-            if step.abs() > MAX_TURN {
-                return None;
-            }
-        }
-        last = Some(turn);
-        out.push((p.0 - centre.0, p.1 - centre.1, turn));
-        d += step(*adv);
-    }
-    Some((centre, out))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parallel(line: &[(f32, f32)], len: f32, overrun: f32, at: Option<f32>) -> Option<(f32, f32, f32)> {
+        Line::new(line)?.parallel(len, overrun, at)
+    }
+
+    fn curved(
+        line: &[(f32, f32)],
+        advances: &[f32],
+        gap: f32,
+        overrun: f32,
+        at: Option<f32>,
+    ) -> Option<((f32, f32), Vec<(f32, f32, f32)>)> {
+        Line::new(line)?.curved(advances, gap, overrun, at)
+    }
 
     #[test]
     fn parallel_text_sits_at_the_middle_turned_to_the_line_and_upright() {
