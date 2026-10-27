@@ -1595,26 +1595,24 @@ impl Map {
         self.layers.iter().map(|l| l.id).collect()
     }
 
-    /// Each tile layer's place now (by its id), where some tile layer has one among the layers.
-    fn tile_places(&self) -> Option<Vec<(String, Option<u32>)>> {
-        self.tiles.iter().any(|t| t.over.is_some()).then(|| self.tiles.iter().map(|t| t.id.clone()).zip(self.tile_slots()).collect())
+    /// The tile layers as they are, in their order and places, where some tile layer has a place
+    /// among the layers ([`Map::release_tiles`] may change both). Kept whole: a tile layer's
+    /// `id` may be empty or shared, so it can't tell them apart.
+    fn tile_places(&self) -> Option<Vec<TileLayer>> {
+        self.tiles.iter().any(|t| t.over.is_some()).then(|| self.tiles.clone())
     }
 
-    /// Puts the tile layers back in `places` when the layers are still in `order`: a move that
-    /// left them where they were (a layer placed on its own spot, a group moved to where it is)
-    /// doesn't hand the tile layers over them to the layer below, as [`Map::release_tiles`] did
-    /// for a move.
-    fn keep_tiles_if_unmoved(&mut self, order: &[u32], places: Option<Vec<(String, Option<u32>)>>) {
+    /// Puts the tile layers back as `places` had them when the layers are still in `order`: a
+    /// move that left them where they were (a layer placed on its own spot, a group moved to
+    /// where it is) doesn't hand the tile layers over them to the layer below, as
+    /// [`Map::release_tiles`] did for a move. A layer that only changed group (put in the group
+    /// just above it, say) keeps its tile layers too, and the caller's [`Map::settle_tiles`] then
+    /// seats them over that group's topmost layer, as [`Map::set_group`] does.
+    fn keep_tiles_if_unmoved(&mut self, order: &[u32], places: Option<Vec<TileLayer>>) {
         let Some(places) = places else { return };
-        if !self.layers.iter().map(|l| l.id).eq(order.iter().copied()) {
-            return;
+        if self.layers.iter().map(|l| l.id).eq(order.iter().copied()) {
+            self.tiles = places;
         }
-        for t in &mut self.tiles {
-            if let Some((_, over)) = places.iter().find(|(id, _)| *id == t.id) {
-                t.over = *over;
-            }
-        }
-        self.sort_tiles(0);
     }
 
     /// After a change to the groups: each tile layer's place is a group's topmost layer, or

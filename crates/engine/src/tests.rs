@@ -16343,9 +16343,30 @@ fn tile_layers_stay_over_a_layer_or_group_that_stays() {
     let grouped = stack_names(&s);
     s.run("group.move", &json!({"group": "Water", "to": 2})).unwrap();
     assert_eq!(stack_names(&s), grouped);
-    // Moved, it still takes them along to the layer below as before.
-    s.run("layer.group", &json!({"layer": "Cities", "group": null, "before": null})).unwrap();
-    assert_eq!(stack_names(&s).last().map(String::as_str), Some("Cities"));
+    // Moved, the group hands the tile layer over its layers on to the next layer down that
+    // stays: none here, so it goes under all.
+    s.run("group.move", &json!({"group": "Water", "to": 0})).unwrap();
+    assert_eq!(stack_names(&s), ["Lakes", "Countries", "Cities", "Rivers", "~Depths"]);
+}
+
+/// Two tile layers with no catalog id (and so the same one) keep their own places and order when
+/// a move leaves the layers where they were.
+#[test]
+fn tile_layers_without_ids_keep_their_places_when_nothing_moves() {
+    let mut s = world();
+    for name in ["Upper", "Lower"] {
+        s.run("map.addTiles", &json!({"url": format!("https://{name}.example.org/{{z}}/{{x}}/{{y}}.png"), "name": name, "overlay": true}))
+            .unwrap();
+    }
+    s.run("map.setTiles", &json!({"name": "Upper", "to": 1})).unwrap();
+    s.run("map.setTiles", &json!({"name": "Lower", "to": 4})).unwrap();
+    for t in &mut s.map_mut().tiles {
+        t.id.clear();
+    }
+    let before = stack_names(&s);
+    assert!(before.iter().position(|n| n == "~Upper") < before.iter().position(|n| n == "~Lower"), "{before:?}");
+    s.run("layer.group", &json!({"layer": "Lakes", "group": null, "before": "Countries"})).unwrap();
+    assert_eq!(stack_names(&s), before);
 }
 
 /// A tile layer added as data (an archive, a GeoTIFF read in place) goes on top as an overlay
