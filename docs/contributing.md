@@ -19,6 +19,12 @@ A maintainer's `automerge` label approves and squash-merges a pull request after
 checks pass. Pushing again removes the label and disables auto-merge; removing the label also
 disables it.
 
+A maintainer's `claude-autofix` label has Claude bring a pull request up to date: it merges the
+base branch and resolves any conflicts, then fixes the open review comments it agrees with,
+replies to each and resolves the fixed ones, and pushes the commits to the branch (a fork's too,
+when edits by maintainers are allowed). The label comes off when it's done; add it again for
+another round.
+
 ## Developer checks
 
 `cargo xtask ci` runs `cargo fmt --all --check`,
