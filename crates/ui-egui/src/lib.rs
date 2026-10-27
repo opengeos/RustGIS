@@ -252,6 +252,10 @@ pub struct Services {
     /// `None` turns autosave off: the browser for now, and a second copy of the desktop app
     /// running alongside the first, which mustn't touch its copy.
     pub recovery: Option<Box<dyn RecoveryStore>>,
+    /// Reads the system clipboard's text into the slot (the browser's `navigator.clipboard`,
+    /// which may ask the user first), for a text field's Paste; `None` where the window sends
+    /// it (the desktop) or the browser can't read it (a page not served over HTTPS).
+    pub read_clipboard: Option<Box<dyn Fn(Slot<Result<String, String>>)>>,
     /// Signs in to an ArcGIS portal (its address and an OAuth client id, either blank for ArcGIS
     /// Online and RustGIS's own app) in a pop-up window, putting who signed in, or why not, in the
     /// slot (the browser; the desktop runs `arcgis.signIn`).

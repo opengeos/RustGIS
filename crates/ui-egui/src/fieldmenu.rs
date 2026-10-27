@@ -7,9 +7,9 @@ use egui::text::CCursorRange;
 use egui::text_edit::TextEditState;
 use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Popup, SurrenderFocusOn, Ui};
 
-use crate::RustGisApp;
 use crate::keymap::Chord;
 use crate::widgets::menu_row;
+use crate::{RustGisApp, Slot};
 
 /// A row of the menu.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,13 +27,15 @@ type Field = (Id, Option<CCursorRange>);
 
 /// The field the menu is open on, with its selection then; the row picked in it (played on the
 /// next frame); the selection of a field pressed with the right button (which egui replaces with
-/// the caret); and when a click elsewhere takes a field's focus away, while the menu keeps it.
+/// the caret); when a click elsewhere takes a field's focus away, while the menu keeps it; and
+/// the field a paste is on its way to, with the clipboard's text when the browser has read it.
 #[derive(Default)]
 pub struct FieldMenu {
     field: Option<Field>,
     picked: Option<(Field, Edit)>,
     kept: Option<(Id, CCursorRange)>,
     surrender: Option<SurrenderFocusOn>,
+    pasting: Option<(Field, Slot<Result<String, String>>)>,
 }
 
 /// At the start of a frame, before the shortcuts and the fields read the keys: Escape closes an
@@ -41,6 +43,45 @@ pub struct FieldMenu {
 /// the right button has its selection noted; the row picked in a field's menu is played to the
 /// field.
 pub fn play(app: &mut RustGisApp, ctx: &Context) {
+    // The clipboard's text the browser read for Paste, pasted into its field; or why not.
+    let landed =
+        app.ui.field_menu.pasting.as_ref().and_then(|(field, slot)| Some((*field, slot.lock().unwrap_or_else(|e| e.into_inner()).take()?)));
+    if let Some((field, read)) = landed {
+        app.ui.field_menu.pasting = None;
+        match read {
+            // Pasted where the user still is, which may be seconds later (the browser asked
+            // first): into the field as it is now, or, with nothing focused (the browser's prompt
+            // took it), into the field as the menu left it. Moved on to another field, the text
+            // isn't pasted there.
+            Ok(text) => match ctx.memory(|m| m.focused()) {
+                Some(id) if id == field.0 => ctx.input_mut(|i| i.events.push(Event::Paste(text))),
+                None => {
+                    refocus(ctx, field);
+                    ctx.input_mut(|i| i.events.push(Event::Paste(text)));
+                }
+                Some(_) => {
+                    let keys = Chord::parse("Mod+V").map(|c| c.text(ctx.os().is_mac())).unwrap_or_default();
+                    app.session.notify(
+                        crate::i18n::fmt(
+                            "The clipboard came after you moved on, so nothing was pasted: paste with {keys}.",
+                            &[("keys", &keys)],
+                        ),
+                        false,
+                    );
+                }
+            },
+            Err(e) => {
+                let keys = Chord::parse("Mod+V").map(|c| c.text(ctx.os().is_mac())).unwrap_or_default();
+                app.session.notify(
+                    crate::i18n::fmt(
+                        "The browser didn't give RustGIS the clipboard ({why}): paste with {keys}.",
+                        &[("why", &e), ("keys", &keys)],
+                    ),
+                    false,
+                );
+            }
+        }
+    }
     let menu = &mut app.ui.field_menu;
     // While the menu is open, the field keeps its focus when the menu is clicked: one that saves
     // and closes when it loses the focus (a table cell, a name being edited) stays open for the
@@ -73,6 +114,16 @@ pub fn play(app: &mut RustGisApp, ctx: &Context) {
     }
     let Some((field, edit)) = menu.picked.take() else { return };
     refocus(ctx, field);
+    // In the browser, the page reads the clipboard itself (the browser may ask first), and the
+    // text is pasted when it comes.
+    if edit == Edit::Paste
+        && let Some(read) = &app.services.read_clipboard
+    {
+        let slot = Slot::default();
+        read(slot.clone());
+        app.ui.field_menu.pasting = Some((field, slot));
+        return;
+    }
     let key = |key, modifiers| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     let event = match edit {
         Edit::Undo => key(Key::Z, Modifiers::COMMAND),
@@ -128,7 +179,9 @@ pub fn show(app: &mut RustGisApp, ctx: &Context) {
     };
     let selected = range.is_some_and(|r| !r.is_empty());
     let mac = ctx.os().is_mac();
-    let shown = Popup::context_menu(&resp).id(id.with("field_menu")).show(|ui| rows(ui, selected, mac));
+    // In the browser, only where the page can read the clipboard (over HTTPS).
+    let paste = !cfg!(target_arch = "wasm32") || app.services.read_clipboard.is_some();
+    let shown = Popup::context_menu(&resp).id(id.with("field_menu")).show(|ui| rows(ui, selected, paste, mac));
     let menu_rect = shown.as_ref().map(|s| s.response.rect);
     if let Some(edit) = shown.and_then(|s| s.inner) {
         app.ui.field_menu.picked = Some((field, edit));
@@ -159,12 +212,10 @@ fn keep_selection(app: &mut RustGisApp, ctx: &Context) {
     }
 }
 
-/// The menu's rows, with their keys; cutting, copying and deleting need a selection. Returns the
-/// row clicked.
-fn rows(ui: &mut Ui, selected: bool, mac: bool) -> Option<Edit> {
+/// The menu's rows, with their keys; cutting, copying and deleting need a selection, pasting a
+/// clipboard the app can read. Returns the row clicked.
+fn rows(ui: &mut Ui, selected: bool, paste: bool, mac: bool) -> Option<Edit> {
     let keys = |k: &str| Chord::parse(k).map(|c| c.text(mac)).unwrap_or_default();
-    // A browser lets a page read the clipboard only as Ctrl+V pastes.
-    let paste = !cfg!(target_arch = "wasm32");
     let mut picked = None;
     let mut row = |ui: &mut Ui, icon: &str, label: &str, k: &str, on: bool, edit: Edit| {
         if menu_row(ui, icon, label, &keys(k), on).clicked() {
@@ -283,6 +334,46 @@ mod tests {
         h.event(Event::Paste("Bern".into()));
         h.run_steps(2);
         assert_eq!(search(&h), "Bern");
+    }
+
+    /// Where the page reads the clipboard itself (the browser), Paste asks it and pastes what it
+    /// reads into the field; what it can't read is said, the field left as it was.
+    #[test]
+    fn paste_reads_the_clipboard_where_the_page_reads_it() {
+        let mut h = harness();
+        let asked: Slot<Slot<Result<String, String>>> = Slot::default();
+        let ask = asked.clone();
+        h.state_mut().services.read_clipboard = Some(Box::new(move |slot| *ask.lock().unwrap() = Some(slot)));
+        let paste = |h: &mut egui_kittest::Harness<'_, RustGisApp>| {
+            h.get_by_role_and_label(Role::TextInput, SEARCH).click_secondary();
+            h.run_steps(2);
+            h.get_by_label("Paste Ctrl+V").click();
+            h.run_steps(2);
+            asked.lock().unwrap().take().expect("the page is asked for the clipboard")
+        };
+        // It comes later (the browser may ask the user first).
+        let slot = paste(&mut h);
+        assert_eq!(search(&h), "");
+        *slot.lock().unwrap() = Some(Ok("Winterthur".into()));
+        h.run_steps(3);
+        assert_eq!(search(&h), "Winterthur");
+        assert!(h.get_by_role_and_label(Role::TextInput, SEARCH).is_focused());
+        // With nothing focused when it comes (the browser's prompt took the focus): into the
+        // field, over the selection the menu was opened on.
+        pick(&mut h, "Select All Ctrl+A");
+        let slot = paste(&mut h);
+        h.ctx.memory_mut(|m| m.focused().map(|id| m.surrender_focus(id)));
+        h.run_steps(2);
+        *slot.lock().unwrap() = Some(Ok("Bern".into()));
+        h.run_steps(3);
+        assert_eq!(search(&h), "Bern");
+        // Refused: said, and nothing pasted.
+        let slot = paste(&mut h);
+        *slot.lock().unwrap() = Some(Err("NotAllowedError".into()));
+        h.run_steps(3);
+        assert_eq!(search(&h), "Bern");
+        let said = h.state().session.notices.iter().any(|n| n.text.contains("NotAllowedError") && n.text.contains("Ctrl+V"));
+        assert!(said, "{:?}", h.state().session.notices.iter().map(|n| &n.text).collect::<Vec<_>>());
     }
 
     /// A page with the fields the app's menu has to live with: one that saves when it loses the
