@@ -30,6 +30,9 @@ struct Key {
     tiles: u64,
     /// Streamed layers' reads finished so far: a new one draws the map again.
     sources: u64,
+    /// Which map, and which of its layers in what order, are shown ([`shown_layers`]): a frame
+    /// is kept through a change to the contents only while this holds.
+    shown: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -675,6 +678,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         draft,
         tiles: 0,
         sources: rustgis_engine::map::source::generation(),
+        shown: shown_layers(&app.session.project),
     };
     // Tiles arriving draw the map again, at most a few times a second.
     static WAKER: std::sync::Once = std::sync::Once::new();
@@ -3608,24 +3612,47 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 /// it on screen until the next one arrives, rather than showing a coarse preview (#1051).
 const KEEP_FRAME_MS: u64 = 300;
 
+/// Which map is active and which of its layers, groups and tile layers are shown, in order: a
+/// frame of other layers (one hidden, added, removed or moved since, or another map) shows a
+/// preview of the change instead of staying on screen.
+fn shown_layers(project: &rustgis_engine::Project) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    let map = project.map();
+    (project.active_map, &map.name).hash(&mut h);
+    for l in &map.layers {
+        (l.id, l.visible).hash(&mut h);
+    }
+    for g in &map.groups {
+        (g.id, g.visible).hash(&mut h);
+    }
+    for t in &map.tiles {
+        (&t.name, &t.url, t.visible).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Whether revision `a` is later than `b` (revisions wrap).
+fn later(a: u64, b: u64) -> bool {
+    a.wrapping_sub(b).cast_signed() > 0
+}
+
 /// Whether a change to the map's contents keeps the frame on screen (`shown`) until the exact
-/// frame for `key` arrives, instead of a coarse preview of the whole map: the view is the same
-/// (only what is drawn changed) and its frames are quick to draw (`render_ms`). A preview of a
-/// tiled map drew the basemap coarsely too, so dragging a layer's colour or transparency slider
-/// made the whole map flicker between blurry and sharp.
+/// frame for `key` arrives, instead of a coarse preview of the whole map: the view and the layers
+/// shown are the same (a layer's colour or transparency changed, say) and its frames are quick to
+/// draw (`render_ms`). A preview of a tiled map drew the basemap coarsely too, so dragging a
+/// layer's colour or transparency slider made the whole map flicker between blurry and sharp.
 fn keeps_frame(shown: Option<Key>, key: Key, render_ms: u64) -> bool {
-    render_ms <= KEEP_FRAME_MS
-        && shown
-            .is_some_and(|s| s.rev != key.rev && Key { rev: key.rev, tiles: key.tiles, sources: key.sources, draft: key.draft, ..s } == key)
+    render_ms <= KEEP_FRAME_MS && shown.is_some_and(|s| later(key.rev, s.rev) && (s.cam, s.size, s.shown) == (key.cam, key.size, key.shown))
 }
 
 /// Whether a frame finished for `done` is shown although the map's contents changed since (to
-/// `key`): it is of the same view and newer than the frame on screen (`shown`), which is of an
-/// older change too. While a slider is dragged every exact frame is out of date when it
+/// `key`): it is of the same view and layers, and later than the frame on screen (`shown`), which
+/// is of an older change too. While a slider is dragged every exact frame is out of date when it
 /// finishes; showing none kept the frame from before the drag up until it ended.
 fn shows_finished(done: Key, key: Key, shown: Option<Key>) -> bool {
-    let view = |k: Key| (k.cam, k.size);
-    done.rev != key.rev && view(done) == view(key) && shown.is_some_and(|s| s.rev != key.rev && s.rev != done.rev && view(s) == view(key))
+    let view = |k: Key| (k.cam, k.size, k.shown);
+    later(key.rev, done.rev) && view(done) == view(key) && shown.is_some_and(|s| later(done.rev, s.rev) && view(s) == view(key))
 }
 
 /// How long (s) after a frame is shown tiles arriving wait before the map is drawn again.
@@ -3652,7 +3679,7 @@ mod tile_redraw_tests {
     use super::{KEEP_FRAME_MS, Key, held_tiles, keeps_frame, shows_finished};
 
     fn key(tiles: u64) -> Key {
-        Key { rev: 4, cam: (1, 2, 3, 0, 0), size: [800, 600], draft: false, tiles, sources: 0 }
+        Key { rev: 4, cam: (1, 2, 3, 0, 0), size: [800, 600], draft: false, tiles, sources: 0, shown: 0 }
     }
 
     #[test]
@@ -3707,6 +3734,8 @@ mod tile_redraw_tests {
         // Another view, or nothing on screen: a preview.
         assert!(!keeps_frame(Some(Key { cam: (9, 9, 9, 0, 0), ..key(3) }), changed, 40));
         assert!(!keeps_frame(Some(Key { size: [400, 300], ..key(3) }), changed, 40));
+        // A layer hidden, added, removed or moved, or another map: a preview.
+        assert!(!keeps_frame(Some(Key { shown: 1, ..key(3) }), changed, 40));
         assert!(!keeps_frame(None, changed, 40));
         // Nothing changed: nothing to keep.
         assert!(!keeps_frame(Some(key(3)), key(3), 40));
@@ -3723,6 +3752,13 @@ mod tile_redraw_tests {
         assert!(!shows_finished(Key { cam: (9, 9, 9, 0, 0), ..done }, now, Some(on_screen)));
         assert!(!shows_finished(now, now, Some(on_screen)));
         assert!(!shows_finished(done, now, None));
+        // Older than the frame on screen, or of other layers: not shown.
+        assert!(!shows_finished(on_screen, now, Some(done)));
+        assert!(!shows_finished(Key { shown: 1, ..done }, now, Some(on_screen)));
+        // Revisions wrap.
+        let (old, newer, latest) = (Key { rev: u64::MAX, ..key(0) }, Key { rev: 1, ..key(0) }, Key { rev: 3, ..key(0) });
+        assert!(shows_finished(newer, latest, Some(old)));
+        assert!(!shows_finished(old, latest, Some(newer)));
         // Simulated drag: the contents change every frame and each exact frame takes three.
         // Frames of the drag are shown as they finish, not only the last one after it.
         let (mut shown, mut drawing, mut shown_during) = (Some(on_screen), None::<(Key, u32)>, 0);
@@ -4123,6 +4159,12 @@ mod tests {
         let kept = h.state().map.key.expect("a frame");
         assert_eq!((kept.rev, kept.draft), (before.rev, before.draft), "a coarse preview replaced the frame on screen");
         exact(&mut h, "the exact frame of the change did not arrive");
+        // Hiding a layer isn't kept: its preview shows at once.
+        h.state_mut().map.render_ms = 20;
+        h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide");
+        h.step();
+        let st = h.state();
+        assert!(st.map.key.is_some_and(|k| k.rev == st.session.revision), "the hidden layer stayed on screen");
     }
 
     /// Dragging a side pane resizes the map view every frame. The map is not drawn again for
