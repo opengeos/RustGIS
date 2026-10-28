@@ -682,7 +682,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         draft,
         tiles: 0,
         sources: rustgis_engine::map::source::generation(),
-        // Read only for tiled flat maps (see `keeps_frame`).
+        // Read only for tiled maps (see `keeps_frame`).
         shown: if app.session.map().tiles.is_empty() { 0 } else { shown_layers(&app.session) },
     };
     // Tiles arriving draw the map again, at most a few times a second.
@@ -3651,6 +3651,8 @@ fn shown_layers(session: &rustgis_engine::Session) -> u64 {
     for t in &map.tiles {
         (&t.name, &t.url, t.draws(), t.over).hash(&mut h);
     }
+    // What is drawn, not how it looks: view effects and colour vision, like a layer's style,
+    // keep the frame until the exact one (at most `KEEP_FRAME_S`).
     h.finish()
 }
 
@@ -4163,6 +4165,10 @@ mod tests {
         app.session.map_mut().graticule = !app.session.map().graticule;
         assert_ne!(shown_layers(&app.session), before, "the graticule turned on or off");
         app.session.map_mut().graticule = !app.session.map().graticule;
+        app.session.map_mut().layers.swap(0, 1);
+        assert_ne!(shown_layers(&app.session), before, "layers reordered");
+        app.session.map_mut().layers.swap(0, 1);
+        assert_eq!(shown_layers(&app.session), before, "back as they were");
         app.run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide");
         assert_ne!(shown_layers(&app.session), before, "a layer hidden");
     }
