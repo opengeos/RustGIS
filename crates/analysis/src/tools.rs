@@ -1890,6 +1890,10 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         return Err("Input Points must be a point layer".into());
     }
 
+    if p.get("crs").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("crs must be text".into());
+    }
+
     let crs_text = s(p, "crs").trim();
     let crs = if !crs_text.is_empty() {
         Crs::parse(crs_text)?
@@ -1903,7 +1907,10 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     };
 
     if crs.is_geographic() {
-        return Err("kernel density requires a projected coordinate system with linear units (e.g. meters or feet), not geographic coordinates in degrees".into());
+        return Err(format!(
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' is in geographic coordinates (degrees). Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            ds.name
+        ));
     }
 
     let transformer = crs.transformer()?;
@@ -1916,12 +1923,19 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     let fi = if !field_name.is_empty() { Some(find_field_case_insensitive(ds, field_name)?) } else { None };
 
     let mut pts: Vec<(Coord, f64)> = Vec::new();
+    let mut skipped: usize = 0;
     for r in rows(inp, p, "input", ds) {
-        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else { continue };
+        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else {
+            skipped += 1;
+            continue;
+        };
         let w = match fi {
             Some(idx) => match ds.value(r, idx).as_f64() {
                 Some(v) if v.is_finite() && v > 0.0 => v,
-                _ => continue,
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
             },
             None => 1.0,
         };
@@ -1933,19 +1947,29 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
                     && p_proj.is_finite()
                 {
                     pts.push((p_proj, w));
+                } else {
+                    skipped += 1;
                 }
             }
             Geometry::MultiPoint(cs) => {
+                let mut any = false;
                 for c in cs {
                     if c.is_finite()
                         && let Some(p_proj) = transformer.from_lonlat(*c)
                         && p_proj.is_finite()
                     {
                         pts.push((p_proj, w));
+                        any = true;
                     }
                 }
+                if !any {
+                    skipped += 1;
+                }
             }
-            _ => continue,
+            _ => {
+                skipped += 1;
+                continue;
+            }
         }
     }
 
@@ -1967,15 +1991,31 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None => crate::density::silverman_bandwidth(&pts, &pt_extent),
     };
 
-    let custom_extent = match s(p, "extent").trim() {
-        "" => None,
-        t => {
-            let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
-            let Some([x0, y0, x1, y1]) = v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
+    let custom_extent = match p.get("extent") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
+                let Some([x0, y0, x1, y1]) = v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
+                    return Err("the extent is xmin,ymin,xmax,ymax".into());
+                };
+                Some(Extent::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
+            }
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != 4 {
+                return Err("the extent is xmin,ymin,xmax,ymax".into());
+            }
+            let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
+            let Some([x0, y0, x1, y1]) = coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
                 return Err("the extent is xmin,ymin,xmax,ymax".into());
             };
             Some(Extent::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
         }
+        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
     };
 
     let grid_ext = custom_extent.unwrap_or_else(|| {
@@ -1989,16 +2029,35 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None => crate::density::auto_cell_size(&grid_ext),
     };
 
+    if p.get("kernel").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("kernel must be text".into());
+    }
+
     let kernel = match s(p, "kernel") {
         "" => crate::density::KernelType::Quartic,
         k => crate::density::KernelType::parse(k)?,
     };
 
+    if p.get("output").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("output must be text".into());
+    }
+
     let name = out_name(p, format!("{}_density", ds.name));
     let r = crate::density::kernel_density(&pts, Some(&grid_ext), cell_size, bandwidth, kernel, &name, crs)?;
     let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
 
-    let msg = format!("Kernel Density: {} × {} cells from {} points (bandwidth: {:.2})", r.width, r.height, pts.len(), bandwidth);
+    let msg = if skipped > 0 {
+        format!(
+            "Kernel Density: {} × {} cells from {} points ({} skipped, bandwidth: {:.2})",
+            r.width,
+            r.height,
+            pts.len(),
+            skipped,
+            bandwidth
+        )
+    } else {
+        format!("Kernel Density: {} × {} cells from {} points (bandwidth: {:.2})", r.width, r.height, pts.len(), bandwidth)
+    };
     Ok(ToolResult {
         output: Output::Layers(vec![OutputLayer::Raster { file_name: format!("{name}.tif"), name, bytes }]),
         messages: vec![msg],
@@ -4432,7 +4491,8 @@ mod tests {
         no_crs_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
         let m_geo = Map(HashMap::from([("geopts".to_string(), geo_pts), ("nocrs".to_string(), no_crs_pts)]));
         let err_geo = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts"})).unwrap_err();
-        assert!(err_geo.contains("projected coordinate system"), "{err_geo}");
+        assert!(err_geo.contains("is in geographic coordinates (degrees)"), "{err_geo}");
+        assert!(err_geo.contains("Provide a projected system under 'crs'"), "{err_geo}");
         let err_nocrs = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "nocrs"})).unwrap_err();
         assert!(err_nocrs.contains("has no coordinate system"), "{err_nocrs}");
 
@@ -4469,6 +4529,61 @@ mod tests {
 
         // Explicit null field runs successfully unweighted
         assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": null})).is_ok());
+
+        // Reject invalid types for crs, kernel, and output
+        let err_crs_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "crs": 3857})).unwrap_err();
+        assert!(err_crs_num.contains("crs must be text"), "{err_crs_num}");
+        let err_kernel_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": 123})).unwrap_err();
+        assert!(err_kernel_num.contains("must be one of Quartic, Gaussian"), "{err_kernel_num}");
+        let err_out_bool = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "output": true})).unwrap_err();
+        assert!(err_out_bool.contains("output must be text"), "{err_out_bool}");
+
+        // Extent parameter accepts both text and JSON number arrays, and rejects invalid types
+        let res_ext_str = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": "500000, 4428000, 501000, 4428200",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_str.messages.len(), 1);
+
+        let res_ext_arr = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": [500000.0, 4428000.0, 501000.0, 4428200.0],
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_arr.messages.len(), 1);
+
+        let err_ext_short =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": [500000.0, 4428000.0]})).unwrap_err();
+        assert!(err_ext_short.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_short}");
+        let err_ext_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": 12345})).unwrap_err();
+        assert!(err_ext_num.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_num}");
+
+        // 9. Report skipped points with non-positive or invalid weights
+        let mut mixed_ds = m.0.get("stations").unwrap().clone();
+        mixed_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_500.0, 4_428_100.0)).unwrap())), vec![Value::Float(-10.0)]);
+        let m_mixed = Map(HashMap::from([("mixed".to_string(), mixed_ds)]));
+        let res_mixed = crate::run(
+            "kernelDensity",
+            &m_mixed,
+            &serde_json::json!({
+                "input": "mixed",
+                "field": "pop",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert!(res_mixed.messages[0].contains("1 skipped"), "expected '1 skipped' in: {}", res_mixed.messages[0]);
 
         // 9. Reject excessive workload exceeding MAX_DENSITY_WORK
         let mut crowded = Dataset::new("crowded", GeometryType::Point, vec![]);

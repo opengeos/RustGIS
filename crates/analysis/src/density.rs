@@ -165,12 +165,18 @@ pub fn kernel_density(
 
     let mut grid = vec![0.0f32; total_cells];
 
-    let (factor_quartic, two_sigma_sq, factor_gauss) = match kernel {
-        KernelType::Quartic => (3.0 / (PI * h_sq), 0.0, 0.0),
+    enum KernelParams {
+        Quartic { factor: f64 },
+        Gaussian { factor: f64, two_sigma_sq: f64 },
+    }
+
+    let kernel_params = match kernel {
+        KernelType::Quartic => KernelParams::Quartic { factor: 3.0 / (PI * h_sq) },
         KernelType::Gaussian => {
             // Truncate at 3σ = bandwidth (standard compact-support approximation capturing >98.8% of mass)
             let sigma = bandwidth / 3.0;
-            (0.0, 2.0 * sigma * sigma, 1.0 / (2.0 * PI * sigma * sigma))
+            let two_sigma_sq = 2.0 * sigma * sigma;
+            KernelParams::Gaussian { factor: 1.0 / (PI * two_sigma_sq), two_sigma_sq }
         }
     };
 
@@ -204,12 +210,12 @@ pub fn kernel_density(
                 }
 
                 let d_sq = dx_sq + dy_sq;
-                let contrib = match kernel {
-                    KernelType::Quartic => {
+                let contrib = match kernel_params {
+                    KernelParams::Quartic { factor } => {
                         let val = 1.0 - d_sq / h_sq;
-                        wgt * factor_quartic * val * val
+                        wgt * factor * val * val
                     }
-                    KernelType::Gaussian => wgt * factor_gauss * (-d_sq / two_sigma_sq).exp(),
+                    KernelParams::Gaussian { factor, two_sigma_sq } => wgt * factor * (-d_sq / two_sigma_sq).exp(),
                 };
 
                 if let Some(cell) = grid.get_mut(row_offset + col) {
@@ -265,7 +271,7 @@ mod tests {
 
         for (v1, v2) in b1.iter().zip(b2.iter()) {
             let diff = (*v2 as f64) - (*v1 as f64) * 3.5;
-            assert!(diff.abs() < 1e-4, "weight scaling mismatch: {v1} vs {v2}");
+            assert!(diff.abs() < 1e-8, "weight scaling mismatch: {v1} vs {v2}");
         }
     }
 
@@ -363,9 +369,7 @@ mod tests {
         assert_eq!(reopened.crs, crs);
         assert_eq!(reopened.transform, r.transform);
 
-        let max_orig = r.bands[0].data.iter().copied().fold(0.0f32, f32::max);
-        let max_reopened = reopened.bands[0].data.iter().copied().fold(0.0f32, f32::max);
-        assert!((max_orig - max_reopened).abs() < 1e-6);
+        assert_eq!(reopened.bands[0].data, r.bands[0].data, "GeoTIFF Float32 roundtrip must be bit-exact");
     }
 
     #[test]
