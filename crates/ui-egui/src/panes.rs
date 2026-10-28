@@ -3016,6 +3016,14 @@ pub(crate) fn first_layer(spec: &rustgis_engine::analysis::ToolSpec) -> Option<&
         .find(|p| matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer))
 }
 
+/// The tool's layer parameter associated with a field parameter.
+pub(crate) fn layer_for_param<'a>(spec: &'a rustgis_engine::analysis::ToolSpec, param_name: &str) -> Option<&'a rustgis_engine::analysis::ParamSpec> {
+    spec.params.iter().find(|p| {
+        matches!(p.kind, ParamKind::Layer | ParamKind::PolygonLayer | ParamKind::PointLayer | ParamKind::VectorLayer)
+            && param_name.starts_with(format!("{}_", p.name).as_str())
+    }).or_else(|| first_layer(spec))
+}
+
 /// The layer or table of name `name`, as a tool finds its input: a layer by its name, else a
 /// table (by its name, else its id).
 pub(crate) fn input_dataset<'a>(session: &'a Session, name: &str) -> Option<&'a rustgis_engine::data::Dataset> {
@@ -3259,8 +3267,9 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             ParamKind::PolygonLayer | ParamKind::PointLayer => Some(layer_names(p.kind)),
             ParamKind::Field | ParamKind::NumericField | ParamKind::CoordinateField => {
-                let lname = first_layer.and_then(|n| app.gp.values.get(n)).cloned().unwrap_or_default();
-                let table = first_layer.and_then(|n| app.gp.tables.get(n)).copied();
+                let target_param = layer_for_param(spec, p.name).map(|p| p.name);
+                let lname = target_param.and_then(|n| app.gp.values.get(n)).cloned().unwrap_or_default();
+                let table = target_param.and_then(|n| app.gp.tables.get(n)).copied();
                 // The table picked; else the layer or table of that name, as the tool finds it.
                 let ds = match table {
                     Some(id) => app.session.project.table(id).map(|t| &t.dataset),

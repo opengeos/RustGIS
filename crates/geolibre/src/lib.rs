@@ -1,3 +1,15 @@
+fn is_field_param_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "field"
+        || n.ends_with("_field")
+        || n == "weight_field"
+        || n == "value_field"
+        || n == "class_field"
+        || n == "id_field"
+        || n == "group_field"
+        || n == "category_field"
+}
+
 //! L3: the GeoLibre tool suite (Whitebox's tools plus GeoLibre's own: 1,000+ raster, vector,
 //! LiDAR, hydrology and terrain tools) as geoprocessing tools.
 //!
@@ -256,6 +268,14 @@ fn spec_of(m: &Value) -> Option<(ToolSpec, Meta)> {
                 }
                 _ if data == Data::Bool => ParamKind::Bool,
                 _ if data == Data::Number => ParamKind::Number,
+                _ if is_field_param_name(pname) => {
+                    let n = pname.to_ascii_lowercase();
+                    if n.contains("weight") || n.contains("numeric") || n.contains("value") {
+                        ParamKind::NumericField
+                    } else {
+                        ParamKind::Field
+                    }
+                }
                 _ => ParamKind::Text,
             },
         };

@@ -134,7 +134,7 @@ pub fn show(app: &mut RustGisApp, ui: &mut Ui) {
                 tb.min_scrolled_height(0.0)
                     .header(24.0, |mut h| {
                         h.col(|ui| {
-                            ui.label(egui::RichText::new(tl!("OID")).font(semibold(11.5)).color(t.text_dim));
+                            ui.label(egui::RichText::new("#").font(semibold(11.5)).color(t.text_dim));
                         });
                         for (i, fd) in ds.fields.iter().enumerate() {
                             h.col(|ui| {
