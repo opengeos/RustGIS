@@ -132,6 +132,16 @@ fn is_found(v: &Value) -> bool {
     v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
+/// A popup's results: its list, or the one feature or pixel found; none while it only waits for
+/// WMS layers' answers.
+fn results_of(info: &Value) -> Vec<Value> {
+    match info["results"].as_array() {
+        Some(r) => r.clone(),
+        None if is_found(info) => vec![info.clone()],
+        None => Vec::new(),
+    }
+}
+
 /// Where the result at `index` of `before` is in `after`, the pop-up's results once some were
 /// added or left out: the same one of identical results (a service may answer a feature twice,
 /// and both lists keep their order), or the first when it's gone.
@@ -147,19 +157,19 @@ fn index_after(before: &[Value], index: usize, after: &[Value]) -> usize {
 /// with features. `None` with nothing to show.
 fn with_answers(map: &rustgis_engine::map::Map, info: &Value, found: Vec<Value>) -> Option<Value> {
     use rustgis_engine::map::Drawn;
-    let mut all: Vec<Value> = match info["results"].as_array() {
-        Some(r) => r.clone(),
-        None if is_found(info) => vec![info.clone()],
-        None => Vec::new(),
-    };
+    let mut all = results_of(info);
     all.extend(found);
+    // A tile layer's results show while it draws: one hidden since must not keep a later answer
+    // out. Of two layers of one name, the one drawn is the one asked.
+    let drawn = |name: &str| map.tiles.iter().position(|t| t.name == name && t.draws());
+    all.retain(|v| v["tileLayer"].as_str().is_none_or(|name| drawn(name).is_some()));
     let stack = map.stack();
-    // A tile layer's feature by its layer's name (two of one name take the higher one's place, as
-    // their answers are told apart by name too), a map layer's (or raster's pixel) by its id;
-    // anything else after them all.
+    // A tile layer's feature by its layer's name (two of one name drawn take the higher one's
+    // place, as their answers are told apart by name too), a map layer's (or raster's pixel) by
+    // its id; anything else after them all.
     let place = |v: &Value| {
         let drawn = match v["tileLayer"].as_str() {
-            Some(name) => map.tiles.iter().position(|t| t.name == name).map(Drawn::Tile),
+            Some(name) => drawn(name).map(Drawn::Tile),
             None => v["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).and_then(|id| map.layer_index(id)).map(Drawn::Layer),
         };
         drawn.and_then(|d| stack.iter().position(|o| *o == d)).unwrap_or(usize::MAX)
@@ -3041,8 +3051,8 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let mut found = Vec::new();
     let mut next = Vec::new();
-    // Only layers drawn are asked, and only their answers are shown: one hidden while its answer
-    // came would otherwise take the pop-up from a feature in view.
+    // Only answers from layers drawn are shown: one hidden while its answer came would otherwise
+    // take the pop-up from a feature in view.
     let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer && t.draws());
     for (layer, also, capabilities, request, r) in landed {
         // Layers removed, renamed or hidden while the answer came: nothing to show, nothing to
@@ -3093,7 +3103,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     {
         // The result shown stays shown, wherever the answers went; the first when it was left out
         // (a layer drawn higher answered, with topmost).
-        let before = pp.info["results"].as_array().cloned().unwrap_or_else(|| vec![pp.info.clone()]);
+        let before = results_of(&pp.info);
         // As the pop-up shows it: an index past the end is the last result.
         let index = pp.index.min(before.len().saturating_sub(1));
         pp.index = index_after(&before, index, info["results"].as_array().map_or(&[][..], Vec::as_slice));
@@ -4001,6 +4011,22 @@ mod tests {
             let v = with_answers(s.map(), &info, vec![answer("Under")]).unwrap();
             assert_eq!(shown(&v), under, "{mode}: drawn under");
         }
+        // Hidden since it answered (and took Switzerland's place): its result goes, and doesn't
+        // keep out a later answer from a layer drawn under it.
+        s.run("map.popupMode", &json!({"mode": "topmost"})).unwrap();
+        let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        let over = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        let v = with_answers(s.map(), &over, vec![answer("Under")]).unwrap();
+        assert_eq!(shown(&v), ["Under"], "hidden");
+        // And with visible, which keeps everything, it isn't shown.
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = true);
+        s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+        let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        let over = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        let v = with_answers(s.map(), &over, vec![answer("Under")]).unwrap();
+        assert_eq!(shown(&v), ["Countries", "Under"], "hidden, visible");
     }
 
     fn selection_harness() -> egui_kittest::Harness<'static, RustGisApp> {
