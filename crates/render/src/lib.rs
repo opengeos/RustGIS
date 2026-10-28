@@ -654,8 +654,9 @@ impl Ctx<'_> {
     /// most [`SMALL_POLYGON_PX`] across and the outline at most [`THIN_OUTLINE_PX`] wide, round
     /// otherwise. Round joins are curves the stroker builds at every vertex, which takes most of
     /// the time a layer of many small polygons draws in; at that size a mitred corner covers nearly
-    /// the same pixels (a corner pixel may differ a little; the layer's tone doesn't). A wider outline (an export at print resolution, a thick line) or a larger
-    /// polygon keeps its round corners.
+    /// the same pixels (a corner pixel may differ a little; the layer's tone doesn't). A wider
+    /// outline (an export at print resolution, a thick line) or a larger polygon keeps its round
+    /// corners.
     fn fill_outline(&self, pm: &mut Pixmap, path: &tiny_skia::Path, p: &Paint, w: f32) {
         let px = w * self.ppp;
         let b = path.bounds();
