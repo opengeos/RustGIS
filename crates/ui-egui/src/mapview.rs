@@ -1748,7 +1748,8 @@ fn finish_area_selection(app: &mut RustGisApp, ui: &Ui, rect: Rect) {
 
 fn selection_interact(app: &mut RustGisApp, ui: &Ui, resp: &egui::Response, rect: Rect) {
     let tool = app.session.tool;
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // While a shortcut is being captured, Escape cancels the capture, not the sketch.
+    if !app.ui.shortcut_editor.capturing() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.map.cancel_sketch();
         return;
     }
@@ -2024,7 +2025,7 @@ fn interact(app: &mut RustGisApp, ui: &mut Ui, resp: &egui::Response, rect: Rect
         }
     }
     // First-person navigation: W A S D walk, Q and E fly up and down.
-    if app.session.map().view.first_person && !ui.ctx().egui_wants_keyboard_input() {
+    if app.session.map().view.first_person && !app.ui.shortcut_editor.capturing() && !ui.ctx().egui_wants_keyboard_input() {
         let (mut fw, mut rt, mut up) = (0.0, 0.0, 0.0);
         ui.input(|i| {
             // Shortcuts (Ctrl+S, Ctrl+E…) aren't steps.

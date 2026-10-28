@@ -21,6 +21,7 @@ pub mod network;
 pub mod neural;
 pub mod rasterops;
 pub mod selection;
+mod stats;
 pub mod tissot;
 mod tools;
 pub mod topology;
