@@ -62,9 +62,7 @@ impl JoinKey {
                         return Some(JoinKey::Int(as_int));
                     }
                 }
-                // Normalize -0.0 to +0.0 before taking raw IEEE 754 bits
-                let normalized = if *f == 0.0 { 0.0 } else { *f };
-                Some(JoinKey::FloatBits(normalized.to_bits()))
+                Some(JoinKey::FloatBits(f.to_bits()))
             }
         }
     }
@@ -140,6 +138,13 @@ impl JoinFieldReport {
 /// Preserves target record count, order, IDs, geometry, and existing attributes.
 /// Appends selected attributes from `source` based on matching key values.
 pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_>) -> Result<(Dataset, JoinFieldReport), String> {
+    if target.windowed {
+        return Err("the target layer is streamed; load all features first".into());
+    }
+    if source.windowed {
+        return Err("the source layer is streamed; load all features first".into());
+    }
+
     // 1. Resolve key field indices
     let target_key_idx = crate::tools::find_field_case_insensitive(target, opts.target_field)?;
     let source_key_idx = crate::tools::find_field_case_insensitive(source, opts.join_field)?;
@@ -191,7 +196,7 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         let src_field = source.fields.get(src_idx).ok_or_else(|| "invalid source field index".to_string())?;
         let proposed = if opts.prefix.is_empty() { src_field.name.clone() } else { format!("{}{}", opts.prefix, src_field.name) };
         let unique_name = make_unique_field(&out.fields, &proposed);
-        out.fields.push(Field::new(unique_name, src_field.ty));
+        out.fields.push(Field { name: unique_name, ty: src_field.ty, alias: src_field.alias.clone() });
     }
 
     // 5. Index source records: Map JoinKey -> source feature index
@@ -230,9 +235,19 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
     let mut out_features = Vec::with_capacity(target_len);
 
     for t_feat in &target.features {
+        if t_feat.attrs.len() > target.fields.len() {
+            return Err(format!(
+                "target feature {} has {} attributes, exceeding schema field count {}",
+                t_feat.id,
+                t_feat.attrs.len(),
+                target.fields.len()
+            ));
+        }
         let mut new_attrs = t_feat.attrs.clone();
         // Rows can hold fewer values than the schema has fields: pad so joined values line up.
-        new_attrs.resize(target.fields.len(), Value::Null);
+        if new_attrs.len() < target.fields.len() {
+            new_attrs.resize(target.fields.len(), Value::Null);
+        }
         new_attrs.reserve(transfer_indices.len());
 
         let t_val = t_feat.attrs.get(target_key_idx).unwrap_or(&Value::Null);
@@ -556,11 +571,13 @@ mod tests {
 
     #[test]
     fn test_geometry_and_feature_id_preservation() {
-        let target = make_point_layer(
+        let mut target = make_point_layer(
             "pts",
             vec![("id", FieldType::Integer)],
             vec![(Coord::new(10.0, 20.0), vec![Value::Int(1)]), (Coord::new(30.0, 40.0), vec![Value::Int(2)])],
         );
+        target.features[0].id = 1007;
+        target.features[1].id = 2024;
         let source = make_table(
             "source",
             vec![("id", FieldType::Integer), ("note", FieldType::Text)],
@@ -577,8 +594,8 @@ mod tests {
         let (out, rep) = join_field(&target, &source, &opts).unwrap();
         assert_eq!(out.geometry_type, GeometryType::Point);
         assert_eq!(out.features.len(), 2);
-        assert_eq!(out.features[0].id, 1);
-        assert_eq!(out.features[1].id, 2);
+        assert_eq!(out.features[0].id, 1007);
+        assert_eq!(out.features[1].id, 2024);
         assert_eq!(out.features[0].geometry, Some(Geometry::Point(Coord::new(10.0, 20.0))));
         assert_eq!(out.features[1].geometry, Some(Geometry::Point(Coord::new(30.0, 40.0))));
         assert_eq!(rep.matched_records, 1);
@@ -634,5 +651,113 @@ mod tests {
         // Must NOT normalize 2^63 to JoinKey::Int(i64::MAX)
         assert_ne!(key, Some(JoinKey::Int(i64::MAX)));
         assert_eq!(key, Some(JoinKey::FloatBits(f_max.to_bits())));
+    }
+
+    #[test]
+    fn test_transferred_field_preserves_source_alias() {
+        let target = make_table("target", vec![("id", FieldType::Integer)], vec![vec![Value::Int(1)]]);
+        let mut source = Dataset::new(
+            "source",
+            GeometryType::None,
+            vec![
+                Field::new("id", FieldType::Integer),
+                Field { name: "cost".to_string(), ty: FieldType::Double, alias: Some("Estimated Cost ($)".to_string()) },
+            ],
+        );
+        source.push(None, vec![Value::Int(1), Value::Float(49.99)]);
+        let opts = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out".into(),
+        };
+        let (out, _) = join_field(&target, &source, &opts).unwrap();
+        assert_eq!(out.fields.len(), 2);
+        assert_eq!(out.fields[1].name, "cost");
+        assert_eq!(out.fields[1].alias.as_deref(), Some("Estimated Cost ($)"));
+        assert_eq!(out.fields[1].display(), "Estimated Cost ($)");
+    }
+
+    #[test]
+    fn test_reject_oversized_target_row() {
+        let mut target = Dataset::new("target", GeometryType::None, vec![Field::new("id", FieldType::Integer)]);
+        target.features.push(rustgis_data::Feature {
+            id: 10,
+            geometry: None,
+            attrs: vec![Value::Int(1), Value::Text("unexpected extra value".into())],
+        });
+        let source = make_table(
+            "source",
+            vec![("id", FieldType::Integer), ("val", FieldType::Text)],
+            vec![vec![Value::Int(1), Value::Text("ok".into())]],
+        );
+        let opts = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out".into(),
+        };
+        let err = join_field(&target, &source, &opts).unwrap_err();
+        assert!(err.contains("exceeding schema field count"));
+    }
+
+    #[test]
+    fn test_reject_windowed_datasets() {
+        let mut target = make_table("target", vec![("id", FieldType::Integer)], vec![vec![Value::Int(1)]]);
+        let mut source = make_table(
+            "source",
+            vec![("id", FieldType::Integer), ("v", FieldType::Text)],
+            vec![vec![Value::Int(1), Value::Text("x".into())]],
+        );
+        let opts = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out".into(),
+        };
+
+        // Windowed target
+        target.windowed = true;
+        let err_target = join_field(&target, &source, &opts).unwrap_err();
+        assert!(err_target.contains("the target layer is streamed"));
+
+        // Windowed source
+        target.windowed = false;
+        source.windowed = true;
+        let err_source = join_field(&target, &source, &opts).unwrap_err();
+        assert!(err_source.contains("the source layer is streamed"));
+    }
+
+    #[test]
+    fn test_negative_zero_matching() {
+        // -0.0 as float should match 0 integer and 0.0 float
+        let target = make_table("target", vec![("key", FieldType::Double)], vec![vec![Value::Float(-0.0)]]);
+        let source = make_table(
+            "source",
+            vec![("key", FieldType::Integer), ("label", FieldType::Text)],
+            vec![vec![Value::Int(0), Value::Text("zero_matched".into())]],
+        );
+        let opts = JoinFieldOptions {
+            target_field: "key",
+            join_field: "key",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out".into(),
+        };
+        let (out, rep) = join_field(&target, &source, &opts).unwrap();
+        assert_eq!(rep.matched_records, 1);
+        assert_eq!(out.features[0].attrs[1], Value::Text("zero_matched".into()));
+
+        // Check JoinKey directly
+        assert_eq!(JoinKey::from_value(&Value::Float(-0.0)), Some(JoinKey::Int(0)));
+        assert_eq!(JoinKey::from_value(&Value::Float(0.0)), Some(JoinKey::Int(0)));
+        assert_eq!(JoinKey::from_value(&Value::Int(0)), Some(JoinKey::Int(0)));
     }
 }

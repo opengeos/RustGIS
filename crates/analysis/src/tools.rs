@@ -19,7 +19,6 @@ const MATCH_OPTIONS: &[&str] =
 const DISTANCE_MATCHES: &[&str] = &["Closest", "Within a distance"];
 const JOIN_OPERATIONS: &[&str] = &["Join one to one", "Join one to many"];
 const TARGET_RECORDS: &[&str] = &["Keep all", "Keep only matching"];
-const DUPLICATE_STRATEGIES: &[&str] = &["First", "Last", "Error"];
 
 pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -704,7 +703,7 @@ pub static TOOLS: &[ToolSpec] = &[
             P {
                 name: "duplicates",
                 label: "Duplicate Keys",
-                kind: K::Choice(DUPLICATE_STRATEGIES),
+                kind: K::Choice(crate::attribute_join::DuplicateStrategy::ALL),
                 required: false,
                 default: "\"First\"",
                 help: "How to handle duplicate keys in the source table: First (first row), Last (last row), or Error.",
@@ -2892,28 +2891,86 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 }
 
 fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    let target = input(inp, p, "target")?;
-    let source = input(inp, p, "joinTable")?;
+    let target_key = if !s(p, "target").is_empty() || p.get("target").is_some_and(|v| v.is_number()) { "target" } else { "input" };
+    let join_table_key =
+        if !s(p, "joinTable").is_empty() || p.get("joinTable").is_some_and(|v| v.is_number()) { "joinTable" } else { "join" };
 
-    let target_field = s(p, "targetField");
+    let target = input(inp, p, target_key)?;
+    let source = input(inp, p, join_table_key)?;
+
+    let target_rows = rows(inp, p, target_key, target);
+    let target_subset;
+    let target_ref = if target_rows.len() == target.features.len() {
+        target
+    } else {
+        let mut sub = Dataset::new(target.name.clone(), target.geometry_type, target.fields.clone());
+        sub.crs = target.crs;
+        sub.crs_incomplete = target.crs_incomplete;
+        sub.windowed = target.windowed;
+        sub.features = target_rows.iter().filter_map(|&r| target.features.get(r).cloned()).collect::<Vec<_>>().into();
+        target_subset = sub;
+        &target_subset
+    };
+
+    let source_rows = rows(inp, p, join_table_key, source);
+    let source_subset;
+    let source_ref = if source_rows.len() == source.features.len() {
+        source
+    } else {
+        let mut sub = Dataset::new(source.name.clone(), source.geometry_type, source.fields.clone());
+        sub.crs = source.crs;
+        sub.crs_incomplete = source.crs_incomplete;
+        sub.windowed = source.windowed;
+        sub.features = source_rows.iter().filter_map(|&r| source.features.get(r).cloned()).collect::<Vec<_>>().into();
+        source_subset = sub;
+        &source_subset
+    };
+
+    let target_field = if !s(p, "targetField").is_empty() {
+        s(p, "targetField")
+    } else if !s(p, "target_field").is_empty() {
+        s(p, "target_field")
+    } else {
+        s(p, "key")
+    };
     if target_field.is_empty() {
         return Err("target key field is required".into());
     }
 
-    let join_field_name = match s(p, "joinField") {
-        "" => target_field,
+    let raw_join_field = if !s(p, "joinField").is_empty() {
+        s(p, "joinField")
+    } else if !s(p, "join_field").is_empty() {
+        s(p, "join_field")
+    } else {
+        ""
+    };
+    let join_field_name = match raw_join_field {
+        f if f.trim().is_empty() => target_field,
         f => f,
     };
 
-    let dup_str = if !s(p, "duplicates").is_empty() { s(p, "duplicates") } else { s(p, "duplicateStrategy") };
+    let dup_str = if !s(p, "duplicates").is_empty() {
+        s(p, "duplicates")
+    } else if !s(p, "duplicateStrategy").is_empty() {
+        s(p, "duplicateStrategy")
+    } else {
+        s(p, "duplicate_strategy")
+    };
     let duplicate_strategy = crate::attribute_join::DuplicateStrategy::parse(dup_str)?;
 
     let prefix = s(p, "prefix");
 
     let explicit_fields: Option<Vec<String>> = match p.get("fields") {
         Some(Json::Array(arr)) => {
-            let names: Vec<String> =
-                arr.iter().filter_map(|v| v.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            let names: Vec<String> = arr
+                .iter()
+                .map(|v| {
+                    v.as_str().map(|s| s.trim().to_string()).ok_or_else(|| "Transfer Fields: array entries must be strings".to_string())
+                })
+                .collect::<Result<Vec<String>, String>>()?
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
             Some(names)
         }
         Some(Json::String(str_val)) if !str_val.trim().is_empty() => {
@@ -2945,7 +3002,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         output_name,
     };
 
-    let (out, report) = crate::attribute_join::join_field(target, source, &opts)?;
+    let (out, report) = crate::attribute_join::join_field(target_ref, source_ref, &opts)?;
     let msg = report.message(&target.name);
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
@@ -5728,5 +5785,213 @@ mod tests {
         assert_eq!(out6.fields.len(), 2);
         assert_eq!(out6.fields[1].name, "weight");
         assert_eq!(out6.features[0].attrs[1], Value::Float(1.25));
+
+        // 7. duplicateStrategy "Last" selects the last matching row
+        let mut dup_prices_last = Dataset::new(
+            "dup_prices_last",
+            GeometryType::None,
+            vec![Field::new("item_sku", FieldType::Text), Field::new("price", FieldType::Double)],
+        );
+        dup_prices_last.push(None, vec![Value::Text("SKU-A".into()), Value::Float(10.0)]);
+        dup_prices_last.push(None, vec![Value::Text("SKU-A".into()), Value::Float(20.0)]);
+        let m7 = Map(HashMap::from([
+            ("inventory".to_string(), m2.0.get("inventory").unwrap().clone()),
+            ("dup_prices_last".to_string(), dup_prices_last),
+        ]));
+        let res7 = crate::run(
+            "joinField",
+            &m7,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "dup_prices_last",
+                "joinField": "item_sku",
+                "duplicateStrategy": "Last"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out7) = res7.output else { panic!("expected Output::Table") };
+        assert_eq!(out7.features[0].attrs[1], Value::Float(20.0));
+
+        // 8. Whitespace-only joinField falls back to targetField
+        let res8 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "joinField": "   "
+            }),
+        )
+        .unwrap();
+        let Output::Table(out8) = res8.output else { panic!("expected Output::Table") };
+        assert_eq!(out8.fields.len(), 2);
+        assert_eq!(out8.fields[1].name, "weight");
+        assert_eq!(out8.features[0].attrs[1], Value::Float(1.25));
+
+        // 9. Reject non-string entries in fields array
+        let err_non_string = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "fields": [42]
+            }),
+        )
+        .unwrap_err();
+        assert!(err_non_string.contains("Transfer Fields: array entries must be strings"));
+
+        let err_mixed = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "join": "matching_source",
+                "fields": ["weight", true]
+            }),
+        )
+        .unwrap_err();
+        assert!(err_mixed.contains("Transfer Fields: array entries must be strings"));
+
+        // 10. Test numeric table ID in input() and row selections
+        struct TestInputs {
+            datasets: HashMap<String, Dataset>,
+            tables: HashMap<u32, Dataset>,
+            selections: HashMap<String, Vec<usize>>,
+        }
+        impl Inputs for TestInputs {
+            fn dataset(&self, layer: &str) -> Option<&Dataset> {
+                self.datasets.get(layer)
+            }
+            fn table(&self, id: u32) -> Option<&Dataset> {
+                self.tables.get(&id)
+            }
+            fn selection(&self, layer: &str) -> &[usize] {
+                self.selections.get(layer).map(|v| v.as_slice()).unwrap_or(&[])
+            }
+        }
+
+        let mut target_ds = Dataset::new(
+            "cities",
+            GeometryType::None,
+            vec![Field::new("city_id", FieldType::Integer), Field::new("name", FieldType::Text)],
+        );
+        target_ds.push(None, vec![Value::Int(1), Value::Text("Paris".into())]);
+        target_ds.push(None, vec![Value::Int(2), Value::Text("Tokyo".into())]);
+        target_ds.push(None, vec![Value::Int(3), Value::Text("New York".into())]);
+
+        let mut source_table = Dataset::new(
+            "table_99",
+            GeometryType::None,
+            vec![Field::new("c_id", FieldType::Integer), Field::new("pop", FieldType::Integer)],
+        );
+        source_table.push(None, vec![Value::Int(1), Value::Int(2_100_000)]);
+        source_table.push(None, vec![Value::Int(2), Value::Int(14_000_000)]);
+        source_table.push(None, vec![Value::Int(3), Value::Int(8_300_000)]);
+
+        let inp_numeric = TestInputs {
+            datasets: HashMap::from([("cities".to_string(), target_ds)]),
+            tables: HashMap::from([(99u32, source_table)]),
+            selections: HashMap::new(),
+        };
+
+        let res_num = crate::run(
+            "joinField",
+            &inp_numeric,
+            &serde_json::json!({
+                "target": "cities",
+                "targetField": "city_id",
+                "joinTable": 99,
+                "joinField": "c_id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_num) = res_num.output else { panic!("expected Output::Table") };
+        assert_eq!(out_num.fields.len(), 3);
+        assert_eq!(out_num.fields[2].name, "pop");
+        assert_eq!(out_num.features[0].attrs[2], Value::Int(2_100_000));
+        assert_eq!(out_num.features[1].attrs[2], Value::Int(14_000_000));
+
+        // 11. Row selections on target and source
+        let mut target_sel =
+            Dataset::new("parcels", GeometryType::None, vec![Field::new("id", FieldType::Integer), Field::new("code", FieldType::Text)]);
+        target_sel.push(None, vec![Value::Int(10), Value::Text("P10".into())]);
+        target_sel.push(None, vec![Value::Int(20), Value::Text("P20".into())]);
+        target_sel.push(None, vec![Value::Int(30), Value::Text("P30".into())]);
+
+        let mut source_sel =
+            Dataset::new("owners", GeometryType::None, vec![Field::new("id", FieldType::Integer), Field::new("owner", FieldType::Text)]);
+        // Two rows for id 10: unselected row has "Alice", selected row has "Bob"
+        source_sel.push(None, vec![Value::Int(10), Value::Text("Alice".into())]);
+        source_sel.push(None, vec![Value::Int(10), Value::Text("Bob".into())]);
+        source_sel.push(None, vec![Value::Int(20), Value::Text("Carol".into())]);
+
+        let inp_sel = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel), ("owners".to_string(), source_sel)]),
+            tables: HashMap::new(),
+            selections: HashMap::from([
+                ("parcels".to_string(), vec![0, 1]), // Only parcels 10 and 20 selected
+                ("owners".to_string(), vec![1, 2]),  // Only second row of 10 ("Bob") and 20 ("Carol") selected
+            ]),
+        };
+
+        let res_sel = crate::run(
+            "joinField",
+            &inp_sel,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_sel) = res_sel.output else { panic!("expected Output::Table") };
+        assert_eq!(out_sel.features.len(), 2);
+        assert_eq!(out_sel.features[0].attrs[0], Value::Int(10));
+        assert_eq!(out_sel.features[0].attrs[2], Value::Text("Bob".into()));
+        assert_eq!(out_sel.features[1].attrs[0], Value::Int(20));
+        assert_eq!(out_sel.features[1].attrs[2], Value::Text("Carol".into()));
+
+        // 12. Aliases and collision suffixes
+        let mut target_col = Dataset::new(
+            "items",
+            GeometryType::None,
+            vec![Field::new("item_id", FieldType::Integer), Field::new("price", FieldType::Double)],
+        );
+        target_col.push(None, vec![Value::Int(1), Value::Float(10.0)]);
+
+        let mut source_col = Dataset::new(
+            "extra",
+            GeometryType::None,
+            vec![Field::new("item_id", FieldType::Integer), Field::new("price", FieldType::Double)],
+        );
+        source_col.push(None, vec![Value::Int(1), Value::Float(15.0)]);
+
+        let m_col = Map(HashMap::from([("items".to_string(), target_col), ("extra".to_string(), source_col)]));
+        let res_col = crate::run(
+            "joinField",
+            &m_col,
+            &serde_json::json!({
+                "target": "items",
+                "target_field": "item_id",
+                "join": "extra",
+                "join_field": "item_id",
+                "fields": ["price", "item_id"]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out_col) = res_col.output else { panic!("expected Output::Table") };
+        assert_eq!(out_col.fields.len(), 4);
+        assert_eq!(out_col.fields[1].name, "price");
+        assert_eq!(out_col.fields[2].name, "price_2");
+        assert_eq!(out_col.fields[3].name, "item_id_2");
+        assert_eq!(out_col.features[0].attrs[1], Value::Float(10.0));
+        assert_eq!(out_col.features[0].attrs[2], Value::Float(15.0));
+        assert_eq!(out_col.features[0].attrs[3], Value::Int(1));
     }
 }

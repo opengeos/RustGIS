@@ -309,6 +309,36 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
+**Join Field** (`joinField`, also `gp.joinField`) performs a one-off non-spatial attribute join,
+copying fields from a source table or layer (`joinTable`, specified by name or numeric table ID)
+into a `target` table or layer based on matching key values:
+
+- **Key fields:** `targetField` (aliases: `target_field`, `key`) names the key field in the target.
+  `joinField` (aliases: `join_field`) names the matching key in the source table; when omitted, empty,
+  or whitespace-only, it defaults to `targetField`. Numeric keys match across integer and floating-point
+  types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
+  nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
+- **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
+  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string entries are rejected). When
+  omitted or empty, every source field except the join key is transferred. Transferred fields preserve
+  their source display aliases and field types.
+- **Prefix and collision handling:** `prefix` prepends text to all transferred field names. When a
+  transferred field name conflicts with an existing target field, an incremental suffix is added
+  (`name_2`, `name_3`) to maintain schema uniqueness without overwriting existing data.
+- **Duplicate keys:** `duplicates` (`duplicateStrategy`) determines what happens when multiple source
+  rows share the same join key: **First** (default: uses the first matching source record), **Last**
+  (uses the last matching source record), or **Error** (fails the operation and reports the duplicate key).
+- **Selections and streamed inputs:** selections on the target layer or source table are honoured;
+  when no selection exists, the full dataset is processed. Streamed layers that are only partially loaded
+  in the view window are rejected with a clear message (`the target layer is streamed; load all features first`)
+  so incomplete results are never committed as a whole layer. Rows with attribute counts exceeding the
+  schema definition are rejected with a typed error rather than silently truncated. Unmatched target
+  records receive null values.
+
+```text
+gp.run={"tool":"joinField","params":{"target":"parcels","targetField":"owner_id","joinTable":"owners","fields":["name","phone"],"duplicates":"First"}}
+```
+
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
   <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>

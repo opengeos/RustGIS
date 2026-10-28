@@ -1,6 +1,6 @@
 ---
 name: geoprocessing
-description: Run geoprocessing tools and chain them — buffer, clip, erase, dissolve, select by location or attributes, summarize within, summary statistics, simplify, export features. Use for "within N km of", "inside", "merge by", "count per", "overlay", or any multi-step analysis.
+description: Run geoprocessing tools and chain them — buffer, clip, erase, dissolve, join attributes, select by location or attributes, summarize within, summary statistics, simplify, export features. Use for "within N km of", "inside", "merge by", "count per", "overlay", "join tables", or any multi-step analysis.
 ---
 
 # Geoprocessing
