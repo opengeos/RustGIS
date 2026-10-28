@@ -2927,6 +2927,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let prefix = s(p, "prefix");
 
     let explicit_fields: Option<Vec<String>> = match p.get("fields") {
+        None | Some(Json::Null) => None,
         Some(Json::Array(arr)) => {
             let names: Vec<String> = arr
                 .iter()
@@ -2939,21 +2940,24 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 .collect();
             Some(names)
         }
-        Some(Json::String(str_val)) if !str_val.trim().is_empty() => {
+        Some(Json::String(str_val)) => {
             let text = str_val.trim();
-            let names: Vec<String> = if text.starts_with('[') {
-                serde_json::from_str::<Vec<String>>(text)
+            if text.is_empty() {
+                None
+            } else if text.starts_with('[') {
+                let names: Vec<String> = serde_json::from_str::<Vec<String>>(text)
                     .map_err(|e| format!("Transfer Fields: invalid JSON array: {e}"))?
                     .into_iter()
                     .map(|n| n.trim().to_string())
                     .filter(|n| !n.is_empty())
-                    .collect()
+                    .collect();
+                Some(names)
             } else {
-                text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
-            };
-            Some(names)
+                let names: Vec<String> = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                Some(names)
+            }
         }
-        _ => None,
+        Some(_) => return Err("Transfer Fields must be a string or JSON array".to_string()),
     };
 
     let default_out_name = format!("{}_JoinField", target.name);
@@ -6061,5 +6065,20 @@ mod tests {
         .unwrap();
         let Output::Table(out17) = res17.output else { panic!("expected Output::Table") };
         assert_eq!(out17.features[0].attrs[1], Value::Float(1.25));
+
+        // 18. Invalid fields type (e.g. integer 5) is rejected
+        let res18 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "joinField": "sku",
+                "fields": 5
+            }),
+        );
+        assert!(res18.is_err());
+        assert_eq!(res18.unwrap_err(), "Transfer Fields must be a string or JSON array");
     }
 }

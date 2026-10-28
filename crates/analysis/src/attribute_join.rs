@@ -73,7 +73,7 @@ impl JoinKey {
         match self {
             JoinKey::Int(i) => i.to_string(),
             JoinKey::Text(s) => format!("\"{s}\""),
-            JoinKey::Bool(b) => (if *b { "true" } else { "false" }).to_string(),
+            JoinKey::Bool(b) => b.to_string(),
             JoinKey::FloatBits(bits) => f64::from_bits(*bits).to_string(),
         }
     }

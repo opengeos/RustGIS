@@ -319,10 +319,10 @@ into a `target` table or layer based on matching key values:
   types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
   nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
-  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string entries are rejected). Repeated
-  field names are deduplicated in order. When omitted, every source field except the join key is transferred;
-  an explicitly empty array (`[]` or blank strings) transfers zero fields. Transferred fields preserve
-  their source display aliases and field types.
+  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string and non-array types are rejected). Repeated
+  field names are deduplicated in order. When omitted or passed as a blank string (`""`), every source field except
+  the join key is transferred; passing an explicitly empty array (`[]`) or an array of blank strings transfers zero fields.
+  Transferred fields preserve their original source display aliases (retained without technical prefixes) and field types.
 - **Prefix and collision handling:** `prefix` prepends text to all transferred field names. When a
   transferred field name conflicts with an existing target field, an incremental suffix is added
   (`name_2`, `name_3`) to maintain schema uniqueness without overwriting existing data.
