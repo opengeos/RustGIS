@@ -384,7 +384,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Field,
                 required: false,
                 default: "",
-                help: "Makes a row for each of this field's values. Scripts and the AI Assistant can give several fields as a list. Leave empty for one row.",
+                help: "Makes a row for each of this field's values. Scripts and the AI Assistant can give several fields as a list. Leave empty for one row for the whole table.",
             },
             P {
                 name: "pivot",
@@ -1939,7 +1939,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
         requests = [Stat::Count, Stat::Sum, Stat::Mean, Stat::Min, Stat::Max, Stat::Std].map(|stat| Request { field: fi, stat }).to_vec();
     }
     let cases = key_fields(ds, p.get("case"), "Case Field")?;
-    let separator = concatenate_separator(p, requests.iter().any(|r| r.stat == Stat::Concatenate))?;
+    let separator = concatenate_separator(p)?;
     let mut fields: Vec<Field> = cases.iter().filter_map(|&c| ds.fields.get(c).cloned()).collect();
     fields.push(Field::new("FREQUENCY", FieldType::Integer));
     for r in &requests {
@@ -2011,12 +2011,9 @@ fn key_fields(ds: &Dataset, v: Option<&Json>, label: &str) -> Result<Vec<usize>,
     Ok(out)
 }
 
-/// The separator CONCATENATE joins values with: `, ` unless given. Read only when a statistic
-/// `concatenates`: otherwise the Tools pane hides it, so a value left there can't fail the run.
-fn concatenate_separator(p: &Json, concatenates: bool) -> Result<&str, String> {
-    if !concatenates {
-        return Ok(", ");
-    }
+/// The separator CONCATENATE joins values with: `, ` unless given. A bad one is refused whatever
+/// the statistics; the Tools pane leaves it out of runs without CONCATENATE.
+fn concatenate_separator(p: &Json) -> Result<&str, String> {
     match p.get("separator") {
         None | Some(Json::Null) => Ok(", "),
         Some(Json::String(t)) if t.len() <= MAX_SEPARATOR => Ok(t.as_str()),
@@ -2075,7 +2072,7 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             Some(stat)
         }
     };
-    let separator = concatenate_separator(p, stat == Some(Stat::Concatenate))?;
+    let separator = concatenate_separator(p)?;
     // Record order, each record once, as FIRST, LAST and CONCATENATE follow it.
     let mut rs = rows(inp, p, "input", ds);
     rs.sort_unstable();
@@ -2099,19 +2096,10 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err(format!("{} rows by {width} fields would make more than {MAX_PIVOT_CELLS} values; select fewer records", groups.len()));
     }
     let mut fields: Vec<Field> = keys.iter().filter_map(|&k| ds.fields.get(k).cloned()).collect();
-    let mut taken: HashSet<String> = fields.iter().map(|f| f.name.to_ascii_lowercase()).collect();
     let ty = stat.map_or(value_type, |st| st.output_type(value_type.is_numeric()));
-    for c in &columns {
-        let base = pivot_column_name(field_name(pivot), c.key.first().unwrap_or(&Value::Null));
-        // Names made alike are told apart by a suffix, in the order of the pivot values.
-        let mut name = base.clone();
-        let mut n = 2;
-        while !taken.insert(name.to_ascii_lowercase()) {
-            name = format!("{base}_{n}");
-            n += 1;
-        }
-        fields.push(Field::new(name, ty));
-    }
+    let values = columns.iter().map(|c| c.key.first().unwrap_or(&Value::Null));
+    let names = pivot_field_names(field_name(pivot), values, &fields);
+    fields.extend(names.into_iter().map(|name| Field::new(name, ty)));
     let mut column_of: HashMap<usize, usize> = HashMap::with_capacity(rs.len());
     for (c, column) in columns.iter().enumerate() {
         column_of.extend(column.rows.iter().map(|&r| (r, c)));
@@ -2155,7 +2143,30 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
 /// Whether a pivot value is missing: null, or a number that isn't one.
 fn no_pivot_value(v: &Value) -> bool {
-    matches!(v, Value::Null) || matches!(v, Value::Float(f) if f.is_nan())
+    match v {
+        Value::Null => true,
+        Value::Float(f) => f.is_nan(),
+        _ => false,
+    }
+}
+
+/// The names of the fields Pivot Table makes for the pivot field `field`'s `values`, in order,
+/// after the fields `before` it: each value's [`pivot_column_name`], with a suffix (`_2`, `_3`, …)
+/// for one already taken, ignoring case, in the order of the values.
+fn pivot_field_names<'a>(field: &str, values: impl Iterator<Item = &'a Value>, before: &[Field]) -> Vec<String> {
+    let mut taken: HashSet<String> = before.iter().map(|f| f.name.to_ascii_lowercase()).collect();
+    let mut out = Vec::new();
+    for v in values {
+        let base = pivot_column_name(field, v);
+        let mut name = base.clone();
+        let mut n = 2;
+        while !taken.insert(name.to_ascii_lowercase()) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        out.push(name);
+    }
+    out
 }
 
 /// The name of the field Pivot Table makes for a value of the pivot field `field`. Letters, digits
@@ -2178,7 +2189,9 @@ fn pivot_column_name(field: &str, v: &Value) -> String {
         }
     }
     let text = matches!(v, Value::Text(_));
-    let name: String = if text { name.trim_matches('_') } else { name.as_str() }.chars().take(MAX_PIVOT_NAME).collect();
+    // Cut, then trimmed, so a cut at a run of other characters leaves no underscore at the end.
+    let kept: String = name.chars().take(MAX_PIVOT_NAME).collect();
+    let name = if text { kept.trim_matches('_').to_string() } else { kept };
     if !text || name.is_empty() || name.starts_with(char::is_numeric) { format!("{field}{name}") } else { name }
 }
 
@@ -5197,10 +5210,10 @@ mod tests {
             let err = crate::run("summaryStatistics", &m, &p).err().unwrap_or_default();
             assert!(err.contains(says), "{p}: {err}");
         }
-        // A separator is read only for CONCATENATE, as the Tools pane shows it only then.
+        // A bad separator is refused without CONCATENATE too, as before Pivot Table shared it.
         for separator in [serde_json::json!(1), serde_json::json!("x".repeat(257))] {
             let p = serde_json::json!({"input": "parcels", "field": "value", "separator": separator});
-            assert!(crate::run("summaryStatistics", &m, &p).is_ok(), "{p}");
+            assert!(crate::run("summaryStatistics", &m, &p).is_err(), "{p}");
         }
         // A case field can't share a name with an output field.
         // Nor can output fields differ only in case.
@@ -5274,6 +5287,10 @@ mod tests {
         assert_eq!(out.name, "totals");
         assert_eq!(out.features.len(), 1);
         assert_eq!((column(&out, "A"), column(&out, "B")), (vec![Value::Float(21.0)], vec![Value::Float(42.0)]));
+        // An empty table has no rows, even without row fields.
+        let empty = Map(HashMap::from([("long".to_string(), Dataset::new("long", GeometryType::None, out.fields.clone()))]));
+        let p = serde_json::json!({"input": "long", "pivot": "A", "value": "B"});
+        assert_eq!(layer(crate::run("pivotTable", &empty, &p).unwrap()).features.len(), 0);
     }
 
     /// Two records for one cell are refused without a statistic, naming the cell; a statistic
@@ -5304,9 +5321,9 @@ mod tests {
             layer(crate::run("pivotTable", &m, &p).unwrap())
         };
         let sum = run("SUM", "value");
-        // A separator is read only for CONCATENATE, as the Tools pane shows it only then.
+        // A bad separator is refused whatever the statistic, as in Summary Statistics.
         let junk = serde_json::json!({"input": "parcels", "fields": "zone", "pivot": "district", "value": "value", "statistic": "SUM", "separator": 1});
-        assert_eq!(crate::run("pivotTable", &m, &junk).map(layer).ok(), Some(sum.clone()));
+        assert!(crate::run("pivotTable", &m, &junk).is_err_and(|e| e.contains("Separator must be text")));
         assert_eq!(column(&sum, "zone"), [Value::Null, Value::Text("C".into()), Value::Text("R".into())]);
         assert_eq!(column(&sum, "district1"), [Value::Null, Value::Float(400.0), Value::Float(800.0)]);
         assert_eq!(column(&sum, "district2"), [Value::Null, Value::Null, Value::Float(300.0)]);
@@ -5367,6 +5384,9 @@ mod tests {
         assert_eq!(pivot_column_name("rate", &Value::Float(0.000_000_1)), "rate0_0000001");
         assert_eq!(pivot_column_name("rate", &Value::Float(1.000_000_1)), "rate1_0000001");
         assert_eq!(pivot_column_name("rate", &Value::Float(1.0)), "rate1");
+        // A cut at a run of other characters leaves no underscore at the end.
+        let cut = format!("{}-b", "a".repeat(MAX_PIVOT_NAME - 1));
+        assert_eq!(pivot_column_name("k", &Value::Text(cut)), "a".repeat(MAX_PIVOT_NAME - 1));
     }
 
     /// Calls that can't be answered are refused with a message naming the problem, including a

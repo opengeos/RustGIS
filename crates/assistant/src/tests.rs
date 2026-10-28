@@ -407,11 +407,21 @@ fn read_features_reads_a_pivot_table() {
     assert_eq!(name, "Countries_Pivot", "{ran}");
     let read: Value = serde_json::from_str(&tools::run(&mut s, &t("read_features", json!({"table": name}))).unwrap()).unwrap();
     let rows = read["rows"].as_array().cloned().unwrap_or_default();
-    assert!(!rows.is_empty(), "{read}");
+    assert!(!rows.is_empty() && read["total"].as_u64() == Some(rows.len() as u64), "{read}");
+    let mut cells = 0.0;
     for row in &rows {
-        let groups = row.as_object().map(|o| o.keys().filter(|k| k.starts_with("income_grp")).count()).unwrap_or_default();
-        assert!(row["continent"].is_string() && groups > 1, "{row}");
+        let groups: Vec<f64> = row
+            .as_object()
+            .map(|o| o.iter().filter(|(k, _)| k.starts_with("income_grp")).filter_map(|(_, v)| v.as_f64()).collect())
+            .unwrap_or_default();
+        assert!(row["continent"].is_string() && !groups.is_empty(), "{row}");
+        cells += groups.iter().sum::<f64>();
     }
+    // Every country's population is in one cell.
+    let countries = s.map().layer_by_name("Countries").map(|l| l.dataset.clone()).unwrap();
+    let pop = countries.field_index("pop_est").unwrap();
+    let total: f64 = (0..countries.features.len()).filter_map(|r| countries.value(r, pop).as_f64()).sum();
+    assert!((cells - total).abs() < 1.0, "{cells} != {total}");
 }
 
 /// A tool's output table is read back by the name `run_tool` gives, as `table` or as `layer` (the
