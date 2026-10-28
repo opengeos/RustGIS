@@ -82,7 +82,13 @@ pub struct Popup {
     pub opened: u64,
     /// The WMS layers being asked what is at the point, whose features join the list.
     pub asks: Vec<Ask>,
+    /// When it opened: it waits for the WMS layers' answers up to [`ASK_WAIT`] from then.
+    since: web_time::Instant,
 }
+
+/// How long a pop-up waits for the WMS layers asked before it shows what was found: then their
+/// answers join it as they come.
+const ASK_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// A WMS layer asked what is at a popup's point (GetFeatureInfo), its answer on the way: the
 /// request's, or first its service's capabilities (a layer from a project doesn't know its request).
@@ -123,7 +129,14 @@ impl Popup {
             let request = (!capabilities).then(|| url.to_string());
             asks.push(Ask { layer, also: Vec::new(), capabilities, request, slot });
         }
-        Popup { info, at, index: 0, map, opened, asks }
+        Popup { info, at, index: 0, map, opened, asks, since: web_time::Instant::now() }
+    }
+
+    /// Whether it waits for the WMS layers asked, to show their answers and what was found
+    /// together, in drawing order: a layer drawn over the feature found may answer, and take its
+    /// place.
+    fn asking(&self) -> bool {
+        !self.asks.is_empty() && self.since.elapsed() < ASK_WAIT
     }
 }
 
@@ -3100,17 +3113,28 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let Some(pp) = &mut app.map.popup else { return };
     pp.asks.extend(next);
+    // Answers that land while the pop-up waits for them: it shows nothing yet, so it opens on the
+    // top result, and selects its feature.
+    let waited = pp.since.elapsed() < ASK_WAIT;
     if !found.is_empty()
         && let Some(info) = with_answers(app.session.map(), &pp.info, found)
     {
-        // The result shown stays shown, wherever the answers went; the first when it was left out
-        // (a layer drawn higher answered, with topmost).
-        let before = results_of(&pp.info);
-        // As the pop-up shows it: an index past the end is the last result.
-        let index = pp.index.min(before.len().saturating_sub(1));
-        pp.index = index_after(&before, index, info["results"].as_array().map(Vec::as_slice).unwrap_or_default());
+        if waited {
+            pp.index = 0;
+        } else {
+            // The result shown stays shown, wherever the answers went; the first when it was left
+            // out (a layer drawn higher answered, with topmost).
+            let before = results_of(&pp.info);
+            // As the pop-up shows it: an index past the end is the last result.
+            let index = pp.index.min(before.len().saturating_sub(1));
+            pp.index = index_after(&before, index, info["results"].as_array().map(Vec::as_slice).unwrap_or_default());
+        }
         pp.info = info;
+        if waited {
+            select_shown(app);
+        }
     }
+    let Some(pp) = &mut app.map.popup else { return };
     if pp.asks.is_empty() && !is_found(&pp.info) {
         app.map.popup = None;
     }
@@ -3125,14 +3149,22 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
     if !rect.contains(anchor) {
         return;
     }
-    let results = pp.info["results"].as_array().map_or(0, Vec::len);
+    // Waiting for the WMS layers' answers, it shows none of the results yet.
+    let asking = pp.asking();
+    let results = if asking { 0 } else { pp.info["results"].as_array().map_or(0, Vec::len) };
     let index = pp.index.min(results.saturating_sub(1));
-    let info = if results > 1 { pp.info["results"][index].clone() } else { pp.info.clone() };
+    let info = if asking {
+        Value::Null
+    } else if results > 1 {
+        pp.info["results"][index].clone()
+    } else {
+        pp.info.clone()
+    };
     let mut step: Option<usize> = None;
     let mut zoom = false;
     // The feature shown, as its layer id and feature id (a raster pixel has neither).
     let shown = info["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).zip(info["fid"].as_u64());
-    // Only WMS layers being asked so far: their names.
+    // Only WMS layers being asked so far, or still waited for: their names.
     let waiting = !is_found(&info);
     let layer = if waiting {
         pp.asks.iter().map(|a| a.layer.as_str()).collect::<Vec<_>>().join(", ")
@@ -3307,22 +3339,27 @@ fn popup(app: &mut RustGisApp, ui: &mut Ui, rect: Rect) {
         app.map.popup = None;
     } else if let (Some(i), Some(pp)) = (step, &mut app.map.popup) {
         pp.index = i;
-        // The feature shown is the one selected, as after the click. Not through `select.rows`:
-        // browsing a pop-up mustn't fill the undo history; the new revision redraws the map.
-        // Found again by its feature id: a streamed layer may have read another window since the
-        // click, moving the feature to another row (or out of the layer: then nothing is selected).
-        let shown = pp.info["results"].get(i).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
-        let found = shown.and_then(|(id, fid)| {
-            let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
-            Some((id, row))
-        });
-        if let Some((id, row)) = found {
-            rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
-        } else {
-            app.session.map_mut().clear_selection();
-        }
-        app.session.revision = app.session.revision.wrapping_add(1);
+        select_shown(app);
     }
+}
+
+/// Selects the feature the pop-up shows, as after the click. Not through `select.rows`: browsing
+/// a pop-up mustn't fill the undo history; the new revision redraws the map. Found again by its
+/// feature id: a streamed layer may have read another window since the click, moving the feature
+/// to another row (or out of the layer: then nothing is selected).
+fn select_shown(app: &mut RustGisApp) {
+    let Some(pp) = &app.map.popup else { return };
+    let shown = pp.info["results"].get(pp.index).and_then(|r| Some((u32::try_from(r["layerId"].as_u64()?).ok()?, r["fid"].as_u64()?)));
+    let found = shown.and_then(|(id, fid)| {
+        let row = app.session.map().layer(id)?.dataset.features.iter().position(|f| f.id == fid)?;
+        Some((id, row))
+    });
+    if let Some((id, row)) = found {
+        rustgis_engine::cmd::select::set(&mut app.session, id, vec![row], rustgis_engine::cmd::select::Mode::New);
+    } else {
+        app.session.map_mut().clear_selection();
+    }
+    app.session.revision = app.session.revision.wrapping_add(1);
 }
 
 /// Whether an attribute value is a picture (a `data:image/png` or `jpeg` address, as a photo's
@@ -3987,6 +4024,52 @@ mod tests {
         // The one shown left out; a list shorter than the index.
         assert_eq!(index_after(&before, 0, &[c.clone(), b.clone()]), 0);
         assert_eq!(index_after(&before, 5, &after), 0);
+    }
+
+    /// A pop-up asking a WMS layer waits for its answer, up to `ASK_WAIT`, before it shows what
+    /// was found, so a layer drawn over the feature found doesn't take its place once shown; with
+    /// nothing asked, it shows at once.
+    #[test]
+    fn a_popup_waits_for_the_wms_answers_a_while() {
+        let found = json!({"layer": "Countries", "attributes": {"name": "Switzerland"}});
+        let mut pp = Popup::new(found, Coord::new(8.6, 46.65), 0, 0);
+        assert!(!pp.asking(), "nothing asked");
+        pp.asks.push(Ask { layer: "Over".into(), also: Vec::new(), capabilities: false, request: None, slot: Default::default() });
+        assert!(pp.asking(), "asked");
+        if let Some(earlier) = web_time::Instant::now().checked_sub(ASK_WAIT) {
+            pp.since = earlier;
+            assert!(!pp.asking(), "waited long enough");
+        }
+    }
+
+    /// Answers that land while the pop-up waits open it on the top result, with its feature
+    /// selected: drawn over Countries, Over's feature comes first, and Switzerland, selected by the
+    /// click, no longer is.
+    #[test]
+    fn a_popup_opens_on_the_top_result_after_its_wait() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::sample::world_project());
+        let url = "https://wms.example.org/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=over&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng";
+        s.run("map.addTiles", &json!({"url": url, "name": "Over", "overlay": true})).unwrap();
+        s.run("map.popupMode", &json!({"mode": "visible"})).unwrap();
+        let mut info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0})).unwrap();
+        assert_eq!(info["layer"], "Countries");
+        assert_eq!(info["featureInfo"][0]["tileLayer"], "Over", "{info}");
+        s.run("select.rows", &json!({"layer": info["layerId"], "rows": [info["row"]]})).unwrap();
+        // Its answer already in, not fetched.
+        info.as_object_mut().unwrap().remove("featureInfo");
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let mut pp = Popup::new(info, Coord::new(8.6, 46.65), map, opened);
+        let answer = br#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"Bern"},"geometry":null}]}"#;
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(Ok(answer.to_vec()))));
+        pp.asks.push(Ask { layer: "Over".into(), also: Vec::new(), capabilities: false, request: None, slot });
+        app.map.popup = Some(pp);
+        follow_asks(&mut app, &egui::Context::default());
+        let pp = app.map.popup.as_ref().unwrap();
+        let shown: Vec<_> =
+            pp.info["results"].as_array().unwrap().iter().map(|r| r["tileLayer"].as_str().or(r["layer"].as_str()).unwrap()).collect();
+        assert_eq!((shown, pp.index), (vec!["Over", "Countries"], 0));
+        assert!(app.session.map().layer_by_name("Countries").unwrap().selection.is_empty());
     }
 
     /// A WMS layer's answer comes in the drawing order (#808): drawn over Countries, its feature

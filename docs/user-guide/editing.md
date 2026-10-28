@@ -152,13 +152,15 @@ buildings`) and its attributes; tile features can't be selected or zoomed to.
 They ask WMS layers too (WMS tile layers that are shown and, as far as their service's
 capabilities say, queryable): RustGIS sends the service a standard GetFeatureInfo request for the
 point (WMS 1.3.0 or 1.1.1, as in the layer's address), asking for GeoJSON when it offers it, else
-GML, other XML, plain text or HTML, and the features it answers join the pop-up as they arrive.
+GML, other XML, plain text or HTML. The pop-up says "Asking the map service…" until every layer
+asked has answered, for up to 4 seconds, and then shows the features found and answered together,
+in drawing order; answers that come later join it as they arrive.
 When the service answers with an error in that format (swisstopo's MapServer can't write some of
 its layers as GeoJSON, but answers them in GML), RustGIS asks again in the next format it offers,
 and keeps asking that layer in it for the rest of the session.
 Topmost asks only the highest WMS layer that can be asked at the point (one that covers it and is
-queryable), and only when no feature of the map's own layers or of its vector tile layers is under
-the click. A project doesn't save the request: a WMS layer from a project reads its service's
+queryable), and only when it is drawn over the feature found, or nothing was found; its features
+then take that feature's place. A project doesn't save the request: a WMS layer from a project reads its service's
 capabilities again on its first click (once for all the map's layers from that service), so until
 then Topmost takes it as one that can be asked.
 `identify` lists the requests in `featureInfo`, and `identify.featureInfo` reads an answer (or, on
