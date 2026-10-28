@@ -294,10 +294,14 @@ const NEVER: &[&str] = &[
     "pg.disconnect",
     // Writes to a database: the user's to do, asked each time.
     "pg.saveEdits",
+    "gpkg.saveEdits",
 ];
 
 /// Commands that write files without naming one in their parameters.
 const WRITES_FILES: &[&str] = &["project.save", "project.saveAs"];
+
+/// Commands that read a file a layer names, not their parameters.
+const READS_FILES: &[&str] = &["gpkg.discardEdits"];
 
 /// Parameter keys that name a file, folder or address. (`data` and `text` carry content, which
 /// plugins may pass: `layer.addDataBytes`, `map.import` from text.)
@@ -378,6 +382,7 @@ pub fn reaches(spec: &C, params: &Value) -> Option<Reach> {
     let files = super::items::names_place(params, PLACE_KEYS, 0)
         || PLACE_KEYS.iter().any(|k| spec.params.contains(&format!("\"{k}\"")))
         || WRITES_FILES.contains(&spec.id)
+        || READS_FILES.contains(&spec.id)
         || ["share.", "offline.", "cache.", "notebook."].iter().any(|p| spec.id.starts_with(p));
     files.then_some(Reach::Files)
 }

@@ -22,7 +22,7 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - selection: `selectByLocation` (`input`, `select`, `distance`, `invert`), `selectByAttributes`
      (`input`, `where`)
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
-     (`input`, `statistics`, `case`)
+     (`input`, `statistics`, `case`), `pivotTable` (`input`, `fields`, `pivot`, `value`, `statistic`)
    - joins: `spatialJoin` (`target`, `join`, `match`), `joinField` (`target`, `targetField`,
      `joinTable`, `joinField`, `fields`, `prefix`, `duplicates`)
    - conversion: `exportFeatures` (`input`, `where`)

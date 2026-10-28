@@ -98,8 +98,6 @@ And alongside it:
 - A histogram for raster stretches; raster attribute tables.
 
 ### Data at the source
-- Write edits back to GeoPackage and PostGIS (edits stay in the project today). _Coordinate
-  first._
 - GeoLibre opening RustGIS `.rgis` projects, once RustGIS's project format and supported
   data types settle. RustGIS imports GeoLibre projects; combined colour and size rendering
   is tracked in [#1017](https://github.com/opengeos/RustGIS/issues/1017).
@@ -168,6 +166,8 @@ Open questions rather than plans; discuss before building.
 - An in-app Python console; an R package.
 
 ## Done
+- Save edits back to existing GeoPackage and PostGIS tables on desktop, with atomic saves,
+  conflict detection and discard/reload ([#1041](https://github.com/opengeos/RustGIS/issues/1041)).
 - Projects that survive a move: local data paths relative to the project and undoable Repair
   Data Source for layers and tile archives ([#879](https://github.com/opengeos/RustGIS/issues/879)).
 - Layered workspace, command registry with undo, project files (`.rgis`), `rustgis-cli`, the
