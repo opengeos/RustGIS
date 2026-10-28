@@ -392,6 +392,17 @@ time. swisstopo's national maps go back year by year to 1952, and its population
 rustgis-cli run --cmd 'service.add={"url":"https://wms.geo.admin.ch/?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0","layer":"ch.swisstopo.pixelkarte-farbe-pk25.noscale","time":"1960"}' --cmd 'map.goToXY={"lon":7.4474,"lat":46.948,"scale":25000}' --cmd 'share.exportMap={"path":"bern-1960.png"}'
 ```
 
+**Follow the time slider** adds a WMS or WMTS layer with a time dimension on the
+[time slider](workspace.md) instead, at a date that changes with it: its
+requests take each step's time, written as the layer writes its times (`1995`, `19951231`,
+`2024-06-01`, `2026-08-31T23:59:59Z`). When the slider is off, it is turned on with the layer's
+times (the years of `1952/2026/P1Y`, or the times it lists), at the layer's default; one already
+on keeps its steps. With commands, `"time": "slider"` (or `true`), and `time.export` makes an animation:
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://wms.geo.admin.ch/?SERVICE=WMS&REQUEST=GetCapabilities&VERSION=1.3.0","layer":"ch.swisstopo.pixelkarte-farbe-pk25.noscale","time":"slider"}' --cmd 'map.goToXY={"lon":7.4474,"lat":46.948,"scale":25000}' --cmd 'time.set={"interval":15}' --cmd 'time.export={"path":"bern.gif"}'
+```
+
 A service may name its time instead of dating it: swisstopo's layers on
 [geo.admin.ch](https://docs.geo.admin.ch/visualize-data/wmts.html) are drawn at `current`, their
 default, so they need no `"time"`:

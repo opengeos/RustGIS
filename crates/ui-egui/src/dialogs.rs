@@ -921,9 +921,14 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             // date; empty, at the service's default.
             if layers.iter().any(|l| l.get("time").is_some()) {
                 ui.horizontal(|ui| {
+                    ui.checkbox(&mut browse.slider, tl!("Follow the time slider"))
+                        .on_hover_text(tl!("Step through the layer's times with the time slider (View › Time), which starts with them"));
                     let input_label = ui.label(tl!("Date"));
-                    ui.add(egui::TextEdit::singleline(&mut browse.time).hint_text(tl!("its default")).desired_width(120.0))
-                        .labelled_by(input_label.id);
+                    ui.add_enabled(
+                        !browse.slider,
+                        egui::TextEdit::singleline(&mut browse.time).hint_text(tl!("its default")).desired_width(120.0),
+                    )
+                    .labelled_by(input_label.id);
                     ui.label(
                         egui::RichText::new(tl!("for the layers that change with time, as they list their times (2024-06-01, 1995)"))
                             .small()
@@ -1003,7 +1008,15 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                                     let values: Vec<&str> =
                                         t["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
                                     let default = t["default"].as_str().unwrap_or("");
-                                    let times = values.join(", ");
+                                    // The first and last few of a long list.
+                                    let times = match values.len() {
+                                        n if n > 24 => format!(
+                                            "{}, …, {}",
+                                            values.get(..12).unwrap_or(&[]).join(", "),
+                                            values.get(n - 12..).unwrap_or(&[]).join(", ")
+                                        ),
+                                        _ => values.join(", "),
+                                    };
                                     what.on_hover_text(crate::i18n::fmt(
                                         "Its default: {default}. Its times: {times}",
                                         &[("default", default), ("times", &times)],
@@ -1062,7 +1075,7 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let name = l.get("name").and_then(Value::as_str).unwrap_or("");
         let title = l.get("title").and_then(Value::as_str).unwrap_or(name).to_string();
         // Features are downloaded in the background, as From URL… does; map layers are added now.
-        let time = app.ui.service_browse.time.trim().to_string();
+        let time = if app.ui.service_browse.slider { "slider".to_string() } else { app.ui.service_browse.time.trim().to_string() };
         // The view's area, for a feature layer only: a map layer never asks for one, so an
         // unknown view can't stop it.
         let features = l["offer"]["type"] == "features";

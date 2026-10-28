@@ -9144,6 +9144,7 @@ fn wms_layers_with_time() {
 <Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS>
 <Layer><Name>population</Name><Title>Population</Title><Dimension name="time" units="ISO8601" default="2025" nearestValue="0">1990,2000,2025</Dimension></Layer>
 <Layer><Name>decades</Name><Title>Decades</Title><Dimension name="time" units="ISO8601" default="2020" multipleValues="1">1990/2020/P10Y</Dimension></Layer>
+<Layer><Name>roads</Name><Title>Roads</Title></Layer>
 </Layer></Capability></WMS_Capabilities>"#;
     let mut s = Session::new(Project::default());
     let url = "https://maps.example.com/wms";
@@ -9183,6 +9184,34 @@ fn wms_layers_with_time() {
     let r = reopened.run("identify.featureInfo", &p).unwrap();
     let request = r["url"].as_str().unwrap();
     assert!(request.contains("REQUEST=GetFeatureInfo") && request.ends_with("&TIME=1990"), "{request}");
+
+    // Following the time slider: it turns on with the layer's times, at its default, and each of
+    // its steps draws (and asks) the layer at that time.
+    let mut s = Session::new(Project::default());
+    s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "slider"})).unwrap();
+    let year = |y: i32| rustgis_data::time::parse_text(&format!("{y}-01-01")).unwrap();
+    let slider = s.map().time.clone().unwrap();
+    assert_eq!((slider.steps(), slider.current), (vec![year(1990), year(2000), year(2025)], year(2025)));
+    let population = s.map().tiles.iter().find(|t| t.name == "Population").unwrap();
+    assert!(population.time_url.as_deref().is_some_and(|u| u.ends_with("&TIME={date:YYYY}")), "{:?}", population.time_url);
+    assert!(population.url.ends_with("&TIME=2025"), "{}", population.url);
+    s.run("time.goTo", &json!({"date": "1990"})).unwrap();
+    assert!(tile(&s, "Population").ends_with("&TIME=1990"), "{}", tile(&s, "Population"));
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let requests = asked(&mut s);
+    assert!(requests.len() == 1 && requests[0].ends_with("&TIME=1990"), "{requests:?}");
+    // A second layer follows the slider that is on (`"time": true`, as for Zarr): its steps stay.
+    s.run("service.add", &json!({"url": url, "layer": "decades", "text": WMS, "time": true})).unwrap();
+    assert_eq!(s.map().time.as_ref().unwrap().steps(), slider.steps());
+    assert!(tile(&s, "Decades").ends_with("&TIME=1990"), "{}", tile(&s, "Decades"));
+    // Kept with the project, still following.
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut reopened = Session::new(serde_json::from_str(&text).unwrap());
+    reopened.run("time.goTo", &json!({"date": "2000"})).unwrap();
+    assert!(tile(&reopened, "Population").ends_with("&TIME=2000"), "{}", tile(&reopened, "Population"));
+    // A layer without times has none to follow it with.
+    let e = s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "time": "slider"})).unwrap_err();
+    assert!(e.contains("no time to follow"), "{e}");
 }
 
 /// Identify asks a WMS layer what is at the point (GetFeatureInfo): the request from the

@@ -50,8 +50,129 @@ pub struct LayerTime {
     pub multiple: bool,
 }
 
-/// Most time values kept for a layer.
-const MAX_TIME_VALUES: usize = 64;
+/// Most time values kept for a layer: enough for every year of a century and more (swisstopo's
+/// aerial photos list 92), as the time slider steps through them.
+const MAX_TIME_VALUES: usize = 1000;
+
+/// The most steps the time slider takes (`rustgis_map::time::MAX_STEPS`).
+const MAX_SLIDER_STEPS: usize = 20_000;
+
+/// The date formats a layer's times may be written in, as `{date:…}` takes them: years, compact
+/// dates (swisstopo's `19951231`), months, dates, date-times.
+const DATE_FORMATS: [&str; 8] = [
+    "YYYY",
+    "YYYYMMDD",
+    "YYYY-MM",
+    "YYYY-MM-DD",
+    "YYYY-MM-DD[T]HH:mm:ss[Z]",
+    "YYYY-MM-DD[T]HH:mm[Z]",
+    "YYYY-MM-DD[T]HH:mm:ss",
+    "YYYY-MM-DD[T]HH:mm",
+];
+
+/// The start of the year 3000 (milliseconds since 1970): times past it stand for the latest
+/// (swisstopo's `9999`, `99991231`), no time the slider steps to.
+const LATEST_STAND_IN: f64 = 32_503_680_000_000.0;
+
+/// How a layer's times go on the time slider: the format they are written in (`{date:…}`'s), the
+/// slider's steps, and the time it starts at (the layer's default, when it is a date).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliderTime {
+    pub format: &'static str,
+    pub steps: SliderSteps,
+    pub at: Option<f64>,
+}
+
+/// The time slider's steps for a layer: the times it lists, or every so often between two (one
+/// period it lists, `1952/2026/P1Y`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum SliderSteps {
+    Dates(Vec<f64>),
+    Every { start: f64, end: f64, unit: crate::time::Unit, interval: u32 },
+}
+
+/// A time written in `format` (and no stand-in for the latest), as milliseconds since 1970.
+fn written_as(v: &str, format: &str) -> Option<f64> {
+    let t = crate::time::parse_input(&serde_json::Value::String(v.to_string()))?;
+    (t < LATEST_STAND_IN && crate::time::format(t, format) == v).then_some(t)
+}
+
+/// An ISO 8601 period the slider steps by: years, months, weeks, days or hours (`P1Y`, `PT6H`).
+fn period_step(p: &str) -> Option<(crate::time::Unit, u32)> {
+    use crate::time::Unit;
+    let (body, hours) = match p.strip_prefix("PT") {
+        Some(b) => (b, true),
+        None => (p.strip_prefix('P')?, false),
+    };
+    let n: u32 = body.get(..body.len().checked_sub(1)?)?.parse().ok().filter(|n| *n > 0)?;
+    match (hours, body.chars().last()?) {
+        (true, 'H') => Some((Unit::Hour, n)),
+        (false, 'Y') => Some((Unit::Year, n)),
+        (false, 'M') => Some((Unit::Month, n)),
+        (false, 'W') => Some((Unit::Day, n.checked_mul(7)?)),
+        (false, 'D') => Some((Unit::Day, n)),
+        _ => None,
+    }
+}
+
+impl LayerTime {
+    /// Its times on the time slider; `None` when they aren't dates it can step to (`current`
+    /// alone, or written in no format of [`DATE_FORMATS`]).
+    pub fn slider(&self) -> Option<SliderTime> {
+        use crate::time::Unit;
+        // The format: the first time listed (or a range's start) that reads as a date in one.
+        let first =
+            self.values.iter().flat_map(|v| v.split('/').take(2)).find(|v| DATE_FORMATS.iter().any(|f| written_as(v, f).is_some()))?;
+        let format = DATE_FORMATS.iter().copied().find(|f| written_as(first, f).is_some())?;
+        // A range without a period steps by the finest unit its times name.
+        let finest = match format {
+            "YYYY" => Unit::Year,
+            "YYYY-MM" => Unit::Month,
+            "YYYYMMDD" | "YYYY-MM-DD" => Unit::Day,
+            _ => Unit::Hour,
+        };
+        let range = |v: &str| -> Option<(f64, f64, Unit, u32)> {
+            let pieces: Vec<&str> = v.split('/').collect();
+            let (a, z) = (written_as(pieces.first()?, format)?, written_as(pieces.get(1)?, format)?);
+            let (unit, n) = match pieces.get(2) {
+                Some(p) => period_step(p)?,
+                None => (finest, 1),
+            };
+            (a <= z).then_some((a, z, unit, n))
+        };
+        let steps = match self.values.as_slice() {
+            [one] if one.contains('/') => {
+                let (start, end, unit, interval) = range(one)?;
+                SliderSteps::Every { start, end, unit, interval }
+            }
+            values => {
+                let mut dates = Vec::new();
+                for v in values {
+                    if v.contains('/') {
+                        let Some((a, z, unit, n)) = range(v) else { continue };
+                        let mut t = a;
+                        while t <= z && dates.len() <= MAX_SLIDER_STEPS {
+                            dates.push(t);
+                            t = crate::time::add(t, unit, i64::from(n));
+                        }
+                    } else if let Some(t) = written_as(v, format) {
+                        dates.push(t);
+                    }
+                    if dates.len() > MAX_SLIDER_STEPS {
+                        return None;
+                    }
+                }
+                dates.sort_by(f64::total_cmp);
+                dates.dedup();
+                if dates.is_empty() {
+                    return None;
+                }
+                SliderSteps::Dates(dates)
+            }
+        };
+        Some(SliderTime { format, steps, at: written_as(&self.default, format) })
+    }
+}
 
 /// A time given for a layer's `{Time}`: an ISO 8601 date or date-time (or `default`, or OGC's
 /// `current`), never anything else, since it goes into tile addresses.
@@ -3326,11 +3447,11 @@ mod tests {
         let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", listed.as_bytes()).unwrap();
         assert_eq!(s.layers[2].time.as_ref().map(|t| t.default.as_str()), Some("2020-02-01"));
         // The latest of many listed times, past the few kept.
-        let many: String = (0..100).map(|i| format!("<Value>{}-01-01</Value>", 1900 + i)).collect();
+        let many: String = (0..MAX_TIME_VALUES + 100).map(|i| format!("<Value>{}-01-01</Value>", 1000 + i)).collect();
         let late = GIBS.replace("<Default>../../x?y</Default>", &many);
         let s = parse("https://gibs.example.org/wmts/1.0.0/WMTSCapabilities.xml", late.as_bytes()).unwrap();
         let t = s.layers[2].time.as_ref().unwrap();
-        assert_eq!((t.default.as_str(), t.values.len()), ("1999-01-01", MAX_TIME_VALUES));
+        assert_eq!((t.default.as_str(), t.values.len()), ("2099-01-01", MAX_TIME_VALUES));
         assert!(checked_time("2024-06-01").is_ok() && checked_time("2024-06-01T10:00:00Z").is_ok());
         assert!(checked_time("default").is_ok() && checked_time("current").is_ok());
         for bad in ["", "..", ".", "../x", "2024-06-01/../..", "a b", "x?y=1", "latest", &"9".repeat(50)] {
@@ -3439,6 +3560,61 @@ mod tests {
             "https://a.example/wms?LAYERS=x&TIME=2024-06-01T10:00:00%2B02:00%2F2024-06-02"
         );
         assert_eq!(with_time("https://a.example/{Time}/{z}/{x}/{y}.png", "2024-06-01"), "https://a.example/2024-06-01/{z}/{x}/{y}.png");
+    }
+
+    /// A layer's times on the time slider, in the forms swisstopo's WMS and NASA's WMTS list them:
+    /// the format they are written in (filled back to the very text listed), and steps: a period
+    /// regular ones, a list (ranges in it too) dated ones, the latest's stand-ins left out.
+    #[test]
+    fn layer_times_on_the_time_slider() {
+        use crate::time::{Unit, fill_template, parse_text};
+        let lt = |default: &str, values: &[&str]| LayerTime {
+            default: default.into(),
+            values: values.iter().map(|v| v.to_string()).collect(),
+            multiple: false,
+        };
+        let ms = |t: &str| parse_text(t).unwrap();
+        let every = |start: &str, end: &str, unit, interval| SliderSteps::Every { start: ms(start), end: ms(end), unit, interval };
+        // swisstopo's national map, a year at a time.
+        let map = lt("2026", &["1952/2026/P1Y"]).slider().unwrap();
+        assert_eq!((map.format, &map.steps, map.at), ("YYYY", &every("1952-01-01", "2026-01-01", Unit::Year, 1), Some(ms("2026-01-01"))));
+        // A range without a period: by the unit its times name.
+        assert_eq!(lt("1915", &["1870/1949"]).slider().unwrap().steps, every("1870-01-01", "1949-01-01", Unit::Year, 1));
+        // NASA GIBS, day by day.
+        let gibs = lt("2024-06-02", &["2000-02-24/2024-06-02/P1D"]).slider().unwrap();
+        assert_eq!((gibs.format, gibs.steps), ("YYYY-MM-DD", every("2000-02-24", "2024-06-02", Unit::Day, 1)));
+        // Years listed, a range among them.
+        let settled = lt("2025", &["1919", "1950", "2019/2025"]).slider().unwrap();
+        let years = |ys: &[i32]| SliderSteps::Dates(ys.iter().map(|y| ms(&format!("{y}-01-01"))).collect());
+        assert_eq!(settled.steps, years(&[1919, 1950, 2019, 2020, 2021, 2022, 2023, 2024, 2025]));
+        // Aerial photos by compact dates, the latest's stand-in left out (and no default to start at).
+        let photos = lt("99991231", &["19291231", "19341231", "99991231"]).slider().unwrap();
+        assert_eq!(
+            (photos.format, &photos.steps, photos.at),
+            ("YYYYMMDD", &SliderSteps::Dates(vec![ms("1929-12-31"), ms("1934-12-31")]), None)
+        );
+        // Date-times, filled back to exactly the times listed (the service takes no other).
+        let ndvi = lt("2026-08-31T23:59:59Z", &["2025-08-31T23:59:59Z", "2026-08-31T23:59:59Z"]).slider().unwrap();
+        assert_eq!(ndvi.format, "YYYY-MM-DD[T]HH:mm:ss[Z]");
+        for (st, listed) in [(&ndvi, "2026-08-31T23:59:59Z"), (&photos, "19341231"), (&map, "2026")] {
+            let at = match &st.steps {
+                SliderSteps::Dates(d) => *d.last().unwrap(),
+                SliderSteps::Every { end, .. } => *end,
+            };
+            assert_eq!(
+                fill_template(&format!("https://wms.example.org/?TIME={{date:{}}}", st.format), at),
+                format!("https://wms.example.org/?TIME={listed}")
+            );
+        }
+        // No dates to step to.
+        assert_eq!(lt("current", &["current"]).slider(), None);
+        assert_eq!(lt("2024", &[]).slider(), None);
+        assert_eq!(lt("2024", &["2024/2020"]).slider(), None);
+        assert_eq!(period_step("PT6H"), Some((Unit::Hour, 6)));
+        assert_eq!(period_step("P2W"), Some((Unit::Day, 14)));
+        for bad in ["P", "PT", "P0Y", "P1S", "PT1D", "1Y", "P1.5Y"] {
+            assert_eq!(period_step(bad), None, "{bad}");
+        }
     }
 
     #[test]
