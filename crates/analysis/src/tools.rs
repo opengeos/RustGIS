@@ -895,11 +895,12 @@ fn copy_schema(ds: &Dataset, name: String, g: GeometryType) -> Dataset {
     Dataset::new(name, g, ds.fields.clone())
 }
 
-/// Gives a tool's output its input's source CRS, for export, and whether the input lost features
-/// to it on reading, so the output isn't taken for complete.
-fn keep_source_crs(out: &mut Dataset, ds: &Dataset) {
+/// Gives an overlay tool's output its input's source CRS, for export, and marks it incomplete
+/// when the input or the layer it is overlaid with lost features on reading, so it isn't taken
+/// for complete.
+fn keep_source_crs(out: &mut Dataset, ds: &Dataset, overlay: &Dataset) {
     out.crs = ds.crs;
-    out.crs_incomplete = ds.crs_incomplete;
+    out.crs_incomplete = ds.crs_incomplete || overlay.crs_incomplete;
 }
 
 /// Finds the index of a field by case-insensitive name, explicitly detecting collisions.
@@ -1050,10 +1051,10 @@ fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     if ds.geometry_type == GeometryType::None {
         return Err(format!("'{}' has no geometry", ds.name));
     }
-    let (_, zones) = overlay_zones(inp, p, "erase")?;
+    let (er, zones) = overlay_zones(inp, p, "erase")?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Erase", ds.name)), ds.geometry_type);
-    keep_source_crs(&mut out, ds);
+    keep_source_crs(&mut out, ds, er);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         if let Some(rest) = f.geometry.as_ref().and_then(|g| outside(g, &zones, &index)) {
@@ -1079,8 +1080,8 @@ fn mask_of(poly: MultiPolygon<f64>) -> MultiPolygon<f64> {
     if poly.0.len() > 1 { union_all(poly.0.iter()) } else { poly.orient(Direction::Default) }
 }
 
-/// The polygon layer of an overlay tool's parameter `k` (`overlay`, `update`, `split`), which must
-/// be polygons, and its (selected) features with geometry as [`Zone`]s, in order.
+/// The polygon layer of an overlay tool's parameter `k` (`overlay`, `erase`, `update`, `split`),
+/// which must be polygons, and its (selected) features with geometry as [`Zone`]s, in order.
 fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json, k: &str) -> Result<(&'a Dataset, Vec<Zone>), String> {
     let ov = input(inp, p, k)?;
     if ov.geometry_type != GeometryType::Polygon {
@@ -1100,7 +1101,7 @@ fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json, k: &str) -> Result<(&'a Data
 /// name is taken getting a suffix (`name_2`). It keeps the input's source CRS for export.
 fn overlay_schema(ds: &Dataset, ov: &Dataset, name: String, g: GeometryType) -> Dataset {
     let mut out = copy_schema(ds, name, g);
-    keep_source_crs(&mut out, ds);
+    keep_source_crs(&mut out, ds, ov);
     for f in &ov.fields {
         let name = unique_field(&out, &f.name);
         out.fields.push(Field { name, ..f.clone() });
@@ -1195,29 +1196,34 @@ fn cut(g: &Geometry, zones: &[Zone], index: &ExtentIndex, outside: bool) -> (Vec
 }
 
 /// A feature's part outside every zone, as [`part`] gives it, for tools that keep only that
-/// (Erase, Update): it is cut once, by the zones whose extent meets its own (that zone itself, so
-/// its edges stay exactly where they are, or their union), without [`cut`]'s part in each zone. A
-/// feature no zone meets (a polygon: overlaps) is kept as it is, coordinates untouched: taking
-/// away what it doesn't meet changes nothing.
+/// (Erase, Update): it is cut once, by the zones that cut it (that zone itself, so its edges stay
+/// exactly where they are, or their union), without [`cut`]'s part in each zone. Only zones whose
+/// extent meets the feature's are tested. A feature no zone cuts is kept as it is, coordinates
+/// untouched: a polygon that at most touches them, a line or point that doesn't meet them.
 fn outside(g: &Geometry, zones: &[Zone], index: &ExtentIndex) -> Option<Geometry> {
     let ext = g.extent();
     let near: Vec<&Zone> = index.candidates(&ext).into_iter().filter_map(|zi| zones.get(zi)).filter(|z| ext.intersects(&z.ext)).collect();
-    let mask = match near.as_slice() {
-        [] => return Some(g.clone()),
-        [only] => std::borrow::Cow::Borrowed(&only.poly),
-        _ => std::borrow::Cow::Owned(union_all(near.iter().flat_map(|z| z.poly.0.iter()))),
-    };
-    // A polygon is cut where it overlaps the mask, a line or point wherever it meets it (an edge
-    // counts as inside): a polygon that only touches the mask is not cut.
-    let geo_g = to_geo(g);
-    let meets = match g {
+    if near.is_empty() {
+        return Some(g.clone());
+    }
+    // The feature as the cut takes it: overlapping parts unioned, for the tests and the cut alike.
+    let whole = dissolved(g);
+    let geo_g = to_geo(&whole);
+    // The zones that cut it: a polygon is cut by those it overlaps, a line or point by those it
+    // meets (an edge counts as inside). Each is tested on its own, before any union.
+    let cuts = |z: &&Zone| match g {
         Geometry::Polygon(_) => {
-            let m = mask.relate(&geo_g);
+            let m = z.poly.relate(&geo_g);
             m.is_intersects() && !m.is_touches()
         }
-        _ => mask.intersects(&geo_g),
+        _ => z.poly.intersects(&geo_g),
     };
-    if meets { part(&dissolved(g), &mask, false) } else { Some(g.clone()) }
+    let hit: Vec<&Zone> = near.into_iter().filter(cuts).collect();
+    match hit.as_slice() {
+        [] => Some(g.clone()),
+        [only] => part(&whole, &only.poly, false),
+        _ => part(&whole, &union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
+    }
 }
 
 /// Intersect, Identity, Union and Symmetrical Difference. Each input feature in turn gives its
@@ -1324,6 +1330,12 @@ fn converted(v: &Value, ty: FieldType) -> Value {
         (Value::Float(f), FieldType::Text) => Value::Text(f.to_string()),
         (Value::Bool(b), FieldType::Integer) => Value::Int(i64::from(*b)),
         (Value::Bool(b), FieldType::Double) => Value::Float(if *b { 1.0 } else { 0.0 }),
+        // Text that reads as an integer is one; text that reads as another number goes as that
+        // float would, so one out of range (or not a number) is empty, not clamped.
+        (Value::Text(t), FieldType::Integer) => match t.trim().parse::<i64>() {
+            Ok(i) => Value::Int(i),
+            Err(_) => t.trim().parse::<f64>().map_or(Value::Null, |f| converted(&Value::Float(f), ty)),
+        },
         (Value::Text(t), _) => Value::parse(t, ty),
         (v, _) => Value::parse(&v.to_string(), ty),
     }
@@ -1342,9 +1354,22 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err(format!("'{}' is not a polygon layer", ds.name));
     }
     let (up, zones) = overlay_zones(inp, p, "update")?;
+    // Each input field's field in the update layer, if it has one: an ambiguous one fails here,
+    // before any geometry work.
+    let from = ds
+        .fields
+        .iter()
+        .map(|f| {
+            if up.fields.iter().any(|u| u.name.eq_ignore_ascii_case(&f.name)) {
+                find_field_case_insensitive(up, &f.name).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<Option<usize>>, String>>()?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Update", ds.name)), GeometryType::Polygon);
-    keep_source_crs(&mut out, ds);
+    keep_source_crs(&mut out, ds, up);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         let rest = match &f.geometry {
@@ -1358,18 +1383,6 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             out.push_next(Some(rest), f.attrs.clone());
         }
     }
-    // Each input field's field in the update layer, if it has one.
-    let from = ds
-        .fields
-        .iter()
-        .map(|f| {
-            if up.fields.iter().any(|u| u.name.eq_ignore_ascii_case(&f.name)) {
-                find_field_case_insensitive(up, &f.name).map(Some)
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<Option<usize>>, String>>()?;
     let kept = out.features.len();
     for z in &zones {
         let Some(u) = up.features.get(z.row) else { continue };
@@ -1465,7 +1478,7 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         };
         let ext = polys.iter().fold(Extent::EMPTY, |e, z| e.union(&z.ext));
         let mut out = copy_schema(ds, format!("{prefix}_{name}"), ds.geometry_type);
-        keep_source_crs(&mut out, ds);
+        keep_source_crs(&mut out, ds, sp);
         for li in index.candidates(&ext) {
             let Some((r, e)) = located.get(li) else { continue };
             let Some(f) = ds.features.get(*r) else { continue };
@@ -4950,6 +4963,13 @@ mod tests {
         assert_eq!(converted(&Value::Float(-1e30), FieldType::Integer), Value::Null);
         assert_eq!(converted(&Value::Float(9.223_372_036_854_776e18), FieldType::Integer), Value::Null, "2⁶³ itself");
         assert_eq!(converted(&Value::Float(-9.223_372_036_854_776e18), FieldType::Integer), Value::Int(i64::MIN));
+        // Text goes the same way: an integer as it is, another number as that float.
+        let text = |t: &str| converted(&Value::Text(t.into()), FieldType::Integer);
+        assert_eq!(text(" 9223372036854775807 "), Value::Int(i64::MAX));
+        assert_eq!(text("-2.7"), Value::Int(-2));
+        for t in ["1e30", "-1e30", "NaN", "inf", "x", ""] {
+            assert_eq!(text(t), Value::Null, "{t}");
+        }
         assert_eq!(converted(&Value::Bool(true), FieldType::Double), Value::Float(1.0));
         assert_eq!(converted(&Value::Int(5), FieldType::Text), Value::Text("5".into()));
         assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
@@ -5148,8 +5168,16 @@ mod tests {
 
     #[test]
     fn erase_update_split_and_overlays_keep_an_incomplete_crs_flag() {
+        for incomplete in ["parcels", "zones"] {
+            incomplete_flag_reaches_every_output(incomplete);
+        }
+    }
+
+    /// Runs every tool that overlays parcels with zones, with layer `lost` marked as having lost
+    /// features on reading, and checks each output is marked so too.
+    fn incomplete_flag_reaches_every_output(lost: &str) {
         let mut m = parcels_and_zones();
-        m.0.get_mut("parcels").unwrap().crs_incomplete = true;
+        m.0.get_mut(lost).unwrap().crs_incomplete = true;
         let params = [
             ("erase", serde_json::json!({"input": "parcels", "erase": "zones"})),
             ("update", serde_json::json!({"input": "parcels", "update": "zones"})),
@@ -5157,7 +5185,7 @@ mod tests {
             ("intersect", serde_json::json!({"input": "parcels", "overlay": "zones"})),
         ];
         for (tool, p) in params {
-            assert!(layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}");
+            assert!(layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}, {lost} incomplete");
         }
         let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
         assert!(!out.is_empty() && out.iter().all(|d| d.crs_incomplete));
