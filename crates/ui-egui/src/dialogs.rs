@@ -1003,24 +1003,26 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                                 };
 
                                 let what = ui.label(egui::RichText::new(what).small().weak());
-                                // The times a layer lists, to pick one for Date.
+                                // The times a layer lists, to pick one for Date: made only while hovered.
                                 if let Some(t) = l.get("time") {
-                                    let values: Vec<&str> =
-                                        t["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-                                    let default = t["default"].as_str().unwrap_or("");
-                                    // The first and last few of a long list.
-                                    let times = match values.len() {
-                                        n if n > 24 => format!(
-                                            "{}, …, {}",
-                                            values.get(..12).unwrap_or(&[]).join(", "),
-                                            values.get(n - 12..).unwrap_or(&[]).join(", ")
-                                        ),
-                                        _ => values.join(", "),
-                                    };
-                                    what.on_hover_text(crate::i18n::fmt(
-                                        "Its default: {default}. Its times: {times}",
-                                        &[("default", default), ("times", &times)],
-                                    ));
+                                    what.on_hover_ui(|ui| {
+                                        let values: Vec<&str> =
+                                            t["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                                        let default = t["default"].as_str().unwrap_or("");
+                                        // The first and last few of a long list.
+                                        let times = match values.len() {
+                                            n if n > 24 => format!(
+                                                "{}, …, {}",
+                                                values.get(..12).unwrap_or(&[]).join(", "),
+                                                values.get(n - 12..).unwrap_or(&[]).join(", ")
+                                            ),
+                                            _ => values.join(", "),
+                                        };
+                                        ui.label(crate::i18n::fmt(
+                                            "Its default: {default}. Its times: {times}",
+                                            &[("default", default), ("times", &times)],
+                                        ));
+                                    });
                                 }
                             });
                         }
