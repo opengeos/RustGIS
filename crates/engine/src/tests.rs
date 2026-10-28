@@ -19269,6 +19269,9 @@ fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
     ds.source = Some("geolibre-pending:save-test".into());
     let id = s.map_mut().add_dataset(ds);
     assert!(s.project.saved_text(None).unwrap_err().contains("still downloading"));
+    for command in ["project.package", "map.package"] {
+        assert!(s.run(command, &json!({"path":"unused-pending-package.zip"})).unwrap_err().contains("still downloading"));
+    }
     let recovered = s.project.clone().recovery_text().unwrap();
     assert!(!recovered.contains("geolibre-pending:"));
     let recovered: crate::project::Project = serde_json::from_str(&recovered).unwrap();
@@ -19277,6 +19280,16 @@ fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
     s.map_mut().layer_mut(id).unwrap().dataset.source = None;
     assert!(s.project.saved_text(None).is_ok());
     assert!(s.project.clone().recovery_text().is_ok());
+    let mut tile = rustgis_map::tiles::TileLayer::new("Pending archive", rustgis_map::tiles::TileKind::MbTiles, "upload:pending.mbtiles");
+    tile.id = "geolibre-pending:tile-save-test".into();
+    s.map_mut().tiles.push(tile);
+    assert!(s.project.saved_text(None).unwrap_err().contains("still downloading"));
+    for command in ["project.package", "map.package"] {
+        assert!(s.run(command, &json!({"path":"unused-pending-package.zip"})).unwrap_err().contains("still downloading"));
+    }
+    let recovered = s.project.clone().recovery_text().unwrap();
+    assert!(!recovered.contains("geolibre-pending:"));
+    assert!(s.map().tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:")));
 }
 
 #[test]
@@ -19295,5 +19308,34 @@ fn geolibre_text_cannot_read_local_files_without_explicit_directory() {
     assert_eq!(out["layers"], json!([]));
     let out = s.run("project.importGeolibre", &json!({"text":text,"dir":dir})).unwrap();
     assert_eq!(out["layers"], json!(["Local"]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn geolibre_archive_completion_preserves_pending_tile_edits() {
+    let dir = std::env::temp_dir().join(format!("rustgis-geolibre-archive-edits-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("archive.mbtiles");
+    let _ = std::fs::remove_file(&path);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE metadata (name text, value text); CREATE TABLE tiles (zoom_level integer, tile_column integer, tile_row integer, tile_data blob); INSERT INTO metadata VALUES ('format','png'),('minzoom','0'),('maxzoom','0');").unwrap();
+    drop(db);
+    let mut s = world();
+    let token = "geolibre-pending:archive-edits";
+    let mut tile = rustgis_map::tiles::TileLayer::new("Original", rustgis_map::tiles::TileKind::MbTiles, "upload:pending-edits.mbtiles");
+    tile.id = token.into();
+    tile.visible = true;
+    tile.opacity = 0.5;
+    s.map_mut().tiles.insert(0, tile);
+    s.run("map.setTiles", &json!({"index":0,"visible":false,"opacity":0.25,"rename":"Edited"})).unwrap();
+    let download = s.download_started();
+    s.download_landed(download, std::fs::read(path).unwrap());
+    let out = s.run("layer.addDownload", &json!({"id":download,"url":"https://example.org/archive.mbtiles","geolibreLayer":{"token":token,"record":{"type":"mbtiles","visible":true,"opacity":0.5}}})).unwrap();
+    let tile = &s.map().tiles[out["index"].as_u64().unwrap() as usize];
+    assert_eq!(tile.name, "Edited");
+    assert!(!tile.visible);
+    assert_eq!(tile.opacity, 0.25);
+    assert!(!tile.id.starts_with("geolibre-pending:"));
     std::fs::remove_dir_all(dir).unwrap();
 }

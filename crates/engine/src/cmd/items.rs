@@ -541,7 +541,9 @@ fn template(p: &Project) -> Project {
     t
 }
 
+/// Packages only completed imports; runtime download reservations cannot be reopened.
 fn package_project(s: &Session) -> Result<Vec<u8>, String> {
+    s.project.ensure_imports_complete()?;
     let mut p = s.project.clone();
     let mut budget = MAX_EMBED;
     for m in &mut p.maps {
@@ -564,6 +566,7 @@ fn safe(name: &str) -> String {
 
 /// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
+    s.project.ensure_imports_complete()?;
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
         // Groups folded into their layers: a hidden group's layers are dropped with the others.

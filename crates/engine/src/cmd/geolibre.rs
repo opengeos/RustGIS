@@ -280,9 +280,12 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report,
             #[cfg(target_arch = "wasm32")]
             {
                 let token = pending_token();
-                let mut tile = rustgis_map::tiles::TileLayer::new(name, rustgis_map::tiles::TileKind::MbTiles, &address);
+                // An unfilled upload address cannot start an independent archive fetch.
+                let mut tile =
+                    rustgis_map::tiles::TileLayer::new(name, rustgis_map::tiles::TileKind::MbTiles, &format!("upload:{token}.mbtiles"));
                 tile.id = token.clone();
-                tile.visible = false;
+                tile.visible = boolean(r, "visible", true);
+                tile.opacity = number(r, "opacity", 1.0).clamp(0.0, 1.0) as f32;
                 s.map_mut().tiles.insert(0, tile);
                 index = 0;
                 let mut saved = r.clone();
@@ -510,9 +513,12 @@ fn finish_archive(s: &mut Session, p: &Value, bytes: Vec<u8>) -> CmdResult {
         }
         let mut loaded = s.map_mut().tiles.remove(index);
         let dest = s.map().tiles.iter().position(|t| t.id == token).ok_or("GeoLibre archive was removed")?;
-        loaded.visible = boolean(&pending["record"], "visible", true);
-        loaded.opacity = number(&pending["record"], "opacity", 1.0).clamp(0.0, 1.0) as f32;
         if let Some(t) = s.map_mut().tiles.get_mut(dest) {
+            // The reservation already carries the inherited import look and later user edits.
+            loaded.visible = t.visible;
+            loaded.opacity = t.opacity;
+            loaded.blend = t.blend;
+            loaded.name = t.name.clone();
             *t = loaded;
         }
         Ok(json!({"index":dest}))

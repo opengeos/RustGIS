@@ -720,7 +720,7 @@ impl Project {
     }
 
     /// Runtime download reservations cannot be reopened; refuse snapshots until they finish.
-    fn ensure_imports_complete(&self) -> Result<(), String> {
+    pub(crate) fn ensure_imports_complete(&self) -> Result<(), String> {
         if self.maps.iter().any(|map| {
             map.layers.iter().any(|layer| layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")))
                 || map.tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:"))
