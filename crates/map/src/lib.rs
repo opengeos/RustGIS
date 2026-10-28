@@ -42,7 +42,7 @@ use rustgis_geom::{Coord, Extent};
 use serde::{Deserialize, Serialize};
 
 /// The backdrop drawn under every layer. Each is drawn from the built-in world outline.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Basemap {
     #[default]
     Paper,
