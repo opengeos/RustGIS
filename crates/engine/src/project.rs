@@ -430,6 +430,12 @@ pub(crate) fn resolve_file_paths<'a>(dir: &str, paths: impl IntoIterator<Item = 
     }
 }
 
+#[derive(Deserialize)]
+struct ProjectFormat {
+    #[serde(default)]
+    format: Option<u32>,
+}
+
 impl Project {
     fn file_paths_mut(&mut self) -> Vec<(&mut String, bool)> {
         let mut paths = Vec::new();
@@ -866,10 +872,24 @@ impl Project {
         if text.len() as u64 > MAX_BYTES {
             return Err("the project file is too large".into());
         }
-        let mut p: Project = serde_json::from_str(text).map_err(|e| format!("not a RustGIS project: {e}"))?;
+        if let Ok(pf) = serde_json::from_str::<ProjectFormat>(text) {
+            if let Some(format) = pf.format {
+                if format > FORMAT {
+                    return Err(format!("this project was saved by a newer RustGIS (format {format}). Update RustGIS to open it."));
+                }
+            }
+        }
+        let mut p: Project = serde_json::from_str(text).map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("unknown variant") {
+                format!("this project may have been saved by a newer RustGIS: {msg}. Update RustGIS to open it.")
+            } else {
+                format!("not a RustGIS project: {msg}")
+            }
+        })?;
         p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
         if p.format > FORMAT {
-            return Err(format!("this project was saved by a newer RustGIS (format {})", p.format));
+            return Err(format!("this project was saved by a newer RustGIS (format {}). Update RustGIS to open it.", p.format));
         }
         if restore {
             p.restore_addresses(text);
