@@ -135,7 +135,8 @@ impl JoinFieldReport {
 
 /// Executes a non-spatial attribute join from `source` onto `target`.
 ///
-/// Preserves target record count, order, IDs, geometry, and existing attributes.
+/// Preserves target order, IDs, geometry, existing attributes, and the record count of the
+/// effective target dataset (honouring row selections when active).
 /// Appends selected attributes from `source` based on matching key values.
 pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_>) -> Result<(Dataset, JoinFieldReport), String> {
     if target.windowed {
@@ -157,7 +158,7 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
 
     // 3. Resolve which source fields to transfer
     let transfer_indices: Vec<usize> = match opts.fields_to_transfer {
-        Some(explicit) if !explicit.is_empty() => {
+        Some(explicit) => {
             let mut indices = Vec::with_capacity(explicit.len());
             for name in explicit {
                 let trimmed = name.trim();
@@ -165,11 +166,13 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
                     continue;
                 }
                 let idx = crate::tools::find_field_case_insensitive(source, trimmed)?;
-                indices.push(idx);
+                if !indices.contains(&idx) {
+                    indices.push(idx);
+                }
             }
             indices
         }
-        _ => {
+        None => {
             // Default: all source fields except the source key field
             (0..source.fields.len()).filter(|&i| i != source_key_idx).collect()
         }
@@ -759,5 +762,69 @@ mod tests {
         assert_eq!(JoinKey::from_value(&Value::Float(-0.0)), Some(JoinKey::Int(0)));
         assert_eq!(JoinKey::from_value(&Value::Float(0.0)), Some(JoinKey::Int(0)));
         assert_eq!(JoinKey::from_value(&Value::Int(0)), Some(JoinKey::Int(0)));
+    }
+
+    #[test]
+    fn test_empty_and_blank_fields_transfer_zero_fields() {
+        let target = make_table("target", vec![("id", FieldType::Integer)], vec![vec![Value::Int(1)]]);
+        let source = make_table(
+            "source",
+            vec![("id", FieldType::Integer), ("val", FieldType::Text), ("extra", FieldType::Double)],
+            vec![vec![Value::Int(1), Value::Text("val1".into()), Value::Float(10.0)]],
+        );
+
+        // Explicitly empty slice -> transfers 0 fields (not all non-key fields)
+        let empty_fields: [String; 0] = [];
+        let opts_empty = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: Some(&empty_fields),
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out_empty".into(),
+        };
+        let (out_empty, rep_empty) = join_field(&target, &source, &opts_empty).unwrap();
+        assert_eq!(rep_empty.transferred_fields, 0);
+        assert_eq!(out_empty.fields.len(), 1); // Only target's "id" field
+        assert_eq!(out_empty.features[0].attrs.len(), 1);
+
+        // Blank-only slice -> transfers 0 fields
+        let blank_fields = vec!["   ".to_string(), "".to_string()];
+        let opts_blank = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: Some(&blank_fields),
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out_blank".into(),
+        };
+        let (out_blank, rep_blank) = join_field(&target, &source, &opts_blank).unwrap();
+        assert_eq!(rep_blank.transferred_fields, 0);
+        assert_eq!(out_blank.fields.len(), 1);
+        assert_eq!(out_blank.features[0].attrs.len(), 1);
+    }
+
+    #[test]
+    fn test_repeated_field_names_deduplicated() {
+        let target = make_table("target", vec![("id", FieldType::Integer)], vec![vec![Value::Int(1)]]);
+        let source = make_table(
+            "source",
+            vec![("id", FieldType::Integer), ("cost", FieldType::Double)],
+            vec![vec![Value::Int(1), Value::Float(99.0)]],
+        );
+        let repeated_fields = vec!["cost".to_string(), "cost".to_string()];
+        let opts = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: Some(&repeated_fields),
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out_dedup".into(),
+        };
+        let (out, rep) = join_field(&target, &source, &opts).unwrap();
+        assert_eq!(rep.transferred_fields, 1);
+        assert_eq!(out.fields.len(), 2);
+        assert_eq!(out.fields[1].name, "cost");
+        assert_eq!(out.features[0].attrs[1], Value::Float(99.0));
     }
 }

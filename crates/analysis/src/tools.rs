@@ -2890,74 +2890,38 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
+/// Returns a borrowed dataset when rows match the full dataset, or a new dataset containing
+/// only the selected rows in the specified order with schema, CRS, and windowed flag preserved.
+fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize], storage: &'a mut Option<Dataset>) -> &'a Dataset {
+    if selected_rows.len() == ds.features.len() {
+        ds
+    } else {
+        let mut sub = Dataset::new(ds.name.clone(), ds.geometry_type, ds.fields.clone());
+        sub.crs = ds.crs;
+        sub.crs_incomplete = ds.crs_incomplete;
+        sub.windowed = ds.windowed;
+        sub.features = selected_rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect::<Vec<_>>().into();
+        storage.insert(sub)
+    }
+}
+
 fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
-    let target_key = if !s(p, "target").is_empty() || p.get("target").is_some_and(|v| v.is_number()) { "target" } else { "input" };
-    let join_table_key =
-        if !s(p, "joinTable").is_empty() || p.get("joinTable").is_some_and(|v| v.is_number()) { "joinTable" } else { "join" };
+    let target = input(inp, p, "target")?;
+    let source = input(inp, p, "joinTable")?;
 
-    let target = input(inp, p, target_key)?;
-    let source = input(inp, p, join_table_key)?;
+    let mut target_storage = None;
+    let target_ref = subset(target, &rows(inp, p, "target", target), &mut target_storage);
 
-    let target_rows = rows(inp, p, target_key, target);
-    let target_subset;
-    let target_ref = if target_rows.len() == target.features.len() {
-        target
-    } else {
-        let mut sub = Dataset::new(target.name.clone(), target.geometry_type, target.fields.clone());
-        sub.crs = target.crs;
-        sub.crs_incomplete = target.crs_incomplete;
-        sub.windowed = target.windowed;
-        sub.features = target_rows.iter().filter_map(|&r| target.features.get(r).cloned()).collect::<Vec<_>>().into();
-        target_subset = sub;
-        &target_subset
-    };
+    let mut source_storage = None;
+    let source_ref = subset(source, &rows(inp, p, "joinTable", source), &mut source_storage);
 
-    let source_rows = rows(inp, p, join_table_key, source);
-    let source_subset;
-    let source_ref = if source_rows.len() == source.features.len() {
-        source
-    } else {
-        let mut sub = Dataset::new(source.name.clone(), source.geometry_type, source.fields.clone());
-        sub.crs = source.crs;
-        sub.crs_incomplete = source.crs_incomplete;
-        sub.windowed = source.windowed;
-        sub.features = source_rows.iter().filter_map(|&r| source.features.get(r).cloned()).collect::<Vec<_>>().into();
-        source_subset = sub;
-        &source_subset
-    };
-
-    let target_field = if !s(p, "targetField").is_empty() {
-        s(p, "targetField")
-    } else if !s(p, "target_field").is_empty() {
-        s(p, "target_field")
-    } else {
-        s(p, "key")
-    };
+    let target_field = s(p, "targetField");
     if target_field.is_empty() {
         return Err("target key field is required".into());
     }
 
-    let raw_join_field = if !s(p, "joinField").is_empty() {
-        s(p, "joinField")
-    } else if !s(p, "join_field").is_empty() {
-        s(p, "join_field")
-    } else {
-        ""
-    };
-    let join_field_name = match raw_join_field {
-        f if f.trim().is_empty() => target_field,
-        f => f,
-    };
-
-    let dup_str = if !s(p, "duplicates").is_empty() {
-        s(p, "duplicates")
-    } else if !s(p, "duplicateStrategy").is_empty() {
-        s(p, "duplicateStrategy")
-    } else {
-        s(p, "duplicate_strategy")
-    };
-    let duplicate_strategy = crate::attribute_join::DuplicateStrategy::parse(dup_str)?;
-
+    let join_field = s(p, "joinField");
+    let duplicate_strategy = crate::attribute_join::DuplicateStrategy::parse(s(p, "duplicates"))?;
     let prefix = s(p, "prefix");
 
     let explicit_fields: Option<Vec<String>> = match p.get("fields") {
@@ -2995,7 +2959,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 
     let opts = crate::attribute_join::JoinFieldOptions {
         target_field,
-        join_field: join_field_name,
+        join_field,
         fields_to_transfer: explicit_fields.as_deref(),
         prefix,
         duplicate_strategy,
@@ -5993,5 +5957,70 @@ mod tests {
         assert_eq!(out_col.features[0].attrs[1], Value::Float(10.0));
         assert_eq!(out_col.features[0].attrs[2], Value::Float(15.0));
         assert_eq!(out_col.features[0].attrs[3], Value::Int(1));
+
+        // 13. "input" alias for target through complete run() lifecycle
+        let res13 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "input": "inventory",
+                "key": "sku",
+                "source": "matching_source",
+            }),
+        )
+        .unwrap();
+        let Output::Table(out13) = res13.output else { panic!("expected Output::Table") };
+        assert_eq!(out13.name, "inventory_JoinField");
+        assert_eq!(out13.fields.len(), 2);
+        assert_eq!(out13.fields[1].name, "weight");
+        assert_eq!(out13.features[0].attrs[1], Value::Float(1.25));
+
+        // 14. Explicitly empty array and blank-only array in fields transfers zero fields
+        let res14_empty = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": []
+            }),
+        )
+        .unwrap();
+        let Output::Table(out14_empty) = res14_empty.output else { panic!("expected Output::Table") };
+        assert_eq!(out14_empty.fields.len(), 1);
+        assert_eq!(out14_empty.features[0].attrs.len(), 1);
+
+        let res14_blank = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": ["   ", ""]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out14_blank) = res14_blank.output else { panic!("expected Output::Table") };
+        assert_eq!(out14_blank.fields.len(), 1);
+        assert_eq!(out14_blank.features[0].attrs.len(), 1);
+
+        // 15. Repeated field names in fields are deduplicated
+        let res15 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "fields": ["weight", "weight"]
+            }),
+        )
+        .unwrap();
+        let Output::Table(out15) = res15.output else { panic!("expected Output::Table") };
+        assert_eq!(out15.fields.len(), 2);
+        assert_eq!(out15.fields[1].name, "weight");
+        assert_eq!(out15.features[0].attrs[1], Value::Float(1.25));
     }
 }

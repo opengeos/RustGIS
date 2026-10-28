@@ -319,8 +319,9 @@ into a `target` table or layer based on matching key values:
   types when whole numbers (e.g. `10` matches `10.0`), while non-finite floats (`NaN`, infinity) and
   nulls never match. Incompatible key data types (e.g. text vs integer) are rejected.
 - **Transferred fields:** `fields` selects specific source fields to transfer (a comma-separated list
-  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string entries are rejected). When
-  omitted or empty, every source field except the join key is transferred. Transferred fields preserve
+  or a JSON array of strings, e.g. `["tax_rate", "zone_code"]`; non-string entries are rejected). Repeated
+  field names are deduplicated in order. When omitted, every source field except the join key is transferred;
+  an explicitly empty array (`[]` or blank strings) transfers zero fields. Transferred fields preserve
   their source display aliases and field types.
 - **Prefix and collision handling:** `prefix` prepends text to all transferred field names. When a
   transferred field name conflicts with an existing target field, an incremental suffix is added
@@ -329,11 +330,11 @@ into a `target` table or layer based on matching key values:
   rows share the same join key: **First** (default: uses the first matching source record), **Last**
   (uses the last matching source record), or **Error** (fails the operation and reports the duplicate key).
 - **Selections and streamed inputs:** selections on the target layer or source table are honoured;
-  when no selection exists, the full dataset is processed. Streamed layers that are only partially loaded
-  in the view window are rejected with a clear message (`the target layer is streamed; load all features first`)
-  so incomplete results are never committed as a whole layer. Rows with attribute counts exceeding the
-  schema definition are rejected with a typed error rather than silently truncated. Unmatched target
-  records receive null values.
+  when a target selection is active, the output contains the selected target rows, while unselected
+  datasets are processed in full. Streamed layers that are only partially loaded in the view window are
+  rejected with a clear message (`the target layer is streamed; load all features first`) so incomplete
+  results are never committed as a whole layer. Rows with attribute counts exceeding the schema definition
+  are rejected with a clear error rather than silently truncated. Unmatched target records receive null values.
 
 ```text
 gp.run={"tool":"joinField","params":{"target":"parcels","targetField":"owner_id","joinTable":"owners","fields":["name","phone"],"duplicates":"First"}}

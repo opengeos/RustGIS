@@ -217,11 +217,12 @@ Open questions rather than plans; discuss before building.
   relationships, archiving.
 - Analysis: selection by attributes and location; polygon, lasso and radius on the map; overlay
   (clip, erase, intersect, identity, union), proximity (buffer, near) and summary tools, spatial
-  join, join field (non-spatial attribute join), feature vertices to points, zonal statistics, A5 grids, kriging, Calculate Geometry with
-  metric or imperial units, and Vector to PMTiles export (#557); guided workflows (viewshed, line
-  of sight, IDW, shortest path, suitability); ModelBuilder on a node canvas, scripts with command,
-  parameter and value completion, and history copied as code; the GeoLibre and Whitebox suite
-  (1,000+ tools) natively and in the browser.
+  join, join field (non-spatial attribute join), feature vertices to points, zonal statistics,
+  A5 grids, kriging, Calculate Geometry with metric or imperial units, and Vector to PMTiles
+  export (#557); guided workflows (viewshed, line of sight, IDW, shortest path, suitability);
+  ModelBuilder on a node canvas, scripts with command, parameter and value completion, and
+  history copied as code; the GeoLibre and Whitebox suite (1,000+ tools) natively and in the
+  browser.
 - Layouts (map frames, surrounds, map series, publication sheets and figures in one command,
   format panes, guides, snapping, element locking and PDF), reports, presentations and
   notebooks; the web app embeddable in a page (`?embed`).
