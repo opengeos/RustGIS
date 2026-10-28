@@ -678,7 +678,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         draft,
         tiles: 0,
         sources: rustgis_engine::map::source::generation(),
-        shown: shown_layers(&app.session.project),
+        shown: shown_layers(&app.session),
     };
     // Tiles arriving draw the map again, at most a few times a second.
     static WAKER: std::sync::Once = std::sync::Once::new();
@@ -774,7 +774,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             }
             // One drawn before tiles or data arrived still shows; the next follows. So does one
             // of a change made since, for a view whose frame on screen is older still.
-            if (same_view(k, key) || shows_finished(k, key, app.map.key))
+            if (same_view(k, key) || (tiled_flat && shows_finished(k, key, app.map.key)))
                 && let Some(r) = done.rendered
             {
                 // With tile pictures still to draw, a draft: the next frame draws more.
@@ -819,7 +819,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
             } else if tilted {
                 tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
-            } else if app.map.preview_attempt != Some(key) && !reprojects && !keep_frame {
+            } else if app.map.preview_attempt != Some(key) && !reprojects && !(keep_frame && app.map.tilt_settle.busy()) {
+                // A kept frame waits for the exact one; if that couldn't be drawn, a preview.
                 // A small preview shows a visibility change immediately. The exact frame is
                 // already on its way. Even a failed preview is attempted only once per key.
                 app.map.preview_attempt = Some(key);
@@ -3612,19 +3613,20 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 /// it on screen until the next one arrives, rather than showing a coarse preview (#1051).
 const KEEP_FRAME_MS: u64 = 300;
 
-/// Which map is active and which of its layers, groups and tile layers are shown, in order: a
-/// frame of other layers (one hidden, added, removed or moved since, or another map) shows a
-/// preview of the change instead of staying on screen.
-fn shown_layers(project: &rustgis_engine::Project) -> u64 {
+/// Which project and map are open and which of the map's layers, groups and tile layers are
+/// shown, in order: a frame of other layers (one hidden, added, removed or moved since, another
+/// map or another project) shows a preview of the change instead of staying on screen.
+fn shown_layers(session: &rustgis_engine::Session) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::hash::DefaultHasher::new();
+    let project = &session.project;
     let map = project.map();
-    (project.active_map, &map.name).hash(&mut h);
+    (&session.path, &project.name, project.active_map, &map.name).hash(&mut h);
     for l in &map.layers {
         (l.id, l.visible).hash(&mut h);
     }
     for g in &map.groups {
-        (g.id, g.visible).hash(&mut h);
+        (g.id, g.visible, &g.children).hash(&mut h);
     }
     for t in &map.tiles {
         (&t.name, &t.url, t.visible).hash(&mut h);
