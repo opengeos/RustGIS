@@ -54,9 +54,15 @@ pub struct LayerTime {
 /// aerial photos list 92), as the time slider steps through them.
 const MAX_TIME_VALUES: usize = 1000;
 
-/// Most time values read of a layer's dimension, for its default and latest (each a few bytes of
-/// the document, whose size is capped).
+/// Most time values of a layer's dimension read for its default and latest, the last it lists
+/// (each a few bytes of the document, whose size is capped).
 const MAX_TIMES_READ: usize = 20_000;
+
+/// The last `n` of `values` (lists of times run from the earliest to the latest).
+fn last(mut values: Vec<String>, n: usize) -> Vec<String> {
+    values.drain(..values.len().saturating_sub(n));
+    values
+}
 
 /// Most time values kept for all of a WMS document's layers together (swisstopo's 56 list about
 /// 2,000).
@@ -245,7 +251,12 @@ fn is_duration(p: &str) -> bool {
             let designator = *b.get(at)?;
             let place = order.iter().skip(next).position(|d| *d == designator)? + next;
             let fraction = number.contains('.');
-            if number.is_empty() || number.starts_with('.') || number.ends_with('.') || (fraction && designator != b'S') {
+            if number.matches('.').count() > 1
+                || number.is_empty()
+                || number.starts_with('.')
+                || number.ends_with('.')
+                || (fraction && designator != b'S')
+            {
                 return None;
             }
             (next, count, at) = (place + 1, count + 1, at + 1);
@@ -328,7 +339,8 @@ fn wms_time(layer: &Node, v13: bool) -> Option<Option<LayerTime>> {
         .find(|d| !text_of(d).is_empty())
         .or_else(|| children(layer, "Extent").find(is_time))
         .or_else(|| children(layer, "Dimension").filter(|_| v13).find(is_time))?;
-    let all = text_of(&d).split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(MAX_TIMES_READ).collect();
+    let all: Vec<String> = text_of(&d).split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect();
+    let all = last(all, MAX_TIMES_READ);
     let multiple = d.attribute("multipleValues").is_some_and(|m| m.trim() == "1" || m.trim().eq_ignore_ascii_case("true"));
     Some(layer_time(d.attribute("default").map(str::trim), all, checked_wms_time, multiple))
 }
@@ -982,7 +994,7 @@ fn wmts(url: &str, root: &Node) -> Service {
             .and_then(|d| {
                 layer_time(
                     child_text(&d, "Default").as_deref(),
-                    children(&d, "Value").take(MAX_TIMES_READ).map(|v| text_of(&v)).collect(),
+                    last(children(&d, "Value").map(|v| text_of(&v)).collect(), MAX_TIMES_READ),
                     checked_time,
                     false,
                 )
@@ -3609,7 +3621,7 @@ mod tests {
         for good in ["P1DT12H", "PT30M", "PT0.5S", "P2W", "P1Y2M3D"] {
             assert!(is_duration(good), "{good}");
         }
-        for bad in ["Pfoo", "P", "PT", "P1YT", "P1D1Y", "P1.5Y", "P.5D", "PT1H1H", "P1Q"] {
+        for bad in ["Pfoo", "P", "PT", "P1YT", "P1D1Y", "P1.5Y", "P.5D", "PT1H1H", "P1Q", "PT1..2S", "PT1.2.3S"] {
             assert!(!is_duration(bad), "{bad}");
         }
         for bad in [
@@ -3733,6 +3745,9 @@ mod tests {
         // A range longer than the slider's steps: every second (fourth…) day of it, to its end.
         let long = lt("2025-01-01", &["1950-01-01/2025-01-01/P1D"]).slider().unwrap();
         assert_eq!(long.steps, every("1950-01-01", "2025-01-01", Unit::Day, 2));
+        // Of a list longer than is read, the latest (and the default) still.
+        let read: Vec<String> = (0..MAX_TIMES_READ + 500).map(|i| format!("{}", 1000 + i)).collect();
+        assert_eq!(last(read, MAX_TIMES_READ).last().map(String::as_str), Some("21499"));
         // Of a long list, the latest are kept, those the default is among.
         let all: Vec<String> = (0..1500).map(|i| format!("{}", 1000 + i)).collect();
         let listed = layer_time(None, all, checked_wms_time, false).unwrap();

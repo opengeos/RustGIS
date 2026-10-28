@@ -296,6 +296,9 @@ fn advertised_template(_: &str, _: bool) -> Option<String> {
     None
 }
 
+/// Of a layer's times, those `service.layers` lists from each end of a long list.
+const SHOWN_TIMES: usize = 12;
+
 /// A service as the app and other callers see it.
 pub fn service_json(svc: &Service) -> Value {
     let layers: Vec<Value> = svc
@@ -312,7 +315,12 @@ pub fn service_json(svc: &Service) -> Value {
             };
             let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
             if let Some(t) = &l.time {
-                layer["time"] = json!({"default": t.default, "values": t.values, "multiple": t.multiple});
+                // The first and last few of a long list, and how many (the slider takes them all).
+                let values: Vec<&String> = match t.values.len() {
+                    n if n > 2 * SHOWN_TIMES => t.values.iter().take(SHOWN_TIMES).chain(t.values.iter().skip(n - SHOWN_TIMES)).collect(),
+                    _ => t.values.iter().collect(),
+                };
+                layer["time"] = json!({"default": t.default, "values": values, "count": t.values.len(), "multiple": t.multiple});
             }
             layer
         })

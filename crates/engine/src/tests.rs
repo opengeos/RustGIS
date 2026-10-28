@@ -9150,7 +9150,7 @@ fn wms_layers_with_time() {
     let url = "https://maps.example.com/wms";
     let listed = s.run("service.layers", &json!({"url": url, "text": WMS})).unwrap();
     let population = listed["layers"].as_array().unwrap().iter().find(|l| l["name"] == "population").unwrap();
-    assert_eq!(population["time"], json!({"default": "2025", "values": ["1990", "2000", "2025"], "multiple": false}));
+    assert_eq!(population["time"], json!({"default": "2025", "values": ["1990", "2000", "2025"], "count": 3, "multiple": false}));
     s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS})).unwrap();
     s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "1990"})).unwrap();
     let tile = |s: &Session, name: &str| s.map().tiles.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}")).url.clone();

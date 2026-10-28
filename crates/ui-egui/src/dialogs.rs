@@ -1009,14 +1009,18 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                                         let values: Vec<&str> =
                                             t["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
                                         let default = t["default"].as_str().unwrap_or("");
-                                        // The first and last few of a long list.
-                                        let times = match values.len() {
-                                            n if n > 24 => format!(
+                                        // The first and last few of a long list (`service.layers` lists
+                                        // those, with how many there are).
+                                        let count = t["count"].as_u64().and_then(|c| usize::try_from(c).ok()).unwrap_or(values.len());
+                                        let half = values.len() / 2;
+                                        let times = if count > values.len() {
+                                            format!(
                                                 "{}, …, {}",
-                                                values.get(..12).unwrap_or(&[]).join(", "),
-                                                values.get(n - 12..).unwrap_or(&[]).join(", ")
-                                            ),
-                                            _ => values.join(", "),
+                                                values.get(..half).unwrap_or(&[]).join(", "),
+                                                values.get(half..).unwrap_or(&[]).join(", ")
+                                            )
+                                        } else {
+                                            values.join(", ")
                                         };
                                         ui.label(crate::i18n::fmt(
                                             "Its default: {default}. Its times: {times}",
