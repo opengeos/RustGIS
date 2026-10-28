@@ -908,24 +908,35 @@ const NATIONAL_DATUMS: &[(u16, &str)] = &[
 ];
 
 /// The WKT name of a definition's national datum, when its ellipsoid and shift are one of
-/// [`NATIONAL_DATUMS`]'.
+/// [`NATIONAL_DATUMS`], however they're written (`+ellps=bessel` or its axes, three parameters or
+/// seven).
 fn national_datum_name(def: &str, code: Option<u16>) -> Option<&'static str> {
-    let earth = |d: &str| {
-        let mut e: Vec<String> = d
-            .split_whitespace()
-            .filter(|p| ["+datum=", "+ellps=", "+a=", "+b=", "+rf=", "+towgs84="].iter().any(|k| p.starts_with(k)))
-            .map(str::to_string)
-            .collect();
-        e.sort();
-        e
-    };
-    let own = earth(def);
-    if own.is_empty() {
-        return None;
-    }
-    let name = NATIONAL_DATUMS.iter().find(|(c, _)| epsg_proj4(*c).is_some_and(|d| earth(d) == own))?.1;
+    let ((a, b), shift) = earth_of(def)?;
+    let name = NATIONAL_DATUMS
+        .iter()
+        .find(|(c, _)| {
+            epsg_proj4(*c).and_then(earth_of).is_some_and(|((na, nb), ns)| {
+                (a - na).abs() < 0.01 && (b - nb).abs() < 0.01 && shift.iter().zip(ns).all(|(s, n)| (s - n).abs() < 1e-6)
+            })
+        })?
+        .1;
     // CH1903+ has CH1903's ellipsoid and shift in the table: only their codes tell them apart.
     Some(if name == "CH1903" && matches!(code, Some(2056 | 4150)) { "CH1903+" } else { name })
+}
+
+/// A definition's ellipsoid axes and its shift to WGS 84 as seven parameters (three padded with
+/// zeros), a named datum's shift included; `None` without a shift.
+fn earth_of(def: &str) -> Option<((f64, f64), [f64; 7])> {
+    let proj = proj4rs::Proj::from_proj_string(def).ok()?;
+    let value = |k: &str| def.split_whitespace().find_map(|t| t.strip_prefix(k));
+    let shift = value("+towgs84=").or_else(|| DATUMS.iter().find(|r| value("+datum=").is_some_and(|d| r.0.eq_ignore_ascii_case(d)))?.3)?;
+    let parts: Vec<f64> = shift.split(',').map(|v| v.trim().parse().ok()).collect::<Option<_>>()?;
+    if parts.len() != 3 && parts.len() != 7 {
+        return None;
+    }
+    let mut seven = [0.0; 7];
+    seven.iter_mut().zip(parts).for_each(|(s, p)| *s = p);
+    Some((proj.ellipse_parameters(), seven))
 }
 
 /// PROJ's ellipsoids by name, with the name WKT gives them and their inverse flattening (0 for a
@@ -1730,6 +1741,7 @@ mod tests {
             (4807, (2.35, 48.86), "PRIMEM[\"Paris\""),
             (4802, (-74.08, 4.6), "PRIMEM[\"Bogota\""),
             (4813, (106.8, -6.2), "PRIMEM[\"Jakarta\""),
+            (3003, (9.19, 45.46), "DATUM[\"Monte_Mario\""),
         ];
         for (code, (lon, lat), says) in systems {
             let crs = Crs::from_epsg(u32::from(code)).unwrap();
@@ -1746,5 +1758,14 @@ mod tests {
         // LV95 takes CH1903+'s name, LV03 CH1903's.
         assert!(to_wkt(Crs::from_epsg(2056).unwrap()).unwrap().contains("DATUM[\"CH1903+\""));
         assert!(to_wkt(Crs::from_epsg(21781).unwrap()).unwrap().contains("DATUM[\"CH1903\""));
+        // A Swiss system read from a .prj with its shift and no code (its ellipsoid by its axes,
+        // a three-parameter shift) is written with its datum named, and reads back as itself.
+        let lv95 = to_wkt(Crs::from_epsg(2056).unwrap()).unwrap().replace(",AUTHORITY[\"EPSG\",\"2056\"]", "");
+        let lv95 = lv95.replace("TOWGS84[674.374,15.056,405.346,0,0,0,0]", "TOWGS84[674.374,15.056,405.346]");
+        let read = crs_from_wkt(&lv95).unwrap();
+        assert!(read.custom_def().unwrap().proj4.contains("+a="), "{:?}", read.custom_def());
+        let again = to_wkt(read).unwrap();
+        assert!(again.contains("DATUM[\"CH1903+\"") || again.contains("DATUM[\"CH1903\""), "{again}");
+        assert!(crs_from_wkt(&again).is_ok(), "{again}");
     }
 }
