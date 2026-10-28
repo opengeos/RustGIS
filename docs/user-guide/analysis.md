@@ -374,16 +374,16 @@ empty even for `COUNT`, which tells it apart from records that have no value (a 
 gp.run={"tool":"pivotTable","params":{"input":"households","fields":"county","pivot":"year","value":"income","statistic":"MEAN"}}
 ```
 
-Field names come from the pivot values. A number, or true and false, follows the pivot field's
-name (`year2020`, `rate2_5` for 2.5, `temp_3` for −3). Text keeps its letters, digits and
-underscores, each run of other characters becoming one underscore and underscores at its ends
-dropped (`North east` gives `North_east`), and follows the field's name when it would start with a
-digit or have nothing left. At most 64 characters of a value are kept; a name already taken,
-ignoring case, gets `_2`, `_3` and so on in the order of the pivot values. A record with no pivot
-value (or a number that isn't one, NaN) is an error: fill those in, or select the other records.
-The pivot field can have at most 1,000 values, and the table at most 10 million cells. Only
-selected records are used when the table has a selection, and the output is named `<input>_Pivot`
-unless `output` names it.
+Field names come from the pivot values. A number, or true and false, follows the pivot field's name
+(`year2020`, `rate2_5` for 2.5, `temp_3` for −3). Text keeps its letters, digits and underscores,
+each run of other characters becoming one underscore (none right after an underscore) and
+underscores at its ends dropped (`North east` and `North_-east` give `North_east`), and follows the
+field's name when it would start with a digit or have nothing left. At most 64 characters of a
+value are kept; a name already taken, ignoring case, gets `_2`, `_3` and so on in the order of the
+pivot values. A record with no pivot value (or a number that isn't one, NaN) is an error: fill
+those in, or select the other records. The pivot field can have at most 1,000 values, and the table
+at most 10 million cells. Only selected records are used when the table has a selection, and the
+output is named `<input>_Pivot` unless `output` names it.
 
 The AI Assistant uses Pivot Table for questions such as "mean household income by county and year":
 it runs the tool with `county` as the row field, `year` as the pivot field and `MEAN`, then reads

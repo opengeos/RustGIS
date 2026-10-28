@@ -2170,10 +2170,11 @@ fn pivot_field_names<'a>(field: &str, values: impl Iterator<Item = &'a Value>, b
 }
 
 /// The name of the field Pivot Table makes for a value of the pivot field `field`. Letters, digits
-/// and underscores are kept, and each run of other characters becomes one underscore; text also
-/// loses underscores at its ends. At most [`MAX_PIVOT_NAME`] characters of the value are kept. A
-/// number (in full) or true/false follows the field's name (`year2020`, `rate2_5`, `temp_3` for −3); so does
-/// text that would start with a digit or have nothing left.
+/// and underscores are kept, and each run of other characters becomes one underscore, or none right
+/// after an underscore (`North_-east` gives `North_east`); text also loses underscores at its ends.
+/// At most [`MAX_PIVOT_NAME`] characters of the value are kept. A number (in full) or true/false
+/// follows the field's name (`year2020`, `rate2_5`, `temp_3` for −3); so does text that would start
+/// with a digit or have nothing left.
 fn pivot_column_name(field: &str, v: &Value) -> String {
     // A decimal in full (the shortest text that reads back as it), not rounded as values are shown.
     let shown = match v {
@@ -5384,6 +5385,8 @@ mod tests {
         assert_eq!(pivot_column_name("rate", &Value::Float(0.000_000_1)), "rate0_0000001");
         assert_eq!(pivot_column_name("rate", &Value::Float(1.000_000_1)), "rate1_0000001");
         assert_eq!(pivot_column_name("rate", &Value::Float(1.0)), "rate1");
+        // A run of other characters right after an underscore adds none.
+        assert_eq!(pivot_column_name("k", &Value::Text("North_-east".into())), "North_east");
         // A cut at a run of other characters leaves no underscore at the end.
         let cut = format!("{}-b", "a".repeat(MAX_PIVOT_NAME - 1));
         assert_eq!(pivot_column_name("k", &Value::Text(cut)), "a".repeat(MAX_PIVOT_NAME - 1));
