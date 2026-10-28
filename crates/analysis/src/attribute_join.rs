@@ -100,7 +100,8 @@ pub fn validate_key_compatibility(target_field: &Field, source_field: &Field) ->
 pub struct JoinFieldOptions<'a> {
     pub target_field: &'a str,
     pub join_field: &'a str,
-    /// Explicit source fields to transfer. If empty or None, all source fields except the join key field are transferred.
+    /// Explicit source fields to transfer. If None, all source fields except the join key field are transferred.
+    /// If Some, only the specified non-empty fields are transferred (transfers zero fields if empty).
     pub fields_to_transfer: Option<&'a [String]>,
     /// Optional prefix to prepend to transferred field names.
     pub prefix: &'a str,
@@ -199,7 +200,17 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         let src_field = source.fields.get(src_idx).ok_or_else(|| "invalid source field index".to_string())?;
         let proposed = if opts.prefix.is_empty() { src_field.name.clone() } else { format!("{}{}", opts.prefix, src_field.name) };
         let unique_name = make_unique_field(&out.fields, &proposed);
-        out.fields.push(Field { name: unique_name, ty: src_field.ty, alias: src_field.alias.clone() });
+        let alias = match &src_field.alias {
+            Some(a) if unique_name == proposed => {
+                if opts.prefix.is_empty() {
+                    Some(a.clone())
+                } else {
+                    Some(format!("{}{}", opts.prefix, a))
+                }
+            }
+            _ => None,
+        };
+        out.fields.push(Field { name: unique_name, ty: src_field.ty, alias });
     }
 
     // 5. Index source records: Map JoinKey -> source feature index
@@ -826,5 +837,56 @@ mod tests {
         assert_eq!(out.fields.len(), 2);
         assert_eq!(out.fields[1].name, "cost");
         assert_eq!(out.features[0].attrs[1], Value::Float(99.0));
+    }
+
+    #[test]
+    fn test_transferred_field_alias_with_prefix_and_collision() {
+        let mut target = Dataset::new(
+            "target",
+            GeometryType::None,
+            vec![
+                Field::new("id", FieldType::Integer),
+                Field { name: "cost".to_string(), ty: FieldType::Double, alias: Some("Existing Cost".to_string()) },
+            ],
+        );
+        target.push(None, vec![Value::Int(1), Value::Float(10.0)]);
+
+        let mut source = Dataset::new(
+            "source",
+            GeometryType::None,
+            vec![
+                Field::new("id", FieldType::Integer),
+                Field { name: "cost".to_string(), ty: FieldType::Double, alias: Some("Source Cost".to_string()) },
+            ],
+        );
+        source.push(None, vec![Value::Int(1), Value::Float(20.0)]);
+
+        // 1. With prefix "src_": no collision, alias gets prefixed
+        let opts_prefix = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "src_",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out_pfx".into(),
+        };
+        let (out_pfx, _) = join_field(&target, &source, &opts_prefix).unwrap();
+        assert_eq!(out_pfx.fields[2].name, "src_cost");
+        assert_eq!(out_pfx.fields[2].alias.as_deref(), Some("src_Source Cost"));
+        assert_eq!(out_pfx.fields[2].display(), "src_Source Cost");
+
+        // 2. Without prefix: collision with target "cost" generates "cost_2" and drops conflicting alias
+        let opts_collision = JoinFieldOptions {
+            target_field: "id",
+            join_field: "id",
+            fields_to_transfer: None,
+            prefix: "",
+            duplicate_strategy: DuplicateStrategy::First,
+            output_name: "out_col".into(),
+        };
+        let (out_col, _) = join_field(&target, &source, &opts_collision).unwrap();
+        assert_eq!(out_col.fields[2].name, "cost_2");
+        assert_eq!(out_col.fields[2].alias, None);
+        assert_eq!(out_col.fields[2].display(), "cost_2");
     }
 }

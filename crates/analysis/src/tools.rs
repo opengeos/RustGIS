@@ -5,6 +5,7 @@ use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
 use serde_json::Value as Json;
+use std::borrow::Cow;
 use std::collections::TryReserveError;
 
 use crate::convert::{from_line, from_multipolygon, from_point, to_geo, to_multiline, to_multipolygon};
@@ -690,7 +691,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "Source fields to transfer (comma-separated or JSON array; all non-key fields if empty).",
+                help: "Source fields to transfer (comma-separated or JSON array; all non-key fields if omitted).",
             },
             P {
                 name: "prefix",
@@ -2890,18 +2891,18 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     Ok(ToolResult { output: Output::Layer(out), messages })
 }
 
-/// Returns a borrowed dataset when rows match the full dataset, or a new dataset containing
+/// Returns a borrowed dataset when rows match the full dataset in identity order, or a new dataset containing
 /// only the selected rows in the specified order with schema, CRS, and windowed flag preserved.
-fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize], storage: &'a mut Option<Dataset>) -> &'a Dataset {
-    if selected_rows.len() == ds.features.len() {
-        ds
+fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize]) -> Cow<'a, Dataset> {
+    if selected_rows.iter().copied().eq(0..ds.features.len()) {
+        Cow::Borrowed(ds)
     } else {
         let mut sub = Dataset::new(ds.name.clone(), ds.geometry_type, ds.fields.clone());
         sub.crs = ds.crs;
         sub.crs_incomplete = ds.crs_incomplete;
         sub.windowed = ds.windowed;
         sub.features = selected_rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect::<Vec<_>>().into();
-        storage.insert(sub)
+        Cow::Owned(sub)
     }
 }
 
@@ -2909,11 +2910,8 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let target = input(inp, p, "target")?;
     let source = input(inp, p, "joinTable")?;
 
-    let mut target_storage = None;
-    let target_ref = subset(target, &rows(inp, p, "target", target), &mut target_storage);
-
-    let mut source_storage = None;
-    let source_ref = subset(source, &rows(inp, p, "joinTable", source), &mut source_storage);
+    let target_ref = subset(target, &rows(inp, p, "target", target));
+    let source_ref = subset(source, &rows(inp, p, "joinTable", source));
 
     let target_field = s(p, "targetField");
     if target_field.is_empty() {
@@ -2966,7 +2964,7 @@ fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         output_name,
     };
 
-    let (out, report) = crate::attribute_join::join_field(target_ref, source_ref, &opts)?;
+    let (out, report) = crate::attribute_join::join_field(&target_ref, &source_ref, &opts)?;
     let msg = report.message(&target.name);
 
     let output = if out.geometry_type == rustgis_data::GeometryType::None { Output::Table(out) } else { Output::Layer(out) };
@@ -5895,7 +5893,7 @@ mod tests {
         source_sel.push(None, vec![Value::Int(20), Value::Text("Carol".into())]);
 
         let inp_sel = TestInputs {
-            datasets: HashMap::from([("parcels".to_string(), target_sel), ("owners".to_string(), source_sel)]),
+            datasets: HashMap::from([("parcels".to_string(), target_sel.clone()), ("owners".to_string(), source_sel.clone())]),
             tables: HashMap::new(),
             selections: HashMap::from([
                 ("parcels".to_string(), vec![0, 1]), // Only parcels 10 and 20 selected
@@ -6022,5 +6020,27 @@ mod tests {
         assert_eq!(out15.fields.len(), 2);
         assert_eq!(out15.fields[1].name, "weight");
         assert_eq!(out15.features[0].attrs[1], Value::Float(1.25));
+
+        // 16. Duplicate index selection [0, 0] produces 2 selected rows and does not bypass subsetting
+        let inp_dup_sel = TestInputs {
+            datasets: HashMap::from([("parcels".to_string(), target_sel), ("owners".to_string(), source_sel)]),
+            tables: HashMap::new(),
+            selections: HashMap::from([("parcels".to_string(), vec![0, 0])]),
+        };
+        let res16 = crate::run(
+            "joinField",
+            &inp_dup_sel,
+            &serde_json::json!({
+                "target": "parcels",
+                "targetField": "id",
+                "joinTable": "owners",
+                "joinField": "id"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out16) = res16.output else { panic!("expected Output::Table") };
+        assert_eq!(out16.features.len(), 2);
+        assert_eq!(out16.features[0].attrs[0], Value::Int(10));
+        assert_eq!(out16.features[1].attrs[0], Value::Int(10));
     }
 }

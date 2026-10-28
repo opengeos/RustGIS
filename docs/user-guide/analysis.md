@@ -309,7 +309,7 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
-**Join Field** (`joinField`, also `gp.joinField`) performs a one-off non-spatial attribute join,
+**Join Field** (`joinField`) performs a one-off non-spatial attribute join,
 copying fields from a source table or layer (`joinTable`, specified by name or numeric table ID)
 into a `target` table or layer based on matching key values:
 

@@ -315,33 +315,30 @@ pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, Str
 pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> {
     let mut p = params.as_object().cloned().unwrap_or_default();
     if spec.id == "joinField" {
-        if p.get("target").is_none_or(|v| v.is_null() || v.as_str() == Some(""))
+        let is_blank = |val: Option<&Value>| val.is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+        if is_blank(p.get("target"))
             && let Some(v) = p.get("input").or_else(|| p.get("target_layer")).cloned()
         {
             p.insert("target".to_string(), v);
         }
-        if p.get("joinTable").is_none_or(|v| v.is_null() || v.as_str() == Some(""))
+        if is_blank(p.get("joinTable"))
             && let Some(v) = p.get("join").or_else(|| p.get("source")).or_else(|| p.get("join_table")).cloned()
         {
             p.insert("joinTable".to_string(), v);
         }
-        if p.get("targetField").is_none_or(|v| v.is_null() || v.as_str() == Some(""))
+        if is_blank(p.get("targetField"))
             && let Some(v) = p.get("target_field").or_else(|| p.get("key")).or_else(|| p.get("target_key")).cloned()
         {
             p.insert("targetField".to_string(), v);
         }
-        if p.get("joinField").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())) {
-            if let Some(v) = p
-                .get("join_field")
-                .or_else(|| p.get("join_key"))
-                .filter(|v| !v.is_null() && !v.as_str().is_some_and(|s| s.trim().is_empty()))
-            {
+        if is_blank(p.get("joinField")) {
+            if let Some(v) = p.get("join_field").or_else(|| p.get("join_key")).filter(|v| !is_blank(Some(v))) {
                 p.insert("joinField".to_string(), v.clone());
-            } else if let Some(tf) = p.get("targetField").filter(|v| !v.is_null() && !v.as_str().is_some_and(|s| s.trim().is_empty())) {
+            } else if let Some(tf) = p.get("targetField").filter(|v| !is_blank(Some(v))) {
                 p.insert("joinField".to_string(), tf.clone());
             }
         }
-        if p.get("duplicates").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()))
+        if is_blank(p.get("duplicates"))
             && let Some(v) = p.get("duplicateStrategy").or_else(|| p.get("duplicate_strategy")).cloned()
         {
             p.insert("duplicates".to_string(), v);
