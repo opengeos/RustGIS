@@ -2892,16 +2892,20 @@ fn zonal_stats(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 }
 
 /// Returns a borrowed dataset when rows match the full dataset in identity order, or a new dataset containing
-/// only the selected rows in the specified order with schema, CRS, and windowed flag preserved.
+/// only the selected rows, in table order, with schema, CRS, and windowed flag preserved.
 fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize]) -> Cow<'a, Dataset> {
-    if selected_rows.iter().copied().eq(0..ds.features.len()) {
+    // Selections keep the order they were picked in: sort and dedupe so the table's order wins.
+    let mut rows: Vec<usize> = selected_rows.iter().copied().filter(|&r| r < ds.features.len()).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    if rows.len() == ds.features.len() {
         Cow::Borrowed(ds)
     } else {
         let mut sub = Dataset::new(ds.name.clone(), ds.geometry_type, ds.fields.clone());
         sub.crs = ds.crs;
         sub.crs_incomplete = ds.crs_incomplete;
         sub.windowed = ds.windowed;
-        sub.features = selected_rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect::<Vec<_>>().into();
+        sub.features = rows.iter().filter_map(|&r| ds.features.get(r).cloned()).collect::<Vec<_>>().into();
         Cow::Owned(sub)
     }
 }
@@ -6021,7 +6025,7 @@ mod tests {
         assert_eq!(out15.fields[1].name, "weight");
         assert_eq!(out15.features[0].attrs[1], Value::Float(1.25));
 
-        // 16. Duplicate index selection [0, 0] produces 2 selected rows and does not bypass subsetting
+        // 16. Duplicate index selection [0, 0] dedupes to 1 selected row in table order
         let inp_dup_sel = TestInputs {
             datasets: HashMap::from([("parcels".to_string(), target_sel), ("owners".to_string(), source_sel)]),
             tables: HashMap::new(),
@@ -6039,9 +6043,8 @@ mod tests {
         )
         .unwrap();
         let Output::Table(out16) = res16.output else { panic!("expected Output::Table") };
-        assert_eq!(out16.features.len(), 2);
+        assert_eq!(out16.features.len(), 1);
         assert_eq!(out16.features[0].attrs[0], Value::Int(10));
-        assert_eq!(out16.features[1].attrs[0], Value::Int(10));
 
         // 17. Blank join_field falls back to join_key
         let res17 = crate::run(

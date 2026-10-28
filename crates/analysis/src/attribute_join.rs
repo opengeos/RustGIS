@@ -202,13 +202,7 @@ pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_
         let proposed = if opts.prefix.is_empty() { src_field.name.clone() } else { format!("{}{}", opts.prefix, src_field.name) };
         let unique_name = make_unique_field(&out.fields, &proposed);
         let alias = match &src_field.alias {
-            Some(a) if unique_name == proposed => {
-                if opts.prefix.is_empty() {
-                    Some(a.clone())
-                } else {
-                    Some(format!("{}{}", opts.prefix, a))
-                }
-            }
+            Some(a) if unique_name == proposed => Some(a.clone()),
             _ => None,
         };
         out.fields.push(Field { name: unique_name, ty: src_field.ty, alias });
@@ -862,7 +856,7 @@ mod tests {
         );
         source.push(None, vec![Value::Int(1), Value::Float(20.0)]);
 
-        // 1. With prefix "src_": no collision, alias gets prefixed
+        // 1. With prefix "src_": no collision, alias is kept as original human-readable label
         let opts_prefix = JoinFieldOptions {
             target_field: "id",
             join_field: "id",
@@ -873,8 +867,8 @@ mod tests {
         };
         let (out_pfx, _) = join_field(&target, &source, &opts_prefix).unwrap();
         assert_eq!(out_pfx.fields[2].name, "src_cost");
-        assert_eq!(out_pfx.fields[2].alias.as_deref(), Some("src_Source Cost"));
-        assert_eq!(out_pfx.fields[2].display(), "src_Source Cost");
+        assert_eq!(out_pfx.fields[2].alias.as_deref(), Some("Source Cost"));
+        assert_eq!(out_pfx.fields[2].display(), "Source Cost");
 
         // 2. Without prefix: collision with target "cost" generates "cost_2" and drops conflicting alias
         let opts_collision = JoinFieldOptions {
