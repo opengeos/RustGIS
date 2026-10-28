@@ -32,7 +32,8 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
     if text.len() > MAX_TEXT {
         return Err("GeoLibre project exceeds 64 MiB".into());
     }
-    let mut v: Value = serde_json::from_str(text).map_err(|e| format!("not a GeoLibre project: {e}"))?;
+    let mut v: Value =
+        serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).map_err(|e| format!("not a GeoLibre project: {e}"))?;
     let name = string(&v, "name").to_string();
     let version = string(&v, "version").to_string();
     if name.is_empty() || version.is_empty() || !v.get("mapView").is_some_and(Value::is_object) {
@@ -174,6 +175,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn geolibre_utf8_bom_is_accepted() {
+        let text = "\u{feff}".to_string() + &json!({"version":"0.2.0","name":"BOM","mapView":{},"layers":[]}).to_string();
+        assert_eq!(read_project(&text, &mut Report::default()).unwrap().name, "BOM");
+    }
+
+    #[test]
     fn geolibre_non_object_groups_and_bookmarks_are_reported_and_skipped() {
         let text = json!({"version":"0.2.0","name":"Malformed records","mapView":{},"layers":[],"layerGroups":[null,1,{"id":"g","name":"Valid group"}],"bookmarks":[false,"bad",{"name":"Valid bookmark","lng":1,"lat":2}]}).to_string();
         let mut report = Report::default();
@@ -268,6 +275,7 @@ pub fn download_url(url: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod boundary_tests {
     use super::*;
     use serde_json::json;
@@ -294,6 +302,7 @@ mod boundary_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod review_regressions {
     use super::*;
     use serde_json::json;

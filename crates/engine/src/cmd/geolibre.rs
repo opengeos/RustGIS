@@ -469,6 +469,8 @@ pub(crate) fn finish_layer(s: &mut Session, p: &Value, name: String, bytes: Vec<
         let mut report = Report::default();
         geolibre::style::apply(&mut loaded, &pending["record"], &mut report);
         let dest = s.map_mut().layer_mut(target.1).ok_or("GeoLibre layer was removed")?;
+        loaded.visible = dest.visible;
+        loaded.transparency = dest.transparency;
         *dest = loaded;
         for note in report.notes {
             s.notify(format!("{}: {}", note.layer, note.text), false);

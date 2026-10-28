@@ -162,6 +162,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -255,6 +256,8 @@ mod tests {
         let mut ds = rustgis_engine::data::Dataset::new("Grid", rustgis_engine::data::GeometryType::Point, Vec::new());
         ds.source = Some("geolibre-pending:zarr-test".into());
         let layer = app.session.map_mut().add_dataset(ds);
+        // Real imports put the saved look on the reservation before the asynchronous read.
+        app.session.map_mut().layer_mut(layer).unwrap().transparency = 60.0;
         app.run("map.new", json!({"name":"Other"})).unwrap();
         let active = app.session.project.active_map;
         let id = app.session.download_started();

@@ -432,6 +432,10 @@ fn import_maps(s: &mut Session, p: &Value) -> CmdResult {
     super::connections::clear_active();
     let maps: Vec<Map> = match serde_json::from_str::<Map>(&text) {
         Ok(mut m) => {
+            if crate::project::ensure_map_imports_complete(&m).is_err() {
+                super::connections::restore_active(s);
+                return Err("a map file cannot contain runtime GeoLibre download reservations".into());
+            }
             if let Some(d) = dir.as_deref().and_then(Path::to_str) {
                 crate::project::resolve_file_paths(d, m.file_paths_mut());
             }
@@ -566,7 +570,6 @@ fn safe(name: &str) -> String {
 
 /// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
-    crate::project::ensure_map_imports_complete(s.map())?;
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
         // Groups folded into their layers: a hidden group's layers are dropped with the others.
@@ -586,6 +589,7 @@ fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
             l.touch_geometry();
         }
     }
+    crate::project::ensure_map_imports_complete(&m)?;
     crate::project::strip_addresses(m.addresses_mut());
     let text = serde_json::to_string(&m).map_err(|e| e.to_string())?;
     let kind = if mobile { "mobile map package" } else { "map package" };
@@ -1022,6 +1026,7 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
             ("ramps".to_string(), to_json(&s.project.ramps)?)
         }
         "template" => {
+            s.project.ensure_imports_complete()?;
             let mut t = template(&s.project);
             if let Some(n) = ps(p, "name").map(str::trim).filter(|n| !n.is_empty()) {
                 t.name = n.chars().take(200).collect();

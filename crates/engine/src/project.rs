@@ -855,6 +855,7 @@ impl Project {
             return Err("the project file is too large".into());
         }
         let mut p: Project = serde_json::from_str(text).map_err(|e| format!("not a RustGIS project: {e}"))?;
+        p.ensure_imports_complete().map_err(|_| "a project file cannot contain runtime GeoLibre download reservations".to_string())?;
         if p.format > FORMAT {
             return Err(format!("this project was saved by a newer RustGIS (format {})", p.format));
         }

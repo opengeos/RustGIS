@@ -18977,6 +18977,8 @@ fn geolibre_download_finishes_in_its_original_map_and_position() {
     let target = s.project.active_map;
     let id = s.map_mut().add_dataset(ds);
     s.map_mut().layer_mut(id).unwrap().name = "Renamed while downloading".into();
+    s.map_mut().layer_mut(id).unwrap().visible = false;
+    s.map_mut().layer_mut(id).unwrap().transparency = 35.0;
     let camera = s.map().camera;
     s.run("map.new", &json!({"name":"Other"})).unwrap();
     let active = s.project.active_map;
@@ -18989,6 +18991,8 @@ fn geolibre_download_finishes_in_its_original_map_and_position() {
     let loaded = map.layer(id).unwrap();
     assert_eq!(loaded.dataset.features.len(), 1);
     assert_eq!(loaded.name, "Renamed while downloading");
+    assert!(!loaded.visible);
+    assert_eq!(loaded.transparency, 35.0);
     assert_eq!(loaded.dataset.name, loaded.name);
     assert_eq!(loaded.renderer.base_symbol().size, 18.0);
     assert_eq!(map.camera, camera);
@@ -19272,6 +19276,7 @@ fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
     for command in ["project.package", "map.package"] {
         assert!(s.run(command, &json!({"path":"unused-pending-package.zip"})).unwrap_err().contains("still downloading"));
     }
+    assert!(crate::cmd::items::item_bytes(&mut s, "template", &json!({})).unwrap_err().contains("still downloading"));
     let recovered = s.project.clone().recovery_text().unwrap();
     assert!(!recovered.contains("geolibre-pending:"));
     let recovered: crate::project::Project = serde_json::from_str(&recovered).unwrap();
@@ -19287,6 +19292,7 @@ fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
     for command in ["project.package", "map.package"] {
         assert!(s.run(command, &json!({"path":"unused-pending-package.zip"})).unwrap_err().contains("still downloading"));
     }
+    assert!(crate::cmd::items::item_bytes(&mut s, "template", &json!({})).unwrap_err().contains("still downloading"));
     let recovered = s.project.clone().recovery_text().unwrap();
     assert!(!recovered.contains("geolibre-pending:"));
     let recovered: crate::project::Project = serde_json::from_str(&recovered).unwrap();
@@ -19363,4 +19369,30 @@ fn geolibre_item_exports_check_only_the_selected_map_or_layer() {
     for kind in ["mapPackage", "mobilePackage"] {
         assert!(crate::cmd::items::item_bytes(&mut s, kind, &json!({})).unwrap_err().contains("still downloading"));
     }
+    s.map_mut().layer_mut(pending).unwrap().visible = false;
+    assert!(crate::cmd::items::item_bytes(&mut s, "mobilePackage", &json!({})).is_ok());
+    assert!(crate::cmd::items::item_bytes(&mut s, "mapPackage", &json!({})).is_err());
+}
+
+#[test]
+fn geolibre_file_pending_tokens_are_rejected_without_mutating_live_work() {
+    let mut s = world();
+    let mut ds = crate::data::Dataset::new("Forged pending", crate::data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:forged".into());
+    let mut map = rustgis_map::Map::new("Forged map");
+    let id = map.add_dataset(ds);
+    let layer = serde_json::to_string(map.layer(id).unwrap()).unwrap();
+    assert!(crate::cmd::layer::add_layer_text(&mut s, &layer).is_err());
+    let count = s.project.maps.len();
+    assert!(s.run("map.import", &json!({"text":serde_json::to_string(&map).unwrap()})).is_err());
+    assert_eq!(s.project.maps.len(), count);
+    let mut project = crate::project::Project::default();
+    project.maps = vec![map];
+    assert!(crate::project::Project::from_json(&serde_json::to_string(&project).unwrap()).is_err());
+    project.maps[0].layers[0].dataset.source = None;
+    let mut tile = rustgis_map::tiles::TileLayer::new("Forged archive", rustgis_map::tiles::TileKind::MbTiles, "upload:forged.mbtiles");
+    tile.id = "geolibre-pending:forged-tile".into();
+    project.maps[0].tiles.push(tile);
+    assert!(crate::project::Project::from_json(&serde_json::to_string(&project).unwrap()).is_err());
+    assert!(s.project.saved_text(None).is_ok());
 }
