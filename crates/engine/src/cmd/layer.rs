@@ -38,7 +38,7 @@ pub fn commands() -> Vec<C> {
             .params(r#"{"layer"?: name|id, "crs": "EPSG:… or WKT; reinterpret native coordinates, without rewriting the source file"}"#),
         C::new("layer.loadAll", "Load All Features", "Layers", load_all).when(need_streamed).params(r#"{"layer"?: name|id}"#),
         C::new("layer.addUrl", "Add Data From URL", "Home › Add › Add Data", add_url).params(
-            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
+            r#"{"url": "https://…/data.geojson|.csv|.parquet|.fgb|.gpkg|.zip|.kml|.kmz|.gpx|.tif|.jp2 (JPEG 2000: desktop, through GDAL) (the format from the address, else the contents) | a .pmtiles archive", "name"?: text, "layer"?: "one layer of a zip, KML or GPX", "zoom"?: "bool: true zooms to what was added; false keeps the view of a GeoParquet or FlatGeobuf read in place (zoomed to only when the map was empty)", "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "whole"?: "bool: download a cloud-optimised GeoTIFF whole (as a raster layer) instead of reading it in place (an address without a file name is read in place when its first bytes are a cloud-optimised GeoTIFF)", "cog"?: "bool: the address is a cloud-optimised GeoTIFF whatever its name says (the app's probe found it so)", "start"?, "end"?, "unit"?, "interval"?, "dates"?: "a GeoTIFF address with date placeholders ({date:YYYY}, {YYYY}{MM}{DD}), one file per date: the dates it spans and steps through (as time.set), turning the time slider on"}"#,
         ),
         C::new("layer.addDownload", "Add Downloaded Data", "Home › Add", add_download)
             .params(r#"{"id": a download the app finished (Home › Add › Add Data › From URL), "url": its address, "name"?: text, "layer"?: text, "zoom"?: bool, "x"?, "y"?, "wkt"?, "crs"?, "delimiter"?, "paperSpace"?, "stream"?, "as"? (as layer.addData), "service"?: bool (a service's features: their axes and paging are checked), "coverage"?: bool (a WCS coverage: a GeoTIFF, else the service's error)}"#),
@@ -2567,8 +2567,9 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
             }
         }
     }
-    // A GeoTIFF: read in place when it is cloud-optimised (tiled), otherwise downloaded whole.
-    let tiff = is_tiff_url(url);
+    // A GeoTIFF: read in place when it is cloud-optimised (tiled), otherwise downloaded whole. One
+    // the app has probed already says so (`"cog"`).
+    let tiff = is_tiff_url(url) || super::b(p, "cog").unwrap_or(false);
     #[cfg(target_arch = "wasm32")]
     {
         // Nothing may wait here: a GeoTIFF is taken to be cloud-optimised (the layer says if not).
@@ -2582,12 +2583,18 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     {
         // Errors about the address itself name it already.
         let named = |e: String| if e.starts_with(url) { e } else { format!("{url}: {e}") };
-        if tiff
-            && !scan
-            && !super::b(p, "whole").unwrap_or(false)
-            && crate::render::rustgis_tiles::cog::probe_blocking(url).map_err(named)?
-        {
-            return add_cog(s, p, url);
+        // An address without a file name may be a GeoTIFF too: its first bytes are read to see,
+        // and anything that doesn't answer as one is downloaded whole, as before.
+        let unnamed = !tiff && is_unnamed_url(url);
+        if (tiff || unnamed) && !scan && !super::b(p, "whole").unwrap_or(false) {
+            let cog = match crate::render::rustgis_tiles::cog::probe_blocking(url) {
+                Ok(cog) => cog,
+                Err(_) if unnamed => false,
+                Err(e) => return Err(named(e)),
+            };
+            if cog {
+                return add_cog(s, p, url);
+            }
         }
         let bytes = crate::render::rustgis_tiles::cache::download_blocking(url).map_err(named)?;
         let name = url_file_name(url, &bytes).map_err(named)?;
@@ -2623,6 +2630,16 @@ pub fn is_tiff_url(url: &str) -> bool {
     let url = rustgis_data::s3_address::inner(url);
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
     path.ends_with(".tif") || path.ends_with(".tiff")
+}
+
+/// Whether a web address's last path segment has no extension (an API answering with a file,
+/// such as Vantor's `…/geotiff?…`): its first bytes tell whether it is a GeoTIFF to read in place.
+pub fn is_unnamed_url(url: &str) -> bool {
+    let url = rustgis_data::s3_address::inner(url);
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let Some((_, rest)) = path.split_once("://") else { return false };
+    let Some((_, path)) = rest.split_once('/') else { return false };
+    path.rsplit('/').find(|p| !p.is_empty()).is_some_and(|last| !last.contains('.'))
 }
 
 /// Adds a cloud-optimised GeoTIFF by its address as a layer read in place (its tiles by range,

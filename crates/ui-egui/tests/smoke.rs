@@ -1406,7 +1406,9 @@ fn data_from_a_web_address_lands_later() {
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
         let body = br#"{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}}"#;
-        for stream in listener.incoming().take(1) {
+        // Three requests: an address without a file name is asked for its headers and first
+        // bytes (is it a GeoTIFF?) before it is downloaded.
+        for stream in listener.incoming().take(3) {
             let Ok(mut s) = stream else { continue };
             let mut buf = [0u8; 2048];
             let _ = s.read(&mut buf);
@@ -1432,6 +1434,65 @@ fn data_from_a_web_address_lands_later() {
     assert!(h.state().session.map().layer_by_name("Pin").is_some());
     assert!(h.state().session.notices.iter().any(|n| n.error && n.text.contains("never fetched")));
     assert!(h.state().ui.downloads.is_empty());
+}
+
+/// Add Data From URL reads a cloud-optimised GeoTIFF in place from an address that names no file
+/// (an API such as Vantor's `…/geotiff?…`): its first bytes are probed off the frame, then the
+/// layer reads its tiles by range, never downloading it whole.
+#[test]
+fn an_unnamed_cog_address_is_read_in_place() {
+    use std::io::{Read, Write};
+    let body = rustgis_engine::data::raster::cog::example(2048, 256);
+    let total = body.len();
+    let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = sent.clone();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+            // Its headers announce the TIFF header's length, as Vantor's Transform API does.
+            if req.starts_with("head ") {
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 200 OK\r\nX-TIFF-Header-Length: 8192\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                continue;
+            }
+            let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
+                let (a, b) = r.trim().split_once('-')?;
+                Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?))
+            });
+            let (status, part) = match range {
+                Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                _ => ("200 OK", &body[..]),
+            };
+            count.fetch_add(part.len(), std::sync::atomic::Ordering::Relaxed);
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+            let _ = s.write_all(part);
+        }
+    });
+    let mut h = harness();
+    h.step();
+    let url = format!("http://{addr}/analytics/v1/raster/ortho-with-overviews/geotiff?function=pansharp_ortho&key=k");
+    h.state_mut().run("ui.addUrl", json!({"url": url, "name": "Ortho"})).unwrap();
+    assert!(h.state().ui.downloads.is_empty(), "probed first, not downloaded");
+    for _ in 0..200 {
+        h.step();
+        if h.state().session.map().tiles.iter().any(|t| t.name == "Ortho") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let t = h.state().session.map().tiles.iter().find(|t| t.name == "Ortho").cloned();
+    assert!(t.is_some_and(|t| t.url == url), "added as a tile layer read in place");
+    assert!(h.state().ui.downloads.is_empty() && h.state().ui.cog_probes.is_empty());
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read < total / 4, "{read} of {total} bytes read");
 }
 
 /// A service layer added from the app (Add From Service, the Connections tree) is read past its

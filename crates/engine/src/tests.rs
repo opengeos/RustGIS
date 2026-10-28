@@ -8552,7 +8552,9 @@ pub(crate) fn serve(body: &'static [u8], n: usize) -> String {
 #[test]
 fn data_from_a_web_address() {
     const GEOJSON: &[u8] = br#"{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"n": 1}, "geometry": {"type": "Point", "coordinates": [10, 20]}}]}"#;
-    let base = serve(GEOJSON, 3);
+    // Five requests: an address without a file name is asked for its headers and its first
+    // bytes (is it a GeoTIFF?) before it is downloaded.
+    let base = serve(GEOJSON, 5);
     let mut s = Session::new(Project::default());
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/places.geojson")})).unwrap();
     assert_eq!(r["features"], 1);
@@ -8562,7 +8564,7 @@ fn data_from_a_web_address() {
     assert!(s.map().layer_by_name("Api").is_some());
     let e = s.run("layer.addUrl", &json!({"url": format!("{base}/missing.geojson")})).unwrap_err();
     assert!(e.contains("404"), "{e}");
-    let page = serve(b"<!doctype html><html>not data</html>", 1);
+    let page = serve(b"<!doctype html><html>not data</html>", 3);
     let e = s.run("layer.addUrl", &json!({"url": format!("{page}/index")})).unwrap_err();
     assert!(e.contains("not a data format"), "{e}");
     for bad in ["file:///etc/passwd", "/tmp/x.geojson", "http://169.254.169.254/latest.geojson", ""] {
@@ -8594,7 +8596,7 @@ fn jpeg2000_from_a_web_address() {
     assert_eq!(named("https://x.org/", &codestream).unwrap(), "data.j2k");
     assert!(named("https://x.org/api/tile", br#"<VRTDataset></VRTDataset>"#).unwrap_err().contains("not a data format"));
     if !rustgis_data::raster::gdal::available() {
-        let jp2 = serve(jp2_box, 2);
+        let jp2 = serve(jp2_box, 4);
         for path in ["TCI.jp2", "api/tile"] {
             let e = s.run("layer.addUrl", &json!({"url": format!("{jp2}/{path}")})).unwrap_err();
             assert!(e.contains("needs GDAL"), "{path}: {e}");
@@ -8628,7 +8630,7 @@ fn jpeg2000_from_a_web_address() {
     // stays valid for the server thread's lifetime.
     let bytes = Vec::leak(std::fs::read(&jp2).unwrap());
     let uploaded = base64::engine::general_purpose::STANDARD.encode(&*bytes);
-    let base = serve(bytes, 2);
+    let base = serve(bytes, 4);
     let r = s.run("layer.addUrl", &json!({"url": format!("{base}/tiles/33/T/XN/TCI.jp2")})).unwrap();
     let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
     assert_eq!(l.name, "TCI");
@@ -10196,6 +10198,11 @@ fn serve_gated(
                 }
             }
             let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+            // A HEAD request is answered with the length alone.
+            if req.starts_with("head ") {
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                continue;
+            }
             let range = req.lines().filter(|_| ranges).find_map(|l| l.strip_prefix("range: bytes=")).and_then(|r| {
                 let (a, b) = r.trim().split_once('-')?;
                 // A suffix (`-n`): the last n bytes.
@@ -10861,6 +10868,128 @@ fn cloud_optimised_geotiffs_are_read_in_place() {
     assert!(r.get("inPlace").is_none(), "{r}");
     let id = r["layer"].as_u64().unwrap() as u32;
     assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+    // So is one at an address without a file name, its first bytes saying GeoTIFF.
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/raster/geotiff?id=1")})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    let id = r["layer"].as_u64().unwrap() as u32;
+    assert!(s.map().layer(id).is_some_and(|l| l.is_raster()), "{r}");
+}
+
+/// A cloud-optimised GeoTIFF from an API whose address names no file (Vantor's
+/// `…/ortho-with-overviews/geotiff?…`) is read in place, as one named `.tif` is, not downloaded
+/// whole; an address the app has probed (`"cog"`) is read in place without the name either.
+#[test]
+fn unnamed_cloud_optimised_geotiffs_are_read_in_place() {
+    use crate::cmd::layer::is_unnamed_url;
+    assert!(is_unnamed_url(
+        "https://api.vantor.com/analytics/v1/raster/ortho-with-overviews/geotiff?function=pansharp_ortho&p=crs%3D%22EPSG%3A3857%22"
+    ));
+    assert!(is_unnamed_url("https://x.org/api/tile/"));
+    for named in
+        ["https://x.org/a/scene.tif?sig=1", "https://x.org/a.b/data.geojson", "https://x.org", "https://x.org/", "/tmp/geotiff", "geotiff"]
+    {
+        assert!(!is_unnamed_url(named), "{named}");
+    }
+    let file = rustgis_data::raster::cog::example(2048, 256);
+    let total = file.len();
+    let (base, sent) = serve_ranges(file);
+    let url =
+        format!("{base}/analytics/v1/raster/ortho-with-overviews/geotiff?function=pansharp_ortho&p=bands%3D%22red%2Cgreen%2Cblue%22&key=k");
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addUrl", &json!({"url": url, "name": "Ortho"})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    let t = s.map().tiles.last().unwrap().clone();
+    assert_eq!((t.kind, t.name.as_str(), t.url.as_str()), (rustgis_map::TileKind::Cog, "Ortho", url.as_str()));
+    let read = sent.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(read < total / 4, "{read} of {total} bytes read: only the header, not the whole file");
+    let r = s.run("layer.addUrl", &json!({"url": url, "name": "Probed", "cog": true})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    // Asked to, it is downloaded whole, named by its contents.
+    let r = s.run("layer.addUrl", &json!({"url": url, "whole": true, "name": "Whole"})).unwrap();
+    assert!(r.get("inPlace").is_none(), "{r}");
+    // Anything else at such an address is downloaded as before, and said not to be data.
+    let (text, _) = serve_file(b"Unauthorized".to_vec(), false);
+    let e = s.run("layer.addUrl", &json!({"url": format!("{text}/api/geotiff?key=bad")})).unwrap_err();
+    assert!(e.contains("not a data format"), "{e}");
+}
+
+/// A server answering every request with `body`, logging each as `HEAD`, `GET` or `GET <range>`.
+/// Its HEAD answers carry `announce` as `X-TIFF-Header-Length` and `kind` as `Content-Type`.
+fn serve_logged(
+    body: Vec<u8>,
+    announce: Option<&'static str>,
+    kind: Option<&'static str>,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = log.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let read = s.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..read]).to_ascii_lowercase();
+            let mut headers = String::new();
+            if let Some(k) = kind {
+                headers.push_str(&format!("Content-Type: {k}\r\n"));
+            }
+            if req.starts_with("head ") {
+                kept.lock().unwrap().push("HEAD".to_string());
+                if let Some(n) = announce {
+                    headers.push_str(&format!("X-TIFF-Header-Length: {n}\r\n"));
+                }
+                let _ = write!(s, "HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                continue;
+            }
+            let range = req.lines().find_map(|l| l.strip_prefix("range: bytes=")).map(|r| r.trim().to_string());
+            kept.lock().unwrap().push(range.as_ref().map_or("GET".to_string(), |r| format!("GET {r}")));
+            let bounds = range.as_deref().and_then(|r| {
+                let (a, b) = r.split_once('-')?;
+                let a = a.parse::<usize>().ok()?;
+                Some((a, if b.is_empty() { body.len().saturating_sub(1) } else { b.parse::<usize>().ok()? }))
+            });
+            let (status, part) = match bounds {
+                Some((a, b)) if a < body.len() => ("206 Partial Content", &body[a..=b.min(body.len() - 1)]),
+                _ => ("200 OK", &body[..]),
+            };
+            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", part.len());
+            let _ = s.write_all(part);
+        }
+    });
+    (format!("http://{addr}"), log)
+}
+
+/// A GeoTIFF made on request (Vantor's Transform API) says how long its header is in its HEAD
+/// answer (`X-TIFF-Header-Length`): the header is read in that one request. Without a usable
+/// length, the first 64 KiB are read as for any file; a HEAD answer saying JSON skips the
+/// GeoTIFF read and downloads it.
+#[test]
+fn announced_tiff_header_lengths_read_the_header_in_one_request() {
+    let file = rustgis_data::raster::cog::example(2048, 256);
+    let mut s = Session::new(Project::default());
+    let (base, log) = serve_logged(file.clone(), Some("8192"), Some("image/tiff"));
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/transform/geotiff?id=1"), "name": "Announced"})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    let asked = log.lock().unwrap().clone();
+    assert_eq!(asked.first().map(String::as_str), Some("HEAD"), "{asked:?}");
+    assert_eq!(asked.get(1).map(String::as_str), Some("GET 0-8191"), "the header in one read of its announced length: {asked:?}");
+    // A length that isn't one: the usual first read.
+    let (base, log) = serve_logged(file.clone(), Some("lots"), None);
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/transform/geotiff?id=2"), "name": "Unannounced"})).unwrap();
+    assert_eq!(r["inPlace"], true, "{r}");
+    assert_eq!(log.lock().unwrap().get(1).map(String::as_str), Some("GET 0-65535"));
+    // A file named .tif isn't asked for its headers.
+    let (base, log) = serve_logged(file, Some("8192"), None);
+    s.run("layer.addUrl", &json!({"url": format!("{base}/scene.tif"), "name": "Named"})).unwrap();
+    assert!(!log.lock().unwrap().iter().any(|r| r == "HEAD"), "{:?}", log.lock().unwrap());
+    // JSON by its HEAD answer: no GeoTIFF read, downloaded and added.
+    let geojson = br#"{"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [1, 2]}}"#.to_vec();
+    let (base, log) = serve_logged(geojson, None, Some("application/geo+json"));
+    let r = s.run("layer.addUrl", &json!({"url": format!("{base}/api/feature"), "name": "Feature"})).unwrap();
+    assert_eq!(r["features"], 1, "{r}");
+    assert_eq!(*log.lock().unwrap(), ["HEAD", "GET"], "no GeoTIFF read, then the download");
 }
 
 /// OpenStreetMap data for an area through an Overpass server (a local one): a layer per geometry
