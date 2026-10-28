@@ -650,11 +650,18 @@ pub fn post_json_blocking(url: &str, body: &str) -> Result<Vec<u8>, String> {
 
 /// What a `HEAD` request says of a file before any of it is read: the length of its TIFF header
 /// that a server making GeoTIFFs on request announces (`X-TIFF-Header-Length`, Vantor's Transform
-/// API), so a cloud-optimised GeoTIFF's header comes in one range read, and its type.
+/// API), so a cloud-optimised GeoTIFF's header comes in one range read; its type; and whether
+/// the server says it answers byte ranges (`Accept-Ranges: bytes`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Head {
     pub tiff_header_length: Option<u64>,
     pub content_type: Option<String>,
+    pub accepts_ranges: bool,
+}
+
+/// Whether an `Accept-Ranges` value says byte ranges are answered.
+pub fn accepts_byte_ranges(value: &str) -> bool {
+    value.split(',').any(|unit| unit.trim().eq_ignore_ascii_case("bytes"))
 }
 
 /// Called once with what a `HEAD` request said.
@@ -1039,7 +1046,22 @@ mod native {
 
     /// Asks for an address's headers on a thread of its own.
     pub(super) fn head(url: String, done: super::HeadDone) {
-        std::thread::spawn(move || done(head_with(&agent(), &url)));
+        use std::sync::atomic::Ordering::Relaxed;
+        // Past this many under way, a file is read without asking (the usual first read), so
+        // many addresses added at once never hold up as many threads and connections.
+        const MAX_HEADS: usize = 8;
+        static HEADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+        if HEADS.fetch_add(1, Relaxed) >= MAX_HEADS {
+            HEADS.fetch_sub(1, Relaxed);
+            done(Ok(super::Head::default()));
+            return;
+        }
+        std::thread::spawn(move || {
+            let r = head_with(AGENT.get_or_init(agent), &url);
+            HEADS.fetch_sub(1, Relaxed);
+            done(r);
+        });
     }
 
     /// Asks for `url`'s headers, following up to 5 redirects, each checked as [`get`] checks
@@ -1074,6 +1096,7 @@ mod native {
             return Ok(super::Head {
                 tiff_header_length: header("x-tiff-header-length").and_then(super::tiff_header_length),
                 content_type: header("content-type").map(str::to_string),
+                accepts_ranges: header("accept-ranges").is_some_and(super::accepts_byte_ranges),
             });
         }
         Err("too many redirects".into())
@@ -1426,6 +1449,7 @@ mod tests {
     #[test]
     fn announced_tiff_header_lengths() {
         assert_eq!(tiff_header_length(" 16384 "), Some(16384));
+        assert!(accepts_byte_ranges("bytes") && accepts_byte_ranges("none, Bytes") && !accepts_byte_ranges("none"));
         for bad in ["", "0", "-5", "12kb", "18446744073709551616"] {
             assert_eq!(tiff_header_length(bad), None, "{bad}");
         }

@@ -2552,7 +2552,8 @@ pub(crate) fn add_url(s: &mut Session, p: &Value) -> CmdResult {
     if rustgis_data::source::is_remote_name(url) && scan {
         return Err(format!("{url}: \"as\": \"scan\" opens a TIFF, PNG or JPEG"));
     }
-    if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) {
+    // An address the app found to be a GeoTIFF (`"cog"`) is one whatever its name says.
+    if rustgis_data::source::is_remote_name(url) && !super::b(p, "whole").unwrap_or(false) && !super::b(p, "cog").unwrap_or(false) {
         // In the browser nothing may wait: the app has fetched what opening needs already.
         #[cfg(target_arch = "wasm32")]
         let opened = rustgis_data::source::open_url_now(url);

@@ -1683,6 +1683,9 @@ impl RustGisApp {
                 );
                 self.session.notify(text, true);
             }
+            // A probe still under way is for an address added to the old project: dropped, so
+            // its layer never lands in the new one.
+            self.ui.cog_probes.clear();
         }
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
@@ -2337,7 +2340,7 @@ impl RustGisApp {
                 let unnamed = !remote
                     && !tiff
                     && rustgis_engine::cmd::layer::is_unnamed_url(url)
-                    && p.get("as").is_none()
+                    && matches!(p.get("as"), None | Some(Value::Null))
                     && ["service", "coverage"].iter().all(|k| p.get(*k).and_then(Value::as_bool) != Some(true));
                 if (remote || tiff || unnamed) && p.get("whole").and_then(Value::as_bool) != Some(true) {
                     let slot: Slot<Result<bool, String>> = Slot::default();

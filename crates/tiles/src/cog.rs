@@ -329,9 +329,10 @@ fn read(url: &str, at: u64, len: u64, done: Done) {
 ///
 /// A file an API makes on request (an address not named `.tif`, such as Vantor's
 /// `…/geotiff?…`) is asked for its headers first: one that says how long its TIFF header is
-/// (`X-TIFF-Header-Length`) has it read in one request, and one that says it is JSON, text or a
-/// page isn't read as a GeoTIFF at all. Without an answer, the first [`HEAD`] bytes are read as
-/// for any other file.
+/// (`X-TIFF-Header-Length`) has it read in one request. One that says it is JSON, text or a page
+/// and doesn't say it answers ranges isn't read as a GeoTIFF at all (a server ignoring the range
+/// would send its whole answer); a GeoTIFF mislabelled so on a server that answers ranges is still
+/// read. Without an answer, the first [`HEAD`] bytes are read as for any other file.
 fn load(url: String, done: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
     if let Err(e) = crate::address::check(&url, None) {
         done(Err(e));
@@ -345,7 +346,7 @@ fn load(url: String, done: Box<dyn FnOnce(Result<Arc<Info>, String>) + Send>) {
         &url,
         Box::new(move |h| {
             let h = h.unwrap_or_default();
-            if h.content_type.as_deref().is_some_and(not_tiff_type) {
+            if h.content_type.as_deref().is_some_and(not_tiff_type) && !h.accepts_ranges && h.tiff_header_length.is_none() {
                 return done(Err(format!("{u}: not a GeoTIFF")));
             }
             read_header(u, header_length(h.tiff_header_length), done);

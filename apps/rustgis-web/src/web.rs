@@ -754,6 +754,8 @@ async fn head(url: &str) -> Result<rustgis_ui_egui::rustgis_engine::render::rust
     Ok(cache::Head {
         tiff_header_length: header("x-tiff-header-length").as_deref().and_then(cache::tiff_header_length),
         content_type: header("content-type"),
+        // Seen only where the server exposes it to pages.
+        accepts_ranges: header("accept-ranges").as_deref().is_some_and(cache::accepts_byte_ranges),
     })
 }
 

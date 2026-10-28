@@ -1493,6 +1493,17 @@ fn an_unnamed_cog_address_is_read_in_place() {
     assert!(h.state().ui.downloads.is_empty() && h.state().ui.cog_probes.is_empty());
     let read = sent.load(std::sync::atomic::Ordering::Relaxed);
     assert!(read < total / 4, "{read} of {total} bytes read");
+    // `"as": null` is no `"as"`: probed too, not downloaded.
+    h.state_mut().run("ui.addUrl", json!({"url": format!("{url}&n=2"), "name": "Null", "as": null})).unwrap();
+    assert!(h.state().ui.downloads.is_empty() && h.state().ui.cog_probes.len() == 1);
+    // A probe under way when another project opens is dropped: its layer never lands there.
+    h.state_mut().run("project.new", json!({})).unwrap();
+    assert!(h.state().ui.cog_probes.is_empty());
+    for _ in 0..50 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!h.state().session.map().tiles.iter().any(|t| t.name == "Null"));
 }
 
 /// A service layer added from the app (Add From Service, the Connections tree) is read past its
