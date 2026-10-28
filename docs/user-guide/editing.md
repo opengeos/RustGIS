@@ -154,7 +154,8 @@ capabilities say, queryable): RustGIS sends the service a standard GetFeatureInf
 point (WMS 1.3.0 or 1.1.1, as in the layer's address), asking for GeoJSON when it offers it, else
 GML, other XML, plain text or HTML. The pop-up says "Asking the map service…" until every layer
 asked has answered, for up to 4 seconds, and then shows the features found and answered together,
-in drawing order; answers that come later join it as they arrive.
+in drawing order; answers that come later join it as they arrive. When nothing else is under the
+click, it waits for the answers however long they take, and closes when none has any features.
 When the service answers with an error in that format (swisstopo's MapServer can't write some of
 its layers as GeoJSON, but answers them in GML), RustGIS asks again in the next format it offers,
 and keeps asking that layer in it for the rest of the session.
