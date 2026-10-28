@@ -231,20 +231,26 @@ def main():
          {"ids": [i for i, g in POINTS if zones_m.intersects(m(g))]})
     case("erase", "erase", {"input": "parcels", "erase": "zones"},
          {"features": overlay("erase_parcels", parcels, lambda g: polygonal(g.difference(zones_m)))})
+    case("erase lines", "erase", {"input": "roads", "erase": "zones"},
+         {"features": overlay("erase_roads", ROADS, lambda g: linear(g.difference(zones_m)))})
+    case("erase points", "erase", {"input": "points", "erase": "zones"},
+         {"ids": [i for i, g in POINTS if not zones_m.intersects(m(g))]})
 
     # Intersect: each input feature's part in each zone, keyed by both ids ("P1|Z1"), in input
     # order, then zone order. Parts that only touch (a shared edge or corner) are left out. The
     # zones' `id` is taken by the parcels', so it comes out as `id_2`.
     # Identity adds each input feature's part outside the zones it has a part in, keyed "P1|" (no
     # zone id); Union adds each zone's part outside the parcels that have a part in it, "|Z1".
-    def pieces(name, rows, part, rest=False, zone_rest=False):
+    # Symmetrical Difference is Union without the parts in both.
+    def pieces(name, rows, part, rest=False, zone_rest=False, inside=True):
         out, covering = [], {zi: [] for zi, _ in ZONES}
         for i, g in rows:
             hit = []
             for zi, z in ZONES:
                 r = part(m(g).intersection(m(z)))
                 if r is not None and not r.is_empty:
-                    out.append((f"{i}|{zi}", ll(r)))
+                    if inside:
+                        out.append((f"{i}|{zi}", ll(r)))
                     hit.append(m(z))
                     covering[zi].append(m(g))
             if rest:
@@ -276,6 +282,19 @@ def main():
     case("identity points", "identity", {"input": "points", "overlay": "zones"}, {"ids": ids, "key": both})
     case("union", "union", {"input": "parcels", "overlay": "zones"},
          {"features": pieces("union_parcels", parcels, polygonal, rest=True, zone_rest=True), "key": both})
+    case("symmetrical difference", "symmetricalDifference", {"input": "parcels", "overlay": "zones"},
+         {"features": pieces("symdiff_parcels", parcels, polygonal, rest=True, zone_rest=True, inside=False), "key": both})
+
+    # Update: each parcel's part outside the zones it has a part in, then each zone whole. Both
+    # layers' `id` lands in the one `id` field.
+    rows = []
+    for i, g in parcels:
+        hit = [m(z) for _, z in ZONES if (r := polygonal(m(g).intersection(m(z)))) is not None and not r.is_empty]
+        r = polygonal(m(g).difference(unary_union(hit))) if hit else m(g)
+        if r is not None and not r.is_empty:
+            rows.append((i, ll(r)))
+    rows += [(zi, z) for zi, z in ZONES]
+    case("update", "update", {"input": "parcels", "update": "zones"}, {"features": write_expected("update_parcels", rows)})
 
     # Dissolve: one feature per code, the union of its parcels.
     codes = sorted({c for _, c, _ in PARCELS})

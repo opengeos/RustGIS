@@ -1,6 +1,6 @@
 ---
 name: geoprocessing
-description: Run geoprocessing tools and chain them — buffer, clip, erase, dissolve, select by location or attributes, summarize within, summary statistics, simplify, export features. Use for "within N km of", "inside", "merge by", "count per", "overlay", or any multi-step analysis.
+description: Run geoprocessing tools and chain them — buffer, clip, erase, split, dissolve, select by location or attributes, summarize within, summary statistics, simplify, export features. Use for "within N km of", "inside", "merge by", "count per", "overlay", or any multi-step analysis.
 ---
 
 # Geoprocessing
@@ -15,7 +15,10 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - overlay: `clip` (`input`, `clip`), `erase` (`input`, `erase`), `intersect` (`input`,
      `overlay`: the parts in each overlay polygon, with both layers' attributes), `identity`
      (the same, plus the parts outside every overlay polygon), `union` (both polygon layers:
-     every piece either covers)
+     every piece either covers), `symmetricalDifference` (both polygon layers: the pieces only
+     one covers), `update` (`input`, `update`: the input's polygons with the update polygons
+     laid over them), `split` (`input`, `split`, `field`: one clipped layer per split polygon
+     or field value)
    - generalization: `dissolve` (`input`, `field`), `simplify` (`input`, `tolerance`)
    - geometry: `convexHull`, `featureToPoint`, `featureVerticesToPoints`, `xyTableToPoint`
      (`input`, `x`, `y`, `crs`), `calculateGeometry`

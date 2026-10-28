@@ -86,10 +86,13 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Buffer | `buffer` | Analysis › Proximity |
 | Near | `near` | Analysis › Proximity |
 | Clip | `clip` | Analysis › Extract |
+| Split | `split` | Analysis › Extract |
 | Erase | `erase` | Analysis › Overlay |
 | Intersect | `intersect` | Analysis › Overlay |
 | Identity | `identity` | Analysis › Overlay |
 | Union | `union` | Analysis › Overlay |
+| Symmetrical Difference | `symmetricalDifference` | Analysis › Overlay |
+| Update | `update` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
@@ -242,6 +245,10 @@ lines and polygons contribute their bounding-box centres. At least two distinct 
 numeric values are needed. It adds **two separate Float32 GeoTIFF layers**: the prediction,
 named by `output`, and `<output>_variance`.
 
+**Erase** (`erase`) removes from `input` features (points, lines or polygons) their parts inside
+the `erase` polygons. An erase polygon's edge counts as inside it, as for Clip, so a point on the
+edge or a stretch of line along it is erased; features left with nothing are left out.
+
 **Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
 input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
 first. A parcel crossed by two flood zones gives two features, one for each zone, and a point in two
@@ -269,6 +276,37 @@ follow Intersect's rules for field names, touching parts and selections. Where o
 overlap each other, an input feature's part in both comes out once for each, and Union adds each
 overlay polygon's own remainder, so the overlay's overlap outside the input comes out once for each
 too.
+
+**Symmetrical Difference** (`symmetricalDifference`) takes two polygon layers, as Union does, and
+keeps only the pieces one layer covers: Union's features without Intersect's. Each input feature's
+part outside every overlay polygon comes first, with empty overlay attributes, then each overlay
+polygon's part outside every input polygon, with empty input attributes.
+
+**Update** (`update`) replaces part of a polygon layer with another: each `input` polygon's part
+outside every `update` polygon keeps its attributes, and each update polygon is then added whole.
+The output has the input's fields only. An update polygon's values go into the input's fields of
+the same name (matched exactly, else ignoring case; converted to the field's type, so text that isn't a number
+becomes empty in a numeric field); the input's other fields are left empty. An input field that
+two update fields match, ignoring case, stops the tool rather than pick one. An input polygon no
+update polygon overlaps, or one without geometry, is kept as it is. Update polygons that overlap
+each other each come out whole, so their overlap comes out twice.
+
+```text
+gp.run={"tool":"update","params":{"input":"parcels","update":"resurveyed_parcels"}}
+```
+
+**Split** (`split`) clips `input` (points, lines or polygons) by each polygon of `split`, as Clip
+does, and adds one layer for each. Give a `field` of the split layer to name the layers by its
+values: polygons sharing a value make one layer together, and one without a value is named by its
+id. Without a field, each polygon gives a layer named by its id. Names start with `output`, else
+the input's name, and an underscore: `roads_North` (a name the map already has gets a number, as
+for any new layer). A feature on the edge between two split
+polygons goes into both layers. Layers that would be empty are left out, and Split stops rather
+than write more than 1,000 layers. Selections in both layers are honoured.
+
+```text
+gp.run={"tool":"split","params":{"input":"roads","split":"districts","field":"name"}}
+```
 
 **Near** (`near`) copies `input` and adds, for each feature, the nearest feature of `near`: its OID
 as the attribute table shows it (`near_fid`), the distance to it (`near_dist`, in `units`,
