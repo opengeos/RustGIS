@@ -28,9 +28,9 @@ impl DbfEncoding {
     }
 
     fn from_number(number: u16) -> Option<Self> {
-        // DOS 437, 850, 852, 861 and 865 go to dbase's OEM adapter; the rest, DOS 866 included,
-        // keep encoding_rs, because dbase's yore adapter is strict for those and can discard
-        // records containing malformed text.
+        // DOS 437, 850, 852, 861 and 865 go to dbase's OEM adapter; DOS 866 and the other pages
+        // decoded here keep encoding_rs, because dbase's yore adapter is strict for those and can
+        // discard records containing malformed text. Any other page isn't decoded (`None`).
         let encoding = match number {
             437 => return Some(Self::Oem(CodePageMark::CP437)),
             850 => return Some(Self::Oem(CodePageMark::CP850)),
