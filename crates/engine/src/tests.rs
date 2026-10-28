@@ -313,6 +313,27 @@ fn geoprocessing_adds_layers_and_history() {
     assert_eq!(s.project.gp_history.len(), 2, "a failed run restores the project");
 }
 
+/// Pivot Table adds a standalone table in one undo step: a row for each continent and a field for
+/// each income group, holding the population summed over that continent's countries in the group.
+#[test]
+fn pivot_table_adds_a_table_in_one_undo_step() {
+    let mut s = world();
+    let countries = s.map().layer_by_name("Countries").map(|l| l.dataset.clone()).unwrap();
+    let total: f64 =
+        (0..countries.features.len()).filter_map(|r| countries.value(r, countries.field_index("pop_est").unwrap()).as_f64()).sum();
+    let params = json!({"input": "Countries", "fields": "continent", "pivot": "income_grp", "value": "pop_est", "statistic": "SUM"});
+    s.run("gp.run", &json!({"tool": "pivotTable", "params": params})).unwrap();
+    let t = s.project.tables.last().unwrap();
+    assert_eq!(t.name, "Countries_Pivot");
+    assert_eq!(t.fields.first().map(|f| f.name.as_str()), Some("continent"));
+    assert!(t.fields.len() > 2 && t.fields.iter().skip(1).all(|f| f.name.starts_with("income_grp")), "{:?}", t.fields);
+    let cells: f64 = (0..t.features.len()).flat_map(|r| (1..t.fields.len()).filter_map(move |c| t.value(r, c).as_f64())).sum();
+    assert!((cells - total).abs() < 1.0, "{cells} != {total}");
+    assert_eq!(s.project.gp_history.len(), 1);
+    s.run("edit.undo", &Value::Null).unwrap();
+    assert!(s.project.tables.is_empty());
+}
+
 #[test]
 fn spatial_join_command_joins_layers_and_records_history() {
     let mut s = world();

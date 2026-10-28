@@ -394,6 +394,26 @@ fn map_switch_and_remove_do_not_report_layers_added() {
     assert!(added.is_some_and(|a| !a.is_empty()), "buffer must name the layer it added: {buffered}");
 }
 
+/// A pivot table answers "population by continent and income group" in two calls: `run_tool` names
+/// the table and `read_features` gives its rows, a field for each income group.
+#[test]
+fn read_features_reads_a_pivot_table() {
+    let mut s = sample();
+    let t = |name: &str, args: Value| ToolCall { id: "x".into(), name: name.into(), args };
+    let params = json!({"input": "Countries", "fields": "continent", "pivot": "income_grp", "value": "pop_est", "statistic": "SUM"});
+    let ran: Value =
+        serde_json::from_str(&tools::run(&mut s, &t("run_tool", json!({"tool": "pivotTable", "params": params}))).unwrap()).unwrap();
+    let name = ran["table"].as_str().map(str::to_string).unwrap_or_default();
+    assert_eq!(name, "Countries_Pivot", "{ran}");
+    let read: Value = serde_json::from_str(&tools::run(&mut s, &t("read_features", json!({"table": name}))).unwrap()).unwrap();
+    let rows = read["rows"].as_array().cloned().unwrap_or_default();
+    assert!(!rows.is_empty(), "{read}");
+    for row in &rows {
+        let groups = row.as_object().map(|o| o.keys().filter(|k| k.starts_with("income_grp")).count()).unwrap_or_default();
+        assert!(row["continent"].is_string() && groups > 1, "{row}");
+    }
+}
+
 /// A tool's output table is read back by the name `run_tool` gives, as `table` or as `layer` (the
 /// name a model passes as readily), without a layer's location columns; a table has no selection,
 /// and a map layer keeps its name over a table sharing it.
