@@ -1939,7 +1939,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
         requests = [Stat::Count, Stat::Sum, Stat::Mean, Stat::Min, Stat::Max, Stat::Std].map(|stat| Request { field: fi, stat }).to_vec();
     }
     let cases = key_fields(ds, p.get("case"), "Case Field")?;
-    let separator = separator(p)?;
+    let separator = concatenate_separator(p, requests.iter().any(|r| r.stat == Stat::Concatenate))?;
     let mut fields: Vec<Field> = cases.iter().filter_map(|&c| ds.fields.get(c).cloned()).collect();
     fields.push(Field::new("FREQUENCY", FieldType::Integer));
     for r in &requests {
@@ -2011,8 +2011,12 @@ fn key_fields(ds: &Dataset, v: Option<&Json>, label: &str) -> Result<Vec<usize>,
     Ok(out)
 }
 
-/// The separator CONCATENATE joins values with: `, ` unless given.
-fn separator(p: &Json) -> Result<&str, String> {
+/// The separator CONCATENATE joins values with: `, ` unless given. Read only when a statistic
+/// `concatenates`: otherwise the Tools pane hides it, so a value left there can't fail the run.
+fn concatenate_separator(p: &Json, concatenates: bool) -> Result<&str, String> {
+    if !concatenates {
+        return Ok(", ");
+    }
     match p.get("separator") {
         None | Some(Json::Null) => Ok(", "),
         Some(Json::String(t)) if t.len() <= MAX_SEPARATOR => Ok(t.as_str()),
@@ -2024,7 +2028,8 @@ fn separator(p: &Json) -> Result<&str, String> {
 /// The most columns Pivot Table makes from the pivot field's values: each is an output field.
 const MAX_PIVOT_COLUMNS: usize = 1000;
 
-/// The most cells (rows times pivot columns) Pivot Table makes: its output is held in memory.
+/// The most cells (rows times output fields: the row fields and the pivot fields) Pivot Table
+/// makes: its output is held in memory.
 const MAX_PIVOT_CELLS: usize = 10_000_000;
 
 /// The most characters of a pivot value Pivot Table keeps in a field name, besides the pivot
@@ -2041,6 +2046,9 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     let keys = key_fields(ds, p.get("fields"), "Row Field")?;
     let named = |k: &str, label: &str| -> Result<usize, String> {
+        if p.get(k).is_some_and(|v| !v.is_string() && !v.is_null()) {
+            return Err(format!("'{label}' must be a field name"));
+        }
         let name = s(p, k).trim();
         if name.is_empty() {
             return Err(format!("'{label}' is required"));
@@ -2054,6 +2062,9 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err(format!("the pivot field '{}' can't also be a row field", field_name(pivot)));
     }
     let value_type = ds.fields.get(value).map_or(FieldType::Text, |f| f.ty);
+    if p.get("statistic").is_some_and(|v| !v.is_string() && !v.is_null()) {
+        return Err("Statistic must be text".into());
+    }
     let stat = match s(p, "statistic").trim() {
         "" => None,
         name => {
@@ -2064,7 +2075,7 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
             Some(stat)
         }
     };
-    let separator = separator(p)?;
+    let separator = concatenate_separator(p, stat == Some(Stat::Concatenate))?;
     // Record order, each record once, as FIRST, LAST and CONCATENATE follow it.
     let mut rs = rows(inp, p, "input", ds);
     rs.sort_unstable();
@@ -2083,12 +2094,9 @@ fn pivot_table(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         ));
     }
     let groups = stats::group_rows(ds, &rs, &keys);
-    if groups.len().saturating_mul(columns.len()) > MAX_PIVOT_CELLS {
-        return Err(format!(
-            "{} rows by {} columns would make more than {MAX_PIVOT_CELLS} values; select fewer records",
-            groups.len(),
-            columns.len()
-        ));
+    let width = keys.len() + columns.len();
+    if groups.len().saturating_mul(width) > MAX_PIVOT_CELLS {
+        return Err(format!("{} rows by {width} fields would make more than {MAX_PIVOT_CELLS} values; select fewer records", groups.len()));
     }
     let mut fields: Vec<Field> = keys.iter().filter_map(|&k| ds.fields.get(k).cloned()).collect();
     let mut taken: HashSet<String> = fields.iter().map(|f| f.name.to_ascii_lowercase()).collect();
@@ -2153,11 +2161,16 @@ fn no_pivot_value(v: &Value) -> bool {
 /// The name of the field Pivot Table makes for a value of the pivot field `field`. Letters, digits
 /// and underscores are kept, and each run of other characters becomes one underscore; text also
 /// loses underscores at its ends. At most [`MAX_PIVOT_NAME`] characters of the value are kept. A
-/// number or true/false follows the field's name (`year2020`, `rate2_5`, `temp_3` for −3); so does
+/// number (in full) or true/false follows the field's name (`year2020`, `rate2_5`, `temp_3` for −3); so does
 /// text that would start with a digit or have nothing left.
 fn pivot_column_name(field: &str, v: &Value) -> String {
+    // A decimal in full (the shortest text that reads back as it), not rounded as values are shown.
+    let shown = match v {
+        Value::Float(f) => f.to_string(),
+        _ => v.to_string(),
+    };
     let mut name = String::new();
-    for ch in v.to_string().chars() {
+    for ch in shown.chars() {
         if ch.is_alphanumeric() || ch == '_' {
             name.push(ch);
         } else if !name.ends_with('_') {
@@ -5172,11 +5185,22 @@ mod tests {
             (serde_json::json!({"input": "parcels", "field": "value", "case": ["zone", "ZONE"]}), "listed twice"),
             (serde_json::json!({"input": "parcels", "field": "value", "case": "zone, district"}), "no field"),
             (serde_json::json!({"input": "parcels", "field": "value", "case": "nope"}), "no field"),
-            (serde_json::json!({"input": "parcels", "field": "value", "separator": 1}), "Separator must be text"),
-            (serde_json::json!({"input": "parcels", "field": "value", "separator": "x".repeat(257)}), "at most 256 bytes"),
+            (
+                serde_json::json!({"input": "parcels", "statistics": [{"field": "owner", "statistic": "CONCATENATE"}], "separator": 1}),
+                "Separator must be text",
+            ),
+            (
+                serde_json::json!({"input": "parcels", "statistics": [{"field": "owner", "statistic": "CONCATENATE"}], "separator": "x".repeat(257)}),
+                "at most 256 bytes",
+            ),
         ] {
             let err = crate::run("summaryStatistics", &m, &p).err().unwrap_or_default();
             assert!(err.contains(says), "{p}: {err}");
+        }
+        // A separator is read only for CONCATENATE, as the Tools pane shows it only then.
+        for separator in [serde_json::json!(1), serde_json::json!("x".repeat(257))] {
+            let p = serde_json::json!({"input": "parcels", "field": "value", "separator": separator});
+            assert!(crate::run("summaryStatistics", &m, &p).is_ok(), "{p}");
         }
         // A case field can't share a name with an output field.
         // Nor can output fields differ only in case.
@@ -5280,6 +5304,9 @@ mod tests {
             layer(crate::run("pivotTable", &m, &p).unwrap())
         };
         let sum = run("SUM", "value");
+        // A separator is read only for CONCATENATE, as the Tools pane shows it only then.
+        let junk = serde_json::json!({"input": "parcels", "fields": "zone", "pivot": "district", "value": "value", "statistic": "SUM", "separator": 1});
+        assert_eq!(crate::run("pivotTable", &m, &junk).map(layer).ok(), Some(sum.clone()));
         assert_eq!(column(&sum, "zone"), [Value::Null, Value::Text("C".into()), Value::Text("R".into())]);
         assert_eq!(column(&sum, "district1"), [Value::Null, Value::Float(400.0), Value::Float(800.0)]);
         assert_eq!(column(&sum, "district2"), [Value::Null, Value::Null, Value::Float(300.0)]);
@@ -5336,6 +5363,10 @@ mod tests {
         let long = "f".repeat(100);
         assert_eq!(pivot_column_name(&long, &Value::Int(7)), format!("{long}7"));
         assert_eq!(pivot_column_name("k", &Value::Text("٣rd".into())), "k٣rd");
+        // Decimals are named in full, so values closer than a display's rounding keep their own.
+        assert_eq!(pivot_column_name("rate", &Value::Float(0.000_000_1)), "rate0_0000001");
+        assert_eq!(pivot_column_name("rate", &Value::Float(1.000_000_1)), "rate1_0000001");
+        assert_eq!(pivot_column_name("rate", &Value::Float(1.0)), "rate1");
     }
 
     /// Calls that can't be answered are refused with a message naming the problem, including a
@@ -5347,6 +5378,9 @@ mod tests {
             (serde_json::json!({"input": "parcels", "value": "value"}), "'Pivot Field' is required"),
             (serde_json::json!({"input": "parcels", "pivot": "district"}), "'Value Field' is required"),
             (serde_json::json!({"input": "parcels", "pivot": " ", "value": "value"}), "'Pivot Field' is required"),
+            (serde_json::json!({"input": "parcels", "pivot": 2020, "value": "value"}), "'Pivot Field' must be a field name"),
+            (serde_json::json!({"input": "parcels", "pivot": "district", "value": "value", "statistic": 7}), "Statistic must be text"),
+            (serde_json::json!({"input": "parcels", "pivot": "district", "value": ["value"]}), "'Value Field' must be a field name"),
             (
                 serde_json::json!({"input": "parcels", "fields": ["district"], "pivot": "DISTRICT", "value": "value"}),
                 "can't also be a row field",
@@ -5357,7 +5391,7 @@ mod tests {
             (serde_json::json!({"input": "parcels", "fields": ["zone", "Zone"], "pivot": "district", "value": "value"}), "listed twice"),
             (serde_json::json!({"input": "parcels", "fields": 3, "pivot": "district", "value": "value"}), "Row Field must be"),
             (
-                serde_json::json!({"input": "parcels", "pivot": "district", "value": "value", "statistic": "SUM", "separator": 1}),
+                serde_json::json!({"input": "parcels", "pivot": "district", "value": "owner", "statistic": "CONCATENATE", "separator": 1}),
                 "Separator must be text",
             ),
         ] {
@@ -5375,7 +5409,7 @@ mod tests {
         assert!(err.contains("more than 1000 fields"), "{err}");
         let p = serde_json::json!({"input": "big", "fields": "k", "pivot": "p", "value": "k", "statistic": "COUNT"});
         let err = crate::run("pivotTable", &m, &p).err().unwrap_or_default();
-        assert!(err.contains("10001 rows by 1000 columns would make more than 10000000 values"), "{err}");
+        assert!(err.contains("10001 rows by 1001 fields would make more than 10000000 values"), "{err}");
     }
 
     /// The Tools pane shows Pivot Table's separator only for CONCATENATE.
