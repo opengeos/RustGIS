@@ -399,8 +399,9 @@ fn main() -> eframe::Result {
         .with_min_inner_size([900.0, 560.0])
         .with_drag_and_drop(true);
     // macOS: the header is the title bar, with the window buttons floating over its left end.
-    // The bundle's rustgis.icns is the Dock icon: a window icon would replace it with the bare
-    // logo, and no icon would make eframe set egui's; it leaves the Dock alone for an empty one.
+    // The bundle's rustgis.icns is the Dock icon. A window icon would replace it with the bare
+    // logo, and no icon makes eframe fall back to egui's; an empty icon opts out of both (eframe
+    // 0.37: its icon setter skips an empty one). Check the Dock again when eframe is updated.
     #[cfg(target_os = "macos")]
     {
         viewport = viewport
