@@ -402,9 +402,9 @@ const SMALL_POLYGON_PX: f32 = 4.0;
 /// a 2× screen (1.4 px), not one at print resolution, whose corners would show.
 const THIN_OUTLINE_PX: f32 = 2.0;
 
-/// How far, in outline widths, a mitred corner may reach (`Ctx::outline_px`): 2 mitres corners of
-/// 60° and more, as a 90° corner reaches 0.7 widths past its vertex, and bevels sharper ones,
-/// whose mitres would stand out as spikes on a polygon a few pixels across.
+/// How far, in outline widths, a mitred corner may reach (`Ctx::outline_px`). A limit of 2 bevels
+/// corners sharper than 60°, whose mitres would stand out as spikes on a polygon a few pixels
+/// across; a 90° corner, the commonest, reaches 0.7 widths past its vertex and stays mitred.
 const MITRE_LIMIT: f32 = 2.0;
 
 /// The most dashes a dashed stroke is cut into along one path (`Ctx::dash`).
@@ -640,12 +640,12 @@ impl Ctx<'_> {
         self.outline_px(pm, path, p, w * self.ppp, LineJoin::Round);
     }
 
-    /// A polygon's outline `w` device pixels wide, with `line_join`s; none for no width. Mitred
-    /// corners sharper than 60° are bevelled ([`MITRE_LIMIT`]), so they don't grow spikes.
+    /// A polygon's outline `w` device pixels wide, with the given `line_join`; none for no width.
+    /// Mitred corners sharper than 60° are bevelled ([`MITRE_LIMIT`]), so they don't grow spikes.
     fn outline_px(&self, pm: &mut Pixmap, path: &tiny_skia::Path, p: &Paint, w: f32, line_join: LineJoin) {
         if w > 0.0 {
-            let miter_limit = if line_join == LineJoin::Miter { MITRE_LIMIT } else { Stroke::default().miter_limit };
-            let st = Stroke { width: w, line_join, miter_limit, ..Stroke::default() };
+            // Only mitred joins read the limit.
+            let st = Stroke { width: w, line_join, miter_limit: MITRE_LIMIT, ..Stroke::default() };
             pm.stroke_path(path, p, &st, Transform::identity(), None);
         }
     }
@@ -653,8 +653,8 @@ impl Ctx<'_> {
     /// A filled polygon's outline `w` points wide: with mitred joins (#1064) when the polygon is at
     /// most [`SMALL_POLYGON_PX`] across and the outline at most [`THIN_OUTLINE_PX`] wide, round
     /// otherwise. Round joins are curves the stroker builds at every vertex, which takes most of
-    /// the time a layer of many small polygons draws in; at that size a mitred corner covers the
-    /// same pixels. A wider outline (an export at print resolution, a thick line) or a larger
+    /// the time a layer of many small polygons draws in; at that size a mitred corner covers nearly
+    /// the same pixels (a corner pixel may differ a little; the layer's tone doesn't). A wider outline (an export at print resolution, a thick line) or a larger
     /// polygon keeps its round corners.
     fn fill_outline(&self, pm: &mut Pixmap, path: &tiny_skia::Path, p: &Paint, w: f32) {
         let px = w * self.ppp;
@@ -6070,8 +6070,8 @@ mod tests {
         assert!(!ctx.splat(&mut pm, &g.extent(), &g, &thick));
     }
 
-    /// A filled polygon a few pixels across has its 1.4 px outline mitred, which covers the same
-    /// pixels as round joins at that size; a larger polygon, an outline-only one and a wide
+    /// A filled polygon a few pixels across has its 1.4 px outline mitred, which covers nearly the
+    /// same pixels as round joins at that size; a larger polygon, an outline-only one and a wide
     /// outline keep round joins (#1064).
     #[test]
     fn small_filled_polygons_have_mitred_outlines_that_look_the_same() {
@@ -6138,6 +6138,11 @@ mod tests {
         assert_eq!(draw(&small, &hollow, false).data(), draw(&small, &hollow, true).data());
         let wide = Symbol { stroke_width: 1.5, ..sym };
         assert_eq!(draw(&small, &wide, false).data(), draw(&small, &wide, true).data());
+        // The limits themselves are mitred: a polygon 4 device px across, and a 2 px outline.
+        let four = grid(2.0);
+        assert_ne!(draw(&four, &sym, false).data(), draw(&four, &sym, true).data(), "4 px across");
+        let two = Symbol { stroke_width: 1.0, ..sym };
+        assert_ne!(draw(&small, &two, false).data(), draw(&small, &two, true).data(), "a 2 px outline");
         // Triangles with corners from 10° to 80°: the sharp ones are bevelled, so no corner grows
         // a spike. A corner pixel differs as a bevelled one does (98 levels at most here); with
         // tiny-skia's own limit of 4, mitres reach 141.
