@@ -132,6 +132,15 @@ fn is_found(v: &Value) -> bool {
     v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
+/// Where the result at `index` of `before` is in `after`, the pop-up's results once some were
+/// added or left out: the same one of identical results (a service may answer a feature twice,
+/// and both lists keep their order), or the first when it's gone.
+fn index_after(before: &[Value], index: usize, after: &[Value]) -> usize {
+    let Some(shown) = before.get(index) else { return 0 };
+    let nth = before.iter().take(index).filter(|v| *v == shown).count();
+    after.iter().enumerate().filter(|(_, v)| *v == shown).nth(nth).map_or(0, |(i, _)| i)
+}
+
 /// A popup's results with the WMS layers' answers `found` added, in the map's drawing order, top
 /// first, as identify ranks what it finds itself: a WMS layer drawn over the feature found comes
 /// before it, and with topmost, the map's pop-up mode by default, takes its place once it answers
@@ -2994,10 +3003,9 @@ fn follow_popup(app: &mut RustGisApp) {
     if here.iter().all(|h| *h) {
         return;
     }
-    let shown = results.get(index).cloned();
-    let kept: Vec<Value> = results.into_iter().zip(here).filter(|(_, h)| *h).map(|(r, _)| r).collect();
+    let kept: Vec<Value> = results.iter().zip(here).filter(|(_, h)| *h).map(|(r, _)| r.clone()).collect();
     let Some(mut info) = kept.first().cloned() else { return };
-    pp.index = shown.and_then(|s| kept.iter().position(|k| *k == s)).unwrap_or(0);
+    pp.index = index_after(&results, index, &kept);
     if let Value::Object(o) = &mut info {
         o.insert("results".into(), Value::Array(kept));
     }
@@ -3083,12 +3091,8 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     {
         // The result shown stays shown, wherever the answers went; the first when it was left out
         // (a layer drawn higher answered, with topmost).
-        let shown = match pp.info["results"].as_array() {
-            Some(r) => r.get(pp.index).cloned(),
-            None => Some(pp.info.clone()),
-        };
-        let results = info["results"].as_array();
-        pp.index = shown.and_then(|s| results?.iter().position(|r| *r == s)).unwrap_or(0);
+        let before = pp.info["results"].as_array().cloned().unwrap_or_else(|| vec![pp.info.clone()]);
+        pp.index = index_after(&before, pp.index, info["results"].as_array().map_or(&[][..], Vec::as_slice));
         pp.info = info;
     }
     if pp.asks.is_empty() && !is_found(&pp.info) {
@@ -3954,6 +3958,20 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pop-up stays on the result shown as answers come and results go, the second of two
+    /// identical ones too, and goes to the first when that one is left out.
+    #[test]
+    fn the_result_shown_stays_shown() {
+        let (a, b, c) = (json!({"layer": "A"}), json!({"layer": "B"}), json!({"layer": "C"}));
+        let before = [a.clone(), b.clone(), b.clone()];
+        // An answer before them: each keeps its place among the identical.
+        let after = [c.clone(), a.clone(), b.clone(), b.clone()];
+        assert_eq!((0..3).map(|i| index_after(&before, i, &after)).collect::<Vec<_>>(), [1, 2, 3]);
+        // The one shown left out; a list shorter than the index.
+        assert_eq!(index_after(&before, 0, &[c.clone(), b.clone()]), 0);
+        assert_eq!(index_after(&before, 5, &after), 0);
+    }
 
     /// A WMS layer's answer comes in the drawing order (#808): drawn over Countries, its feature
     /// comes first, and with topmost replaces Switzerland; drawn under the map's layers, it comes
