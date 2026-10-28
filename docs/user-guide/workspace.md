@@ -209,6 +209,19 @@ Use scripts or the assistant for parameterized commands without an interactive e
 
 ## Keyboard shortcuts
 
+**Settings › Customize › Keyboard Shortcuts** assigns multiple keys to commands and map tools.
+Click **Add…** and press the desired key combination. Escape cancels; **Assign Escape** binds Escape.
+If the combination is already in use, choose **Replace** or **Cancel**.
+Tab, Enter, Space and arrow key bindings can override their usual keyboard navigation actions.
+Click a displayed key to remove it, **Reset {key}** (for example, **Reset Ctrl+T**) to restore a default key, or **Reset All** to restore
+all defaults. These changes are saved as a user preference on this device. Copy, Cut and Paste stay
+fixed. While typing, shortcuts without Ctrl/⌘ are paused, including Shift and Alt combinations. During
+first-person navigation, unmodified shortcuts are paused except Escape, Home and Delete. Browsers may
+reserve some shortcuts. In Command Search, right-click a command and choose **Keyboard Shortcuts**
+to open it in the editor. If saved preferences are unreadable or exceed the supported limits, the
+original value is preserved and edits apply only to the current session. **Reset All** explicitly
+replaces the saved shortcuts with the defaults.
+
 See the [keyboard shortcut reference](index.md#keyboard-shortcuts) for project, map and editing
 shortcuts, macOS bindings and text-field undo behavior. **Help › Shortcuts** lists the active
 bindings in the app. Feature editing is described in [Editing](editing.md); layout deletion,
