@@ -308,6 +308,43 @@ hold. For example, the total units permitted in each district:
 gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","merge":[{"field":"units","rule":"sum"}]}}
 ```
 
+**Summary Statistics** (`summaryStatistics`) makes a standalone table of statistics: one row for
+the whole table, or one for each combination of values of the `case` fields (one field, or
+several as a list such as `["county", "year"]`). Rows are sorted by those values; records with no
+value form a group of their own, first. Statistics follow record order (`FIRST`, `LAST`,
+`CONCATENATE`) and use only the selected records when the table has a selection. Each row has the case fields, then `FREQUENCY` (the group's
+records), then a field `<STAT>_<field>` for each statistic asked for. Name the statistics in
+`statistics`, a list of (field, statistic) pairs in the order the fields should appear:
+
+```text
+gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
+```
+
+| Statistic | What it is |
+| --- | --- |
+| `COUNT` | Values that aren't empty |
+| `SUM`, `MEAN`, `MIN`, `MAX` | The usual; `MIN` and `MAX` of text compare by character code, so ISO dates order as dates |
+| `RANGE` | `MAX` − `MIN` |
+| `STD`, `VARIANCE` | Population standard deviation and variance (divided by the count) |
+| `MEDIAN` | The middle value; for an even count, the mean of the middle two |
+| `P1` to `P99` | Percentiles, interpolated linearly between ranks (as a spreadsheet's `PERCENTILE.INC`), so `P50` is the median |
+| `IQR` | `P75` − `P25` |
+| `CV` | Coefficient of variation, `STD` / `MEAN`; empty when the mean is 0 |
+| `MODE`, `MINORITY` | The most and least common value; on a tie, the lowest |
+| `UNIQUE` | Distinct values |
+| `FIRST`, `LAST` | The first and last value, in record order |
+| `CONCATENATE` | The values in record order, joined by `separator` (`, ` by default) |
+| `NULLS` | Records with no value |
+
+Every statistic but `NULLS` leaves out empty values. A text field takes `COUNT`, `MIN`, `MAX`,
+`FIRST`, `LAST`, `UNIQUE`, `CONCATENATE`, `MODE`, `MINORITY` and `NULLS`; the rest need a numeric
+field. A group with no values gets empty statistics, except a `COUNT` and `UNIQUE` of 0 (its
+`NULLS` is its `FREQUENCY`). Two output fields can't share a name, so a case field can't be called
+`FREQUENCY` or `<STAT>_<field>` for a statistic asked for. Counts
+are whole numbers, `CONCATENATE` and the statistics of a text field are text, and the others are
+decimal. Without `statistics`, `field` gives that field's `COUNT`, `SUM`, `MEAN`, `MIN`, `MAX` and
+`STD`, reading its values as numbers.
+
 <figure markdown="span">
   ![Tissot's indicatrix on the Robinson projection: circles of 800 km every 30°, stretched and sheared toward the poles](https://assets.rustgis.app/images/tissot.webp)
   <figcaption>Tissot's indicatrix on Robinson: equal circles, stretched and sheared by the projection.</figcaption>
