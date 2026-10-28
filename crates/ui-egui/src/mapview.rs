@@ -160,7 +160,8 @@ fn with_answers(map: &rustgis_engine::map::Map, info: &Value, found: Vec<Value>)
     let mut all = results_of(info);
     all.extend(found);
     // A tile layer's results show while it draws: one hidden since must not keep a later answer
-    // out. Of two layers of one name, the one drawn is the one asked.
+    // out. Of two layers of one name, the answers are placed by the one drawn (though
+    // identify.featureInfo tells its answer to the first of them, drawn or not).
     let drawn = |name: &str| map.tiles.iter().position(|t| t.name == name && t.draws());
     all.retain(|v| v["tileLayer"].as_str().is_none_or(|name| drawn(name).is_some()));
     let stack = map.stack();
@@ -2999,7 +3000,8 @@ fn follow_popup(app: &mut RustGisApp) {
     let here: Vec<bool> = results
         .iter()
         .map(|r| match home(r) {
-            Home::NoLayer => true,
+            // A tile layer's answer, while the layer draws (as `with_answers` keeps them).
+            Home::NoLayer => r["tileLayer"].as_str().is_none_or(|name| map.tiles.iter().any(|t| t.name == name && t.draws())),
             Home::LayerGone => false,
             // A streamed layer holds a window of its features: one outside it isn't gone.
             Home::Layer(l) => r["fid"].as_u64().is_none_or(|fid| l.dataset.windowed || found.contains(&(l.id, fid))),
@@ -3106,7 +3108,7 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         let before = results_of(&pp.info);
         // As the pop-up shows it: an index past the end is the last result.
         let index = pp.index.min(before.len().saturating_sub(1));
-        pp.index = index_after(&before, index, info["results"].as_array().map_or(&[][..], Vec::as_slice));
+        pp.index = index_after(&before, index, info["results"].as_array().map(Vec::as_slice).unwrap_or_default());
         pp.info = info;
     }
     if pp.asks.is_empty() && !is_found(&pp.info) {
@@ -4027,6 +4029,21 @@ mod tests {
         s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
         let v = with_answers(s.map(), &over, vec![answer("Under")]).unwrap();
         assert_eq!(shown(&v), ["Countries", "Under"], "hidden, visible");
+        // Hidden with its result in the pop-up and no answer to come: the result goes at once.
+        s.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = true);
+        let (map, opened) = (s.project.active_map, s.opened);
+        let mut app = RustGisApp::new(s);
+        let mut popup = Popup::new(over, Coord::new(8.6, 46.65), map, opened);
+        popup.index = 1;
+        app.map.popup = Some(popup);
+        app.map.popup_rev = app.session.revision.wrapping_add(1);
+        follow_popup(&mut app);
+        assert_eq!(shown(&app.map.popup.as_ref().unwrap().info), ["Over", "Countries"], "drawn, in the pop-up");
+        app.session.map_mut().tiles.iter_mut().filter(|t| t.name == "Over").for_each(|t| t.visible = false);
+        app.map.popup_rev = app.session.revision.wrapping_add(1);
+        follow_popup(&mut app);
+        let popup = app.map.popup.as_ref().unwrap();
+        assert_eq!((shown(&popup.info), popup.index), (vec!["Countries".to_string()], 0), "hidden, in the pop-up");
     }
 
     fn selection_harness() -> egui_kittest::Harness<'static, RustGisApp> {
