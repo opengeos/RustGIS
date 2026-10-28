@@ -13880,6 +13880,7 @@ fn shapefiles_too_large_to_load_whole_are_read_in_place() {
     let r = s.run("layer.addData", &json!({"path": p.display().to_string()})).unwrap();
     assert_eq!(r["features"], 20, "{r}");
     let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert!(!l.is_streamed());
     assert_eq!(l.dataset.features.len(), 20);
     for e in ["shp", "shx", "dbf", "prj", "cpg"] {
         let _ = std::fs::remove_file(p.with_extension(e));
