@@ -726,6 +726,9 @@ fn search_action(id: &str) -> Option<SearchAction> {
         "pg.connect" | "pg.addLayer" => Dialog("pgAddLayer"),
         "pg.saveEdits" => Dialog("pgSave"),
         "pg.discardEdits" => Dialog("pgDiscard"),
+        "gpkg.addLayer" => Dialog("gpkgAddLayer"),
+        "gpkg.saveEdits" => Dialog("gpkgSave"),
+        "gpkg.discardEdits" => Dialog("gpkgDiscard"),
         "layer.addZarr" => Command("ui.addZarr"),
         "layer.addLayerFile" => OpenItem("layer"),
         "layer.save" => SaveItem("layer"),
@@ -833,6 +836,7 @@ fn search_platform_disabled(id: &str, web: bool) -> Option<&'static str> {
         "project.addFolder" => Some("folder connections need the desktop app"),
         "layer.addDatabase" => Some("databases are read through DuckDB, a program the browser can't run"),
         "pg.connect" | "pg.addLayer" | "pg.saveEdits" | "pg.discardEdits" => Some("PostGIS tables are edited in the desktop app"),
+        "gpkg.addLayer" | "gpkg.saveEdits" | "gpkg.discardEdits" => Some("GeoPackage tables are edited in the desktop app"),
         _ => None,
     }
 }
@@ -1234,7 +1238,15 @@ mod tests {
 
     #[test]
     fn desktop_only_search_actions_are_disabled_only_on_the_web() {
-        for id in ["project.addFolder", "layer.addDatabase", "pg.addLayer", "pg.saveEdits"] {
+        for id in [
+            "project.addFolder",
+            "layer.addDatabase",
+            "pg.addLayer",
+            "pg.saveEdits",
+            "gpkg.addLayer",
+            "gpkg.saveEdits",
+            "gpkg.discardEdits",
+        ] {
             assert!(search_platform_disabled(id, true).is_some(), "{id} must explain its web restriction");
             assert_eq!(search_platform_disabled(id, false), None, "{id} stays available on desktop");
         }

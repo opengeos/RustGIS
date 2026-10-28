@@ -711,6 +711,13 @@ fn activate(s: &mut Session, c: &Connection, password: &str) {
     }
 }
 
+/// The password a saved database connection logs in with, best first: one given this session
+/// (typed for it); then, for a connection that keeps a saved password, the environment's for its
+/// kind (`PGPASSWORD`, `MYSQL_PWD`, `SQLCMDPASSWORD`), which never asks the store; then the saved
+/// one. A password typed for the address itself and one passed to a command are ranked above all
+/// of these by the callers. The environment never reaches a connection that isn't saved with a
+/// password, so a project can't name a new address to receive it. The flag is `true` for a saved
+/// password (the server's refusal rejects it), `false` for the others.
 #[cfg(not(target_arch = "wasm32"))]
 fn credential(s: &mut Session, c: &Connection) -> Result<Option<(rustgis_data::secrets::Secret, bool)>, String> {
     if let Some(pw) = s.database_logins.session_password(&c.id) {
@@ -718,6 +725,9 @@ fn credential(s: &mut Session, c: &Connection) -> Result<Option<(rustgis_data::s
     }
     if !c.remembered || s.database_logins.is_rejected(&c.id) {
         return Ok(None);
+    }
+    if let Some(pw) = s.database_logins.ambient(c) {
+        return Ok(Some((pw, false)));
     }
     match s.database_logins.load(c) {
         crate::connections::SavedPassword::Found(pw) => Ok(Some((pw, true))),

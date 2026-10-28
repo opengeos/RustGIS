@@ -28,8 +28,9 @@ impl DbfEncoding {
     }
 
     fn from_number(number: u16) -> Option<Self> {
-        // DOS pages go to dbase's OEM adapter; the others keep encoding_rs, because dbase's yore
-        // adapter is strict for those and can discard records containing malformed text.
+        // DOS 437, 850, 852, 861 and 865 go to dbase's OEM adapter; DOS 866 and the other pages
+        // decoded here keep encoding_rs, because dbase's yore adapter is strict for those and can
+        // discard records containing malformed text. Any other page isn't decoded (`None`).
         let encoding = match number {
             437 => return Some(Self::Oem(CodePageMark::CP437)),
             850 => return Some(Self::Oem(CodePageMark::CP850)),
@@ -216,12 +217,23 @@ mod tests {
                 CodePageMark::CP1255 => 1255,
                 CodePageMark::CP1256 => 1256,
                 CodePageMark::Utf8 => 65001,
-                // Not a language driver (0), or a page dbase names but RustGIS never decoded
-                // (620, 737, 857, 895).
-                _ => continue,
+                // Pages dbase names that RustGIS can't decode: the table names them too.
+                CodePageMark::CP620 => 620,
+                CodePageMark::CP737 => 737,
+                CodePageMark::CP857 => 857,
+                CodePageMark::CP895 => 895,
+                // Not a language driver: only 0, which the table leaves out (read as UTF-8, no note).
+                CodePageMark::Undefined => {
+                    assert_eq!(ldid, 0, "LDID 0x{ldid:02X}");
+                    continue;
+                }
+                // An ID dbase doesn't know. (No other arm: a variant a dbase update adds fails to
+                // compile here.)
+                CodePageMark::Invalid => continue,
             };
             assert_eq!(ldid_code_page(ldid), Some(before), "LDID 0x{ldid:02X}");
-            assert!(DbfEncoding::from_number(before).is_some(), "LDID 0x{ldid:02X}");
+            let decoded = !matches!(before, 620 | 737 | 857 | 895);
+            assert_eq!(DbfEncoding::from_number(before).is_some(), decoded, "LDID 0x{ldid:02X}");
         }
     }
 

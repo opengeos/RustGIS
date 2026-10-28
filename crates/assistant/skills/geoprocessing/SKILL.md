@@ -22,7 +22,7 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - selection: `selectByLocation` (`input`, `select`, `distance`, `invert`), `selectByAttributes`
      (`input`, `where`)
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
-     (`input`, `statistics`, `case`)
+     (`input`, `statistics`, `case`), `pivotTable` (`input`, `fields`, `pivot`, `value`, `statistic`)
    - conversion: `exportFeatures` (`input`, `where`)
    - density: `kernelDensity` (`input`, `field`, `radius`, `pixelSize`, `kernel`)
 2. **Run it:** use `run_tool` with layers named in `params`. The output is a new layer, and the
