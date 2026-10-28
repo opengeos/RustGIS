@@ -19396,3 +19396,25 @@ fn geolibre_file_pending_tokens_are_rejected_without_mutating_live_work() {
     assert!(crate::project::Project::from_json(&serde_json::to_string(&project).unwrap()).is_err());
     assert!(s.project.saved_text(None).is_ok());
 }
+
+#[test]
+fn geolibre_offline_snapshots_cannot_persist_or_restore_pending_downloads() {
+    let mut s = world();
+    s.run("offline.download", &json!({"name":"Completed","extent":[-180,-80,180,80]})).unwrap();
+    let mut ds = crate::data::Dataset::new("Pending", crate::data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:offline-test".into());
+    let id = s.map_mut().add_dataset(ds.clone());
+    assert!(s.run("offline.download", &json!({"name":"Pending","extent":[-180,-80,180,80]})).unwrap_err().contains("still downloading"));
+    assert_eq!(s.project.offline_areas.len(), 1);
+    assert!(s.run("offline.sync", &json!({"name":"Completed"})).unwrap_err().contains("still downloading"));
+    s.map_mut().layer_mut(id).unwrap().dataset.source = None;
+    let area = &mut s.project.offline_areas[0];
+    area.data.add_dataset(ds);
+    let raw = serde_json::to_string(&s.project).unwrap();
+    assert!(crate::project::Project::from_json(&raw).is_err());
+    assert!(s.project.saved_text(None).is_err());
+    assert!(s.run("offline.open", &json!({"name":"Completed"})).is_err());
+    let recovered: crate::project::Project = serde_json::from_str(&s.project.clone().recovery_text().unwrap()).unwrap();
+    assert!(recovered.offline_areas[0].data.layers.iter().all(|l| l.dataset.source.as_deref() != Some("geolibre-pending:offline-test")));
+    assert!(!recovered.offline_areas[0].data.layers.is_empty());
+}

@@ -256,8 +256,8 @@ mod tests {
         let mut ds = rustgis_engine::data::Dataset::new("Grid", rustgis_engine::data::GeometryType::Point, Vec::new());
         ds.source = Some("geolibre-pending:zarr-test".into());
         let layer = app.session.map_mut().add_dataset(ds);
-        // Real imports put the saved look on the reservation before the asynchronous read.
-        app.session.map_mut().layer_mut(layer).unwrap().transparency = 60.0;
+        // A user edit differs from the saved opacity (0.4), which would produce 60.0.
+        app.session.map_mut().layer_mut(layer).unwrap().transparency = 25.0;
         app.run("map.new", json!({"name":"Other"})).unwrap();
         let active = app.session.project.active_map;
         let id = app.session.download_started();
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(app.session.project.active_map, active);
         let loaded = app.session.project.maps[target].layer(layer).unwrap();
         assert!(loaded.is_raster());
-        assert_eq!(loaded.transparency, 60.0);
+        assert_eq!(loaded.transparency, 25.0);
         assert!(app.session.map().layers.is_empty());
     }
 

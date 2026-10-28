@@ -731,7 +731,7 @@ impl Project {
 
     /// Runtime download reservations cannot be reopened; refuse snapshots until they finish.
     pub(crate) fn ensure_imports_complete(&self) -> Result<(), String> {
-        for map in &self.maps {
+        for map in self.maps.iter().chain(self.offline_areas.iter().map(|area| &area.data)) {
             ensure_map_imports_complete(map)?;
         }
         Ok(())
@@ -799,7 +799,7 @@ impl Project {
     /// Text too large to open again is refused.
     pub fn recovery_text(mut self) -> Result<String, String> {
         // A recovery copy preserves completed work without persisting runtime-only reservations.
-        for map in &mut self.maps {
+        for map in self.maps.iter_mut().chain(self.offline_areas.iter_mut().map(|area| &mut area.data)) {
             let pending: std::collections::HashSet<_> = map
                 .layers
                 .iter()
