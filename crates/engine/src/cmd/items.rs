@@ -566,7 +566,7 @@ fn safe(name: &str) -> String {
 
 /// A package of the active map; `mobile` drops hidden layers and simplifies geometry.
 fn package_map(s: &Session, mobile: bool, tol: f64) -> Result<Vec<u8>, String> {
-    s.project.ensure_imports_complete()?;
+    crate::project::ensure_map_imports_complete(s.map())?;
     let mut m = embedded_map(s.map(), &mut MAX_EMBED.clone());
     if mobile {
         // Groups folded into their layers: a hidden group's layers are dropped with the others.
@@ -994,6 +994,7 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
                 Some(n) => s.project.maps.iter().find(|m| m.name.eq_ignore_ascii_case(n)).ok_or_else(|| format!("no map '{n}'"))?,
                 None => s.map(),
             };
+            crate::project::ensure_map_imports_complete(map)?;
             let mut map = embedded_map(map, &mut MAX_EMBED.clone());
             crate::project::strip_addresses(map.addresses_mut());
             (map.name.clone(), to_json(&map)?)
@@ -1001,6 +1002,9 @@ pub fn item_bytes(s: &mut Session, kind: &str, p: &Value) -> Result<(String, Vec
         "layer" => {
             let id = s.layer_id(p)?;
             let l = s.map().layer(id).ok_or("no such layer")?.clone();
+            if l.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")) {
+                return Err("this layer is still downloading; wait for it to finish before saving".into());
+            }
             let mut layer = embed_layer(l, &mut MAX_EMBED.clone());
             crate::project::strip_addresses(layer.addresses_mut().collect());
             (layer.name.clone(), to_json(&layer)?)

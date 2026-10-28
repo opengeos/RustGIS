@@ -906,7 +906,7 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
                 rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "zip"])
             } else if purpose == "project" {
                 rfd::AsyncFileDialog::new().add_filter(
-                    rustgis_ui_egui::tl!("Projects and JSON data (RustGIS, QGIS, GeoLibre)"),
+                    rustgis_ui_egui::tl!("Projects and JSON data (RustGIS, GeoLibre)"),
                     &["rgis", "rgisx", "rgispkg", "geolibre", "json"],
                 )
             } else if purpose == "qgisProject" {

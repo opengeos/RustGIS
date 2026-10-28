@@ -19289,6 +19289,8 @@ fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
     }
     let recovered = s.project.clone().recovery_text().unwrap();
     assert!(!recovered.contains("geolibre-pending:"));
+    let recovered: crate::project::Project = serde_json::from_str(&recovered).unwrap();
+    assert!(recovered.maps[recovered.active_map].tiles.iter().all(|tile| tile.name != "Pending archive"));
     assert!(s.map().tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:")));
 }
 
@@ -19328,7 +19330,7 @@ fn geolibre_archive_completion_preserves_pending_tile_edits() {
     tile.visible = true;
     tile.opacity = 0.5;
     s.map_mut().tiles.insert(0, tile);
-    s.run("map.setTiles", &json!({"index":0,"visible":false,"opacity":0.25,"rename":"Edited"})).unwrap();
+    s.run("map.setTiles", &json!({"index":0,"visible":false,"opacity":0.25,"rename":"Edited","blend":"multiply"})).unwrap();
     let download = s.download_started();
     s.download_landed(download, std::fs::read(path).unwrap());
     let out = s.run("layer.addDownload", &json!({"id":download,"url":"https://example.org/archive.mbtiles","geolibreLayer":{"token":token,"record":{"type":"mbtiles","visible":true,"opacity":0.5}}})).unwrap();
@@ -19336,6 +19338,29 @@ fn geolibre_archive_completion_preserves_pending_tile_edits() {
     assert_eq!(tile.name, "Edited");
     assert!(!tile.visible);
     assert_eq!(tile.opacity, 0.25);
+    assert_eq!(tile.blend.code(), "multiply");
     assert!(!tile.id.starts_with("geolibre-pending:"));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn geolibre_item_exports_check_only_the_selected_map_or_layer() {
+    let mut s = world();
+    let clean = s.map().name.clone();
+    s.run("map.new", &json!({"name":"Pending map"})).unwrap();
+    let mut ds = crate::data::Dataset::new("Pending", crate::data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:export-test".into());
+    let pending = s.map_mut().add_dataset(ds);
+    assert!(crate::cmd::items::item_bytes(&mut s, "map", &json!({})).unwrap_err().contains("still downloading"));
+    assert!(crate::cmd::items::item_bytes(&mut s, "layer", &json!({"layer":pending})).unwrap_err().contains("still downloading"));
+    assert!(crate::cmd::items::item_bytes(&mut s, "map", &json!({"map":clean})).is_ok());
+    s.project.active_map = 0;
+    for kind in ["mapPackage", "mobilePackage"] {
+        assert!(crate::cmd::items::item_bytes(&mut s, kind, &json!({})).is_ok());
+    }
+    assert!(crate::cmd::items::item_bytes(&mut s, "projectPackage", &json!({})).unwrap_err().contains("still downloading"));
+    s.project.active_map = 1;
+    for kind in ["mapPackage", "mobilePackage"] {
+        assert!(crate::cmd::items::item_bytes(&mut s, kind, &json!({})).unwrap_err().contains("still downloading"));
+    }
 }

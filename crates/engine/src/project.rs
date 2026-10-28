@@ -11,6 +11,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::GpRecord;
 
+/// A map export cannot keep runtime-only download reservations, even in a larger project.
+pub(crate) fn ensure_map_imports_complete(map: &Map) -> Result<(), String> {
+    if map.layers.iter().any(|layer| layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")))
+        || map.tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:"))
+    {
+        return Err("GeoLibre layers are still downloading; wait for them to finish before saving".into());
+    }
+    Ok(())
+}
+
 pub const EXTENSION: &str = "rgis";
 /// The project extension earlier versions wrote; such files still open.
 pub const LEGACY_EXTENSION: &str = "rgisx";
@@ -721,11 +731,8 @@ impl Project {
 
     /// Runtime download reservations cannot be reopened; refuse snapshots until they finish.
     pub(crate) fn ensure_imports_complete(&self) -> Result<(), String> {
-        if self.maps.iter().any(|map| {
-            map.layers.iter().any(|layer| layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")))
-                || map.tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:"))
-        }) {
-            return Err("GeoLibre layers are still downloading; wait for them to finish before saving".into());
+        for map in &self.maps {
+            ensure_map_imports_complete(map)?;
         }
         Ok(())
     }

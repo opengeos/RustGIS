@@ -98,7 +98,21 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
     if array(&v, "bookmarks").len() > MAX_ITEMS {
         report.skipped("", "bookmarks past the first 1000");
     }
-    let bookmarks = array(&v, "bookmarks").iter().take(MAX_ITEMS).map(|b| {
+    let groups = array(&v, "layerGroups")
+        .iter()
+        .filter(|group| {
+            if group.is_object() {
+                true
+            } else {
+                report.skipped("", "invalid group record");
+                false
+            }
+        })
+        .cloned()
+        .collect();
+    let bookmarks = array(&v, "bookmarks").iter().take(MAX_ITEMS).filter(|bookmark| {
+        if bookmark.is_object() { true } else { report.skipped("", "invalid bookmark record"); false }
+    }).map(|b| {
         let view = serde_json::json!({"center": [number(b,"lng",0.0), number(b,"lat",0.0)], "zoom": b.get("zoom"), "bearing": b.get("bearing"), "pitch": b.get("pitch")});
         Bookmark::new(string(b,"name"), camera(&view))
     }).collect();
@@ -106,7 +120,7 @@ pub fn read_project(text: &str, report: &mut Report) -> Result<Project, String> 
         name,
         camera: camera(v.get("mapView").unwrap_or(&Value::Null)),
         layers,
-        groups: array(&v, "layerGroups").to_vec(),
+        groups,
         bookmarks,
         basemap: v.get("basemapStyleUrl").and_then(Value::as_str).unwrap_or("https://tiles.openfreemap.org/styles/liberty").to_string(),
         basemap_visible: boolean(&v, "basemapVisible", true),
@@ -158,6 +172,17 @@ pub fn is_project_file(name: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn geolibre_non_object_groups_and_bookmarks_are_reported_and_skipped() {
+        let text = json!({"version":"0.2.0","name":"Malformed records","mapView":{},"layers":[],"layerGroups":[null,1,{"id":"g","name":"Valid group"}],"bookmarks":[false,"bad",{"name":"Valid bookmark","lng":1,"lat":2}]}).to_string();
+        let mut report = Report::default();
+        let project = read_project(&text, &mut report).unwrap();
+        assert_eq!(project.groups.len(), 1);
+        assert_eq!(project.bookmarks.len(), 1);
+        assert!(report.notes.iter().any(|note| note.text == "invalid group record"));
+        assert!(report.notes.iter().any(|note| note.text == "invalid bookmark record"));
+    }
 
     #[test]
     fn geolibre_camera_and_top_level_style_override() {
