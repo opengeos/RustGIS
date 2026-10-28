@@ -327,7 +327,7 @@ pub fn not_covered(ds: &Dataset, rows: &[usize], by: &Dataset) -> Checked {
         };
         for c in pts {
             // Unfolded, as the polygons are (see `polygons`), so a point across the antimeridian is found.
-            let m = rustgis_geom::lonlat_to_merc_unfolded(c);
+            let m = rustgis_geom::lonlat_to_merc(c);
             let p = geo::Point::new(m.x, m.y);
             if !polys.iter().any(|(_, mp, bb)| rects_touch(bb, &geo::Rect::new(p.0, p.0)) && mp.contains(&p)) {
                 out.push(TopologyError { rows: vec![*r], at: c });

@@ -2,12 +2,12 @@
 
 use geo::{Coord as GC, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon};
 use rustgis_data::Geometry;
-use rustgis_geom::{Coord, lonlat_to_merc_unfolded, merc_to_lonlat};
+use rustgis_geom::{Coord, lonlat_to_merc, merc_to_lonlat};
 
 /// Projects without folding the longitude: a ring kept unwrapped across the antimeridian (as a
 /// geodesic buffer is) stays one piece, rather than folding its far vertex across the world.
 fn gc(c: Coord) -> GC<f64> {
-    let m = lonlat_to_merc_unfolded(c);
+    let m = lonlat_to_merc(c);
     GC { x: m.x, y: m.y }
 }
 
