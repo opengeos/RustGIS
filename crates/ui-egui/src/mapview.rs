@@ -682,7 +682,8 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
         draft,
         tiles: 0,
         sources: rustgis_engine::map::source::generation(),
-        shown: shown_layers(&app.session),
+        // Read only for tiled flat maps (see `keeps_frame`).
+        shown: if app.session.map().tiles.is_empty() { 0 } else { shown_layers(&app.session) },
     };
     // Tiles arriving draw the map again, at most a few times a second.
     static WAKER: std::sync::Once = std::sync::Once::new();
@@ -4174,14 +4175,16 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         // Nothing listens there: the tiles fail, the map still draws.
         app.run("map.addTiles", json!({"url": "http://127.0.0.1:9/{z}/{x}/{y}.png", "name": "Offline"})).expect("tile layer");
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_max_steps(10_000).build_ui_state(
-            |ui, app: &mut RustGisApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        // Short steps: a kept frame gives way to a preview after `KEEP_FRAME_S` of the harness's time.
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_step_dt(0.0005).with_max_steps(10_000).build_ui_state(
+                |ui, app: &mut RustGisApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         let exact = |h: &mut egui_kittest::Harness<'_, RustGisApp>, what: &str| {
             let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
             loop {
@@ -4203,6 +4206,23 @@ mod tests {
         let kept = h.state().map.key.expect("a frame");
         assert_eq!((kept.rev, kept.draft), (before.rev, before.draft), "a coarse preview replaced the frame on screen");
         exact(&mut h, "the exact frame of the change did not arrive");
+        // Changed again while the exact frame of a change is drawn: that frame, of an earlier
+        // change, is shown when it finishes, before the frame of the latest.
+        h.state_mut().map.render_ms = 20;
+        let shown = h.state().map.key.expect("a frame").rev;
+        h.state_mut().run("layer.transparency", json!({"layer": "Countries", "value": 20})).expect("transparency");
+        h.step();
+        let first = h.state().session.revision;
+        assert!(h.state().map.tilt_settle.busy(), "the exact frame of the change is being drawn");
+        h.state_mut().run("layer.transparency", json!({"layer": "Countries", "value": 30})).expect("transparency");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while h.state().map.key.is_some_and(|k| k.rev == shown) {
+            assert!(std::time::Instant::now() < end, "no frame of the changes arrived");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            h.step();
+        }
+        assert_eq!(h.state().map.key.map(|k| k.rev), Some(first), "the earlier change's frame was shown first");
+        exact(&mut h, "the exact frame of the latest change did not arrive");
         // Hiding a layer isn't kept: its preview shows at once.
         h.state_mut().map.render_ms = 20;
         h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide");
