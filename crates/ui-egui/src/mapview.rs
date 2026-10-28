@@ -728,21 +728,22 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
     // cached flat picture keeps navigation and layer changes responsive while they finish.
     let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
-    // A change to a tiled flat map's contents (a layer's colour or transparency) keeps its frame
-    // on screen, labels and all, until the exact frame arrives (#1051).
-    let keep_frame =
+    // A change to a tiled flat map's contents that leaves the same layers shown (a layer's colour
+    // or transparency, its labels, an edit) keeps the frame on screen, labels and all, until the
+    // exact frame arrives (#1051).
+    let restyled =
         tiled_flat && (app.map.texture.is_some() || app.map.gpu_frame.is_some()) && keeps_frame(app.map.key, key, app.map.render_ms);
-    // At most `KEEP_FRAME_MS` from when the frame went out of date: the exact frame of a change
+    // At most `KEEP_FRAME_S` from when the frame went out of date: the exact frame of a change
     // can take longer than the last one did. A frame shown meanwhile starts the wait again.
-    if !keep_frame {
+    if !restyled {
         app.map.kept = None;
     } else if app.map.kept.is_none_or(|(k, _)| Some(k) != app.map.key) {
         app.map.kept = app.map.key.map(|k| (k, time));
     }
     let waited = app.map.kept.map_or(0.0, |(_, at)| time - at);
-    let keep_frame = keep_frame && waited <= KEEP_FRAME_MS as f64 / 1000.0;
+    let keep_frame = restyled && waited <= KEEP_FRAME_S;
     if keep_frame {
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((KEEP_FRAME_MS as f64 / 1000.0 - waited).max(0.0) + 0.01));
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((KEEP_FRAME_S - waited).max(0.0) + 0.01));
     }
     // Labels belong to the rendered contents. When visibility or data change, old labels
     // must disappear with their layers while a preview stands in for the exact frame.
@@ -3629,6 +3630,7 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 /// it on screen until the next one arrives, rather than showing a coarse preview (#1051); and how
 /// long it is kept at most, should the next one take longer.
 const KEEP_FRAME_MS: u64 = 300;
+const KEEP_FRAME_S: f64 = KEEP_FRAME_MS as f64 / 1000.0;
 
 /// Which project and map are open and which of the map's layers, groups and tile layers are
 /// shown, in order: a frame of other layers (one hidden, added, removed or moved since, another
@@ -3646,7 +3648,7 @@ fn shown_layers(session: &rustgis_engine::Session) -> u64 {
         (g.id, g.visible, &g.children).hash(&mut h);
     }
     for t in &map.tiles {
-        (&t.name, &t.url, t.visible).hash(&mut h);
+        (&t.name, &t.url, t.visible, t.over).hash(&mut h);
     }
     h.finish()
 }
@@ -3658,8 +3660,8 @@ fn later(a: u64, b: u64) -> bool {
 
 /// Whether a change to the map's contents keeps the frame on screen (`shown`) until the exact
 /// frame for `key` arrives, instead of a coarse preview of the whole map: the view and the layers
-/// shown are the same (a layer's colour or transparency changed, say) and its frames are quick to
-/// draw (`render_ms`). A preview of a tiled map drew the basemap coarsely too, so dragging a
+/// shown are the same (a layer's colour, transparency, symbology or labels changed, or its
+/// features were edited) and its frames are quick to draw (`render_ms`). A preview of a tiled map drew the basemap coarsely too, so dragging a
 /// layer's colour or transparency slider made the whole map flicker between blurry and sharp.
 fn keeps_frame(shown: Option<Key>, key: Key, render_ms: u64) -> bool {
     render_ms <= KEEP_FRAME_MS && shown.is_some_and(|s| later(key.rev, s.rev) && (s.cam, s.size, s.shown) == (key.cam, key.size, key.shown))
@@ -4139,6 +4141,22 @@ mod tests {
         h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide countries");
         h.step();
         assert!(h.state().map.labels.is_empty(), "the preview kept labels from the old visibility state");
+    }
+
+    /// A frame is kept only through changes that leave the same layers shown in the same order.
+    #[test]
+    fn the_shown_layers_change_with_visibility_order_and_tile_placement_not_style() {
+        let mut app = RustGisApp::with_sample();
+        app.run("map.addTiles", json!({"url": "http://127.0.0.1:9/{z}/{x}/{y}.png", "name": "Offline"})).expect("tile layer");
+        let before = shown_layers(&app.session);
+        app.run("layer.transparency", json!({"layer": "Countries", "value": 50})).expect("transparency");
+        assert_eq!(shown_layers(&app.session), before, "a style change");
+        let top = app.session.map().layers.first().map(|l| l.id);
+        app.session.map_mut().tiles[0].over = top;
+        assert_ne!(shown_layers(&app.session), before, "a tile layer moved over a map layer");
+        app.session.map_mut().tiles[0].over = None;
+        app.run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide");
+        assert_ne!(shown_layers(&app.session), before, "a layer hidden");
     }
 
     /// #1051: changing a layer's transparency over a tiled basemap kept the exact frame on
