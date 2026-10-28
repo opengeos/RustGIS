@@ -9200,15 +9200,35 @@ fn wms_layers_with_time() {
     s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
     let requests = asked(&mut s);
     assert!(requests.len() == 1 && requests[0].ends_with("&TIME=1990"), "{requests:?}");
-    // A second layer follows the slider that is on (`"time": true`, as for Zarr): its steps stay.
+    // A second layer follows the slider that is on (`"time": true`, as for Zarr): its steps stay,
+    // and it says the service may have no map at some of them.
+    let mark = s.notice_mark();
     s.run("service.add", &json!({"url": url, "layer": "decades", "text": WMS, "time": true})).unwrap();
     assert_eq!(s.map().time.as_ref().unwrap().steps(), slider.steps());
+    assert!(s.notices_since(mark).is_empty(), "1990 is one of its times: {:?}", s.notices_since(mark));
     assert!(tile(&s, "Decades").ends_with("&TIME=1990"), "{}", tile(&s, "Decades"));
     // Kept with the project, still following.
     let text = serde_json::to_string(&s.project).unwrap();
     let mut reopened = Session::new(serde_json::from_str(&text).unwrap());
     reopened.run("time.goTo", &json!({"date": "2000"})).unwrap();
     assert!(tile(&reopened, "Population").ends_with("&TIME=2000"), "{}", tile(&reopened, "Population"));
+    // One period: a regular slider, by its period, at the layer's default.
+    let mut every = Session::new(Project::default());
+    every.run("service.add", &json!({"url": url, "layer": "decades", "text": WMS, "time": "slider"})).unwrap();
+    let t = every.map().time.clone().unwrap();
+    assert_eq!((t.start, t.end, t.unit.code(), t.interval, t.current), (year(1990), year(2020), "year", 10, year(2020)));
+    assert_eq!(t.steps().len(), 4);
+    assert!(tile(&every, "Decades").ends_with("&TIME=2020"), "{}", tile(&every, "Decades"));
+    // A slider on at a time the layer doesn't list: the layer says so.
+    let mut other = Session::new(Project::default());
+    other.run("time.set", &json!({"start": "2025", "end": "2026", "unit": "year"})).unwrap();
+    let mark = other.notice_mark();
+    other.run("service.add", &json!({"url": url, "layer": "decades", "text": WMS, "time": "slider"})).unwrap();
+    assert!(
+        other.notices_since(mark).iter().any(|n| n.text.contains("Decades: follows the time slider's steps")),
+        "{:?}",
+        other.notices_since(mark)
+    );
     // A layer without times has none to follow it with.
     let e = s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "time": "slider"})).unwrap_err();
     assert!(e.contains("no time to follow"), "{e}");

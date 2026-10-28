@@ -58,13 +58,15 @@ const MAX_TIME_VALUES: usize = 1000;
 const MAX_SLIDER_STEPS: usize = 20_000;
 
 /// The date formats a layer's times may be written in, as `{date:…}` takes them: years, compact
-/// dates (swisstopo's `19951231`), months, dates, date-times.
-const DATE_FORMATS: [&str; 8] = [
+/// dates (swisstopo's `19951231`), months, dates, date-times (with milliseconds, as GeoServer and
+/// ncWMS write them, always zero there).
+const DATE_FORMATS: [&str; 9] = [
     "YYYY",
     "YYYYMMDD",
     "YYYY-MM",
     "YYYY-MM-DD",
     "YYYY-MM-DD[T]HH:mm:ss[Z]",
+    "YYYY-MM-DD[T]HH:mm:ss[.000Z]",
     "YYYY-MM-DD[T]HH:mm[Z]",
     "YYYY-MM-DD[T]HH:mm:ss",
     "YYYY-MM-DD[T]HH:mm",
@@ -75,7 +77,7 @@ const DATE_FORMATS: [&str; 8] = [
 const LATEST_STAND_IN: f64 = 32_503_680_000_000.0;
 
 /// How a layer's times go on the time slider: the format they are written in (`{date:…}`'s), the
-/// slider's steps, and the time it starts at (the layer's default, when it is a date).
+/// slider's steps, and the time it starts at (the layer's default, else its latest).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SliderTime {
     pub format: &'static str,
@@ -115,6 +117,20 @@ fn period_step(p: &str) -> Option<(crate::time::Unit, u32)> {
     }
 }
 
+impl SliderTime {
+    /// Whether `t` is one of its steps (each counted from the start, as the slider counts them).
+    pub fn has(&self, t: f64) -> bool {
+        match &self.steps {
+            SliderSteps::Dates(dates) => dates.contains(&t),
+            SliderSteps::Every { start, end, unit, interval } => (0i64..)
+                .take(MAX_SLIDER_STEPS)
+                .map(|i| crate::time::add(*start, *unit, i * i64::from(*interval)))
+                .take_while(|s| s <= end)
+                .any(|s| s == t),
+        }
+    }
+}
+
 impl LayerTime {
     /// Its times on the time slider; `None` when they aren't dates it can step to (`current`
     /// alone, or written in no format of [`DATE_FORMATS`]).
@@ -150,10 +166,15 @@ impl LayerTime {
                 for v in values {
                     if v.contains('/') {
                         let Some((a, z, unit, n)) = range(v) else { continue };
-                        let mut t = a;
-                        while t <= z && dates.len() <= MAX_SLIDER_STEPS {
+                        // Each step from the start, as the slider counts them: a month-end range keeps
+                        // to month ends (31 January, 29 February, 31 March), not one day earlier
+                        // after February.
+                        for i in 0i64.. {
+                            let t = crate::time::add(a, unit, i * i64::from(n));
+                            if t > z || dates.len() > MAX_SLIDER_STEPS {
+                                break;
+                            }
                             dates.push(t);
-                            t = crate::time::add(t, unit, i64::from(n));
                         }
                     } else if let Some(t) = written_as(v, format) {
                         dates.push(t);
@@ -170,7 +191,13 @@ impl LayerTime {
                 SliderSteps::Dates(dates)
             }
         };
-        Some(SliderTime { format, steps, at: written_as(&self.default, format) })
+        // At its default; one that isn't a date (`current`, swisstopo's `99991231`), its latest.
+        let latest = match &steps {
+            SliderSteps::Dates(dates) => dates.last().copied(),
+            SliderSteps::Every { end, .. } => Some(*end),
+        };
+        let at = written_as(&self.default, format).or(latest);
+        Some(SliderTime { format, steps, at })
     }
 }
 
@@ -3591,7 +3618,7 @@ mod tests {
         let photos = lt("99991231", &["19291231", "19341231", "99991231"]).slider().unwrap();
         assert_eq!(
             (photos.format, &photos.steps, photos.at),
-            ("YYYYMMDD", &SliderSteps::Dates(vec![ms("1929-12-31"), ms("1934-12-31")]), None)
+            ("YYYYMMDD", &SliderSteps::Dates(vec![ms("1929-12-31"), ms("1934-12-31")]), Some(ms("1934-12-31")))
         );
         // Date-times, filled back to exactly the times listed (the service takes no other).
         let ndvi = lt("2026-08-31T23:59:59Z", &["2025-08-31T23:59:59Z", "2026-08-31T23:59:59Z"]).slider().unwrap();
@@ -3606,6 +3633,14 @@ mod tests {
                 format!("https://wms.example.org/?TIME={listed}")
             );
         }
+        // Month ends in a list stay month ends; times with milliseconds (GeoServer's, ncWMS's).
+        let months = lt("2024-04-30", &["2023-12-31", "2024-01-31/2024-04-30/P1M"]).slider().unwrap();
+        let days = |ds: &[&str]| SliderSteps::Dates(ds.iter().map(|d| ms(d)).collect());
+        assert_eq!(months.steps, days(&["2023-12-31", "2024-01-31", "2024-02-29", "2024-03-31", "2024-04-30"]));
+        let geoserver = lt("2024-01-03T00:00:00.000Z", &["2024-01-01T00:00:00.000Z/2024-01-03T00:00:00.000Z/P1D"]).slider().unwrap();
+        assert_eq!(geoserver.format, "YYYY-MM-DD[T]HH:mm:ss[.000Z]");
+        assert_eq!(geoserver.steps, every("2024-01-01", "2024-01-03", Unit::Day, 1));
+        assert_eq!(fill_template("TIME={date:YYYY-MM-DD[T]HH:mm:ss[.000Z]}", ms("2024-01-02")), "TIME=2024-01-02T00:00:00.000Z");
         // No dates to step to.
         assert_eq!(lt("current", &["current"]).slider(), None);
         assert_eq!(lt("2024", &[]).slider(), None);

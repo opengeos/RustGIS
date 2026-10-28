@@ -433,6 +433,18 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             if let Some(at) = slider.as_ref().filter(|_| fresh).and_then(|st| st.at) {
                 super::time::set(s, &json!({"date": at}))?;
             }
+            // A slider already on keeps its steps: the service may have no map for some of them.
+            let current = s.map().time.as_ref().map(|t| t.current);
+            if let (Some(st), Some(now), false) = (&slider, current, fresh)
+                && !st.has(now)
+            {
+                s.notify(
+                    format!(
+                        "{name}: follows the time slider's steps, and its service lists other times, so it may draw nothing at some of them"
+                    ),
+                    false,
+                );
+            }
             zoom(s);
             Ok(r)
         }
