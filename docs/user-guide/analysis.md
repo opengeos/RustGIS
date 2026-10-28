@@ -110,6 +110,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 | Zonal Statistics | `zonalStats` | Analysis › Raster |
+| Kernel Density | `kernelDensity` | Analysis › Density |
 
 **Vector to PMTiles** (`vectorToPmtiles`) writes a single-layer MVT archive in standard Web
 Mercator. Choose `minZoom` and `maxZoom` from 0 to 16; `sourceLayer` defaults to the input
