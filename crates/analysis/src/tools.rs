@@ -1034,20 +1034,22 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Clip: {n} features kept"))
 }
 
-/// Erase: each input feature's part outside the union of the erase polygons, as [`part`] gives it
-/// (a point on an edge, or a line along one, counts as inside and is erased). Features left with
-/// nothing, or without geometry, are left out; the input must have geometry.
+/// Erase: each input feature's part outside every erase polygon, as [`cut`] gives it (a point on
+/// an edge, or a line along one, counts as inside and is erased). Only the erase polygons whose
+/// extent meets a feature's are tried, and a feature none of them overlaps is kept as it is.
+/// Features left with nothing, or without geometry, are left out; the input must have geometry.
 fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
         return Err(format!("'{}' has no geometry", ds.name));
     }
-    let mask = union_of(inp, p, "erase")?;
+    let (_, zones) = overlay_zones(inp, p, "erase")?;
+    let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Erase", ds.name)), ds.geometry_type);
     out.crs = ds.crs;
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(rest) = f.geometry.as_ref().and_then(|g| part(&dissolved(g), &mask, false)) {
+        if let Some(rest) = f.geometry.as_ref().and_then(|g| cut(g, &zones, &index, true).1) {
             out.push_next(Some(rest), f.attrs.clone());
         }
     }
@@ -1299,8 +1301,8 @@ fn converted(v: &Value, ty: FieldType) -> Value {
 /// exactly, else ignoring case; converted by [`converted`]), the input's other fields empty. The
 /// output has the input's fields only. Input features without geometry, and those no update
 /// polygon overlaps, are kept as they are; update features without geometry are left out, and
-/// update polygons that overlap each other each come out whole. An input field that two update
-/// fields match, ignoring case, is an error rather than a guess.
+/// update polygons that overlap each other each come out whole. An input field that no update
+/// field matches exactly, but two match ignoring case, is an error rather than a guess.
 fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type != GeometryType::Polygon {
@@ -1444,7 +1446,7 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut msg = format!("Split: {} layers", layers.len());
     if empty > 0 {
-        msg.push_str(&format!(" ({empty} split areas held no features)"));
+        msg = format!("{msg} ({empty} split areas held no features)");
     }
     Ok(ToolResult { output: Output::Layers(layers), messages: vec![msg] })
 }
@@ -5033,6 +5035,27 @@ mod tests {
     }
 
     #[test]
+    fn erase_keeps_a_feature_no_erase_polygon_overlaps_as_it_is() {
+        // Two overlapping squares as one parcel, far from the erase square; and a triangle whose
+        // extent meets the erase square's but whose shape doesn't reach it.
+        let ring = |x: f64| {
+            vec![Coord::new(x, 10.0), Coord::new(x + 2.0, 10.0), Coord::new(x + 2.0, 12.0), Coord::new(x, 12.0), Coord::new(x, 10.0)]
+        };
+        let overlapping = Geometry::Polygon(vec![vec![ring(0.0)], vec![ring(1.0)]]);
+        let triangle =
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(4.0, 0.0), Coord::new(0.0, 4.0), Coord::new(0.0, 0.0)]]]);
+        let mut parcels = Dataset::new("parcels", GeometryType::Polygon, vec![]);
+        parcels.push(Some(overlapping.clone()), vec![]);
+        parcels.push(Some(triangle.clone()), vec![]);
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        zones.push(Some(sq(3.0, 3.0, 1.0)), vec![]);
+        let m = Map(HashMap::from([("parcels".to_string(), parcels), ("zones".to_string(), zones)]));
+        let out = layer(crate::run("erase", &m, &serde_json::json!({"input": "parcels", "erase": "zones"})).unwrap());
+        let got: Vec<Option<&Geometry>> = out.features.iter().map(|f| f.geometry.as_ref()).collect();
+        assert_eq!(got, [Some(&overlapping), Some(&triangle)], "copied as they are, parts and coordinates");
+    }
+
+    #[test]
     fn erase_needs_an_input_with_geometry() {
         let mut m = inputs();
         m.0.insert("table".into(), Dataset::new("table", GeometryType::None, vec![]));
@@ -5068,6 +5091,9 @@ mod tests {
         let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "row", "split": "zones", "field": "v"})).unwrap());
         let layers: Vec<(&str, usize)> = out.iter().map(|d| (d.name.as_str(), d.features.len())).collect();
         assert_eq!(layers, [("row_0.000001", 1), ("row_0.000001", 1), ("row_0", 2)]);
+        // Each float layer holds the point in its own zone: 0.0000012's at x 0.25, 0.0000014's at 0.75.
+        let x = |d: &Dataset| d.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.extent().min_x).collect::<Vec<_>>();
+        assert_eq!((x(&out[0]), x(&out[1])), (vec![0.25], vec![0.75]));
     }
 
     #[test]
@@ -5080,6 +5106,19 @@ mod tests {
         m.0.insert("zones".into(), zones);
         let e = crate::run("split", &m, &serde_json::json!({"input": "pts", "split": "zones"})).unwrap_err();
         assert!(e.contains("at most"), "{e}");
+    }
+
+    #[test]
+    fn split_accepts_exactly_max_split_areas() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
+        for i in 0..MAX_SPLIT_AREAS {
+            zones.push_next(Some(sq(f64::from(i as u32 % 100), f64::from(i as u32 / 100), 0.5)), vec![]);
+        }
+        m.0.insert("zones".into(), zones);
+        // (0.5, 0.5) and (1.5, 1.5) fall in the first and 102nd zones' corners; the rest hold nothing.
+        let r = crate::run("split", &m, &serde_json::json!({"input": "pts", "split": "zones"})).unwrap();
+        assert!(r.messages[0].contains("held no features"), "{:?}", r.messages);
     }
 
     /// Near's four fields of row `r`: the near feature's id, the distance and the point.

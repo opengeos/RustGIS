@@ -247,7 +247,8 @@ named by `output`, and `<output>_variance`.
 
 **Erase** (`erase`) removes from `input` features (points, lines or polygons) their parts inside
 the `erase` polygons. An erase polygon's edge counts as inside it, as for Clip, so a point on the
-edge or a stretch of line along it is erased; features left with nothing are left out.
+edge or a stretch of line along it is erased; features left with nothing are left out, and one
+no erase polygon overlaps is kept as it is.
 
 **Intersect** (`intersect`) splits `input` features by the polygons of `overlay`: each part of an
 input feature inside an overlay polygon becomes a feature with the attributes of both, the input's
@@ -285,12 +286,12 @@ feature without geometry is kept as it is, with empty overlay attributes, so no 
 
 **Update** (`update`) replaces part of a polygon layer with another: each `input` polygon's part
 outside every `update` polygon keeps its attributes, and each update polygon is then added whole.
-The output has the input's fields only. An update polygon's values go into the input's fields of
-the same name (matched exactly, else ignoring case; converted to the field's type, so text that isn't a number
-becomes empty in a numeric field); the input's other fields are left empty. An input field that
-two update fields match, ignoring case, stops the tool rather than pick one. An input polygon no
-update polygon overlaps, or one without geometry, is kept as it is. Update polygons that overlap
-each other each come out whole, so their overlap comes out twice.
+The output has the input's fields only. An update polygon's values go into the input's fields of the
+same name (matched exactly, else ignoring case; converted to the field's type, so text that isn't a
+number becomes empty in a numeric field); the input's other fields are left empty. An input field
+that no update field matches exactly, but two match ignoring case, stops the tool rather than pick
+one. An input polygon no update polygon overlaps, or one without geometry, is kept as it is. Update
+polygons that overlap each other each come out whole, so their overlap comes out twice.
 
 ```text
 gp.run={"tool":"update","params":{"input":"parcels","update":"resurveyed_parcels"}}
