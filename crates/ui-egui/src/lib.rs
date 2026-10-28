@@ -1690,6 +1690,9 @@ impl RustGisApp {
                 );
                 self.session.notify(text, true);
             }
+            // A probe still under way is for an address added to the old project: dropped, so
+            // its layer never lands in the new one.
+            self.ui.cog_probes.clear();
         }
         // Undo and redo can move vertices: an index chosen before may now name another vertex.
         // A step moved or deleted, from the pane, Command Search, the assistant or a script: the
@@ -2350,9 +2353,17 @@ impl RustGisApp {
                 }
                 // A GeoTIFF, FlatGeobuf or GeoParquet: its header (or footer) first, off the
                 // frame; one that can be read in place is, another is downloaded (see
-                // `poll_downloads`).
+                // `poll_downloads`). An address without a file name (an API answering with a
+                // file, such as Vantor's `…/geotiff?…`) is probed as a GeoTIFF too, and downloaded
+                // as before when it doesn't answer as one.
                 let remote = rustgis_engine::data::source::is_remote_name(url);
-                if (remote || rustgis_engine::cmd::layer::is_tiff_url(url)) && p.get("whole").and_then(Value::as_bool) != Some(true) {
+                let tiff = rustgis_engine::cmd::layer::is_tiff_url(url);
+                let unnamed = !remote
+                    && !tiff
+                    && rustgis_engine::cmd::layer::is_unnamed_url(url)
+                    && matches!(p.get("as"), None | Some(Value::Null))
+                    && ["service", "coverage"].iter().all(|k| p.get(*k).and_then(Value::as_bool) != Some(true));
+                if (remote || tiff || unnamed) && p.get("whole").and_then(Value::as_bool) != Some(true) {
                     let slot: Slot<Result<bool, String>> = Slot::default();
                     let land = slot.clone();
                     if remote {
@@ -2370,7 +2381,10 @@ impl RustGisApp {
                     } else {
                         rustgis_engine::render::rustgis_tiles::cog::probe(
                             url,
-                            Box::new(move |r| *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r)),
+                            Box::new(move |r| {
+                                let r = if unnamed { Ok(r.unwrap_or(false)) } else { r };
+                                *land.lock().unwrap_or_else(|e| e.into_inner()) = Some(r);
+                            }),
                         );
                     }
                     // An address read through a saved S3 connection is said as the address it wraps.
@@ -3398,6 +3412,10 @@ impl RustGisApp {
             let url = p.get("url").and_then(Value::as_str).unwrap_or("").to_string();
             match r {
                 Ok(true) => {
+                    // A GeoTIFF by its first bytes, whatever its address is named.
+                    if !rustgis_engine::data::source::is_remote_name(&url) {
+                        p["cog"] = json!(true);
+                    }
                     let before = self.session.sources.generation;
                     if self.run("layer.addUrl", p).is_ok() {
                         connectiontree::name_recent(self, before, origin.as_deref());
