@@ -165,7 +165,7 @@ fn with_answers(map: &rustgis_engine::map::Map, info: &Value, found: Vec<Value>)
         drawn.and_then(|d| stack.iter().position(|o| *o == d)).unwrap_or(usize::MAX)
     };
     // Stable: each layer's results keep the order identify or the service gave them.
-    all.sort_by_key(|v| place(v));
+    all.sort_by_cached_key(place);
     if map.popup_mode == rustgis_engine::map::PopupMode::Topmost {
         let top = all.first().map(place);
         all.retain(|v| Some(place(v)) == top);
@@ -3041,10 +3041,12 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let mut found = Vec::new();
     let mut next = Vec::new();
-    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer);
+    // Only layers drawn are asked, and only their answers are shown: one hidden while its answer
+    // came would otherwise take the pop-up from a feature in view.
+    let exists = |app: &RustGisApp, layer: &str| app.session.map().tiles.iter().any(|t| t.name == layer && t.draws());
     for (layer, also, capabilities, request, r) in landed {
-        // Layers removed or renamed while the answer came: nothing to show, nothing to tell. The
-        // first of a service's layers still there takes the capabilities for the rest.
+        // Layers removed, renamed or hidden while the answer came: nothing to show, nothing to
+        // tell. The first of a service's layers still there takes the capabilities for the rest.
         let mut group = std::iter::once(layer).chain(also).filter(|l| exists(app, l));
         let Some(layer) = group.next() else { continue };
         let also: Vec<String> = group.collect();
@@ -3092,7 +3094,9 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
         // The result shown stays shown, wherever the answers went; the first when it was left out
         // (a layer drawn higher answered, with topmost).
         let before = pp.info["results"].as_array().cloned().unwrap_or_else(|| vec![pp.info.clone()]);
-        pp.index = index_after(&before, pp.index, info["results"].as_array().map_or(&[][..], Vec::as_slice));
+        // As the pop-up shows it: an index past the end is the last result.
+        let index = pp.index.min(before.len().saturating_sub(1));
+        pp.index = index_after(&before, index, info["results"].as_array().map_or(&[][..], Vec::as_slice));
         pp.info = info;
     }
     if pp.asks.is_empty() && !is_found(&pp.info) {
