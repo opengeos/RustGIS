@@ -1493,17 +1493,28 @@ fn an_unnamed_cog_address_is_read_in_place() {
     assert!(h.state().ui.downloads.is_empty() && h.state().ui.cog_probes.is_empty());
     let read = sent.load(std::sync::atomic::Ordering::Relaxed);
     assert!(read < total / 4, "{read} of {total} bytes read");
-    // `"as": null` is no `"as"`: probed too, not downloaded.
-    h.state_mut().run("ui.addUrl", json!({"url": format!("{url}&n=2"), "name": "Null", "as": null})).unwrap();
+    // `"as": null` is no `"as"`: probed too, not downloaded, and read in place.
+    let null_url = format!("{url}&n=2");
+    h.state_mut().run("ui.addUrl", json!({"url": null_url, "name": "Null", "as": null})).unwrap();
     assert!(h.state().ui.downloads.is_empty() && h.state().ui.cog_probes.len() == 1);
+    for _ in 0..200 {
+        h.step();
+        if h.state().session.map().tiles.iter().any(|t| t.name == "Null") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let t = h.state().session.map().tiles.iter().find(|t| t.name == "Null").cloned();
+    assert!(t.is_some_and(|t| t.url == null_url), "added as a tile layer read in place");
     // A probe under way when another project opens is dropped: its layer never lands there.
+    h.state_mut().run("ui.addUrl", json!({"url": format!("{url}&n=3"), "name": "Late"})).unwrap();
     h.state_mut().run("project.new", json!({})).unwrap();
     assert!(h.state().ui.cog_probes.is_empty());
     for _ in 0..50 {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert!(!h.state().session.map().tiles.iter().any(|t| t.name == "Null"));
+    assert!(!h.state().session.map().tiles.iter().any(|t| t.name == "Late"));
 }
 
 /// A service layer added from the app (Add From Service, the Connections tree) is read past its
