@@ -156,6 +156,8 @@ pub struct MapView {
     key: Option<Key>,
     /// A preview is attempted once for each frame key, including when drawing fails.
     preview_attempt: Option<Key>,
+    /// The frame on screen kept through a change to the map's contents, and since when (s).
+    kept: Option<(Key, f64)>,
     tex_camera: Camera,
     /// The size (points) of the view the texture was drawn for: larger than the map while it
     /// moves, so zooming out and panning have more of it to show.
@@ -279,6 +281,7 @@ impl Default for MapView {
             texture: None,
             key: None,
             preview_attempt: None,
+            kept: None,
             tex_camera: Camera::world(),
             tex_size: (0.0, 0.0),
             tex_rect: Rect::NOTHING,
@@ -375,6 +378,7 @@ impl MapView {
     pub fn invalidate(&mut self) {
         self.key = None;
         self.preview_attempt = None;
+        self.kept = None;
         self.gpu_frame = None;
         self.tilt_settle = Default::default();
     }
@@ -728,6 +732,18 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // on screen, labels and all, until the exact frame arrives (#1051).
     let keep_frame =
         tiled_flat && (app.map.texture.is_some() || app.map.gpu_frame.is_some()) && keeps_frame(app.map.key, key, app.map.render_ms);
+    // At most `KEEP_FRAME_MS` from when the frame went out of date: the exact frame of a change
+    // can take longer than the last one did. A frame shown meanwhile starts the wait again.
+    if !keep_frame {
+        app.map.kept = None;
+    } else if app.map.kept.is_none_or(|(k, _)| Some(k) != app.map.key) {
+        app.map.kept = app.map.key.map(|k| (k, time));
+    }
+    let waited = app.map.kept.map_or(0.0, |(_, at)| time - at);
+    let keep_frame = keep_frame && waited <= KEEP_FRAME_MS as f64 / 1000.0;
+    if keep_frame {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((KEEP_FRAME_MS as f64 / 1000.0 - waited).max(0.0) + 0.01));
+    }
     // Labels belong to the rendered contents. When visibility or data change, old labels
     // must disappear with their layers while a preview stands in for the exact frame.
     if app.map.key.is_none_or(|k| k.rev != key.rev) && !keep_frame {
@@ -3610,7 +3626,8 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 }
 
 /// How long (ms) the last exact frame may have taken for a change to the map's contents to keep
-/// it on screen until the next one arrives, rather than showing a coarse preview (#1051).
+/// it on screen until the next one arrives, rather than showing a coarse preview (#1051); and how
+/// long it is kept at most, should the next one take longer.
 const KEEP_FRAME_MS: u64 = 300;
 
 /// Which project and map are open and which of the map's layers, groups and tile layers are
