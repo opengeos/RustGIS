@@ -9145,6 +9145,7 @@ fn wms_layers_with_time() {
 <Layer><Name>population</Name><Title>Population</Title><Dimension name="time" units="ISO8601" default="2025" nearestValue="0">1990,2000,2025</Dimension></Layer>
 <Layer><Name>decades</Name><Title>Decades</Title><Dimension name="time" units="ISO8601" default="2020" multipleValues="1">1990/2020/P10Y</Dimension></Layer>
 <Layer><Name>roads</Name><Title>Roads</Title></Layer>
+<Layer><Name>now</Name><Title>Now</Title><Dimension name="time" units="ISO8601" default="current">current</Dimension></Layer>
 </Layer></Capability></WMS_Capabilities>"#;
     let mut s = Session::new(Project::default());
     let url = "https://maps.example.com/wms";
@@ -9230,6 +9231,21 @@ fn wms_layers_with_time() {
         "{:?}",
         other.notices_since(mark)
     );
+    // Without a time asked for, a layer follows the slider; "default" (or false) adds it at its
+    // service's default instead, and a layer whose only time is a name (`current`) is added at it.
+    let mut plain = Session::new(Project::default());
+    plain.run("service.add", &json!({"url": url, "layer": "population", "text": WMS})).unwrap();
+    let t = plain.map().tiles.iter().find(|t| t.name == "Population").unwrap();
+    assert!(plain.map().time.is_some() && t.time_url.is_some() && t.url.ends_with("&TIME=2025"), "{}", t.url);
+    for pin in [json!("default"), json!(false)] {
+        let mut pinned = Session::new(Project::default());
+        pinned.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": pin})).unwrap();
+        let t = pinned.map().tiles.iter().find(|t| t.name == "Population").unwrap_or_else(|| panic!("{pin}"));
+        assert!(pinned.map().time.is_none() && t.time_url.is_none() && t.url.ends_with("&TIME=2025"), "{pin}: {}", t.url);
+    }
+    let mut named = Session::new(Project::default());
+    named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS})).unwrap();
+    assert!(named.map().time.is_none() && tile(&named, "Now").ends_with("&TIME=current"), "{}", tile(&named, "Now"));
     // A layer without times has none to follow it with.
     let e = s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "time": "slider"})).unwrap_err();
     assert!(e.contains("no time to follow"), "{e}");

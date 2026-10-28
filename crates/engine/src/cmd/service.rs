@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API collections address or landing page (its map tiles and linked collections), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer, or an ArcGIS services directory or folder (its folders and services, each listed by its own url)", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched", "documents"?: [{"url": "a discovered document address", "text": "its fetched JSON"}]} → layers with source_url, and next when supplied documents need another fetch"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
-            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "time"?: "a time-enabled WMS or WMTS layer's date (2024-06-01; its default otherwise), or \"slider\" (or true): following the time slider (turned on with the layer's times when it is off)", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" | "full": a WCS coverage's area (the view by default); for a WFS, OGC API or ArcGIS feature layer, only the features that cross it (the whole layer, "full", by default)}"#,
+            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "time"?: "a time-enabled WMS or WMTS layer: by default (or \"slider\", true) it follows the time slider, turned on with the layer's times when it is off; or one of its dates (2024-06-01), or \"default\" (false): its service's default", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" | "full": a WCS coverage's area (the view by default); for a WFS, OGC API or ArcGIS feature layer, only the features that cross it (the whole layer, "full", by default)}"#,
         ),
         C::new("service.coverage", "WCS Coverage Request", "Home › Add", coverage).view().params(
             r#"{"url": "a WCS address", "type"?: "wcs", "layer": "the coverage's name", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed coverage's source_url", "describe"?: "its DescribeCoverage answer, when already fetched", "bbox"?: [west, south, east, north] | "view" (the default) | "full"} → the GetCoverage address of a GeoTIFF (layer.addUrl adds it)"#,
@@ -358,13 +358,15 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         .find(|(l, _)| l.name == want)
         .or_else(|| candidates().find(|(l, _)| l.name.eq_ignore_ascii_case(want) || l.title.eq_ignore_ascii_case(want)))
         .ok_or_else(|| format!("{url}: no layer '{want}' (service.layers lists them)"))?;
-    // A time-enabled layer at the time asked for (its default otherwise), named with it; or
-    // following the time slider, at each of its steps.
-    // (`"time": true` as for a Zarr variable, `layer.addZarr`'s.)
+    // A time-enabled layer follows the time slider, at each of its steps, unless a time is asked
+    // for: one of its times (the layer named with it), or "default" (`false`), the service's.
+    // (`"time": true`, the slider, as for a Zarr variable, `layer.addZarr`'s.)
     let asked = match p.get("time") {
         Some(Value::Bool(true)) => Some("slider"),
+        Some(Value::Bool(false)) => Some("default"),
         _ => ps(p, "time").map(str::trim).filter(|t| !t.is_empty()),
     };
+    let pinned = asked.is_some_and(|a| a.eq_ignore_ascii_case("default"));
     let slider = match (&layer.time, asked) {
         (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(
             t.slider()
@@ -373,9 +375,11 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         (None, Some(a)) if a.eq_ignore_ascii_case("slider") => {
             return Err(format!("{}: the layer has no time to follow the time slider with", layer.title));
         }
+        // None asked: on the slider when its times are dates it steps to, at its default if not.
+        (Some(t), None) => t.slider(),
         _ => None,
     };
-    let asked = asked.filter(|_| slider.is_none());
+    let asked = asked.filter(|_| slider.is_none() && !pinned);
     let time = match (&layer.time, asked) {
         // A WMS layer's: a list of times or an interval when it takes several (WMS 1.3.0 Annex C).
         (Some(l), Some(t)) if l.multiple => Some(rustgis_data::ogc::checked_wms_time(t)?),

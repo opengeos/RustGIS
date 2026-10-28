@@ -364,8 +364,9 @@ pub struct ServiceBrowse {
     pub filter: String,
     /// The date time-enabled layers are added at (their default when empty).
     pub time: String,
-    /// Time-enabled layers follow the time slider instead, at each of its steps.
-    pub slider: bool,
+    /// Time-enabled layers are added at a fixed date (`time`, or their default when empty) rather
+    /// than following the time slider, as they do by default.
+    pub fixed: bool,
     /// Feature layers are asked only for the features crossing the map's view (Only the map's
     /// area), not whole.
     pub area: bool,

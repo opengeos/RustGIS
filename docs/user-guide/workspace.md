@@ -301,10 +301,10 @@ duplication and nudging have their own [layout shortcuts](layouts.md#layouts).
       `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/{date:YYYY-MM-DD}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`.
     - A Zarr variable added with **Follow the time slider** (Home › Add › Add Data › Zarr…) shows
       the step the slider is at; see [Zarr stores](data.md#zarr-stores).
-    - So does a WMS or WMTS layer with a time dimension added with **Follow the time slider**
-      (Web Data's service dialog; `service.add` with `"time": "slider"`): its requests take the
-      step's time, and a slider that is off starts with the layer's times; see
-      [Web services](web-data.md#web-services).
+    - So does a WMS or WMTS layer with a time dimension, as it is added by default (**Follow the
+      time slider** in Web Data's dialogs; `service.add` without a `"time"`): its requests take
+      the step's time, and a slider that is off starts with the layer's times; see
+      [Layers that change with time](web-data.md#layers-that-change-with-time).
     - From scripts: `time.bind` (`"layer"`, `"field"`, `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`), `time.set` (the
       window: `"start"`, `"end"`, `"unit"`, `"interval"`, `"show"`, `"speed"`, `"loop"`,
       `"format"`…), `time.goTo` (`"date"`, or `"step"` from 0), `time.step` (`"by"`, negative goes

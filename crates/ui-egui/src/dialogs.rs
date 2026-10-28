@@ -921,11 +921,17 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
             // date; empty, at the service's default.
             if layers.iter().any(|l| l.get("time").is_some()) {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut browse.slider, tl!("Follow the time slider"))
-                        .on_hover_text(tl!("Step through the layer's times with the time slider (View › Time), which starts with them"));
+                    let mut follow = !browse.fixed;
+                    if ui
+                        .checkbox(&mut follow, tl!("Follow the time slider"))
+                        .on_hover_text(tl!("Step through the layer's times with the time slider (View › Time), which starts with them"))
+                        .changed()
+                    {
+                        browse.fixed = !follow;
+                    }
                     let input_label = ui.label(tl!("Date"));
                     ui.add_enabled(
-                        !browse.slider,
+                        browse.fixed,
                         egui::TextEdit::singleline(&mut browse.time).hint_text(tl!("its default")).desired_width(120.0),
                     )
                     .labelled_by(input_label.id);
@@ -1081,7 +1087,7 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
         let name = l.get("name").and_then(Value::as_str).unwrap_or("");
         let title = l.get("title").and_then(Value::as_str).unwrap_or(name).to_string();
         // Features are downloaded in the background, as From URL… does; map layers are added now.
-        let time = if app.ui.service_browse.slider { "slider".to_string() } else { app.ui.service_browse.time.trim().to_string() };
+        let time = crate::webdataui::fixed_or_slider(app.ui.service_browse.fixed, &app.ui.service_browse.time);
         // The view's area, for a feature layer only: a map layer never asks for one, so an
         // unknown view can't stop it.
         let features = l["offer"]["type"] == "features";
