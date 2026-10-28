@@ -422,8 +422,9 @@ struct Ctx<'a> {
     globe: Option<Globe>,
     /// Point marker sprites drawn so far, by symbol and quarter-pixel offset.
     sprites: std::cell::RefCell<std::collections::HashMap<SpriteKey, Option<Pixmap>>>,
-    /// The pixels the frame's shapeburst fills have worked on (`gradient_fill::FRAME_BURST_PX`).
-    bursts: std::cell::Cell<f32>,
+    /// The pixels the frame's shapeburst fills have worked on (`gradient_fill::FRAME_BURST_PX`),
+    /// shared by a layer's scaled context (a reference scale's) with the frame's.
+    bursts: std::rc::Rc<std::cell::Cell<f32>>,
 }
 
 /// A marker sprite's symbol and quarter-pixel offset.
@@ -3069,7 +3070,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             &ctx
         } else {
             // Its own sprite cache: the sprites are drawn at the scaled size.
-            scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), bursts: Default::default(), ..ctx };
+            scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), bursts: std::rc::Rc::clone(&ctx.bursts), ..ctx };
             &scaled_ctx
         };
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {

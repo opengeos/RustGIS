@@ -314,7 +314,8 @@ fn dot_spacing() -> [f32; 2] {
 
 /// `v` within `lo..=hi`; one of no number is `none`.
 fn within(v: f32, lo: f32, hi: f32, none: f32) -> f32 {
-    if v.is_finite() { v.clamp(lo, hi) } else { none }
+    // An infinity to its bound; only NaN, which has no side, to `none`.
+    if v.is_nan() { none } else { v.clamp(lo, hi) }
 }
 
 impl FillLayer {
@@ -467,6 +468,15 @@ mod tests {
         assert!(FillLayer::default().draws(feature));
         assert!(!FillLayer::default().draws(Rgba::new(0, 0, 0, 0)));
         assert!(!FillLayer::hatch(0.0, 4.0, 0.0).draws(feature));
+    }
+
+    /// A gradient's point out of range is held at the nearest bound, an infinite one too; only
+    /// NaN, which has no side, goes to the middle.
+    #[test]
+    fn gradient_points_out_of_range_are_held_at_their_bound() {
+        let held = GradientPoint::At([f32::INFINITY, f32::NEG_INFINITY]).clamped();
+        assert_eq!(held, GradientPoint::At([MAX_GRADIENT_POINT, -MAX_GRADIENT_POINT]));
+        assert_eq!(GradientPoint::At([f32::NAN, 1e9]).clamped(), GradientPoint::At([0.5, MAX_GRADIENT_POINT]));
     }
 
     /// A gradient's colours along it, blended or held, its points written as QGIS's or the

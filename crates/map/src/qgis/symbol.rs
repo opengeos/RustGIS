@@ -280,7 +280,7 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
             class @ ("GradientFill" | "ShapeburstFill") => {
                 let (first, pattern) = gradient(class == "ShapeburstFill", *l, p, reference, layer, report);
                 stack.push(FillLayer { color: Some(first), pattern });
-                fill = Some(first).or(fill);
+                fill = Some(first);
             }
             // Hatch lines: its line's colour and width, its angle and spacing.
             "LinePatternFill" => {
@@ -386,14 +386,18 @@ fn gradient(burst: bool, l: Node, p: &Props, reference: Option<f64>, layer: &str
     let (first, color2, stops, discrete) = if prop(p, "color_type") == Some("1") {
         // The ramp's settings: in a `colorramp` of the layer's own where it has one, else among
         // the layer's.
-        let own = l.children().find(|c| c.has_tag_name("colorramp")).map(props);
+        let ramp = l.children().find(|c| c.has_tag_name("colorramp"));
+        let own = ramp.map(props);
         let r = own.as_ref().map_or(p, |o| o);
-        let kind = own.as_ref().and_then(|_| l.children().find(|c| c.has_tag_name("colorramp"))).and_then(|c| c.attribute("type"));
-        if !matches!(prop(r, "rampType").or(kind), None | Some("gradient")) {
+        let kind = ramp.and_then(|c| c.attribute("type"));
+        // Another kind of ramp is drawn by its two ends alone, its stops left out.
+        let gradient = matches!(prop(r, "rampType").or(kind), None | Some("gradient"));
+        if !gradient {
             report.approximated(layer, "gradient fills' colour ramps other than gradients, drawn from their first colour to their last");
         }
+        let stops = if gradient { ramp_stops(prop(r, "stops").unwrap_or_default()) } else { Stops::default() };
         match (prop(r, "color1").and_then(color), prop(r, "color2").and_then(color)) {
-            (Some(a), Some(b)) => (a, b, ramp_stops(prop(r, "stops").unwrap_or_default()), prop(r, "discrete") == Some("1")),
+            (Some(a), Some(b)) => (a, b, stops, gradient && prop(r, "discrete") == Some("1")),
             _ => (two.0, two.1, Stops::default(), false),
         }
     } else {
@@ -454,6 +458,10 @@ fn ramp_stops(stops: &str) -> Stops {
     for part in stops.split(':') {
         // A new stop starts with its position and a semicolon; anything else goes on the last.
         let starts = part.split_once(';').is_some_and(|(at, _)| at.trim().parse::<f32>().is_ok());
+        // No more than a fill keeps (and one to tell it has more).
+        if starts && list.len() > crate::fills::MAX_STOPS {
+            break;
+        }
         match list.last_mut() {
             Some(last) if !starts => {
                 last.push(':');

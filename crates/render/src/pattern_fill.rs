@@ -268,8 +268,8 @@ pub(crate) fn tint(fills: &[FillLayer], feature: Rgba) -> Rgba {
         let c = f.color.unwrap_or(feature);
         match f.pattern {
             FillPattern::Solid => over(c, 1.0),
-            FillPattern::Gradient { color2, ref stops, .. } | FillPattern::Shapeburst { color2, ref stops, .. } => {
-                over(crate::gradient_fill::average(c, color2, stops), 1.0)
+            FillPattern::Gradient { color2, ref stops, discrete, .. } | FillPattern::Shapeburst { color2, ref stops, discrete, .. } => {
+                over(crate::gradient_fill::average(c, color2, stops, discrete), 1.0)
             }
             FillPattern::Hatch { spacing, width, .. } => over(c, per(width, spacing)),
             FillPattern::Dots { marker, size, outline, outline_width, spacing, .. } => {

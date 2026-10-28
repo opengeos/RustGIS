@@ -1155,7 +1155,7 @@ fn gradient_and_shapeburst_fills_carry_over() {
     let (fills, report) = read(&gradient);
     assert_eq!(fills.len(), 1, "{fills:?}");
     let half = |c: Rgba| c.with_alpha(128);
-    assert_eq!(fills[0].color.map(|c| c.0[..3].to_vec()), Some(vec![255, 0, 0]), "its first colour, the symbol's opacity on it");
+    assert_eq!(fills[0].color, Some(half(Rgba::rgb(255, 0, 0))), "its first colour, the symbol's opacity on it");
     let FillPattern::Gradient { shape, color2, from, to, spread, angle, in_view, stops, .. } = fills[0].pattern else {
         panic!("{fills:?}")
     };
@@ -1173,7 +1173,7 @@ fn gradient_and_shapeburst_fills_carry_over() {
         <prop k="use_whole_shape" v="0"/></layer>"#;
     let (fills, report) = read(burst);
     let FillPattern::Shapeburst { color2, stops, distance, blur, ignore_rings, discrete } = fills[0].pattern else { panic!("{fills:?}") };
-    assert_eq!(fills[0].color.map(|c| c.0[..3].to_vec()), Some(vec![0, 104, 55]), "the ramp's first colour");
+    assert_eq!(fills[0].color, Some(half(Rgba::rgb(0, 104, 55))), "the ramp's first colour");
     assert_eq!(color2, half(Rgba::rgb(255, 255, 204)));
     assert_eq!(
         stops.as_slice(),
@@ -1183,6 +1183,12 @@ fn gradient_and_shapeburst_fills_carry_over() {
     assert!((distance.unwrap() - 5.0 * 96.0 / 25.4).abs() < 1e-3, "{distance:?}");
     assert_eq!((blur, ignore_rings, discrete), (10, false, false));
     assert!(report.notes.is_empty(), "{:?}", report.notes);
+    // A ramp that isn't a gradient: drawn by its two ends, its stops left out, and noted.
+    let random = burst.replace(r#"<prop k="color_type" v="1"/>"#, r#"<prop k="color_type" v="1"/><prop k="rampType" v="random"/>"#);
+    let (fills, report) = read(&random);
+    let FillPattern::Shapeburst { stops, .. } = fills[0].pattern else { panic!("{fills:?}") };
+    assert!(stops.as_slice().is_empty(), "{stops:?}");
+    assert!(report.notes.iter().any(|n| n.text.contains("other than gradients")), "{:?}", report.notes);
     // Over the whole shape; an offset, which is left out, noted.
     let whole =
         burst.replace(r#"<prop k="use_whole_shape" v="0"/>"#, r#"<prop k="use_whole_shape" v="1"/>"#).replace(r#"v="0,0""#, r#"v="1,2""#);

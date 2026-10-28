@@ -68,10 +68,11 @@ pub(crate) fn draw(
     let b = path.bounds();
     if b.width() < 1.5
         && b.height() < 1.5
-        && let FillPattern::Gradient { color2, ref stops, .. } | FillPattern::Shapeburst { color2, ref stops, .. } = *pattern
+        && let FillPattern::Gradient { color2, ref stops, discrete, .. } | FillPattern::Shapeburst { color2, ref stops, discrete, .. } =
+            *pattern
     {
         let paint = Paint {
-            shader: Shader::SolidColor(color_of(average(color, color2, stops))),
+            shader: Shader::SolidColor(color_of(average(color, color2, stops, discrete))),
             anti_alias: crate::antialiased(),
             ..Paint::default()
         };
@@ -237,6 +238,8 @@ impl Grid {
             .map(|d| match *d {
                 d if d >= FAR => 1.0,
                 d if depth > 0.0 => (d.sqrt() / self.k / depth).min(1.0),
+                // No depth: the far colour straight in from the edge.
+                d if d > 0.0 => 1.0,
                 _ => 0.0,
             })
             .collect();
@@ -337,7 +340,9 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
         None => depth(tiles.iter().filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner)))).fold(0.0, f32::max)),
     };
     // Drawn through the polygon's mask over the picture, tile by tile.
+    // (Counted against the frame's budget too: a frame of many such parts goes coarse instead.)
     let Some(mut clip) = Mask::new(pm.width(), pm.height()) else { return };
+    part.budget.set(part.budget.get() + pm.width() as f32 * pm.height() as f32);
     clip.fill_path(path, FillRule::EvenOdd, crate::antialiased(), Transform::identity());
     let picture = [0.0, 0.0, pm.width() as f32, pm.height() as f32];
     for inner in tiles {
@@ -494,20 +499,20 @@ fn box_1d(src: &[f32], out: &mut [f32], r: usize) {
 
 /// What a gradient or shapeburst shows as when smaller than a pixel: its colours' average along
 /// it (each stretch between stops by its length, blended as drawn, by premultiplied colour).
-pub(crate) fn average(first: Rgba, last: Rgba, stops: &Stops) -> Rgba {
+pub(crate) fn average(first: Rgba, last: Rgba, stops: &Stops, discrete: bool) -> Rgba {
     let pre = |c: Rgba| {
         let a = f32::from(c.a()) / 255.0;
         [f32::from(c.r()) * a, f32::from(c.g()) * a, f32::from(c.b()) * a, a]
     };
+    // Along the ramp as it is drawn: a discrete one holds each colour up to the next stop.
     let mut sum = [0.0f32; 4];
-    let mut prev = Stop { at: 0.0, color: first };
-    for s in stops.as_slice().iter().copied().chain(std::iter::once(Stop { at: 1.0, color: last })) {
-        let span = (s.at - prev.at).max(0.0);
-        let (a, b) = (pre(prev.color), pre(s.color));
+    for w in fills::ramp(first, last, stops, discrete).windows(2) {
+        let [p, s] = w else { continue };
+        let span = (s.at - p.at).max(0.0);
+        let (a, b) = (pre(p.color), pre(s.color));
         for ((o, x), y) in sum.iter_mut().zip(a).zip(b) {
             *o += span * (x + y) / 2.0;
         }
-        prev = s;
     }
     if sum[3] <= 0.0 {
         return Rgba([0; 4]);
@@ -569,10 +574,13 @@ mod tests {
     #[test]
     fn a_ramps_average_weighs_each_stretch() {
         let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
-        assert_eq!(average(red, blue, &Stops::default()), Rgba::rgb(128, 0, 128));
+        assert_eq!(average(red, blue, &Stops::default(), false), Rgba::rgb(128, 0, 128));
         let mostly_red = Stops::new([Stop { at: 0.9, color: red }]);
-        assert_eq!(average(red, blue, &mostly_red), Rgba::rgb(242, 0, 13));
-        assert_eq!(average(Rgba::new(0, 0, 0, 0), Rgba::new(0, 0, 0, 0), &Stops::default()), Rgba::new(0, 0, 0, 0));
+        assert_eq!(average(red, blue, &mostly_red, false), Rgba::rgb(242, 0, 13));
+        assert_eq!(average(Rgba::new(0, 0, 0, 0), Rgba::new(0, 0, 0, 0), &Stops::default(), false), Rgba::new(0, 0, 0, 0));
+        // A discrete one as it is drawn: red, then green from halfway, and no blue at all.
+        let green = Stops::new([Stop { at: 0.5, color: Rgba::rgb(0, 255, 0) }]);
+        assert_eq!(average(red, blue, &green, true), Rgba::rgb(128, 128, 0));
     }
 
     /// A box blur keeps a flat field flat and spreads a step.
