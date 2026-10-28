@@ -872,12 +872,11 @@ impl Project {
         if text.len() as u64 > MAX_BYTES {
             return Err("the project file is too large".into());
         }
-        if let Ok(pf) = serde_json::from_str::<ProjectFormat>(text) {
-            if let Some(format) = pf.format {
-                if format > FORMAT {
-                    return Err(format!("this project was saved by a newer RustGIS (format {format}). Update RustGIS to open it."));
-                }
-            }
+        if let Ok(pf) = serde_json::from_str::<ProjectFormat>(text)
+            && let Some(format) = pf.format
+            && format > FORMAT
+        {
+            return Err(format!("this project was saved by a newer RustGIS (format {format}). Update RustGIS to open it."));
         }
         let mut p: Project = serde_json::from_str(text).map_err(|e| {
             let msg = e.to_string();

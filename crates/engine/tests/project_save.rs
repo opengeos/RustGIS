@@ -75,7 +75,8 @@ fn project_from_newer_rustgis_reports_update_message() {
     let json = serde_json::json!({
         "format": 9999,
         "name": "future project"
-    }).to_string();
+    })
+    .to_string();
     let err = Project::from_json(&json).unwrap_err();
     assert!(err.contains("saved by a newer RustGIS"));
     assert!(err.contains("Update RustGIS to open it"));
@@ -90,7 +91,8 @@ fn project_with_unknown_variant_suggests_newer_version() {
             "name": "Map",
             "projection": "FutureProjectionVariant"
         }]
-    }).to_string();
+    })
+    .to_string();
     let err = Project::from_json(&json).unwrap_err();
     assert!(err.contains("may have been saved by a newer RustGIS") || err.contains("Update RustGIS to open it"));
 }
