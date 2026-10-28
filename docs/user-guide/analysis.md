@@ -312,9 +312,10 @@ gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","me
 the whole table, or one for each combination of values of the `case` fields (one field, or
 several as a list such as `["county", "year"]`). Rows are sorted by those values; records with no
 value form a group of their own, first. Statistics follow record order (`FIRST`, `LAST`,
-`CONCATENATE`) and use only the selected records when the table has a selection. Each row has the case fields, then `FREQUENCY` (the group's
-records), then a field `<STAT>_<field>` for each statistic asked for. Name the statistics in
-`statistics`, a list of (field, statistic) pairs in the order the fields should appear:
+`CONCATENATE`) and use only the selected records when the table has a selection. Each row has
+the case fields, then `FREQUENCY` (the group's records), then a field `<STAT>_<field>` for each
+statistic asked for. Name the statistics in `statistics`, a list of up to 256 (field, statistic)
+pairs in the order the fields should appear:
 
 ```text
 gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
@@ -331,7 +332,7 @@ gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county",
 | `IQR` | `P75` − `P25` |
 | `CV` | Coefficient of variation, `STD` / `MEAN`; empty when the mean is 0 |
 | `MODE`, `MINORITY` | The most and least common value; on a tie, the lowest |
-| `UNIQUE` | Distinct values |
+| `UNIQUE` | The number of distinct values |
 | `FIRST`, `LAST` | The first and last value, in record order |
 | `CONCATENATE` | The values in record order, joined by `separator` (`, ` by default) |
 | `NULLS` | Records with no value |

@@ -358,7 +358,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Field,
                 required: false,
                 default: "",
-                help: "Groups records by this field's values. Several fields can be given as a list.",
+                help: "Groups records by this field's values. Scripts and the AI Assistant can give several fields as a list.",
             },
             P {
                 name: "separator",
@@ -1895,7 +1895,7 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
         let (name, numeric) = ds.fields.get(r.field).map(|f| (f.name.as_str(), f.ty.is_numeric())).unwrap_or_default();
         let field = Field::new(format!("{}_{name}", r.stat.name()), r.stat.output_type(numeric || field_only));
         if fields.iter().any(|f| f.name.eq_ignore_ascii_case(&field.name)) {
-            return Err(format!("the output would have two fields named '{}': a case field has that name", field.name));
+            return Err(format!("the output would have two fields named '{}'", field.name));
         }
         fields.push(field);
     }
@@ -1946,6 +1946,11 @@ fn case_fields(ds: &Dataset, v: Option<&Json>) -> Result<Vec<usize>, String> {
         if out.contains(&c) {
             return Err(format!("case field '{name}' is listed twice"));
         }
+        // Output names must differ in more than case, for lookups that ignore it.
+        let same = |o: &usize| ds.fields.get(*o).zip(ds.fields.get(c)).is_some_and(|(a, b)| a.name.eq_ignore_ascii_case(&b.name));
+        if out.iter().any(same) {
+            return Err(format!("case fields can't differ only in case ('{name}')"));
+        }
         out.push(c);
     }
     Ok(out)
@@ -1986,7 +1991,11 @@ pub fn param_applies(tool: &str, param: &str, value: &dyn Fn(&str) -> String) ->
             DISTANCE_MATCHES.iter().any(|d| d.eq_ignore_ascii_case(m.trim()))
         }
         ("spatialJoin", "merge") => !value("operation").trim().eq_ignore_ascii_case("Join one to many"),
-        ("summaryStatistics", "field") => value("statistics").trim().is_empty(),
+        ("summaryStatistics", "field") => {
+            // Shown until the list holds a pair, so an empty list doesn't hide the field it falls back to.
+            let list = serde_json::from_str::<Json>(&value("statistics")).unwrap_or(Json::Null);
+            !list.as_array().is_some_and(|items| !items.is_empty())
+        }
         ("summaryStatistics", "separator") => {
             let list = serde_json::from_str::<Json>(&value("statistics")).unwrap_or(Json::Null);
             let concatenates =
@@ -4952,16 +4961,25 @@ mod tests {
             assert!(err.contains(says), "{p}: {err}");
         }
         // A case field can't share a name with an output field.
-        let fields =
-            vec![Field::new("count_v", FieldType::Text), Field::new("v", FieldType::Double), Field::new("Frequency", FieldType::Text)];
+        // Nor can output fields differ only in case.
+        let fields = vec![
+            Field::new("count_v", FieldType::Text),
+            Field::new("v", FieldType::Double),
+            Field::new("Frequency", FieldType::Text),
+            Field::new("V", FieldType::Double),
+        ];
         let mut t = Dataset::new("t", GeometryType::None, fields);
-        t.push(None, vec![Value::Text("a".into()), Value::Float(1.0), Value::Text("x".into())]);
+        t.push(None, vec![Value::Text("a".into()), Value::Float(1.0), Value::Text("x".into()), Value::Float(2.0)]);
         let m = Map(HashMap::from([("t".to_string(), t)]));
-        for (case, says) in [("count_v", "two fields named 'COUNT_v'"), ("Frequency", "FREQUENCY field")] {
-            let err = crate::run("summaryStatistics", &m, &serde_json::json!({"input": "t", "field": "v", "case": case}))
-                .err()
-                .unwrap_or_default();
-            assert!(err.contains(says), "{case}: {err}");
+        let mean = |f: &str| serde_json::json!({"field": f, "statistic": "MEAN"});
+        for (p, says) in [
+            (serde_json::json!({"input": "t", "field": "v", "case": "count_v"}), "two fields named 'COUNT_v'"),
+            (serde_json::json!({"input": "t", "field": "v", "case": "Frequency"}), "FREQUENCY field"),
+            (serde_json::json!({"input": "t", "field": "count_v", "case": ["v", "V"]}), "differ only in case"),
+            (serde_json::json!({"input": "t", "statistics": [mean("v"), mean("V")]}), "two fields named 'MEAN_V'"),
+        ] {
+            let err = crate::run("summaryStatistics", &m, &p).err().unwrap_or_default();
+            assert!(err.contains(says), "{p}: {err}");
         }
     }
 
@@ -4971,6 +4989,8 @@ mod tests {
     fn summary_statistics_parameters_apply() {
         let with = |list: &'static str| move |k: &str| if k == "statistics" { list.to_string() } else { String::new() };
         assert!(param_applies("summaryStatistics", "field", &with("")));
+        assert!(param_applies("summaryStatistics", "field", &with("[]")));
+        assert!(param_applies("summaryStatistics", "field", &with("[{")));
         assert!(!param_applies("summaryStatistics", "field", &with("[{\"field\": \"v\", \"statistic\": \"SUM\"}]")));
         assert!(!param_applies("summaryStatistics", "separator", &with("")));
         assert!(param_applies("summaryStatistics", "separator", &with("[{\"field\": \"v\", \"statistic\": \"concatenate\"}]")));

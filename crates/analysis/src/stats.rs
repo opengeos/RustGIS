@@ -121,6 +121,10 @@ impl Stat {
     }
 }
 
+/// The most (field, statistic) pairs a statistics list may hold: each adds an output field and a
+/// computation for every group.
+pub const MAX_REQUESTS: usize = 256;
+
 /// A field's statistic, as a statistics list names it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
@@ -144,6 +148,9 @@ pub fn parse_requests(ds: &Dataset, v: Option<&Json>) -> Result<Vec<Request>, St
         Some(other) => other,
     };
     let items = list.as_array().ok_or("Statistics must be a list such as [{\"field\": \"income\", \"statistic\": \"MEAN\"}]")?;
+    if items.len() > MAX_REQUESTS {
+        return Err(format!("Statistics can list at most {MAX_REQUESTS} pairs (not {})", items.len()));
+    }
     let mut out: Vec<Request> = Vec::with_capacity(items.len());
     for item in items {
         let text = |k: &str| item.get(k).and_then(Json::as_str).map(str::trim);
@@ -190,6 +197,7 @@ fn key_part(v: &Value) -> KeyPart {
     match v {
         Value::Null => KeyPart::Null,
         Value::Int(i) => KeyPart::Int(*i),
+        Value::Float(f) if f.is_nan() => KeyPart::Float(f64::NAN.to_bits()),
         Value::Float(f) => KeyPart::Float(if *f == 0.0 { 0.0f64.to_bits() } else { f.to_bits() }),
         Value::Text(t) => KeyPart::Text(t.clone()),
         Value::Bool(b) => KeyPart::Bool(*b),
@@ -217,11 +225,20 @@ pub fn group_rows(ds: &Dataset, rows: &[usize], keys: &[usize]) -> Vec<Group> {
     groups
 }
 
-/// Orders group keys value by value. Values that compare equal but are different keys (text
-/// differing in case, 1 and 1.0) are ordered by their text's character codes, so the order never
-/// depends on the records'.
+/// Orders group keys value by value. Values that compare equal but are different keys are ordered
+/// by kind (1 before 1.0), then by their text's character codes (text differing in case), so the
+/// order never depends on the records'.
 fn cmp_keys(a: &[Value], b: &[Value]) -> Ordering {
-    let cmp = |x: &Value, y: &Value| x.partial_cmp(y).unwrap_or(Ordering::Equal).then_with(|| x.to_string().cmp(&y.to_string()));
+    let kind = |v: &Value| match v {
+        Value::Null => 0,
+        Value::Bool(_) => 1,
+        Value::Int(_) => 2,
+        Value::Float(_) => 3,
+        Value::Text(_) => 4,
+    };
+    let cmp = |x: &Value, y: &Value| {
+        x.partial_cmp(y).unwrap_or(Ordering::Equal).then_with(|| kind(x).cmp(&kind(y))).then_with(|| x.to_string().cmp(&y.to_string()))
+    };
     a.iter().zip(b).map(|(x, y)| cmp(x, y)).find(|o| o.is_ne()).unwrap_or(Ordering::Equal)
 }
 
@@ -235,8 +252,35 @@ pub enum Values {
 /// A field's values within a group, and how many of its records have none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Column {
-    pub values: Values,
-    pub nulls: usize,
+    values: Values,
+    /// The values in ascending order, sorted once for every statistic that needs them so.
+    sorted: Values,
+    nulls: usize,
+    /// How many distinct values there are.
+    distinct: usize,
+}
+
+impl Column {
+    /// A column of `values`, in record order, and `nulls` records without one.
+    pub fn new(values: Values, nulls: usize) -> Column {
+        let sorted = match &values {
+            Values::Numbers(v) => {
+                let mut s = v.clone();
+                s.sort_by(f64::total_cmp);
+                Values::Numbers(s)
+            }
+            Values::Texts(v) => {
+                let mut s = v.clone();
+                s.sort_unstable();
+                Values::Texts(s)
+            }
+        };
+        let distinct = match &sorted {
+            Values::Numbers(s) => distinct(s),
+            Values::Texts(s) => distinct(s),
+        };
+        Column { values, sorted, nulls, distinct }
+    }
 }
 
 /// A field's values in `rows`. A numeric field, or any field read `as_numbers`, gives numbers (a
@@ -246,13 +290,25 @@ pub fn column(ds: &Dataset, rows: &[usize], field: usize, as_numbers: bool) -> C
     let mut nulls = 0;
     if numeric {
         let mut out = Vec::with_capacity(rows.len());
+        // Whole numbers as they are, which past 2^53 can differ where their f64s don't.
+        let mut ints = Vec::new();
         for &r in rows {
-            match ds.value(r, field).as_f64() {
+            let v = ds.value(r, field);
+            match v.as_f64() {
                 Some(x) => out.push(x),
                 None => nulls += 1,
             }
+            if let Value::Int(i) = v {
+                ints.push(*i);
+            }
         }
-        Column { values: Values::Numbers(out), nulls }
+        let all_ints = ints.len() == out.len();
+        let mut column = Column::new(Values::Numbers(out), nulls);
+        if all_ints {
+            ints.sort_unstable();
+            column.distinct = distinct(&ints);
+        }
+        column
     } else {
         let mut out = Vec::with_capacity(rows.len());
         for &r in rows {
@@ -261,7 +317,7 @@ pub fn column(ds: &Dataset, rows: &[usize], field: usize, as_numbers: bool) -> C
                 v => out.push(v.to_string()),
             }
         }
-        Column { values: Values::Texts(out), nulls }
+        Column::new(Values::Texts(out), nulls)
     }
 }
 
@@ -273,23 +329,24 @@ pub fn count(n: usize) -> Value {
 /// Computes `stat` over a column. `separator` joins CONCATENATE's values. A statistic that doesn't
 /// fit text is null over text.
 pub fn compute(stat: Stat, column: &Column, separator: &str) -> Value {
-    match (stat, &column.values) {
-        (Stat::Nulls, _) => count(column.nulls),
-        (Stat::Count, Values::Numbers(v)) => count(v.len()),
-        (Stat::Count, Values::Texts(v)) => count(v.len()),
-        (Stat::Concatenate, Values::Numbers(v)) if !v.is_empty() => {
+    match (stat, &column.values, &column.sorted) {
+        (Stat::Nulls, ..) => count(column.nulls),
+        (Stat::Count, Values::Numbers(v), _) => count(v.len()),
+        (Stat::Count, Values::Texts(v), _) => count(v.len()),
+        (Stat::Concatenate, Values::Numbers(v), _) if !v.is_empty() => {
             Value::Text(v.iter().map(|x| number_text(*x)).collect::<Vec<_>>().join(separator))
         }
-        (Stat::Concatenate, Values::Texts(v)) if !v.is_empty() => Value::Text(v.join(separator)),
-        (Stat::Unique, Values::Numbers(v)) => {
-            count(sorted_numbers(v).windows(2).filter(|w| matches!(w, [a, b] if a != b)).count() + usize::from(!v.is_empty()))
-        }
-        (Stat::Unique, Values::Texts(v)) => {
-            count(sorted_texts(v).windows(2).filter(|w| matches!(w, [a, b] if a != b)).count() + usize::from(!v.is_empty()))
-        }
-        (_, Values::Numbers(v)) => number(numeric(stat, v)),
-        (_, Values::Texts(v)) => textual(stat, v).map_or(Value::Null, |t| Value::Text(t.to_string())),
+        (Stat::Concatenate, Values::Texts(v), _) if !v.is_empty() => Value::Text(v.join(separator)),
+        (Stat::Unique, ..) => count(column.distinct),
+        (_, Values::Numbers(v), Values::Numbers(s)) => number(numeric(stat, v, s)),
+        (_, Values::Texts(v), Values::Texts(s)) => textual(stat, v, s).map_or(Value::Null, |t| Value::Text(t.to_string())),
+        _ => Value::Null,
     }
+}
+
+/// How many distinct values sorted `s` holds.
+fn distinct<T: PartialEq>(s: &[T]) -> usize {
+    s.windows(2).filter(|w| matches!(w, [a, b] if a != b)).count() + usize::from(!s.is_empty())
 }
 
 /// A number as an output value: null unless finite.
@@ -297,27 +354,16 @@ fn number(x: Option<f64>) -> Value {
     x.filter(|x| x.is_finite()).map_or(Value::Null, Value::Float)
 }
 
-/// A number's text in a concatenation: whole numbers without a decimal point, others in full.
+/// A number's text in a concatenation: whole numbers without a decimal point, others in full; −0
+/// as 0, as grouping treats it.
 fn number_text(x: f64) -> String {
+    let x = x + 0.0;
     if x.fract() == 0.0 && x.abs() < 1e15 { format!("{x:.0}") } else { x.to_string() }
 }
 
-/// Numbers in ascending order.
-fn sorted_numbers(v: &[f64]) -> Vec<f64> {
-    let mut s = v.to_vec();
-    s.sort_by(f64::total_cmp);
-    s
-}
-
-/// Texts in ascending order, by character code.
-fn sorted_texts(v: &[String]) -> Vec<&str> {
-    let mut s: Vec<&str> = v.iter().map(String::as_str).collect();
-    s.sort_unstable();
-    s
-}
-
-/// A numeric statistic over numbers; `None` over no numbers.
-fn numeric(stat: Stat, v: &[f64]) -> Option<f64> {
+/// A numeric statistic over numbers `v`, in record order, and `s`, the same sorted; `None` over no
+/// numbers.
+fn numeric(stat: Stat, v: &[f64], s: &[f64]) -> Option<f64> {
     if v.is_empty() {
         return None;
     }
@@ -337,34 +383,29 @@ fn numeric(stat: Stat, v: &[f64]) -> Option<f64> {
         Stat::Range => Some(max() - min()),
         Stat::Std => Some(variance().sqrt()),
         Stat::Variance => Some(variance()),
-        Stat::Median => percentile(&sorted_numbers(v), 50.0),
-        Stat::Percentile(k) => percentile(&sorted_numbers(v), f64::from(k)),
-        Stat::Iqr => {
-            let s = sorted_numbers(v);
-            Some(percentile(&s, 75.0)? - percentile(&s, 25.0)?)
-        }
+        Stat::Median => percentile(s, 50.0),
+        Stat::Percentile(k) => percentile(s, f64::from(k)),
+        Stat::Iqr => Some(percentile(s, 75.0)? - percentile(s, 25.0)?),
         Stat::Cv => {
             let m = mean();
             (m != 0.0).then(|| variance().sqrt() / m)
         }
-        Stat::Mode | Stat::Minority => {
-            let s = sorted_numbers(v);
-            pick_run(&s, stat == Stat::Mode).copied()
-        }
+        Stat::Mode | Stat::Minority => pick_run(s, stat == Stat::Mode).copied(),
         Stat::First => v.first().copied(),
         Stat::Last => v.last().copied(),
         Stat::Count | Stat::Unique | Stat::Concatenate | Stat::Nulls => None,
     }
 }
 
-/// A text statistic over texts; `None` over no texts, or for a statistic that needs numbers.
-fn textual(stat: Stat, v: &[String]) -> Option<&str> {
+/// A text statistic over texts `v`, in record order, and `s`, the same sorted; `None` over no texts,
+/// or for a statistic that needs numbers.
+fn textual<'a>(stat: Stat, v: &'a [String], s: &'a [String]) -> Option<&'a str> {
     match stat {
-        Stat::Min => v.iter().map(String::as_str).min(),
-        Stat::Max => v.iter().map(String::as_str).max(),
+        Stat::Min => s.first().map(String::as_str),
+        Stat::Max => s.last().map(String::as_str),
         Stat::First => v.first().map(String::as_str),
         Stat::Last => v.last().map(String::as_str),
-        Stat::Mode | Stat::Minority => pick_run(&sorted_texts(v), stat == Stat::Mode).copied(),
+        Stat::Mode | Stat::Minority => pick_run(s, stat == Stat::Mode).map(String::as_str),
         _ => None,
     }
 }
@@ -392,7 +433,9 @@ fn percentile(s: &[f64], k: f64) -> Option<f64> {
     let lo = rank.floor() as usize;
     let a = *s.get(lo)?;
     let b = *s.get(lo + 1).unwrap_or(&a);
-    Some(a + (b - a) * (rank - lo as f64))
+    // Weighted rather than a + (b − a)·t, whose b − a overflows for extremes of opposite sign.
+    let t = rank - lo as f64;
+    Some(a * (1.0 - t) + b * t)
 }
 
 #[cfg(test)]
@@ -412,7 +455,7 @@ mod tests {
 
     /// The named statistic over values with no nulls, joined by ", ".
     fn f(stat: &str, v: &Values) -> Value {
-        compute(Stat::parse(stat).unwrap(), &Column { values: v.clone(), nulls: 0 }, ", ")
+        compute(Stat::parse(stat).unwrap(), &Column::new(v.clone(), 0), ", ")
     }
 
     /// Every named statistic and the percentiles read back under their own names, in any case, and
@@ -498,7 +541,7 @@ mod tests {
         assert_eq!(f("FIRST", &t), Value::Text("2024-03-01".into()));
         assert_eq!(f("LAST", &t), Value::Text("2024-01-15".into()));
         assert_eq!(f("UNIQUE", &texts(&["a", "b", "a"])), Value::Int(2));
-        assert_eq!(compute(Stat::Concatenate, &Column { values: texts(&["a", "b"]), nulls: 0 }, "|"), Value::Text("a|b".into()));
+        assert_eq!(compute(Stat::Concatenate, &Column::new(texts(&["a", "b"]), 0), "|"), Value::Text("a|b".into()));
         assert_eq!(f("MEAN", &t), Value::Null);
     }
 
@@ -508,7 +551,7 @@ mod tests {
     fn empty_groups_are_null_not_zero() {
         for v in [nums(&[]), texts(&[])] {
             for (name, _) in NAMED {
-                let got = compute(Stat::parse(name).unwrap(), &Column { values: v.clone(), nulls: 3 }, ", ");
+                let got = compute(Stat::parse(name).unwrap(), &Column::new(v.clone(), 3), ", ");
                 let want = match name {
                     "COUNT" | "UNIQUE" => Value::Int(0),
                     "NULLS" => Value::Int(3),
@@ -552,9 +595,9 @@ mod tests {
         assert_eq!(two.len(), 5);
         assert_eq!(group_rows(&ds, &all, &[]).len(), 1);
         assert!(group_rows(&ds, &[], &[]).is_empty());
-        assert_eq!(column(&ds, &all, 0, false), Column { values: nums(&[2.0, 0.0, -0.0, 2.0]), nulls: 1 });
+        assert_eq!(column(&ds, &all, 0, false), Column::new(nums(&[2.0, 0.0, -0.0, 2.0]), 1));
         // Text read as numbers: what isn't a number is null.
-        assert_eq!(column(&ds, &all, 1, true), Column { values: nums(&[]), nulls: 5 });
+        assert_eq!(column(&ds, &all, 1, true), Column::new(nums(&[]), 5));
         // Keys equal but for case are ordered by character code, whatever the record order.
         let mut cased = table(&[(Value::Null, "b"), (Value::Null, "B")]);
         let both = [0, 1];
@@ -563,6 +606,39 @@ mod tests {
         assert_eq!(order(&cased), want);
         cased.features.reverse();
         assert_eq!(order(&cased), want);
+        // So are 1 and 1.0, which display alike: the whole number first.
+        let mut mixed = table(&[(Value::Float(1.0), ""), (Value::Int(1), "")]);
+        let want = vec![vec![Value::Int(1)], vec![Value::Float(1.0)]];
+        let order = |ds: &Dataset| group_rows(ds, &both, &[0]).into_iter().map(|g| g.key).collect::<Vec<_>>();
+        assert_eq!(order(&mixed), want);
+        mixed.features.reverse();
+        assert_eq!(order(&mixed), want);
+        // Every NaN is one key, whatever its sign and payload.
+        let nan = table(&[
+            (Value::Float(f64::NAN), ""),
+            (Value::Float(-f64::NAN), ""),
+            (Value::Float(f64::from_bits(0x7ff8_0000_0000_0001)), ""),
+        ]);
+        assert_eq!(group_rows(&nan, &[0, 1, 2], &[0]).len(), 1);
+    }
+
+    /// UNIQUE counts whole numbers exactly, past where f64 tells them apart; percentiles between
+    /// extremes of opposite sign don't overflow.
+    #[test]
+    fn large_values() {
+        let mut ds = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Integer)]);
+        for i in [1i64 << 53, (1 << 53) + 1, (1 << 53) + 1] {
+            ds.push(None, vec![Value::Int(i)]);
+        }
+        assert_eq!(compute(Stat::Unique, &column(&ds, &[0, 1, 2], 0, false), ", "), Value::Int(2));
+        assert_eq!(f("MEDIAN", &nums(&[-1e308, 1e308])), Value::Float(0.0));
+        assert_eq!(f("P75", &nums(&[-1e308, 1e308])), Value::Float(5e307));
+    }
+
+    /// CONCATENATE writes −0 as 0, as grouping treats it.
+    #[test]
+    fn concatenate_writes_negative_zero_as_zero() {
+        assert_eq!(f("CONCATENATE", &nums(&[-0.0, 1.5, -2.0])), Value::Text("0, 1.5, -2".into()));
     }
 
     /// A statistics list is read from JSON or its text; bad fields, statistics and pairs are named
@@ -574,6 +650,11 @@ mod tests {
         assert_eq!(ok, Ok(vec![Request { field: 0, stat: Stat::Percentile(90) }, Request { field: 1, stat: Stat::Mode }]));
         let text = parse_requests(&ds, Some(&Json::String(r#"[{"field": "v", "statistic": "SUM"}]"#.into())));
         assert_eq!(text, Ok(vec![Request { field: 0, stat: Stat::Sum }]));
+        // The list's length is bounded.
+        let long: Vec<Json> =
+            (1..=99).flat_map(|k| ["v", "k", "v"].map(|f| serde_json::json!({"field": f, "statistic": format!("P{k}")}))).collect();
+        let err = parse_requests(&ds, Some(&Json::Array(long))).unwrap_err();
+        assert!(err.contains("at most 256"), "{err}");
         assert_eq!(parse_requests(&ds, Some(&Json::String(" ".into()))), Ok(Vec::new()));
         for (bad, says) in [
             (serde_json::json!([{"field": "k", "statistic": "MEAN"}]), "needs a numeric field"),
