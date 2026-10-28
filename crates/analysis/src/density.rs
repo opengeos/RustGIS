@@ -46,7 +46,8 @@ const DEFAULT_GRID_STEPS: f64 = 250.0;
 ///
 /// h = 0.9 * min(StandardDistance, sqrt(1 / ln(2)) * MedianDistance) * N^(-0.2)
 ///
-/// Falls back safely and deterministically to extent-based scaling for small samples or identical coordinates.
+/// Falls back safely and deterministically to extent-based scaling for small samples or identical coordinates
+/// (span / 30.0 when extent > 0, or 1000.0 coordinate-space units for single or coincident points).
 pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
     let n = points.len();
     if n < 2 {
@@ -149,7 +150,7 @@ pub fn kernel_density(
     // Estimate total cell visits bounded by the point kernel window and output grid
     let cells_across = (2.0 * bandwidth / cell_size).ceil();
     let cells_per_point = if cells_across.is_finite() && cells_across < total_cells as f64 {
-        let dim = (cells_across as usize).saturating_add(1);
+        let dim = (cells_across as usize).saturating_add(2);
         dim.saturating_mul(dim).min(total_cells)
     } else {
         total_cells

@@ -756,7 +756,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Number,
                 required: false,
                 default: "",
-                help: "Search bandwidth in CRS linear units (default or 0: Silverman's rule of thumb).",
+                help: "Search bandwidth in CRS linear units (default or 0: Silverman's rule of thumb, or 1000 units for single/coincident points).",
             },
             P {
                 name: "pixelSize",
@@ -1907,6 +1907,9 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     };
 
     if crs.is_geographic() {
+        if !crs_text.is_empty() {
+            return Err("crs must be a projected coordinate system with linear units (such as UTM or State Plane, e.g. EPSG:32618), not geographic coordinates (degrees)".into());
+        }
         return Err(format!(
             "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' is in geographic coordinates (degrees). Provide a projected system under 'crs' (e.g. EPSG:32618)",
             ds.name
@@ -4493,6 +4496,9 @@ mod tests {
         let err_geo = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts"})).unwrap_err();
         assert!(err_geo.contains("is in geographic coordinates (degrees)"), "{err_geo}");
         assert!(err_geo.contains("Provide a projected system under 'crs'"), "{err_geo}");
+        let err_explicit_geo =
+            crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts", "crs": "EPSG:4326"})).unwrap_err();
+        assert!(err_explicit_geo.contains("crs must be a projected coordinate system with linear units"), "{err_explicit_geo}");
         let err_nocrs = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "nocrs"})).unwrap_err();
         assert!(err_nocrs.contains("has no coordinate system"), "{err_nocrs}");
 
