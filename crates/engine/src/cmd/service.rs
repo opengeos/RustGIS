@@ -27,7 +27,7 @@ pub fn commands() -> Vec<C> {
             r#"{"url": "a WMS, WMTS or WFS address (GetCapabilities is added), an OGC API collections address or landing page (its map tiles and linked collections), or an ArcGIS FeatureServer, MapServer, ImageServer or VectorTileServer, or an ArcGIS services directory or folder (its folders and services, each listed by its own url)", "type"?: "wms"|"wmts"|"wfs"|"ogcapi"|"arcgis" (guessed from the address), "text"?: "the capabilities document, when already fetched", "documents"?: [{"url": "a discovered document address", "text": "its fetched JSON"}]} → layers with source_url, and next when supplied documents need another fetch"#,
         ),
         C::new("service.add", "Add Service Layer", "Home › Add", add).params(
-            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "time"?: "a time-enabled WMTS layer's date (2024-06-01; its default otherwise)", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" | "full": a WCS coverage's area (the view by default); for a WFS, OGC API or ArcGIS feature layer, only the features that cross it (the whole layer, "full", by default)}"#,
+            r#"{"url": "as service.layers", "type"?, "layer": "the layer's name (service.layers lists them)", "name"?: text, "time"?: "a time-enabled WMS or WMTS layer's date (2024-06-01; its default otherwise)", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed layer's source_url", "describe"?: "a WCS coverage's DescribeCoverage document, when already fetched", "tiles"?: "an OGC API layer's tile template, when already read from its tileset (the app's)", "bbox"?: [west, south, east, north] | "view" | "full": a WCS coverage's area (the view by default); for a WFS, OGC API or ArcGIS feature layer, only the features that cross it (the whole layer, "full", by default)}"#,
         ),
         C::new("service.coverage", "WCS Coverage Request", "Home › Add", coverage).view().params(
             r#"{"url": "a WCS address", "type"?: "wcs", "layer": "the coverage's name", "text"?: "the capabilities document, when already fetched", "documents"?: "additional fetched documents, as service.layers", "source_url"?: "the listed coverage's source_url", "describe"?: "its DescribeCoverage answer, when already fetched", "bbox"?: [west, south, east, north] | "view" (the default) | "full"} → the GetCoverage address of a GeoTIFF (layer.addUrl adds it)"#,
@@ -312,7 +312,7 @@ pub fn service_json(svc: &Service) -> Value {
             };
             let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
             if let Some(t) = &l.time {
-                layer["time"] = json!({"default": t.default, "values": t.values});
+                layer["time"] = json!({"default": t.default, "values": t.values, "multiple": t.multiple});
             }
             layer
         })
@@ -353,6 +353,8 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     // A time-enabled layer at the time asked for (its default otherwise), named with it.
     let asked = ps(p, "time").map(str::trim).filter(|t| !t.is_empty());
     let time = match (&layer.time, asked) {
+        // A WMS layer's: a list of times or an interval when it takes several (WMS 1.3.0 Annex C).
+        (Some(l), Some(t)) if l.multiple => Some(rustgis_data::ogc::checked_wms_time(t)?),
         (Some(_), Some(t)) => Some(rustgis_data::ogc::checked_time(t)?),
         (Some(t), None) => Some(t.default.clone()),
         (None, Some(_)) => return Err(format!("{}: the layer has no time to pick (leave time out)", layer.title)),
@@ -379,7 +381,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
         Offer::Tiles { template } => {
             let template = advertised.as_deref().unwrap_or(template);
             let template = match &time {
-                Some(t) => template.replace("{Time}", t),
+                Some(t) => rustgis_data::ogc::with_time(template, t),
                 None => template.to_string(),
             };
             // With its legends, as its service gives them (none: no key, as before).

@@ -177,6 +177,15 @@ fn without_wms_keys(url: &str) -> String {
     if kept.is_empty() { base(url).to_string() } else { format!("{}?{}", base(url), kept.join("&")) }
 }
 
+/// The time a WMS tile template (a GetMap request) draws at: its `TIME`, as it is in the address
+/// (encoded), when it is a time ([`super::checked_wms_time`]). A GetFeatureInfo request of the layer
+/// asks at the same time.
+pub fn map_time(template: &str) -> Option<&str> {
+    let v = query_value(template, "time")?;
+    let decoded = url::form_urlencoded::parse(format!("v={v}").as_bytes()).next().map(|(_, v)| v.into_owned())?;
+    super::checked_wms_time(&decoded).ok().map(|_| v)
+}
+
 /// A WMS tile template's (a GetMap request's) service and layer: its GetCapabilities address and
 /// the layer's name. How a layer whose GetFeatureInfo request isn't known (one from a project)
 /// finds it. `None` for other templates.

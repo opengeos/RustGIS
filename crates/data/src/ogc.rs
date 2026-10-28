@@ -12,7 +12,9 @@ use std::rc::Rc;
 
 #[path = "ogc_info.rs"]
 mod info;
-pub use info::{FeatureInfo, InfoFeature, MAX_INFO_BYTES, answer_text, may_answer_in_another_format, read_feature_info, wms_layer_of};
+pub use info::{
+    FeatureInfo, InfoFeature, MAX_INFO_BYTES, answer_text, map_time, may_answer_in_another_format, read_feature_info, wms_layer_of,
+};
 
 /// What a layer of a service becomes.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,14 +36,17 @@ pub enum Offer {
     Service { url: String },
 }
 
-/// A layer's time dimension (a WMTS `Dimension` named `Time`): its tile template has `{Time}`,
-/// which takes the default unless a time is asked for.
+/// A layer's time dimension (a WMTS `Dimension` named `Time`, a WMS `Dimension` named `time`):
+/// its tile template has `{Time}`, which takes the default unless a time is asked for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayerTime {
     /// The time the service draws when none is given (`default` is GIBS's latest day).
     pub default: String,
     /// The times or ranges it lists (`2000-02-24/2026-10-19/P1D`), the first few.
     pub values: Vec<String>,
+    /// Whether several times may be asked for at once: a list or an interval (a WMS layer's
+    /// `multipleValues`, WMS 1.3.0 Annex C.2); otherwise one time.
+    pub multiple: bool,
 }
 
 /// Most time values kept for a layer.
@@ -61,6 +66,76 @@ pub fn checked_time(t: &str) -> Result<String, String> {
     } else {
         Err(format!("'{}': a time is a date like 2024-06-01", t.chars().take(60).collect::<String>()))
     }
+}
+
+/// Most characters of a WMS layer's time asked for (a list or interval of times).
+const MAX_WMS_TIME: usize = 1000;
+
+/// A time given for a WMS layer's `TIME` (WMS 1.3.0 Annex C, Table C.2): one time, a
+/// comma-separated list of times, or an interval `start/end`, with its resolution or not
+/// (`1952/2026/P1Y`); each time as [`checked_time`] takes it. It goes into a query, encoded.
+pub fn checked_wms_time(t: &str) -> Result<String, String> {
+    let t = t.trim();
+    let error = || {
+        format!(
+            "'{}': a time is a date like 2024-06-01, a list (1990,2000) or an interval (1990/2000/P1Y)",
+            t.chars().take(60).collect::<String>()
+        )
+    };
+    if t.is_empty() || t.len() > MAX_WMS_TIME {
+        return Err(error());
+    }
+    let one = |v: &str| checked_time(v).is_ok();
+    let period = |p: &str| p.len() > 1 && p.len() <= 40 && p.starts_with('P') && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.');
+    let parts: Vec<&str> = t.split(',').map(str::trim).collect();
+    let valid = |part: &&str| {
+        let pieces: Vec<&str> = part.split('/').collect();
+        match pieces.as_slice() {
+            [v] => one(v),
+            [start, end] => one(start) && one(end),
+            [start, end, p] => one(start) && one(end) && period(p),
+            _ => false,
+        }
+    };
+    if parts.iter().all(valid) { Ok(parts.join(",")) } else { Err(error()) }
+}
+
+/// A tile template with its `{Time}` filled with `t` (a [`checked_time`], or for a WMS layer a
+/// [`checked_wms_time`]): percent-encoded where
+/// it is a query value (`TIME={Time}`, a WMS layer's or a WMTS one asked by key), as it is in a
+/// path (a checked time has no `/`).
+pub fn with_time(template: &str, t: &str) -> String {
+    template.replace("={Time}", &format!("={}", encode(t))).replace("{Time}", t)
+}
+
+/// A time dimension from its default (`None` when the service gives none) and the values it
+/// lists: the default when `check` takes it, else the latest time listed (a range's end); with
+/// neither, none. Every value listed is read for the latest; the first few are kept.
+fn layer_time(default: Option<&str>, all: Vec<String>, check: fn(&str) -> Result<String, String>, multiple: bool) -> Option<LayerTime> {
+    let all: Vec<String> = all.into_iter().filter(|v| v.len() <= 100).collect();
+    let listed = all.iter().rev().find_map(|v| {
+        let mut parts = v.split('/');
+        let first = parts.next().unwrap_or("");
+        checked_time(parts.next().unwrap_or(first)).ok()
+    });
+    let default = default.and_then(|t| check(t).ok()).or(listed)?;
+    let values = all.into_iter().take(MAX_TIME_VALUES).collect();
+    Some(LayerTime { default, values, multiple })
+}
+
+/// A WMS layer's own time dimension: its `Dimension` named `time` with its values (WMS 1.3.0
+/// Annex C), or its `Extent` of that name (WMS 1.1.1, whose `Dimension` only declares it): a
+/// comma-separated list of times and ranges (`1990,2000`, `1952/2026/P1Y`). Its default may be any
+/// time `TIME` takes, a range too (`2005/2025`, swisstopo's strips of aerial photos).
+fn wms_time(layer: &Node) -> Option<LayerTime> {
+    let is_time = |n: &Node| n.attribute("name").is_some_and(|a| a.trim().eq_ignore_ascii_case("time"));
+    let d = children(layer, "Dimension")
+        .filter(is_time)
+        .find(|d| !text_of(d).is_empty())
+        .or_else(|| children(layer, "Extent").find(is_time))?;
+    let all = text_of(&d).split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(MAX_LAYERS).collect();
+    let multiple = d.attribute("multipleValues").is_some_and(|m| m.trim() == "1" || m.trim().eq_ignore_ascii_case("true"));
+    layer_time(d.attribute("default").map(str::trim), all, checked_wms_time, multiple)
 }
 
 /// A layer a service offers.
@@ -463,21 +538,21 @@ fn wms(url: &str, root: &Node) -> Service {
     let info_request = info::request_of(root, url, version, format);
     let mut service = Service { kind: "WMS".into(), title, ..Service::default() };
     let mut skipped = 0;
-    // Layers inherit their parents' coordinate systems, nearest valid geographic bounds and
-    // queryable attribute.
+    // Layers inherit their parents' coordinate systems, nearest valid geographic bounds, queryable
+    // attribute and time dimension.
     // The SLD profile's GetLegendGraphic (WMS 1.3.0 with SLD 1.1, 1.1.1 with SLD 1.0), when the
     // service offers it in a format RustGIS shows: a layer's legend, drawn from its default style.
     let legend_graphic = wms_legend_graphic(root, url, &get_map, version);
     // (What a layer passes on is shared by its sublayers, not copied for each: a hostile document
     // may give one layer a great many.)
-    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>);
+    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>, Option<Rc<LayerTime>>);
     let mut stack: Vec<Inherited<'_, '_>> = root
         .descendants()
         .filter(|n| n.is_element() && local(n) == "Capability")
         .flat_map(|c| children(&c, "Layer").collect::<Vec<_>>())
-        .map(|l| (l, Rc::from([]), None, false, Rc::from([])))
+        .map(|l| (l, Rc::from([]), None, false, Rc::from([]), None))
         .collect();
-    while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles)) = stack.pop() {
+    while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles, inherited_time)) = stack.pop() {
         if service.layers.len() >= MAX_LAYERS {
             break;
         }
@@ -499,8 +574,10 @@ fn wms(url: &str, root: &Node) -> Service {
             layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim().eq_ignore_ascii_case("true"));
         // Its own styles first, then those it inherits (a few: its parents' are each kept).
         let styles: Rc<[Node]> = children(&layer, "Style").chain(inherited_styles.iter().copied()).take(MAX_STYLES).collect();
+        // Its own time dimension replaces the one it inherits (WMS 1.3.0 §7.2.4.8).
+        let time = wms_time(&layer).map(Rc::new).or(inherited_time);
         for sub in children(&layer, "Layer") {
-            stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles)));
+            stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone()));
         }
         let Some(name) = child_text(&layer, "Name") else { continue };
         if !crs.iter().any(|c| c.split_whitespace().any(is_web_mercator)) {
@@ -516,6 +593,8 @@ fn wms(url: &str, root: &Node) -> Service {
                 encode(format)
             ),
         );
+        // At its time: the service's default, unless another is asked for when it is added.
+        let template = if time.is_some() { format!("{template}&TIME={{Time}}") } else { template };
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
         // A service without GetFeatureInfo still gives each layer one, never asked, so Identify
         // doesn't fetch the capabilities again to find out.
@@ -539,7 +618,7 @@ fn wms(url: &str, root: &Node) -> Service {
             offer: Offer::Tiles { template },
             bbox,
             tilesets: None,
-            time: None,
+            time: time.as_deref().cloned(),
             feature_info,
             legends,
         });
@@ -692,16 +771,12 @@ fn wmts(url: &str, root: &Node) -> Service {
         let time = children(&layer, "Dimension")
             .find(|d| child_text(d, "Identifier").is_some_and(|i| i.eq_ignore_ascii_case("time")))
             .and_then(|d| {
-                // Every listed value is read for the latest; the first few are kept.
-                let all: Vec<String> = children(&d, "Value").take(MAX_LAYERS).map(|v| text_of(&v)).filter(|v| v.len() <= 100).collect();
-                let listed = all.iter().rev().find_map(|v| {
-                    let mut parts = v.split('/');
-                    let first = parts.next().unwrap_or("");
-                    checked_time(parts.next().unwrap_or(first)).ok()
-                });
-                let default = child_text(&d, "Default").and_then(|t| checked_time(&t).ok()).or(listed)?;
-                let values = all.into_iter().take(MAX_TIME_VALUES).collect();
-                Some(LayerTime { default, values })
+                layer_time(
+                    child_text(&d, "Default").as_deref(),
+                    children(&d, "Value").take(MAX_LAYERS).map(|v| text_of(&v)).collect(),
+                    checked_time,
+                    false,
+                )
             });
         let templates: Vec<String> = children(&layer, "ResourceURL")
             .filter(|r| r.attribute("resourceType") == Some("tile"))
@@ -3252,6 +3327,86 @@ mod tests {
         for bad in ["", "..", ".", "../x", "2024-06-01/../..", "a b", "x?y=1", "latest", &"9".repeat(50)] {
             assert!(checked_time(bad).is_err(), "{bad}");
         }
+    }
+
+    /// WMS layers with a time dimension (WMS 1.3.0 Annex C, as swisstopo's: years listed, a range
+    /// by years, `99991231` for the latest): its GetMap template takes `{Time}`, at the default
+    /// given (any value `TIME` takes, a range too), else the latest listed; a sublayer inherits
+    /// its parent's.
+    #[test]
+    fn wms_time_dimensions() {
+        let layer = |name: &str, dim: &str| {
+            format!(r#"<Layer queryable="1"><Name>{name}</Name><Title>{name}</Title><CRS>EPSG:3857</CRS>{dim}</Layer>"#)
+        };
+        let dim = |attributes: &str, values: &str| format!(r#"<Dimension name="time" units="ISO8601" {attributes}>{values}</Dimension>"#);
+        let parent = format!(
+            "<Layer><Name>series</Name><Title>Series</Title><CRS>EPSG:3857</CRS>{}{}</Layer>",
+            dim(r#"default="2020""#, "2000,2010,2020"),
+            layer("part", "")
+        );
+        let layers = [
+            layer("population", &dim(r#"default="2025" nearestValue="0""#, "1990, 2000,2025")),
+            layer("strips", &dim(r#"default="2005/2025""#, "2005/2025")),
+            layer("oblique", &dim("", "1927,1950,2004")),
+            layer("photos", &dim(r#"default="99991231""#, "19291231,19341231,99991231")),
+            layer("several", &dim(r#"default="2010" multipleValues="1""#, "1990/2020/P10Y")),
+            layer("bad", &dim(r#"default="../x""#, "")),
+            layer("plain", ""),
+            parent,
+        ]
+        .concat();
+        let caps = format!(
+            r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms"><Service><Title>Maps</Title></Service><Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="https://maps.example.org/wms?"/></Get></HTTP></DCPType></GetMap></Request><Layer><Title>Root</Title>{layers}</Layer></Capability></WMS_Capabilities>"#
+        );
+        let url = "https://maps.example.org/wms?SERVICE=WMS&REQUEST=GetCapabilities";
+        let s = parse(url, caps.as_bytes()).unwrap();
+        let time = |name: &str| {
+            let l = s.layers.iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}: {:?}", s.layers));
+            let Offer::Tiles { template } = &l.offer else { panic!("{name}") };
+            assert_eq!(template.ends_with("&TIME={Time}"), l.time.is_some(), "{name}: {template}");
+            l.time.clone()
+        };
+        let population = time("population").unwrap();
+        assert_eq!(
+            (population.default.as_str(), population.values.as_slice(), population.multiple),
+            ("2025", &["1990", "2000", "2025"].map(String::from)[..], false)
+        );
+        // The service's default as it gives it, a range too.
+        assert_eq!(time("strips").map(|t| t.default), Some("2005/2025".into()));
+        // No default: the latest listed.
+        assert_eq!(time("oblique").map(|t| t.default), Some("2004".into()));
+        assert_eq!(time("photos").map(|t| t.default), Some("99991231".into()));
+        assert!(time("several").unwrap().multiple);
+        // A default that isn't a time, and no time listed: no time, as for WMTS.
+        assert_eq!(time("bad"), None);
+        assert_eq!(time("plain"), None);
+        assert_eq!(time("series").map(|t| t.default), Some("2020".into()));
+        assert_eq!(time("part"), time("series"), "inherited");
+        // WMS 1.1.1: the parent declares the dimension, the layer gives its extent.
+        let old = caps.replace(r#"version="1.3.0""#, r#"version="1.1.1""#).replace("<CRS>", "<SRS>").replace("</CRS>", "</SRS>").replace(
+            r#"<Dimension name="time" units="ISO8601" default="2025" nearestValue="0">1990, 2000,2025</Dimension>"#,
+            r#"<Dimension name="time" units="ISO8601"/><Extent name="time" default="2000">1990,2000</Extent>"#,
+        );
+        let s = parse(url, old.as_bytes()).unwrap();
+        let population = s.layers.iter().find(|l| l.name == "population").unwrap();
+        assert_eq!(population.time.as_ref().map(|t| t.default.as_str()), Some("2000"));
+        // What TIME takes (WMS 1.3.0 Table C.2): a time, a list, an interval with its resolution or
+        // not; never a path or another parameter.
+        for good in ["2024-06-01", "1990, 2000", "1990/2020", "1952/2026/P1Y", "2017-08-31T23:59:59Z/current/P1M", "1990,2000/2010"] {
+            assert!(checked_wms_time(good).is_ok(), "{good}");
+        }
+        assert_eq!(checked_wms_time(" 1990, 2000 "), Ok("1990,2000".into()));
+        for bad in
+            ["", "1990,", "/", "1990/", "1990/2000/2010", "1990/2000/P", "1990/2000/P1Y/x", "../x", "1990&LAYERS=x", &"1990,".repeat(300)]
+        {
+            assert!(checked_wms_time(bad).is_err(), "{bad}");
+        }
+        // Filled where `{Time}` is a query value, encoded; in a path, as it is.
+        assert_eq!(
+            with_time("https://a.example/wms?LAYERS=x&TIME={Time}", "2024-06-01T10:00:00+02:00/2024-06-02"),
+            "https://a.example/wms?LAYERS=x&TIME=2024-06-01T10:00:00%2B02:00%2F2024-06-02"
+        );
+        assert_eq!(with_time("https://a.example/{Time}/{z}/{x}/{y}.png", "2024-06-01"), "https://a.example/2024-06-01/{z}/{x}/{y}.png");
     }
 
     #[test]

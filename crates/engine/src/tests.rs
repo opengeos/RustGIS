@@ -9132,6 +9132,59 @@ fn tile_layers_take_their_services_legends() {
     assert_eq!(legends(&s, "Topo").0, Vec::<String>::new(), "a refusal changes nothing");
 }
 
+/// A WMS layer with a time dimension (WMS 1.3.0 Annex C) is added at its default or the time
+/// asked for, named with it: one time where the layer takes single values, a list or interval
+/// where it takes several; GetFeatureInfo asks at the same time, its project's layer too.
+#[test]
+fn wms_layers_with_time() {
+    const WMS: &str = r#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
+<Service><Title>Test WMS</Title></Service>
+<Capability><Request><GetMap><Format>image/png</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetMap>
+<GetFeatureInfo><Format>application/geo+json</Format><DCPType><HTTP><Get><OnlineResource xlink:href="https://maps.example.com/wms?"/></Get></HTTP></DCPType></GetFeatureInfo></Request>
+<Layer queryable="1"><Title>Root</Title><CRS>EPSG:3857</CRS>
+<Layer><Name>population</Name><Title>Population</Title><Dimension name="time" units="ISO8601" default="2025" nearestValue="0">1990,2000,2025</Dimension></Layer>
+<Layer><Name>decades</Name><Title>Decades</Title><Dimension name="time" units="ISO8601" default="2020" multipleValues="1">1990/2020/P10Y</Dimension></Layer>
+</Layer></Capability></WMS_Capabilities>"#;
+    let mut s = Session::new(Project::default());
+    let url = "https://maps.example.com/wms";
+    let listed = s.run("service.layers", &json!({"url": url, "text": WMS})).unwrap();
+    let population = listed["layers"].as_array().unwrap().iter().find(|l| l["name"] == "population").unwrap();
+    assert_eq!(population["time"], json!({"default": "2025", "values": ["1990", "2000", "2025"], "multiple": false}));
+    s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS})).unwrap();
+    s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "1990"})).unwrap();
+    let tile = |s: &Session, name: &str| s.map().tiles.iter().find(|t| t.name == name).unwrap_or_else(|| panic!("{name}")).url.clone();
+    assert!(tile(&s, "Population").ends_with("&TIME=2025"), "{}", tile(&s, "Population"));
+    assert!(tile(&s, "Population 1990").ends_with("&TIME=1990"), "{}", tile(&s, "Population 1990"));
+    // One time for a layer that takes single values; a list or interval for one that takes several.
+    let e = s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "1990,2000"})).unwrap_err();
+    assert!(e.contains("a time is a date"), "{e}");
+    s.run("service.add", &json!({"url": url, "layer": "decades", "text": WMS, "time": "1990/2010"})).unwrap();
+    assert!(tile(&s, "Decades 1990/2010").ends_with("&TIME=1990%2F2010"), "{}", tile(&s, "Decades 1990/2010"));
+    // GetFeatureInfo asks at the layer's time, a project's layer (without its request) too.
+    s.run("map.goToXY", &json!({"lon": 8.5, "lat": 47.4, "scale": 10000})).unwrap();
+    let asked = |s: &mut Session| -> Vec<String> {
+        let v = s.run("identify", &json!({"lon": 8.5, "lat": 47.4, "mode": "visible"})).unwrap();
+        v["featureInfo"].as_array().unwrap().iter().filter_map(|a| a["url"].as_str().map(str::to_string)).collect()
+    };
+    let requests = asked(&mut s);
+    for (name, time) in [("Population", "2025"), ("Population 1990", "1990"), ("Decades 1990/2010", "1990%2F2010")] {
+        let layer = tile(&s, name);
+        assert!(
+            requests.iter().any(|r| r.contains("REQUEST=GetFeatureInfo")
+                && r.ends_with(&format!("&TIME={time}"))
+                && r.contains(if name.starts_with('D') { "LAYERS=decades" } else { "LAYERS=population" })),
+            "{name} ({layer}): {requests:?}"
+        );
+    }
+    let text = serde_json::to_string(&s.project).unwrap();
+    let mut reopened = Session::new(serde_json::from_str(&text).unwrap());
+    assert!(reopened.map().tiles.iter().all(|t| t.feature_info.is_none()));
+    let p = json!({"layer": "Population 1990", "lon": 8.5, "lat": 47.4, "capabilities": WMS, "request": true});
+    let r = reopened.run("identify.featureInfo", &p).unwrap();
+    let request = r["url"].as_str().unwrap();
+    assert!(request.contains("REQUEST=GetFeatureInfo") && request.ends_with("&TIME=1990"), "{request}");
+}
+
 /// Identify asks a WMS layer what is at the point (GetFeatureInfo): the request from the
 /// capabilities, the answer read as results; a project's layer, which doesn't keep the request,
 /// reads its service's capabilities again; a layer that isn't queryable isn't asked.

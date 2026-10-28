@@ -917,13 +917,18 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                     }
                 });
             }
-            // Layers that change with time (NASA GIBS's) are added at a date.
+            // Layers that change with time (NASA GIBS's, swisstopo's maps by year) are added at a
+            // date; empty, at the service's default.
             if layers.iter().any(|l| l.get("time").is_some()) {
                 ui.horizontal(|ui| {
                     let input_label = ui.label(tl!("Date"));
-                    ui.add(egui::TextEdit::singleline(&mut browse.time).hint_text(tl!("latest")).desired_width(120.0))
+                    ui.add(egui::TextEdit::singleline(&mut browse.time).hint_text(tl!("its default")).desired_width(120.0))
                         .labelled_by(input_label.id);
-                    ui.label(egui::RichText::new(tl!("YYYY-MM-DD, for the layers that change with time")).small().weak());
+                    ui.label(
+                        egui::RichText::new(tl!("for the layers that change with time, as they list their times (2024-06-01, 1995)"))
+                            .small()
+                            .weak(),
+                    );
                 });
             }
             // Feature layers come whole, or only the features crossing the map's view.
@@ -992,7 +997,18 @@ fn add_service(app: &mut RustGisApp, ui: &mut egui::Ui) -> bool {
                                     _ => tl!("map"),
                                 };
 
-                                ui.label(egui::RichText::new(what).small().weak());
+                                let what = ui.label(egui::RichText::new(what).small().weak());
+                                // The times a layer lists, to pick one for Date.
+                                if let Some(t) = l.get("time") {
+                                    let values: Vec<&str> =
+                                        t["values"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                                    let default = t["default"].as_str().unwrap_or("");
+                                    let times = values.join(", ");
+                                    what.on_hover_text(crate::i18n::fmt(
+                                        "Its default: {default}. Its times: {times}",
+                                        &[("default", default), ("times", &times)],
+                                    ));
+                                }
                             });
                         }
                     });

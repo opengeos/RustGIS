@@ -80,7 +80,12 @@ fn next_fetch(t: &rustgis_map::tiles::TileLayer, lon: f64, lat: f64, at: Coord, 
 fn ask(t: &rustgis_map::tiles::TileLayer, fi: &FeatureInfo, at: Coord, m_per_px: f64) -> Option<Value> {
     // The request's address comes from the capabilities (hostile input): it must not reach into
     // the local network from a service on the web.
+    // At the time the layer draws (a WMS layer with a time dimension).
     fi.request(at.x, at.y, m_per_px)
+        .map(|url| match ogc::map_time(&t.url) {
+            Some(time) => format!("{url}&TIME={time}"),
+            None => url,
+        })
         .filter(|url| crate::render::rustgis_tiles::address::check(url, Some(&t.url)).is_ok())
         .map(|url| json!({"tileLayer": t.name, "url": url}))
 }
