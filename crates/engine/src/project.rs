@@ -729,6 +729,19 @@ impl Project {
         &mut self.maps[i]
     }
 
+    /// A consumed download cannot run again when an older undo snapshot is restored.
+    pub(crate) fn discard_import_reservation(&mut self, token: &str) {
+        for map in &mut self.maps {
+            let removed: std::collections::HashSet<_> =
+                map.layers.iter().filter(|layer| layer.dataset.source.as_deref() == Some(token)).map(|layer| layer.id).collect();
+            map.layers.retain(|layer| !removed.contains(&layer.id));
+            map.tiles.retain(|tile| tile.id != token);
+            for group in &mut map.groups {
+                group.children.retain(|id| !removed.contains(id));
+            }
+        }
+    }
+
     /// Runtime download reservations cannot be reopened; refuse snapshots until they finish.
     pub(crate) fn ensure_imports_complete(&self) -> Result<(), String> {
         for map in self.maps.iter().chain(self.offline_areas.iter().map(|area| &area.data)) {

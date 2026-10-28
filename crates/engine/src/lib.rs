@@ -991,6 +991,12 @@ impl Session {
         }
         self.merge = merge;
         let res = self.guarded(label, mutates, |s| run(s, params));
+        if id == "layer.addDownload"
+            && res.is_ok()
+            && let Some(token) = params.get("geolibreLayer").and_then(|v| v.get("token")).and_then(serde_json::Value::as_str)
+        {
+            self.retire_import_history(token);
+        }
         // What was added, for the Data Sources pane's Recent list.
         if res.is_ok()
             && let Some(src) = sources::added_by(id, params)
@@ -998,6 +1004,16 @@ impl Session {
             self.sources.note(src);
         }
         res
+    }
+
+    /// Retires only this consumed reservation, preserving unrelated pending imports in history.
+    pub(crate) fn retire_import_history(&mut self, token: &str) {
+        if token.is_empty() {
+            return;
+        }
+        for (project, ..) in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            project.discard_import_reservation(token);
+        }
     }
 
     /// Why a command can't run on `layer`: it edits features, and the layer is read in place from

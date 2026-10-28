@@ -24,6 +24,8 @@ pub struct Read {
     bytes: usize,
     /// Missing keys can return 403; report access denial only if no metadata was readable.
     forbidden: usize,
+    /// Retain a failed batch until its callbacks drain before another store can start.
+    error: Option<String>,
 }
 
 /// Starts an import read; the engine has already reserved its layer and drawing position.
@@ -43,6 +45,7 @@ pub fn start(app: &mut RustGisApp, p: &Value) -> Result<(), String> {
         phase: None,
         bytes: 0,
         forbidden: 0,
+        error: None,
     });
     Ok(())
 }
@@ -50,7 +53,7 @@ pub fn start(app: &mut RustGisApp, p: &Value) -> Result<(), String> {
 impl Read {
     /// Polls one batch. Missing chunks retain the format's fill values; other errors stop it.
     fn poll(&mut self) -> Option<Result<Vec<u8>, String>> {
-        let mut error = None;
+        let mut error = self.error.take();
         self.waiting.retain(|(key, slot)| match slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
             Some(Ok(bytes)) => {
                 self.bytes = self.bytes.saturating_add(bytes.len());
@@ -70,8 +73,11 @@ impl Read {
             }
             None => true,
         });
-        if let Some(e) = error {
-            return Some(Err(e));
+        self.error = error;
+        if self.waiting.is_empty()
+            && let Some(error) = self.error.take()
+        {
+            return Some(Err(error));
         }
         // Wait for the entire batch before reserving another: partially finished batches
         // still own their byte allowance in callback slots, even before we consume them.
@@ -197,7 +203,21 @@ mod tests {
             phase: None,
             bytes: 0,
             forbidden: 0,
+            error: None,
         }
+    }
+
+    #[test]
+    fn geolibre_zarr_failed_batch_drains_before_the_next_store_can_start() {
+        let mut read = reader(vec![("failed", Err("HTTP 500".into()))]);
+        let pending: Answer = Slot::default();
+        read.waiting.push(("still running".into(), pending.clone()));
+        assert!(read.poll().is_none());
+        assert!(read.error.is_some());
+        assert_eq!(read.waiting.len(), 1);
+        *pending.lock().unwrap() = Some(Ok(vec![0; 16]));
+        assert!(read.poll().unwrap().unwrap_err().contains("HTTP 500"));
+        assert!(read.waiting.is_empty());
     }
 
     #[test]
@@ -272,6 +292,7 @@ mod tests {
             phase: Some((store, plan)),
             bytes: 0,
             forbidden: 0,
+            error: None,
         });
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx()));
@@ -300,6 +321,7 @@ mod tests {
                 phase: None,
                 bytes: 0,
                 forbidden: 0,
+                error: None,
             });
         }
         let target = app.session.project.active_map;
@@ -340,6 +362,7 @@ mod tests {
             phase: None,
             bytes: MAX_IMPORT_BYTES,
             forbidden: 0,
+            error: None,
         });
         start(&mut app, &json!({"url":"https://example.org/queued.zarr"})).unwrap();
         let ctx = egui::Context::default();

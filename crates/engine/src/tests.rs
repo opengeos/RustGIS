@@ -18997,6 +18997,17 @@ fn geolibre_download_finishes_in_its_original_map_and_position() {
     assert_eq!(loaded.renderer.base_symbol().size, 18.0);
     assert_eq!(map.camera, camera);
     assert!(s.map().layers.is_empty());
+    // Completion and an earlier map switch must not resurrect the consumed reservation.
+    for _ in 0..2 {
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(s.project.saved_text(None).is_ok());
+        assert!(s.project.maps.iter().all(|m| m.layers.iter().all(|l| l.dataset.source.as_deref() != Some("geolibre-pending:test"))));
+    }
+    for _ in 0..2 {
+        s.run("edit.redo", &json!({})).unwrap();
+        assert!(s.project.saved_text(None).is_ok());
+    }
+    assert_eq!(s.project.maps[target].layer(id).unwrap().dataset.features.len(), 1);
 }
 
 #[test]

@@ -538,6 +538,7 @@ pub fn discard_pending(s: &mut Session, p: &Value) {
     if token.is_empty() {
         return;
     }
+    s.retire_import_history(token);
     for (index, map) in s.project.maps.iter_mut().enumerate() {
         let removed: std::collections::HashSet<_> =
             map.layers.iter().filter(|l| l.dataset.source.as_deref() == Some(token)).map(|l| l.id).collect();
