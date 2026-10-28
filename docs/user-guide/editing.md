@@ -152,10 +152,11 @@ buildings`) and its attributes; tile features can't be selected or zoomed to.
 They ask WMS layers too (WMS tile layers that are shown and, as far as their service's
 capabilities say, queryable): RustGIS sends the service a standard GetFeatureInfo request for the
 point (WMS 1.3.0 or 1.1.1, as in the layer's address), asking for GeoJSON when it offers it, else
-GML, other XML, plain text or HTML. The pop-up says "Asking the map service…" until every layer
-asked has answered, for up to 4 seconds, and then shows the features found and answered together,
-in drawing order; answers that come later join it as they arrive. When nothing else is under the
-click, it waits for the answers however long they take, and closes when none has any features.
+GML, other XML, plain text or HTML. While it asks, the pop-up says "Asking the map service…".
+When something else is under the click, it waits up to 4 seconds for every layer asked to answer,
+then shows the features found and answered together, in drawing order; answers that come later
+join it as they arrive. When nothing else is, it waits until an answer has features, and closes
+once every layer asked has answered (or failed) without any.
 When the service answers with an error in that format (swisstopo's MapServer can't write some of
 its layers as GeoJSON, but answers them in GML), RustGIS asks again in the next format it offers,
 and keeps asking that layer in it for the rest of the session.
