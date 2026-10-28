@@ -19260,3 +19260,16 @@ fn geolibre_summary_counts_completed_records_instead_of_note_names() {
         assert!(notices.iter().any(|n| n.contains(summary)), "expected {summary}, got {notices:?}");
     }
 }
+
+#[test]
+fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
+    let mut s = Session::new(crate::project::Project::default());
+    let mut ds = crate::data::Dataset::new("Pending", crate::data::GeometryType::Point, Vec::new());
+    ds.source = Some("geolibre-pending:save-test".into());
+    let id = s.map_mut().add_dataset(ds);
+    assert!(s.project.saved_text(None).unwrap_err().contains("still downloading"));
+    assert!(s.project.clone().recovery_text().unwrap_err().contains("still downloading"));
+    s.map_mut().layer_mut(id).unwrap().dataset.source = None;
+    assert!(s.project.saved_text(None).is_ok());
+    assert!(s.project.clone().recovery_text().is_ok());
+}

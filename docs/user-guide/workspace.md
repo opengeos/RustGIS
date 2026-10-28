@@ -100,7 +100,7 @@ keep colour and use a fixed size; graduated colour class boundaries are retained
 sizes use RustGIS's area scaling. Label halos use RustGIS defaults. Tile overlays draw above feature
 layers, and nested groups become flat folders with inherited visibility and opacity retained.
 URL data downloaded in the browser fills its reserved layer position when it arrives; wait for
-those downloads before saving. A browser import can queue at most 16 whole-file downloads
+those downloads before saving. Saving and recovery snapshots are refused while imported layers are still downloading. A browser import can queue at most 16 whole-file downloads
 (fewer if other downloads are queued, active, or awaiting completion); a larger batch is refused before creating its map.
 Split that project into smaller imports or use the desktop app. Streaming tiles and COGs do
 not consume those download slots. Desktop URL imports run synchronously, like Add Data from URL;

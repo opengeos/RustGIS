@@ -719,11 +719,23 @@ impl Project {
         &mut self.maps[i]
     }
 
+    /// Runtime download reservations cannot be reopened; refuse snapshots until they finish.
+    fn ensure_imports_complete(&self) -> Result<(), String> {
+        if self.maps.iter().any(|map| {
+            map.layers.iter().any(|layer| layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")))
+                || map.tiles.iter().any(|tile| tile.id.starts_with("geolibre-pending:"))
+        }) {
+            return Err("GeoLibre layers are still downloading; wait for them to finish before saving".into());
+        }
+        Ok(())
+    }
+
     /// The file keeps no passwords, keys, tokens or signatures in layer addresses. The open project
     /// keeps them. This process remembers the 32 most recent distinct saved snapshots with stripped
     /// addresses: opening identical plain project text restores them until that snapshot is evicted
     /// or RustGIS closes. Packages and imports never restore them.
     pub fn saved_text(&mut self, dir: Option<&Path>) -> Result<(String, usize), String> {
+        self.ensure_imports_complete()?;
         let was = strip_addresses(self.addresses_mut());
         let n = was.iter().flatten().count();
         let originals: Vec<Option<String>> = if let Some(d) = dir.and_then(Path::to_str) {
@@ -778,6 +790,7 @@ impl Project {
     /// frequent copies can't push the user's own saves out of the snapshots that restore secrets.
     /// Text too large to open again is refused.
     pub fn recovery_text(mut self) -> Result<String, String> {
+        self.ensure_imports_complete()?;
         strip_addresses(self.addresses_mut());
         let text = serde_json::to_string(&self).map_err(|e| e.to_string())?;
         if text.len() as u64 > MAX_BYTES {

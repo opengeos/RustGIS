@@ -101,6 +101,12 @@ impl Read {
             return None;
         }
         if let Some((store, plan)) = self.phase.take() {
+            if self.forbidden > 0 {
+                return Some(Err(crate::i18n::fmt(
+                    "{url}: access denied (HTTP 403) to {count} of the slice’s chunks",
+                    &[("url", &self.root), ("count", &self.forbidden.to_string())],
+                )));
+            }
             let name = self.params.get("name").and_then(Value::as_str).unwrap_or("Zarr");
             return Some(
                 zarr::assemble(&store, &plan, &self.got, name, None)
@@ -146,7 +152,7 @@ pub fn poll(app: &mut RustGisApp, ctx: &egui::Context) {
             Err(e) => {
                 app.session.download_failed(id);
                 rustgis_engine::cmd::geolibre::discard_pending(&mut app.session, &params);
-                app.session.notify(format!("{url}: {e}"), true);
+                app.session.notify(crate::i18n::fmt("{url}: {e}", &[("url", &url), ("e", &e)]), true);
             }
         }
     }
@@ -208,12 +214,26 @@ mod tests {
     }
 
     #[test]
-    fn geolibre_zarr_missing_chunk_403_preserves_fill_values() {
+    fn geolibre_zarr_refused_chunk_403_reports_access_denied() {
         let mut metadata = metadata();
         metadata["metadata"]["value/.zarray"]["chunks"] = json!([1, 2]);
         let store = zarr::parse_store(&[(".zmetadata".into(), metadata.to_string().into_bytes())]).unwrap();
         let plan = zarr::plan(&store, &zarr::Selection { variable: "value".into(), index: Vec::new() }).unwrap();
         let mut read = reader(vec![("value/1.0", Err("HTTP 403".into()))]);
+        for (key, values) in [("value/0.0", vec![1.0f64, 2.0]), ("lat/0", vec![0.5, 1.5]), ("lon/0", vec![0.5, 1.5])] {
+            read.got.insert(key.into(), values.iter().flat_map(|v| v.to_le_bytes()).collect());
+        }
+        read.phase = Some((store, plan));
+        assert!(read.poll().unwrap().unwrap_err().contains("access denied (HTTP 403) to 1"));
+    }
+
+    #[test]
+    fn geolibre_zarr_missing_chunk_404_preserves_fill_values() {
+        let mut metadata = metadata();
+        metadata["metadata"]["value/.zarray"]["chunks"] = json!([1, 2]);
+        let store = zarr::parse_store(&[(".zmetadata".into(), metadata.to_string().into_bytes())]).unwrap();
+        let plan = zarr::plan(&store, &zarr::Selection { variable: "value".into(), index: Vec::new() }).unwrap();
+        let mut read = reader(vec![("value/1.0", Err("HTTP 404".into()))]);
         for (key, values) in [("value/0.0", vec![1.0f64, 2.0]), ("lat/0", vec![0.5, 1.5]), ("lon/0", vec![0.5, 1.5])] {
             read.got.insert(key.into(), values.iter().flat_map(|v| v.to_le_bytes()).collect());
         }

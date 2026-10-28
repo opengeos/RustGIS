@@ -241,7 +241,9 @@ enum Added {
 
 /// Adds data or tiles, retaining the original layer's presentation. Tile layers have their own
 /// order in RustGIS, so mixing them with features is explicitly reported.
-fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report, _folder: (bool, f64)) -> Result<Added, String> {
+fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report, folder: (bool, f64)) -> Result<Added, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = folder;
     let name = string(r, "name");
     let kind = string(r, "type");
     let src = &r["source"];
@@ -284,8 +286,8 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report,
                 s.map_mut().tiles.insert(0, tile);
                 index = 0;
                 let mut saved = r.clone();
-                saved["visible"] = json!(boolean(r, "visible", true) && _folder.0);
-                saved["opacity"] = json!(number(r, "opacity", 1.0).clamp(0.0, 1.0) * _folder.1);
+                saved["visible"] = json!(boolean(r, "visible", true) && folder.0);
+                saved["opacity"] = json!(number(r, "opacity", 1.0).clamp(0.0, 1.0) * folder.1);
                 s.request_url(&json!({"url":address,"whole":true,"name":name,"geolibreLayer":{"token":token,"record":saved}}))?;
                 report.approximated(name, "MBTiles archive is downloading; wait before saving");
             }
