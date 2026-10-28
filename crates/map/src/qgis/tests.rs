@@ -1189,6 +1189,12 @@ fn gradient_and_shapeburst_fills_carry_over() {
     let FillPattern::Shapeburst { stops, .. } = fills[0].pattern else { panic!("{fills:?}") };
     assert!(stops.as_slice().is_empty(), "{stops:?}");
     assert!(report.notes.iter().any(|n| n.text.contains("other than gradients")), "{:?}", report.notes);
+    // Invalid stops before a valid one don't use up what a fill keeps.
+    let junk: String = (0..20).map(|_| "0.1;not a colour:").collect();
+    let late = burst.replace(r#"<prop k="stops" v=""#, &format!(r#"<prop k="stops" v="{junk}0.5;255,0,0,255:"#));
+    let (fills, _) = read(&late);
+    let FillPattern::Shapeburst { stops, .. } = fills[0].pattern else { panic!("{fills:?}") };
+    assert!(stops.as_slice().iter().any(|s| s.at == 0.5 && s.color.0[..3] == [255, 0, 0]), "{stops:?}");
     // Over the whole shape; an offset, which is left out, noted.
     let whole =
         burst.replace(r#"<prop k="use_whole_shape" v="0"/>"#, r#"<prop k="use_whole_shape" v="1"/>"#).replace(r#"v="0,0""#, r#"v="1,2""#);

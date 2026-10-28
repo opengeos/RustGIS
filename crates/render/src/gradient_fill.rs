@@ -22,7 +22,9 @@ use tiny_skia::{
 /// is smooth, so it scales up well).
 const MAX_BURST_PX: f32 = 1.0e6;
 /// The pixels all of a frame's shapebursts work on before each further one is shaded coarsely
-/// (at [`MIN_BURST_PX`]), so a layer of many large polygons still draws in time.
+/// (at [`MIN_BURST_PX`]), so a layer of many large polygons still draws in time: a threshold, not
+/// a cap (the one that crosses it finishes). A tilted view's bands, each drawn as a frame of its
+/// own, count their own.
 pub(crate) const FRAME_BURST_PX: f32 = 16.0e6;
 const MIN_BURST_PX: f32 = 65_536.0;
 

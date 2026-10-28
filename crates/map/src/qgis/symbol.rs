@@ -454,27 +454,34 @@ fn gradient(burst: bool, l: Node, p: &Props, reference: Option<f64>, layer: &str
 /// A QGIS gradient ramp's `stops`: `position;colour` pairs split by colons (a colour may carry
 /// its own colon, in `…,rgb:0.2,0.4,…`, and a stop its colour spec and direction after it).
 fn ramp_stops(stops: &str) -> Stops {
-    let mut list: Vec<String> = Vec::new();
+    // Each stop read as it ends, so only valid ones count towards what a fill keeps (and one
+    // more, to tell it has more), however many entries before them aren't.
+    let parse = |s: &str| {
+        let mut f = s.split(';');
+        let at = f.next()?.trim().parse::<f32>().ok().filter(|a| a.is_finite())?;
+        Some(Stop { at, color: color(f.next()?)? })
+    };
+    let mut valid: Vec<Stop> = Vec::new();
+    let mut current: Option<String> = None;
     for part in stops.split(':') {
         // A new stop starts with its position and a semicolon; anything else goes on the last.
         let starts = part.split_once(';').is_some_and(|(at, _)| at.trim().parse::<f32>().is_ok());
-        // No more than a fill keeps (and one to tell it has more).
-        if starts && list.len() > crate::fills::MAX_STOPS {
-            break;
-        }
-        match list.last_mut() {
+        match current.as_mut() {
             Some(last) if !starts => {
                 last.push(':');
                 last.push_str(part);
             }
-            _ => list.push(part.to_string()),
+            _ => {
+                valid.extend(current.take().as_deref().and_then(parse));
+                if valid.len() > crate::fills::MAX_STOPS {
+                    break;
+                }
+                current = Some(part.to_string());
+            }
         }
     }
-    Stops::new(list.iter().filter_map(|s| {
-        let mut f = s.split(';');
-        let at = f.next()?.trim().parse::<f32>().ok()?;
-        Some(Stop { at, color: color(f.next()?)? })
-    }))
+    valid.extend(current.as_deref().and_then(parse));
+    Stops::new(valid)
 }
 
 fn line(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &mut Report) -> Converted {
