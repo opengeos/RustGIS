@@ -303,9 +303,9 @@ values: polygons sharing a value make one layer together, and one without a valu
 id. Without a field, each polygon gives a layer named by its id. Names start with `output`, else
 the input's name, and an underscore: `roads_North` (a name the map already has gets a number, as
 for any new layer). A feature on the edge between two split
-polygons goes into both layers. Layers that would be empty are left out. Split stops, before any
-work, when there are more than 1,000 split areas (split polygons, or values of the field), empty
-ones included. Selections in both layers are honoured.
+polygons goes into both layers. Layers that would be empty are left out. Split stops, before
+clipping anything, when there are more than 1,000 split areas (split polygons, or values of the
+field), empty ones included. Selections in both layers are honoured.
 
 ```text
 gp.run={"tool":"split","params":{"input":"roads","split":"districts","field":"name"}}

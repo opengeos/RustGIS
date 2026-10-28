@@ -1185,14 +1185,23 @@ fn cut(g: &Geometry, zones: &[Zone], index: &ExtentIndex, outside: bool) -> (Vec
     if !outside {
         return (inside, None);
     }
-    let rest = match inside.as_slice() {
-        [] => Some(g.clone()),
-        // The same mask the inside part was cut with, when one zone was hit: a union would move
-        // its edges by a rounding error, and a line along one could come out on both sides.
-        [(only, _)] => zones.get(*only).and_then(|z| part(&whole, &z.poly, false)),
-        hit => part(&whole, &union_all(hit.iter().filter_map(|(zi, _)| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false),
-    };
+    let hit: Vec<&Zone> = inside.iter().filter_map(|(zi, _)| zones.get(*zi)).collect();
+    let rest = rest_outside(g, &whole, &hit);
     (inside, rest)
+}
+
+/// A feature's part outside the zones that cut it, for [`cut`] and [`outside`], which find those
+/// zones differently: `cut` makes each part inside anyway, so a zone cuts when that part is
+/// something; `outside` makes none, so it tests each zone with a predicate. `whole` is the feature
+/// as [`dissolved`] gives it. With no zone, the feature as it is, coordinates untouched; with one,
+/// cut by that zone itself (a union would move its edges by a rounding error, and a line along one
+/// could come out on both sides of it); with several, by their union.
+fn rest_outside(g: &Geometry, whole: &Geometry, hit: &[&Zone]) -> Option<Geometry> {
+    match hit {
+        [] => Some(g.clone()),
+        [only] => part(whole, &only.poly, false),
+        _ => part(whole, &union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
+    }
 }
 
 /// A feature's part outside every zone, as [`part`] gives it, for tools that keep only that
@@ -1219,11 +1228,7 @@ fn outside(g: &Geometry, zones: &[Zone], index: &ExtentIndex) -> Option<Geometry
         _ => z.poly.intersects(&geo_g),
     };
     let hit: Vec<&Zone> = near.into_iter().filter(cuts).collect();
-    match hit.as_slice() {
-        [] => Some(g.clone()),
-        [only] => part(&whole, &only.poly, false),
-        _ => part(&whole, &union_all(hit.iter().flat_map(|z| z.poly.0.iter())), false),
-    }
+    rest_outside(g, &whole, &hit)
 }
 
 /// Intersect, Identity, Union and Symmetrical Difference. Each input feature in turn gives its
@@ -1314,7 +1319,8 @@ fn symmetrical_difference(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Stri
 /// A value as a field of type `ty` holds it: unchanged when it already fits; else converted as
 /// typing it into the field would, so text that isn't a number becomes empty in a numeric field.
 /// A number becomes text at full precision, and a fractional one an integer by truncation; one
-/// beyond an integer field's range becomes empty.
+/// beyond an integer field's range, or not finite, becomes empty. Text becomes a Boolean as typing
+/// it would: true for true, yes, 1 or y, else false.
 fn converted(v: &Value, ty: FieldType) -> Value {
     match (v, ty) {
         (Value::Int(_), FieldType::Integer)
@@ -1336,6 +1342,9 @@ fn converted(v: &Value, ty: FieldType) -> Value {
             Ok(i) => Value::Int(i),
             Err(_) => t.trim().parse::<f64>().map_or(Value::Null, |f| converted(&Value::Float(f), ty)),
         },
+        // Text that reads as a finite number goes into a Double field; "NaN", "inf" or "1e400" is
+        // empty, as it is in an integer field.
+        (Value::Text(t), FieldType::Double) => t.trim().parse::<f64>().ok().filter(|f| f.is_finite()).map_or(Value::Null, Value::Float),
         (Value::Text(t), _) => Value::parse(t, ty),
         (v, _) => Value::parse(&v.to_string(), ty),
     }
@@ -1395,7 +1404,7 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
 }
 
 /// The most split areas (split polygons, or values of the split field) Split takes: more is an
-/// error before any work, not thousands of layers. Areas that come out empty count too.
+/// error before anything is clipped, not thousands of layers. Areas that come out empty count too.
 const MAX_SPLIT_AREAS: usize = 1000;
 /// The most characters of a split value kept in a layer's name.
 const MAX_SPLIT_NAME: usize = 64;
@@ -4970,6 +4979,12 @@ mod tests {
         for t in ["1e30", "-1e30", "NaN", "inf", "x", ""] {
             assert_eq!(text(t), Value::Null, "{t}");
         }
+        // And into a Double field: finite numbers only.
+        let double = |t: &str| converted(&Value::Text(t.into()), FieldType::Double);
+        assert_eq!(double(" 2.5 "), Value::Float(2.5));
+        for t in ["NaN", "inf", "-infinity", "1e400", "x", ""] {
+            assert_eq!(double(t), Value::Null, "{t}");
+        }
         assert_eq!(converted(&Value::Bool(true), FieldType::Double), Value::Float(1.0));
         assert_eq!(converted(&Value::Int(5), FieldType::Text), Value::Text("5".into()));
         assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
@@ -5171,6 +5186,21 @@ mod tests {
         for incomplete in ["parcels", "zones"] {
             incomplete_flag_reaches_every_output(incomplete);
         }
+    }
+
+    #[test]
+    fn overlays_leave_the_crs_flag_clear_when_inputs_are_complete() {
+        let m = parcels_and_zones();
+        for (tool, p) in [
+            ("erase", serde_json::json!({"input": "parcels", "erase": "zones"})),
+            ("update", serde_json::json!({"input": "parcels", "update": "zones"})),
+            ("symmetricalDifference", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+            ("intersect", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+        ] {
+            assert!(!layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}");
+        }
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
+        assert!(!out.is_empty() && out.iter().all(|d| !d.crs_incomplete));
     }
 
     /// Runs every tool that overlays parcels with zones, with layer `lost` marked as having lost

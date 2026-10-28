@@ -27,9 +27,11 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
      (`input`, `statistics`, `case`), `pivotTable` (`input`, `fields`, `pivot`, `value`, `statistic`)
    - conversion: `exportFeatures` (`input`, `where`)
-2. **Run it:** use `run_tool` with layers named in `params`. The output is a new layer, and the
-   result names it: use that name as the next step's input. Give `output` a clear name when the
-   chain is long.
+2. **Run it:** use `run_tool` with layers named in `params`. The output is usually one new layer,
+   and the result names it: use that name as the next step's input. Give `output` a clear name
+   when the chain is long. A tool with several outputs (`split`, one layer per split area) lists
+   them all among the layers it added: pick the layer the next step needs, or run that step on
+   each.
 3. **The selection:** tools process only the selected features when a layer has a selection. Clear it
    with `select.clear` first unless the user meant the selection.
 4. **Units:** `buffer` distances take `units`. Check `describe_tool` for the default and say which
