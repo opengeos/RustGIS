@@ -1,6 +1,6 @@
 //! The tools.
 
-use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Simplify, orient::Direction};
+use geo::{BooleanOps, Contains, ConvexHull, InteriorPoint, Intersects, MultiPolygon, Orient, Relate, Simplify, orient::Direction};
 use rustgis_data::raster::Crs;
 use rustgis_data::{Coord, Dataset, Field, FieldType, Geometry, GeometryType, Value};
 use rustgis_geom::Extent;
@@ -895,6 +895,13 @@ fn copy_schema(ds: &Dataset, name: String, g: GeometryType) -> Dataset {
     Dataset::new(name, g, ds.fields.clone())
 }
 
+/// Gives a tool's output its input's source CRS, for export, and whether the input lost features
+/// to it on reading, so the output isn't taken for complete.
+fn keep_source_crs(out: &mut Dataset, ds: &Dataset) {
+    out.crs = ds.crs;
+    out.crs_incomplete = ds.crs_incomplete;
+}
+
 /// Finds the index of a field by case-insensitive name, explicitly detecting collisions.
 ///
 /// If multiple fields in `ds.fields` match `name` case-insensitively, returns an error
@@ -1034,10 +1041,10 @@ fn clip(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Clip: {n} features kept"))
 }
 
-/// Erase: each input feature's part outside every erase polygon, as [`cut`] gives it (a point on
-/// an edge, or a line along one, counts as inside and is erased). Only the erase polygons whose
-/// extent meets a feature's are tried, and a feature none of them overlaps is kept as it is.
-/// Features left with nothing, or without geometry, are left out; the input must have geometry.
+/// Erase: each input feature's part outside every erase polygon, as [`outside`] gives it (a point
+/// on an edge, or a line along one, counts as inside and is erased); a feature no erase polygon
+/// meets is kept as it is. Features left with nothing, or without geometry, are left out; the
+/// input must have geometry.
 fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -1046,10 +1053,10 @@ fn erase(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let (_, zones) = overlay_zones(inp, p, "erase")?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Erase", ds.name)), ds.geometry_type);
-    out.crs = ds.crs;
+    keep_source_crs(&mut out, ds);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
-        if let Some(rest) = f.geometry.as_ref().and_then(|g| cut(g, &zones, &index, true).1) {
+        if let Some(rest) = f.geometry.as_ref().and_then(|g| outside(g, &zones, &index)) {
             out.push_next(Some(rest), f.attrs.clone());
         }
     }
@@ -1093,7 +1100,7 @@ fn overlay_zones<'a>(inp: &'a dyn Inputs, p: &Json, k: &str) -> Result<(&'a Data
 /// name is taken getting a suffix (`name_2`). It keeps the input's source CRS for export.
 fn overlay_schema(ds: &Dataset, ov: &Dataset, name: String, g: GeometryType) -> Dataset {
     let mut out = copy_schema(ds, name, g);
-    out.crs = ds.crs;
+    keep_source_crs(&mut out, ds);
     for f in &ov.fields {
         let name = unique_field(&out, &f.name);
         out.fields.push(Field { name, ..f.clone() });
@@ -1185,6 +1192,32 @@ fn cut(g: &Geometry, zones: &[Zone], index: &ExtentIndex, outside: bool) -> (Vec
         hit => part(&whole, &union_all(hit.iter().filter_map(|(zi, _)| zones.get(*zi)).flat_map(|z| z.poly.0.iter())), false),
     };
     (inside, rest)
+}
+
+/// A feature's part outside every zone, as [`part`] gives it, for tools that keep only that
+/// (Erase, Update): it is cut once, by the zones whose extent meets its own (that zone itself, so
+/// its edges stay exactly where they are, or their union), without [`cut`]'s part in each zone. A
+/// feature no zone meets (a polygon: overlaps) is kept as it is, coordinates untouched: taking
+/// away what it doesn't meet changes nothing.
+fn outside(g: &Geometry, zones: &[Zone], index: &ExtentIndex) -> Option<Geometry> {
+    let ext = g.extent();
+    let near: Vec<&Zone> = index.candidates(&ext).into_iter().filter_map(|zi| zones.get(zi)).filter(|z| ext.intersects(&z.ext)).collect();
+    let mask = match near.as_slice() {
+        [] => return Some(g.clone()),
+        [only] => std::borrow::Cow::Borrowed(&only.poly),
+        _ => std::borrow::Cow::Owned(union_all(near.iter().flat_map(|z| z.poly.0.iter()))),
+    };
+    // A polygon is cut where it overlaps the mask, a line or point wherever it meets it (an edge
+    // counts as inside): a polygon that only touches the mask is not cut.
+    let geo_g = to_geo(g);
+    let meets = match g {
+        Geometry::Polygon(_) => {
+            let m = mask.relate(&geo_g);
+            m.is_intersects() && !m.is_touches()
+        }
+        _ => mask.intersects(&geo_g),
+    };
+    if meets { part(&dissolved(g), &mask, false) } else { Some(g.clone()) }
 }
 
 /// Intersect, Identity, Union and Symmetrical Difference. Each input feature in turn gives its
@@ -1311,7 +1344,7 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let (up, zones) = overlay_zones(inp, p, "update")?;
     let index = ExtentIndex::new(zones.iter().map(|z| z.ext));
     let mut out = copy_schema(ds, out_name(p, format!("{}_Update", ds.name)), GeometryType::Polygon);
-    out.crs = ds.crs;
+    keep_source_crs(&mut out, ds);
     for r in rows(inp, p, "input", ds) {
         let Some(f) = ds.features.get(r) else { continue };
         let rest = match &f.geometry {
@@ -1319,7 +1352,7 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
                 out.push_next(None, f.attrs.clone());
                 continue;
             }
-            Some(g) => cut(g, &zones, &index, true).1,
+            Some(g) => outside(g, &zones, &index),
         };
         if let Some(rest) = rest {
             out.push_next(Some(rest), f.attrs.clone());
@@ -1384,9 +1417,12 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         return Err(format!("'{}' has no geometry", ds.name));
     }
     let (sp, zones) = overlay_zones(inp, p, "split")?;
-    let field = match s(p, "field").trim() {
-        "" => None,
-        name => Some(find_field_case_insensitive(sp, name)?),
+    // A field name, or none; anything else is an error, not one layer per polygon.
+    let field = match p.get("field") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(name)) if name.trim().is_empty() => None,
+        Some(Json::String(name)) => Some(find_field_case_insensitive(sp, name.trim())?),
+        Some(other) => return Err(format!("Split Field must be a field name, not {other}")),
     };
     // The split polygons of each layer, in the order their first polygon comes, keyed by the exact
     // value, so values that would be named alike stay apart. A layer named by a value and one named
@@ -1429,7 +1465,7 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         };
         let ext = polys.iter().fold(Extent::EMPTY, |e, z| e.union(&z.ext));
         let mut out = copy_schema(ds, format!("{prefix}_{name}"), ds.geometry_type);
-        out.crs = ds.crs;
+        keep_source_crs(&mut out, ds);
         for li in index.candidates(&ext) {
             let Some((r, e)) = located.get(li) else { continue };
             let Some(f) = ds.features.get(*r) else { continue };
@@ -1446,7 +1482,8 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     }
     let mut msg = format!("Split: {} layers", layers.len());
     if empty > 0 {
-        msg = format!("{msg} ({empty} split areas held no features)");
+        let areas = if empty == 1 { "split area" } else { "split areas" };
+        msg = format!("{msg} ({empty} {areas} held no features)");
     }
     Ok(ToolResult { output: Output::Layers(layers), messages: vec![msg] })
 }
@@ -4938,7 +4975,7 @@ mod tests {
         let m = parcels_and_zones();
         let r = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap();
         // z1 (id 1) holds p1's right half; z2 only touches p1 and p2, so its layer is left out.
-        assert!(r.messages[0].contains("1 split areas held no features"), "{:?}", r.messages);
+        assert!(r.messages[0].contains("1 split area held no features"), "{:?}", r.messages);
         let out = layers_of(r);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].name, "parcels_1");
@@ -5094,6 +5131,36 @@ mod tests {
         // Each float layer holds the point in its own zone: 0.0000012's at x 0.25, 0.0000014's at 0.75.
         let x = |d: &Dataset| d.features.iter().filter_map(|f| f.geometry.as_ref()).map(|g| g.extent().min_x).collect::<Vec<_>>();
         assert_eq!((x(&out[0]), x(&out[1])), (vec![0.25], vec![0.75]));
+    }
+
+    #[test]
+    fn split_refuses_a_split_field_that_is_not_a_name() {
+        let m = parcels_and_zones();
+        for bad in [serde_json::json!(5), serde_json::json!(["zone"]), serde_json::json!(true)] {
+            let e = crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": bad})).unwrap_err();
+            assert!(e.contains("must be a field name"), "{e}");
+        }
+        // Empty or null is no field.
+        for none in [serde_json::json!(""), serde_json::json!(null)] {
+            assert!(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": none})).is_ok());
+        }
+    }
+
+    #[test]
+    fn erase_update_split_and_overlays_keep_an_incomplete_crs_flag() {
+        let mut m = parcels_and_zones();
+        m.0.get_mut("parcels").unwrap().crs_incomplete = true;
+        let params = [
+            ("erase", serde_json::json!({"input": "parcels", "erase": "zones"})),
+            ("update", serde_json::json!({"input": "parcels", "update": "zones"})),
+            ("symmetricalDifference", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+            ("intersect", serde_json::json!({"input": "parcels", "overlay": "zones"})),
+        ];
+        for (tool, p) in params {
+            assert!(layer(crate::run(tool, &m, &p).unwrap()).crs_incomplete, "{tool}");
+        }
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones"})).unwrap());
+        assert!(!out.is_empty() && out.iter().all(|d| d.crs_incomplete));
     }
 
     #[test]
