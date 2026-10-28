@@ -182,7 +182,7 @@ pub fn commands() -> Vec<C> {
         C::new("layer.fillLayers", "Fill Layers", "Style › Drawing", fill_layers)
             .when(need_polygons)
             .params(
-                r##"{"layer"?, "value"?|"index"?|"other"?: a class of Unique Values (its value, or other: true) or Graduated Colors (its index) to set its own fills (none: the layer's), "fills": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the feature's fill colour, so the fills follow the classes), "pattern"?: "solid" (default)|"hatch" (parallel lines)|"dots" (markers on a grid), "angle"?: degrees anticlockwise from east (hatch), "spacing"?: points between lines (hatch, 1 to 500; default 8) or points across and down between markers, a number or [across, down] (dots), "width"?: a hatch line's width in points (0 to 50; default 1), "offset"?: points across the lines (hatch) or [across, down] (dots), "marker"?: "circle"|"square"|"triangle"|"diamond"|"star" (dots), "char"?: text (dots: a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: a marker's size in points (default 3), "outline"?: a marker's outline colour or null, "outlineWidth"?: points, "displacement"?: [across, down] points every other row and column are shifted by (dots)}] (bottom first, at most 8; [] for the symbol's single fill; the outline is drawn over them)}"##,
+                r##"{"layer"?, "value"?|"index"?|"other"?: a class of Unique Values (its value, or other: true) or Graduated Colors (its index) to set its own fills (none: the layer's), "fills": [{"color"?: "#RRGGBB"|"#RRGGBBAA"|null (null: the feature's fill colour, so the fills follow the classes), "pattern"?: "solid" (default)|"hatch" (parallel lines)|"dots" (markers on a grid)|"gradient" (from color to color2 across the feature)|"shapeburst" (from color at the edge to color2 inside), "angle"?: degrees anticlockwise from east (hatch), "spacing"?: points between lines (hatch, 1 to 500; default 8) or points across and down between markers, a number or [across, down] (dots), "width"?: a hatch line's width in points (0 to 50; default 1), "offset"?: points across the lines (hatch) or [across, down] (dots), "marker"?: "circle"|"square"|"triangle"|"diamond"|"star" (dots), "char"?: text (dots: a character of a font as the marker instead of a shape), "font"?: text (the installed family it is drawn from; none: the label font), "size"?: a marker's size in points (default 3), "outline"?: a marker's outline colour or null, "outlineWidth"?: points, "displacement"?: [across, down] points every other row and column are shifted by (dots), "color2"?: "#RRGGBB"|"#RRGGBBAA" (gradient, shapeburst: the second colour; default white), "stops"?: [[0..1, "#RRGGBB"|"#RRGGBBAA"], …] (gradient, shapeburst: colours between the two, at most 16), "discrete"?: bool (each colour held until the next stop), "shape"?: "linear" (default)|"radial"|"conical" (gradient), "from"?: [across, down]|"centroid" (gradient: where color is, 0..1 in the feature's box; default [0.5, 0], the top middle), "to"?: [across, down]|"centroid" (where color2 is; default [0.5, 1]), "spread"?: "pad" (default)|"reflect"|"repeat" (gradient: past its points), "angle"?: degrees anticlockwise (gradient: turned round its box's middle), "inView"?: bool (gradient: from and to in the map view's box, not the feature's), "distance"?: points|null (shapeburst: how deep it shades; null or none: to the point deepest inside), "blur"?: 0..17 (shapeburst: pixels), "ignoreRings"?: bool (shapeburst: holes' edges left out)}] (bottom first, at most 8; [] for the symbol's single fill; the outline is drawn over them)}"##,
             ),
         C::new("layer.markerRotation", "Marker Rotation", "Style › Drawing", |s, p| {
             let field = match p.get("field") {
@@ -616,7 +616,7 @@ fn line_strokes(s: &mut Session, p: &Value) -> CmdResult {
 /// `layer.fillLayers`: a polygon layer's stacked fills (or a class's own, with `value`, `index`
 /// or `other`), bottom first; `[]` goes back to the symbol's single fill.
 fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
-    use rustgis_map::fills::{FillLayer, FillPattern, MAX_FILLS};
+    use rustgis_map::fills::{FillLayer, FillPattern, GradientPoint, GradientShape, MAX_FILLS, Spread, Stop, Stops};
     let class = class_ref(p)?;
     let list = p.get("fills").and_then(Value::as_array).ok_or("fills is a list of fills ([] for the symbol's single fill)")?;
     if list.len() > MAX_FILLS {
@@ -690,7 +690,95 @@ fn fill_layers(s: &mut Session, p: &Value) -> CmdResult {
                     offset: pair("offset", [0.0, 0.0])?,
                 }
             }
-            Some(_) => return Err(format!("fill {n}: pattern is \"solid\", \"hatch\" or \"dots\"")),
+            Some(Some(kind @ ("gradient" | "shapeburst"))) => {
+                let color2 = hex("color2")?.unwrap_or(Rgba::rgb(255, 255, 255));
+                let stops = match o.get("stops") {
+                    None | Some(Value::Null) => Stops::default(),
+                    Some(Value::Array(a)) if a.len() <= rustgis_map::fills::MAX_STOPS => {
+                        let mut list = Vec::with_capacity(a.len());
+                        for st in a {
+                            let bad = || format!("fill {n}: each stop is [0..1, \"#RRGGBB\" or \"#RRGGBBAA\"]");
+                            let [at, c] = st.as_array().map(Vec::as_slice).unwrap_or_default() else { return Err(bad()) };
+                            let at = number(at).ok_or_else(bad)?;
+                            let color = c.as_str().and_then(Rgba::from_hex).ok_or_else(bad)?;
+                            list.push(Stop { at, color });
+                        }
+                        Stops::new(list)
+                    }
+                    Some(_) => {
+                        return Err(format!("fill {n}: stops is a list of at most {} [0..1, \"#RRGGBB\"]", rustgis_map::fills::MAX_STOPS));
+                    }
+                };
+                let flag = |k: &str| -> Result<bool, String> {
+                    match o.get(k) {
+                        None | Some(Value::Null) => Ok(false),
+                        Some(Value::Bool(b)) => Ok(*b),
+                        Some(_) => Err(format!("fill {n}: {k} is true or false")),
+                    }
+                };
+                let discrete = flag("discrete")?;
+                if kind == "shapeburst" {
+                    let blur = num("blur", 0.0)?;
+                    if !(0.0..=f32::from(rustgis_map::fills::MAX_BURST_BLUR)).contains(&blur) {
+                        return Err(format!("fill {n}: blur is 0 to {}", rustgis_map::fills::MAX_BURST_BLUR));
+                    }
+                    let distance = match o.get("distance") {
+                        None | Some(Value::Null) => None,
+                        Some(v) => Some(
+                            number(v).filter(|d| *d >= 0.0).ok_or_else(|| format!("fill {n}: distance is points (0 or more) or null"))?,
+                        ),
+                    };
+                    FillPattern::Shapeburst {
+                        color2,
+                        stops,
+                        discrete,
+                        distance,
+                        blur: blur.round() as u8,
+                        ignore_rings: flag("ignoreRings")?,
+                    }
+                } else {
+                    let point = |k: &str, default: [f32; 2]| -> Result<GradientPoint, String> {
+                        match o.get(k) {
+                            None | Some(Value::Null) => Ok(GradientPoint::At(default)),
+                            Some(Value::String(c)) if c.eq_ignore_ascii_case("centroid") => Ok(GradientPoint::CENTROID),
+                            Some(_) => pair(k, default)
+                                .map(GradientPoint::At)
+                                .map_err(|_| format!("fill {n}: {k} is [across, down] (0..1 in the box) or \"centroid\"")),
+                        }
+                    };
+                    let word = |k: &str, words: &[&str]| -> Result<usize, String> {
+                        match o.get(k) {
+                            None | Some(Value::Null) => Ok(0),
+                            Some(Value::String(w)) => words.iter().position(|x| x.eq_ignore_ascii_case(w.trim())).ok_or_else(|| {
+                                format!("fill {n}: {k} is {}", words.iter().map(|w| format!("\"{w}\"")).collect::<Vec<_>>().join(", "))
+                            }),
+                            Some(_) => {
+                                Err(format!("fill {n}: {k} is {}", words.iter().map(|w| format!("\"{w}\"")).collect::<Vec<_>>().join(", ")))
+                            }
+                        }
+                    };
+                    let shape = [GradientShape::Linear, GradientShape::Radial, GradientShape::Conical]
+                        .get(word("shape", &["linear", "radial", "conical"])?)
+                        .copied()
+                        .unwrap_or_default();
+                    let spread = [Spread::Pad, Spread::Reflect, Spread::Repeat]
+                        .get(word("spread", &["pad", "reflect", "repeat"])?)
+                        .copied()
+                        .unwrap_or_default();
+                    FillPattern::Gradient {
+                        shape,
+                        color2,
+                        stops,
+                        discrete,
+                        from: point("from", [0.5, 0.0])?,
+                        to: point("to", [0.5, 1.0])?,
+                        spread,
+                        angle: num("angle", 0.0)?,
+                        in_view: flag("inView")?,
+                    }
+                }
+            }
+            Some(_) => return Err(format!("fill {n}: pattern is \"solid\", \"hatch\", \"dots\", \"gradient\" or \"shapeburst\"")),
         };
         fills.push(FillLayer { color: hex("color")?, pattern }.clamped());
     }

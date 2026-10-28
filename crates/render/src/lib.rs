@@ -11,6 +11,7 @@ pub mod families;
 pub mod fonts;
 mod glyphs;
 pub mod gpu_scene;
+mod gradient_fill;
 pub mod layout;
 mod line_labels;
 mod line_markers;
@@ -421,6 +422,8 @@ struct Ctx<'a> {
     globe: Option<Globe>,
     /// Point marker sprites drawn so far, by symbol and quarter-pixel offset.
     sprites: std::cell::RefCell<std::collections::HashMap<SpriteKey, Option<Pixmap>>>,
+    /// The pixels the frame's shapeburst fills have worked on (`gradient_fill::FRAME_BURST_PX`).
+    bursts: std::cell::Cell<f32>,
 }
 
 /// A marker sprite's symbol and quarter-pixel offset.
@@ -2758,6 +2761,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
         cull: cull_extent(view, CULL_MARGIN),
         globe,
         sprites: Default::default(),
+        bursts: Default::default(),
     };
     // The Gpu backend draws flat, effect-free frames; anything else stays on the CPU pixmap.
     let gpu = backend.is_gpu()
@@ -3065,7 +3069,7 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
             &ctx
         } else {
             // Its own sprite cache: the sprites are drawn at the scaled size.
-            scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), ..ctx };
+            scaled_ctx = Ctx { ppp: ctx.ppp * size_factor, sprites: Default::default(), bursts: Default::default(), ..ctx };
             &scaled_ctx
         };
         let mut draw_chunk = |layer: &mut rustgis_map::Layer| -> rustgis_data::Result<()> {
@@ -5617,7 +5621,15 @@ mod tests {
             camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
-        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         for marker in Marker::ALL {
             let s = Symbol { fill: Rgba::new(200, 60, 30, 200), stroke: Rgba::rgb(20, 20, 20), stroke_width: 1.2, size: 9.0, marker };
             let (mut stamped, mut drawn) = (Pixmap::new(120, 80).unwrap(), Pixmap::new(120, 80).unwrap());
@@ -6060,7 +6072,15 @@ mod tests {
             camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
-        let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         let ring = vec![Coord::new(0.0, 0.0), Coord::new(0.25, 0.0), Coord::new(0.25, 0.25), Coord::new(0.0, 0.25), Coord::new(0.0, 0.0)];
         let g = Geometry::Polygon(vec![vec![ring]]);
         let mut pm = Pixmap::new(200, 200).unwrap();
@@ -6083,7 +6103,15 @@ mod tests {
             camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
-        let ctx = Ctx { view: &view, ppp: 2.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         let sym =
             Symbol { fill: Rgba::rgb(200, 120, 0), stroke: Rgba::rgb(30, 30, 30), stroke_width: 0.7, size: 0.0, marker: Marker::Circle };
         // Polygons `cell` map units across (twice that in device px), tiled as land cover is, each
@@ -6260,6 +6288,196 @@ mod tests {
         m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol::default_for(GeometryType::Polygon, id));
         m.layer_mut(id).unwrap().fill_layers.clear();
         assert_eq!(rgb(&render(&mut m, &view).unwrap(), 100, 100), plain);
+    }
+
+    /// Gradient and shapeburst fills, as QGIS draws them (sampled from QGIS 4.2's renders): a
+    /// gradient from its first colour at its first point (the box's top middle) to its second,
+    /// turned anticlockwise, radial out to its second point, conical anticlockwise from it; a
+    /// shapeburst from its first colour at the edge to its second deepest inside (or as deep as
+    /// its distance), holes' edges shading too unless left out.
+    #[test]
+    fn gradient_and_shapeburst_fills_shade_as_qgis_does() {
+        use rustgis_map::fills::{FillLayer, FillPattern, GradientPoint, GradientShape, Spread, Stops};
+        let ring = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            vec![Coord::new(x0, y0), Coord::new(x1, y0), Coord::new(x1, y1), Coord::new(x0, y1), Coord::new(x0, y0)]
+        };
+        // A map of one polygon of `parts` (each its rings), unoutlined.
+        let map_of = |parts: Vec<Vec<Vec<Coord>>>| {
+            let mut m = Map::new("Map");
+            m.basemap = rustgis_map::Basemap::Blank;
+            let mut d = Dataset::new("fields", GeometryType::Polygon, vec![]);
+            d.push(Some(Geometry::Polygon(parts)), vec![]);
+            let id = m.add_dataset(d);
+            m.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(rustgis_map::Symbol {
+                stroke: Rgba::new(0, 0, 0, 0),
+                ..rustgis_map::Symbol::default_for(GeometryType::Polygon, id)
+            });
+            (m, id)
+        };
+        let (mut m, id) = map_of(vec![vec![ring(-0.5, -0.5, 0.5, 0.5)]]);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.0, 0.0)), res: 1500.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 200.0, height: 200.0, pixels_per_point: 1.0, camera, sky: false };
+        let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
+        // The square's edges on screen, and its red at a pixel (blue is the rest of it).
+        let r0 = render(&mut m, &view).unwrap();
+        let inside: Vec<u32> = (0..200).filter(|&x| r0.pixmap.pixel(x, 100).is_some_and(|p| p.red() < 250)).collect();
+        let (lo, hi) = (*inside.first().unwrap(), *inside.last().unwrap());
+        let (mid, span) = ((lo + hi) / 2, (hi - lo) as f32);
+        let set = |m: &mut Map, pattern: FillPattern| {
+            m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(red), pattern }];
+            render(m, &view).unwrap()
+        };
+        let redness = |r: &Rendered, x: u32, y: u32| {
+            let p = r.pixmap.pixel(x, y).unwrap();
+            assert!(p.green() < 10, "red to blue at ({x}, {y}): {p:?}");
+            f32::from(p.red()) / 255.0
+        };
+        let near = |got: f32, want: f32, what: &str| assert!((got - want).abs() < 0.08, "{what}: {got} not {want}");
+        let gradient = |shape, from, to, angle| FillPattern::Gradient {
+            shape,
+            color2: blue,
+            stops: Stops::default(),
+            discrete: false,
+            from,
+            to,
+            spread: Spread::Pad,
+            angle,
+            in_view: false,
+        };
+        let top = GradientPoint::At([0.5, 0.0]);
+        let bottom = GradientPoint::At([0.5, 1.0]);
+        // Linear, top to bottom.
+        let r = set(&mut m, gradient(GradientShape::Linear, top, bottom, 0.0));
+        near(redness(&r, mid, lo + 2), 1.0, "top");
+        near(redness(&r, mid, mid), 0.5, "middle");
+        near(redness(&r, mid, hi - 2), 0.0, "bottom");
+        near(redness(&r, lo + 2, mid), redness(&r, hi - 2, mid), "level across");
+        // Turned 90° anticlockwise: left to right.
+        let r = set(&mut m, gradient(GradientShape::Linear, top, bottom, 90.0));
+        near(redness(&r, lo + 2, mid), 1.0, "turned: left");
+        near(redness(&r, hi - 2, mid), 0.0, "turned: right");
+        // Radial from the middle out to the right edge's middle.
+        let centre = GradientPoint::At([0.5, 0.5]);
+        let right = GradientPoint::At([1.0, 0.5]);
+        let r = set(&mut m, gradient(GradientShape::Radial, centre, right, 0.0));
+        near(redness(&r, mid, mid), 1.0, "radial: middle");
+        near(redness(&r, mid + (span / 4.0) as u32, mid), 0.5, "radial: halfway out");
+        near(redness(&r, mid, lo + 1), 0.0, "radial: top edge as far out");
+        // Conical: anticlockwise from the right, a quarter of the way round at the top.
+        let r = set(&mut m, gradient(GradientShape::Conical, centre, right, 0.0));
+        near(redness(&r, mid, lo + 10), 0.75, "conical: top");
+        near(redness(&r, lo + 10, mid), 0.5, "conical: left");
+        near(redness(&r, mid, hi - 10), 0.25, "conical: bottom");
+        // The centroid as its first point.
+        let r = set(&mut m, gradient(GradientShape::Linear, GradientPoint::CENTROID, bottom, 0.0));
+        near(redness(&r, mid, lo + 5), 1.0, "from the centroid: red above it");
+        near(redness(&r, mid, mid + (span / 4.0) as u32), 0.5, "from the centroid: halfway down");
+        // Reflected past its second point.
+        let quarter = GradientPoint::At([0.5, 0.25]);
+        let mut reflected = gradient(GradientShape::Linear, top, quarter, 0.0);
+        if let FillPattern::Gradient { spread, .. } = &mut reflected {
+            *spread = Spread::Reflect;
+        }
+        let r = set(&mut m, reflected);
+        near(redness(&r, mid, lo + (span * 0.375) as u32), 0.5, "reflected: back halfway");
+        near(redness(&r, mid, mid), 1.0, "reflected: back at the first colour");
+        // A shapeburst over the whole shape: red at the edge, blue at the middle, a quarter in half.
+        let burst = |distance, ignore_rings| FillPattern::Shapeburst {
+            color2: blue,
+            stops: Stops::default(),
+            discrete: false,
+            distance,
+            blur: 0,
+            ignore_rings,
+        };
+        let r = set(&mut m, burst(None, false));
+        near(redness(&r, lo + 1, mid), 1.0, "shapeburst: edge");
+        near(redness(&r, lo + (span / 4.0) as u32, mid), 0.5, "shapeburst: a quarter in");
+        near(redness(&r, mid, mid), 0.0, "shapeburst: middle");
+        // 10 points deep: blue past it.
+        let r = set(&mut m, burst(Some(10.0), false));
+        near(redness(&r, lo + 4, mid), 0.5, "10 points deep: 5 in (the edge a pixel out)");
+        near(redness(&r, lo + 15, mid), 0.0, "10 points deep: past it");
+        // A hole: shaded from its edge too, unless rings are left out.
+        let (mut m, _) = map_of(vec![vec![ring(-0.5, -0.5, 0.5, 0.5), ring(-0.1, -0.1, 0.1, 0.1)]]);
+        let hole = (span * 0.4) as u32;
+        let r = set(&mut m, burst(None, false));
+        assert!(redness(&r, lo + hole - 2, mid) > 0.7, "next to the hole: its edge");
+        let r = set(&mut m, burst(None, true));
+        assert!(redness(&r, lo + hole - 2, mid) < 0.4, "rings left out: deep inside");
+        assert_eq!(r.pixmap.pixel(mid, mid).map(|p| p.alpha()), r0.pixmap.pixel(0, 0).map(|p| p.alpha()), "the hole stays empty");
+        // Each part of a multi-part feature in its own box: two squares side by side, each red at
+        // its own top.
+        let (mut m, _) = map_of(vec![vec![ring(-0.5, -0.5, -0.1, 0.5)], vec![ring(0.1, -0.2, 0.5, 0.2)]]);
+        let r = set(&mut m, gradient(GradientShape::Linear, top, bottom, 0.0));
+        let top_of = |x: u32| (0..200).find(|&y| r.pixmap.pixel(x, y).is_some_and(|p| p.red() < 250 || p.blue() < 250)).unwrap();
+        let right = mid + (span * 0.3) as u32;
+        near(redness(&r, right, top_of(right) + 1), 1.0, "the smaller part red at its own top");
+        near(redness(&r, lo + 5, lo + 2), 1.0, "the taller part red at its top");
+        // Held, not blended: each colour up to the next stop.
+        let mut held = gradient(GradientShape::Linear, top, bottom, 0.0);
+        if let FillPattern::Gradient { stops, discrete, .. } = &mut held {
+            *stops = Stops::new([rustgis_map::fills::Stop { at: 0.5, color: Rgba::rgb(0, 255, 0) }]);
+            *discrete = true;
+        }
+        let (mut m, _) = map_of(vec![vec![ring(-0.5, -0.5, 0.5, 0.5)]]);
+        let r = set(&mut m, held);
+        let at = |y: u32| r.pixmap.pixel(mid, y).map(|p| (p.red(), p.green(), p.blue())).unwrap();
+        assert_eq!((at(lo + 5), at(mid - 3), at(mid + 3)), ((255, 0, 0), (255, 0, 0), (0, 255, 0)), "red, then green from halfway");
+        // In the view's box: the view's top red, its middle half way, whatever the feature's box.
+        let mut in_view = gradient(GradientShape::Linear, top, bottom, 0.0);
+        if let FillPattern::Gradient { in_view: v, .. } = &mut in_view {
+            *v = true;
+        }
+        let r = set(&mut m, in_view);
+        near(redness(&r, mid, lo + 2), 1.0 - (lo + 2) as f32 / 200.0, "in the view: by the view's height");
+        near(redness(&r, mid, 100), 0.5, "in the view: half way down it");
+        // A shapeburst larger than it works on at full resolution (scaled down) keeps its edges:
+        // a square near 3,000 pixels across, red at its edge and blue at its middle.
+        let big = View { width: 3000.0, height: 3000.0, camera: Camera { res: 37.0, ..camera }, ..view };
+        let (mut m, id) = map_of(vec![vec![ring(-0.5, -0.5, 0.5, 0.5)]]);
+        m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(red), pattern: burst(None, false) }];
+        let r = render(&mut m, &big).unwrap();
+        let inside: Vec<u32> = (0..3000).filter(|&x| r.pixmap.pixel(x, 1500).is_some_and(|p| p.alpha() > 0 && (p.green() < 250))).collect();
+        let (blo, bhi) = (*inside.first().unwrap(), *inside.last().unwrap());
+        assert!(bhi - blo > 2500, "{blo}..{bhi}");
+        near(redness(&r, blo + 3, 1500), 1.0, "large: its edge");
+        near(redness(&r, (blo + bhi) / 2, 1500), 0.0, "large: its middle");
+        near(redness(&r, blo + (bhi - blo) / 4, 1500), 0.5, "large: a quarter in");
+        // Zoomed into the middle of a polygon shaded over its whole shape, no edge in sight: its
+        // middle still the far colour (from the whole polygon's depth), not the edge's.
+        let inside = View { camera: Camera { res: 25.0, ..camera }, ..view };
+        let r = render(&mut m, &inside).unwrap();
+        assert!(redness(&r, 100, 100) < 0.1, "zoomed into the middle: {}", redness(&r, 100, 100));
+        // A radial gradient from the centroid of a polygon far larger than the view keeps its
+        // place on the map as it pans: a map point the same colour before and after.
+        let (mut m, id) = map_of(vec![vec![ring(-0.5, -0.5, 0.5, 0.5)]]);
+        let far_out = GradientPoint::At([1.0, 0.5]);
+        m.layer_mut(id).unwrap().fill_layers =
+            vec![FillLayer { color: Some(red), pattern: gradient(GradientShape::Radial, GradientPoint::CENTROID, far_out, 0.0) }];
+        let near_corner = Camera { center: lonlat_to_merc(Coord::new(0.3, 0.3)), res: 25.0, ..camera };
+        let a = render(&mut m, &View { camera: near_corner, ..view }).unwrap();
+        let panned = Camera { center: Coord::new(near_corner.center.x + 20.0 * 25.0, near_corner.center.y), ..near_corner };
+        let b = render(&mut m, &View { camera: panned, ..view }).unwrap();
+        near(redness(&b, 80, 100), redness(&a, 100, 100), "the same map point, panned 20 pixels");
+        assert!(redness(&a, 100, 100) < 0.9 && redness(&a, 100, 100) > 0.1, "part way out: {}", redness(&a, 100, 100));
+        // A thin diagonal strip (about 6 pixels wide) across a large export, too thin for the
+        // coarse grid: red at its edges, blue down its middle, not one flat colour.
+        let (mut m, id) = map_of(vec![vec![vec![
+            Coord::new(-0.45, -0.45),
+            Coord::new(-0.447, -0.45),
+            Coord::new(0.45, 0.447),
+            Coord::new(0.45, 0.45),
+            Coord::new(-0.45, -0.45),
+        ]]]);
+        m.layer_mut(id).unwrap().fill_layers = vec![FillLayer { color: Some(red), pattern: burst(None, false) }];
+        let r = render(&mut m, &big).unwrap();
+        let row: Vec<u32> = (0..3000).filter(|&x| r.pixmap.pixel(x, 1500).is_some_and(|p| p.alpha() > 0 && p.green() < 250)).collect();
+        assert!(row.len() >= 5 && row.len() < 20, "the strip across the middle row: {row:?}");
+        let (first, last) = (row[0], row[row.len() - 1]);
+        // (A pixel in from the edge: the edge pixel is partly covered.)
+        assert!(redness(&r, first + 1, 1500) > 0.5, "its edge: {}", redness(&r, first + 1, 1500));
+        assert!(redness(&r, (first + last) / 2, 1500) < 0.4, "its middle: {}", redness(&r, (first + last) / 2, 1500));
     }
 
     #[test]
@@ -6689,7 +6907,15 @@ mod tests {
         // stroke's, shifted beside it (straight, so the shifted line is as long as the line).
         let camera = Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 };
         let view = View { width: 100.0, height: 20.0, pixels_per_point: 1.0, camera, sky: false };
-        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         // 1,003.5 px of line before the image, not a whole number of the pattern's 7 px rounds.
         let line = [Coord::new(-1053.5, 0.0), Coord::new(60.0, 0.0)];
         let (mut pb, mut starts) = (PathBuilder::new(), DashStarts::default());
@@ -6750,7 +6976,15 @@ mod tests {
             camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
             sky: false,
         };
-        let ctx = Ctx { view: &view, ppp: 1.0, wireframe: false, cull: Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         // A 1-pixel period would cut it into 200,000 dashes: drawn solid. A 4-pixel one is fine.
         assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[0.5, 0.5]).unwrap(), &zigzag).is_none());
         assert!(ctx.dash(&rustgis_map::symbology::Dash::new(&[2.0, 2.0]).unwrap(), &zigzag).is_some());

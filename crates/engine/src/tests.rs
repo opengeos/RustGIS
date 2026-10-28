@@ -464,6 +464,80 @@ fn fill_layers_stack_and_survive_save_and_undo() {
     }
 }
 
+/// Gradient and shapeburst fills: their colours, stops and how they run, kept with the project;
+/// junk refused, numbers held within range.
+#[test]
+fn gradient_and_shapeburst_fills_are_set_and_kept() {
+    use rustgis_map::Rgba;
+    use rustgis_map::fills::{FillPattern, GradientPoint, GradientShape, MAX_GRADIENT_POINT, Spread, Stop};
+    let mut s = world();
+    let fills = json!([
+        {"color": "#FF0000", "pattern": "gradient", "color2": "#0000FF", "shape": "radial", "from": "centroid", "to": [1, 0.5], "spread": "reflect", "angle": 30, "stops": [[0.5, "#00FF00"]]},
+        {"color": "#2B6ADB", "pattern": "shapeburst", "color2": "#6A94DB", "distance": 14, "blur": 10, "ignoreRings": true, "discrete": true}
+    ]);
+    assert_eq!(s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": fills})).unwrap(), json!({"fills": 2}));
+    let got = |s: &Session| s.map().layer_by_name("Countries").unwrap().fill_layers.clone();
+    let f = got(&s);
+    let FillPattern::Gradient { shape, color2, stops, from, to, spread, angle, in_view, discrete } = f[0].pattern else { panic!("{f:?}") };
+    assert_eq!(
+        (shape, color2, from, to, spread, angle, in_view, discrete),
+        (
+            GradientShape::Radial,
+            Rgba::rgb(0, 0, 255),
+            GradientPoint::CENTROID,
+            GradientPoint::At([1.0, 0.5]),
+            Spread::Reflect,
+            30.0,
+            false,
+            false
+        )
+    );
+    assert_eq!(stops.as_slice(), &[Stop { at: 0.5, color: Rgba::rgb(0, 255, 0) }]);
+    assert_eq!(
+        f[1].pattern,
+        FillPattern::Shapeburst {
+            color2: Rgba::rgb(0x6A, 0x94, 0xDB),
+            stops: Default::default(),
+            discrete: true,
+            distance: Some(14.0),
+            blur: 10,
+            ignore_rings: true
+        }
+    );
+    // Kept with the project.
+    let text = serde_json::to_string(&s.project).unwrap();
+    assert!(text.contains(r#""from":"centroid""#), "{text}");
+    assert_eq!(got(&Session::new(serde_json::from_str(&text).unwrap())), f);
+    // Defaults: QGIS's, top middle to bottom middle, to white; a shapeburst over the whole shape.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "gradient"}, {"pattern": "shapeburst"}]})).unwrap();
+    let f = got(&s);
+    assert!(
+        matches!(f[0].pattern, FillPattern::Gradient { shape: GradientShape::Linear, from: GradientPoint::At([0.5, 0.0]), to: GradientPoint::At([0.5, 1.0]), color2, .. } if color2 == Rgba::rgb(255, 255, 255)),
+        "{f:?}"
+    );
+    assert!(matches!(f[1].pattern, FillPattern::Shapeburst { distance: None, blur: 0, .. }), "{f:?}");
+    // Held within range.
+    s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [{"pattern": "gradient", "from": [1e300, -1e300], "angle": -90, "stops": [[7, "#000000"], [-1, "#FFFFFF"]]}]})).unwrap();
+    let FillPattern::Gradient { from, angle, stops, .. } = got(&s)[0].pattern else { panic!() };
+    assert_eq!((from, angle), (GradientPoint::At([MAX_GRADIENT_POINT, -MAX_GRADIENT_POINT]), 270.0));
+    assert_eq!(stops.as_slice().iter().map(|s| s.at).collect::<Vec<_>>(), vec![0.0, 1.0], "in order, within 0 to 1");
+    for bad in [
+        json!({"pattern": "gradient", "shape": "spiral"}),
+        json!({"pattern": "gradient", "spread": 2}),
+        json!({"pattern": "gradient", "from": "middle"}),
+        json!({"pattern": "gradient", "from": [0.5]}),
+        json!({"pattern": "gradient", "stops": [[0.5]]}),
+        json!({"pattern": "gradient", "stops": [[0.5, "green"]]}),
+        json!({"pattern": "gradient", "stops": (0..20).map(|i| json!([i as f64 / 20.0, "#000000"])).collect::<Vec<_>>()}),
+        json!({"pattern": "gradient", "inView": "yes"}),
+        json!({"pattern": "shapeburst", "blur": 99}),
+        json!({"pattern": "shapeburst", "distance": -1}),
+        json!({"pattern": "shapeburst", "color2": "blue"}),
+    ] {
+        assert!(s.run("layer.fillLayers", &json!({"layer": "Countries", "fills": [bad]})).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn line_strokes_stack_and_survive_save_and_undo() {
     use rustgis_map::{LineCap, LineJoin, LineStroke, Rgba};
