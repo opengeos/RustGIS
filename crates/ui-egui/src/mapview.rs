@@ -717,16 +717,20 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     if hold {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(RESIZE_SETTLE));
     }
+    // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
+    // cached flat picture keeps navigation and layer changes responsive while they finish.
+    let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
+    // A change to a tiled flat map's contents (a layer's colour or transparency) keeps its frame
+    // on screen, labels and all, until the exact frame arrives (#1051).
+    let keep_frame =
+        tiled_flat && (app.map.texture.is_some() || app.map.gpu_frame.is_some()) && keeps_frame(app.map.key, key, app.map.render_ms);
     // Labels belong to the rendered contents. When visibility or data change, old labels
     // must disappear with their layers while a preview stands in for the exact frame.
-    if app.map.key.is_none_or(|k| k.rev != key.rev) {
+    if app.map.key.is_none_or(|k| k.rev != key.rev) && !keep_frame {
         app.map.labels.clear();
         app.map.label_lonlat.clear();
         app.map.label_map.clear();
     }
-    // Exact globe, tilted and tiled flat frames are composed off the UI thread. A drape or
-    // cached flat picture keeps navigation and layer changes responsive while they finish.
-    let tiled_flat = !globe_view && cam.bearing == 0.0 && cam.pitch == 0.0 && !app.session.map().tiles.is_empty();
     let settling = (tilted || globe_view || tiled_flat) && !moving && app.ws.playing.is_none() && !hold;
     let mut tilt_draped = tilt_draped;
     // A frame finishing during a new gesture is obsolete. Drain it now so it neither holds
@@ -764,8 +768,9 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if same_view(k, key) && done.rendered.is_none() {
                 app.map.filling = false;
             }
-            // One drawn before tiles or data arrived still shows; the next follows.
-            if same_view(k, key)
+            // One drawn before tiles or data arrived still shows; the next follows. So does one
+            // of a change made since, for a view whose frame on screen is older still.
+            if (same_view(k, key) || shows_finished(k, key, app.map.key))
                 && let Some(r) = done.rendered
             {
                 // With tile pictures still to draw, a draft: the next frame draws more.
@@ -810,7 +815,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 draped = app.map.drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
             } else if tilted {
                 tilt_draped = app.map.tilt_drape.prepare(ui.ctx(), app.session.map_mut(), drape_key, tiles, w, h, ppp, time);
-            } else if app.map.preview_attempt != Some(key) && !reprojects {
+            } else if app.map.preview_attempt != Some(key) && !reprojects && !keep_frame {
                 // A small preview shows a visibility change immediately. The exact frame is
                 // already on its way. Even a failed preview is attempted only once per key.
                 app.map.preview_attempt = Some(key);
@@ -3599,6 +3604,30 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
     !e.is_empty() && e.min_x >= held.min_x && e.min_y >= held.min_y && e.max_x <= held.max_x && e.max_y <= held.max_y
 }
 
+/// How long (ms) the last exact frame may have taken for a change to the map's contents to keep
+/// it on screen until the next one arrives, rather than showing a coarse preview (#1051).
+const KEEP_FRAME_MS: u64 = 300;
+
+/// Whether a change to the map's contents keeps the frame on screen (`shown`) until the exact
+/// frame for `key` arrives, instead of a coarse preview of the whole map: the view is the same
+/// (only what is drawn changed) and its frames are quick to draw (`render_ms`). A preview of a
+/// tiled map drew the basemap coarsely too, so dragging a layer's colour or transparency slider
+/// made the whole map flicker between blurry and sharp.
+fn keeps_frame(shown: Option<Key>, key: Key, render_ms: u64) -> bool {
+    render_ms <= KEEP_FRAME_MS
+        && shown
+            .is_some_and(|s| s.rev != key.rev && Key { rev: key.rev, tiles: key.tiles, sources: key.sources, draft: key.draft, ..s } == key)
+}
+
+/// Whether a frame finished for `done` is shown although the map's contents changed since (to
+/// `key`): it is of the same view and newer than the frame on screen (`shown`), which is of an
+/// older change too. While a slider is dragged every exact frame is out of date when it
+/// finishes; showing none kept the frame from before the drag up until it ended.
+fn shows_finished(done: Key, key: Key, shown: Option<Key>) -> bool {
+    let view = |k: Key| (k.cam, k.size);
+    done.rev != key.rev && view(done) == view(key) && shown.is_some_and(|s| s.rev != key.rev && s.rev != done.rev && view(s) == view(key))
+}
+
 /// How long (s) after a frame is shown tiles arriving wait before the map is drawn again.
 const TILE_REDRAW_GAP: f64 = 0.25;
 
@@ -3620,7 +3649,7 @@ fn held_tiles(key: Key, drawing: Option<Key>, shown: Option<Key>, since_render: 
 
 #[cfg(test)]
 mod tile_redraw_tests {
-    use super::{Key, held_tiles};
+    use super::{KEEP_FRAME_MS, Key, held_tiles, keeps_frame, shows_finished};
 
     fn key(tiles: u64) -> Key {
         Key { rev: 4, cam: (1, 2, 3, 0, 0), size: [800, 600], draft: false, tiles, sources: 0 }
@@ -3665,6 +3694,53 @@ mod tile_redraw_tests {
         }
         assert_eq!(started, 0);
         assert_eq!(shown, Some(key(28)));
+    }
+
+    #[test]
+    fn a_change_to_the_contents_keeps_a_quick_frame_instead_of_a_preview() {
+        // #1051: a layer's colour changed, the view didn't: the frame on screen stays.
+        let changed = Key { rev: 5, ..key(3) };
+        assert!(keeps_frame(Some(key(3)), changed, 40));
+        assert!(keeps_frame(Some(Key { draft: true, ..key(3) }), changed, 40), "a draft of the view stays too");
+        // Slow frames show a preview: the old picture would stay wrong too long.
+        assert!(!keeps_frame(Some(key(3)), changed, KEEP_FRAME_MS + 1));
+        // Another view, or nothing on screen: a preview.
+        assert!(!keeps_frame(Some(Key { cam: (9, 9, 9, 0, 0), ..key(3) }), changed, 40));
+        assert!(!keeps_frame(Some(Key { size: [400, 300], ..key(3) }), changed, 40));
+        assert!(!keeps_frame(None, changed, 40));
+        // Nothing changed: nothing to keep.
+        assert!(!keeps_frame(Some(key(3)), key(3), 40));
+    }
+
+    #[test]
+    fn a_frame_of_an_earlier_change_shows_while_a_slider_is_dragged() {
+        let (on_screen, done, now) = (Key { rev: 4, ..key(0) }, Key { rev: 6, ..key(0) }, Key { rev: 9, ..key(0) });
+        assert!(shows_finished(done, now, Some(on_screen)));
+        // The frame on screen is already of the latest change, or is the finished one.
+        assert!(!shows_finished(done, now, Some(now)));
+        assert!(!shows_finished(done, now, Some(done)));
+        // A frame of another view, or one of the latest change (shown the usual way).
+        assert!(!shows_finished(Key { cam: (9, 9, 9, 0, 0), ..done }, now, Some(on_screen)));
+        assert!(!shows_finished(now, now, Some(on_screen)));
+        assert!(!shows_finished(done, now, None));
+        // Simulated drag: the contents change every frame and each exact frame takes three.
+        // Frames of the drag are shown as they finish, not only the last one after it.
+        let (mut shown, mut drawing, mut shown_during) = (Some(on_screen), None::<(Key, u32)>, 0);
+        for step in 0..30u64 {
+            let k = Key { rev: 10 + step, ..key(0) };
+            if let Some((d, 0)) = drawing {
+                if shows_finished(d, k, shown) {
+                    shown = Some(d);
+                    shown_during += 1;
+                }
+                drawing = None;
+            }
+            drawing = match drawing {
+                Some((d, n)) => Some((d, n - 1)),
+                None => Some((k, 2)),
+            };
+        }
+        assert!(shown_during >= 5, "frames shown during the drag: {shown_during}");
     }
 }
 
@@ -4008,6 +4084,45 @@ mod tests {
         h.state_mut().run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide countries");
         h.step();
         assert!(h.state().map.labels.is_empty(), "the preview kept labels from the old visibility state");
+    }
+
+    /// #1051: changing a layer's transparency over a tiled basemap kept the exact frame on
+    /// screen until the next one arrived; it showed a coarse preview of the whole map, basemap
+    /// included, so every step of a slider drag made the map flicker.
+    #[test]
+    fn a_style_change_over_tiles_keeps_the_frame_instead_of_a_preview() {
+        let mut app = RustGisApp::with_sample();
+        // Nothing listens there: the tiles fail, the map still draws.
+        app.run("map.addTiles", json!({"url": "http://127.0.0.1:9/{z}/{x}/{y}.png", "name": "Offline"})).expect("tile layer");
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_max_steps(10_000).build_ui_state(
+            |ui, app: &mut RustGisApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        let exact = |h: &mut egui_kittest::Harness<'_, RustGisApp>, what: &str| {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                h.step();
+                let st = h.state();
+                if st.map.key.is_some_and(|k| k.rev == st.session.revision) && !st.map.tilt_settle.busy() {
+                    break;
+                }
+                assert!(std::time::Instant::now() < end, "{what}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        exact(&mut h, "the first exact frame did not arrive");
+        // A quick map (a debug build may draw slower than a release one).
+        h.state_mut().map.render_ms = 20;
+        let before = h.state().map.key.expect("a frame");
+        h.state_mut().run("layer.transparency", json!({"layer": "Countries", "value": 50})).expect("transparency");
+        h.step();
+        let kept = h.state().map.key.expect("a frame");
+        assert_eq!((kept.rev, kept.draft), (before.rev, before.draft), "a coarse preview replaced the frame on screen");
+        exact(&mut h, "the exact frame of the change did not arrive");
     }
 
     /// Dragging a side pane resizes the map view every frame. The map is not drawn again for
