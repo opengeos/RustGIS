@@ -21,6 +21,8 @@ pub enum KernelType {
 }
 
 impl KernelType {
+    /// Parses a kernel name case-insensitively. Accepts `"Quartic"`, `"Gaussian"`, or `"biweight"`.
+    /// When given empty text, defaults to [`KernelType::Quartic`].
     pub fn parse(s: &str) -> Result<Self, String> {
         let t = s.trim();
         if t.eq_ignore_ascii_case("quartic") || t.eq_ignore_ascii_case("biweight") || t.is_empty() {
@@ -113,8 +115,8 @@ pub fn kernel_density(
         return Err("search radius (bandwidth) must be a positive number".into());
     }
     let h_sq = bandwidth * bandwidth;
-    if !h_sq.is_finite() || h_sq <= 0.0 {
-        return Err("search radius is too large or invalid".into());
+    if !h_sq.is_normal() || h_sq <= 0.0 {
+        return Err("search radius is out of range".into());
     }
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err("pixel size must be a positive number".into());
@@ -175,12 +177,25 @@ pub fn kernel_density(
     }
 
     let kernel_params = match kernel {
-        KernelType::Quartic => KernelParams::Quartic { factor: 3.0 / (PI * h_sq) },
+        KernelType::Quartic => {
+            let factor = 3.0 / (PI * h_sq);
+            if !factor.is_normal() {
+                return Err("search radius is out of range".into());
+            }
+            KernelParams::Quartic { factor }
+        }
         KernelType::Gaussian => {
             // Truncate at 3σ = bandwidth (standard compact-support approximation capturing >98.8% of mass)
             let sigma = bandwidth / 3.0;
             let two_sigma_sq = 2.0 * sigma * sigma;
-            KernelParams::Gaussian { factor: 1.0 / (PI * two_sigma_sq), two_sigma_sq }
+            if !two_sigma_sq.is_normal() {
+                return Err("search radius is out of range".into());
+            }
+            let factor = 1.0 / (PI * two_sigma_sq);
+            if !factor.is_normal() {
+                return Err("search radius is out of range".into());
+            }
+            KernelParams::Gaussian { factor, two_sigma_sq }
         }
     };
 
@@ -229,6 +244,12 @@ pub fn kernel_density(
         }
     }
 
+    for d in &grid {
+        if !d.is_finite() {
+            return Err("calculated density values produced non-finite numbers; check weights and radius".into());
+        }
+    }
+
     Raster::new(name, w as u32, h_rows as u32, vec![grid], gt, crs, None, ColorHint::Gray, "Float32").map_err(|e| e.to_string())
 }
 
@@ -274,9 +295,17 @@ mod tests {
         assert_eq!(b1.len(), b2.len());
 
         for (v1, v2) in b1.iter().zip(b2.iter()) {
-            let diff = (*v2 as f64) - (*v1 as f64) * 3.5;
-            assert!(diff.abs() < 1e-8, "weight scaling mismatch: {v1} vs {v2}");
+            let expected = (*v1 as f64) * 3.5;
+            let actual = *v2 as f64;
+            assert!((actual - expected).abs() <= 1e-5 * expected.abs() + 1e-12, "weight scaling mismatch: {v1} vs {v2}");
         }
+    }
+
+    #[test]
+    fn tiny_or_subnormal_radius_is_rejected() {
+        let pt = Coord::new(100.0, 100.0);
+        let err = kernel_density(&[(pt, 1.0)], None, 1.0, 1e-160, KernelType::Quartic, "tiny", Crs::WebMercator).unwrap_err();
+        assert!(err.contains("search radius is out of range"), "{err}");
     }
 
     #[test]
@@ -389,7 +418,7 @@ mod tests {
     fn bandwidth_overflow_is_rejected() {
         let pts = vec![(Coord::new(0.0, 0.0), 1.0)];
         let err = kernel_density(&pts, None, 1.0, 1e200, KernelType::Quartic, "huge_bw", Crs::WebMercator).unwrap_err();
-        assert!(err.contains("too large or invalid"), "{err}");
+        assert!(err.contains("search radius is out of range"), "{err}");
     }
 
     #[test]

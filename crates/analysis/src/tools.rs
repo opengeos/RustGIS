@@ -740,7 +740,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::PointLayer,
                 required: true,
                 default: "",
-                help: "Point features to calculate density from.",
+                help: "Point features to calculate density from (for multipoints, each point component receives the feature's weight).",
             },
             P {
                 name: "field",
@@ -748,7 +748,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::NumericField,
                 required: false,
                 default: "",
-                help: "Numeric weight or count for each point (default 1.0).",
+                help: "Numeric weight or count for each point (default 1.0; multipoint parts each receive this weight).",
             },
             P {
                 name: "radius",
@@ -2005,7 +2005,12 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
                 let Some([x0, y0, x1, y1]) = v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
                     return Err("the extent is xmin,ymin,xmax,ymax".into());
                 };
-                Some(Extent::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
+                let (min_x, max_x) = (x0.min(x1), x0.max(x1));
+                let (min_y, max_y) = (y0.min(y1), y0.max(y1));
+                if !(max_x > min_x && max_y > min_y) {
+                    return Err("the extent must have a positive width and height".into());
+                }
+                Some(Extent::new(min_x, min_y, max_x, max_y))
             }
         }
         Some(serde_json::Value::Array(arr)) => {
@@ -2016,7 +2021,12 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
             let Some([x0, y0, x1, y1]) = coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()) else {
                 return Err("the extent is xmin,ymin,xmax,ymax".into());
             };
-            Some(Extent::new(x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)))
+            let (min_x, max_x) = (x0.min(x1), x0.max(x1));
+            let (min_y, max_y) = (y0.min(y1), y0.max(y1));
+            if !(max_x > min_x && max_y > min_y) {
+                return Err("the extent must have a positive width and height".into());
+            }
+            Some(Extent::new(min_x, min_y, max_x, max_y))
         }
         Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
     };
@@ -2029,7 +2039,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         Some(c) if c > 0.0 => c,
         Some(_) => return Err("pixel size must be a positive number".into()),
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
-        None => crate::density::auto_cell_size(&grid_ext).min(bandwidth),
+        None => crate::density::auto_cell_size(&grid_ext),
     };
 
     if p.get("kernel").is_some_and(|v| !v.is_null() && !v.is_string()) {
@@ -4574,6 +4584,10 @@ mod tests {
         assert!(err_ext_short.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_short}");
         let err_ext_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": 12345})).unwrap_err();
         assert!(err_ext_num.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_num}");
+        let err_ext_zero =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": "500000,4428000,500000,4428000"}))
+                .unwrap_err();
+        assert!(err_ext_zero.contains("positive width and height"), "{err_ext_zero}");
 
         // 9. Report skipped points with non-positive or invalid weights
         let mut mixed_ds = m.0.get("stations").unwrap().clone();
@@ -4591,7 +4605,23 @@ mod tests {
         .unwrap();
         assert!(res_mixed.messages[0].contains("1 skipped"), "expected '1 skipped' in: {}", res_mixed.messages[0]);
 
-        // 9. Reject excessive workload exceeding MAX_DENSITY_WORK
+        // 10. MultiPoint geometry support
+        let mut mp_ds = Dataset::new("mp", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        mp_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        mp_ds.push(
+            Some(Geometry::MultiPoint(vec![
+                tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap(),
+                tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap(),
+            ])),
+            vec![Value::Float(5.0)],
+        );
+        let m_mp = Map(HashMap::from([("mp".to_string(), mp_ds)]));
+        let res_mp =
+            crate::run("kernelDensity", &m_mp, &serde_json::json!({"input": "mp", "field": "w", "pixelSize": 25.0, "radius": 100.0}))
+                .unwrap();
+        assert_eq!(res_mp.messages.len(), 1);
+
+        // 11. Reject excessive workload exceeding MAX_DENSITY_WORK
         let mut crowded = Dataset::new("crowded", GeometryType::Point, vec![]);
         crowded.crs = Some(Crs::from_epsg(32618).unwrap());
         for i in 0..500 {
