@@ -336,10 +336,14 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
         })
         .collect();
     let grid_of = |inner: [f32; 4]| grown(inner, margin, region).and_then(|g| Grid::new(edges, g, 1.0, part.budget)).filter(Grid::inside);
-    // Over the whole shape: its deepest point first, over every tile.
+    // The tiles stop at the frame's budget too: those past it are shaded from the coarse grid.
+    let affordable = || part.budget.get() < FRAME_BURST_PX;
+    // Over the whole shape: its deepest point first, over the tiles (the coarse grid's, past them).
     let depth = match b.distance {
         Some(d) => d,
-        None => depth(tiles.iter().filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner)))).fold(0.0, f32::max)),
+        None => depth(
+            tiles.iter().filter(|_| affordable()).filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner)))).fold(deep, f32::max),
+        ),
     };
     // Drawn through the polygon's mask over the picture, tile by tile.
     // (Counted against the frame's budget too: a frame of many such parts goes coarse instead.)
@@ -349,8 +353,10 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
     let picture = [0.0, 0.0, pm.width() as f32, pm.height() as f32];
     for inner in tiles {
         let Some(shown) = grown(inner, 0.0, picture) else { continue };
-        let Some(g) = grid_of(inner) else { continue };
-        if let Some(rect) = Rect::from_ltrb(shown[0], shown[1], shown[2], shown[3]) {
+        let Some(rect) = Rect::from_ltrb(shown[0], shown[1], shown[2], shown[3]) else { continue };
+        if !affordable() {
+            grid.paint(pm, path, depth, b, Some((rect, &clip)));
+        } else if let Some(g) = grid_of(inner) {
             g.paint(pm, path, depth, b, Some((rect, &clip)));
         }
     }
@@ -573,6 +579,38 @@ mod tests {
     }
 
     /// A ramp's average: by the length of each stretch, premultiplied.
+    /// A thin polygon over a large box, drawn in tiles at full resolution, stops building tiles
+    /// at the frame's budget: past it, its tiles are shaded from the coarse grid, and still drawn.
+    #[test]
+    fn a_thin_shapeburst_stops_at_the_frames_budget() {
+        let mut pm = Pixmap::new(2000, 2000).unwrap();
+        let mut pb = tiny_skia::PathBuilder::new();
+        pb.move_to(0.0, 6.0);
+        pb.line_to(6.0, 0.0);
+        pb.line_to(2000.0, 1994.0);
+        pb.line_to(1994.0, 2000.0);
+        pb.close();
+        let path = pb.finish().unwrap();
+        let budget = Cell::new(FRAME_BURST_PX - 1.0);
+        let none = |_: bool| None;
+        let part = Part { path: &path, whole: None, centroid: None, clip: None, whole_depth: &none, budget: &budget };
+        let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
+        let pattern = FillPattern::Shapeburst {
+            color2: blue,
+            stops: Stops::default(),
+            discrete: false,
+            distance: None,
+            blur: 0,
+            ignore_rings: false,
+        };
+        assert!(draw(&mut pm, &part, || None, &pattern, red, 1.0));
+        // One coarse grid (padded a little) and the mask, no full-resolution tile (each about
+        // 300,000 cells, sixteen of them).
+        let picture = 2000.0 * 2000.0;
+        assert!(budget.get() < FRAME_BURST_PX + 1.1 * MAX_BURST_PX + picture, "{}", budget.get() - FRAME_BURST_PX);
+        assert!(pm.pixel(1000, 1000).is_some_and(|p| p.alpha() > 0), "drawn");
+    }
+
     #[test]
     fn a_ramps_average_weighs_each_stretch() {
         let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
