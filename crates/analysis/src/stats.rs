@@ -263,7 +263,9 @@ fn cmp_key(x: &Value, y: &Value) -> Ordering {
         _ => 1,
     };
     rank(x).cmp(&rank(y)).then_with(|| match (x, y) {
-        (Value::Text(a), Value::Text(b)) => a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)),
+        (Value::Text(a), Value::Text(b)) => {
+            a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase)).then_with(|| a.cmp(b))
+        }
         (Value::Null, Value::Null) => Ordering::Equal,
         _ => cmp_number(x, y).then_with(|| kind(x).cmp(&kind(y))),
     })
@@ -323,7 +325,7 @@ pub enum Values {
 }
 
 /// A field's values within a group, and how many of its records have none.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Column {
     values: Values,
     nulls: usize,
@@ -332,12 +334,21 @@ pub struct Column {
     whole: Vec<Option<i64>>,
     /// The values in ascending order, sorted once, and only for a statistic that needs them so.
     sorted: OnceCell<Values>,
+    /// With whole numbers among the values, all of them in ascending order compared exactly.
+    exact: OnceCell<Vec<Value>>,
+}
+
+/// Columns are equal when their values are: the sorted caches don't count.
+impl PartialEq for Column {
+    fn eq(&self, other: &Column) -> bool {
+        self.values == other.values && self.nulls == other.nulls && self.whole == other.whole
+    }
 }
 
 impl Column {
     /// A column of `values`, in record order, and `nulls` records without one.
     pub fn new(values: Values, nulls: usize) -> Column {
-        Column { values, nulls, whole: Vec::new(), sorted: OnceCell::new() }
+        Column { values, nulls, whole: Vec::new(), sorted: OnceCell::new(), exact: OnceCell::new() }
     }
 
     /// The values in ascending order.
@@ -356,16 +367,26 @@ impl Column {
         })
     }
 
+    /// With whole numbers among the values, all of them sorted and compared exactly: whole numbers
+    /// as themselves, decimals against them without rounding. Past 2^53 whole numbers can differ
+    /// where their f64s don't.
+    fn exact(&self) -> Option<&[Value]> {
+        let Values::Numbers(v) = &self.values else { return None };
+        if self.whole.is_empty() {
+            return None;
+        }
+        let exact = self.exact.get_or_init(|| {
+            let mut e: Vec<Value> = v.iter().zip(&self.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int)).collect();
+            e.sort_by(cmp_number);
+            e
+        });
+        Some(exact)
+    }
+
     /// How many distinct values there are.
     fn distinct(&self) -> usize {
-        // With whole numbers among them, every value is compared exactly: whole numbers as
-        // themselves, decimals against them without rounding.
-        if let Values::Numbers(v) = &self.values
-            && !self.whole.is_empty()
-        {
-            let mut exact: Vec<Value> = v.iter().zip(&self.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int)).collect();
-            exact.sort_by(cmp_number);
-            return exact.windows(2).filter(|w| matches!(w, [a, b] if cmp_number(a, b).is_ne())).count() + 1;
+        if let Some(e) = self.exact() {
+            return e.windows(2).filter(|w| matches!(w, [a, b] if cmp_number(a, b).is_ne())).count() + usize::from(!e.is_empty());
         }
         match self.sorted() {
             Values::Numbers(s) => distinct(s),
@@ -431,6 +452,10 @@ pub fn compute(stat: Stat, column: &Column, separator: &str) -> Value {
         (Stat::Concatenate, Values::Texts(v)) if !v.is_empty() => Value::Text(v.join(separator)),
         (Stat::Unique, _) => count(column.distinct()),
         (_, Values::Numbers(v)) => {
+            // MODE and MINORITY tell whole numbers apart exactly, as UNIQUE does.
+            if let (Stat::Mode | Stat::Minority, Some(e)) = (stat, column.exact()) {
+                return number(pick_run_by(e, stat == Stat::Mode, |a, b| cmp_number(a, b).is_eq()).and_then(Value::as_f64));
+            }
             let sorted = || match column.sorted() {
                 Values::Numbers(s) => s.as_slice(),
                 Values::Texts(_) => &[],
@@ -516,10 +541,15 @@ fn textual<'a>(stat: Stat, v: &'a [String], sorted: impl Fn() -> &'a [String]) -
 /// The value of the longest run of equal values in sorted `s` (`most`), or of the shortest: the
 /// first such run, so the lowest value on a tie.
 fn pick_run<T: PartialEq>(s: &[T], most: bool) -> Option<&T> {
+    pick_run_by(s, most, |a, b| a == b)
+}
+
+/// [`pick_run`] with the values' equality given by `eq`.
+fn pick_run_by<T>(s: &[T], most: bool, eq: impl Fn(&T, &T) -> bool) -> Option<&T> {
     let mut best: Option<(&T, usize)> = None;
     let mut i = 0;
     while let Some(first) = s.get(i) {
-        let len = s.get(i..).map_or(0, |rest| rest.iter().take_while(|x| *x == first).count()).max(1);
+        let len = s.get(i..).map_or(0, |rest| rest.iter().take_while(|x| eq(x, first)).count()).max(1);
         let better = best.is_none_or(|(_, n)| if most { len > n } else { len < n });
         if better {
             best = Some((first, len));
@@ -810,6 +840,25 @@ mod tests {
         let unique = |rows: &[usize]| compute(Stat::Unique, &column(&mixed, rows, 0, false), ", ");
         assert_eq!(unique(&[0, 1, 2]), Value::Int(3));
         assert_eq!(unique(&[1, 3, 4, 5]), Value::Int(3));
+        // On that exact path, −0 and 0 are one value with the whole number 0.
+        let mut signed_zero = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Double)]);
+        for v in [Value::Int(0), Value::Float(-0.0), Value::Float(0.0)] {
+            signed_zero.push(None, vec![v]);
+        }
+        assert_eq!(compute(Stat::Unique, &column(&signed_zero, &[0, 1, 2], 0, false), ", "), Value::Int(1));
+        // MODE and MINORITY tell whole numbers past 2^53 apart: 2^53 + 2 twice is the mode, not
+        // 2^53 and 2^53 + 1, which share an f64.
+        let mut modes = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Integer)]);
+        for i in [1i64 << 53, (1 << 53) + 1, (1 << 53) + 2, (1 << 53) + 2] {
+            modes.push(None, vec![Value::Int(i)]);
+        }
+        let col = column(&modes, &[0, 1, 2, 3], 0, false);
+        assert_eq!(compute(Stat::Mode, &col, ", "), Value::Float(9_007_199_254_740_994.0));
+        assert_eq!(compute(Stat::Minority, &col, ", "), Value::Float(9_007_199_254_740_992.0));
+        // A column's equality ignores whether its values were sorted yet.
+        let sorted = column(&modes, &[0, 1, 2, 3], 0, false);
+        assert_eq!(compute(Stat::Median, &sorted, ", "), compute(Stat::Median, &col, ", "));
+        assert_eq!(sorted, column(&modes, &[0, 1, 2, 3], 0, false));
         // MODE of −0 and 0 is 0.
         assert!(matches!(f("MODE", &nums(&[-0.0, 0.0])), Value::Float(z) if z.to_bits() == 0));
         let tiny = f64::from_bits(1);
