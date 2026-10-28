@@ -3632,15 +3632,15 @@ fn scene_covers(scene: Camera, cam: Camera, w: f64, h: f64) -> bool {
 const KEEP_FRAME_MS: u64 = 300;
 const KEEP_FRAME_S: f64 = KEEP_FRAME_MS as f64 / 1000.0;
 
-/// Which project and map are open and which of the map's layers, groups and tile layers are
-/// shown, in order: a frame of other layers (one hidden, added, removed or moved since, another
-/// map or another project) shows a preview of the change instead of staying on screen.
+/// Which project and map are open, the map's backdrop, and which of its layers, groups and tile
+/// layers are drawn, in order: a frame of other layers (one hidden, added, removed or moved since,
+/// another basemap, map or project) shows a preview of the change instead of staying on screen.
 fn shown_layers(session: &rustgis_engine::Session) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::hash::DefaultHasher::new();
     let project = &session.project;
     let map = project.map();
-    (&session.path, &project.name, project.active_map, &map.name).hash(&mut h);
+    (&session.path, &project.name, project.active_map, &map.name, format!("{:?}", map.basemap), map.graticule).hash(&mut h);
     for l in &map.layers {
         (l.id, l.visible).hash(&mut h);
     }
@@ -3648,7 +3648,7 @@ fn shown_layers(session: &rustgis_engine::Session) -> u64 {
         (g.id, g.visible, &g.children).hash(&mut h);
     }
     for t in &map.tiles {
-        (&t.name, &t.url, t.visible, t.over).hash(&mut h);
+        (&t.name, &t.url, t.draws(), t.over).hash(&mut h);
     }
     h.finish()
 }
@@ -3661,8 +3661,9 @@ fn later(a: u64, b: u64) -> bool {
 /// Whether a change to the map's contents keeps the frame on screen (`shown`) until the exact
 /// frame for `key` arrives, instead of a coarse preview of the whole map: the view and the layers
 /// shown are the same (a layer's colour, transparency, symbology or labels changed, or its
-/// features were edited) and its frames are quick to draw (`render_ms`). A preview of a tiled map drew the basemap coarsely too, so dragging a
-/// layer's colour or transparency slider made the whole map flicker between blurry and sharp.
+/// features were edited) and its frames are quick to draw (`render_ms`). A preview of a tiled
+/// map drew the basemap coarsely too, so dragging a layer's colour or transparency slider made
+/// the whole map flicker between blurry and sharp.
 fn keeps_frame(shown: Option<Key>, key: Key, render_ms: u64) -> bool {
     render_ms <= KEEP_FRAME_MS && shown.is_some_and(|s| later(key.rev, s.rev) && (s.cam, s.size, s.shown) == (key.cam, key.size, key.shown))
 }
@@ -4155,6 +4156,12 @@ mod tests {
         app.session.map_mut().tiles[0].over = top;
         assert_ne!(shown_layers(&app.session), before, "a tile layer moved over a map layer");
         app.session.map_mut().tiles[0].over = None;
+        app.session.map_mut().tiles[0].time_hidden = true;
+        assert_ne!(shown_layers(&app.session), before, "a tile layer hidden by the time slider");
+        app.session.map_mut().tiles[0].time_hidden = false;
+        app.session.map_mut().graticule = !app.session.map().graticule;
+        assert_ne!(shown_layers(&app.session), before, "the graticule turned on or off");
+        app.session.map_mut().graticule = !app.session.map().graticule;
         app.run("layer.visibility", json!({"layer": "Countries", "visible": false})).expect("hide");
         assert_ne!(shown_layers(&app.session), before, "a layer hidden");
     }
