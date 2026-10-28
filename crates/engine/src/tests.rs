@@ -13869,6 +13869,24 @@ fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
 }
 
 #[test]
+fn shapefiles_too_large_to_load_whole_are_read_in_place() {
+    // Few records, but a .dbf past what the whole-file reader takes (#1055): opened through the
+    // in-place reader, which has no cap on the file, rather than refused as too large. Grown
+    // sparse, so it takes no room on disk.
+    let p = line_of_points_shp("wide-shp", 20);
+    let dbf = p.with_extension("dbf");
+    std::fs::OpenOptions::new().write(true).open(&dbf).unwrap().set_len(rustgis_data::io::MAX_BYTES + 1).unwrap();
+    let mut s = Session::new(Project::default());
+    let r = s.run("layer.addData", &json!({"path": p.display().to_string()})).unwrap();
+    assert_eq!(r["features"], 20, "{r}");
+    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+    assert_eq!(l.dataset.features.len(), 20);
+    for e in ["shp", "shx", "dbf", "prj", "cpg"] {
+        let _ = std::fs::remove_file(p.with_extension(e));
+    }
+}
+
+#[test]
 fn large_shapefiles_are_read_in_place() {
     // Small: loaded whole, so it can be edited.
     let small = line_of_points_shp("small-shp", 50);

@@ -1037,9 +1037,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     {
         let crs = rustgis_data::raster::Crs::parse(crs)?;
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
-        let stream = b(p, "stream").unwrap_or_else(|| {
-            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        });
+        let stream = b(p, "stream").unwrap_or_else(|| large_shapefile(path));
         if stream {
             let src = rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
             return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)));
@@ -1050,11 +1048,7 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
     #[cfg(not(target_arch = "wasm32"))]
-    if path.to_ascii_lowercase().ends_with(".shp")
-        && b(p, "stream").unwrap_or_else(|| {
-            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        })
-    {
+    if path.to_ascii_lowercase().ends_with(".shp") && b(p, "stream").unwrap_or_else(|| large_shapefile(path)) {
         return add_source(s, p, Origin::Path(path));
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
@@ -1666,6 +1660,17 @@ fn lidar_renderer(src: &dyn rustgis_data::source::FeatureSource, seed: u32) -> O
     } else {
         Renderer::graduated(&ds, &[], "z", 7, ClassMethod::Quantile, Ramp::Terrain, base).ok()
     }
+}
+
+/// A Shapefile read in place rather than loaded whole: one of many records, or one whose `.shp` or
+/// `.dbf` is past what the whole-file reader takes (a few large shapes, #1055).
+#[cfg(not(target_arch = "wasm32"))]
+fn large_shapefile(path: &str) -> bool {
+    let shp = Path::new(path);
+    let past_reader = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES);
+    rustgis_data::source::shp::record_count(shp).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
+        || past_reader(shp)
+        || past_reader(&shp.with_extension("dbf"))
 }
 
 /// An OpenStreetMap extract past what the native reader takes, opened through GDAL instead when it
