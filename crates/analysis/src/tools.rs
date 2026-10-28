@@ -1928,7 +1928,8 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
             };
             row.push(read.get(i).map_or(Value::Null, |(_, c)| stats::compute(r.stat, c, separator)));
         }
-        out.push(None, row);
+        // One past the last id: `push` would search them all for each group.
+        out.push_next(None, row);
     }
     let n = out.features.len();
     Ok(ToolResult { output: Output::Table(out), messages: vec![format!("Summary Statistics: {n} rows")] })

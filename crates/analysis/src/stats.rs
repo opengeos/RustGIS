@@ -358,10 +358,14 @@ impl Column {
 
     /// How many distinct values there are.
     fn distinct(&self) -> usize {
-        // Whole numbers only: counted exactly.
-        if let Some(mut s) = (!self.whole.is_empty()).then(|| self.whole.iter().copied().collect::<Option<Vec<i64>>>()).flatten() {
-            s.sort_unstable();
-            return distinct(&s);
+        // With whole numbers among them, every value is compared exactly: whole numbers as
+        // themselves, decimals against them without rounding.
+        if let Values::Numbers(v) = &self.values
+            && !self.whole.is_empty()
+        {
+            let mut exact: Vec<Value> = v.iter().zip(&self.whole).map(|(x, w)| w.map_or(Value::Float(*x), Value::Int)).collect();
+            exact.sort_by(cmp_number);
+            return exact.windows(2).filter(|w| matches!(w, [a, b] if cmp_number(a, b).is_ne())).count() + 1;
         }
         match self.sorted() {
             Values::Numbers(s) => distinct(s),
@@ -448,9 +452,9 @@ fn distinct<T: PartialEq>(s: &[T]) -> usize {
     s.windows(2).filter(|w| matches!(w, [a, b] if a != b)).count() + usize::from(!s.is_empty())
 }
 
-/// A number as an output value: null unless finite.
+/// A number as an output value: null unless finite, and −0 as 0.
 fn number(x: Option<f64>) -> Value {
-    x.filter(|x| x.is_finite()).map_or(Value::Null, Value::Float)
+    x.filter(|x| x.is_finite()).map_or(Value::Null, |x| Value::Float(x + 0.0))
 }
 
 /// A number's text in a concatenation: whole numbers without a decimal point, others in full; −0
@@ -740,6 +744,9 @@ mod tests {
         // group, after the numbers.
         let big = (1i64 << 53) + 1;
         assert_eq!(cmp_key(&Value::Int(big), &Value::Float(9_007_199_254_740_992.0)), Ordering::Greater);
+        let mixed_big = table(&[(Value::Int(big), ""), (Value::Float(9_007_199_254_740_992.0), "")]);
+        let order: Vec<Vec<Value>> = group_rows(&mixed_big, &[0, 1], &[0]).into_iter().map(|g| g.key).collect();
+        assert_eq!(order, vec![vec![Value::Float(9_007_199_254_740_992.0)], vec![Value::Int(big)]]);
         assert_eq!(cmp_key(&Value::Int(i64::MAX), &Value::Float(9.3e18)), Ordering::Less);
         assert_eq!(cmp_key(&Value::Int(i64::MIN), &Value::Float(f64::NEG_INFINITY)), Ordering::Greater);
         assert_eq!(cmp_key(&Value::Int(3), &Value::Float(3.5)), Ordering::Less);
@@ -787,6 +794,24 @@ mod tests {
             mixed.push(None, vec![v]);
         }
         assert_eq!(compute(Stat::Concatenate, &column(&mixed, &[0, 1], 0, false), ", "), Value::Text("9007199254740993, 0.5".into()));
+        // UNIQUE is exact in a mixed column too: 2^53 and 2^53 + 1 (whole) are two values beside a
+        // decimal, 2^53 + 1 and 2^53 (a decimal) are two, and 2 (whole) and 2.0 (decimal) one.
+        let mut mixed = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Double)]);
+        for v in [
+            Value::Int(1 << 53),
+            Value::Int((1 << 53) + 1),
+            Value::Float(0.5),
+            Value::Float(9_007_199_254_740_992.0),
+            Value::Int(2),
+            Value::Float(2.0),
+        ] {
+            mixed.push(None, vec![v]);
+        }
+        let unique = |rows: &[usize]| compute(Stat::Unique, &column(&mixed, rows, 0, false), ", ");
+        assert_eq!(unique(&[0, 1, 2]), Value::Int(3));
+        assert_eq!(unique(&[1, 3, 4, 5]), Value::Int(3));
+        // MODE of −0 and 0 is 0.
+        assert!(matches!(f("MODE", &nums(&[-0.0, 0.0])), Value::Float(z) if z.to_bits() == 0));
         let tiny = f64::from_bits(1);
         assert_eq!(f("MEDIAN", &nums(&[tiny, tiny])), Value::Float(tiny));
     }

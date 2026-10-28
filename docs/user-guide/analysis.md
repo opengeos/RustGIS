@@ -311,11 +311,11 @@ gp.run={"tool":"spatialJoin","params":{"target":"districts","join":"permits","me
 **Summary Statistics** (`summaryStatistics`) makes a standalone table of statistics: one row for
 the whole table (none for an empty one), or one for each combination of values of the `case`
 fields (one field, or several as a list such as `["county", "year"]`). Rows are sorted by those
-values; records with no value form a group of their own, first. Statistics follow record order (`FIRST`, `LAST`,
-`CONCATENATE`) and use only the selected records when the table has a selection. Each row has
-the case fields, then `FREQUENCY` (the group's records), then a field `<STAT>_<field>` for each
-statistic asked for. Name the statistics in `statistics`, a list of up to 256 (field, statistic)
-pairs in the order the fields should appear:
+values; records with no value form a group of their own, first. Statistics follow record order
+(`FIRST`, `LAST`, `CONCATENATE`) and use only the selected records when the table has a
+selection. Each row has the case fields, then `FREQUENCY` (the group's records), then a field
+`<STAT>_<field>` for each statistic asked for. Name the statistics in `statistics`, a list of up
+to 256 (field, statistic) pairs in the order the fields should appear:
 
 ```text
 gp.run={"tool":"summaryStatistics","params":{"input":"parcels","case":["county","year"],"statistics":[{"field":"income","statistic":"MEAN"},{"field":"income","statistic":"MEDIAN"},{"field":"zoning","statistic":"MODE"}]}}
