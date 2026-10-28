@@ -340,17 +340,23 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
     let affordable = || part.budget.get() < FRAME_BURST_PX;
     let picture = [0.0, 0.0, pm.width() as f32, pm.height() as f32];
     let on_screen = |inner: &[f32; 4]| grown(*inner, 0.0, picture).is_some();
-    // Over the whole shape: its deepest point first, over the tiles in the picture (the coarse
-    // grid's past the budget). A part the picture cuts takes its whole shape's depth instead.
+    // Over the whole shape: its deepest point first, over every tile of the clip box, off screen
+    // too, so the depth stays put as the map pans. The tiles the budget leaves out bring in the
+    // coarse grid's depth instead.
     let depth = match b.distance {
         Some(d) => d,
-        None => depth(
-            tiles
+        None => {
+            let mut skipped = false;
+            let measured = tiles
                 .iter()
-                .filter(|inner| on_screen(inner) && affordable())
+                .filter(|_| {
+                    skipped |= !affordable();
+                    !skipped
+                })
                 .filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner))))
-                .fold(deep, f32::max),
-        ),
+                .fold(0.0, f32::max);
+            depth(if skipped { measured.max(deep) } else { measured })
+        }
     };
     // Drawn through the polygon's mask over the picture, tile by tile.
     // (Counted against the frame's budget too: a frame of many such parts goes coarse instead.)
@@ -622,12 +628,29 @@ mod tests {
         let picture = 2000.0 * 2000.0;
         assert!(budget.get() < FRAME_BURST_PX + 1.1 * MAX_BURST_PX + picture, "{}", budget.get() - FRAME_BURST_PX);
         assert!(pm.pixel(1000, 1000).is_some_and(|p| p.alpha() > 0), "drawn");
-        // Running out part way: the tiles it affords at full resolution, the rest at once from the
-        // coarse grid, the strip drawn from end to end.
-        let mut pm = Pixmap::new(2000, 2000).unwrap();
-        let budget = Cell::new(FRAME_BURST_PX - 6.0e6);
-        let part = Part { path: &path, whole: None, centroid: None, clip: None, whole_depth: &none, budget: &budget };
-        assert!(draw(&mut pm, &part, || None, &pattern, red, 1.0));
+        // Running out part way through the painting: what each pass costs, measured on a fresh
+        // budget (with a depth of its own, no depth pass over the tiles), then a budget that runs
+        // out halfway through the painted tiles.
+        let cost = |start: f32, pattern: &FillPattern| {
+            let mut pm = Pixmap::new(2000, 2000).unwrap();
+            let budget = Cell::new(start);
+            let part = Part { path: &path, whole: None, centroid: None, clip: None, whole_depth: &none, budget: &budget };
+            assert!(draw(&mut pm, &part, || None, pattern, red, 1.0));
+            (budget.get() - start, pm)
+        };
+        let deep = FillPattern::Shapeburst {
+            color2: blue,
+            stops: Stops::default(),
+            discrete: false,
+            distance: Some(5.0),
+            blur: 0,
+            ignore_rings: false,
+        };
+        let (all, _) = cost(0.0, &pattern);
+        let tiles = all - cost(0.0, &deep).0;
+        let before_painting = all - tiles;
+        let (spent, pm) = cost(FRAME_BURST_PX - before_painting - tiles / 2.0, &pattern);
+        assert!(spent > before_painting && spent < all, "{spent} of {all}: some tiles painted at full resolution, not all");
         for at in [20, 500, 1000, 1500, 1980] {
             assert!(pm.pixel(at, at).is_some_and(|p| p.alpha() > 0), "drawn at {at}");
         }
