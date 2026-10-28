@@ -6042,5 +6042,21 @@ mod tests {
         assert_eq!(out16.features.len(), 2);
         assert_eq!(out16.features[0].attrs[0], Value::Int(10));
         assert_eq!(out16.features[1].attrs[0], Value::Int(10));
+
+        // 17. Blank join_field falls back to join_key
+        let res17 = crate::run(
+            "joinField",
+            &m5,
+            &serde_json::json!({
+                "target": "inventory",
+                "targetField": "sku",
+                "joinTable": "matching_source",
+                "join_field": "",
+                "join_key": "sku"
+            }),
+        )
+        .unwrap();
+        let Output::Table(out17) = res17.output else { panic!("expected Output::Table") };
+        assert_eq!(out17.features[0].attrs[1], Value::Float(1.25));
     }
 }

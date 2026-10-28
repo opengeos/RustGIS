@@ -316,30 +316,34 @@ pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> 
     let mut p = params.as_object().cloned().unwrap_or_default();
     if spec.id == "joinField" {
         let is_blank = |val: Option<&Value>| val.is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+        let find_first = |map: &serde_json::Map<String, Value>, keys: &[&str]| {
+            keys.iter().filter_map(|k| map.get(*k)).find(|v| !is_blank(Some(v))).cloned()
+        };
+
         if is_blank(p.get("target"))
-            && let Some(v) = p.get("input").or_else(|| p.get("target_layer")).cloned()
+            && let Some(v) = find_first(&p, &["target", "input", "target_layer"])
         {
             p.insert("target".to_string(), v);
         }
         if is_blank(p.get("joinTable"))
-            && let Some(v) = p.get("join").or_else(|| p.get("source")).or_else(|| p.get("join_table")).cloned()
+            && let Some(v) = find_first(&p, &["joinTable", "join", "source", "join_table"])
         {
             p.insert("joinTable".to_string(), v);
         }
         if is_blank(p.get("targetField"))
-            && let Some(v) = p.get("target_field").or_else(|| p.get("key")).or_else(|| p.get("target_key")).cloned()
+            && let Some(v) = find_first(&p, &["targetField", "target_field", "key", "target_key"])
         {
             p.insert("targetField".to_string(), v);
         }
         if is_blank(p.get("joinField")) {
-            if let Some(v) = p.get("join_field").or_else(|| p.get("join_key")).filter(|v| !is_blank(Some(v))) {
-                p.insert("joinField".to_string(), v.clone());
+            if let Some(v) = find_first(&p, &["joinField", "join_field", "join_key"]) {
+                p.insert("joinField".to_string(), v);
             } else if let Some(tf) = p.get("targetField").filter(|v| !is_blank(Some(v))) {
                 p.insert("joinField".to_string(), tf.clone());
             }
         }
         if is_blank(p.get("duplicates"))
-            && let Some(v) = p.get("duplicateStrategy").or_else(|| p.get("duplicate_strategy")).cloned()
+            && let Some(v) = find_first(&p, &["duplicates", "duplicateStrategy", "duplicate_strategy"])
         {
             p.insert("duplicates".to_string(), v);
         }

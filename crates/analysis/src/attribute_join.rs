@@ -6,6 +6,7 @@
 
 use rustgis_data::{Dataset, Field, Value};
 use std::collections::HashMap;
+use std::fmt::Write;
 
 /// Strategy for handling duplicate matching keys in the source table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +129,7 @@ impl JoinFieldReport {
             self.matched_records, self.total_records, self.unmatched_records, self.transferred_fields
         );
         if self.duplicate_keys > 0 {
-            msg.push_str(&format!(" ({} duplicate source keys encountered)", self.duplicate_keys));
+            let _ = write!(msg, " ({} duplicate source keys encountered)", self.duplicate_keys);
         }
         msg
     }
@@ -137,7 +138,7 @@ impl JoinFieldReport {
 /// Executes a non-spatial attribute join from `source` onto `target`.
 ///
 /// Preserves target order, IDs, geometry, existing attributes, and the record count of the
-/// effective target dataset (honouring row selections when active).
+/// provided target dataset (when invoked through the tool, row selections are applied beforehand).
 /// Appends selected attributes from `source` based on matching key values.
 pub fn join_field(target: &Dataset, source: &Dataset, opts: &JoinFieldOptions<'_>) -> Result<(Dataset, JoinFieldReport), String> {
     if target.windowed {
