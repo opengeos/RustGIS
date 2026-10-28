@@ -398,7 +398,7 @@ fn add_layer(s: &mut Session, r: &Value, dir: Option<&str>, report: &mut Report,
 }
 
 /// Absolute saved paths are tried first, then their basename in the supplied project folder.
-/// Relative paths require a folder rather than depending on the process working directory.
+/// Local paths require a locally chosen project or explicit folder, even when absolute.
 fn resolve(address: &str, dir: Option<&str>) -> Result<String, String> {
     if rustgis_map::tiles::is_web(address) {
         return Ok(address.into());
@@ -406,11 +406,12 @@ fn resolve(address: &str, dir: Option<&str>) -> Result<String, String> {
     if crate::map::qgis::is_drive_relative(address) {
         return Err("drive-relative path is unsupported".into());
     }
+    let dir = dir.ok_or("local data requires a local project path or explicit dir")?;
     let path = std::path::Path::new(address);
     if !crate::map::qgis::is_relative(address) && path.exists() {
         return Ok(address.into());
     }
-    if let Some(dir) = dir {
+    {
         let name = address.rsplit(['/', '\\']).next().unwrap_or(address);
         let path = if crate::map::qgis::is_relative(address) {
             rustgis_map::paths::resolve(dir, address)

@@ -169,7 +169,13 @@ pub fn start() {
                             ["data", "stac", "style", "tiles", "zarr"].into_iter().filter(|k| !params(&q, k, 1).is_empty()).collect();
                         if !skipped.is_empty() {
                             let list = skipped.iter().map(|k| format!("?{k}=")).collect::<Vec<_>>().join(", ");
-                            app.session.notify(format!("?project= opens a project or imports a map, so {list} links were left out"), false);
+                            app.session.notify(
+                                rustgis_ui_egui::i18n::fmt(
+                                    "?project= opens a project or imports a map, so {list} links were left out",
+                                    &[("list", &list)],
+                                ),
+                                false,
+                            );
                         }
                     }
                     let links = if project.is_some() { "" } else { q.as_str() };
@@ -899,8 +905,10 @@ fn services(inbox: Inbox, font_inbox: Inbox, notes: Notes, ctx: egui::Context, e
             } else if purpose == "shapefile" {
                 rfd::AsyncFileDialog::new().add_filter("Shapefile", &["shp", "dbf", "shx", "prj", "cpg", "zip"])
             } else if purpose == "project" {
-                rfd::AsyncFileDialog::new()
-                    .add_filter(rustgis_ui_egui::tl!("Projects (RustGIS, GeoLibre)"), &["rgis", "rgisx", "rgispkg", "geolibre", "json"])
+                rfd::AsyncFileDialog::new().add_filter(
+                    rustgis_ui_egui::tl!("Projects and JSON data (RustGIS, QGIS, GeoLibre)"),
+                    &["rgis", "rgisx", "rgispkg", "geolibre", "json"],
+                )
             } else if purpose == "qgisProject" {
                 rfd::AsyncFileDialog::new().add_filter(rustgis_ui_egui::tl!("QGIS project"), &["qgs", "qgz"])
             } else if purpose == "item" {

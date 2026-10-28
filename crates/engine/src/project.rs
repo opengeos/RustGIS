@@ -788,9 +788,23 @@ impl Project {
     /// holds them, absolute: the copy lives in the app's recovery folder and is opened from there,
     /// not from the project's folder. Nor is it remembered as a file this process wrote, so
     /// frequent copies can't push the user's own saves out of the snapshots that restore secrets.
+    /// Runtime import reservations are omitted while completed work remains recoverable.
     /// Text too large to open again is refused.
     pub fn recovery_text(mut self) -> Result<String, String> {
-        self.ensure_imports_complete()?;
+        // A recovery copy preserves completed work without persisting runtime-only reservations.
+        for map in &mut self.maps {
+            let pending: std::collections::HashSet<_> = map
+                .layers
+                .iter()
+                .filter(|layer| layer.dataset.source.as_deref().is_some_and(|source| source.starts_with("geolibre-pending:")))
+                .map(|layer| layer.id)
+                .collect();
+            map.layers.retain(|layer| !pending.contains(&layer.id));
+            for group in &mut map.groups {
+                group.children.retain(|id| !pending.contains(id));
+            }
+            map.tiles.retain(|tile| !tile.id.starts_with("geolibre-pending:"));
+        }
         strip_addresses(self.addresses_mut());
         let text = serde_json::to_string(&self).map_err(|e| e.to_string())?;
         if text.len() as u64 > MAX_BYTES {

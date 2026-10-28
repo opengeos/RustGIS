@@ -19263,13 +19263,37 @@ fn geolibre_summary_counts_completed_records_instead_of_note_names() {
 
 #[test]
 fn geolibre_pending_layers_cannot_be_saved_as_completed_data() {
-    let mut s = Session::new(crate::project::Project::default());
+    let mut s = world();
+    let completed = s.map().layers.len();
     let mut ds = crate::data::Dataset::new("Pending", crate::data::GeometryType::Point, Vec::new());
     ds.source = Some("geolibre-pending:save-test".into());
     let id = s.map_mut().add_dataset(ds);
     assert!(s.project.saved_text(None).unwrap_err().contains("still downloading"));
-    assert!(s.project.clone().recovery_text().unwrap_err().contains("still downloading"));
+    let recovered = s.project.clone().recovery_text().unwrap();
+    assert!(!recovered.contains("geolibre-pending:"));
+    let recovered: crate::project::Project = serde_json::from_str(&recovered).unwrap();
+    assert_eq!(recovered.maps[recovered.active_map].layers.len(), completed);
+    assert!(s.map().layer(id).is_some());
     s.map_mut().layer_mut(id).unwrap().dataset.source = None;
     assert!(s.project.saved_text(None).is_ok());
     assert!(s.project.clone().recovery_text().is_ok());
+}
+
+#[test]
+fn geolibre_text_cannot_read_local_files_without_explicit_directory() {
+    let dir = std::env::temp_dir().join(format!("rustgis-geolibre-local-trust-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("local.geojson");
+    std::fs::write(
+        &path,
+        br#"{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{}}]}"#,
+    )
+    .unwrap();
+    let text = json!({"version":"0.2.0","name":"Trust","mapView":{},"basemapStyleUrl":"","layers":[{"name":"Local","type":"geojson","sourcePath":path}]}).to_string();
+    let mut s = world();
+    let out = s.run("project.importGeolibre", &json!({"text":text})).unwrap();
+    assert_eq!(out["layers"], json!([]));
+    let out = s.run("project.importGeolibre", &json!({"text":text,"dir":dir})).unwrap();
+    assert_eq!(out["layers"], json!(["Local"]));
+    std::fs::remove_dir_all(dir).unwrap();
 }

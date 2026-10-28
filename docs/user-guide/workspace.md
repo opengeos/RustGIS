@@ -99,12 +99,13 @@ Colour classes and proportional sizes are supported separately. Combined colour-
 keep colour and use a fixed size; graduated colour class boundaries are retained; proportional
 sizes use RustGIS's area scaling. Label halos use RustGIS defaults. Tile overlays draw above feature
 layers, and nested groups become flat folders with inherited visibility and opacity retained.
+Local data paths require a locally opened project or an explicit `dir`; URL and pasted-text imports cannot read local files without that folder.
 URL data downloaded in the browser fills its reserved layer position when it arrives; wait for
-those downloads before saving. Saving and recovery snapshots are refused while imported layers are still downloading. A browser import can queue at most 16 whole-file downloads
+those downloads before saving. Saving is refused while imported layers are still downloading. Recovery copies retain completed work and omit unfinished layers. A browser import can queue at most 16 whole-file downloads
 (fewer if other downloads are queued, active, or awaiting completion); a larger batch is refused before creating its map.
 Split that project into smaller imports or use the desktop app. Streaming tiles and COGs do
-not consume those download slots. Desktop URL imports run synchronously, like Add Data from URL;
-a slow source can delay completion. Zarr sources use their saved variable and dimension indices,
+not consume those download slots. Desktop GeoLibre URL imports wait for each download on the calling thread, which can pause the interface.
+Each request, including a remote MBTiles archive, has a 60-second timeout; download larger archives locally before importing. Zarr sources use their saved variable and dimension indices,
 or the first supported variable when those choices are absent. Imported Zarr stores are read
 one at a time with a 128 MiB download-buffer limit; larger slices must be reduced or opened
 through the desktop data workflow.
