@@ -13870,9 +13870,9 @@ fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
 
 #[test]
 fn shapefiles_too_large_to_load_whole_still_open() {
-    // Few records, but a .shp or .dbf past what the whole-file reader takes (#1055): opened in
-    // place, which has no cap on the file, and with so few records loaded whole rather than
-    // refused as too large. Grown sparse where the file system allows.
+    // Few records, but a .shp or .dbf past what the whole-file reader takes (#1055): opened and
+    // kept in place, so it never has to fit in memory whole, rather than refused as too large.
+    // Grown sparse where the file system allows.
     for grown in ["dbf", "shp"] {
         let p = line_of_points_shp(&format!("wide-{grown}"), 20);
         std::fs::OpenOptions::new().write(true).open(p.with_extension(grown)).unwrap().set_len(rustgis_data::io::MAX_BYTES + 1).unwrap();
@@ -13882,9 +13882,8 @@ fn shapefiles_too_large_to_load_whole_still_open() {
             let mut s = Session::new(Project::default());
             let r = s.run("layer.addData", &params).unwrap();
             assert_eq!(r["features"], 20, "{grown}: {r}");
-            let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
-            assert!(!l.is_streamed());
-            assert_eq!(l.dataset.features.len(), 20);
+            assert_eq!(r["streamed"], true, "{grown}: {r}");
+            assert!(s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap().is_streamed());
         }
         // "stream": false still asks for the whole-file reader, which refuses it.
         let mut s = Session::new(Project::default());

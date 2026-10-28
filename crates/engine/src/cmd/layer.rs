@@ -1031,13 +1031,21 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
             Err(e) => return Err(format!("{path}: {e}")),
         }
     }
+    // A Shapefile past what the whole-file reader takes is kept in place however few its records
+    // (#1055), so it never has to fit in memory whole; "stream": false or Load All loads it.
+    #[cfg(not(target_arch = "wasm32"))]
+    let past_cap = past_cap_shapefile(path, p);
+    #[cfg(not(target_arch = "wasm32"))]
+    let p = past_cap.as_ref().unwrap_or(p);
     #[cfg(not(target_arch = "wasm32"))]
     if path.to_ascii_lowercase().ends_with(".shp")
         && let Some(crs) = ps(p, "crs").map(str::trim).filter(|c| !c.is_empty())
     {
         let crs = rustgis_data::raster::Crs::parse(crs)?;
         let name = Path::new(path).file_stem().and_then(|n| n.to_str()).unwrap_or("layer");
-        let stream = b(p, "stream").unwrap_or_else(|| large_shapefile(path));
+        let stream = b(p, "stream").unwrap_or_else(|| {
+            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
+        });
         if stream {
             let src = rustgis_data::source::shp::ShpSource::open_path_in(Path::new(path), name, Some(crs)).map_err(|e| e.to_string())?;
             return add_source_with(s, p, Origin::Path(path), Some(Box::new(src)));
@@ -1048,7 +1056,11 @@ fn add_data(s: &mut Session, p: &Value) -> CmdResult {
     }
     // A large Shapefile is read in place, as a GeoPackage is; smaller ones are loaded whole.
     #[cfg(not(target_arch = "wasm32"))]
-    if path.to_ascii_lowercase().ends_with(".shp") && b(p, "stream").unwrap_or_else(|| large_shapefile(path)) {
+    if path.to_ascii_lowercase().ends_with(".shp")
+        && b(p, "stream").unwrap_or_else(|| {
+            rustgis_data::source::shp::record_count(Path::new(path)).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
+        })
+    {
         return add_source(s, p, Origin::Path(path));
     }
     // A PMTiles archive is a tile layer (raster or vector, as its header says).
@@ -1662,15 +1674,18 @@ fn lidar_renderer(src: &dyn rustgis_data::source::FeatureSource, seed: u32) -> O
     }
 }
 
-/// A Shapefile read in place rather than loaded whole: one of many records, or one whose `.shp` or
-/// `.dbf` is past what the whole-file reader takes (a few large shapes, #1055).
+/// The parameters with `"stream": true` for a Shapefile whose `.shp` or `.dbf` is past what the
+/// whole-file reader takes, when they don't say whether to stream; `None` otherwise.
 #[cfg(not(target_arch = "wasm32"))]
-fn large_shapefile(path: &str) -> bool {
+fn past_cap_shapefile(path: &str, p: &Value) -> Option<Value> {
     let shp = Path::new(path);
-    let past_reader = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES);
-    rustgis_data::source::shp::record_count(shp).is_some_and(|n| n > rustgis_map::source::STREAM_ABOVE)
-        || past_reader(shp)
-        || past_reader(&shp.with_extension("dbf"))
+    let past = |f: &Path| std::fs::metadata(f).is_ok_and(|m| m.len() > rustgis_data::io::MAX_BYTES);
+    if !path.to_ascii_lowercase().ends_with(".shp") || b(p, "stream").is_some() || !(past(shp) || past(&shp.with_extension("dbf"))) {
+        return None;
+    }
+    let mut q = p.clone();
+    q.as_object_mut()?.insert("stream".into(), json!(true));
+    Some(q)
 }
 
 /// An OpenStreetMap extract past what the native reader takes, opened through GDAL instead when it
