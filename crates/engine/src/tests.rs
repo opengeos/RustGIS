@@ -17131,6 +17131,34 @@ fn model_graphs(s: &mut Session) {
     }
 }
 
+/// A model from a file, saved as steps, has each step checked with its tool: a tool that writes a
+/// file without naming it (vectorToPmtiles with no `output`) is refused, and a built-in tool's
+/// step that only names its output layer runs (#1043).
+#[test]
+fn a_model_from_a_file_checks_each_step_with_its_tool() {
+    let mut s = Session::new(sample::world_project());
+    s.queue_gp_files = true;
+    let export = json!([{"tool": "vectorToPmtiles", "params": {"input": "Cities", "minZoom": 0, "maxZoom": 0}}]);
+    s.run("model.new", &json!({"name": "Export", "steps": export, "imported": true})).unwrap();
+    let e = s.run("model.run", &json!({"name": "Export"})).unwrap_err();
+    assert!(e.contains("step 1 (vectorToPmtiles)") && e.contains("from a file"), "{e}");
+    assert!(s.take_gp_files().is_empty(), "nothing was exported");
+    // Made here, the same model runs.
+    s.run("model.new", &json!({"name": "Export here", "steps": export})).unwrap();
+    s.run("model.run", &json!({"name": "Export here"})).unwrap();
+    assert_eq!(s.take_gp_files().len(), 1);
+
+    let named = json!([{"tool": "buffer", "params": {"input": "Cities", "distance": 100, "output": "Near cities"}}]);
+    s.run("model.new", &json!({"name": "Buffer", "steps": named, "imported": true})).unwrap();
+    s.run("model.run", &json!({"name": "Buffer"})).unwrap();
+    assert!(s.map().layer_by_name("Near cities").is_some());
+    // A path through the output stays refused.
+    let path = json!([{"tool": "buffer", "params": {"input": "Cities", "distance": 100, "output": "/tmp/near.shp"}}]);
+    s.run("model.new", &json!({"name": "Buffer to a file", "steps": path, "imported": true})).unwrap();
+    let e = s.run("model.run", &json!({"name": "Buffer to a file"})).unwrap_err();
+    assert!(e.contains("from a file"), "{e}");
+}
+
 fn rustgis_engine_graph(v: &Value) -> crate::project::ModelGraph {
     crate::model::graph_from_json(v).unwrap()
 }
