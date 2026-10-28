@@ -1866,6 +1866,10 @@ fn calculate_geometry(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     })
 }
 
+/// The longest separator Summary Statistics joins CONCATENATE's values with, in bytes: each value
+/// adds one, so a long one would multiply the output's size.
+const MAX_SEPARATOR: usize = 256;
+
 /// Summary Statistics: a row for each group of records sharing the case fields' values, holding
 /// the case fields, `FREQUENCY` (the group's records) and each requested statistic as
 /// `<STAT>_<field>`. Without `statistics`, `field` takes COUNT, SUM, MEAN, MIN, MAX and STD, its
@@ -1886,7 +1890,8 @@ fn summary_statistics(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> 
     let cases = case_fields(ds, p.get("case"))?;
     let separator = match p.get("separator") {
         None | Some(Json::Null) => ", ",
-        Some(Json::String(t)) => t.as_str(),
+        Some(Json::String(t)) if t.len() <= MAX_SEPARATOR => t.as_str(),
+        Some(Json::String(_)) => return Err(format!("Separator can be at most {MAX_SEPARATOR} bytes")),
         Some(_) => return Err("Separator must be text".into()),
     };
     let mut fields: Vec<Field> = cases.iter().filter_map(|&c| ds.fields.get(c).cloned()).collect();
@@ -4956,6 +4961,7 @@ mod tests {
             (serde_json::json!({"input": "parcels", "field": "value", "case": "zone, district"}), "no field"),
             (serde_json::json!({"input": "parcels", "field": "value", "case": "nope"}), "no field"),
             (serde_json::json!({"input": "parcels", "field": "value", "separator": 1}), "Separator must be text"),
+            (serde_json::json!({"input": "parcels", "field": "value", "separator": "x".repeat(257)}), "at most 256 bytes"),
         ] {
             let err = crate::run("summaryStatistics", &m, &p).err().unwrap_or_default();
             assert!(err.contains(says), "{p}: {err}");

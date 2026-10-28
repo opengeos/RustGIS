@@ -183,41 +183,49 @@ pub struct Group {
 }
 
 /// A value as a group key: equal keys are equal values. Numbers compare by their bits, with −0 as
-/// 0, so every NaN is one key.
+/// 0, so every NaN is one key. Text is borrowed from the dataset.
 #[derive(Hash, PartialEq, Eq)]
-enum KeyPart {
+enum KeyPart<'a> {
     Null,
     Int(i64),
     Float(u64),
-    Text(String),
+    Text(&'a str),
     Bool(bool),
 }
 
 /// A value's group key.
-fn key_part(v: &Value) -> KeyPart {
+fn key_part(v: &Value) -> KeyPart<'_> {
     match v {
         Value::Null => KeyPart::Null,
         Value::Int(i) => KeyPart::Int(*i),
         Value::Float(f) if f.is_nan() => KeyPart::Float(f64::NAN.to_bits()),
         Value::Float(f) => KeyPart::Float(if *f == 0.0 { 0.0f64.to_bits() } else { f.to_bits() }),
-        Value::Text(t) => KeyPart::Text(t.clone()),
+        Value::Text(t) => KeyPart::Text(t),
         Value::Bool(b) => KeyPart::Bool(*b),
     }
 }
 
 /// Groups `rows` by the values of the `keys` fields, sorted by those values (nulls first). Null
-/// values form their own group. With no key fields, every row is one group, and no rows are no
-/// groups.
+/// values form their own group, and −0 is 0. With no key fields, every row is one group, and no
+/// rows are no groups.
 pub fn group_rows(ds: &Dataset, rows: &[usize], keys: &[usize]) -> Vec<Group> {
-    let mut index: HashMap<Vec<KeyPart>, usize> = HashMap::new();
+    let mut index: HashMap<Vec<KeyPart<'_>>, usize> = HashMap::new();
     let mut groups: Vec<Group> = Vec::new();
     for &r in rows {
         let hashed: Vec<KeyPart> = keys.iter().map(|&k| key_part(ds.value(r, k))).collect();
-        // The key's values are copied only for a new group.
+        // The key's values are copied only for a new group (its hash borrows them).
         let g = match index.get(&hashed) {
             Some(&g) => g,
             None => {
-                let key: Vec<Value> = keys.iter().map(|&k| ds.value(r, k).clone()).collect();
+                // −0 as 0 and one NaN, as they group.
+                let key: Vec<Value> = keys
+                    .iter()
+                    .map(|&k| match ds.value(r, k) {
+                        Value::Float(f) if f.is_nan() => Value::Float(f64::NAN),
+                        Value::Float(f) => Value::Float(f + 0.0),
+                        v => v.clone(),
+                    })
+                    .collect();
                 groups.push(Group { key, rows: Vec::new() });
                 index.insert(hashed, groups.len() - 1);
                 groups.len() - 1
@@ -241,14 +249,12 @@ fn cmp_keys(a: &[Value], b: &[Value]) -> Ordering {
 
 /// Orders two group key values (see [`cmp_keys`]).
 fn cmp_key(x: &Value, y: &Value) -> Ordering {
-    /// A value's place: its rank (null, number, text), then within numbers the value, the kind,
-    /// and a whole number exactly.
-    fn number(v: &Value) -> Option<(f64, u8, i64)> {
+    /// A number's kind, the tie-break between equal values: true/false, then whole, then decimal.
+    fn kind(v: &Value) -> u8 {
         match v {
-            Value::Bool(b) => Some((f64::from(u8::from(*b)), 0, 0)),
-            Value::Int(i) => Some((*i as f64, 1, *i)),
-            Value::Float(f) => Some((f + 0.0, 2, 0)),
-            Value::Null | Value::Text(_) => None,
+            Value::Bool(_) => 0,
+            Value::Int(_) => 1,
+            _ => 2,
         }
     }
     let rank = |v: &Value| match v {
@@ -258,10 +264,54 @@ fn cmp_key(x: &Value, y: &Value) -> Ordering {
     };
     rank(x).cmp(&rank(y)).then_with(|| match (x, y) {
         (Value::Text(a), Value::Text(b)) => a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)),
-        _ => match (number(x), number(y)) {
-            (Some((a, ka, ia)), Some((b, kb, ib))) => a.total_cmp(&b).then(ka.cmp(&kb)).then(ia.cmp(&ib)),
-            _ => Ordering::Equal,
-        },
+        (Value::Null, Value::Null) => Ordering::Equal,
+        _ => cmp_number(x, y).then_with(|| kind(x).cmp(&kind(y))),
+    })
+}
+
+/// Orders two numbers (true and false as 1 and 0) by value, exactly: a whole number against a
+/// decimal without rounding it to f64. Every NaN is one value, above all others; −0 is 0.
+fn cmp_number(x: &Value, y: &Value) -> Ordering {
+    /// A number as a whole number or a decimal.
+    enum N {
+        I(i64),
+        F(f64),
+    }
+    let n = |v: &Value| match v {
+        Value::Bool(b) => N::I(i64::from(*b)),
+        Value::Int(i) => N::I(*i),
+        Value::Float(f) if f.is_nan() => N::F(f64::NAN),
+        Value::Float(f) => N::F(f + 0.0),
+        Value::Null | Value::Text(_) => N::F(f64::NAN),
+    };
+    match (n(x), n(y)) {
+        (N::I(a), N::I(b)) => a.cmp(&b),
+        (N::F(a), N::F(b)) => a.total_cmp(&b),
+        (N::I(a), N::F(b)) => cmp_int_float(a, b),
+        (N::F(a), N::I(b)) => cmp_int_float(b, a).reverse(),
+    }
+}
+
+/// Orders a whole number against a decimal exactly; NaN is above every number.
+fn cmp_int_float(i: i64, f: f64) -> Ordering {
+    // 2^63: no i64 reaches it, every i64 is at least its negative.
+    const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+    if f.is_nan() || f >= TWO_63 {
+        return Ordering::Less;
+    }
+    if f < -TWO_63 {
+        return Ordering::Greater;
+    }
+    let t = f.trunc();
+    // In range, so the truncated decimal is a whole number an i64 holds exactly.
+    i.cmp(&(t as i64)).then_with(|| {
+        if f > t {
+            Ordering::Less
+        } else if f < t {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
     })
 }
 
@@ -277,9 +327,9 @@ pub enum Values {
 pub struct Column {
     values: Values,
     nulls: usize,
-    /// The values as whole numbers, exactly, when every one is: past 2^53 they can differ where
-    /// their f64s don't.
-    ints: Option<Vec<i64>>,
+    /// Beside each number, in the same order, the whole number it was read from, exactly: past
+    /// 2^53 whole numbers can differ where their f64s don't. Empty when there are none.
+    whole: Vec<Option<i64>>,
     /// The values in ascending order, sorted once, and only for a statistic that needs them so.
     sorted: OnceCell<Values>,
 }
@@ -287,7 +337,7 @@ pub struct Column {
 impl Column {
     /// A column of `values`, in record order, and `nulls` records without one.
     pub fn new(values: Values, nulls: usize) -> Column {
-        Column { values, nulls, ints: None, sorted: OnceCell::new() }
+        Column { values, nulls, whole: Vec::new(), sorted: OnceCell::new() }
     }
 
     /// The values in ascending order.
@@ -308,8 +358,8 @@ impl Column {
 
     /// How many distinct values there are.
     fn distinct(&self) -> usize {
-        if let Some(ints) = &self.ints {
-            let mut s = ints.clone();
+        // Whole numbers only: counted exactly.
+        if let Some(mut s) = (!self.whole.is_empty()).then(|| self.whole.iter().copied().collect::<Option<Vec<i64>>>()).flatten() {
             s.sort_unstable();
             return distinct(&s);
         }
@@ -327,20 +377,21 @@ pub fn column(ds: &Dataset, rows: &[usize], field: usize, as_numbers: bool) -> C
     let mut nulls = 0;
     if numeric {
         let mut out = Vec::with_capacity(rows.len());
-        let mut ints = Vec::new();
+        let mut whole = Vec::with_capacity(rows.len());
         for &r in rows {
             let v = ds.value(r, field);
             match v.as_f64() {
-                Some(x) => out.push(x),
+                Some(x) => {
+                    out.push(x);
+                    whole.push(if let Value::Int(i) = v { Some(*i) } else { None });
+                }
                 None => nulls += 1,
             }
-            if let Value::Int(i) = v {
-                ints.push(*i);
-            }
         }
-        let all_ints = !ints.is_empty() && ints.len() == out.len();
         let mut column = Column::new(Values::Numbers(out), nulls);
-        column.ints = all_ints.then_some(ints);
+        if whole.iter().any(Option::is_some) {
+            column.whole = whole;
+        }
         column
     } else {
         let mut out = Vec::with_capacity(rows.len());
@@ -366,10 +417,13 @@ pub fn compute(stat: Stat, column: &Column, separator: &str) -> Value {
         (Stat::Nulls, _) => count(column.nulls),
         (Stat::Count, Values::Numbers(v)) => count(v.len()),
         (Stat::Count, Values::Texts(v)) => count(v.len()),
-        (Stat::Concatenate, Values::Numbers(v)) if !v.is_empty() => Value::Text(match &column.ints {
-            Some(ints) => ints.iter().map(i64::to_string).collect::<Vec<_>>().join(separator),
-            None => v.iter().map(|x| number_text(*x)).collect::<Vec<_>>().join(separator),
-        }),
+        (Stat::Concatenate, Values::Numbers(v)) if !v.is_empty() => {
+            let text = |(i, x): (usize, &f64)| match column.whole.get(i) {
+                Some(Some(w)) => w.to_string(),
+                _ => number_text(*x),
+            };
+            Value::Text(v.iter().enumerate().map(text).collect::<Vec<_>>().join(separator))
+        }
         (Stat::Concatenate, Values::Texts(v)) if !v.is_empty() => Value::Text(v.join(separator)),
         (Stat::Unique, _) => count(column.distinct()),
         (_, Values::Numbers(v)) => {
@@ -678,6 +732,23 @@ mod tests {
         assert_eq!(order(&mix), want);
         mix.features.reverse();
         assert_eq!(order(&mix), want);
+        // A group first met as −0 is keyed 0.
+        let neg = table(&[(Value::Float(-0.0), ""), (Value::Float(0.0), "")]);
+        let key = group_rows(&neg, &[0, 1], &[0]).into_iter().next().and_then(|g| g.key.into_iter().next());
+        assert!(matches!(key, Some(Value::Float(z)) if z.to_bits() == 0), "{key:?}");
+        // Whole numbers and decimals compare exactly past 2^53, and NaNs of either sign are one
+        // group, after the numbers.
+        let big = (1i64 << 53) + 1;
+        assert_eq!(cmp_key(&Value::Int(big), &Value::Float(9_007_199_254_740_992.0)), Ordering::Greater);
+        assert_eq!(cmp_key(&Value::Int(i64::MAX), &Value::Float(9.3e18)), Ordering::Less);
+        assert_eq!(cmp_key(&Value::Int(i64::MIN), &Value::Float(f64::NEG_INFINITY)), Ordering::Greater);
+        assert_eq!(cmp_key(&Value::Int(3), &Value::Float(3.5)), Ordering::Less);
+        assert_eq!(cmp_key(&Value::Int(-3), &Value::Float(-3.5)), Ordering::Greater);
+        let nans = table(&[(Value::Float(-f64::NAN), ""), (Value::Float(f64::INFINITY), ""), (Value::Float(f64::NAN), "")]);
+        let keys: Vec<Vec<Value>> = group_rows(&nans, &[0, 1, 2], &[0]).into_iter().map(|g| g.key).collect();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys.first(), Some(&vec![Value::Float(f64::INFINITY)]));
+        assert!(matches!(keys.get(1).and_then(|k| k.first()), Some(Value::Float(n)) if n.to_bits() == f64::NAN.to_bits()));
         // Every NaN is one key, whatever its sign and payload.
         let nan = table(&[
             (Value::Float(f64::NAN), ""),
@@ -710,6 +781,12 @@ mod tests {
         }
         let want = Value::Text("9007199254740992, 9007199254740993, 9007199254740993".into());
         assert_eq!(compute(Stat::Concatenate, &column(&ds, &[0, 1, 2], 0, false), ", "), want);
+        // A column mixing whole numbers and decimals writes its whole numbers exactly too.
+        let mut mixed = Dataset::new("t", GeometryType::None, vec![Field::new("n", FieldType::Double)]);
+        for v in [Value::Int((1 << 53) + 1), Value::Float(0.5)] {
+            mixed.push(None, vec![v]);
+        }
+        assert_eq!(compute(Stat::Concatenate, &column(&mixed, &[0, 1], 0, false), ", "), Value::Text("9007199254740993, 0.5".into()));
         let tiny = f64::from_bits(1);
         assert_eq!(f("MEDIAN", &nums(&[tiny, tiny])), Value::Float(tiny));
     }
