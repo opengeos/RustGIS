@@ -1218,9 +1218,9 @@ fn overlay(inp: &dyn Inputs, p: &Json, op: Overlay) -> Result<ToolResult, String
             continue;
         };
         let (inside, rest) = cut(g, &zones, &index, op.keeps_outside());
-        for (zi, part) in inside {
+        for (zi, piece) in inside {
             if op.keeps_inside() {
-                out.push_next(Some(part), overlay_row(ds, Some(&f.attrs), ov, zones.get(zi).and_then(zone_attrs)));
+                out.push_next(Some(piece), overlay_row(ds, Some(&f.attrs), ov, zones.get(zi).and_then(zone_attrs)));
             }
             if op.keeps_overlay_rest()
                 && let Some(c) = covering.get_mut(zi)
@@ -1272,7 +1272,8 @@ fn symmetrical_difference(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, Stri
 
 /// A value as a field of type `ty` holds it: unchanged when it already fits; else converted as
 /// typing it into the field would, so text that isn't a number becomes empty in a numeric field.
-/// A number becomes text at full precision, and a fractional one an integer by truncation.
+/// A number becomes text at full precision, and a fractional one an integer by truncation; one
+/// beyond an integer field's range becomes empty.
 fn converted(v: &Value, ty: FieldType) -> Value {
     match (v, ty) {
         (Value::Int(_), FieldType::Integer)
@@ -1281,7 +1282,9 @@ fn converted(v: &Value, ty: FieldType) -> Value {
         | (Value::Bool(_), FieldType::Boolean) => v.clone(),
         (Value::Null, _) => Value::Null,
         (Value::Int(i), FieldType::Double) => Value::Float(*i as f64),
-        (Value::Float(f), FieldType::Integer) if f.is_finite() => Value::Int(f.trunc() as i64),
+        // In range, truncated; out of range (or not a number), empty rather than clamped. i64's
+        // bounds as f64 are exactly -2⁶³ and 2⁶³.
+        (Value::Float(f), FieldType::Integer) if (i64::MIN as f64..i64::MAX as f64).contains(&f.trunc()) => Value::Int(f.trunc() as i64),
         (Value::Float(_), FieldType::Integer) => Value::Null,
         (Value::Float(f), FieldType::Text) => Value::Text(f.to_string()),
         (Value::Bool(b), FieldType::Integer) => Value::Int(i64::from(*b)),
@@ -1343,17 +1346,36 @@ fn update(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     result(out, format!("Update: {kept} input features kept, {added} update features added"))
 }
 
-/// The most layers Split writes: more is an error, not thousands of layers.
-const MAX_SPLIT_LAYERS: usize = 1000;
+/// The most split areas (split polygons, or values of the split field) Split takes: more is an
+/// error before any work, not thousands of layers. Areas that come out empty count too.
+const MAX_SPLIT_AREAS: usize = 1000;
 /// The most characters of a split value kept in a layer's name.
 const MAX_SPLIT_NAME: usize = 64;
+
+/// A split value as it goes into a layer's name: control characters dropped, then its first
+/// [`MAX_SPLIT_NAME`] characters, trimmed.
+fn split_name(value: &str) -> String {
+    let name: String = value.chars().filter(|c| !c.is_control()).take(MAX_SPLIT_NAME).collect();
+    name.trim().to_string()
+}
+
+/// A split value exactly, for grouping: a float as the shortest text that reads back as it (its
+/// displayed text keeps six decimals, so 0.0000012 and 0.0000014 would read alike); any other
+/// value as it displays.
+fn split_key(v: &Value) -> String {
+    match v {
+        Value::Float(f) => format!("{f:?}"),
+        v => v.to_string(),
+    }
+}
 
 /// Split: the input clipped (as Clip clips) by each split polygon, one layer each, named by the
 /// output name (else the input's), an underscore and the polygon's id. With a split field, split
 /// polygons sharing its value make one layer together, named by the value (its first
 /// [`MAX_SPLIT_NAME`] characters, control characters dropped); one with no value is named by its
-/// id. A name the map already has gets a number when the layer is added. Layers left with no
-/// features are left out; selections in both layers count.
+/// id, as is one whose value is blank once its control characters are dropped. A name the map
+/// already has gets a number when the layer is added. Layers left with no features are left out;
+/// selections in both layers count.
 fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type == GeometryType::None {
@@ -1364,27 +1386,29 @@ fn split(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
         "" => None,
         name => Some(find_field_case_insensitive(sp, name)?),
     };
-    // The split polygons of each layer, in the order their first polygon comes, keyed by the whole
+    // The split polygons of each layer, in the order their first polygon comes, keyed by the exact
     // value, so values that would be named alike stay apart. A layer named by a value and one named
     // by an id are kept apart even when the two read the same.
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     let mut by_key: HashMap<(bool, String), usize> = HashMap::new();
     for (zi, z) in zones.iter().enumerate() {
         let Some(f) = sp.features.get(z.row) else { continue };
-        let value = field.and_then(|i| f.attrs.get(i)).filter(|v| !v.is_null()).map(ToString::to_string);
-        let key = match value.filter(|t| !t.trim().is_empty()) {
-            Some(t) => (true, t),
-            None => (false, f.id.to_string()),
+        let value = field.and_then(|i| f.attrs.get(i)).filter(|v| !v.is_null());
+        // -0 is 0, in the key and the name alike.
+        let value = value.map(|v| if let Value::Float(f) = v { Value::Float(f + 0.0) } else { v.clone() });
+        let named = value.map(|v| (split_key(&v), split_name(&v.to_string()))).filter(|(_, name)| !name.is_empty());
+        let (key, name) = match named {
+            Some((key, name)) => ((true, key), name),
+            None => ((false, f.id.to_string()), f.id.to_string()),
         };
         if let Some(g) = by_key.get(&key).and_then(|g| groups.get_mut(*g)) {
             g.1.push(zi);
         } else {
-            if groups.len() >= MAX_SPLIT_LAYERS {
-                return Err(format!("Split writes at most {MAX_SPLIT_LAYERS} layers"));
+            if groups.len() >= MAX_SPLIT_AREAS {
+                return Err(format!("Split takes at most {MAX_SPLIT_AREAS} split areas"));
             }
-            let name: String = key.1.chars().filter(|c| !c.is_control()).take(MAX_SPLIT_NAME).collect();
             by_key.insert(key, groups.len());
-            groups.push((name.trim().to_string(), vec![zi]));
+            groups.push((name, vec![zi]));
         }
     }
     let prefix = out_name(p, ds.name.clone());
@@ -4882,6 +4906,11 @@ mod tests {
         assert_eq!(converted(&Value::Float(third), FieldType::Text), Value::Text(third.to_string()), "full precision");
         assert_eq!(converted(&Value::Float(-2.7), FieldType::Integer), Value::Int(-2));
         assert_eq!(converted(&Value::Float(f64::NAN), FieldType::Integer), Value::Null);
+        // Beyond i64: empty, not clamped to its largest value.
+        assert_eq!(converted(&Value::Float(1e30), FieldType::Integer), Value::Null);
+        assert_eq!(converted(&Value::Float(-1e30), FieldType::Integer), Value::Null);
+        assert_eq!(converted(&Value::Float(9.223_372_036_854_776e18), FieldType::Integer), Value::Null, "2⁶³ itself");
+        assert_eq!(converted(&Value::Float(-9.223_372_036_854_776e18), FieldType::Integer), Value::Int(i64::MIN));
         assert_eq!(converted(&Value::Bool(true), FieldType::Double), Value::Float(1.0));
         assert_eq!(converted(&Value::Int(5), FieldType::Text), Value::Text("5".into()));
         assert_eq!(converted(&Value::Text("x".into()), FieldType::Double), Value::Null);
@@ -5012,10 +5041,40 @@ mod tests {
     }
 
     #[test]
-    fn split_refuses_more_layers_than_it_writes() {
+    fn split_names_a_value_of_control_characters_by_its_id() {
+        let mut m = parcels_and_zones();
+        // z1's zone is only a control character (trim leaves it), so its layer is named by its id.
+        m.0.get_mut("zones").unwrap().features[0].attrs[1] = Value::Text("\u{1}".into());
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "parcels", "split": "zones", "field": "zone"})).unwrap());
+        let names: Vec<&str> = out.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["parcels_1"]);
+        assert_eq!(split_name(" \u{1}a\tb "), "ab");
+    }
+
+    #[test]
+    fn split_keeps_floats_apart_that_display_alike() {
+        let mut m = inputs();
+        let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![Field::new("v", FieldType::Double)]);
+        // Both display as 0.000001; -0 and 0 are one value.
+        for (x, v) in [(0.0, 0.000_001_2), (0.5, 0.000_001_4), (1.0, -0.0), (1.5, 0.0)] {
+            zones.push(Some(sq(x, 0.0, 0.5)), vec![Value::Float(v)]);
+        }
+        m.0.insert("zones".into(), zones);
+        let mut row = Dataset::new("row", GeometryType::Point, vec![]);
+        for x in [0.25, 0.75, 1.25, 1.75] {
+            row.push(Some(Geometry::Point(Coord::new(x, 0.25))), vec![]);
+        }
+        m.0.insert("row".into(), row);
+        let out = layers_of(crate::run("split", &m, &serde_json::json!({"input": "row", "split": "zones", "field": "v"})).unwrap());
+        let layers: Vec<(&str, usize)> = out.iter().map(|d| (d.name.as_str(), d.features.len())).collect();
+        assert_eq!(layers, [("row_0.000001", 1), ("row_0.000001", 1), ("row_0", 2)]);
+    }
+
+    #[test]
+    fn split_refuses_more_split_areas_than_it_takes() {
         let mut m = inputs();
         let mut zones = Dataset::new("zones", GeometryType::Polygon, vec![]);
-        for i in 0..=MAX_SPLIT_LAYERS {
+        for i in 0..=MAX_SPLIT_AREAS {
             zones.push_next(Some(sq(f64::from(i as u32 % 100), f64::from(i as u32 / 100), 0.5)), vec![]);
         }
         m.0.insert("zones".into(), zones);

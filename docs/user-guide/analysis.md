@@ -280,7 +280,8 @@ too.
 **Symmetrical Difference** (`symmetricalDifference`) takes two polygon layers, as Union does, and
 keeps only the pieces one layer covers: Union's features without Intersect's. Each input feature's
 part outside every overlay polygon comes first, with empty overlay attributes, then each overlay
-polygon's part outside every input polygon, with empty input attributes.
+polygon's part outside every input polygon, with empty input attributes. As in Union, an input
+feature without geometry is kept as it is, with empty overlay attributes, so no input row is lost.
 
 **Update** (`update`) replaces part of a polygon layer with another: each `input` polygon's part
 outside every `update` polygon keeps its attributes, and each update polygon is then added whole.
@@ -301,8 +302,9 @@ values: polygons sharing a value make one layer together, and one without a valu
 id. Without a field, each polygon gives a layer named by its id. Names start with `output`, else
 the input's name, and an underscore: `roads_North` (a name the map already has gets a number, as
 for any new layer). A feature on the edge between two split
-polygons goes into both layers. Layers that would be empty are left out, and Split stops rather
-than write more than 1,000 layers. Selections in both layers are honoured.
+polygons goes into both layers. Layers that would be empty are left out. Split stops, before any
+work, when there are more than 1,000 split areas (split polygons, or values of the field), empty
+ones included. Selections in both layers are honoured.
 
 ```text
 gp.run={"tool":"split","params":{"input":"roads","split":"districts","field":"name"}}
