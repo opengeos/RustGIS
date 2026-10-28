@@ -494,8 +494,8 @@ as the layer writes its times (`1995`, `19951231`, `2024-06-01`, `2026-08-31T23:
 GetFeatureInfo requests too, so identify answers for that time; `time.export` animates it.
 
 - **A slider that is off** is turned on with the layer's times: every step of a period it lists
-  (`2000-02-24/2026-10-28/P1D`, a day at a time; for a period longer than the slider's 20,000 steps,
-  every second, fourth… step), or the times it lists, at the layer's default
+  (`2000-02-24/2026-10-28/P1D`, a day at a time; when it lists only a period longer than the
+  slider's 20,000 steps, every second, fourth… step), or the times it lists, at the layer's default
   (or its latest, when its default is no date). A slider already on keeps its steps; a service
   that lists other times may draw nothing at some of them, and a notice says so.
 - **At one time instead**: untick **Follow the time slider**. **Date** then takes one of the times
@@ -507,8 +507,8 @@ GetFeatureInfo requests too, so identify answers for that time; `time.export` an
   (`1990,2000`) or an interval (`1990/2020`, `1990/2020/P10Y`) can be asked for too, otherwise one
   time.
 - **A time named, not dated**: a layer whose only time is a name (OGC's `current`, or `default`),
-  or whose times are one period finer than the slider's hour (`…/PT30M`), isn't stepped through:
-  it is added at its default.
+  whose times are one period finer than the slider's hour (`…/PT30M`), or whose list of times would
+  take more than the slider's 20,000 steps, isn't stepped through: it is added at its default.
 
 With commands, `service.add` follows the slider when `"time"` is left out (or is `"slider"`, or
 `true`); a time of the layer's draws it at that time, and `"default"` (or `false`) at the service's
