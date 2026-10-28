@@ -13869,19 +13869,27 @@ fn line_of_points_shp(name: &str, n: usize) -> std::path::PathBuf {
 }
 
 #[test]
-fn shapefiles_too_large_to_load_whole_are_read_in_place() {
+fn shapefiles_too_large_to_load_whole_still_open() {
     // Few records, but a .dbf past what the whole-file reader takes (#1055): opened through the
-    // in-place reader, which has no cap on the file, rather than refused as too large. Grown
-    // sparse, so it takes no room on disk.
+    // in-place reader, which has no cap on the file, rather than refused as too large, and with
+    // so few records loaded whole from it. Grown sparse where the file system allows.
     let p = line_of_points_shp("wide-shp", 20);
     let dbf = p.with_extension("dbf");
     std::fs::OpenOptions::new().write(true).open(&dbf).unwrap().set_len(rustgis_data::io::MAX_BYTES + 1).unwrap();
+    let path = p.display().to_string();
+    // With and without a coordinate system given for it.
+    for params in [json!({"path": path}), json!({"path": path, "crs": "EPSG:4326"})] {
+        let mut s = Session::new(Project::default());
+        let r = s.run("layer.addData", &params).unwrap();
+        assert_eq!(r["features"], 20, "{r}");
+        let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
+        assert!(!l.is_streamed());
+        assert_eq!(l.dataset.features.len(), 20);
+    }
+    // "stream": false still asks for the whole-file reader, which refuses it.
     let mut s = Session::new(Project::default());
-    let r = s.run("layer.addData", &json!({"path": p.display().to_string()})).unwrap();
-    assert_eq!(r["features"], 20, "{r}");
-    let l = s.map().layer(r["layer"].as_u64().unwrap() as u32).unwrap();
-    assert!(!l.is_streamed());
-    assert_eq!(l.dataset.features.len(), 20);
+    let e = s.run("layer.addData", &json!({"path": path, "stream": false})).unwrap_err();
+    assert!(e.contains("too large"), "{e}");
     for e in ["shp", "shx", "dbf", "prj", "cpg"] {
         let _ = std::fs::remove_file(p.with_extension(e));
     }
