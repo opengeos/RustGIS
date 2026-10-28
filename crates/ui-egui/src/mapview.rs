@@ -4181,9 +4181,10 @@ mod tests {
         let mut app = RustGisApp::with_sample();
         // Nothing listens there: the tiles fail, the map still draws.
         app.run("map.addTiles", json!({"url": "http://127.0.0.1:9/{z}/{x}/{y}.png", "name": "Offline"})).expect("tile layer");
-        // Short steps: a kept frame gives way to a preview after `KEEP_FRAME_S` of the harness's time.
+        // Short steps: a kept frame gives way to a preview after `KEEP_FRAME_S` of the harness's time,
+        // 6000 steps here (at least 12 s with the waits below), far longer than a debug frame takes.
         let mut h =
-            egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_step_dt(0.0005).with_max_steps(10_000).build_ui_state(
+            egui_kittest::Harness::builder().with_size(vec2(900.0, 550.0)).with_step_dt(0.000_05).with_max_steps(10_000).build_ui_state(
                 |ui, app: &mut RustGisApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);
