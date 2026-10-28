@@ -374,7 +374,8 @@ NASA's data comes two ways: **NASA Earthdata…** adds imagery that NASA serves 
 (GIBS) in Web Mercator: more than a thousand layers of satellite imagery and science data (MODIS,
 VIIRS, Landsat, sea surface temperature, aerosols, fires…), grouped by mission or instrument (the
 first part of their names) and searched by words. Most layers change day by day: **Date**
-(YYYY-MM-DD) picks the day they are added at, and empty adds the service's default (its latest).
+(YYYY-MM-DD) picks the day they are added at, and empty adds the service's default (its latest);
+**Follow the time slider** steps through the days with the time slider instead (see below).
 The same layer can be added at several dates, each a layer named with its date. A WMS or WMTS layer with a time dimension works the same way in any service:
 **Date** takes one of the times it lists (hover over its "map by date" to see them, and its default), and with commands `service.add` takes `"time"`:
 

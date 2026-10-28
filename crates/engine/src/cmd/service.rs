@@ -424,7 +424,7 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             if !legends.is_empty() {
                 add["legend"] = json!(legends);
             }
-            let r = super::tiles::add(s, &add)?;
+            let mut r = super::tiles::add(s, &add)?;
             // A WMS layer's GetFeatureInfo request, for identify.
             let added = r["index"].as_u64().and_then(|i| usize::try_from(i).ok());
             if let Some(t) = added.and_then(|i| s.map_mut().tiles.get_mut(i)) {
@@ -432,6 +432,10 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             }
             if let Some(at) = slider.as_ref().filter(|_| fresh).and_then(|st| st.at) {
                 super::time::set(s, &json!({"date": at}))?;
+                // Its address at the step the slider went to.
+                if let Some(t) = added.and_then(|i| s.map().tiles.get(i)) {
+                    r["url"] = json!(t.url);
+                }
             }
             // A slider already on keeps its steps: the service may have no map for some of them.
             let current = s.map().time.as_ref().map(|t| t.current);

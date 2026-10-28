@@ -9188,7 +9188,8 @@ fn wms_layers_with_time() {
     // Following the time slider: it turns on with the layer's times, at its default, and each of
     // its steps draws (and asks) the layer at that time.
     let mut s = Session::new(Project::default());
-    s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "slider"})).unwrap();
+    let added = s.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": "slider"})).unwrap();
+    assert!(added["url"].as_str().is_some_and(|u| u.ends_with("&TIME=2025")), "{added}");
     let year = |y: i32| rustgis_data::time::parse_text(&format!("{y}-01-01")).unwrap();
     let slider = s.map().time.clone().unwrap();
     assert_eq!((slider.steps(), slider.current), (vec![year(1990), year(2000), year(2025)], year(2025)));
