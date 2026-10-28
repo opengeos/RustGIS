@@ -349,10 +349,10 @@ decimal. Without `statistics`, `field` gives that field's `COUNT`, `SUM`, `MEAN`
 
 **Pivot Table** (`pivotTable`) turns the values of one field into fields of their own. It makes a
 standalone table with a row for each combination of values of the row `fields` (one field, or
-several as a list; none gives one row for the whole table, or none for an empty one), then a field
-for each value of the `pivot` field, sorted by value. Each cell holds the `value` field's value for
-that row and pivot value, or is empty when no record has them. A table with a record per county and
-year becomes one with a row per county and a field per year:
+several as a list); with no row fields there is one row for the whole table, or none for an empty
+table. Then it adds a field for each value of the `pivot` field, sorted by value. Each cell holds
+the `value` field's value for that row and pivot value, or is empty when no record has them. A
+table with a record per county and year becomes one with a row per county and a field per year:
 
 ```text
 gp.run={"tool":"pivotTable","params":{"input":"incomes","fields":"county","pivot":"year","value":"income"}}
