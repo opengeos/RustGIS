@@ -28,7 +28,7 @@ fn selected_units_overwrite_and_undo() {
     p["overwrite"] = json!(true);
     assert_eq!(s.run("edit.calculateGeometry", &p).unwrap()["rows"], 1);
     let value = s.map().layer(id).unwrap().dataset.value(1, 0).as_f64().unwrap();
-    assert!((222.0..223.0).contains(&value));
+    assert!((222.6..222.7).contains(&value), "{value}"); // the ellipsoid: the sphere gives 222.39
     assert_eq!(s.map().layer(id).unwrap().dataset.value(0, 0).as_f64(), Some(99.0));
     s.run("edit.undo", &json!({})).unwrap();
     assert_eq!(s.map().layer(id).unwrap().dataset.value(1, 0).as_f64(), Some(99.0));

@@ -453,7 +453,7 @@ mod tests {
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
         // Clicks beside its middle, far from both vertices but close to the road.
         let r = shortest_route(&ds, &[0], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
-        assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
+        assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
         assert!((r.path[0].x - 0.03).abs() < 1e-9 && (r.path.last().unwrap().x - 0.06).abs() < 1e-9);
         assert!(shortest_route(&ds, &[0], Coord::new(0.03, 0.01), Coord::new(0.06, 0.0), None, 50.0).is_err(), "1 km away");
         assert!(shortest_route(&ds, &[0], Coord::new(f64::NAN, 0.0), Coord::new(0.06, 0.0), None, 50.0).is_err(), "a NaN end");
@@ -466,7 +466,7 @@ mod tests {
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.5, 0.5), Coord::new(f64::NAN, 0.5)]])), vec![]);
         ds.push(Some(Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(0.09, 0.0)]])), vec![]);
         let r = shortest_route(&ds, &[0, 1], Coord::new(0.03, 0.0001), Coord::new(0.06, -0.0001), None, 50.0).unwrap();
-        assert!((r.length_m - 3336.0).abs() < 20.0, "{}", r.length_m);
+        assert!((r.length_m - 3339.6).abs() < 1.0, "{}", r.length_m);
     }
 
     fn offset(at: Coord, x: f64, y: f64) -> Coord {
