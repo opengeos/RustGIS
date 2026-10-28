@@ -36,7 +36,10 @@ impl KernelType {
 /// Upper limit on total output raster cells to prevent memory exhaustion (64 MB for f32).
 pub const MAX_DENSITY_CELLS: usize = 16_000_000;
 
-/// Default target grid resolution across the extent diagonal when pixel size is not specified.
+/// Upper limit on aggregate cell visits across all points to prevent CPU exhaustion.
+pub const MAX_DENSITY_WORK: usize = 400_000_000;
+
+/// Default target grid resolution along the longer side of the extent when pixel size is not specified.
 const DEFAULT_GRID_STEPS: f64 = 250.0;
 
 /// Computes an automatic bandwidth (search radius) for 2D point data using Silverman's rule of thumb.
@@ -61,7 +64,7 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
     let mut dists: Vec<f64> = points.iter().map(|(p, _)| ((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt()).collect();
     dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median_dist = if dists.len() % 2 == 1 {
-        dists[dists.len() / 2]
+        dists.get(dists.len() / 2).copied().unwrap_or(0.0)
     } else {
         let mid = dists.len() / 2;
         let d1 = dists.get(mid.saturating_sub(1)).copied().unwrap_or(0.0);
@@ -108,6 +111,10 @@ pub fn kernel_density(
     if !bandwidth.is_finite() || bandwidth <= 0.0 {
         return Err("search radius (bandwidth) must be a positive number".into());
     }
+    let h_sq = bandwidth * bandwidth;
+    if !h_sq.is_finite() || h_sq <= 0.0 {
+        return Err("search radius is too large or invalid".into());
+    }
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err("pixel size must be a positive number".into());
     }
@@ -136,101 +143,77 @@ pub fn kernel_density(
         return Err(format!("{w} × {h_rows} cells is too large; choose a larger pixel size"));
     }
 
+    // Estimate total cell visits bounded by the point kernel window and output grid
+    let cells_across = (2.0 * bandwidth / cell_size).ceil();
+    let cells_per_point = if cells_across.is_finite() && cells_across < total_cells as f64 {
+        let dim = (cells_across as usize).saturating_add(1);
+        dim.saturating_mul(dim).min(total_cells)
+    } else {
+        total_cells
+    };
+    let total_work = points.len().saturating_mul(cells_per_point);
+    if total_work > MAX_DENSITY_WORK {
+        return Err(format!(
+            "{w} × {h_rows} cells from {} points is too much work; choose a larger pixel size or a smaller search radius",
+            points.len()
+        ));
+    }
+
     let origin_x = base_extent.min_x;
     let origin_y = base_extent.max_y;
     let gt = GeoTransform { origin_x, origin_y, pixel_width: cell_size, pixel_height: -cell_size };
 
     let mut grid = vec![0.0f32; total_cells];
-    let h_sq = bandwidth * bandwidth;
 
-    match kernel {
-        KernelType::Quartic => {
-            // Normalizing constant: 3 / (π * h²)
-            let factor = 3.0 / (PI * h_sq);
-
-            for &(p, wgt) in points {
-                if wgt <= 0.0 || !wgt.is_finite() {
-                    continue;
-                }
-
-                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
-                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
-
-                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-
-                for row in row_min..=row_max {
-                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
-                    let dy = p.y - y_cell;
-                    let dy_sq = dy * dy;
-                    if dy_sq >= h_sq {
-                        continue;
-                    }
-                    let rem_sq = h_sq - dy_sq;
-                    let row_offset = row * w;
-
-                    for col in col_min..=col_max {
-                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
-                        let dx = p.x - x_cell;
-                        let dx_sq = dx * dx;
-                        if dx_sq >= rem_sq {
-                            continue;
-                        }
-
-                        let d_sq = dx_sq + dy_sq;
-                        let u_sq = d_sq / h_sq;
-                        let val = 1.0 - u_sq;
-                        let contrib = wgt * factor * val * val;
-
-                        if let Some(cell) = grid.get_mut(row_offset + col) {
-                            *cell += contrib as f32;
-                        }
-                    }
-                }
-            }
-        }
+    let (factor_quartic, two_sigma_sq, factor_gauss) = match kernel {
+        KernelType::Quartic => (3.0 / (PI * h_sq), 0.0, 0.0),
         KernelType::Gaussian => {
-            // Truncate at 3σ = bandwidth
+            // Truncate at 3σ = bandwidth (standard compact-support approximation capturing >98.8% of mass)
             let sigma = bandwidth / 3.0;
-            let two_sigma_sq = 2.0 * sigma * sigma;
-            let factor = 1.0 / (2.0 * PI * sigma * sigma);
+            (0.0, 2.0 * sigma * sigma, 1.0 / (2.0 * PI * sigma * sigma))
+        }
+    };
 
-            for &(p, wgt) in points {
-                if wgt <= 0.0 || !wgt.is_finite() {
+    for &(p, wgt) in points {
+        if wgt <= 0.0 || !wgt.is_finite() {
+            continue;
+        }
+
+        let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
+        let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
+
+        let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+        let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
+
+        for row in row_min..=row_max {
+            let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
+            let dy = p.y - y_cell;
+            let dy_sq = dy * dy;
+            if dy_sq >= h_sq {
+                continue;
+            }
+            let rem_sq = h_sq - dy_sq;
+            let row_offset = row * w;
+
+            for col in col_min..=col_max {
+                let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
+                let dx = p.x - x_cell;
+                let dx_sq = dx * dx;
+                if dx_sq >= rem_sq {
                     continue;
                 }
 
-                let col_min = (((p.x - bandwidth - origin_x) / cell_size).floor() as isize).clamp(0, (w - 1) as isize) as usize;
-                let col_max = (((p.x + bandwidth - origin_x) / cell_size).ceil() as isize).clamp(0, (w - 1) as isize) as usize;
-
-                let row_min = (((origin_y - (p.y + bandwidth)) / cell_size).floor() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-                let row_max = (((origin_y - (p.y - bandwidth)) / cell_size).ceil() as isize).clamp(0, (h_rows - 1) as isize) as usize;
-
-                for row in row_min..=row_max {
-                    let y_cell = origin_y - (row as f64 + 0.5) * cell_size;
-                    let dy = p.y - y_cell;
-                    let dy_sq = dy * dy;
-                    if dy_sq >= h_sq {
-                        continue;
+                let d_sq = dx_sq + dy_sq;
+                let contrib = match kernel {
+                    KernelType::Quartic => {
+                        let val = 1.0 - d_sq / h_sq;
+                        wgt * factor_quartic * val * val
                     }
-                    let rem_sq = h_sq - dy_sq;
-                    let row_offset = row * w;
+                    KernelType::Gaussian => wgt * factor_gauss * (-d_sq / two_sigma_sq).exp(),
+                };
 
-                    for col in col_min..=col_max {
-                        let x_cell = origin_x + (col as f64 + 0.5) * cell_size;
-                        let dx = p.x - x_cell;
-                        let dx_sq = dx * dx;
-                        if dx_sq >= rem_sq {
-                            continue;
-                        }
-
-                        let d_sq = dx_sq + dy_sq;
-                        let contrib = wgt * factor * (-d_sq / two_sigma_sq).exp();
-
-                        if let Some(cell) = grid.get_mut(row_offset + col) {
-                            *cell += contrib as f32;
-                        }
-                    }
+                if let Some(cell) = grid.get_mut(row_offset + col) {
+                    *cell += contrib as f32;
                 }
             }
         }
@@ -383,5 +366,21 @@ mod tests {
         let max_orig = r.bands[0].data.iter().copied().fold(0.0f32, f32::max);
         let max_reopened = reopened.bands[0].data.iter().copied().fold(0.0f32, f32::max);
         assert!((max_orig - max_reopened).abs() < 1e-6);
+    }
+
+    #[test]
+    fn excessive_workload_is_rejected() {
+        // 50,000 points in a 100x100 grid (10,000 cells <= MAX_DENSITY_CELLS) with large radius
+        let pts: Vec<(Coord, f64)> = (0..50_000).map(|_| (Coord::new(500.0, 500.0), 1.0)).collect();
+        let ext = Extent::new(0.0, 0.0, 1000.0, 1000.0);
+        let err = kernel_density(&pts, Some(&ext), 10.0, 1000.0, KernelType::Quartic, "huge", Crs::WebMercator).unwrap_err();
+        assert!(err.contains("too much work"), "{err}");
+    }
+
+    #[test]
+    fn bandwidth_overflow_is_rejected() {
+        let pts = vec![(Coord::new(0.0, 0.0), 1.0)];
+        let err = kernel_density(&pts, None, 1.0, 1e200, KernelType::Quartic, "huge_bw", Crs::WebMercator).unwrap_err();
+        assert!(err.contains("too large or invalid"), "{err}");
     }
 }

@@ -756,7 +756,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Number,
                 required: false,
                 default: "",
-                help: "Search bandwidth in CRS linear units (default: Silverman's rule of thumb).",
+                help: "Search bandwidth in CRS linear units (default or 0: Silverman's rule of thumb).",
             },
             P {
                 name: "pixelSize",
@@ -1897,7 +1897,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         c
     } else {
         return Err(format!(
-            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' has geographic coordinates (degrees). Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' has no coordinate system. Provide a projected system under 'crs' (e.g. EPSG:32618)",
             ds.name
         ));
     };
@@ -1907,6 +1907,10 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     }
 
     let transformer = crs.transformer()?;
+
+    if p.get("field").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("field must be text".into());
+    }
 
     let field_name = s(p, "field").trim();
     let fi = if !field_name.is_empty() { Some(find_field_case_insensitive(ds, field_name)?) } else { None };
@@ -1991,7 +1995,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     };
 
     let name = out_name(p, format!("{}_density", ds.name));
-    let r = crate::density::kernel_density(&pts, custom_extent.as_ref(), cell_size, bandwidth, kernel, &name, crs)?;
+    let r = crate::density::kernel_density(&pts, Some(&grid_ext), cell_size, bandwidth, kernel, &name, crs)?;
     let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
 
     let msg = format!("Kernel Density: {} × {} cells from {} points (bandwidth: {:.2})", r.width, r.height, pts.len(), bandwidth);
@@ -4370,6 +4374,36 @@ mod tests {
         let Output::Layers(layers_auto) = res_auto.output else { panic!("expected layers") };
         assert_eq!(layers_auto.len(), 1);
 
+        let pt_extent = Extent::new(500_000.0, 4_428_000.0, 501_000.0, 4_428_200.0);
+        let expected_bw = crate::density::silverman_bandwidth(&[(c1_proj, 1.0), (c2_proj, 1.0), (c3_proj, 1.0)], &pt_extent);
+        assert!(
+            res_auto.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")),
+            "expected silverman bandwidth {expected_bw:.2} in message: {}",
+            res_auto.messages[0]
+        );
+
+        let OutputLayer::Raster { bytes: auto_bytes, .. } = &layers_auto[0] else { panic!("expected OutputLayer::Raster") };
+        let r_auto = rustgis_data::raster::geotiff::read(std::io::Cursor::new(auto_bytes), "stations_density").unwrap();
+        let expected_origin_x = pt_extent.min_x - expected_bw;
+        assert!(
+            (r_auto.transform.origin_x - expected_origin_x).abs() < 1e-4,
+            "origin_x ({}) must match expected Silverman bandwidth expansion ({expected_origin_x})",
+            r_auto.transform.origin_x
+        );
+
+        // Explicit radius 0.0 behaves identically to omitted radius (sentinel for Silverman bandwidth)
+        let res_zero = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "pixelSize": 50.0,
+                "radius": 0.0
+            }),
+        )
+        .unwrap();
+        assert!(res_zero.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")));
+
         // 3. Gaussian kernel run
         let res_gauss = crate::run(
             "kernelDensity",
@@ -4393,9 +4427,14 @@ mod tests {
         let mut geo_pts = Dataset::new("geopts", GeometryType::Point, vec![]);
         geo_pts.crs = Some(Crs::LonLat);
         geo_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
-        let m_geo = Map(HashMap::from([("geopts".to_string(), geo_pts)]));
+        let mut no_crs_pts = Dataset::new("nocrs", GeometryType::Point, vec![]);
+        no_crs_pts.crs = None;
+        no_crs_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let m_geo = Map(HashMap::from([("geopts".to_string(), geo_pts), ("nocrs".to_string(), no_crs_pts)]));
         let err_geo = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts"})).unwrap_err();
         assert!(err_geo.contains("projected coordinate system"), "{err_geo}");
+        let err_nocrs = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "nocrs"})).unwrap_err();
+        assert!(err_nocrs.contains("has no coordinate system"), "{err_nocrs}");
 
         // 6. Geographic CRS succeeds when projected crs parameter is supplied
         let res_projected = crate::run(
@@ -4416,6 +4455,39 @@ mod tests {
         assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "radius": -10.0})).is_err());
         assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "pixelSize": -5.0})).is_err());
         assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": "InvalidKernel"})).is_err());
+
+        // 8. Reject invalid field parameter types (must be string or null/missing)
+        let err_num_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": 123})).unwrap_err();
+        assert!(err_num_field.contains("field must be text"), "{err_num_field}");
+        let err_bool_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": true})).unwrap_err();
+        assert!(err_bool_field.contains("field must be text"), "{err_bool_field}");
+        let err_arr_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": ["pop"]})).unwrap_err();
+        assert!(err_arr_field.contains("field must be text"), "{err_arr_field}");
+        let err_obj_field =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": {"name": "pop"}})).unwrap_err();
+        assert!(err_obj_field.contains("field must be text"), "{err_obj_field}");
+
+        // Explicit null field runs successfully unweighted
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": null})).is_ok());
+
+        // 9. Reject excessive workload exceeding MAX_DENSITY_WORK
+        let mut crowded = Dataset::new("crowded", GeometryType::Point, vec![]);
+        crowded.crs = Some(Crs::from_epsg(32618).unwrap());
+        for i in 0..500 {
+            crowded.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0 + (i as f64) * 2.0, 4_428_000.0)).unwrap())), vec![]);
+        }
+        let m_crowded = Map(HashMap::from([("crowded".to_string(), crowded)]));
+        let err_work = crate::run(
+            "kernelDensity",
+            &m_crowded,
+            &serde_json::json!({
+                "input": "crowded",
+                "radius": 1000.0,
+                "pixelSize": 1.0
+            }),
+        )
+        .unwrap_err();
+        assert!(err_work.contains("too much work"), "{err_work}");
     }
 
     #[test]

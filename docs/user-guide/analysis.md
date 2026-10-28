@@ -166,6 +166,16 @@ multipart rings are retained. This is not a topology-preserving simplifier: chec
 where holes or neighbouring polygons must stay aligned. The default tolerance remains 25 km;
 use a smaller value for local boundaries.
 
+**Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
+surface from point features using a Quartic (biweight, default) or Gaussian kernel.
+Points can optionally be weighted by a numeric population field. Calculations are performed
+in the linear units of a projected coordinate system (e.g. UTM or State Plane); if the input
+layer lacks a projected coordinate system or is in degrees, supply a projected system via `crs`
+(e.g. `EPSG:32618`). Leaving `radius` empty or setting it to `0` automatically estimates the
+bandwidth using Silverman's rule of thumb based on the points' spatial distribution. When `pixelSize`
+is omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
+of the extent. The output is written as a single-band Float32 GeoTIFF.
+
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's
 selection. Summarize Within counts the selected points against **all** input polygons, and

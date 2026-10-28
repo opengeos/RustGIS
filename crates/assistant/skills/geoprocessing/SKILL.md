@@ -24,7 +24,7 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
      (`input`, `statistics`, `case`), `pivotTable` (`input`, `fields`, `pivot`, `value`, `statistic`)
    - conversion: `exportFeatures` (`input`, `where`)
-   - density: `kernelDensity` (`input`, `field`, `radius`, `pixelSize`, `kernel`)
+   - density: `kernelDensity` (`input`, `field`, `radius`, `pixelSize`, `kernel`, `crs`)
 2. **Run it:** use `run_tool` with layers named in `params`. The output is a new layer, and the
    result names it: use that name as the next step's input. Give `output` a clear name when the
    chain is long.

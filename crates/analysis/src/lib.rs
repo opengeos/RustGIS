@@ -28,7 +28,7 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
-pub use density::{KernelType, auto_cell_size, kernel_density, silverman_bandwidth};
+pub use density::{KernelType, MAX_DENSITY_WORK, auto_cell_size, kernel_density, silverman_bandwidth};
 pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
