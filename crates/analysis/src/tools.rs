@@ -2026,7 +2026,7 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         Some(c) if c > 0.0 => c,
         Some(_) => return Err("pixel size must be a positive number".into()),
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
-        None => crate::density::auto_cell_size(&grid_ext),
+        None => crate::density::auto_cell_size(&grid_ext).min(bandwidth),
     };
 
     if p.get("kernel").is_some_and(|v| !v.is_null() && !v.is_string()) {

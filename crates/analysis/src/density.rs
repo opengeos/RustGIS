@@ -118,6 +118,9 @@ pub fn kernel_density(
     if !cell_size.is_finite() || cell_size <= 0.0 {
         return Err("pixel size must be a positive number".into());
     }
+    if crs.is_geographic() {
+        return Err("kernel density requires a projected coordinate system with linear units (e.g. meters or feet), not geographic coordinates in degrees".into());
+    }
 
     // Determine spatial extent
     let mut pt_extent = Extent::EMPTY;
@@ -181,7 +184,7 @@ pub fn kernel_density(
     };
 
     for &(p, wgt) in points {
-        if wgt <= 0.0 || !wgt.is_finite() {
+        if wgt <= 0.0 || !wgt.is_finite() || !p.is_finite() {
             continue;
         }
 
@@ -386,5 +389,22 @@ mod tests {
         let pts = vec![(Coord::new(0.0, 0.0), 1.0)];
         let err = kernel_density(&pts, None, 1.0, 1e200, KernelType::Quartic, "huge_bw", Crs::WebMercator).unwrap_err();
         assert!(err.contains("too large or invalid"), "{err}");
+    }
+
+    #[test]
+    fn geographic_crs_is_rejected() {
+        let pts = vec![(Coord::new(10.0, 20.0), 1.0)];
+        let err = kernel_density(&pts, None, 1.0, 10.0, KernelType::Quartic, "geo_crs", Crs::LonLat).unwrap_err();
+        assert!(err.contains("requires a projected coordinate system"), "{err}");
+    }
+
+    #[test]
+    fn non_finite_points_are_skipped() {
+        let pts = vec![(Coord::new(f64::NAN, 100.0), 1.0), (Coord::new(100.0, f64::INFINITY), 1.0), (Coord::new(100.0, 100.0), 1.0)];
+        let r = kernel_density(&pts, None, 2.0, 20.0, KernelType::Quartic, "finite_test", Crs::WebMercator).unwrap();
+        for &val in &r.bands[0].data {
+            assert!(val.is_finite());
+            assert!(val >= 0.0);
+        }
     }
 }
