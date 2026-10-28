@@ -361,11 +361,17 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
     // A time-enabled layer follows the time slider, at each of its steps, unless a time is asked
     // for: one of its times (the layer named with it), or "default" (`false`), the service's.
     // (`"time": true`, the slider, as for a Zarr variable, `layer.addZarr`'s.)
-    let asked = match p.get("time") {
-        Some(Value::Bool(true)) => Some("slider"),
-        Some(Value::Bool(false)) => Some("default"),
-        _ => ps(p, "time").map(str::trim).filter(|t| !t.is_empty()),
+    // A year given as a number is that time; an empty one, as before, the service's default.
+    let given: Option<String> = match p.get("time") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(true)) => Some("slider".into()),
+        Some(Value::Bool(false)) => Some("default".into()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::String(t)) if t.trim().is_empty() => Some("default".into()),
+        Some(Value::String(t)) => Some(t.trim().to_string()),
+        Some(_) => return Err(format!("{}: time is a date, \"slider\" or \"default\"", layer.title)),
     };
+    let asked = given.as_deref();
     let pinned = asked.is_some_and(|a| a.eq_ignore_ascii_case("default"));
     let slider = match (&layer.time, asked) {
         (Some(t), Some(a)) if a.eq_ignore_ascii_case("slider") => Some(

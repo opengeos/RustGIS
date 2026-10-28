@@ -9246,6 +9246,17 @@ fn wms_layers_with_time() {
     let mut named = Session::new(Project::default());
     named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS})).unwrap();
     assert!(named.map().time.is_none() && tile(&named, "Now").ends_with("&TIME=current"), "{}", tile(&named, "Now"));
+    // Asked to follow the slider, such a layer can't: it says so.
+    let e = named.run("service.add", &json!({"url": url, "layer": "now", "text": WMS, "time": "slider"})).unwrap_err();
+    assert!(e.contains("aren't dates the time slider can step to"), "{e}");
+    // A year as a number is that time; an empty time, the service's default; anything else, refused.
+    let mut given = Session::new(Project::default());
+    given.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": 1990})).unwrap();
+    assert!(tile(&given, "Population 1990").ends_with("&TIME=1990") && given.map().time.is_none());
+    given.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": " "})).unwrap();
+    assert!(tile(&given, "Population").ends_with("&TIME=2025") && given.map().time.is_none());
+    let e = given.run("service.add", &json!({"url": url, "layer": "population", "text": WMS, "time": ["1990"]})).unwrap_err();
+    assert!(e.contains("time is a date"), "{e}");
     // A layer without times has none to follow it with.
     let e = s.run("service.add", &json!({"url": url, "layer": "roads", "text": WMS, "time": "slider"})).unwrap_err();
     assert!(e.contains("no time to follow"), "{e}");

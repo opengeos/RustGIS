@@ -506,8 +506,8 @@ GetFeatureInfo requests too, so identify answers for that time; `time.export` an
   (`1990,2000`) or an interval (`1990/2020`, `1990/2020/P10Y`) can be asked for too, otherwise one
   time.
 - **A time named, not dated**: a layer whose only time is a name (OGC's `current`, or `default`),
-  or whose times are closer than the slider's hour, isn't stepped through: it is added at its
-  default.
+  or whose times are one period finer than the slider's hour (`…/PT30M`), isn't stepped through:
+  it is added at its default.
 
 With commands, `service.add` follows the slider when `"time"` is left out (or is `"slider"`, or
 `true`); a time of the layer's draws it at that time, and `"default"` (or `false`) at the service's

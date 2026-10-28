@@ -120,11 +120,12 @@ fn add_layer(app: &mut RustGisApp, url: &str, kind: &'static str, layer: &str, n
     poll(app);
 }
 
-/// What `service.add` takes as a time-enabled layer's `time` from a dialog: following the time slider
-/// (its default), or at the date typed, or at the service's default when none is.
+/// What `service.add` takes as a time-enabled layer's `time` from a dialog: none, to follow the
+/// time slider (its default, which adds a layer whose times it can't step to at the service's
+/// default), or the date typed, or the service's default when none is.
 pub(crate) fn fixed_or_slider(fixed: bool, date: &str) -> String {
     match (fixed, date.trim()) {
-        (false, _) => "slider".into(),
+        (false, _) => String::new(),
         (true, "") => "default".into(),
         (true, d) => d.to_string(),
     }
