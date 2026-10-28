@@ -10,6 +10,7 @@
 //! [`tool`] and run by [`run`] like the rest.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod attribute_join;
 pub mod convert;
 pub mod dggs;
 pub mod geodesic;
@@ -26,6 +27,7 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
+pub use attribute_join::{DuplicateStrategy, JoinFieldOptions, JoinFieldReport, join_field};
 pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
@@ -312,6 +314,28 @@ pub fn external_placeholder(_: &dyn Inputs, _: &Value) -> Result<ToolResult, Str
 /// asynchronous runner) does it too, so both check parameters the same way.
 pub fn resolve_params(spec: &ToolSpec, params: &Value) -> Result<Value, String> {
     let mut p = params.as_object().cloned().unwrap_or_default();
+    if spec.id == "joinField" {
+        if !p.contains_key("joinTable")
+            && let Some(v) = p.get("join").cloned()
+        {
+            p.insert("joinTable".to_string(), v);
+        }
+        if !p.contains_key("targetField")
+            && let Some(v) = p.get("target_field").or_else(|| p.get("key")).cloned()
+        {
+            p.insert("targetField".to_string(), v);
+        }
+        if !p.contains_key("joinField")
+            && let Some(v) = p.get("join_field").cloned()
+        {
+            p.insert("joinField".to_string(), v);
+        }
+        if p.get("duplicates").is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()))
+            && let Some(v) = p.get("duplicateStrategy").or_else(|| p.get("duplicate_strategy")).cloned()
+        {
+            p.insert("duplicates".to_string(), v);
+        }
+    }
     // Not an external suite's tool (a copy of a built-in spec counts as built-in).
     let built_in = source_of(spec).is_none();
     for ps in spec.params {

@@ -23,6 +23,8 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
      (`input`, `where`)
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
      (`input`, `field`, `case`)
+   - joins: `spatialJoin` (`target`, `join`, `match`), `joinField` (`target`, `targetField`,
+     `joinTable`, `joinField`, `fields`, `prefix`, `duplicates`)
    - conversion: `exportFeatures` (`input`, `where`)
 2. **Run it:** use `run_tool` with layers named in `params`. The output is a new layer, and the
    result names it: use that name as the next step's input. Give `output` a clear name when the

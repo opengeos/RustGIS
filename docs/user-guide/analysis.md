@@ -91,6 +91,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | Identity | `identity` | Analysis › Overlay |
 | Union | `union` | Analysis › Overlay |
 | Spatial Join | `spatialJoin` | Analysis › Overlay |
+| Join Field | `joinField` | Data Management › Joins |
 | Dissolve | `dissolve` | Data Management › Generalization |
 | Minimum Bounding Geometry | `convexHull` | Data Management › Features |
 | Feature To Point | `featureToPoint` | Data Management › Features |
