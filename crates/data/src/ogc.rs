@@ -13,7 +13,8 @@ use std::rc::Rc;
 #[path = "ogc_info.rs"]
 mod info;
 pub use info::{
-    FeatureInfo, InfoFeature, MAX_INFO_BYTES, answer_text, map_time, may_answer_in_another_format, read_feature_info, wms_layer_of,
+    FeatureInfo, InfoFeature, MAX_INFO_BYTES, answer_text, at_map_time, map_time, may_answer_in_another_format, read_feature_info,
+    wms_layer_of,
 };
 
 /// What a layer of a service becomes.
@@ -127,7 +128,9 @@ fn layer_time(default: Option<&str>, all: Vec<String>, check: fn(&str) -> Result
 /// Annex C), or its `Extent` of that name (WMS 1.1.1, whose `Dimension` only declares it): a
 /// comma-separated list of times and ranges (`1990,2000`, `1952/2026/P1Y`). Its default may be any
 /// time `TIME` takes, a range too (`2005/2025`, swisstopo's strips of aerial photos).
-fn wms_time(layer: &Node) -> Option<LayerTime> {
+/// `None` when the layer declares none of its own; `Some(None)` when it declares one that gives no
+/// time to draw it at.
+fn wms_time(layer: &Node) -> Option<Option<LayerTime>> {
     let is_time = |n: &Node| n.attribute("name").is_some_and(|a| a.trim().eq_ignore_ascii_case("time"));
     let d = children(layer, "Dimension")
         .filter(is_time)
@@ -135,7 +138,7 @@ fn wms_time(layer: &Node) -> Option<LayerTime> {
         .or_else(|| children(layer, "Extent").find(is_time))?;
     let all = text_of(&d).split(',').map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(MAX_LAYERS).collect();
     let multiple = d.attribute("multipleValues").is_some_and(|m| m.trim() == "1" || m.trim().eq_ignore_ascii_case("true"));
-    layer_time(d.attribute("default").map(str::trim), all, checked_wms_time, multiple)
+    Some(layer_time(d.attribute("default").map(str::trim), all, checked_wms_time, multiple))
 }
 
 /// A layer a service offers.
@@ -523,6 +526,8 @@ fn wms(url: &str, root: &Node) -> Service {
         .and_then(|g| child(&g, "OnlineResource"))
         .and_then(|o| href(&o))
         .filter(|h| is_web(h))
+        // The request's own parameters replace any the advertised address carries (a `TIME`).
+        .map(|h| info::without_wms_keys(&h))
         .unwrap_or_else(|| endpoint(url));
     let formats: Vec<String> = root
         .descendants()
@@ -574,8 +579,12 @@ fn wms(url: &str, root: &Node) -> Service {
             layer.attribute("queryable").map_or(inherited_queryable, |q| q.trim() == "1" || q.trim().eq_ignore_ascii_case("true"));
         // Its own styles first, then those it inherits (a few: its parents' are each kept).
         let styles: Rc<[Node]> = children(&layer, "Style").chain(inherited_styles.iter().copied()).take(MAX_STYLES).collect();
-        // Its own time dimension replaces the one it inherits (WMS 1.3.0 §7.2.4.8).
-        let time = wms_time(&layer).map(Rc::new).or(inherited_time);
+        // Its own time dimension replaces the one it inherits (WMS 1.3.0 §7.2.4.8), even one it
+        // can't be drawn at.
+        let time = match wms_time(&layer) {
+            Some(own) => own.map(Rc::new),
+            None => inherited_time,
+        };
         for sub in children(&layer, "Layer") {
             stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone()));
         }
@@ -594,7 +603,7 @@ fn wms(url: &str, root: &Node) -> Service {
             ),
         );
         // At its time: the service's default, unless another is asked for when it is added.
-        let template = if time.is_some() { format!("{template}&TIME={{Time}}") } else { template };
+        let template = if time.is_some() { with_query(&template, "TIME={Time}") } else { template };
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
         // A service without GetFeatureInfo still gives each layer one, never asked, so Identify
         // doesn't fetch the capabilities again to find out.
@@ -3401,6 +3410,29 @@ mod tests {
         {
             assert!(checked_wms_time(bad).is_err(), "{bad}");
         }
+        // A sublayer's own dimension replaces its parent's, even one that gives no time.
+        let broken = caps.replace(
+            "<Name>part</Name><Title>part</Title><CRS>EPSG:3857</CRS>",
+            r#"<Name>part</Name><Title>part</Title><CRS>EPSG:3857</CRS><Dimension name="time" units="ISO8601" default="../x">..</Dimension>"#,
+        );
+        let s = parse(url, broken.as_bytes()).unwrap();
+        assert_eq!(s.layers.iter().find(|l| l.name == "part").unwrap().time, None);
+        // A GetMap address that carries a TIME of its own (or other GetMap parameters) gives the
+        // template one TIME, the layer's.
+        let carried = caps.replace("https://maps.example.org/wms?", "https://maps.example.org/wms?map=m&amp;TIME=2000&amp;");
+        let s = parse(url, carried.as_bytes()).unwrap();
+        let Offer::Tiles { template } = &s.layers.iter().find(|l| l.name == "population").unwrap().offer else { panic!() };
+        assert!(template.starts_with("https://maps.example.org/wms?map=m&SERVICE=WMS&"), "{template}");
+        assert_eq!(template.matches("TIME=").count(), 1, "{template}");
+        // GetFeatureInfo at the template's time; none for a layer without one, and before a fragment.
+        let request = "https://maps.example.org/wms?REQUEST=GetFeatureInfo".to_string();
+        assert_eq!(
+            at_map_time(request.clone(), "https://maps.example.org/wms?LAYERS=x&TIME=1990%2F2000"),
+            format!("{request}&TIME=1990%2F2000")
+        );
+        assert_eq!(at_map_time(request.clone(), "https://maps.example.org/wms?LAYERS=x"), request);
+        assert_eq!(at_map_time(request.clone(), "https://maps.example.org/wms?LAYERS=x&TIME=../x"), request);
+        assert_eq!(at_map_time(format!("{request}#v"), "https://maps.example.org/wms?TIME=1990"), format!("{request}&TIME=1990#v"));
         // Filled where `{Time}` is a query value, encoded; in a path, as it is.
         assert_eq!(
             with_time("https://a.example/wms?LAYERS=x&TIME={Time}", "2024-06-01T10:00:00+02:00/2024-06-02"),

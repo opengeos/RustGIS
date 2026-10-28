@@ -156,7 +156,7 @@ const INFO_KEYS: [&str; 7] = ["query_layers", "info_format", "feature_count", "i
 
 /// An address without the WMS request parameters it carries (GetMap's and GetFeatureInfo's),
 /// keeping the others (MapServer's `map=`, a token); as it is when it carries none.
-fn without_wms_keys(url: &str) -> String {
+pub(super) fn without_wms_keys(url: &str) -> String {
     let pairs: Vec<&str> = url
         .split('#')
         .next()
@@ -184,6 +184,15 @@ pub fn map_time(template: &str) -> Option<&str> {
     let v = query_value(template, "time")?;
     let decoded = url::form_urlencoded::parse(format!("v={v}").as_bytes()).next().map(|(_, v)| v.into_owned())?;
     super::checked_wms_time(&decoded).ok().map(|_| v)
+}
+
+/// A GetFeatureInfo request of the layer drawn by WMS tile `template`, at its time: with the
+/// template's `TIME`, when it has one ([`map_time`]).
+pub fn at_map_time(request: String, template: &str) -> String {
+    match map_time(template) {
+        Some(time) => super::with_query(&request, &format!("TIME={time}")),
+        None => request,
+    }
 }
 
 /// A WMS tile template's (a GetMap request's) service and layer: its GetCapabilities address and
