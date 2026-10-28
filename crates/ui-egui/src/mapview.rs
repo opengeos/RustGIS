@@ -132,6 +132,43 @@ fn is_found(v: &Value) -> bool {
     v.get("layer").is_some() || v.get("attributes").is_some()
 }
 
+/// A popup's results with the WMS layers' answers `found` added, in the map's drawing order, top
+/// first, as identify ranks what it finds itself: a WMS layer drawn over the feature found comes
+/// before it, and with topmost, the map's pop-up mode by default, takes its place once it answers
+/// with features. `None` with nothing to show.
+fn with_answers(map: &rustgis_engine::map::Map, info: &Value, found: Vec<Value>) -> Option<Value> {
+    use rustgis_engine::map::Drawn;
+    let mut all: Vec<Value> = match info["results"].as_array() {
+        Some(r) => r.clone(),
+        None if is_found(info) => vec![info.clone()],
+        None => Vec::new(),
+    };
+    all.extend(found);
+    let stack = map.stack();
+    // A tile layer's feature by its layer's name (two of one name take the higher one's place, as
+    // their answers are told apart by name too), a map layer's (or raster's pixel) by its id;
+    // anything else after them all.
+    let place = |v: &Value| {
+        let drawn = match v["tileLayer"].as_str() {
+            Some(name) => map.tiles.iter().position(|t| t.name == name).map(Drawn::Tile),
+            None => v["layerId"].as_u64().and_then(|id| u32::try_from(id).ok()).and_then(|id| map.layer_index(id)).map(Drawn::Layer),
+        };
+        drawn.and_then(|d| stack.iter().position(|o| *o == d)).unwrap_or(usize::MAX)
+    };
+    // Stable: each layer's results keep the order identify or the service gave them.
+    all.sort_by_key(|v| place(v));
+    if map.popup_mode == rustgis_engine::map::PopupMode::Topmost {
+        let top = all.first().map(place);
+        all.retain(|v| Some(place(v)) == top);
+    }
+    let mut first = all.first().cloned()?;
+    if let Value::Object(o) = &mut first {
+        o.remove("featureInfo");
+        o.insert("results".into(), Value::Array(all));
+    }
+    Some(first)
+}
+
 /// A notice shown as a toast.
 pub struct Toast {
     pub text: String,
@@ -3041,20 +3078,18 @@ fn follow_asks(app: &mut RustGisApp, ctx: &egui::Context) {
     }
     let Some(pp) = &mut app.map.popup else { return };
     pp.asks.extend(next);
-    if !found.is_empty() {
-        let mut all: Vec<Value> = match pp.info["results"].as_array() {
-            Some(r) => r.clone(),
-            None if is_found(&pp.info) => vec![pp.info.clone()],
-            None => Vec::new(),
+    if !found.is_empty()
+        && let Some(info) = with_answers(app.session.map(), &pp.info, found)
+    {
+        // The result shown stays shown, wherever the answers went; the first when it was left out
+        // (a layer drawn higher answered, with topmost).
+        let shown = match pp.info["results"].as_array() {
+            Some(r) => r.get(pp.index).cloned(),
+            None => Some(pp.info.clone()),
         };
-        all.extend(found);
-        if let Some(mut info) = all.first().cloned() {
-            if let Value::Object(o) = &mut info {
-                o.remove("featureInfo");
-                o.insert("results".into(), Value::Array(all));
-            }
-            pp.info = info;
-        }
+        let results = info["results"].as_array();
+        pp.index = shown.and_then(|s| results?.iter().position(|r| *r == s)).unwrap_or(0);
+        pp.info = info;
     }
     if pp.asks.is_empty() && !is_found(&pp.info) {
         app.map.popup = None;
@@ -3919,6 +3954,32 @@ mod picture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A WMS layer's answer comes in the drawing order (#808): drawn over Countries, its feature
+    /// comes first, and with topmost replaces Switzerland; drawn under the map's layers, it comes
+    /// after them, and topmost keeps Switzerland.
+    #[test]
+    fn a_wms_answer_takes_its_place_in_the_drawing_order() {
+        let mut s = rustgis_engine::Session::new(rustgis_engine::sample::world_project());
+        s.run("map.addTiles", &json!({"url": "https://wms.example.org/{z}/{x}/{y}.png", "name": "Over", "overlay": true})).unwrap();
+        s.run("map.addTiles", &json!({"url": "https://base.example.org/{z}/{x}/{y}.png", "name": "Under"})).unwrap();
+        let answer = |layer: &str| json!({"layer": layer, "tileLayer": layer, "sourceLayer": null, "attributes": {"name": "Bern"}});
+        let shown = |v: &Value| -> Vec<String> {
+            v["results"].as_array().unwrap().iter().map(|r| r["tileLayer"].as_str().or(r["layer"].as_str()).unwrap().to_string()).collect()
+        };
+        for (mode, over, under) in
+            [("topmost", vec!["Over"], vec!["Countries"]), ("visible", vec!["Over", "Countries"], vec!["Countries", "Under"])]
+        {
+            s.run("map.popupMode", &json!({"mode": mode})).unwrap();
+            let info = s.run("identify", &json!({"lon": 8.6, "lat": 46.65, "tolerancePx": 0, "mode": mode})).unwrap();
+            assert_eq!(info["layer"], "Countries", "{mode}");
+            let v = with_answers(s.map(), &info, vec![answer("Over")]).unwrap();
+            assert_eq!(shown(&v), over, "{mode}: drawn over");
+            assert_eq!(v["layer"], over[0], "{mode}");
+            let v = with_answers(s.map(), &info, vec![answer("Under")]).unwrap();
+            assert_eq!(shown(&v), under, "{mode}: drawn under");
+        }
+    }
 
     fn selection_harness() -> egui_kittest::Harness<'static, RustGisApp> {
         let mut app = RustGisApp::new(rustgis_engine::Session::new(rustgis_engine::Project::default()));
