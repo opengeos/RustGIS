@@ -338,11 +338,18 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
     let grid_of = |inner: [f32; 4]| grown(inner, margin, region).and_then(|g| Grid::new(edges, g, 1.0, part.budget)).filter(Grid::inside);
     // The tiles stop at the frame's budget too: those past it are shaded from the coarse grid.
     let affordable = || part.budget.get() < FRAME_BURST_PX;
-    // Over the whole shape: its deepest point first, over the tiles (the coarse grid's, past them).
+    let picture = [0.0, 0.0, pm.width() as f32, pm.height() as f32];
+    let on_screen = |inner: &[f32; 4]| grown(*inner, 0.0, picture).is_some();
+    // Over the whole shape: its deepest point first, over the tiles in the picture (the coarse
+    // grid's past the budget). A part the picture cuts takes its whole shape's depth instead.
     let depth = match b.distance {
         Some(d) => d,
         None => depth(
-            tiles.iter().filter(|_| affordable()).filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner)))).fold(deep, f32::max),
+            tiles
+                .iter()
+                .filter(|inner| on_screen(inner) && affordable())
+                .filter_map(|&inner| grid_of(inner).map(|g| g.deepest(Some(inner))))
+                .fold(deep, f32::max),
         ),
     };
     // Drawn through the polygon's mask over the picture, tile by tile.
@@ -350,14 +357,21 @@ fn shapeburst(pm: &mut Pixmap, part: &Part, edges: &Path, b: &Burst) {
     let Some(mut clip) = Mask::new(pm.width(), pm.height()) else { return };
     part.budget.set(part.budget.get() + pm.width() as f32 * pm.height() as f32);
     clip.fill_path(path, FillRule::EvenOdd, crate::antialiased(), Transform::identity());
-    let picture = [0.0, 0.0, pm.width() as f32, pm.height() as f32];
-    for inner in tiles {
-        let Some(shown) = grown(inner, 0.0, picture) else { continue };
-        let Some(rect) = Rect::from_ltrb(shown[0], shown[1], shown[2], shown[3]) else { continue };
-        if !affordable() {
-            grid.paint(pm, path, depth, b, Some((rect, &clip)));
-        } else if let Some(g) = grid_of(inner) {
+    let mut fill = |area: [f32; 4], g: &Grid| {
+        if let Some(rect) = grown(area, 0.0, picture).and_then(|a| Rect::from_ltrb(a[0], a[1], a[2], a[3])) {
             g.paint(pm, path, depth, b, Some((rect, &clip)));
+        }
+    };
+    for inner in tiles.iter().copied().filter(on_screen) {
+        // Past the budget, what is left is shaded from the coarse grid at once (each painting of
+        // it shades its whole picture): the rest of this row of tiles, and the rows below it.
+        if !affordable() {
+            fill([inner[0], inner[1], r, inner[3]], &grid);
+            fill([l, inner[3], r, btm], &grid);
+            break;
+        }
+        if let Some(g) = grid_of(inner) {
+            fill(inner, &g);
         }
     }
 }
@@ -578,7 +592,6 @@ mod tests {
         assert!(budget.get() > FRAME_BURST_PX + 1.0 && budget.get() < FRAME_BURST_PX + 1.0 + 2.0 * MIN_BURST_PX, "{}", budget.get());
     }
 
-    /// A ramp's average: by the length of each stretch, premultiplied.
     /// A thin polygon over a large box, drawn in tiles at full resolution, stops building tiles
     /// at the frame's budget: past it, its tiles are shaded from the coarse grid, and still drawn.
     #[test]
@@ -609,8 +622,18 @@ mod tests {
         let picture = 2000.0 * 2000.0;
         assert!(budget.get() < FRAME_BURST_PX + 1.1 * MAX_BURST_PX + picture, "{}", budget.get() - FRAME_BURST_PX);
         assert!(pm.pixel(1000, 1000).is_some_and(|p| p.alpha() > 0), "drawn");
+        // Running out part way: the tiles it affords at full resolution, the rest at once from the
+        // coarse grid, the strip drawn from end to end.
+        let mut pm = Pixmap::new(2000, 2000).unwrap();
+        let budget = Cell::new(FRAME_BURST_PX - 6.0e6);
+        let part = Part { path: &path, whole: None, centroid: None, clip: None, whole_depth: &none, budget: &budget };
+        assert!(draw(&mut pm, &part, || None, &pattern, red, 1.0));
+        for at in [20, 500, 1000, 1500, 1980] {
+            assert!(pm.pixel(at, at).is_some_and(|p| p.alpha() > 0), "drawn at {at}");
+        }
     }
 
+    /// A ramp's average: by the length of each stretch, premultiplied.
     #[test]
     fn a_ramps_average_weighs_each_stretch() {
         let (red, blue) = (Rgba::rgb(255, 0, 0), Rgba::rgb(0, 0, 255));
