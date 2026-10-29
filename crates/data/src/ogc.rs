@@ -973,7 +973,7 @@ fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, m
         })
         .collect();
     // One name for each system (EPSG:4326 and CRS:84 differ only in their axes: CRS:84 kept).
-    listed.sort_by_key(|(name, code, _, _)| (*code, !warp::is_crs84(name)));
+    listed.sort_by_cached_key(|(name, code, _, _)| (*code, !warp::is_crs84(name)));
     listed.dedup_by_key(|(_, code, _, _)| *code);
     let rank = |(name, _, c, _): &(String, u32, crate::raster::Crs, usize)| match (c.is_geographic(), warp::is_crs84(name)) {
         (false, _) => 0,
@@ -1155,19 +1155,11 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
     let mut out = Vec::new();
     // (In any order, up to `MAX_RAW_MATRICES` read: a real set has a few dozen.)
     for m in children(tms, "TileMatrix").take(MAX_RAW_MATRICES) {
-        let n = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
-        let u = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<u32>().ok()).filter(|v| *v > 0);
-        let corner: Vec<f64> = child_text(&m, "TopLeftCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
-        let [a, b] = corner.as_slice() else { return None };
-        let raw = RawMatrix {
-            id: child_text(&m, "Identifier")?,
-            scale: n("ScaleDenominator").filter(|v| *v > 0.0)?,
-            corner: (*a, *b),
-            tile: (u("TileWidth").unwrap_or(256), u("TileHeight").unwrap_or(256)),
-            size: (u("MatrixWidth")?, u("MatrixHeight")?),
-        };
-        // Only one RustGIS can draw counts towards `MAX_MATRICES`.
-        if warp::Matrix::from_scale(raw.id.clone(), raw.scale, unit, raw.corner, raw.tile, raw.size).is_some() {
+        // One that can't be read or drawn is left out, not the set; only one RustGIS can draw
+        // counts towards `MAX_MATRICES`.
+        if let Some(raw) = raw_matrix(&m)
+            && warp::Matrix::from_scale(raw.id.clone(), raw.scale, unit, raw.corner, raw.tile, raw.size).is_some()
+        {
             out.push(raw);
         }
     }
@@ -1175,6 +1167,21 @@ fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix
     // corners' order is settled per layer, against its area.)
     out.sort_by(|a, b| b.scale.total_cmp(&a.scale));
     (!out.is_empty()).then_some((u16::try_from(code).ok()?, system, out))
+}
+
+/// A `TileMatrix` as the document gives it, if it gives all a matrix needs.
+fn raw_matrix(m: &Node) -> Option<RawMatrix> {
+    let n = |k: &str| child_text(m, k).and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let u = |k: &str| child_text(m, k).and_then(|t| t.trim().parse::<u32>().ok()).filter(|v| *v > 0);
+    let corner: Vec<f64> = child_text(m, "TopLeftCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+    let [a, b] = corner.as_slice() else { return None };
+    Some(RawMatrix {
+        id: child_text(m, "Identifier")?,
+        scale: n("ScaleDenominator").filter(|v| *v > 0.0)?,
+        corner: (*a, *b),
+        tile: (u("TileWidth").unwrap_or(256), u("TileHeight").unwrap_or(256)),
+        size: (u("MatrixWidth")?, u("MatrixHeight")?),
+    })
 }
 
 /// Past `MAX_MATRICES` the middle of `ms` (coarsest first) goes, the coarsest half kept for a
@@ -2996,6 +3003,29 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tile matrix set keeps the matrices it can read when one can't be (no identifier), and
+    /// past `MAX_MATRICES` its 20 coarsest and 20 finest.
+    #[test]
+    fn a_tile_matrix_set_keeps_what_it_can_read() {
+        let matrix = |id: &str, scale: f64| {
+            format!(
+                "<TileMatrix>{id}<ScaleDenominator>{scale}</ScaleDenominator><TopLeftCorner>2420000 1350000</TopLeftCorner><MatrixWidth>4</MatrixWidth><MatrixHeight>3</MatrixHeight></TileMatrix>"
+            )
+        };
+        let set = |ms: &str| format!("<TileMatrixSet><SupportedCRS>EPSG:2056</SupportedCRS>{ms}</TileMatrixSet>");
+        let xml = set(&(matrix("<Identifier>a</Identifier>", 2_000_000.0) + &matrix("", 1_000_000.0)));
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let (code, _, ms) = native_matrices(&doc.root_element()).unwrap();
+        assert_eq!((code, ms.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()), (2056, vec!["a"]));
+        let many: String = (0..50).map(|i| matrix(&format!("<Identifier>{i}</Identifier>"), 1e7 / f64::from(i + 1))).collect();
+        let xml = set(&many);
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let mut ms = native_matrices(&doc.root_element()).unwrap().2;
+        keep_matrices(&mut ms);
+        let ids: Vec<&str> = ms.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!((ids.len(), ids[0], ids[19], ids[20], ids[39]), (40, "0", "19", "30", "49"));
+    }
 
     /// #167: World_Street_Map's map is named "Layers" and titled "Map", and its description is
     /// HTML: the service is named from its address, never from the description.

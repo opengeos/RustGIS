@@ -279,7 +279,8 @@ pub fn forget(url: &str) {
     drop(c);
     crate::pmtiles::forget_archive(url);
     crate::cog::forget_file(url);
-    // (A map tile made from its pictures names the service with more after it: all are made again.)
+    // Map tiles made from a service's pictures, kept only while one is missing or on its way,
+    // and their plans: all are made again (those kept in the cache stay till `clear`).
     crate::warp::forget();
     rustgis_data::source::remote::forget_file(url);
     GENERATION.fetch_add(1, Ordering::Relaxed);

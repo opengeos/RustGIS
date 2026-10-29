@@ -34,11 +34,12 @@ pub fn transformer(epsg: u16) -> Option<Arc<Transformer>> {
     rustgis_data::ogc::warp::transformer(u32::from(epsg))
 }
 
-/// Map tiles made without a picture that failed, kept a while so they aren't made again for
-/// every frame drawn meanwhile: when each was made, and it (a 256 × 256 tile is 256 KiB: at
-/// most 64 MiB of them). Well short of the cache's [`cache::RETRY`], so a picture that answers
-/// when asked again fills its hole soon after.
+/// How long a map tile made without a picture that failed is kept, so it isn't made again for
+/// every frame drawn meanwhile: well short of the cache's [`cache::RETRY`], so a picture that
+/// answers when asked again fills its hole soon after.
 const FOR_NOW: web_time::Duration = web_time::Duration::from_secs(10);
+/// The most such tiles kept (a 256 × 256 tile is 256 KiB: at most 64 MiB of them); past it
+/// they are all let go.
 const MAX_FOR_NOW: usize = 256;
 
 /// Forgets the tiles made without a picture that failed, and the plans kept: the pictures are
@@ -48,6 +49,7 @@ pub(crate) fn forget() {
     plans().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
+/// The map tiles made without a picture that failed: when each was made, and it.
 fn made_for_now() -> &'static Mutex<HashMap<String, (web_time::Instant, Arc<Payload>)>> {
     static KEPT: OnceLock<Mutex<HashMap<String, (web_time::Instant, Arc<Payload>)>>> = OnceLock::new();
     KEPT.get_or_init(Mutex::default)
