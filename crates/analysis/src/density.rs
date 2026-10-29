@@ -15,8 +15,8 @@ pub enum KernelType {
     /// 2D Quartic (biweight) compact-support kernel (default):
     /// K(u) = (3 / (π * h²)) * (1 - u²)² for u < 1, 0 otherwise.
     Quartic,
-    /// 2D Gaussian kernel truncated at 3σ = h:
-    /// K(d) = (1 / (2π * σ²)) * exp(-d² / (2σ²)) for d <= h, 0 otherwise.
+    /// 2D Gaussian kernel truncated at 3σ = h and renormalised to integrate to 1:
+    /// K(d) = (1 / (2π * σ² * (1 - exp(-4.5)))) * exp(-d² / (2σ²)) for d <= h, 0 otherwise.
     Gaussian,
 }
 
@@ -39,7 +39,7 @@ impl KernelType {
 pub const MAX_DENSITY_CELLS: usize = 16_000_000;
 
 /// Upper limit on aggregate cell visits across all points to prevent CPU exhaustion.
-pub const MAX_DENSITY_WORK: usize = 400_000_000;
+pub const MAX_DENSITY_WORK: usize = 50_000_000;
 
 /// Default target grid resolution along the longer side of the extent when pixel size is not specified.
 const DEFAULT_GRID_STEPS: f64 = 250.0;
@@ -122,9 +122,40 @@ pub fn auto_cell_size(extent: &Extent) -> f64 {
     (span / DEFAULT_GRID_STEPS).max(1e-4)
 }
 
+/// Computes the bounding extent of a slice of weighted points, ignoring non-finite coordinates.
+pub fn points_extent(points: &[(Coord, f64)]) -> Option<Extent> {
+    let mut ext = Extent::EMPTY;
+    for (p, _) in points {
+        if p.is_finite() {
+            ext.expand(*p);
+        }
+    }
+    if ext.is_empty() { None } else { Some(ext) }
+}
+
+/// Resolves the grid extent for kernel density estimation.
+///
+/// If `custom_extent` is provided and non-empty, validates and returns it.
+/// Otherwise, expands `pt_extent` by `bandwidth`.
+pub fn resolve_grid_extent(pt_extent: &Extent, bandwidth: f64, custom_extent: Option<&Extent>) -> Result<Extent, String> {
+    let base_extent = match custom_extent {
+        Some(e) if !e.is_empty() => *e,
+        _ => {
+            if pt_extent.is_empty() {
+                return Err("points have empty extent".into());
+            }
+            Extent::new(pt_extent.min_x - bandwidth, pt_extent.min_y - bandwidth, pt_extent.max_x + bandwidth, pt_extent.max_y + bandwidth)
+        }
+    };
+    if !base_extent.width().is_finite() || !base_extent.height().is_finite() || base_extent.width() <= 0.0 || base_extent.height() <= 0.0 {
+        return Err("the extent must have a positive width and height".into());
+    }
+    Ok(base_extent)
+}
+
 fn accumulate_density<F>(
     points: &[(Coord, f64)],
-    grid: &mut [f32],
+    grid: &mut [f64],
     w: usize,
     h_rows: usize,
     origin_x: f64,
@@ -169,7 +200,7 @@ fn accumulate_density<F>(
                 let contrib = eval(d_sq, wgt);
 
                 if let Some(cell) = grid.get_mut(row_offset + col) {
-                    *cell += contrib as f32;
+                    *cell += contrib;
                 }
             }
         }
@@ -207,26 +238,18 @@ pub fn kernel_density(
     }
 
     // Determine spatial extent
-    let mut pt_extent = Extent::EMPTY;
-    for (p, _) in points {
-        pt_extent.expand(*p);
-    }
-    if pt_extent.is_empty() {
-        return Err("points have empty extent".into());
-    }
+    let pt_extent = points_extent(points).ok_or("points have empty extent")?;
+    let base_extent = resolve_grid_extent(&pt_extent, bandwidth, custom_extent)?;
 
-    let base_extent = match custom_extent {
-        Some(e) if !e.is_empty() => *e,
-        _ => {
-            Extent::new(pt_extent.min_x - bandwidth, pt_extent.min_y - bandwidth, pt_extent.max_x + bandwidth, pt_extent.max_y + bandwidth)
-        }
+    // Snap cell count to nearest integer if within floating-point epsilon to avoid spurious extra cells from division rounding.
+    // When an extent dimension is not an exact multiple of cell_size, ceil() ensures the requested extent is fully covered.
+    let snap_cells = |span: f64| -> usize {
+        let raw = span / cell_size;
+        let rounded = raw.round();
+        if (raw - rounded).abs() < 1e-9 { rounded.max(1.0) as usize } else { raw.ceil().max(1.0) as usize }
     };
-    if !base_extent.width().is_finite() || !base_extent.height().is_finite() || base_extent.width() <= 0.0 || base_extent.height() <= 0.0 {
-        return Err("the extent must have a positive width and height".into());
-    }
-
-    let w = ((base_extent.width() / cell_size).ceil().max(1.0)) as usize;
-    let h_rows = ((base_extent.height() / cell_size).ceil().max(1.0)) as usize;
+    let w = snap_cells(base_extent.width());
+    let h_rows = snap_cells(base_extent.height());
 
     let total_cells = w.checked_mul(h_rows).ok_or("grid dimensions overflow")?;
     if total_cells > MAX_DENSITY_CELLS {
@@ -253,7 +276,8 @@ pub fn kernel_density(
     let origin_y = base_extent.max_y;
     let gt = GeoTransform { origin_x, origin_y, pixel_width: cell_size, pixel_height: -cell_size };
 
-    let mut grid = vec![0.0f32; total_cells];
+    // Accumulate in f64 to avoid precision loss when many point contributions overlap
+    let mut grid = vec![0.0f64; total_cells];
 
     match kernel {
         KernelType::Quartic => {
@@ -267,13 +291,14 @@ pub fn kernel_density(
             });
         }
         KernelType::Gaussian => {
-            // Truncate at 3σ = bandwidth (standard compact-support approximation capturing >98.8% of mass)
+            // Truncate at 3σ = bandwidth and renormalise so the kernel integrates to 1 over the disk.
             let sigma = bandwidth / 3.0;
             let two_sigma_sq = 2.0 * sigma * sigma;
             if !two_sigma_sq.is_normal() {
                 return Err("search radius is out of range".into());
             }
-            let factor = 1.0 / (PI * two_sigma_sq);
+            let norm = 1.0 - (-4.5f64).exp();
+            let factor = 1.0 / (PI * two_sigma_sq * norm);
             if !factor.is_normal() {
                 return Err("search radius is out of range".into());
             }
@@ -283,13 +308,15 @@ pub fn kernel_density(
         }
     }
 
-    for d in &grid {
+    let mut grid_f32 = Vec::with_capacity(total_cells);
+    for d in grid {
         if !d.is_finite() {
             return Err("calculated density values produced non-finite numbers; check weights and radius".into());
         }
+        grid_f32.push(d as f32);
     }
 
-    Raster::new(name, w as u32, h_rows as u32, vec![grid], gt, crs, None, ColorHint::Gray, "Float32").map_err(|e| e.to_string())
+    Raster::new(name, w as u32, h_rows as u32, vec![grid_f32], gt, crs, None, ColorHint::Gray, "Float32").map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -482,5 +509,39 @@ mod tests {
         let pts = vec![(Coord::new(100.0, 100.0), 1.0)];
         let err = kernel_density(&pts, None, 50.0, 10.0, KernelType::Quartic, "test", Crs::WebMercator).unwrap_err();
         assert!(err.contains("pixel size must not be larger than"), "{err}");
+    }
+
+    #[test]
+    fn gaussian_kernel_integrates_to_one() {
+        let pt = Coord::new(100.0, 100.0);
+        let cell = 0.5;
+        let h = 30.0;
+        let r = kernel_density(&[(pt, 1.0)], None, cell, h, KernelType::Gaussian, "gauss_int", Crs::WebMercator).unwrap();
+        let total_mass: f64 = r.bands[0].data.iter().map(|&v| (v as f64) * cell * cell).sum();
+        assert!((total_mass - 1.0).abs() < 0.02, "expected Gaussian integral ≈ 1.0, got {total_mass}");
+    }
+
+    #[test]
+    fn quartic_kernel_integrates_to_one() {
+        let pt = Coord::new(100.0, 100.0);
+        let cell = 0.5;
+        let h = 30.0;
+        let r = kernel_density(&[(pt, 1.0)], None, cell, h, KernelType::Quartic, "quartic_int", Crs::WebMercator).unwrap();
+        let total_mass: f64 = r.bands[0].data.iter().map(|&v| (v as f64) * cell * cell).sum();
+        assert!((total_mass - 1.0).abs() < 0.02, "expected Quartic integral ≈ 1.0, got {total_mass}");
+    }
+
+    #[test]
+    fn extent_helpers_work_as_expected() {
+        let pts = vec![(Coord::new(10.0, 20.0), 1.0), (Coord::new(30.0, 40.0), 2.0)];
+        let pe = points_extent(&pts).unwrap();
+        assert_eq!(pe, Extent::new(10.0, 20.0, 30.0, 40.0));
+
+        let ge_auto = resolve_grid_extent(&pe, 5.0, None).unwrap();
+        assert_eq!(ge_auto, Extent::new(5.0, 15.0, 35.0, 45.0));
+
+        let custom = Extent::new(0.0, 0.0, 100.0, 100.0);
+        let ge_custom = resolve_grid_extent(&pe, 5.0, Some(&custom)).unwrap();
+        assert_eq!(ge_custom, custom);
     }
 }

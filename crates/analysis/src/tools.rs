@@ -2298,6 +2298,36 @@ fn kriging_auto_cell(extent: &Extent, n: usize, neighbours: usize) -> f64 {
     cell
 }
 
+fn parse_optional_extent(p: &Json) -> Result<Option<Extent>, String> {
+    let raw = match p.get("extent") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
+            v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != 4 {
+                return Err("the extent is xmin,ymin,xmax,ymax".into());
+            }
+            let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
+            coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
+    };
+
+    let (min_x, max_x) = (raw[0].min(raw[2]), raw[0].max(raw[2]));
+    let (min_y, max_y) = (raw[1].min(raw[3]), raw[1].max(raw[3]));
+    let (w, h) = (max_x - min_x, max_y - min_y);
+    if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
+        return Err("the extent must have a positive width and height".into());
+    }
+    Ok(Some(Extent::new(min_x, min_y, max_x, max_y)))
+}
+
 fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
     let ds = input(inp, p, "input")?;
     if ds.geometry_type != GeometryType::Point {
@@ -2402,13 +2432,10 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         return Err("input layer has no valid points with positive weights to analyze".into());
     }
 
-    let mut pt_extent = Extent::EMPTY;
-    for (p_coord, _) in &pts {
-        pt_extent.expand(*p_coord);
-    }
+    let pt_extent = crate::density::points_extent(&pts).ok_or("input layer has no valid points with positive weights to analyze")?;
 
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
-    let (bandwidth, user_radius) = match num(p, "radius") {
+    let (mut bandwidth, user_radius) = match num(p, "radius") {
         Some(h) if h > 0.0 => (h, true),
         Some(0.0) => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
         Some(_) => return Err("search radius must be a positive number".into()),
@@ -2416,46 +2443,8 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
     };
 
-    let raw_extent = match p.get("extent") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(s)) => {
-            let t = s.trim();
-            if t.is_empty() {
-                None
-            } else {
-                let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
-                Some(v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?)
-            }
-        }
-        Some(serde_json::Value::Array(arr)) => {
-            if arr.len() != 4 {
-                return Err("the extent is xmin,ymin,xmax,ymax".into());
-            }
-            let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
-            Some(coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?)
-        }
-        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
-    };
-
-    let custom_extent = match raw_extent {
-        Some([x0, y0, x1, y1]) => {
-            let (min_x, max_x) = (x0.min(x1), x0.max(x1));
-            let (min_y, max_y) = (y0.min(y1), y0.max(y1));
-            let (w, h) = (max_x - min_x, max_y - min_y);
-            if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
-                return Err("the extent must have a positive width and height".into());
-            }
-            Some(Extent::new(min_x, min_y, max_x, max_y))
-        }
-        None => None,
-    };
-
-    let grid_ext = custom_extent.unwrap_or_else(|| {
-        Extent::new(pt_extent.min_x - bandwidth, pt_extent.min_y - bandwidth, pt_extent.max_x + bandwidth, pt_extent.max_y + bandwidth)
-    });
-    if !grid_ext.width().is_finite() || !grid_ext.height().is_finite() || grid_ext.width() <= 0.0 || grid_ext.height() <= 0.0 {
-        return Err("the extent must have a positive width and height".into());
-    }
+    let custom_extent = parse_optional_extent(p)?;
+    let mut grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, custom_extent.as_ref())?;
 
     let cell_size = match num(p, "pixelSize") {
         Some(c) if c > 0.0 => {
@@ -2472,12 +2461,14 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         }
     };
 
-    let bandwidth = if !user_radius && bandwidth < cell_size { cell_size } else { bandwidth };
+    if !user_radius && bandwidth < cell_size {
+        bandwidth = cell_size;
+        if custom_extent.is_none() {
+            grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, None)?;
+        }
+    }
 
-    let kernel = match s(p, "kernel") {
-        "" => crate::density::KernelType::Quartic,
-        k => crate::density::KernelType::parse(k)?,
-    };
+    let kernel = crate::density::KernelType::parse(s(p, "kernel"))?;
 
     if p.get("output").is_some_and(|v| !v.is_null() && !v.is_string()) {
         return Err("output must be text".into());
@@ -5196,6 +5187,24 @@ mod tests {
         let m_outlier = Map(HashMap::from([("outlier_ds".to_string(), outlier_ds)]));
         let res_outlier = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds"}));
         assert!(res_outlier.is_ok(), "default run with outlier should succeed: {:?}", res_outlier.err());
+
+        // 18. Default run where Silverman radius is bumped to cell_size does not clip grid extent
+        let mut bump_ds = Dataset::new("bump_ds", GeometryType::Point, vec![]);
+        bump_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500005.0, 4428005.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_bump = Map(HashMap::from([("bump_ds".to_string(), bump_ds)]));
+        let res_bump = crate::run("kernelDensity", &m_bump, &serde_json::json!({"input": "bump_ds"})).unwrap();
+        let bytes_bump = extract_raster_bytes(res_bump.output);
+        let r_bump = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_bump), "b").unwrap();
+        let left_point_x = 500000.0;
+        let grid_min_x = r_bump.transform.origin_x;
+        assert!(
+            left_point_x - grid_min_x >= r_bump.transform.pixel_width * 0.99,
+            "grid must not clip at edge: {grid_min_x} vs {left_point_x}"
+        );
     }
 
     #[test]

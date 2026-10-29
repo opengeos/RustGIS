@@ -180,8 +180,8 @@ where holes or neighbouring polygons must stay aligned. The default tolerance re
 use a smaller value for local boundaries.
 
 **Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
-surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ,
-capturing >98.8% of mass).
+surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ and
+renormalised to integrate to 1).
 Points can optionally be weighted by a numeric population field (invalid or non-positive weights
 are excluded and reported in the tool messages; for multipoint features, each constituent point part
 receives the feature's weight). Calculations are performed in the linear units
