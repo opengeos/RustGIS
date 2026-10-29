@@ -990,14 +990,31 @@ impl RustGisApp {
         widgets::enabled(self, command)
     }
 
-    /// A fingerprint of the keymap's key combinations: cheap to take every frame (no
-    /// allocation), it changes when a shortcut is added, removed or rebound, so a caller can
-    /// rebuild [`RustGisApp::command_keys`] only then.
+    /// A fingerprint of the keymap's key combinations and what they run: cheap to take every
+    /// frame (no allocation), it changes when a shortcut is added, removed or rebound (to
+    /// another key or another command), so a caller can rebuild [`RustGisApp::command_keys`]
+    /// only then.
     pub fn shortcuts_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for b in &self.ui.keymap.bindings {
             b.chord.hash(&mut h);
+            // And what it runs: a key rebound to another command changes it too.
+            b.command.hash(&mut h);
+            if !b.params.is_null() {
+                // Written straight into the hash: no allocation.
+                struct Feed<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+                impl std::io::Write for Feed<'_> {
+                    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                        self.0.write(buf);
+                        Ok(buf.len())
+                    }
+                    fn flush(&mut self) -> std::io::Result<()> {
+                        Ok(())
+                    }
+                }
+                let _ = serde_json::to_writer(Feed(&mut h), &b.params);
+            }
         }
         self.ui.keymap.bindings.len().hash(&mut h);
         h.finish()
