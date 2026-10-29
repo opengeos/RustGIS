@@ -117,6 +117,7 @@ Use these ids in `gp.run`'s `tool` parameter (`gp.tools` lists the available too
 | IDW Interpolation | `idwInterpolation` | Analysis › Interpolation |
 | Ordinary Kriging | `kriging` | Analysis › Interpolation |
 | Zonal Statistics | `zonalStats` | Analysis › Raster |
+| Kernel Density | `kernelDensity` | Analysis › Density |
 
 **Raster to PMTiles** (`rasterToPmtiles`) writes Web Mercator PNG tiles using the raster's current
 bands, colors, mask and resampling. Set the minimum and maximum zoom from 0 to 16 and choose a
@@ -178,6 +179,27 @@ than a polygon produces a small ring instead of restoring its original vertices.
 multipart rings are retained. This is not a topology-preserving simplifier: check the result
 where holes or neighbouring polygons must stay aligned. The default tolerance remains 25 km;
 use a smaller value for local boundaries.
+
+**Kernel Density** (`kernelDensity`) calculates a continuous magnitude-per-unit-area raster
+surface from point features using a Quartic (biweight, default) or Gaussian kernel (truncated at 3σ and
+renormalised to integrate to 1).
+Points can optionally be weighted by a numeric population field (invalid or non-positive weights
+are excluded and reported in the tool messages; for multipoint features, each constituent point part
+receives the feature's weight). Calculations are performed in the linear units
+of a projected coordinate system (defaults to the layer's projected system; if the input layer lacks a
+coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
+e.g. `EPSG:32618`).
+Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
+projections such as Web Mercator (EPSG:3857) introduce scale distortion that increases with latitude;
+use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
+are required. Leaving `radius` empty or setting it to `0` automatically estimates the bandwidth
+using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
+or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
+omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
+of the extent; the default search radius is automatically adjusted if needed to be at least the pixel
+size so points are not missed between cell centres.
+The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
+as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
 
 Most feature tools process only the selected rows when an input has a selection. Selection tools
 instead replace the input's selection; Select Layer By Location honours the selecting layer's

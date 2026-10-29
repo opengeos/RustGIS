@@ -20,6 +20,7 @@ const MATCH_OPTIONS: &[&str] =
 const DISTANCE_MATCHES: &[&str] = &["Closest", "Within a distance"];
 const JOIN_OPERATIONS: &[&str] = &["Join one to one", "Join one to many"];
 const TARGET_RECORDS: &[&str] = &["Keep all", "Keep only matching"];
+const KERNEL_TYPES: &[&str] = &["Quartic", "Gaussian"];
 
 pub static TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -845,6 +846,72 @@ pub static TOOLS: &[ToolSpec] = &[
             },
         ],
         run: vector_to_pmtiles,
+    },
+    ToolSpec {
+        id: "kernelDensity",
+        name: "Kernel Density",
+        toolbox: "Analysis › Density",
+        summary: "Calculates a magnitude-per-unit-area surface from point features using a kernel function.",
+        params: &[
+            P {
+                name: "input",
+                label: "Input Points",
+                kind: K::PointLayer,
+                required: true,
+                default: "",
+                help: "Point features to calculate density from (for multipoints, each point component receives the feature's weight).",
+            },
+            P {
+                name: "field",
+                label: "Population Field",
+                kind: K::NumericField,
+                required: false,
+                default: "",
+                help: "Numeric weight or count for each point (default 1.0; multipoint parts each receive this weight).",
+            },
+            P {
+                name: "radius",
+                label: "Search Radius",
+                kind: K::Number,
+                required: false,
+                default: "",
+                help: "Search bandwidth in CRS linear units (default or 0: Silverman's rule of thumb, or 1000 units for single/coincident points).",
+            },
+            P {
+                name: "pixelSize",
+                label: "Pixel Size",
+                kind: K::Number,
+                required: false,
+                default: "",
+                help: "Output cell size in CRS linear units (default: ~250 cells along the longer side of the extent).",
+            },
+            P {
+                name: "kernel",
+                label: "Kernel Type",
+                kind: K::Choice(KERNEL_TYPES),
+                required: false,
+                default: "\"Quartic\"",
+                help: "Kernel function: Quartic (biweight, default) or Gaussian (truncated at 3σ).",
+            },
+            P {
+                name: "extent",
+                label: "Extent",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "xmin,ymin,xmax,ymax in CRS linear units; points expanded by bandwidth when empty.",
+            },
+            P {
+                name: "crs",
+                label: "Coordinate System",
+                kind: K::Text,
+                required: false,
+                default: "",
+                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the layer's CRS when projected, or required when the layer has none or is in degrees.",
+            },
+            P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output raster layer name." },
+        ],
+        run: kernel_density_tool,
     },
     ToolSpec {
         id: "joinField",
@@ -2303,6 +2370,209 @@ fn kriging_auto_cell(extent: &Extent, n: usize, neighbours: usize) -> f64 {
         cell *= 1.1;
     }
     cell
+}
+
+fn parse_optional_extent(p: &Json) -> Result<Option<Extent>, String> {
+    let raw = match p.get("extent") {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            let v: Option<Vec<f64>> = t.split(',').map(|x| x.trim().parse().ok().filter(|x: &f64| x.is_finite())).collect();
+            v.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(serde_json::Value::Array(arr)) => {
+            if arr.len() != 4 {
+                return Err("the extent is xmin,ymin,xmax,ymax".into());
+            }
+            let coords: Option<Vec<f64>> = arr.iter().map(|v| v.as_f64().filter(|x| x.is_finite())).collect();
+            coords.as_deref().and_then(|v| <[f64; 4]>::try_from(v).ok()).ok_or("the extent is xmin,ymin,xmax,ymax")?
+        }
+        Some(_) => return Err("the extent is xmin,ymin,xmax,ymax".into()),
+    };
+
+    let (min_x, max_x) = (raw[0].min(raw[2]), raw[0].max(raw[2]));
+    let (min_y, max_y) = (raw[1].min(raw[3]), raw[1].max(raw[3]));
+    let (w, h) = (max_x - min_x, max_y - min_y);
+    if !(max_x > min_x && max_y > min_y && w.is_finite() && h.is_finite()) {
+        return Err("the extent must have a positive width and height".into());
+    }
+    Ok(Some(Extent::new(min_x, min_y, max_x, max_y)))
+}
+
+fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let ds = input(inp, p, "input")?;
+    if ds.geometry_type != GeometryType::Point {
+        return Err("Input Points must be a point layer".into());
+    }
+
+    if p.get("crs").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("crs must be text".into());
+    }
+
+    let crs_text = s(p, "crs").trim();
+    let crs = if !crs_text.is_empty() {
+        Crs::parse(crs_text)?
+    } else if let Some(c) = ds.crs {
+        c
+    } else {
+        return Err(format!(
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' has no coordinate system. Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            ds.name
+        ));
+    };
+
+    if crs.is_geographic() {
+        if !crs_text.is_empty() {
+            return Err("crs must be a projected coordinate system with linear units (such as UTM or State Plane, e.g. EPSG:32618), not geographic coordinates (degrees)".into());
+        }
+        return Err(format!(
+            "kernel density requires a projected coordinate system with linear units (such as UTM or State Plane); '{}' is in geographic coordinates (degrees). Provide a projected system under 'crs' (e.g. EPSG:32618)",
+            ds.name
+        ));
+    }
+
+    let transformer = crs.transformer()?;
+
+    if p.get("field").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("field must be text".into());
+    }
+
+    let field_name = s(p, "field").trim();
+    let fi = if !field_name.is_empty() {
+        let idx = find_field_case_insensitive(ds, field_name)?;
+        let f = ds.fields.get(idx).ok_or_else(|| format!("no field named '{field_name}'"))?;
+        if !f.ty.is_numeric() {
+            return Err(format!("field '{field_name}' must be numeric (is {})", f.ty.label()));
+        }
+        Some(idx)
+    } else {
+        None
+    };
+
+    let mut pts: Vec<(Coord, f64)> = Vec::new();
+    let mut skipped: usize = 0;
+    for r in rows(inp, p, "input", ds) {
+        let Some(g) = ds.features.get(r).and_then(|f| f.geometry.as_ref()) else {
+            skipped += 1;
+            continue;
+        };
+        let w = match fi {
+            Some(idx) => match ds.value(r, idx).as_f64() {
+                Some(v) if v.is_finite() && v > 0.0 => v,
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            },
+            None => 1.0,
+        };
+
+        match g {
+            Geometry::Point(c) => {
+                if c.is_finite()
+                    && let Some(p_proj) = transformer.from_lonlat(*c)
+                    && p_proj.is_finite()
+                {
+                    pts.push((p_proj, w));
+                } else {
+                    skipped += 1;
+                }
+            }
+            Geometry::MultiPoint(cs) => {
+                let mut any = false;
+                for c in cs {
+                    if c.is_finite()
+                        && let Some(p_proj) = transformer.from_lonlat(*c)
+                        && p_proj.is_finite()
+                    {
+                        pts.push((p_proj, w));
+                        any = true;
+                    }
+                }
+                if !any {
+                    skipped += 1;
+                }
+            }
+            _ => {
+                skipped += 1;
+            }
+        }
+    }
+
+    if pts.is_empty() {
+        return Err("input layer has no valid points with positive weights to analyze".into());
+    }
+
+    let pt_extent = crate::density::points_extent(&pts).ok_or("input layer has no valid points with positive weights to analyze")?;
+
+    let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
+    let (mut bandwidth, user_radius) = match num(p, "radius") {
+        Some(h) if h > 0.0 => (h, true),
+        Some(0.0) => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
+        Some(_) => return Err("search radius must be a positive number".into()),
+        None if given("radius") => return Err("search radius must be a number".into()),
+        None => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
+    };
+
+    let custom_extent = parse_optional_extent(p)?;
+    let mut grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, custom_extent.as_ref())?;
+
+    let cell_size = match num(p, "pixelSize") {
+        Some(c) if c > 0.0 => {
+            if user_radius && c > bandwidth {
+                return Err("pixel size must not be larger than the search radius (bandwidth); choose a smaller pixel size or a larger search radius".into());
+            }
+            c
+        }
+        Some(_) => return Err("pixel size must be a positive number".into()),
+        None if given("pixelSize") => return Err("pixel size must be a number".into()),
+        None => {
+            let auto = crate::density::auto_cell_size(&grid_ext);
+            if user_radius && auto > bandwidth {
+                return Err(
+                    "search radius must be at least the pixel size; choose a larger search radius or specify a smaller pixelSize".into()
+                );
+            }
+            auto
+        }
+    };
+
+    if !user_radius && bandwidth < cell_size {
+        bandwidth = cell_size;
+        if custom_extent.is_none() {
+            grid_ext = crate::density::resolve_grid_extent(&pt_extent, bandwidth, None)?;
+        }
+    }
+
+    let kernel = crate::density::KernelType::parse(s(p, "kernel"))?;
+
+    if p.get("output").is_some_and(|v| !v.is_null() && !v.is_string()) {
+        return Err("output must be text".into());
+    }
+
+    let name = out_name(p, format!("{}_density", ds.name));
+    let r = crate::density::kernel_density(&pts, Some(&grid_ext), cell_size, bandwidth, kernel, &name, crs)?;
+    let bytes = rustgis_data::raster::geotiff::write(&r, 0).map_err(|e| e.to_string())?;
+
+    let msg = if skipped > 0 {
+        format!(
+            "Kernel Density: {} × {} cells from {} points ({} skipped, bandwidth: {:.2})",
+            r.width,
+            r.height,
+            pts.len(),
+            skipped,
+            bandwidth
+        )
+    } else {
+        format!("Kernel Density: {} × {} cells from {} points (bandwidth: {:.2})", r.width, r.height, pts.len(), bandwidth)
+    };
+    Ok(ToolResult {
+        output: Output::Layers(vec![OutputLayer::Raster { file_name: format!("{name}.tif"), name, bytes }]),
+        messages: vec![msg],
+    })
 }
 
 /// The extent of a geometry in Web Mercator, as [`to_geo`] gives it, leaving out non-finite
@@ -4786,6 +5056,420 @@ mod tests {
             _ => panic!("expected raster"),
         };
         assert!((pred_inter.bands[0].data[0] - 20.0).abs() < 1e-4, "expected 20.0 at (0.5, 0.5), got {}", pred_inter.bands[0].data[0]);
+    }
+
+    #[test]
+    fn kernel_density_analysis_tool_tests() {
+        // Create point dataset with UTM projection
+        let mut pts = Dataset::new("stations", GeometryType::Point, vec![Field::new("pop", FieldType::Double)]);
+        pts.crs = Some(Crs::from_epsg(32618).unwrap()); // UTM zone 18N
+        let tr = pts.crs.unwrap().transformer().unwrap();
+
+        // 3 points around central meridian (-75.0, 40.0)
+        let c1_proj = Coord::new(500_000.0, 4_428_000.0);
+        let c2_proj = Coord::new(500_500.0, 4_428_200.0);
+        let c3_proj = Coord::new(501_000.0, 4_428_000.0);
+
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c1_proj).unwrap())), vec![Value::Float(10.0)]);
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c2_proj).unwrap())), vec![Value::Float(20.0)]);
+        pts.push(Some(Geometry::Point(tr.to_lonlat(c3_proj).unwrap())), vec![Value::Float(30.0)]);
+
+        let mut polys = Dataset::new("bounds", GeometryType::Polygon, vec![]);
+        polys.push(Some(sq(0.0, 0.0, 1.0)), vec![]);
+
+        let m = Map(HashMap::from([("stations".to_string(), pts), ("bounds".to_string(), polys)]));
+
+        // 1. Normal run with weights and explicit bandwidth
+        let res = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "field": "pop",
+                "radius": 1000.0,
+                "pixelSize": 50.0,
+                "output": "stations_kde"
+            }),
+        )
+        .unwrap();
+
+        let Output::Layers(layers) = res.output else { panic!("expected Output::Layers") };
+        assert_eq!(layers.len(), 1);
+        let (name, r) = match &layers[0] {
+            OutputLayer::Raster { name, file_name, bytes } => {
+                assert_eq!(file_name, "stations_kde.tif");
+                (name.clone(), rustgis_data::raster::geotiff::read(std::io::Cursor::new(bytes), name).unwrap())
+            }
+            _ => panic!("expected OutputLayer::Raster"),
+        };
+        assert_eq!(name, "stations_kde");
+        assert_eq!(r.crs, Crs::from_epsg(32618).unwrap());
+        assert!(r.width > 0 && r.height > 0);
+        let peak = r.bands[0].data.iter().copied().fold(0.0f32, f32::max);
+        assert!(peak > 0.0, "peak density must be positive, got {peak}");
+
+        // 2. Auto bandwidth and omitted weight field
+        let res_auto = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_auto) = res_auto.output else { panic!("expected layers") };
+        assert_eq!(layers_auto.len(), 1);
+
+        let pt_extent = Extent::new(500_000.0, 4_428_000.0, 501_000.0, 4_428_200.0);
+        let expected_bw = crate::density::silverman_bandwidth(&[(c1_proj, 1.0), (c2_proj, 1.0), (c3_proj, 1.0)], &pt_extent);
+        assert!(
+            res_auto.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")),
+            "expected silverman bandwidth {expected_bw:.2} in message: {}",
+            res_auto.messages[0]
+        );
+
+        let OutputLayer::Raster { bytes: auto_bytes, .. } = &layers_auto[0] else { panic!("expected OutputLayer::Raster") };
+        let r_auto = rustgis_data::raster::geotiff::read(std::io::Cursor::new(auto_bytes), "stations_density").unwrap();
+        let expected_origin_x = pt_extent.min_x - expected_bw;
+        assert!(
+            (r_auto.transform.origin_x - expected_origin_x).abs() < 1e-4,
+            "origin_x ({}) must match expected Silverman bandwidth expansion ({expected_origin_x})",
+            r_auto.transform.origin_x
+        );
+
+        // Explicit radius 0.0 behaves identically to omitted radius (sentinel for Silverman bandwidth)
+        let res_zero = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "pixelSize": 50.0,
+                "radius": 0.0
+            }),
+        )
+        .unwrap();
+        assert!(res_zero.messages[0].contains(&format!("bandwidth: {expected_bw:.2}")));
+
+        // 3. Gaussian kernel run
+        let res_gauss = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "radius": 800.0,
+                "pixelSize": 50.0,
+                "kernel": "Gaussian"
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_gauss) = res_gauss.output else { panic!("expected layers") };
+        assert_eq!(layers_gauss.len(), 1);
+
+        // 4. Reject non-point layer
+        let err_poly = crate::run("kernelDensity", &m, &serde_json::json!({"input": "bounds"})).unwrap_err();
+        assert!(err_poly.contains("must be a point layer"), "{err_poly}");
+
+        // 5. Reject geographic CRS without explicit projected crs param
+        let mut geo_pts = Dataset::new("geopts", GeometryType::Point, vec![]);
+        geo_pts.crs = Some(Crs::LonLat);
+        geo_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let mut no_crs_pts = Dataset::new("nocrs", GeometryType::Point, vec![]);
+        no_crs_pts.crs = None;
+        no_crs_pts.push(Some(Geometry::Point(Coord::new(10.0, 10.0))), vec![]);
+        let m_geo = Map(HashMap::from([("geopts".to_string(), geo_pts), ("nocrs".to_string(), no_crs_pts)]));
+        let err_geo = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts"})).unwrap_err();
+        assert!(err_geo.contains("is in geographic coordinates (degrees)"), "{err_geo}");
+        assert!(err_geo.contains("Provide a projected system under 'crs'"), "{err_geo}");
+        let err_explicit_geo =
+            crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "geopts", "crs": "EPSG:4326"})).unwrap_err();
+        assert!(err_explicit_geo.contains("crs must be a projected coordinate system with linear units"), "{err_explicit_geo}");
+        let err_nocrs = crate::run("kernelDensity", &m_geo, &serde_json::json!({"input": "nocrs"})).unwrap_err();
+        assert!(err_nocrs.contains("has no coordinate system"), "{err_nocrs}");
+
+        // 6. Geographic CRS succeeds when projected crs parameter is supplied
+        let res_projected = crate::run(
+            "kernelDensity",
+            &m_geo,
+            &serde_json::json!({
+                "input": "geopts",
+                "crs": "EPSG:3857",
+                "radius": 50000.0,
+                "pixelSize": 5000.0
+            }),
+        )
+        .unwrap();
+        let Output::Layers(layers_proj) = res_projected.output else { panic!("expected layers") };
+        assert_eq!(layers_proj.len(), 1);
+
+        // 7. Reject negative radius and negative pixelSize
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "radius": -10.0})).is_err());
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "pixelSize": -5.0})).is_err());
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": "InvalidKernel"})).is_err());
+
+        // 8. Reject invalid field parameter types (must be string or null/missing)
+        let err_num_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": 123})).unwrap_err();
+        assert!(err_num_field.contains("field must be text"), "{err_num_field}");
+        let err_bool_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": true})).unwrap_err();
+        assert!(err_bool_field.contains("field must be text"), "{err_bool_field}");
+        let err_arr_field = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": ["pop"]})).unwrap_err();
+        assert!(err_arr_field.contains("field must be text"), "{err_arr_field}");
+        let err_obj_field =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": {"name": "pop"}})).unwrap_err();
+        assert!(err_obj_field.contains("field must be text"), "{err_obj_field}");
+
+        // Explicit null field runs successfully unweighted
+        assert!(crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "field": null})).is_ok());
+
+        // Reject invalid types for crs, kernel, and output
+        let err_crs_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "crs": 3857})).unwrap_err();
+        assert!(err_crs_num.contains("crs must be text"), "{err_crs_num}");
+        let err_kernel_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "kernel": 123})).unwrap_err();
+        assert!(err_kernel_num.contains("must be one of Quartic, Gaussian"), "{err_kernel_num}");
+        let err_out_bool = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "output": true})).unwrap_err();
+        assert!(err_out_bool.contains("output must be text"), "{err_out_bool}");
+
+        // Extent parameter accepts both text and JSON number arrays, and rejects invalid types
+        let res_ext_str = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": "500000, 4428000, 501000, 4428200",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_str.messages.len(), 1);
+
+        let res_ext_arr = crate::run(
+            "kernelDensity",
+            &m,
+            &serde_json::json!({
+                "input": "stations",
+                "extent": [500000.0, 4428000.0, 501000.0, 4428200.0],
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert_eq!(res_ext_arr.messages.len(), 1);
+
+        let err_ext_short =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": [500000.0, 4428000.0]})).unwrap_err();
+        assert!(err_ext_short.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_short}");
+        let err_ext_num = crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": 12345})).unwrap_err();
+        assert!(err_ext_num.contains("the extent is xmin,ymin,xmax,ymax"), "{err_ext_num}");
+        let err_ext_zero =
+            crate::run("kernelDensity", &m, &serde_json::json!({"input": "stations", "extent": "500000,4428000,500000,4428000"}))
+                .unwrap_err();
+        assert!(err_ext_zero.contains("positive width and height"), "{err_ext_zero}");
+
+        // 9. Report skipped points with non-positive or invalid weights
+        let mut mixed_ds = m.0.get("stations").unwrap().clone();
+        mixed_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_500.0, 4_428_100.0)).unwrap())), vec![Value::Float(-10.0)]);
+        let m_mixed = Map(HashMap::from([("mixed".to_string(), mixed_ds)]));
+        let res_mixed = crate::run(
+            "kernelDensity",
+            &m_mixed,
+            &serde_json::json!({
+                "input": "mixed",
+                "field": "pop",
+                "pixelSize": 50.0
+            }),
+        )
+        .unwrap();
+        assert!(res_mixed.messages[0].contains("1 skipped"), "expected '1 skipped' in: {}", res_mixed.messages[0]);
+
+        // 10. MultiPoint geometry support
+        let mut mp_ds = Dataset::new("mp", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        mp_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        mp_ds.push(
+            Some(Geometry::MultiPoint(vec![
+                tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap(),
+                tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap(),
+            ])),
+            vec![Value::Float(5.0)],
+        );
+        let m_mp = Map(HashMap::from([("mp".to_string(), mp_ds)]));
+        let res_mp =
+            crate::run("kernelDensity", &m_mp, &serde_json::json!({"input": "mp", "field": "w", "pixelSize": 25.0, "radius": 100.0}))
+                .unwrap();
+        assert_eq!(res_mp.messages.len(), 1);
+
+        // 11. Reject excessive workload exceeding MAX_DENSITY_WORK
+        let mut crowded = Dataset::new("crowded", GeometryType::Point, vec![]);
+        crowded.crs = Some(Crs::from_epsg(32618).unwrap());
+        for i in 0..500 {
+            crowded.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0 + (i as f64) * 2.0, 4_428_000.0)).unwrap())), vec![]);
+        }
+        let m_crowded = Map(HashMap::from([("crowded".to_string(), crowded)]));
+        let err_work = crate::run(
+            "kernelDensity",
+            &m_crowded,
+            &serde_json::json!({
+                "input": "crowded",
+                "radius": 1000.0,
+                "pixelSize": 1.0
+            }),
+        )
+        .unwrap_err();
+        assert!(err_work.contains("too much work"), "{err_work}");
+
+        // 12. Text-valued weight field produces clear, actionable error
+        let mut text_field_ds = Dataset::new("stations_text", GeometryType::Point, vec![Field::new("city", FieldType::Text)]);
+        text_field_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        text_field_ds
+            .push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap())), vec![Value::Text("Boston".into())]);
+        let m_text = Map(HashMap::from([("stations_text".to_string(), text_field_ds)]));
+        let err_text_field =
+            crate::run("kernelDensity", &m_text, &serde_json::json!({"input": "stations_text", "field": "city"})).unwrap_err();
+        assert!(err_text_field.contains("field 'city' must be numeric (is Text)"), "{err_text_field}");
+
+        // 13. MultiPoint vs single point vs multiple independent points
+        let p1 = tr.to_lonlat(Coord::new(500_000.0, 4_428_000.0)).unwrap();
+        let p2 = tr.to_lonlat(Coord::new(500_100.0, 4_428_100.0)).unwrap();
+
+        // Single point dataset
+        let mut single_ds = Dataset::new("single", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        single_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        single_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+
+        // MultiPoint dataset with 2 parts
+        let mut multi_ds = Dataset::new("multi", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        multi_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        multi_ds.push(Some(Geometry::MultiPoint(vec![p1, p2])), vec![Value::Float(2.0)]);
+
+        // Two independent point features
+        let mut two_pts_ds = Dataset::new("two_pts", GeometryType::Point, vec![Field::new("w", FieldType::Double)]);
+        two_pts_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        two_pts_ds.push(Some(Geometry::Point(p1)), vec![Value::Float(2.0)]);
+        two_pts_ds.push(Some(Geometry::Point(p2)), vec![Value::Float(2.0)]);
+
+        let m_cmp =
+            Map(HashMap::from([("single".to_string(), single_ds), ("multi".to_string(), multi_ds), ("two_pts".to_string(), two_pts_ds)]));
+
+        let res_single = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "single", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_multi = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "multi", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+        let res_two_pts = crate::run(
+            "kernelDensity",
+            &m_cmp,
+            &serde_json::json!({"input": "two_pts", "field": "w", "extent": "499800,4427800,500300,4428300", "pixelSize": 25.0, "radius": 150.0}),
+        ).unwrap();
+
+        let extract_raster_bytes = |out: Output| match out {
+            Output::Layers(mut layers) => match layers.remove(0) {
+                OutputLayer::Raster { bytes, .. } => bytes,
+                _ => panic!("expected Raster"),
+            },
+            _ => panic!("expected Layers"),
+        };
+        let bytes_single = extract_raster_bytes(res_single.output);
+        let bytes_multi = extract_raster_bytes(res_multi.output);
+        let bytes_two_pts = extract_raster_bytes(res_two_pts.output);
+
+        let r_single = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_single), "s").unwrap();
+        let r_multi = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_multi), "m").unwrap();
+        let r_two_pts = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_two_pts), "t").unwrap();
+
+        // MultiPoint with 2 parts must produce exact same output as 2 independent points each with weight 2.0
+        assert_eq!(r_multi.bands[0].data, r_two_pts.bands[0].data, "MultiPoint must match two independent point features");
+        // And must differ from single point (which only contains p1)
+        assert_ne!(r_multi.bands[0].data, r_single.bands[0].data, "MultiPoint must differ from single point");
+
+        // 14. Extent whose span overflows f64 must be rejected with extent error, not pixel size error
+        let err_str_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": "-1e308,-1e308,1e308,1e308"}))
+                .unwrap_err();
+        assert!(
+            err_str_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_str_overflow}"
+        );
+        assert!(
+            !err_str_overflow.contains("pixel size must be a positive number"),
+            "should not blame pixel size when user did not set one: {err_str_overflow}"
+        );
+
+        let err_arr_overflow =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "extent": [-1e308, -1e308, 1e308, 1e308]}))
+                .unwrap_err();
+        assert!(
+            err_arr_overflow.contains("the extent must have a positive width and height"),
+            "expected extent error, got: {err_arr_overflow}"
+        );
+
+        // 15. Hostile and extreme parameters must be rejected cleanly without panic
+        let hostile_cases = vec![
+            serde_json::json!({"input": "single", "radius": -100.0}),
+            serde_json::json!({"input": "single", "radius": 1e308}),
+            serde_json::json!({"input": "single", "pixelSize": -5.0}),
+            serde_json::json!({"input": "single", "pixelSize": 0.0}),
+            serde_json::json!({"input": "single", "pixelSize": 1e-12}),
+            serde_json::json!({"input": "single", "kernel": "nonexistent"}),
+            serde_json::json!({"input": "single", "extent": "0,0,10"}),
+            serde_json::json!({"input": "single", "extent": [10.0, 20.0]}),
+        ];
+        for case in hostile_cases {
+            let res = crate::run("kernelDensity", &m_cmp, &case);
+            assert!(res.is_err(), "hostile params should return Err, but got Ok");
+        }
+
+        // 16. pixelSize > radius must be rejected with informative error
+        let err_pixel_larger =
+            crate::run("kernelDensity", &m_cmp, &serde_json::json!({"input": "single", "pixelSize": 250.0, "radius": 50.0})).unwrap_err();
+        assert!(
+            err_pixel_larger.contains("pixel size must not be larger than"),
+            "expected pixel size larger error, got: {err_pixel_larger}"
+        );
+
+        // 17. Clustered points with far outlier must succeed with default parameters
+        let mut outlier_ds = Dataset::new("outlier_ds", GeometryType::Point, vec![]);
+        outlier_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500020.0, 4428020.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500030.0, 4428030.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_outlier = Map(HashMap::from([("outlier_ds".to_string(), outlier_ds)]));
+        let res_outlier = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds"}));
+        assert!(res_outlier.is_ok(), "default run with outlier should succeed: {:?}", res_outlier.err());
+
+        // 18. Default run where Silverman radius is bumped to cell_size does not clip grid extent
+        let mut bump_ds = Dataset::new("bump_ds", GeometryType::Point, vec![]);
+        bump_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500005.0, 4428005.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        bump_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_bump = Map(HashMap::from([("bump_ds".to_string(), bump_ds)]));
+        let res_bump = crate::run("kernelDensity", &m_bump, &serde_json::json!({"input": "bump_ds"})).unwrap();
+        let bytes_bump = extract_raster_bytes(res_bump.output);
+        let r_bump = rustgis_data::raster::geotiff::read(std::io::Cursor::new(&bytes_bump), "b").unwrap();
+        let left_point_x = 500000.0;
+        let grid_min_x = r_bump.transform.origin_x;
+        assert!(
+            left_point_x - grid_min_x >= r_bump.transform.pixel_width * 0.99,
+            "grid must not clip at edge: {grid_min_x} vs {left_point_x}"
+        );
+
+        // 19. pixelSize larger than automatic Silverman radius raises radius to pixelSize instead of erroring
+        let res_auto_bump = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "pixelSize": 1000.0}));
+        assert!(res_auto_bump.is_ok(), "pixelSize > auto radius should succeed by bumping radius: {:?}", res_auto_bump.err());
+
+        // 20. User sets radius smaller than default 250-step cell size with pixelSize omitted returns clear error
+        let err_small_radius =
+            crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds", "radius": 10.0})).unwrap_err();
+        assert!(
+            err_small_radius.contains("search radius must be at least the pixel size"),
+            "expected clear error on small radius with omitted pixelSize, got: {err_small_radius}"
+        );
     }
 
     #[test]
