@@ -814,7 +814,7 @@ pub static TOOLS: &[ToolSpec] = &[
                 kind: K::Text,
                 required: false,
                 default: "",
-                help: "Projected coordinate system (e.g. EPSG:32618) when the input layer has none or is in degrees.",
+                help: "Projected coordinate system (e.g. EPSG:32618); defaults to the layer's CRS when projected, or required when the layer has none or is in degrees.",
             },
             P { name: "output", label: "Output Name", kind: K::Text, required: false, default: "", help: "Output raster layer name." },
         ],
@@ -2020,12 +2020,12 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
     }
 
     let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|t| !t.trim().is_empty()));
-    let bandwidth = match num(p, "radius") {
-        Some(h) if h > 0.0 => h,
-        Some(0.0) => crate::density::silverman_bandwidth(&pts, &pt_extent),
+    let (bandwidth, user_radius) = match num(p, "radius") {
+        Some(h) if h > 0.0 => (h, true),
+        Some(0.0) => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
         Some(_) => return Err("search radius must be a positive number".into()),
         None if given("radius") => return Err("search radius must be a number".into()),
-        None => crate::density::silverman_bandwidth(&pts, &pt_extent),
+        None => (crate::density::silverman_bandwidth(&pts, &pt_extent), false),
     };
 
     let raw_extent = match p.get("extent") {
@@ -2080,9 +2080,11 @@ fn kernel_density_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String>
         None if given("pixelSize") => return Err("pixel size must be a number".into()),
         None => {
             let auto = crate::density::auto_cell_size(&grid_ext);
-            auto.min(bandwidth)
+            if user_radius { auto.min(bandwidth) } else { auto }
         }
     };
+
+    let bandwidth = if !user_radius && bandwidth < cell_size { cell_size } else { bandwidth };
 
     let kernel = match s(p, "kernel") {
         "" => crate::density::KernelType::Quartic,
@@ -4791,6 +4793,18 @@ mod tests {
             err_pixel_larger.contains("pixel size must not be larger than"),
             "expected pixel size larger error, got: {err_pixel_larger}"
         );
+
+        // 17. Clustered points with far outlier must succeed with default parameters
+        let mut outlier_ds = Dataset::new("outlier_ds", GeometryType::Point, vec![]);
+        outlier_ds.crs = Some(Crs::from_epsg(32618).unwrap());
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500000.0, 4428000.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500010.0, 4428010.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500020.0, 4428020.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(500030.0, 4428030.0)).unwrap())), vec![]);
+        outlier_ds.push(Some(Geometry::Point(tr.to_lonlat(Coord::new(550000.0, 4478000.0)).unwrap())), vec![]);
+        let m_outlier = Map(HashMap::from([("outlier_ds".to_string(), outlier_ds)]));
+        let res_outlier = crate::run("kernelDensity", &m_outlier, &serde_json::json!({"input": "outlier_ds"}));
+        assert!(res_outlier.is_ok(), "default run with outlier should succeed: {:?}", res_outlier.err());
     }
 
     #[test]

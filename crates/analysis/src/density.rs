@@ -21,11 +21,11 @@ pub enum KernelType {
 }
 
 impl KernelType {
-    /// Parses a kernel name case-insensitively. Accepts `"Quartic"`, `"Gaussian"`, or `"biweight"`.
+    /// Parses a kernel name case-insensitively. Accepts `"Quartic"` or `"Gaussian"`.
     /// When given empty text, defaults to [`KernelType::Quartic`].
     pub fn parse(s: &str) -> Result<Self, String> {
         let t = s.trim();
-        if t.eq_ignore_ascii_case("quartic") || t.eq_ignore_ascii_case("biweight") || t.is_empty() {
+        if t.eq_ignore_ascii_case("quartic") || t.is_empty() {
             Ok(KernelType::Quartic)
         } else if t.eq_ignore_ascii_case("gaussian") {
             Ok(KernelType::Gaussian)
@@ -48,8 +48,10 @@ const DEFAULT_GRID_STEPS: f64 = 250.0;
 ///
 /// h = 0.9 * min(StandardDistance, sqrt(1 / ln(2)) * MedianDistance) * N^(-0.2)
 ///
-/// Falls back safely and deterministically to extent-based scaling for small samples or identical coordinates
-/// (span / 30.0 when extent > 0, or 1000.0 coordinate-space units for single or coincident points).
+/// Takes point weights into account for weighted mean center, weighted standard distance, and
+/// weighted median distance. Falls back safely and deterministically to extent-based scaling for
+/// small samples or identical coordinates (span / 30.0 when extent > 0, or 1000.0 coordinate-space
+/// units for single or coincident points).
 pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
     let n = points.len();
     if n < 2 {
@@ -57,23 +59,42 @@ pub fn silverman_bandwidth(points: &[(Coord, f64)], extent: &Extent) -> f64 {
         return if span > 1e-4 { span / 30.0 } else { 1000.0 };
     }
 
-    let (sum_x, sum_y) = points.iter().fold((0.0, 0.0), |(sx, sy), (p, _)| (sx + p.x, sy + p.y));
-    let mean_x = sum_x / n as f64;
-    let mean_y = sum_y / n as f64;
+    let (sum_x, sum_y, sum_w) = points.iter().fold((0.0, 0.0, 0.0), |(sx, sy, sw), (p, w)| {
+        let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
+        (sx + p.x * weight, sy + p.y * weight, sw + weight)
+    });
+    if sum_w <= 0.0 || !sum_w.is_finite() {
+        let span = extent.width().max(extent.height());
+        return if span.is_finite() && span > 1e-4 { (span / 30.0).max(1e-4) } else { 1000.0 };
+    }
+    let mean_x = sum_x / sum_w;
+    let mean_y = sum_y / sum_w;
 
-    let sum_sq_dist = points.iter().fold(0.0, |acc, (p, _)| acc + (p.x - mean_x).powi(2) + (p.y - mean_y).powi(2));
-    let std_dist = (sum_sq_dist / n as f64).sqrt();
+    let sum_sq_dist = points.iter().fold(0.0, |acc, (p, w)| {
+        let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
+        acc + weight * ((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2))
+    });
+    let std_dist = (sum_sq_dist / sum_w).sqrt();
 
-    let mut dists: Vec<f64> = points.iter().map(|(p, _)| ((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt()).collect();
-    dists.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median_dist = if dists.len() % 2 == 1 {
-        dists.get(dists.len() / 2).copied().unwrap_or(0.0)
-    } else {
-        let mid = dists.len() / 2;
-        let d1 = dists.get(mid.saturating_sub(1)).copied().unwrap_or(0.0);
-        let d2 = dists.get(mid).copied().unwrap_or(d1);
-        (d1 + d2) * 0.5
-    };
+    let mut dists: Vec<(f64, f64)> = points
+        .iter()
+        .map(|(p, w)| {
+            let weight = if w.is_finite() && *w > 0.0 { *w } else { 1.0 };
+            (((p.x - mean_x).powi(2) + (p.y - mean_y).powi(2)).sqrt(), weight)
+        })
+        .collect();
+    dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let half_w = sum_w * 0.5;
+    let mut cum_w = 0.0;
+    let mut median_dist = dists.first().map_or(0.0, |d| d.0);
+    for &(d, w) in &dists {
+        cum_w += w;
+        if cum_w >= half_w {
+            median_dist = d;
+            break;
+        }
+    }
 
     // A = sqrt(1 / ln(2)) ≈ 1.2011224087864498
     let a = (1.0 / 2.0f64.ln()).sqrt();

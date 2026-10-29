@@ -173,8 +173,9 @@ capturing >98.8% of mass).
 Points can optionally be weighted by a numeric population field (invalid or non-positive weights
 are excluded and reported in the tool messages; for multipoint features, each constituent point part
 receives the feature's weight). Calculations are performed in the linear units
-of a projected coordinate system (e.g. UTM or State Plane); if the input layer lacks a projected
-coordinate system or is in degrees, supply a projected system via `crs` (e.g. `EPSG:32618`).
+of a projected coordinate system (defaults to the layer's projected system; if the input layer lacks a
+coordinate system or is in degrees, or to project into a specific system, supply a projected system via `crs`,
+e.g. `EPSG:32618`).
 Because bandwidth and cell size are measured in coordinate-space linear units, global cylindrical
 projections such as Web Mercator (EPSG:3857) introduce scale distortion that increases with latitude;
 use a local projected coordinate system (such as UTM or State Plane) when accurate ground distances
@@ -182,7 +183,8 @@ are required. Leaving `radius` empty or setting it to `0` automatically estimate
 using Silverman's rule of thumb based on the points' spatial distribution (falling back to extent span / 30,
 or 1000 coordinate-space linear units for a single point or coincident points). When `pixelSize` is
 omitted, an adaptive cell size is calculated to span approximately 250 cells along the longer side
-of the extent (clamped to at most the search radius so points are not missed between cell centres).
+of the extent; the default search radius is automatically adjusted if needed to be at least the pixel
+size so points are not missed between cell centres.
 The search radius must be at least the pixel size. The extent can optionally be overridden via `extent`
 as `xmin,ymin,xmax,ymax` text or a four-number array. The output is written as a single-band Float32 GeoTIFF.
 
