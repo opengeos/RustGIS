@@ -972,7 +972,7 @@ type Candidate = (String, u32, crate::raster::Crs, usize);
 /// projected ones first (the service's own, as a rule), then CRS:84, then other
 /// longitude/latitude ones, each kind as listed. (A GeoServer lists some 5,000 systems by
 /// default, each layer inheriting them: only a system's definition is looked up here, once a
-/// list; transformers are built later, in this order, until `MAX_SYSTEMS` are kept.)
+/// list; [`wms_native`] builds transformers, in this order, until `MAX_SYSTEMS` are kept.)
 fn wms_candidates(crs: &[String]) -> Vec<Candidate> {
     let mut seen = std::collections::HashSet::new();
     let mut listed: Vec<Candidate> = crs
@@ -1006,21 +1006,24 @@ fn wms_candidates(crs: &[String]) -> Vec<Candidate> {
 /// the system's axes: written north first where the layer's own `BoundingBox` in that system
 /// says so (else in a geographic system other than CRS:84).
 fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
-    // Its boxes (its own, then those it inherits: WMS 1.3.0 §7.2.4.6.8), read once: a few at most.
-    let boxes: Vec<Node> = if v13 {
-        layer
+    // Its boxes by system (its own, else the nearest it inherits: WMS 1.3.0 §7.2.4.6.8), read
+    // once a layer.
+    let mut boxes: std::collections::HashMap<String, Node> = std::collections::HashMap::new();
+    if v13 {
+        for b in layer
             .ancestors()
             .filter(|a| a.is_element() && local(a) == "Layer")
             .flat_map(|a| children(&a, "BoundingBox").collect::<Vec<_>>())
-            .take(MAX_BOXES)
-            .collect()
-    } else {
-        Vec::new()
-    };
+        {
+            if let Some(c) = b.attribute("CRS").or(b.attribute("SRS")) {
+                boxes.entry(c.trim().to_ascii_uppercase()).or_insert(b);
+            }
+        }
+    }
     let lat_first = |name: &str, system: crate::raster::Crs| {
         v13 && !warp::is_crs84(name) && {
-            // The layer's box in that system, the nearest, against its area worked out there.
-            let own = boxes.iter().find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)));
+            // The layer's box in that system, against its area worked out there.
+            let own = boxes.get(&name.trim().to_ascii_uppercase());
             let corner = own.and_then(|b| {
                 let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
                 Some((f("minx")?, f("miny")?))
@@ -1048,9 +1051,6 @@ fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 
     let (epsg, lat_first) = if mercator { (3857, false) } else { (first.epsg, first.lat_first) };
     Some((first.name, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, area, systems }))
 }
-
-/// The most `BoundingBox`es of a WMS layer and its parents read for the axis order.
-const MAX_BOXES: usize = 256;
 
 /// The longest address a layer in another system keeps (the map's own limit on an address).
 const MAX_ADDRESS: usize = 4096;

@@ -15,6 +15,7 @@
 
 use rustgis_geom::{Coord, merc_to_lonlat};
 
+use super::encode;
 use crate::raster::{Crs, Transformer};
 
 /// Marks a layer address drawn in another coordinate system (see the module docs).
@@ -458,16 +459,6 @@ impl Warp {
             }
         }
     }
-}
-
-/// Percent-encodes a query value (a system's name: `EPSG:2056` stays as it is).
-fn encode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' | b',' => (b as char).to_string(),
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// A matrix identifier in an address's fragment, its separators escaped.
