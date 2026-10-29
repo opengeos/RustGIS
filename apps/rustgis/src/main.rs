@@ -28,7 +28,7 @@ struct Menus {
 }
 #[cfg(not(target_os = "macos"))]
 #[derive(Default)]
-struct Menus;
+struct Menus {}
 
 /// Preferences in `prefs.json` beside the platform's other app settings.
 mod prefs {
