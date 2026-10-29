@@ -441,7 +441,7 @@ fn panel_has_keys() -> bool {
     let app = NSApplication::sharedApplication(mtm);
     match (app.keyWindow(), app.mainWindow()) {
         (Some(key), Some(main)) => !std::ptr::eq(Retained::as_ptr(&key), Retained::as_ptr(&main)),
-        (Some(_), None) => true,
+        // Without both, it can't be told: the choice is kept rather than lost.
         _ => false,
     }
 }
