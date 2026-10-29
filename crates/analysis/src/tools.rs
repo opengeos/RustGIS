@@ -3682,7 +3682,58 @@ fn subset<'a>(ds: &'a Dataset, selected_rows: &[usize]) -> Cow<'a, Dataset> {
     }
 }
 
+/// Normalizes tool-specific parameter aliases before validation and execution.
+pub(crate) fn normalize_params(spec: &ToolSpec, p: &mut serde_json::Map<String, Json>) {
+    if spec.id == "joinField" {
+        normalize_join_field_params(p);
+    }
+}
+
+pub(crate) fn normalize_join_field_params(p: &mut serde_json::Map<String, Json>) {
+    let is_blank = |val: Option<&Json>| val.is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty()));
+    let find_first =
+        |map: &serde_json::Map<String, Json>, keys: &[&str]| keys.iter().filter_map(|k| map.get(*k)).find(|v| !is_blank(Some(v))).cloned();
+
+    if is_blank(p.get("target"))
+        && let Some(v) = find_first(p, &["target", "input", "target_layer"])
+    {
+        p.insert("target".to_string(), v);
+    }
+    if is_blank(p.get("joinTable"))
+        && let Some(v) = find_first(p, &["joinTable", "join", "source", "join_table"])
+    {
+        p.insert("joinTable".to_string(), v);
+    }
+    if is_blank(p.get("targetField"))
+        && let Some(v) = find_first(p, &["targetField", "target_field", "key", "target_key"])
+    {
+        p.insert("targetField".to_string(), v);
+    }
+    if is_blank(p.get("joinField")) {
+        if let Some(v) = find_first(p, &["joinField", "join_field", "join_key"]) {
+            p.insert("joinField".to_string(), v);
+        } else if let Some(tf) = p.get("targetField").filter(|v| !is_blank(Some(v))) {
+            p.insert("joinField".to_string(), tf.clone());
+        }
+    }
+    if is_blank(p.get("duplicates"))
+        && let Some(v) = find_first(p, &["duplicates", "duplicateStrategy", "duplicate_strategy"])
+    {
+        p.insert("duplicates".to_string(), v);
+    }
+}
+
 fn join_field_tool(inp: &dyn Inputs, p: &Json) -> Result<ToolResult, String> {
+    let mut normalized_storage;
+    let p = match p.as_object() {
+        Some(map) => {
+            normalized_storage = map.clone();
+            normalize_join_field_params(&mut normalized_storage);
+            &Json::Object(normalized_storage)
+        }
+        None => p,
+    };
+
     let target = input(inp, p, "target")?;
     let source = input(inp, p, "joinTable")?;
 
