@@ -1,7 +1,7 @@
 //! A WMS or WMTS layer on a map drawn in one of the systems its service offers it in (#769):
 //! asked for in that system and drawn as the service gives it, not warped from Web Mercator. A
 //! WMS layer is asked for in tiles of its own, 256 pixels a side, at the power of two of the map's
-//! units per pixel nearest its detail (so they are kept and found again as the map moves); a WMTS
+//! units per pixel at or below its detail (so they are kept and found again as the map moves); a WMTS
 //! layer's tiles are its matrix's nearest the map's detail.
 
 use std::sync::Arc;
@@ -208,9 +208,10 @@ pub(crate) fn draw(pm: &mut Pixmap, n: &Native, t: &TileLayer, view: &View, flat
                     paint(pm, img, at, p.area, opacity, &place);
                 }
             }
-            // A picture the service doesn't have (a WMTS tile past its coverage) is left clear, as
-            // the warped tiles leave it; any other failure is the layer's error.
-            State::Failed(e) if rustgis_tiles::warp::missing(&e) => {}
+            // A WMTS tile the service doesn't have (past its coverage) is left clear, as the warped
+            // tiles leave it; any other failure, and a WMS's 4xx (it draws any area), is the
+            // layer's error.
+            State::Failed(e) if matches!(n.how, How::Tiles(_)) && rustgis_tiles::warp::missing(&e) => {}
             State::Failed(e) => error = Some(e),
         }
     }

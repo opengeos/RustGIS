@@ -131,6 +131,9 @@ pub struct Warp {
 /// Most systems kept of a WMS layer.
 pub const MAX_SYSTEMS: usize = 64;
 
+/// The longest name of a system kept in a layer's address (`EPSG:2056`, an OGC URN or URL).
+pub const MAX_SYSTEM_NAME: usize = 100;
+
 /// One picture a map tile is made from: its address and the area it shows in the layer's system
 /// (west, south, east, north); for a tile of a matrix, its column and row too.
 #[derive(Clone, Debug, PartialEq)]
@@ -275,7 +278,7 @@ impl Warp {
                             let epsg = p.next()?.parse().ok()?;
                             let lat_first = p.next()? == "n";
                             let name = unescape(p.next()?);
-                            (!name.is_empty() && name.len() <= 100).then_some(System { epsg, name, lat_first })
+                            (!name.is_empty() && name.len() <= MAX_SYSTEM_NAME).then_some(System { epsg, name, lat_first })
                         })
                         .collect();
                 }
@@ -343,12 +346,6 @@ impl Warp {
             .replace("{nbbox}", &bbox)
             .replace("{nw}", &w.to_string())
             .replace("{nh}", &h.to_string())
-    }
-
-    /// Whether a Web Mercator map takes the layer's pictures as they come: its service's address
-    /// (filled in for the tile) is then the picture's, else they are warped into place.
-    pub fn direct(&self) -> bool {
-        self.epsg == 3857
     }
 
     /// The service's address for pictures in any of the layer's systems (`{ncrs}`, `{nbbox}`,
@@ -488,15 +485,15 @@ fn unescape(id: &str) -> String {
     let bytes = id.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
+    while let Some(&b) = bytes.get(i) {
+        if b == b'%'
             && let Some(v) = id.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok())
         {
             out.push(v);
             i += 3;
             continue;
         }
-        out.push(bytes[i]);
+        out.push(b);
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()

@@ -79,7 +79,8 @@ pub(crate) enum Made {
 /// The map tile `url` names, made from its pictures when they are all in the cache (asking for
 /// those that aren't). A picture the service doesn't have (a WMTS tile past its matrix, see
 /// [`missing`]) is left clear, and one that failed otherwise too, the tile made again once it is
-/// asked for again; with none at all, the tile fails.
+/// asked for again; with none there at all, the tile is empty when they were all missing, else
+/// it fails.
 pub(crate) fn make(url: &str) -> Made {
     if let Some((at, tile)) = made_for_now().lock().unwrap_or_else(|e| e.into_inner()).get(url)
         && at.elapsed() < FOR_NOW
@@ -108,8 +109,9 @@ pub(crate) fn make(url: &str) -> Made {
             State::Ready(payload) => pictures.push(Some(payload)),
             State::Pending => waiting = true,
             State::Failed(e) => {
-                // A picture the service doesn't have is left clear, not the layer's error.
-                if !missing(&e) {
+                // A WMTS tile the service doesn't have (past its coverage) is left clear, not the
+                // layer's error; a WMS draws any area it is asked for, so its 4xx is one.
+                if p.tile.is_none() || !missing(&e) {
                     error = Some(e);
                 }
                 pictures.push(None);
@@ -117,7 +119,7 @@ pub(crate) fn make(url: &str) -> Made {
         }
     }
     // A picture that failed leaves a hole: the tile isn't kept with it, and is made again once
-    // the picture is asked for again. (With none there, the tile fails, as the cache keeps.)
+    // the picture is asked for again. (With none there, see below.)
     let for_now = error.is_some() && pictures.iter().any(Option::is_some);
     // Kept while the tile is made again: its pictures on their way, or one failed.
     let mut known = plans().lock().unwrap_or_else(|e| e.into_inner());
@@ -156,8 +158,9 @@ pub(crate) fn make(url: &str) -> Made {
     Made::ForNow(tile)
 }
 
-/// Whether a picture's failure means the service doesn't have it: a 4xx other than a refused
-/// login (401, 403), a timeout (408) or too many requests (429). Such a picture is left clear.
+/// Whether a WMTS tile's failure means the service doesn't have it (past its coverage): a 4xx
+/// other than a refused login (401, 403), a timeout (408) or too many requests (429). Such a
+/// tile is left clear; a WMS picture's 4xx is the layer's error (it draws any area asked).
 pub fn missing(error: &str) -> bool {
     cache::http_status(error).is_some_and(|s| (400..500).contains(&s) && !matches!(s, 401 | 403 | 408 | 429))
 }
@@ -230,8 +233,8 @@ fn sample(img: &Pixmap, u: f64, v: f64) -> Option<[u8; 4]> {
     let px = |a: i64, b: i64| -> [f64; 4] {
         let (a, b) = (a.clamp(0, w - 1), b.clamp(0, h - 1));
         let o = ((b * w + a) * 4) as usize;
-        let d = data.get(o..o + 4).unwrap_or(&[0, 0, 0, 0]);
-        [f64::from(d[0]), f64::from(d[1]), f64::from(d[2]), f64::from(d[3])]
+        let Some(&[r, g, b, a]) = data.get(o..o + 4) else { return [0.0; 4] };
+        [f64::from(r), f64::from(g), f64::from(b), f64::from(a)]
     };
     let (x0, y0) = (x0 as i64, y0 as i64);
     let (c00, c10, c01, c11) = (px(x0, y0), px(x0 + 1, y0), px(x0, y0 + 1), px(x0 + 1, y0 + 1));

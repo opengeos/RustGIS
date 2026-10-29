@@ -252,9 +252,9 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
   layer is drawn so on a map in its tile matrix set's system. Change the map's projection and the
   layer follows: in Web Mercator again, it is asked for in Web Mercator (or warped), and in a
   projection the layer isn't offered in, it is drawn warped as before. A WMS layer is drawn so in
-  64 of the systems it lists that RustGIS can transform (projected ones first, then CRS:84, then
-  other longitude/latitude ones, each kind in the order listed), and warped in the rest. A
-  tilted map draws every layer warped.
+  up to 64 of the systems it lists that RustGIS can transform (projected ones first, then
+  CRS:84, then other longitude/latitude ones, each kind in the order listed), and warped in the
+  rest. A tilted map draws every layer warped.
 - **Identify** asks a WMS layer drawn in a system of its own (GetFeatureInfo) in that system.
 - **Axis order.** A WMS 1.3.0 bounding box is written in the order of the system's axes: latitude
   first in EPSG:4326 and other longitude/latitude systems (not in CRS:84), and north first in a

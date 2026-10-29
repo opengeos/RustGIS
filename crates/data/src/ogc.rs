@@ -811,12 +811,12 @@ fn wms(url: &str, root: &Node) -> Service {
     let legend_graphic = wms_legend_graphic(root, url, &get_map, version);
     // (What a layer passes on is shared by its sublayers, not copied for each: a hostile document
     // may give one layer a great many.)
-    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<[String]>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>, Option<Rc<LayerTime>>, Scales);
+    type Inherited<'a, 'i> = (Node<'a, 'i>, Rc<Systems>, Option<[f64; 4]>, bool, Rc<[Node<'a, 'i>]>, Option<Rc<LayerTime>>, Scales);
     let mut stack: Vec<Inherited<'_, '_>> = root
         .descendants()
         .filter(|n| n.is_element() && local(n) == "Capability")
         .flat_map(|c| children(&c, "Layer").collect::<Vec<_>>())
-        .map(|l| (l, Rc::from([]), None, false, Rc::from([]), None, Scales::default()))
+        .map(|l| (l, Rc::default(), None, false, Rc::from([]), None, Scales::default()))
         .collect();
     while let Some((layer, inherited_crs, inherited_bbox, inherited_queryable, inherited_styles, inherited_time, inherited_scales)) =
         stack.pop()
@@ -824,9 +824,14 @@ fn wms(url: &str, root: &Node) -> Service {
         if service.layers.len() >= MAX_LAYERS {
             break;
         }
-        let mut crs = inherited_crs.to_vec();
-        crs.extend(layer.children().filter(|c| c.is_element() && matches!(local(c), "CRS" | "SRS")).map(|c| text_of(&c)));
-        let crs: Rc<[String]> = crs.into();
+        // (A layer naming none of its own shares its parent's list, and what is worked out of it.)
+        let own: Vec<String> =
+            layer.children().filter(|c| c.is_element() && matches!(local(c), "CRS" | "SRS")).map(|c| text_of(&c)).collect();
+        let crs: Rc<Systems> = if own.is_empty() {
+            inherited_crs
+        } else {
+            Rc::new(Systems { names: inherited_crs.names.iter().cloned().chain(own).collect(), ..Systems::default() })
+        };
         let bbox = child(&layer, "EX_GeographicBoundingBox")
             .and_then(|b| {
                 let f = |k: &str| child_text(&b, k).and_then(|t| t.parse::<f64>().ok());
@@ -856,8 +861,9 @@ fn wms(url: &str, root: &Node) -> Service {
         let Some(name) = child_text(&layer, "Name") else { continue };
         // In Web Mercator, as the service draws it, else in a system of its own, warped (#769);
         // with the other systems it is offered in, for a map drawn in one of them.
-        let mercator = crs.iter().any(|c| c.split_whitespace().any(is_web_mercator));
-        let mut native = wms_native(&layer, &crs, v13, bbox, mercator);
+        let mercator = crs.names.iter().any(|c| c.split_whitespace().any(is_web_mercator));
+        let listed = crs.candidates.get_or_init(|| wms_candidates(&crs.names));
+        let mut native = wms_native(&layer, listed, v13, bbox, mercator);
         if !mercator && native.is_none() {
             skipped += 1;
             continue;
@@ -943,28 +949,36 @@ fn wms(url: &str, root: &Node) -> Service {
         service.notes.push(format!("{skipped} layers aren't offered in a coordinate system RustGIS can draw and are left out"));
     }
     if too_long > 0 {
-        service
-            .notes
-            .push(format!("{too_long} layers in another coordinate system are left out: their addresses are longer than 4096 bytes"));
+        service.notes.push(format!(
+            "{too_long} layers in another coordinate system are left out: their addresses are longer than {MAX_ADDRESS} bytes"
+        ));
     }
     service
 }
 
-/// The systems a WMS layer is offered in that RustGIS can draw (#769), and the one a Web
-/// Mercator map takes its pictures in: Web Mercator itself (`mercator`), else of those it lists a
-/// projected one first (the service's own, as a rule), then CRS:84, then a geographic one. `None`
-/// for a layer offered in Web Mercator alone (its address stays as it was) or in nothing usable.
-/// In WMS 1.3.0 a bounding box follows the system's axes: written north first where the layer's
-/// own `BoundingBox` in that system says so (else in a geographic system other than CRS:84).
-fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
-    // Each with its place in the list. (A GeoServer lists some 5,000 systems by default, each
-    // layer inheriting them: only a system's definition is looked up here, and its transformer
-    // built for those kept.)
+/// The coordinate systems a WMS layer is offered in, its own and those it inherits, and those of
+/// them RustGIS knows (worked out once, for the layers sharing the list).
+#[derive(Default)]
+struct Systems {
+    names: Vec<String>,
+    candidates: std::cell::OnceCell<Vec<Candidate>>,
+}
+
+/// A system of a WMS layer's list that RustGIS knows: its name there, its EPSG code, it, and its
+/// place in the list.
+type Candidate = (String, u32, crate::raster::Crs, usize);
+
+/// The systems of a WMS layer's list that RustGIS knows, one name each, in order of preference:
+/// projected ones first (the service's own, as a rule), then CRS:84, then other
+/// longitude/latitude ones, each kind as listed. (A GeoServer lists some 5,000 systems by
+/// default, each layer inheriting them: only a system's definition is looked up here, once a
+/// list; transformers are built later, in this order, until `MAX_SYSTEMS` are kept.)
+fn wms_candidates(crs: &[String]) -> Vec<Candidate> {
     let mut seen = std::collections::HashSet::new();
-    let mut listed: Vec<(String, u32, crate::raster::Crs, usize)> = crs
+    let mut listed: Vec<Candidate> = crs
         .iter()
         .flat_map(|c| c.split_whitespace())
-        .filter(|c| !is_web_mercator(c) && seen.insert(c.to_ascii_uppercase()))
+        .filter(|c| c.len() <= warp::MAX_SYSTEM_NAME && !is_web_mercator(c) && seen.insert(c.to_ascii_uppercase()))
         .enumerate()
         .filter_map(|(i, c)| {
             let code = warp::epsg_of(c)?;
@@ -975,21 +989,38 @@ fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, m
     // One name for each system (EPSG:4326 and CRS:84 differ only in their axes: CRS:84 kept).
     listed.sort_by_cached_key(|(name, code, _, _)| (*code, !warp::is_crs84(name)));
     listed.dedup_by_key(|(_, code, _, _)| *code);
-    let rank = |(name, _, c, _): &(String, u32, crate::raster::Crs, usize)| match (c.is_geographic(), warp::is_crs84(name)) {
+    let rank = |(name, _, c, _): &Candidate| match (c.is_geographic(), warp::is_crs84(name)) {
         (false, _) => 0,
         (true, true) => 1,
         (true, false) => 2,
     };
     // In the order the service lists them, the preferred first.
     listed.sort_by_key(|l| (rank(l), l.3));
+    listed
+}
+
+/// The systems a WMS layer is offered in that RustGIS can draw (#769), of its `listed`
+/// candidates (see [`wms_candidates`]), and the one a Web Mercator map takes its pictures in: Web
+/// Mercator itself (`mercator`), else the first. `None` for a layer offered in Web Mercator
+/// alone (its address stays as it was) or in nothing usable. In WMS 1.3.0 a bounding box follows
+/// the system's axes: written north first where the layer's own `BoundingBox` in that system
+/// says so (else in a geographic system other than CRS:84).
+fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
+    // Its boxes (its own, then those it inherits: WMS 1.3.0 §7.2.4.6.8), read once: a few at most.
+    let boxes: Vec<Node> = if v13 {
+        layer
+            .ancestors()
+            .filter(|a| a.is_element() && local(a) == "Layer")
+            .flat_map(|a| children(&a, "BoundingBox").collect::<Vec<_>>())
+            .take(MAX_BOXES)
+            .collect()
+    } else {
+        Vec::new()
+    };
     let lat_first = |name: &str, system: crate::raster::Crs| {
         v13 && !warp::is_crs84(name) && {
-            // The layer's box in that system (its own, else one it inherits: WMS 1.3.0
-            // §7.2.4.6.8), against its area worked out there.
-            let own = layer.ancestors().filter(|a| a.is_element() && local(a) == "Layer").find_map(|a| {
-                children(&a, "BoundingBox")
-                    .find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)))
-            });
+            // The layer's box in that system, the nearest, against its area worked out there.
+            let own = boxes.iter().find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)));
             let corner = own.and_then(|b| {
                 let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
                 Some((f("minx")?, f("miny")?))
@@ -1017,6 +1048,9 @@ fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, m
     let (epsg, lat_first) = if mercator { (3857, false) } else { (first.epsg, first.lat_first) };
     Some((first.name, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, area, systems }))
 }
+
+/// The most `BoundingBox`es of a WMS layer and its parents read for the axis order.
+const MAX_BOXES: usize = 256;
 
 /// The longest address a layer in another system keeps (the map's own limit on an address).
 const MAX_ADDRESS: usize = 4096;
@@ -1179,7 +1213,7 @@ fn raw_matrix(m: &Node) -> Option<RawMatrix> {
         id: child_text(m, "Identifier")?,
         scale: n("ScaleDenominator").filter(|v| *v > 0.0)?,
         corner: (*a, *b),
-        tile: (u("TileWidth").unwrap_or(256), u("TileHeight").unwrap_or(256)),
+        tile: (u("TileWidth")?, u("TileHeight")?),
         size: (u("MatrixWidth")?, u("MatrixHeight")?),
     })
 }
@@ -1361,9 +1395,9 @@ fn wmts(url: &str, root: &Node) -> Service {
         service.notes.push(format!("{skipped} layers have no tile matrix set RustGIS can draw and are left out"));
     }
     if too_long > 0 {
-        service
-            .notes
-            .push(format!("{too_long} layers in another coordinate system are left out: their addresses are longer than 4096 bytes"));
+        service.notes.push(format!(
+            "{too_long} layers in another coordinate system are left out: their addresses are longer than {MAX_ADDRESS} bytes"
+        ));
     }
     service
 }
@@ -3010,7 +3044,7 @@ mod tests {
     fn a_tile_matrix_set_keeps_what_it_can_read() {
         let matrix = |id: &str, scale: f64| {
             format!(
-                "<TileMatrix>{id}<ScaleDenominator>{scale}</ScaleDenominator><TopLeftCorner>2420000 1350000</TopLeftCorner><MatrixWidth>4</MatrixWidth><MatrixHeight>3</MatrixHeight></TileMatrix>"
+                "<TileMatrix>{id}<ScaleDenominator>{scale}</ScaleDenominator><TopLeftCorner>2420000 1350000</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>4</MatrixWidth><MatrixHeight>3</MatrixHeight></TileMatrix>"
             )
         };
         let set = |ms: &str| format!("<TileMatrixSet><SupportedCRS>EPSG:2056</SupportedCRS>{ms}</TileMatrixSet>");
@@ -3705,7 +3739,7 @@ mod tests {
         let roads_tile = tile(template);
         let (base, _, w) = warp::Warp::parse(&roads_tile).unwrap();
         let base = base.to_string();
-        assert!(w.direct() && base.contains("CRS=EPSG:3857&BBOX={bbox-epsg-3857}&"));
+        assert!(w.epsg == 3857 && base.contains("CRS=EPSG:3857&BBOX={bbox-epsg-3857}&"));
         assert_eq!(w.systems, [warp::System { epsg: 4326, name: "EPSG:4326".into(), lat_first: true }]);
         assert!(warp::Warp::map_template(&base).contains("&CRS={ncrs}&BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}&"));
         let water = s.layers.iter().find(|l| l.name == "water bodies").unwrap();
