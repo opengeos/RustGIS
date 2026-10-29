@@ -63,6 +63,15 @@ fn summary_list_runs_with_ordered_case_fields_and_reopens_from_history() {
     h.state_mut().run("ui.gp.open", json!({"tool":"summaryStatistics", "values":params})).unwrap();
     h.run_steps(3);
     assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().gp.values["statistics"]).unwrap(), params["statistics"]);
+    let mut reversed = params;
+    reversed["case"] = json!(["category", "region"]);
+    h.state_mut().run("ui.gp.open", json!({"tool":"summaryStatistics", "values":reversed})).unwrap();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Run").click();
+    h.run_steps(3);
+    let output = &h.state().session.project.tables.last().unwrap().dataset;
+    assert_eq!(output.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["category", "region", "FREQUENCY", "SUM_amount"]);
+    assert_eq!(output.value(0, 3).as_f64(), Some(16.3));
 }
 
 #[test]
@@ -381,4 +390,41 @@ fn model_numeric_table_input_filters_statistics_by_its_own_fields() {
     h.run_steps(2);
     assert_eq!(h.state().mb.graph.nodes[0].params["input"], json!(id));
     assert_eq!(h.state().mb.graph.nodes[0].params["statistics"], json!([{"field":"region","statistic":"COUNT"}]));
+    // The legacy Statistics Field shortcut uses the same numeric table schema.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Statistics Field").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "region").is_none());
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "wrong_layer_field").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "amount").click();
+    h.run_steps(2);
+    assert_eq!(h.state().mb.graph.nodes[0].params["field"], json!("amount"));
+}
+
+/// Distinct case-variant inputs cannot generate duplicate Summary output column names.
+#[test]
+fn summary_picker_excludes_case_variant_output_collisions() {
+    let mut h = harness("summaryStatistics", json!({"input":"Records","statistics":[{"field":"region","statistic":"COUNT"}]}));
+    let table = &mut h.state_mut().session.project.tables[0].dataset;
+    table.fields.push(Field::new("REGION", FieldType::Double));
+    for feature in &mut table.features {
+        feature.attrs.push(Value::Float(2.5));
+    }
+    h.run_steps(3);
+    h.get_by_label("Add statistic").click();
+    h.run_steps(2);
+    h.get_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Field").nth(1).unwrap().click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "REGION").click_accesskit();
+    h.run_steps(2);
+    h.get_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Statistic").nth(1).unwrap().click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "COUNT").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "SUM").click_accesskit();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Run").click();
+    h.run_steps(3);
+    assert!(h.state().gp.last.as_ref().unwrap().0);
+    let output = &h.state().session.project.tables.last().unwrap().dataset;
+    assert_eq!(output.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["FREQUENCY", "COUNT_region", "SUM_REGION"]);
+    assert_eq!(output.value(0, 2).as_f64(), Some(5.0));
 }

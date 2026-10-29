@@ -653,15 +653,19 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
                 _ => return None,
             };
             let without_word = format!("{}{after}", script.get(byte_at(script, brace)?..byte_at(script, start)?)?);
-            let given = scan(&without_word).values;
+            // Scan retains raw JSON string contents; decode before comparing with dataset names.
+            let given: std::collections::HashSet<String> = scan(&without_word)
+                .values
+                .into_iter()
+                .filter(|(k, _, listed)| *listed && k == &key)
+                .filter_map(|(_, value, _)| serde_json::from_str::<String>(&format!("\"{value}\"")).ok())
+                .map(|name| name.trim().to_ascii_lowercase())
+                .collect();
             let names = d
                 .fields
                 .iter()
                 .enumerate()
-                .filter(|(i, f)| {
-                    takes_field(p.kind, d, *i)
-                        && (!in_array || !given.iter().any(|(k, v, listed)| *listed && k == &key && v.trim().eq_ignore_ascii_case(&f.name)))
-                })
+                .filter(|(i, f)| takes_field(p.kind, d, *i) && (!in_array || !given.contains(&f.name.to_ascii_lowercase())))
                 .map(|(_, f)| f.name.as_str());
             value_ids(start, at, &word, names, of)
         }
@@ -2771,6 +2775,20 @@ mod tests {
         assert!(offer(&app, r#"gp.run {"tool": "nope", "params": {"input": ""#).is_none(), "a tool that isn't there");
         assert!(offer(&app, r#"gp.run {"tool": "buffer", "params": {"input": {"x": ""#).is_none(), "deeper");
         assert!(offer(&app, r#"task.addStep {"command": "buffer", "params": {"input": ""#).is_none(), "another command's params");
+        app.session.project.tables[0].dataset.fields.push(Field::new("a\"b", FieldType::Text));
+        let quoted = serde_json::to_string("a\"b").unwrap();
+        let text = format!(r#"gp.run {{"tool":"pivotTable","params":{{"input":{id},"fields":[{quoted},""#);
+        assert_eq!(offer(&app, &text).unwrap().items, ["total"], "escaped name before cursor excluded");
+        let before = format!(r#"gp.run {{"tool":"pivotTable","params":{{"input":{id},"fields":[""#);
+        let text = format!(r#"{before}",{quoted}]}}}}"#);
+        assert_eq!(
+            super::offer_at(&text, before.chars().count(), &[], &app.session).unwrap().items,
+            ["total"],
+            "escaped name after cursor excluded"
+        );
+        let unicode = r#""to\u0074al""#;
+        let text = format!(r#"gp.run {{"tool":"pivotTable","params":{{"input":{id},"fields":[{unicode},""#);
+        assert_eq!(offer(&app, &text).unwrap().items, ["a\"b"], "Unicode escape decoded before comparison");
     }
 
     /// Beside a table, its rows and the table icon; beside a tool's field, its type and the field

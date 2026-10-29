@@ -126,6 +126,8 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
             name.trim().to_ascii_lowercase()
         }
     };
+    // Summary output column names must differ in more than case, even for distinct input fields.
+    let pair_field = |name: &str| identity(name).to_ascii_lowercase();
     // Index saved selections once per frame, rather than scanning all rows for each offered field.
     let mut used_names: HashMap<String, usize> = HashMap::new();
     let mut used_pairs: HashMap<String, HashMap<String, usize>> = HashMap::new();
@@ -135,7 +137,7 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
         if statistics == Some(StatisticList::Summary)
             && let Some(stat) = row.get("statistic").and_then(Value::as_str).and_then(|s| StatisticList::Summary.canonical_name(s))
         {
-            *used_pairs.entry(identity(name)).or_default().entry(stat).or_default() += 1;
+            *used_pairs.entry(pair_field(name)).or_default().entry(stat).or_default() += 1;
         }
     }
     let mut choice_cache: Vec<(Option<FieldType>, Vec<String>)> = Vec::new();
@@ -164,7 +166,7 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                     .get("statistic")
                     .and_then(Value::as_str)
                     .and_then(|s| StatisticList::Summary.canonical_name(s))
-                    .map(|stat| (identity(&old_name), stat));
+                    .map(|stat| (pair_field(&old_name), stat));
                 let Some(row) = rows.get_mut(i) else { return };
                 if name != old_name {
                     changed = true;
@@ -180,7 +182,7 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                     if !choice_cache.iter().any(|(cached, _)| *cached == ty) {
                         choice_cache.push((ty, s.choices(ty)));
                     }
-                    let normalized_name = identity(&name);
+                    let normalized_name = pair_field(&name);
                     let choices: Vec<&String> = choice_cache
                         .iter()
                         .find(|(cached, _)| *cached == ty)

@@ -1319,12 +1319,6 @@ fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
     }
 }
 
-/// The layer feeding a tool's first layer parameter, when it is an input node's (for its fields).
-fn source_layer(app: &RustGisApp, n: &ModelNode, spec: &ToolSpec) -> Option<String> {
-    let first = crate::panes::first_layer(spec)?;
-    source_input(app, n, first.name)
-}
-
 /// Resolves the named input independently, so a join's fields come from its join input.
 fn source_input(app: &RustGisApp, n: &ModelNode, input: &str) -> Option<String> {
     match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == input) {
@@ -1356,20 +1350,16 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
     };
     ui.label(egui::RichText::new(tl!(spec.summary)).size(11.5).color(t.text_dim));
     ui.add_space(6.0);
-    let fields: Vec<(String, bool)> = source_layer(app, n, spec)
-        .and_then(|l| {
-            let s = &app.session;
-            s.map().layer_by_name(&l).map(|x| &x.dataset).or_else(|| {
-                rustgis_engine::project::find_table(&s.project.tables, &l).and_then(|k| s.project.tables.get(k)).map(|x| &x.dataset)
-            })
-        })
-        .map(|d| d.fields.iter().map(|f| (f.name.clone(), f.ty.is_numeric())).collect())
+    let fields: Vec<(String, bool)> = crate::panes::first_layer(spec)
+        .and_then(|p| input_fields(app, n, p.name))
+        .map(|fields| fields.iter().map(|f| (f.name.clone(), f.ty.is_numeric())).collect())
         .unwrap_or_default();
     let mut set: Option<(&'static str, Value)> = None;
     let mut focus = false;
     let mut unwire: Option<&'static str> = None;
     for p in spec.params {
         let label = ui.label(egui::RichText::new(format!("{}{}", tl!(p.label), if p.required { " *" } else { "" })).size(12.0));
+        let label_id = label.id;
         if !p.help.is_empty() {
             label.on_hover_text(p.help);
         }
@@ -1490,6 +1480,7 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                         }
                     })
                     .response
+                    .labelled_by(label_id)
                     .on_hover_text(tl!(p.label));
             }
             _ => {
