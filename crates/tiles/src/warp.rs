@@ -109,8 +109,11 @@ pub(crate) fn make(url: &str) -> Made {
             State::Ready(payload) => pictures.push(Some(payload)),
             State::Pending => waiting = true,
             State::Failed(e) => {
-                // A WMTS tile the service doesn't have (past its coverage) is left clear, not the
-                // layer's error; a WMS draws any area it is asked for, so its 4xx is one.
+                // A WMTS tile the service doesn't have (past its coverage) is a gap, left clear for
+                // good; any other failure, and a WMS's 4xx (it draws any area asked), is one the
+                // map tile isn't kept with: it is made again once the picture is asked again. (As
+                // for any raster tile, the map's layer list doesn't name it: a layer drawn in its
+                // own system does, see `native_tiles`.)
                 if p.tile.is_none() || !missing(&e) {
                     error = Some(e);
                 }
@@ -160,7 +163,8 @@ pub(crate) fn make(url: &str) -> Made {
 
 /// Whether a WMTS tile's failure means the service doesn't have it (past its coverage): a 4xx
 /// other than a refused login (401, 403), a timeout (408) or too many requests (429). Such a
-/// tile is left clear; a WMS picture's 4xx is the layer's error (it draws any area asked).
+/// tile is left clear for good; a WMS picture's 4xx is a failure, asked again (it draws any
+/// area asked).
 pub fn missing(error: &str) -> bool {
     cache::http_status(error).is_some_and(|s| (400..500).contains(&s) && !matches!(s, 401 | 403 | 408 | 429))
 }

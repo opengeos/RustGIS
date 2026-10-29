@@ -1008,33 +1008,34 @@ fn wms_candidates(crs: &[String]) -> Vec<Candidate> {
 fn wms_native(layer: &Node, listed: &[Candidate], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
     // Its boxes by system (its own, else the nearest it inherits: WMS 1.3.0 §7.2.4.6.8), read
     // once a layer.
-    let mut boxes: std::collections::HashMap<String, Node> = std::collections::HashMap::new();
+    let mut boxes: std::collections::HashMap<u32, Node> = std::collections::HashMap::new();
     if v13 {
         for b in layer
             .ancestors()
             .filter(|a| a.is_element() && local(a) == "Layer")
             .flat_map(|a| children(&a, "BoundingBox").collect::<Vec<_>>())
         {
-            if let Some(c) = b.attribute("CRS").or(b.attribute("SRS")) {
-                boxes.entry(c.trim().to_ascii_uppercase()).or_insert(b);
+            // (By code: the box may name the system otherwise than the list, `EPSG:2056` for
+            // `urn:ogc:def:crs:EPSG::2056`; but a CRS:84 box, longitude first, isn't an
+            // EPSG:4326 one.)
+            if let Some(code) = b.attribute("CRS").or(b.attribute("SRS")).filter(|c| !warp::is_crs84(c)).and_then(warp::epsg_of) {
+                boxes.entry(code).or_insert(b);
             }
         }
     }
     let lat_first = |name: &str, system: crate::raster::Crs| {
         v13 && !warp::is_crs84(name) && {
             // The layer's box in that system, against its area worked out there.
-            let own = boxes.get(&name.trim().to_ascii_uppercase());
-            let corner = own.and_then(|b| {
-                let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
-                Some((f("minx")?, f("miny")?))
+            let own = warp::epsg_of(name).and_then(|code| boxes.get(&code));
+            let written = own.and_then(|b| {
+                let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+                Some([f("minx")?, f("miny")?, f("maxx")?, f("maxy")?])
             });
-            // (The least of its edges there: a projected box's south-west corner isn't.)
-            let expected = || area.and_then(|a| warp::native_box(&*warp::transformer(u32::from(system.epsg()))?, a)).map(|b| (b[0], b[1]));
-            match corner {
-                Some(c) => match expected() {
-                    Some(e) => warp::north_first(c, Some(e), system.is_geographic()),
-                    None => system.is_geographic(),
-                },
+            match written {
+                Some(b) => {
+                    let native = area.and_then(|a| warp::native_box(&*warp::transformer(u32::from(system.epsg()))?, a));
+                    warp::north_first(b, native, system.is_geographic())
+                }
                 None => system.is_geographic(),
             }
         }
@@ -3037,6 +3038,17 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A layer's box names its system otherwise than its list (`EPSG:3035` for the URN): found by
+    /// code, it still says the service writes LAEA Europe north first.
+    #[test]
+    fn a_box_is_found_by_its_systems_code() {
+        let xml = r#"<Layer><CRS>urn:ogc:def:crs:EPSG::3035</CRS><BoundingBox CRS="EPSG:3035" minx="2700000" miny="4000000" maxx="3600000" maxy="4700000"/></Layer>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let listed = wms_candidates(&["urn:ogc:def:crs:EPSG::3035".to_string()]);
+        let (_, w) = wms_native(&doc.root_element(), &listed, true, Some([6.0, 47.0, 15.0, 55.0]), false).unwrap();
+        assert_eq!((w.epsg, w.grid), (3035, warp::Grid::Map { lat_first: true }));
+    }
 
     /// A tile matrix set keeps the matrices it can read when one can't be (no identifier), and
     /// past `MAX_MATRICES` its 20 coarsest and 20 finest.

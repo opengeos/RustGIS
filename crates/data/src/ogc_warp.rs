@@ -192,13 +192,12 @@ pub fn transformer(epsg: u32) -> Option<std::sync::Arc<Transformer>> {
 /// what would change the address's path or query (`/`, `?`, `#`, `&`, `%`, spaces), and the
 /// braces, so that no `{ncol}` or `{nrow}` in it is filled in later.
 pub fn matrix_in_address(id: &str) -> String {
-    id.bytes()
-        .map(|b| match b {
-            b'/' | b'?' | b'#' | b'&' | b'%' | b'+' | b'{' | b'}' => format!("%{b:02X}"),
-            b if b.is_ascii_graphic() => (b as char).to_string(),
-            b => format!("%{b:02X}"),
-        })
-        .collect()
+    percent_escape(id, b"/?#&%+{}")
+}
+
+/// `s` with each byte of `reserved`, and each that isn't printable ASCII, percent-escaped.
+fn percent_escape(s: &str, reserved: &[u8]) -> String {
+    s.bytes().map(|b| if b.is_ascii_graphic() && !reserved.contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 /// The EPSG code a service names a coordinate system with: `EPSG:2056`, `CRS:84` (4326, east
@@ -463,13 +462,7 @@ impl Warp {
 
 /// A matrix identifier in an address's fragment, its separators escaped.
 fn escape(id: &str) -> String {
-    id.bytes()
-        .map(|b| match b {
-            b'%' | b'|' | b'~' | b';' | b'#' | b'{' | b'}' => format!("%{b:02X}"),
-            b if b.is_ascii_graphic() => (b as char).to_string(),
-            b => format!("%{b:02X}"),
-        })
-        .collect()
+    percent_escape(id, b"%|~;#{}")
 }
 
 fn unescape(id: &str) -> String {
@@ -490,18 +483,25 @@ fn unescape(id: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Whether a corner of a layer's own box from a capabilities document (a WMS `BoundingBox`'s
-/// lower corner) is written north first: the way that puts it nearer `expected` (the layer's
-/// corner worked out in the system) when there is one, else as the system's axes usually run
-/// (latitude first in a geographic system, east first in a projected one).
-pub fn north_first(pair: (f64, f64), expected: Option<(f64, f64)>, geographic: bool) -> bool {
-    match expected {
-        Some((x, y)) => {
-            let d = |a: f64, b: f64| (a - x).hypot(b - y);
-            d(pair.1, pair.0) < d(pair.0, pair.1)
-        }
-        None => geographic,
+/// Whether a layer's box from a capabilities document (a WMS `BoundingBox`: `minx`, `miny`,
+/// `maxx`, `maxy` as written) is written north first: the way that overlaps more of `area` (the
+/// layer's area worked out in the system: west, south, east, north), so a parent's or a world's
+/// box over a small layer is read right too; overlapping as much either way (a box holding the
+/// area both ways), the way whose middle is nearer the area's; else as the system's axes usually
+/// run (latitude first in a geographic system, east first in a projected one).
+pub fn north_first(b: [f64; 4], area: Option<[f64; 4]>, geographic: bool) -> bool {
+    let Some([w, s, e, n]) = area else { return geographic };
+    let overlap = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let (dx, dy) = (x1.min(e) - x0.max(w), y1.min(n) - y0.max(s));
+        if dx > 0.0 && dy > 0.0 { dx * dy } else { 0.0 }
+    };
+    let (east, north) = (overlap(b[0], b[1], b[2], b[3]), overlap(b[1], b[0], b[3], b[2]));
+    if north != east {
+        return north > east;
     }
+    let off = |x0: f64, y0: f64, x1: f64, y1: f64| ((x0 + x1 - w - e) / 2.0).hypot((y0 + y1 - s - n) / 2.0);
+    let (east, north) = (off(b[0], b[1], b[2], b[3]), off(b[1], b[0], b[3], b[2]));
+    if north == east { geographic } else { north < east }
 }
 
 /// Whether a WMTS tile matrix's `TopLeftCorner` is written north first: the order whose matrix
@@ -722,10 +722,18 @@ mod tests {
         let switzerland = Some([2_380_000.0, 1_060_000.0, 2_870_000.0, 1_310_000.0]);
         assert!(!corner_north_first((2_420_000.0, 1_350_000.0), (480_000.0, 320_000.0), switzerland, false));
         assert!(corner_north_first((90.0, -180.0), (360.0, 180.0), None, true));
-        // swisstopo's LV95 corner, east first; an Austrian one written north first.
-        assert!(!north_first((2_420_000.0, 1_350_000.0), Some((2_600_000.0, 1_200_000.0)), false));
-        assert!(north_first((5_800_000.0, -300_000.0), Some((100_000.0, 5_400_000.0)), false));
-        assert!(north_first((90.0, -180.0), None, true));
-        assert!(!north_first((-180.0, 90.0), None, false));
+        // swisstopo's LV95 box, east first; an Austrian one written north first.
+        assert!(!north_first([2_480_000.0, 1_070_000.0, 2_840_000.0, 1_300_000.0], switzerland, false));
+        assert!(north_first([2_600_000.0, 4_300_000.0, 2_900_000.0, 4_900_000.0], austria, false));
+        // A world box latitude first over a small layer (lon 120..130, lat 30..40): the reading
+        // nearer its corner would be east first; the one that holds the layer is north first.
+        assert!(north_first([-90.0, -180.0, 90.0, 180.0], Some([120.0, 30.0, 130.0, 40.0]), true));
+        assert!(!north_first([-180.0, -90.0, 180.0, 90.0], Some([120.0, 30.0, 130.0, 40.0]), true));
+        // A Europe-wide LAEA box, north first, holding a German layer either way: its middle says.
+        let germany = Some([4_000_000.0, 2_650_000.0, 4_720_000.0, 3_560_000.0]);
+        assert!(north_first([1_400_000.0, 2_500_000.0, 5_500_000.0, 7_400_000.0], germany, false));
+        assert!(!north_first([2_500_000.0, 1_400_000.0, 7_400_000.0, 5_500_000.0], germany, false));
+        assert!(north_first([-90.0, -180.0, 90.0, 180.0], None, true));
+        assert!(!north_first([-180.0, -90.0, 180.0, 90.0], None, false));
     }
 }
