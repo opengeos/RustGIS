@@ -17,6 +17,7 @@ mod line_labels;
 mod line_markers;
 pub mod logo;
 mod mesh;
+mod native_tiles;
 mod pattern_fill;
 pub mod pdf;
 mod picture;

@@ -12,6 +12,8 @@ use std::rc::Rc;
 
 #[path = "ogc_info.rs"]
 mod info;
+#[path = "ogc_warp.rs"]
+pub mod warp;
 pub use info::{
     FeatureInfo, InfoFeature, MAX_INFO_BYTES, answer_text, at_map_time, map_time, may_answer_in_another_format, read_feature_info,
     wms_layer_of,
@@ -852,21 +854,33 @@ fn wms(url: &str, root: &Node) -> Service {
             stack.push((sub, Rc::clone(&crs), bbox, queryable, Rc::clone(&styles), time.clone(), scales));
         }
         let Some(name) = child_text(&layer, "Name") else { continue };
-        if !crs.iter().any(|c| c.split_whitespace().any(is_web_mercator)) {
+        // In Web Mercator, as the service draws it, else in a system of its own, warped (#769);
+        // with the other systems it is offered in, for a map drawn in one of them.
+        let mercator = crs.iter().any(|c| c.split_whitespace().any(is_web_mercator));
+        let native = wms_native(&layer, &crs, v13, bbox, mercator);
+        if !mercator && native.is_none() {
             skipped += 1;
             continue;
         }
         let crs_key = if v13 { "CRS" } else { "SRS" };
+        let (code, area) = match &native {
+            Some((_, w)) if w.epsg != 3857 => ("{ncrs}".to_string(), "BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}"),
+            _ => ("EPSG:3857".to_string(), "BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256"),
+        };
         let template = with_query(
             &get_map,
             &format!(
-                "SERVICE=WMS&VERSION={version}&REQUEST=GetMap&LAYERS={}&STYLES=&{crs_key}=EPSG:3857&BBOX={{bbox-epsg-3857}}&WIDTH=256&HEIGHT=256&FORMAT={}&TRANSPARENT=TRUE",
+                "SERVICE=WMS&VERSION={version}&REQUEST=GetMap&LAYERS={}&STYLES=&{crs_key}={code}&{area}&FORMAT={}&TRANSPARENT=TRUE",
                 encode(&name),
                 encode(format)
             ),
         );
         // At its time: the service's default, unless another is asked for when it is added.
         let template = if time.is_some() { with_query(&template, "TIME={Time}") } else { template };
+        let template = match &native {
+            Some((_, w)) => w.address(&template),
+            None => template,
+        };
         let title = child_text(&layer, "Title").unwrap_or_else(|| name.clone());
         // A service without GetFeatureInfo still gives each layer one, never asked, so Identify
         // doesn't fetch the capabilities again to find out.
@@ -874,7 +888,14 @@ fn wms(url: &str, root: &Node) -> Service {
             info_request
                 .as_ref()
                 .map_or_else(|| FeatureInfo { layer: name.clone(), ..FeatureInfo::default() }, |r| r.for_layer(&name, queryable)),
-        );
+        )
+        .map(|f| match &native {
+            // Asked in the system the layer is drawn in.
+            Some((code, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, .. })) if *epsg != 3857 => {
+                FeatureInfo { crs: code.clone(), lat_first: *lat_first, ..f }
+            }
+            _ => f,
+        });
         // Its legend: the one the service draws from the layer's styling (the SLD profile's
         // GetLegendGraphic, symbols with their names, as ArcGIS Pro and QGIS show a WMS layer's),
         // then its default style's `LegendURL` picture (WMS 1.3.0 §7.2.4.6.4, 1.1.1 §7.1.4.5.14: of
@@ -905,9 +926,70 @@ fn wms(url: &str, root: &Node) -> Service {
     }
     service.layers.reverse();
     if skipped > 0 {
-        service.notes.push(format!("{skipped} layers aren't offered in Web Mercator (EPSG:3857) and are left out"));
+        service.notes.push(format!("{skipped} layers aren't offered in a coordinate system RustGIS can draw and are left out"));
     }
     service
+}
+
+/// The systems a WMS layer is offered in that RustGIS can draw (#769), and the one a Web
+/// Mercator map takes its pictures in: Web Mercator itself (`mercator`), else of those it lists a
+/// projected one first (the service's own, as a rule), then CRS:84, then a geographic one. `None`
+/// for a layer offered in Web Mercator alone (its address stays as it was) or in nothing usable.
+/// In WMS 1.3.0 a bounding box follows the system's axes: written north first where the layer's
+/// own `BoundingBox` in that system says so (else in a geographic system other than CRS:84).
+fn wms_native(layer: &Node, crs: &[String], v13: bool, area: Option<[f64; 4]>, mercator: bool) -> Option<(String, warp::Warp)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut listed: Vec<(String, u32, crate::raster::Crs)> = crs
+        .iter()
+        .flat_map(|c| c.split_whitespace())
+        .filter(|c| !is_web_mercator(c) && seen.insert(c.to_ascii_uppercase()))
+        .filter_map(|c| {
+            let code = warp::epsg_of(c)?;
+            Some((c.to_string(), code, warp::usable(code)?))
+        })
+        .collect();
+    // One name for each system (EPSG:4326 and CRS:84 differ only in their axes: CRS:84 kept).
+    listed.sort_by_key(|(name, code, _)| (*code, !warp::is_crs84(name)));
+    listed.dedup_by_key(|(_, code, _)| *code);
+    if listed.is_empty() {
+        return None;
+    }
+    let rank = |(name, _, c): &(String, u32, crate::raster::Crs)| match (c.is_geographic(), warp::is_crs84(name)) {
+        (false, _) => 0,
+        (true, true) => 1,
+        (true, false) => 2,
+    };
+    // In the order the service lists them, the preferred first.
+    let order = |name: &str| crs.iter().flat_map(|c| c.split_whitespace()).position(|c| c == name).unwrap_or(usize::MAX);
+    listed.sort_by_key(|l| (rank(l), order(&l.0)));
+    let lat_first = |name: &str, system: crate::raster::Crs| {
+        v13 && !warp::is_crs84(name) && {
+            // The layer's own box in that system, against its area worked out there.
+            let own = children(layer, "BoundingBox")
+                .find(|b| b.attribute("CRS").or(b.attribute("SRS")).is_some_and(|c| c.eq_ignore_ascii_case(name)));
+            let corner = own.and_then(|b| {
+                let f = |k: &str| b.attribute(k).and_then(|v| v.trim().parse::<f64>().ok());
+                Some((f("minx")?, f("miny")?))
+            });
+            let expected = area.and_then(|[w, s, ..]| {
+                warp::transformer(u32::from(system.epsg()))?.from_lonlat(rustgis_geom::Coord::new(w, s)).map(|c| (c.x, c.y))
+            });
+            match (corner, expected) {
+                (Some(c), Some(e)) => warp::north_first(c, Some(e), system.is_geographic()),
+                _ => system.is_geographic(),
+            }
+        }
+    };
+    let systems: Vec<warp::System> = listed
+        .iter()
+        .take(warp::MAX_SYSTEMS)
+        .filter_map(|(name, code, system)| {
+            Some(warp::System { epsg: u16::try_from(*code).ok()?, name: name.clone(), lat_first: lat_first(name, *system) })
+        })
+        .collect();
+    let first = systems.first()?.clone();
+    let (epsg, lat_first) = if mercator { (3857, false) } else { (first.epsg, first.lat_first) };
+    Some((first.name, warp::Warp { epsg, grid: warp::Grid::Map { lat_first }, area, systems }))
 }
 
 /// The most styles a WMS layer's legend is looked for among, its own and those it inherits.
@@ -1014,6 +1096,42 @@ fn wmts_zooms(layer: &Node, set: &str, sets: &[(String, Vec<(String, u8)>)]) -> 
     (lo <= hi.min(24)).then_some((lo, hi.min(24)))
 }
 
+/// A tile matrix as a WMTS document gives it, its corner in the order written.
+struct RawMatrix {
+    id: String,
+    scale: f64,
+    corner: (f64, f64),
+    tile: (u32, u32),
+    size: (u32, u32),
+}
+
+/// A tile matrix set in another system than Web Mercator that RustGIS can draw (#769): its EPSG
+/// code and its matrices, coarsest first (at most [`warp::MAX_MATRICES`]).
+fn native_matrices(tms: &Node) -> Option<(u16, crate::raster::Crs, Vec<RawMatrix>)> {
+    let name = child_text(tms, "SupportedCRS")?;
+    let code = warp::epsg_of(&name)?;
+    let system = warp::usable(code)?;
+    let mut out = Vec::new();
+    // (Every one read, in any order: the coarsest are kept.)
+    for m in children(tms, "TileMatrix") {
+        let n = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+        let u = |k: &str| child_text(&m, k).and_then(|t| t.trim().parse::<u32>().ok()).filter(|v| *v > 0);
+        let corner: Vec<f64> = child_text(&m, "TopLeftCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+        let [a, b] = corner.as_slice() else { return None };
+        out.push(RawMatrix {
+            id: child_text(&m, "Identifier")?,
+            scale: n("ScaleDenominator").filter(|v| *v > 0.0)?,
+            corner: (*a, *b),
+            tile: (u("TileWidth").unwrap_or(256), u("TileHeight").unwrap_or(256)),
+            size: (u("MatrixWidth")?, u("MatrixHeight")?),
+        });
+    }
+    // Coarsest first. (The corners' order is settled per layer, against its area.)
+    out.sort_by(|a, b| b.scale.total_cmp(&a.scale));
+    out.truncate(warp::MAX_MATRICES);
+    (!out.is_empty()).then_some((u16::try_from(code).ok()?, system, out))
+}
+
 fn wmts(url: &str, root: &Node) -> Service {
     let title = child(root, "ServiceIdentification").and_then(|s| child_text(&s, "Title")).unwrap_or_default();
     let mut service = Service { kind: "WMTS".into(), title, ..Service::default() };
@@ -1021,6 +1139,15 @@ fn wmts(url: &str, root: &Node) -> Service {
     // Tile matrix sets that are Web Mercator pyramids, with a zoom per matrix identifier.
     let sets: Vec<(String, Vec<(String, u8)>)> =
         children(&contents, "TileMatrixSet").filter_map(|t| Some((child_text(&t, "Identifier")?, mercator_matrices(&t)?))).collect();
+    // Others in a system RustGIS can transform, drawn warped into the map's tiles (#769).
+    let natives: Vec<(String, u16, crate::raster::Crs, bool, Vec<RawMatrix>)> = children(&contents, "TileMatrixSet")
+        .filter_map(|t| {
+            let id = child_text(&t, "Identifier")?;
+            let crs84 = child_text(&t, "SupportedCRS").is_some_and(|c| warp::is_crs84(&c));
+            let (code, system, ms) = native_matrices(&t)?;
+            Some((id, code, system, crs84, ms))
+        })
+        .collect();
     let kvp = root
         .descendants()
         .find(|n| n.is_element() && local(n) == "GetTile")
@@ -1046,18 +1173,63 @@ fn wmts(url: &str, root: &Node) -> Service {
             .take(MAX_LEGENDS)
             .collect();
         let linked: Vec<String> = children(&layer, "TileMatrixSetLink").filter_map(|l| child_text(&l, "TileMatrixSet")).collect();
-        let Some((set, matrices)) = sets.iter().find(|(id, _)| linked.contains(id)) else {
-            skipped += 1;
-            continue;
+        let bbox = child(&layer, "WGS84BoundingBox").and_then(|b| {
+            let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
+        });
+        // A Web Mercator set whose matrix identifiers are a fixed prefix then the zoom, drawn as
+        // it is; else a set in another system, warped.
+        let mercator = sets.iter().filter(|(id, _)| linked.contains(id)).find_map(|(set, matrices)| {
+            let prefix = matrices.iter().find_map(|(id, z)| id.strip_suffix(&z.to_string()).map(str::to_string));
+            let consistent = prefix.as_ref().is_some_and(|p| matrices.iter().all(|(id, z)| *id == format!("{p}{z}")));
+            prefix.filter(|_| consistent).map(|p| (set.clone(), p))
+        });
+        let native = match mercator {
+            Some(_) => None,
+            None => natives.iter().filter(|n| linked.contains(&n.0)).find_map(|(set, code, system, crs84, raw)| {
+                // The corners' order: the one whose matrix covers more of the layer's area worked
+                // out in the system (else latitude first in a geographic system other than CRS84).
+                let geographic = system.is_geographic();
+                let area = bbox.filter(|_| !geographic).and_then(|[w, s, e, n]| {
+                    let t = warp::transformer(u32::from(*code))?;
+                    let mut out: Option<[f64; 4]> = None;
+                    for i in 0..=4 {
+                        let f = f64::from(i) / 4.0;
+                        for ll in [(w + (e - w) * f, s), (w + (e - w) * f, n), (w, s + (n - s) * f), (e, s + (n - s) * f)] {
+                            if let Some(c) = t.from_lonlat(rustgis_geom::Coord::new(ll.0, ll.1)) {
+                                out = Some(
+                                    out.map_or([c.x, c.y, c.x, c.y], |b| [b[0].min(c.x), b[1].min(c.y), b[2].max(c.x), b[3].max(c.y)]),
+                                );
+                            }
+                        }
+                    }
+                    out
+                });
+                let first = raw.first()?;
+                let m = warp::Matrix::from_scale(first.id.clone(), first.scale, geographic, first.corner, first.tile, first.size)?;
+                let span = (m.cell * f64::from(m.tile_w) * f64::from(m.cols), m.cell * f64::from(m.tile_h) * f64::from(m.rows));
+                let swap = !*crs84 && warp::corner_north_first(first.corner, span, area, geographic);
+                let matrices: Vec<warp::Matrix> = raw
+                    .iter()
+                    .filter_map(|m| {
+                        let corner = if swap { (m.corner.1, m.corner.0) } else { m.corner };
+                        warp::Matrix::from_scale(m.id.clone(), m.scale, geographic, corner, m.tile, m.size)
+                    })
+                    .collect();
+                (!matrices.is_empty())
+                    .then(|| (set.clone(), warp::Warp { epsg: *code, grid: warp::Grid::Tiles(matrices), area: bbox, systems: Vec::new() }))
+            }),
         };
-        // A template needs the zoom in the matrix identifier: a fixed prefix then the zoom.
-        let prefix = matrices.iter().find_map(|(id, z)| id.strip_suffix(&z.to_string()).map(str::to_string));
-        let consistent = prefix.as_ref().is_some_and(|p| matrices.iter().all(|(id, z)| *id == format!("{p}{z}")));
-        let Some(prefix) = prefix.filter(|_| consistent) else {
-            skipped += 1;
-            continue;
+        let (set, matrix, row, col) = match (&mercator, &native) {
+            (Some((set, prefix)), _) => (set.clone(), format!("{prefix}{{z}}"), "{y}", "{x}"),
+            (None, Some((set, _))) => (set.clone(), "{nm}".to_string(), "{nrow}", "{ncol}"),
+            (None, None) => {
+                skipped += 1;
+                continue;
+            }
         };
-        let matrix = format!("{prefix}{{z}}");
+        let set = &set;
         // A time dimension: the template with `{Time}` is preferred, which takes the time asked
         // for (its default otherwise); without one, a template with no `{Time}` is.
         // Its default: the one given, else the last time its values list (a range's end); with
@@ -1091,15 +1263,15 @@ fn wmts(url: &str, root: &Node) -> Service {
                 .replace("{TileMatrixSet}", set)
                 .replace("{Style}", &style)
                 .replace("{TileMatrix}", &matrix)
-                .replace("{TileRow}", "{y}")
-                .replace("{TileCol}", "{x}"),
+                .replace("{TileRow}", row)
+                .replace("{TileCol}", col),
             None => {
                 let format =
                     children(&layer, "Format").map(|f| text_of(&f)).find(|f| f.starts_with("image/")).unwrap_or_else(|| "image/png".into());
                 let get = with_query(
                     &kvp,
                     &format!(
-                        "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER={}&STYLE={}&TILEMATRIXSET={}&TILEMATRIX={matrix}&TILEROW={{y}}&TILECOL={{x}}&FORMAT={}",
+                        "SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER={}&STYLE={}&TILEMATRIXSET={}&TILEMATRIX={matrix}&TILEROW={row}&TILECOL={col}&FORMAT={}",
                         encode(&name),
                         encode(&style),
                         encode(set),
@@ -1109,13 +1281,19 @@ fn wmts(url: &str, root: &Node) -> Service {
                 if time.is_some() { format!("{get}&TIME={{Time}}") } else { get }
             }
         };
-        let bbox = child(&layer, "WGS84BoundingBox").and_then(|b| {
-            let lo: Vec<f64> = child_text(&b, "LowerCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
-            let hi: Vec<f64> = child_text(&b, "UpperCorner")?.split_whitespace().filter_map(|t| t.parse().ok()).collect();
-            lonlat_box(*lo.first()?, *lo.get(1)?, *hi.first()?, *hi.get(1)?)
-        });
+        let template = match &native {
+            Some((_, w)) => w.address(&template),
+            None => template,
+        };
+        // An address in another system no longer than a tile layer keeps (a set of a great many
+        // matrices, in its fragment).
+        if native.is_some() && template.len() > 4096 {
+            skipped += 1;
+            continue;
+        }
         service.layers.push(ServiceLayer {
-            zooms: wmts_zooms(&layer, set, &sets),
+            // A Web Mercator set's own zooms, else those a warped set's matrices make (#769).
+            zooms: wmts_zooms(&layer, set, &sets).or_else(|| native.as_ref().and_then(|(_, w)| w.zooms())),
             name,
             title,
             offer: Offer::Tiles { template },
@@ -1127,7 +1305,7 @@ fn wmts(url: &str, root: &Node) -> Service {
         });
     }
     if skipped > 0 {
-        service.notes.push(format!("{skipped} layers have no Web Mercator tile matrix set RustGIS can draw and are left out"));
+        service.notes.push(format!("{skipped} layers have no tile matrix set RustGIS can draw and are left out"));
     }
     service
 }
@@ -3363,6 +3541,60 @@ mod tests {
         assert_eq!(photo(&wmts(limits)), Some((8, 17)));
     }
 
+    /// WMTS layers whose tile matrix sets are in another system (#769): swisstopo's LV95, its
+    /// corners east first, and one in longitude/latitude written latitude first (EPSG:4326): read
+    /// as matrices in the system, the layer's address asking for them by `{nm}`, `{ncol}`, `{nrow}`.
+    #[test]
+    fn wmts_layers_in_other_systems() {
+        let caps = r#"<Capabilities xmlns="http://www.opengis.net/wmts/1.0" xmlns:ows="http://www.opengis.net/ows/1.1" version="1.0.0"><Contents>
+<Layer><ows:Title>Map</ows:Title><ows:Identifier>map</ows:Identifier>
+ <ows:WGS84BoundingBox><ows:LowerCorner>5.1 45.4</ows:LowerCorner><ows:UpperCorner>11.5 48.2</ows:UpperCorner></ows:WGS84BoundingBox>
+ <Style isDefault="true"><ows:Identifier>default</ows:Identifier></Style>
+ <TileMatrixSetLink><TileMatrixSet>lv95</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/{Style}/{TileMatrixSet}/{TileMatrix}/{TileCol}/{TileRow}.png"/></Layer>
+<Layer><ows:Title>World</ows:Title><ows:Identifier>world</ows:Identifier>
+ <TileMatrixSetLink><TileMatrixSet>geo</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/w/{TileMatrix}/{TileRow}/{TileCol}.png"/></Layer>
+<Layer><ows:Title>Elsewhere</ows:Title><ows:Identifier>odd</ows:Identifier>
+ <TileMatrixSetLink><TileMatrixSet>odd</TileMatrixSet></TileMatrixSetLink>
+ <ResourceURL resourceType="tile" format="image/png" template="https://t.example.org/o/{TileMatrix}/{TileRow}/{TileCol}.png"/></Layer>
+<TileMatrixSet><ows:Identifier>lv95</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG:2056</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>21</ows:Identifier><ScaleDenominator>17857.142857142857</ScaleDenominator><TopLeftCorner>2420000.0 1350000.0</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>375</MatrixWidth><MatrixHeight>250</MatrixHeight></TileMatrix>
+ <TileMatrix><ows:Identifier>20</ows:Identifier><ScaleDenominator>35714.28571428571</ScaleDenominator><TopLeftCorner>2420000.0 1350000.0</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>188</MatrixWidth><MatrixHeight>125</MatrixHeight></TileMatrix>
+</TileMatrixSet>
+<TileMatrixSet><ows:Identifier>geo</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:EPSG::4326</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>279541132.0143589</ScaleDenominator><TopLeftCorner>90 -180</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>2</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
+</TileMatrixSet>
+<TileMatrixSet><ows:Identifier>odd</ows:Identifier><ows:SupportedCRS>urn:ogc:def:crs:IAU::49900</ows:SupportedCRS>
+ <TileMatrix><ows:Identifier>0</ows:Identifier><ScaleDenominator>1000</ScaleDenominator><TopLeftCorner>0 0</TopLeftCorner><TileWidth>256</TileWidth><TileHeight>256</TileHeight><MatrixWidth>1</MatrixWidth><MatrixHeight>1</MatrixHeight></TileMatrix>
+</TileMatrixSet>
+</Contents></Capabilities>"#;
+        let s = parse("https://t.example.org/WMTSCapabilities.xml", caps.as_bytes()).unwrap();
+        let names: Vec<&str> = s.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["map", "world"], "{:?}", s.notes);
+        assert!(s.notes.iter().any(|n| n.starts_with("1 layers have no tile matrix set")));
+        let read = |i: usize| {
+            let Offer::Tiles { template } = &s.layers[i].offer else { panic!() };
+            let filled = template.replace("{z}/{x}/{y}", "0/0/0");
+            let (base, _, w) = warp::Warp::parse(&filled).unwrap();
+            (base.to_string(), w)
+        };
+        let (base, w) = read(0);
+        assert_eq!(base, "https://t.example.org/default/lv95/{nm}/{ncol}/{nrow}.png");
+        assert_eq!((w.epsg, w.area), (2056, Some([5.1, 45.4, 11.5, 48.2])));
+        let warp::Grid::Tiles(ms) = &w.grid else { panic!() };
+        // Coarsest first; 10 m and 5 m pixels; east first.
+        assert_eq!(ms.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["20", "21"]);
+        assert!((ms[0].cell - 10.0).abs() < 1e-9 && (ms[1].cell - 5.0).abs() < 1e-9);
+        assert_eq!((ms[1].left, ms[1].top, ms[1].cols, ms[1].rows), (2_420_000.0, 1_350_000.0, 375, 250));
+        // Latitude first in the document: read as west, north; its cells in degrees.
+        let (base, w) = read(1);
+        assert_eq!(base, "https://t.example.org/w/{nm}/{nrow}/{ncol}.png");
+        let warp::Grid::Tiles(ms) = &w.grid else { panic!() };
+        assert_eq!((w.epsg, ms[0].left, ms[0].top), (4326, -180.0, 90.0));
+        assert!((ms[0].cell - 0.703_125).abs() < 1e-6, "{}", ms[0].cell);
+    }
+
     #[test]
     fn wms_layers_in_web_mercator() {
         let xml = r#"<?xml version="1.0"?><WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms" xmlns:xlink="http://www.w3.org/1999/xlink">
@@ -3372,20 +3604,41 @@ mod tests {
   <Layer><Name>roads</Name><Title>Roads</Title><EX_GeographicBoundingBox><westBoundLongitude>-10</westBoundLongitude><eastBoundLongitude>20</eastBoundLongitude><southBoundLatitude>35</southBoundLatitude><northBoundLatitude>60</northBoundLatitude></EX_GeographicBoundingBox></Layer>
   <Layer><Name>water bodies</Name></Layer>
 </Layer>
-<Layer><Name>utm only</Name><CRS>EPSG:32633</CRS></Layer></Capability></WMS_Capabilities>"#;
+<Layer><Name>utm only</Name><CRS>EPSG:32633</CRS><BoundingBox CRS="EPSG:32633" minx="500000" miny="5200000" maxx="700000" maxy="5400000"/></Layer>
+<Layer><Name>automatic</Name><CRS>AUTO:42001</CRS></Layer></Capability></WMS_Capabilities>"#;
         let s = parse("https://maps.example.org/wms", xml.as_bytes()).unwrap();
         assert_eq!((s.kind.as_str(), s.title.as_str()), ("WMS", "Demo WMS"));
         let names: Vec<&str> = s.layers.iter().map(|l| l.name.as_str()).collect();
-        assert!(names.contains(&"roads") && names.contains(&"water bodies") && !names.contains(&"utm only"), "{names:?}");
+        assert!(names.contains(&"roads") && names.contains(&"water bodies") && !names.contains(&"automatic"), "{names:?}");
         let roads = s.layers.iter().find(|l| l.name == "roads").unwrap();
         assert_eq!(roads.bbox, Some([-10.0, 35.0, 20.0, 60.0]));
         let Offer::Tiles { template } = &roads.offer else { panic!() };
         assert_eq!(
             template,
-            "https://maps.example.org/wms?map=demo&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng&TRANSPARENT=TRUE"
+            "https://maps.example.org/wms?map=demo&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=roads&STYLES=&CRS=EPSG:3857&BBOX={bbox-epsg-3857}&WIDTH=256&HEIGHT=256&FORMAT=image%2Fpng&TRANSPARENT=TRUE\
+             #rustgis-warp={z}/{x}/{y};crs=3857;in=-10,35,20,60;sys=4326|n|EPSG:4326;map=east"
         );
+        // Drawn in Web Mercator as it comes; its other system (latitude first, WMS 1.3.0's
+        // EPSG:4326) kept for a map drawn in it.
+        let tile = |t: &str| t.replace("{z}/{x}/{y}", "0/0/0");
+        let roads_tile = tile(template);
+        let (base, _, w) = warp::Warp::parse(&roads_tile).unwrap();
+        let base = base.to_string();
+        assert!(w.direct() && base.contains("CRS=EPSG:3857&BBOX={bbox-epsg-3857}&"));
+        assert_eq!(w.systems, [warp::System { epsg: 4326, name: "EPSG:4326".into(), lat_first: true }]);
+        assert!(warp::Warp::map_template(&base).contains("&CRS={ncrs}&BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}&"));
         let water = s.layers.iter().find(|l| l.name == "water bodies").unwrap();
         assert!(matches!(&water.offer, Offer::Tiles { template } if template.contains("LAYERS=water%20bodies")));
+        // A layer offered only in UTM: in UTM, warped (east first, as its own box says).
+        let utm = s.layers.iter().find(|l| l.name == "utm only").unwrap();
+        let Offer::Tiles { template } = &utm.offer else { panic!() };
+        let filled = tile(template);
+        let (base, _, w) = warp::Warp::parse(&filled).unwrap();
+        assert!(base.contains("&CRS={ncrs}&BBOX={nbbox}&WIDTH={nw}&HEIGHT={nh}&"), "{base}");
+        assert_eq!((w.epsg, &w.grid), (32633, &warp::Grid::Map { lat_first: false }));
+        // Its identify asks in UTM too.
+        assert_eq!(utm.feature_info.as_ref().map(|f| f.crs.as_str()), Some("EPSG:32633"));
+        // One in a system RustGIS can't draw is left out, and said so.
         assert!(s.notes.iter().any(|n| n.contains("1 layers")));
     }
 

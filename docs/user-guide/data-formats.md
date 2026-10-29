@@ -173,8 +173,8 @@ Scripts use `service.import {"url":"…","name":"My OGC Layer"}` and
 
 | Service | What it lists | How a layer is added |
 | --- | --- | --- |
-| WMS 1.1.1 / 1.3.0 | Named layers offered in Web Mercator | A tile layer of GetMap images (PNG when the service offers it, else JPEG) |
-| WMTS | Layers whose tile matrix set is Web Mercator's pyramid | A tile layer from the tile template (or KVP GetTile) |
+| WMS 1.1.1 / 1.3.0 | Named layers offered in Web Mercator or in a coordinate system RustGIS can transform (an EPSG code, CRS:84) | A tile layer of GetMap images (PNG when the service offers it, else JPEG); see [Services in other coordinate systems](#services-in-other-coordinate-systems) |
+| WMTS | Layers whose tile matrix set is Web Mercator's pyramid, or a tile matrix set in a coordinate system RustGIS can transform | A tile layer from the tile template (or KVP GetTile) |
 | WFS 1.1 / 2.0 | Feature types | Their features downloaded as GeoJSON, in the output format the service names (up to 50,000) |
 | OGC API Features | Collections | Their items downloaded as GeoJSON, following the service's `next` pages up to 100,000 features (a command such as `service.add` waits a minute at most) |
 | OGC API Tiles | Collections' map and vector tiles; a landing page's dataset map tiles | A tile layer in WebMercatorQuad, from the tile template the tileset advertises (its `item` link; `…/tiles/WebMercatorQuad/{z}/{y}/{x}`, the usual path, when that can't be read), keeping the tiles link's query (a token), map tiles in the server's image format, vector tiles drawn layer by layer in colours of their own |
@@ -231,6 +231,37 @@ never cause a blocking capabilities fetch. Each listed layer includes `source_ur
 and the same documents to `service.add` to distinguish layers with the same name. Discovery
 follows at most four documents and rejects loops and disallowed addresses. Collection lists
 aren't paged. On the desktop, feature downloads follow their `next` pages (see the table above).
+
+### Services in other coordinate systems
+
+National and regional services often draw their maps in a coordinate system of their own
+(Switzerland's LV95, EPSG:2056; Austria's EPSG:31287) and sometimes not in Web Mercator at all. A
+WMS layer offered in any system with an EPSG code that RustGIS can transform (or in CRS:84), and a
+WMTS layer whose tile matrix set is in one, is listed and added like any other (#769):
+
+- **On a Web Mercator map**, a layer the service offers in Web Mercator is asked for in it, as
+  before. Otherwise each of the map's tiles is made from what the service gives for its area in the
+  layer's own system, warped into place on your computer: one GetMap image, or the tiles of the
+  WMTS matrix nearest the map's detail. A WMS layer is asked for in the projected system it lists
+  first, else in CRS:84, else in another longitude/latitude system.
+- **On a map in another projection** (**View › Projection**, `map.projection`) that the layer is
+  offered in, a WMS layer is asked for in that system, in tiles of its own 256 pixels a side, and
+  drawn as the service draws it: nothing is warped, so its lines and labels stay sharp. A WMTS
+  layer is drawn so on a map in its tile matrix set's system. Change the map's projection and the
+  layer follows: in Web Mercator again, it is asked for in Web Mercator (or warped), and in a
+  projection the layer isn't offered in, it is drawn warped as before.
+- **Identify** asks a WMS layer drawn in a system of its own (GetFeatureInfo) in that system.
+- **Axis order.** A WMS 1.3.0 bounding box is written in the order of the system's axes: latitude
+  first in EPSG:4326 and other longitude/latitude systems (not in CRS:84), and north first in a
+  projected system whose own `BoundingBox` in the capabilities says so. A WMTS `TopLeftCorner` is
+  read in the order that puts it at the layer's north-west corner.
+
+A layer offered in no system RustGIS can transform (an `AUTO:` system, a planet's) is still left
+out, and the dialog says how many were.
+
+```sh
+rustgis-cli run --cmd 'service.add={"url":"https://wmts.geo.admin.ch/EPSG/2056/1.0.0/WMTSCapabilities.xml","layer":"ch.swisstopo.pixelkarte-farbe"}' --cmd 'map.projection={"type":"EPSG:2056"}' --cmd 'map.goToXY={"lon":7.4474,"lat":46.948,"scale":20000}' --cmd 'share.exportMap={"path":"bern-lv95.png"}'
+```
 
 ### Secured ArcGIS services
 
