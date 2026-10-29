@@ -2889,6 +2889,7 @@ impl GpForm {
         let Some(spec) = self.tool.and_then(rustgis_engine::analysis::tool) else { return };
         for p in spec.params {
             let text = match (p.kind, given.get(p.name)) {
+                (ParamKind::Fields { .. } | ParamKind::FieldStatistics { .. }, Some(v)) => v.to_string(),
                 (_, None | Some(Value::Null)) => continue,
                 (ParamKind::RasterLayers | ParamKind::VectorLayers, Some(Value::Array(a))) => {
                     a.iter().map(|x| x.as_str().map_or_else(|| x.to_string(), str::to_string)).collect::<Vec<_>>().join(";")
@@ -3123,7 +3124,7 @@ pub(crate) fn takes_layer(kind: ParamKind, l: &rustgis_engine::map::Layer) -> bo
 /// a kind that isn't a field's.
 pub(crate) fn takes_field(kind: ParamKind, d: &rustgis_engine::data::Dataset, i: usize) -> bool {
     match kind {
-        ParamKind::Field => true,
+        ParamKind::Field | ParamKind::Fields { .. } => true,
         ParamKind::NumericField => d.fields.get(i).is_some_and(|f| f.ty.is_numeric()),
         ParamKind::CoordinateField => rustgis_engine::analysis::holds_coordinates(d, i),
         _ => false,
@@ -3338,7 +3339,15 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // A parameter that doesn't apply to the options picked (Spatial Join's search distance with
     // Intersects) is hidden, and left out of the run.
     let applies = |app: &RustGisApp, name: &str| {
-        let value = |n: &str| app.gp.values.get(n).cloned().unwrap_or_default();
+        let value = |n: &str| {
+            let text = app.gp.values.get(n).cloned().unwrap_or_default();
+            if spec.params.iter().any(|p| p.name == n && crate::fieldlists::input(p.kind).is_some()) {
+                let value = crate::fieldlists::form_value(&text);
+                value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string())
+            } else {
+                text
+            }
+        };
         rustgis_engine::analysis::param_applies(spec.id, name, &value)
     };
     for p in spec.params {
@@ -3350,6 +3359,22 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             label.on_hover_text(p.help);
         }
         let mut cur = app.gp.values.get(p.name).cloned().unwrap_or_default();
+        if let Some(input) = crate::fieldlists::input(p.kind) {
+            let name = app.gp.values.get(input).map(String::as_str).unwrap_or_default();
+            let dataset = match app.gp.tables.get(input) {
+                Some(id) => app.session.project.table(*id).map(|t| &t.dataset),
+                None => input_dataset(&app.session, name),
+            };
+            let value = crate::fieldlists::form_value(&cur);
+            if let Some(value) = ui
+                .push_id(("gp_list", p.name), |ui| crate::fieldlists::show(ui, p.kind, &value, dataset.map(|d| d.fields.as_slice())))
+                .inner
+            {
+                app.gp.values.insert(p.name, value.to_string());
+            }
+            ui.add_space(4.0);
+            continue;
+        }
         let options: Option<Vec<String>> = match p.kind {
             // Layers by their names, then tables: the value is the name shown, and a table
             // picked is kept by its id beside it.
@@ -3570,6 +3595,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                             let bytes = app.gp.files.get(p.name).map(|(_, b)| b.as_slice()).unwrap_or_default();
                             json!({"name": v, "data": base64::engine::general_purpose::STANDARD.encode(bytes)})
                         }
+                        (ParamKind::Fields { .. } | ParamKind::FieldStatistics { .. }, _) => crate::fieldlists::form_value(v),
                         (ParamKind::Bool, _) => json!(v == "true"),
                         _ => json!(v),
                     };

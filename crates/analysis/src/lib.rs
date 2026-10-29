@@ -19,6 +19,7 @@ pub mod kriging;
 mod merge;
 pub mod network;
 pub mod neural;
+mod parameters;
 pub mod rasterops;
 pub mod selection;
 mod stats;
@@ -28,6 +29,7 @@ pub mod topology;
 pub mod trend;
 pub mod warp;
 
+pub use parameters::StatisticList;
 pub use tools::{TOOLS, find_field_case_insensitive, holds_coordinates, param_applies, simplify_geometry, zonal_bands};
 
 use rustgis_data::Dataset;
@@ -49,6 +51,15 @@ pub enum ParamKind {
     /// A field of the first layer that can hold coordinates: a numeric field, or a text field
     /// with numbers written in it (see [`holds_coordinates`]).
     CoordinateField,
+    /// Ordered field names from the named input; accepts the existing string or array values.
+    Fields {
+        input: &'static str,
+    },
+    /// Ordered field/statistic objects from the named input, using the existing JSON keys.
+    FieldStatistics {
+        input: &'static str,
+        statistics: StatisticList,
+    },
     Number,
     Text,
     /// One of a fixed list of choices.

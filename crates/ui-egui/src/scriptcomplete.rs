@@ -543,7 +543,7 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
                 };
                 // Not those its array already gives, before or after it: twice is the same work
                 // twice. The line's object without the word being typed, as `complete_keys` reads it.
-                let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+                let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?, false);
                 let given = scan(&format!("{}{after}", script.get(byte_at(script, hint.brace)?..byte_at(script, start)?)?)).values;
                 let names = d
                     .fields
@@ -559,7 +559,7 @@ fn offer_at(script: &str, at: usize, ids: &[String], session: &rustgis_engine::S
         return Some(offer);
     }
     let KeyAt { hint: h, start, word, nested } = key_at(script, at)?;
-    let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
+    let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?, false);
     // The object the key goes in, from its `{` to its `}`, the word being typed taken out.
     let brace = nested.as_ref().map_or(h.brace, |n| n.brace);
     let object = format!("{}{after}", script.get(byte_at(script, brace)?..byte_at(script, start)?)?);
@@ -597,11 +597,14 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
     let tool = rustgis_engine::analysis::tool(&name)?;
     // The `"params"` object, read as a line's object from its `{`.
     let text = script.get(byte_at(script, brace)?..byte_at(script, at)?)?;
-    // A tool's parameter takes no array.
-    let (start, key, false) = scan(text).value? else { return None };
+    // Field lists accept a single name as well as names within an array.
+    let (start, key, in_array) = scan(text).value?;
     let word = word_from(text, start)?;
     let start = brace + start;
     let p = tool.params.iter().find(|p| p.name == key)?;
+    if in_array && !matches!(p.kind, K::Fields { .. }) {
+        return None;
+    }
     let map = session.map();
     match p.kind {
         K::Layer | K::PolygonLayer | K::PointLayer | K::RasterLayer | K::VectorLayer => {
@@ -615,9 +618,10 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
             let names = layers.map(|l| l.name.as_str()).chain(tables.map(|(_, t)| t.name.as_str()));
             value_ids(start, at, &word, names, Of::Layers)
         }
-        K::Field | K::NumericField | K::CoordinateField => {
-            let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?);
-            let input = value_of(&format!("{text}{after}"), crate::panes::first_layer(tool)?.name)?;
+        K::Field | K::NumericField | K::CoordinateField | K::Fields { .. } => {
+            let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?, in_array);
+            let source = crate::fieldlists::input(p.kind).or_else(|| crate::panes::first_layer(tool).map(|p| p.name))?;
+            let input = value_of(&format!("{text}{after}"), source)?;
             let d = crate::panes::input_dataset(session, &input)?;
             let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
             value_ids(start, at, &word, names, Of::ToolFields(input))
@@ -630,9 +634,9 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
 /// What follows a cursor in a key (`after`, to the line's end) up to the `}` that closes the key's
 /// object, or all of it when nothing closes it: an object after it on the line (the next one in
 /// its array, a later key's) isn't read as holding its keys.
-fn object_rest(after: &str) -> &str {
-    // In the key's quotes, then one level in.
-    let (mut depth, mut q) = (1usize, Quotes::in_string());
+fn object_rest(after: &str, in_array: bool) -> &str {
+    // Inside quotes in the object, and optionally its field-name array.
+    let (mut depth, mut q) = (if in_array { 2usize } else { 1usize }, Quotes::in_string());
     for (i, c) in after.char_indices() {
         if !q.read(c) {
             continue;
@@ -783,6 +787,8 @@ fn param_line(p: &rustgis_engine::analysis::ParamSpec) -> String {
         K::Field => tl_raw!("a field of the first layer"),
         K::NumericField => tl_raw!("a numeric field of the first layer"),
         K::CoordinateField => tl_raw!("a field of the first layer holding coordinates"),
+        K::Fields { .. } => tl_raw!("ordered field names"),
+        K::FieldStatistics { .. } => tl_raw!("field and statistic pairs"),
         K::Number => tl_raw!("number"),
         K::Text => tl_raw!("text"),
         K::Bool => tl_raw!("bool"),
@@ -2682,6 +2688,13 @@ mod tests {
         assert_eq!((o.items, o.of), (numeric.clone(), Some(super::Of::ToolFields("Cities".into()))), "a numeric field");
         let o = offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Cities", "case": ""#).unwrap();
         assert_eq!(o.items, fields, "any field");
+        let o = offer(&app, r#"gp.run {"tool": "summaryStatistics", "params": {"input": "Cities", "case": [""#).unwrap();
+        assert_eq!(o.items, fields, "field-list array values");
+        let o = offer(&app, r#"gp.run {"tool": "pivotTable", "params": {"input": "Cities", "fields": [""#).unwrap();
+        assert_eq!(o.items, fields, "pivot row fields");
+        let s = r#"gp.run {"tool": "summaryStatistics", "params": {"case": [""#;
+        let o = super::offer_at(&format!(r#"{s}"], "input": "Cities"}}}}"#), s.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(o.items, fields, "the input after a field array");
         let s = r#"gp.run {"tool": "summaryStatistics", "params": {"field": ""#;
         let o = super::offer_at(&format!(r#"{s}", "input": "Cities"}}}}"#), s.chars().count(), &[], &app.session).unwrap();
         assert_eq!(o.items, numeric, "the input after the field");
@@ -2979,10 +2992,14 @@ mod tests {
     #[test]
     fn object_rest_stops_at_the_keys_object() {
         use super::object_rest;
-        assert_eq!(object_rest(r#"me": "a"}, {"name": "b"}]}"#), r#"me": "a"}"#);
-        assert_eq!(object_rest(r#"": {"b": [1]}, "c": "}"}, "d": 1}"#), r#"": {"b": [1]}, "c": "}"}"#, "nested, and a brace in a string");
-        assert_eq!(object_rest(r#"a\"b": 1}"#), r#"a\"b": 1}"#, "an escaped quote in the key");
-        assert_eq!(object_rest(r#"": 1, "b""#), r#"": 1, "b""#, "not closed");
-        assert_eq!(object_rest(""), "");
+        assert_eq!(object_rest(r#"me": "a"}, {"name": "b"}]}"#, false), r#"me": "a"}"#);
+        assert_eq!(
+            object_rest(r#"": {"b": [1]}, "c": "}"}, "d": 1}"#, false),
+            r#"": {"b": [1]}, "c": "}"}"#,
+            "nested, and a brace in a string"
+        );
+        assert_eq!(object_rest(r#"a\"b": 1}"#, false), r#"a\"b": 1}"#, "an escaped quote in the key");
+        assert_eq!(object_rest(r#"": 1, "b""#, false), r#"": 1, "b""#, "not closed");
+        assert_eq!(object_rest("", false), "");
     }
 }

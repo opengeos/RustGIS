@@ -33,6 +33,7 @@ mod earthaccessui;
 mod editpanes;
 mod embeddingsui;
 mod failureui;
+mod fieldlists;
 mod fieldmenu;
 mod fill_editor;
 mod geocodeui;

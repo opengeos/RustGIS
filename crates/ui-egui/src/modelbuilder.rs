@@ -1322,9 +1322,14 @@ fn input_settings(app: &mut RustGisApp, ui: &mut Ui, i: usize, n: &ModelNode) {
 /// The layer feeding a tool's first layer parameter, when it is an input node's (for its fields).
 fn source_layer(app: &RustGisApp, n: &ModelNode, spec: &ToolSpec) -> Option<String> {
     let first = crate::panes::first_layer(spec)?;
-    match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == first.name) {
+    source_input(app, n, first.name)
+}
+
+/// Resolves the named input independently, so a join's fields come from its join input.
+fn source_input(app: &RustGisApp, n: &ModelNode, input: &str) -> Option<String> {
+    match app.mb.graph.edges.iter().find(|e| e.to == n.id && e.to_port == input) {
         Some(e) => app.mb.graph.nodes.iter().find(|u| u.id == e.from && u.kind == ModelNodeKind::Input).and_then(|u| u.layer.clone()),
-        None => n.params.get(first.name).and_then(Value::as_str).map(str::to_string),
+        None => n.params.get(input).and_then(Value::as_str).map(str::to_string),
     }
 }
 
@@ -1413,6 +1418,17 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
                 })
                 .response
                 .on_hover_text(tl!(p.label));
+            ui.add_space(4.0);
+            continue;
+        }
+        if let Some(input) = crate::fieldlists::input(p.kind) {
+            let name = source_input(app, n, input);
+            let fields = name.as_deref().and_then(|name| crate::panes::input_dataset(&app.session, name)).map(|d| d.fields.clone());
+            if let Some(value) =
+                ui.push_id(("mb_list", &n.id, p.name), |ui| crate::fieldlists::show(ui, p.kind, &cur, fields.as_deref())).inner
+            {
+                set = Some((p.name, value));
+            }
             ui.add_space(4.0);
             continue;
         }
