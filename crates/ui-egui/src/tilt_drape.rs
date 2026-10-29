@@ -68,9 +68,10 @@ struct Drawn {
 #[derive(Default)]
 pub(crate) struct TiltDrape {
     drape: Option<Drape>,
-    /// The next drape, being drawn from a copy of the map handed back with it.
+    /// The next drape, being drawn from a copy of the map handed back with it, and the map
+    /// change it is for.
     #[cfg(not(target_arch = "wasm32"))]
-    job: Option<std::sync::mpsc::Receiver<(Drawn, Map)>>,
+    job: Option<(DrapeKey, std::sync::mpsc::Receiver<(Drawn, Map)>)>,
     /// The map change whose drape couldn't be drawn off the UI thread (it panicked): the last one
     /// is drawn on the UI thread until the map changes.
     #[cfg(not(target_arch = "wasm32"))]
@@ -100,7 +101,8 @@ impl TiltDrape {
     /// filled go to `map`.
     #[cfg(not(target_arch = "wasm32"))]
     fn take(&mut self, map: &mut Map) -> Option<Drawn> {
-        let rx = self.job.as_ref()?;
+        let (key, rx) = self.job.as_ref()?;
+        let key = *key;
         match rx.try_recv() {
             Ok((drawn, copy)) => {
                 self.job = None;
@@ -108,10 +110,11 @@ impl TiltDrape {
                 Some(drawn)
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            // The worker ended without an answer: it panicked.
+            // The worker ended without an answer: it panicked, for the map change it was started
+            // for.
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.job = None;
-                self.failed = self.drape.as_ref().map(|d| d.key);
+                self.failed = Some(key);
                 None
             }
         }
@@ -122,7 +125,7 @@ impl TiltDrape {
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     fn start(&mut self, ctx: &egui::Context, mut map: Map, view: View, max_side: u32, key: DrapeKey, tiles: u64, time: f64) -> bool {
-        self.start_with(ctx, move || {
+        self.start_with(ctx, key, move || {
             let drawn = draw(&mut map, &view, max_side, key, tiles, time);
             (drawn, map)
         })
@@ -130,7 +133,7 @@ impl TiltDrape {
 
     /// Starts `work` drawing the next drape (see [`TiltDrape::start`]).
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_with(&mut self, ctx: &egui::Context, work: impl FnOnce() -> (Drawn, Map) + Send + 'static) -> bool {
+    fn start_with(&mut self, ctx: &egui::Context, key: DrapeKey, work: impl FnOnce() -> (Drawn, Map) + Send + 'static) -> bool {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         let work = std::panic::AssertUnwindSafe(work);
@@ -142,7 +145,7 @@ impl TiltDrape {
             ctx.request_repaint();
         });
         if spawned.is_ok() {
-            self.job = Some(rx);
+            self.job = Some((key, rx));
         }
         spawned.is_ok()
     }
@@ -186,11 +189,18 @@ impl TiltDrape {
             && drawn.key == key
             && drawn.ppp == drape_ppp
         {
+            // Nothing to drape: as a drape drawn here would say, without drawing it again.
             if drawn.patches.is_empty() {
                 self.drape = None;
-            } else {
-                self.show(ctx, drawn);
+                return false;
             }
+            self.show(ctx, drawn);
+        }
+        // A job for an earlier map change (an edit while it ran) isn't waited for: its drape
+        // would be thrown away.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.job.as_ref().is_some_and(|(k, _)| *k != key) {
+            self.job = None;
         }
         let same_map = |d: &Drape| d.key == key && d.ppp == drape_ppp;
         let fresh = self.drape.as_ref().is_some_and(|d| {
@@ -705,7 +715,7 @@ mod tests {
         let mut m = tilted(60.0);
         let mut d = TiltDrape::default();
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
-        assert!(d.start_with(&ctx, || panic!("the renderer failed")));
+        assert!(d.start_with(&ctx, key, || panic!("the renderer failed")));
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while d.busy() {
             assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1));
@@ -713,6 +723,15 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(d.failed == Some(key));
+        // A job for an earlier map change isn't waited for: a change made while it runs starts
+        // its own once the view moves on.
+        let other = DrapeKey { rev: 7, sources: 0 };
+        assert!(d.start_with(&ctx, other, || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            panic!("stale")
+        }));
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.15));
+        assert!(!d.job.as_ref().is_some_and(|(k, _)| *k == other), "the stale job is let go");
         // Panning far away draws the next drape at once, covering the view.
         m.camera.pan_px(5_000.0, 0.0);
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.2));
