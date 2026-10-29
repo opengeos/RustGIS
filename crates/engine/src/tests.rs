@@ -2309,11 +2309,15 @@ fn label_range_placement_lock_and_convert() {
     s.run("labels.lock", &json!({"on": false})).unwrap();
     count(&mut s);
     assert!(s.map().label_lock.is_none());
-    // Convert makes an annotation layer and turns the source's labels off.
+    // Convert makes an annotation layer and turns the source's labels off; its labels stay on
+    // their points, even when the source's went round them (#1011).
+    let countries = s.map().layer_by_name("Countries").unwrap().id;
+    s.map_mut().layer_mut(countries).unwrap().labels.default.other_positions = true;
     let r = s.run("labels.convert", &json!({"layer": "Countries"})).unwrap();
     assert!(r["annotations"].as_u64().unwrap() > 100);
     let a = s.map().layer_by_name("Countries Annotation").unwrap();
     assert!(a.labels.enabled && a.labels.default.field == "TEXT");
+    assert!(!a.labels.default.other_positions);
     assert!(!s.map().layer_by_name("Countries").unwrap().labels.enabled);
 }
 
@@ -2508,6 +2512,39 @@ fn labels_take_an_offset_and_a_background() {
     let text = serde_json::to_string(&s.project).unwrap();
     let reopened = Session::new(serde_json::from_str(&text).unwrap());
     assert_eq!(class(&reopened), class(&s));
+}
+
+/// A lock names the place round its point a label took by its number among its class's (#1011): a
+/// class trying the others locks the labels again when its position changes, not when its offset
+/// does; one that doesn't keeps the lock, as before.
+#[test]
+fn a_change_to_where_point_labels_go_locks_them_again() {
+    use crate::render::View;
+    let mut s = world();
+    s.run("labels.enable", &json!({"layer": "Cities", "on": true})).unwrap();
+    s.run("labels.lock", &json!({"on": true})).unwrap();
+    let draw = |s: &mut Session| {
+        let v = View { width: 800.0, height: 600.0, pixels_per_point: 1.0, camera: s.map().camera, sky: false };
+        crate::render::render(s.map_mut(), &v).unwrap();
+    };
+    draw(&mut s);
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "below"})).unwrap();
+    assert!(s.map().label_lock.is_some(), "no class tries other places: the lock is kept");
+    let id = s.map().layer_by_name("Cities").unwrap().id;
+    s.map_mut().layer_mut(id).unwrap().labels.default.other_positions = true;
+    s.run("labels.placement", &json!({"layer": "Cities", "offset": [2, 2]})).unwrap();
+    assert!(s.map().label_lock.is_some(), "an offset moves every place alike: the lock is kept");
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "above"})).unwrap();
+    assert!(s.map().label_lock.is_none(), "another position: locked again");
+    draw(&mut s);
+    assert!(s.map().label_lock.is_some(), "locked on the next frame");
+    // A style applied counts its classes' places too.
+    s.run("style.new", &json!({"layer": "Cities", "name": "Above"})).unwrap();
+    s.run("labels.placement", &json!({"layer": "Cities", "position": "below"})).unwrap();
+    draw(&mut s);
+    assert!(s.map().label_lock.is_some());
+    s.run("style.apply", &json!({"layer": "Cities", "name": "Above"})).unwrap();
+    assert!(s.map().label_lock.is_none(), "a style putting the labels elsewhere: locked again");
 }
 
 /// A lock names each label by its class's place in the list: a change to the list (a class added,
@@ -9178,6 +9215,9 @@ fn service_times_and_directories() {
         ]
     );
     assert!(s.run("service.add", &json!({"url": url, "layer": "TC", "text": WMTS, "time": "../../etc"})).is_err());
+    // Its matrices are zooms 0 and 1: past them its tiles are stretched, not asked for.
+    assert!(s.map().tiles.iter().all(|t| (t.min_zoom, t.max_zoom) == (0, 1)));
+    assert_eq!((v["layers"][0]["minZoom"].as_u64(), v["layers"][0]["maxZoom"].as_u64()), (Some(0), Some(1)));
     // A directory: its folders and services, each opened by its own address.
     let root = "https://x.example.org/arcgis/rest/services";
     let dir = r#"{"currentVersion": 11, "folders": ["Hydro"], "services": [{"name": "Topo", "type": "MapServer"}]}"#;
@@ -16389,7 +16429,7 @@ fn ogc_group_refresh_keeps_children_across_rotated_keys_and_rejects_bad_answers(
     let group = added["group"].clone();
     let ids: Vec<u32> = s.map().service_groups[0].children.iter().map(|c| c.layer).collect();
     s.run("layer.rename", &json!({"layer":ids[0], "name":"Renamed"})).unwrap();
-    s.map_mut().label_lock = Some(vec![(ids[0], 0, 0, 0), (ids[1], 0, 0, 0)]);
+    s.map_mut().label_lock = Some(vec![((ids[0], 0, 0, 0), 0), ((ids[1], 0, 0, 0), 0)]);
 
     // A rotated key changes every source address but not the collections: the children stay.
     let mut q = doc("rotated-key");

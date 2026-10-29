@@ -37,9 +37,10 @@ fn gradient(r: &Raster, data: &[f32], col: i64, row: i64, zf: f64, (cx, cy): (f6
     let (d, f) = (g(-1, 0)?, g(1, 0)?);
     let (gg, h, i) = (g(-1, 1)?, g(0, 1)?, g(1, 1)?);
     let dzdx = ((c + 2.0 * f + i) - (a + 2.0 * d + gg)) / (8.0 * cx);
-    // Rows run south, so north is up: the difference is top minus bottom.
+    // In a north-up grid rows run south, so the difference is top minus bottom.
     let dzdy = ((a + 2.0 * b + c) - (gg + 2.0 * h + i)) / (8.0 * cy);
-    Some((dzdx, dzdy))
+    // A grid stored bottom up (a positive pixel height) or right to left runs the other way.
+    Some((dzdx * r.transform.pixel_width.signum(), dzdy * -r.transform.pixel_height.signum()))
 }
 
 fn per_cell(r: &Raster, f: impl Fn(i64, i64) -> Option<f64>) -> Vec<f32> {
@@ -1127,6 +1128,25 @@ mod tests {
         failures.clear();
         assert!(polygon_mask_with_failures(&r, &[invalid], &mut failures).is_none());
         assert_eq!(failures, vec![0]);
+    }
+
+    #[test]
+    fn terrain_faces_the_right_way_on_a_bottom_up_grid() {
+        // Band 2 rises one per row. North up, rows run south, so the slope faces north; stored
+        // bottom up (a positive pixel height, as some COGs are), rows run north and it faces south.
+        let north_up = ramp();
+        let mut gt = north_up.transform;
+        (gt.origin_y, gt.pixel_height) = (0.0, 0.001);
+        let bands = north_up.bands.iter().map(|b| b.data.clone()).collect();
+        let bottom_up =
+            Raster::new("ramp", 20, 20, bands, gt, Crs::LonLat, None, ColorHint::Gray, "Float32").unwrap_or_else(|e| panic!("{e}"));
+        let a = aspect(&north_up, 1).unwrap_or_default();
+        assert!(a[210] < 1.0 || a[210] > 359.0, "north up faces north: {}", a[210]);
+        let a = aspect(&bottom_up, 1).unwrap_or_default();
+        assert!((a[210] - 180.0).abs() < 1.0, "bottom up faces south: {}", a[210]);
+        let lit_s = hillshade(&bottom_up, 1, 180.0, 45.0, 1.0).unwrap_or_default();
+        let lit_n = hillshade(&bottom_up, 1, 0.0, 45.0, 1.0).unwrap_or_default();
+        assert!(lit_s[210] > lit_n[210], "lit from the south the south-facing slope is brighter");
     }
 
     #[test]

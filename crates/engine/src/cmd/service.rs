@@ -314,6 +314,10 @@ pub fn service_json(svc: &Service) -> Value {
                 Offer::Service { url } => json!({"type": "service", "url": url}),
             };
             let mut layer = json!({"name": l.name, "title": l.title, "bbox": l.bbox, "offer": offer, "tilesets": l.tilesets});
+            if let Some((min, max)) = l.zooms {
+                layer["minZoom"] = json!(min);
+                layer["maxZoom"] = json!(max);
+            }
             // A layer that lists one time is listed as a plain map: there is no other to pick.
             if let Some(t) = l.time.as_ref().filter(|t| t.changes()) {
                 // The first and last few of a long list, and how many (the slider takes them all).
@@ -428,6 +432,12 @@ pub(crate) fn add(s: &mut Session, p: &Value) -> CmdResult {
             };
             // With its legends, as its service gives them (none: no key, as before).
             let mut add = json!({"url": template, "kind": "raster", "name": name, "overlay": true, "bounds": layer.bbox});
+            // The zooms its service draws it at (a WMS layer's scale hints, a WMTS layer's matrices):
+            // closer in, its finest tiles are stretched rather than asked for.
+            if let Some((min, max)) = layer.zooms {
+                add["minZoom"] = json!(min);
+                add["maxZoom"] = json!(max);
+            }
             // The time slider, when it is off, turned on with the layer's steps (one that is on
             // keeps its own); it starts at the layer's default.
             let fresh = s.map().time.is_none();

@@ -364,8 +364,8 @@ impl Raster {
         let (w, h) = (self.width as f64, self.height as f64);
         let steps = 32;
         let mut add = |col: f64, row: f64| {
-            if let Some(c) = self.transformer.to_lonlat(self.transform.to_world(col, row)) {
-                e.expand(Coord::new(c.x.clamp(-180.0, 180.0), c.y.clamp(-90.0, 90.0)));
+            if let Some(c) = self.transformer.to_lonlat_for_extent(self.transform.to_world(col, row)) {
+                e.expand(Coord::new(c.x, c.y.clamp(-90.0, 90.0)));
             }
         };
         for i in 0..=steps {
@@ -381,6 +381,16 @@ impl Raster {
             for j in 1..n {
                 add(w * i as f64 / n as f64, h * j as f64 / n as f64);
             }
+        }
+        // Normalize the transformed range as a whole, retaining its winding: a range crossing
+        // the antimeridian needs world-wide bounds to include both strips in a single Extent.
+        // A native full turn remains world-wide even if a datum shift contracts its samples.
+        if !e.is_empty() && self.transformer.is_geographic() && w * self.transform.pixel_width.abs() >= 360.0 {
+            (e.min_x, e.max_x) = (-180.0, 180.0);
+        } else if !e.is_empty() && (e.min_x < -180.0 || e.max_x > 180.0) {
+            let shift = 360.0 * ((e.min_x + 180.0) / 360.0).floor();
+            let (lo, hi) = (e.min_x - shift, e.max_x - shift);
+            (e.min_x, e.max_x) = if lo >= -180.0 && hi <= 180.0 { (lo, hi) } else { (-180.0, 180.0) };
         }
         e
     }
@@ -468,8 +478,21 @@ impl Raster {
     /// The pixel under a longitude/latitude point.
     pub fn pixel_at(&self, lonlat: Coord) -> Option<(i64, i64)> {
         let (c, r) = self.transform.to_pixel(self.transformer.from_lonlat(lonlat)?);
-        let (c, r) = (c.floor(), r.floor());
+        let (c, r) = (self.wrap_col(c).floor(), r.floor());
         (c >= 0.0 && r >= 0.0 && c < self.width as f64 && r < self.height as f64).then_some((c as i64, r as i64))
+    }
+
+    /// A column off a geographic grid moved round by whole turns of 360° onto it, when that
+    /// lands on it: a grid stored from 0 to 360° has the place at -100° at its 260° column.
+    /// Any other column is returned as it is.
+    pub fn wrap_col(&self, c: f64) -> f64 {
+        let w = f64::from(self.width);
+        if (0.0..w).contains(&c) || !self.transformer.is_geographic() {
+            return c;
+        }
+        let turn = 360.0 / self.transform.pixel_width.abs();
+        let wrapped = c.rem_euclid(turn);
+        if wrapped < w { wrapped } else { c }
     }
 
     /// Cell size in the raster's units (x, y).
@@ -964,6 +987,62 @@ pub(crate) mod tests {
         assert_eq!(r.value(9, 0, 0), None);
         assert_eq!(r.pixel_at(Coord::new(10.6, 49.9)), Some((1, 0)));
         assert_eq!(r.pixel_at(Coord::new(0.0, 0.0)), None);
+    }
+
+    /// #1109: a lon/lat grid stored past 180° (0 to 360°) covers the places it holds within
+    /// ±180°, and the place at a western longitude is found in its columns past 180°.
+    #[test]
+    fn longitudes_past_180_go_round() {
+        let grid = |x0: f64, w: u32, px: f64, crs: Crs| {
+            let gt = GeoTransform { origin_x: x0, origin_y: 77.25, pixel_width: px, pixel_height: -0.5 };
+            Raster::new("g", w, 309, vec![vec![1.0; w as usize * 309]], gt, crs, None, ColorHint::Gray, "Float32").unwrap()
+        };
+        let lon = |r: &Raster| (r.extent().min_x, r.extent().max_x);
+        // The issue's grid: 720 × 0.5° from -0.25°, in EPSG:4326 and in another geographic system.
+        for crs in [Crs::LonLat, Crs::from_epsg(4269).unwrap()] {
+            let r = grid(-0.25, 720, 0.5, crs);
+            assert_eq!(lon(&r), (-180.0, 180.0), "{crs:?}");
+            assert!((r.extent().min_y + 77.25).abs() < 1e-6 && (r.extent().max_y - 77.25).abs() < 1e-6, "{crs:?}");
+            assert_eq!(r.pixel_at(Coord::new(-100.0, 0.0)), Some((520, 154)), "{crs:?}: 260°");
+            assert_eq!(r.pixel_at(Coord::new(100.0, 0.0)), Some((200, 154)), "{crs:?}");
+            assert_eq!(r.pixel_at(Coord::new(-0.1, 0.0)), Some((0, 154)), "{crs:?}");
+            assert_eq!(r.pixel_at(Coord::new(-0.3, 0.0)), Some((719, 154)), "{crs:?}: 359.7°");
+            // Do not clamp away the eastern strip of a regional grid straddling -180°.
+            let west = grid(-180.25, 41, 0.25, crs);
+            assert_eq!(lon(&west), (-180.0, 180.0), "{crs:?}");
+            assert!(west.extent().contains(Coord::new(179.9, 0.0)), "{crs:?}");
+        }
+        // A grid a turn east of its place is there; one across the antimeridian goes all round.
+        assert_eq!(lon(&grid(190.0, 20, 0.5, Crs::LonLat)), (-170.0, -160.0));
+        assert_eq!(lon(&grid(170.0, 40, 0.5, Crs::LonLat)), (-180.0, 180.0));
+        // Columns off a grid that doesn't reach round stay off it, and projected grids never wrap.
+        let part = grid(190.0, 20, 0.5, Crs::LonLat);
+        assert_eq!(part.pixel_at(Coord::new(0.0, 0.0)), None);
+        assert_eq!(part.pixel_at(Coord::new(-165.0, 0.0)), Some((10, 154)));
+        assert_eq!(grid(-0.25, 720, 0.5, Crs::WebMercator).wrap_col(-1.5), -1.5);
+        assert!(grid(-0.25, 720, 0.5, Crs::LonLat).wrap_col(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn geographic_extent_uses_greenwich_not_the_native_prime_meridian() {
+        let crs = Crs::parse("+proj=longlat +datum=WGS84 +pm=paris +no_defs").unwrap();
+        let grid = |x0: f64, width: u32| {
+            let gt = GeoTransform { origin_x: x0, origin_y: 1.0, pixel_width: 0.5, pixel_height: -1.0 };
+            Raster::new("Paris", width, 2, vec![vec![1.0; width as usize * 2]], gt, crs, None, ColorHint::Gray, "Float32").unwrap()
+        };
+        let e = grid(190.0, 20).extent();
+        let (west, east) = (-167.662_770_833_333, -157.662_770_833_333);
+        assert!((e.min_x - west).abs() < 1e-9 && (e.max_x - east).abs() < 1e-9, "{e:?}");
+        for x in [west + 1e-8, east - 1e-8] {
+            assert!(e.contains(Coord::new(x, 0.0)), "{x}: {e:?}");
+        }
+        for x in [west - 1e-8, east + 1e-8] {
+            assert!(!e.contains(Coord::new(x, 0.0)), "{x}: {e:?}");
+        }
+        // 177°..178° Paris is 179.337°..180.337° Greenwich, across the real antimeridian.
+        let e = grid(177.0, 2).extent();
+        assert_eq!((e.min_x, e.max_x), (-180.0, 180.0));
+        assert!(e.contains(Coord::new(179.9, 0.0)) && e.contains(Coord::new(-179.9, 0.0)));
     }
 
     #[test]

@@ -316,4 +316,12 @@ python -m pytest tests/test_saved_secrets.py
 Rebuild without `--features test-stores` afterward to restore the OS backend. CI builds one test
 wheel with the injected store and runs the suite once; distributed wheels keep default features.
 
+To require the Qt tests, install the `qt` extra too and set `RUSTGIS_TEST_QT=1`. They run
+offscreen with one `QApplication` kept alive for the test session, and with WebEngine's GPU
+turned off (`--webEngineArgs --disable-gpu`): otherwise WebEngine sets up EGL on a thread of
+its own, where Mesa reads the environment, and a test or library adding an environment variable
+at that moment can crash the process (glibc's `setenv` may free the environment array that
+`getenv` is reading). Qt tests create widgets with the `make_widget` fixture, which destroys
+each widget and its message bridge at test teardown.
+
 Its version is the RustGIS version, and each release publishes wheels to PyPI.
