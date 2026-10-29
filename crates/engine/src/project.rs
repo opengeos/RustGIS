@@ -616,7 +616,8 @@ impl Project {
                 true
             });
             // Layer groups likewise: ids of their own, children that exist and are in no other
-            // group, numbers in range; children kept together in the drawing order.
+            // group, numbers in range, parents that exist without a loop or too many levels;
+            // each group's layers kept together in the drawing order.
             m.groups.truncate(rustgis_map::MAX_GROUPS);
             m.groups.retain_mut(|g| {
                 if g.id == 0 || !ids.insert(g.id) {
@@ -629,10 +630,7 @@ impl Project {
                 g.children.retain(|c| layer_ids.contains(c) && children.insert(*c));
                 true
             });
-            let group_ids: Vec<u32> = m.groups.iter().map(|g| g.id).collect();
-            for id in group_ids {
-                m.gather_group(id);
-            }
+            m.tidy_groups();
             // A projection this version can't use (a hand edit, or a newer file) falls back to
             // Web Mercator rather than being named while another is drawn.
             if let rustgis_map::Projection::Custom(code) = &m.projection

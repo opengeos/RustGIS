@@ -125,7 +125,20 @@ pub fn spec(t: &TileLayer) -> Spec {
         attribution: t.attribution.clone(),
         layers: t.layers.clone(),
         style_layers: t.style_layers.clone(),
+        hidden_layers: t.hidden_layers.clone(),
     }
+}
+
+/// A vector PMTiles or MBTiles archive's source layers (`vector_layers`), each once in its
+/// order, as [`source_layers::of_metadata`](rustgis_data::source_layers::of_metadata) keeps
+/// them. `None` for other tile layers, and while the archive's header is on its way.
+pub fn source_layers(t: &TileLayer) -> Option<Vec<String>> {
+    let kind = match t.kind {
+        TileKind::PmTiles => Kind::PmTiles,
+        TileKind::MbTiles => Kind::MbTiles,
+        _ => return None,
+    };
+    rustgis_tiles::source::source_layers(kind, &t.url)
 }
 
 /// Where a MapLibre style layer's root properties place the map; `Ok(None)` while the style is

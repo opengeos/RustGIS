@@ -7,7 +7,7 @@ use roxmltree::Node;
 
 use super::{Report, color, data_defined_on, has_effect, points, prop, props, signed_points};
 use crate::Rgba;
-use crate::fills::{FillLayer, FillPattern};
+use crate::fills::{FillLayer, FillPattern, GradientPoint, GradientShape, Spread, Stop, Stops};
 use crate::symbology::{
     Dash, Glyph, LineCap, LineJoin, LineMark, LineMarkers, LineStroke, MAX_DASH_STEPS, MAX_STROKES, Marker, MarkerRotation, Placements,
     Symbol,
@@ -107,8 +107,13 @@ pub(super) fn read(sym: Node, reference: Option<f64>, turned: bool, layer: &str,
     }
     for f in &mut out.fills {
         f.color = f.color.map(fade);
-        if let FillPattern::Dots { outline, .. } = &mut f.pattern {
-            *outline = outline.map(fade);
+        match &mut f.pattern {
+            FillPattern::Dots { outline, .. } => *outline = outline.map(fade),
+            FillPattern::Gradient { color2, stops, .. } | FillPattern::Shapeburst { color2, stops, .. } => {
+                *color2 = fade(*color2);
+                *stops = Stops::new(stops.as_slice().iter().map(|s| Stop { at: s.at, color: fade(s.color) }));
+            }
+            _ => {}
         }
     }
     out
@@ -272,18 +277,16 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
                     width = size(p, "line_width", reference, layer, report).unwrap_or(width);
                 }
             }
-            "GradientFill" | "ShapeburstFill" => {
-                report.approximated(layer, "gradient fills, drawn in their first colour");
-                let c = prop(p, "color").or(prop(p, "color1")).and_then(color);
-                if let Some(c) = c {
-                    stack.push(FillLayer { color: Some(c), pattern: FillPattern::Solid });
-                }
-                fill = c.or(fill);
+            class @ ("GradientFill" | "ShapeburstFill") => {
+                let (first, pattern) = gradient(class == "ShapeburstFill", *l, p, reference, layer, report);
+                stack.push(FillLayer { color: Some(first), pattern });
+                fill = Some(first);
             }
             // Hatch lines: its line's colour and width, its angle and spacing.
             "LinePatternFill" => {
                 let sub = l.children().find(|c| c.has_tag_name("symbol")).map(|s| read(s, reference, false, layer, report));
-                let angle = num(p, "lineangle").unwrap_or(45.0);
+                // QGIS 3 saves it as `angle`, QGIS 2 as `lineangle`.
+                let angle = num(p, "angle").or(num(p, "lineangle")).unwrap_or(45.0);
                 // QGIS's default: 5 mm apart.
                 let spacing = size(p, "distance", reference, layer, report).unwrap_or(5.0 * 96.0 / 25.4);
                 let shift = offset(p, "offset", reference, layer, report).unwrap_or(0.0);
@@ -371,6 +374,116 @@ fn fill(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &
     Converted { symbol, strokes: Vec::new(), rotation: None, fills: stack }
 }
 
+/// A gradient fill's (or a shapeburst fill's, `burst`) first colour and the rest of it: its two
+/// colours, or its colour ramp (a gradient's stops; another kind of ramp by its two ends), how
+/// it runs, and for a shapeburst how deep it shades.
+fn gradient(burst: bool, l: Node, p: &Props, reference: Option<f64>, layer: &str, report: &mut Report) -> (Rgba, FillPattern) {
+    let num = |k: &str| prop(p, k).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite());
+    let white = Rgba::rgb(255, 255, 255);
+    // QGIS's defaults: blue to white.
+    let two =
+        (prop(p, "color").and_then(color).unwrap_or(Rgba::rgb(0, 0, 255)), prop(p, "gradient_color2").and_then(color).unwrap_or(white));
+    let (first, color2, stops, discrete) = if prop(p, "color_type") == Some("1") {
+        // The ramp's settings: in a `colorramp` of the layer's own where it has one, else among
+        // the layer's.
+        let ramp = l.children().find(|c| c.has_tag_name("colorramp"));
+        let own = ramp.map(props);
+        let r = own.as_ref().map_or(p, |o| o);
+        let kind = ramp.and_then(|c| c.attribute("type"));
+        // Another kind of ramp is drawn by its two ends alone, its stops left out.
+        let gradient = matches!(prop(r, "rampType").or(kind), None | Some("gradient"));
+        if !gradient {
+            report.approximated(layer, "gradient fills' colour ramps other than gradients, drawn from their first colour to their last");
+        }
+        let stops = if gradient { ramp_stops(prop(r, "stops").unwrap_or_default()) } else { Stops::default() };
+        match (prop(r, "color1").and_then(color), prop(r, "color2").and_then(color)) {
+            (Some(a), Some(b)) => (a, b, stops, gradient && prop(r, "discrete") == Some("1")),
+            _ => (two.0, two.1, Stops::default(), false),
+        }
+    } else {
+        (two.0, two.1, Stops::default(), false)
+    };
+    if prop(p, "offset").is_some_and(|o| o.split(',').any(|v| v.trim().parse::<f64>().is_ok_and(|v| v != 0.0))) {
+        report.approximated(layer, "gradient and shapeburst fills' offsets, left out");
+    }
+    if burst {
+        // QGIS's default: over the whole shape.
+        let distance = (prop(p, "use_whole_shape") == Some("0")).then(|| {
+            let v = prop(p, "max_distance").and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(5.0);
+            points(v, prop(p, "distance_unit").or(prop(p, SYMBOL_UNIT)), reference, layer, report)
+        });
+        let blur = num("blur_radius").map_or(0, |b| b.clamp(0.0, f32::from(crate::fills::MAX_BURST_BLUR)).round() as u8);
+        let ignore_rings = prop(p, "ignore_rings") == Some("1");
+        let pattern = FillPattern::Shapeburst { color2, stops, discrete, distance, blur, ignore_rings };
+        return (first, FillLayer { color: None, pattern }.clamped().pattern);
+    }
+    let point = |k: &str, default: [f32; 2]| {
+        if prop(p, &format!("{k}_iscentroid")) == Some("1") {
+            return GradientPoint::CENTROID;
+        }
+        let xy: Option<Vec<f32>> = prop(p, k).map(|v| v.split(',').filter_map(|c| c.trim().parse::<f32>().ok()).collect());
+        match xy.as_deref() {
+            Some([x, y]) => GradientPoint::At([*x, *y]),
+            _ => GradientPoint::At(default),
+        }
+    };
+    let shape = match prop(p, "type") {
+        Some("1") => GradientShape::Radial,
+        Some("2") => GradientShape::Conical,
+        _ => GradientShape::Linear,
+    };
+    let spread = match prop(p, "spread") {
+        Some("1") => Spread::Reflect,
+        Some("2") => Spread::Repeat,
+        _ => Spread::Pad,
+    };
+    let pattern = FillPattern::Gradient {
+        shape,
+        color2,
+        stops,
+        discrete,
+        from: point("reference_point1", [0.5, 0.0]),
+        to: point("reference_point2", [0.5, 1.0]),
+        spread,
+        angle: num("angle").unwrap_or(0.0),
+        in_view: prop(p, "coordinate_mode") == Some("1"),
+    };
+    (first, FillLayer { color: None, pattern }.clamped().pattern)
+}
+
+/// A QGIS gradient ramp's `stops`: `position;colour` pairs split by colons (a colour may carry
+/// its own colon, in `…,rgb:0.2,0.4,…`, and a stop its colour spec and direction after it).
+fn ramp_stops(stops: &str) -> Stops {
+    // Each stop read as it ends, so only valid ones count towards what a fill keeps (and one
+    // more, to tell it has more), however many entries before them aren't.
+    let parse = |s: &str| {
+        let mut f = s.split(';');
+        let at = f.next()?.trim().parse::<f32>().ok().filter(|a| a.is_finite())?;
+        Some(Stop { at, color: color(f.next()?)? })
+    };
+    let mut valid: Vec<Stop> = Vec::new();
+    let mut current: Option<String> = None;
+    for part in stops.split(':') {
+        // A new stop starts with its position and a semicolon; anything else goes on the last.
+        let starts = part.split_once(';').is_some_and(|(at, _)| at.trim().parse::<f32>().is_ok());
+        match current.as_mut() {
+            Some(last) if !starts => {
+                last.push(':');
+                last.push_str(part);
+            }
+            _ => {
+                valid.extend(current.take().as_deref().and_then(parse));
+                if valid.len() > crate::fills::MAX_STOPS {
+                    break;
+                }
+                current = Some(part.to_string());
+            }
+        }
+    }
+    valid.extend(current.as_deref().and_then(parse));
+    Stops::new(valid)
+}
+
 fn line(layers: &[(Node, Props)], reference: Option<f64>, layer: &str, report: &mut Report) -> Converted {
     let mut strokes = Vec::new();
     for (l, p) in layers {
@@ -447,7 +560,12 @@ fn along(l: Node, p: &[(String, String)], hash: bool, reference: Option<f64>, la
         offset_along: offset(p, "offset_along_line", reference, layer, report).unwrap_or(0.0),
         rotate: prop(p, "rotate") != Some("0"),
         // QGIS's default stretch is 4 mm.
-        average_angle: size(p, "average_angle_length", reference, layer, report).unwrap_or(4.0 * 96.0 / 25.4),
+        // (Its unit is `average_angle_unit`, not the `_length_unit` `size` would look for.)
+        average_angle: prop(p, "average_angle_length")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| points(v, prop(p, "average_angle_unit").or(prop(p, SYMBOL_UNIT)), reference, layer, report))
+            .unwrap_or(4.0 * 96.0 / 25.4),
         ..LineMarkers::default()
     };
     let across = offset(p, "offset", reference, layer, report).unwrap_or(0.0);

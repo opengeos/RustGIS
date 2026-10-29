@@ -321,7 +321,7 @@ fn info(s: &mut Session, p: &Value) -> CmdResult {
         "layers": layers,
         "groups": m.groups.iter().map(|g| json!({
             "id": g.id, "name": g.name, "visible": g.visible, "transparency": g.transparency,
-            "minScale": g.min_scale, "maxScale": g.max_scale, "layers": g.children,
+            "minScale": g.min_scale, "maxScale": g.max_scale, "layers": g.children, "parent": g.parent,
         })).collect::<Vec<_>>(),
         // Web tile layers (XYZ, WMS, vector tiles, styles, archives), each drawn over the map layer
         // its `over` names, or under them all.

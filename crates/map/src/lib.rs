@@ -921,9 +921,14 @@ pub struct ServiceChild {
 /// Most layer groups a map keeps (files are hostile).
 pub const MAX_GROUPS: usize = 2000;
 
+/// Most levels layer groups nest (#836): a top-level group is level 1.
+pub const MAX_GROUP_DEPTH: usize = 8;
+
 /// Related layers under one name (#413): a collapsible folder in the Layers pane whose
 /// visibility, transparency and scale range apply on top of each child's own. Children stay
 /// ordinary layers, kept together in the drawing order; a layer belongs to one group at most.
+/// A group may sit in another (#836, `parent`): its layers, and its subgroups' at any depth,
+/// stay together in the drawing order, and every group above it applies too.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LayerGroup {
     pub id: u32,
@@ -941,9 +946,12 @@ pub struct LayerGroup {
     /// The children draw only when zoomed out beyond 1:`max_scale`, if set.
     #[serde(default)]
     pub max_scale: Option<f64>,
-    /// The children's layer ids.
+    /// The children's layer ids (the layers directly in it, not its subgroups').
     #[serde(default)]
     pub children: Vec<u32>,
+    /// The group this one is in (#836); `None` at the top level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
 }
 
 impl LayerGroup {
@@ -957,6 +965,7 @@ impl LayerGroup {
             min_scale: None,
             max_scale: None,
             children: Vec::new(),
+            parent: None,
         }
     }
 
@@ -968,6 +977,15 @@ impl LayerGroup {
     pub fn opacity(&self) -> f32 {
         (1.0 - self.transparency / 100.0).clamp(0.0, 1.0)
     }
+}
+
+/// An item at one level of the Layers pane's outline (#836, [`Map::outline`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Outline {
+    /// A map layer, by id.
+    Layer(u32),
+    /// A layer group, by id.
+    Group(u32),
 }
 
 /// An entry in the drawing order of all a map's layers ([`Map::stack`]), by index.
@@ -1241,37 +1259,47 @@ impl Map {
         id
     }
 
-    /// Adds a layer group (its children are taken from any other group); returns its id.
+    /// Adds a layer group (its children are taken from any other group and gathered together,
+    /// in its parent when it has one); returns its id. A parent that's missing, or with no room
+    /// for another level, is dropped.
     pub fn add_group(&mut self, mut group: LayerGroup) -> u32 {
         group.id = self.next_id();
         let id = group.id;
+        if group.parent.is_some_and(|p| self.group(p).is_none() || self.group_depth(p) >= MAX_GROUP_DEPTH) {
+            group.parent = None;
+        }
         self.settle_tiles();
         for g in &mut self.groups {
             g.children.retain(|c| !group.children.contains(c));
         }
+        let mut inside = vec![id];
+        inside.extend(self.chain_ids(group.parent));
         for c in &group.children {
-            self.lift_out(*c);
+            self.lift_out(&[*c], &inside);
         }
         self.groups.push(group);
+        self.gather_chain(id);
         self.settle_tiles();
         id
     }
 
-    /// Moves a layer that sits between two layers of a group it isn't in (it just left it) to
-    /// just above that group, so the group's layers stay together.
-    fn lift_out(&mut self, layer: u32) {
-        let Some(i) = self.layer_index(layer) else { return };
-        let l = self.layers.remove(i);
-        let mut at = i;
-        while at > 0 && self.splits_group(at) {
+    /// Moves layers that sit together inside a group they aren't in (`inside`: the groups they
+    /// are in, innermost first) to just above that group, so its layers stay together.
+    fn lift_out(&mut self, ids: &[u32], inside: &[u32]) {
+        let Some(first) = self.layers.iter().position(|l| ids.contains(&l.id)) else { return };
+        let order: Vec<u32> = self.layers.iter().map(|l| l.id).filter(|id| !ids.contains(id)).collect();
+        let mut at = first.min(order.len());
+        while at > 0 && self.splits_between(order.get(at - 1).copied(), order.get(at).copied(), inside) {
             at -= 1;
         }
-        self.layers.insert(i, l);
-        if at != i {
-            // Moving: the tile layers drawn over it keep their place.
-            self.release_tiles(&[layer]);
-            let l = self.layers.remove(i);
-            self.layers.insert(at.min(self.layers.len()), l);
+        if at != first {
+            // Moving: the tile layers drawn over them keep their place.
+            self.release_tiles(ids);
+            let (members, rest): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut self.layers).into_iter().partition(|l| ids.contains(&l.id));
+            self.layers = rest;
+            let tail = self.layers.split_off(at.min(self.layers.len()));
+            self.layers.extend(members);
+            self.layers.extend(tail);
         }
     }
 
@@ -1279,44 +1307,197 @@ impl Map {
         self.groups.iter().find(|g| g.id == id)
     }
 
-    /// The layer group a layer is in, if any.
+    /// The layer group a layer is directly in, if any.
     pub fn group_of(&self, layer: u32) -> Option<&LayerGroup> {
         self.groups.iter().find(|g| g.children.contains(&layer))
     }
 
-    /// Whether a layer is shown: its own box ticked, and its group's if it has one.
+    /// A group and the groups holding it, innermost first: at most [`MAX_GROUP_DEPTH`], ending at
+    /// a parent that's missing or already listed (a loop, as a project file may have).
+    pub fn group_chain(&self, group: u32) -> Vec<&LayerGroup> {
+        let mut out: Vec<&LayerGroup> = Vec::new();
+        let mut next = Some(group);
+        while let Some(id) = next {
+            if out.len() >= MAX_GROUP_DEPTH || out.iter().any(|g| g.id == id) {
+                break;
+            }
+            let Some(g) = self.group(id) else { break };
+            out.push(g);
+            next = g.parent;
+        }
+        out
+    }
+
+    /// The groups a layer is in, its own first (none outside a group).
+    pub fn groups_of(&self, layer: u32) -> Vec<&LayerGroup> {
+        self.group_of(layer).map_or_else(Vec::new, |g| self.group_chain(g.id))
+    }
+
+    /// The ids of a group's chain ([`Map::group_chain`]); none for `None`.
+    fn chain_ids(&self, group: Option<u32>) -> Vec<u32> {
+        group.map_or_else(Vec::new, |g| self.group_chain(g).iter().map(|g| g.id).collect())
+    }
+
+    /// How many levels deep a group is: 1 at the top level.
+    pub fn group_depth(&self, group: u32) -> usize {
+        self.group_chain(group).len()
+    }
+
+    /// Whether a layer is in a group, directly or in one of its subgroups.
+    pub fn layer_in(&self, layer: u32, group: u32) -> bool {
+        self.groups_of(layer).iter().any(|g| g.id == group)
+    }
+
+    /// Each group's chain of ids, itself first: for loops over many layers or groups.
+    fn chains(&self) -> std::collections::HashMap<u32, Vec<u32>> {
+        let parent: std::collections::HashMap<u32, Option<u32>> = self.groups.iter().map(|g| (g.id, g.parent)).collect();
+        self.groups
+            .iter()
+            .map(|g| {
+                let mut chain = vec![g.id];
+                let mut next = g.parent;
+                while let Some(p) = next {
+                    if chain.len() >= MAX_GROUP_DEPTH || chain.contains(&p) {
+                        break;
+                    }
+                    let Some(up) = parent.get(&p) else { break };
+                    chain.push(p);
+                    next = *up;
+                }
+                (g.id, chain)
+            })
+            .collect()
+    }
+
+    /// Each grouped layer's chain of groups, its own first (the first group listing it, as
+    /// [`Map::group_of`] finds it).
+    fn layer_chains(&self) -> std::collections::HashMap<u32, Vec<u32>> {
+        let chains = self.chains();
+        let mut out = std::collections::HashMap::new();
+        for g in &self.groups {
+            let Some(c) = chains.get(&g.id) else { continue };
+            for l in &g.children {
+                out.entry(*l).or_insert_with(|| c.clone());
+            }
+        }
+        out
+    }
+
+    /// The layers in a group and its subgroups at any depth, in drawing order.
+    pub fn group_layers(&self, group: u32) -> Vec<u32> {
+        let chains = self.layer_chains();
+        self.layers.iter().map(|l| l.id).filter(|id| chains.get(id).is_some_and(|c| c.contains(&group))).collect()
+    }
+
+    /// A group's subgroups at any depth (not itself).
+    pub fn subgroups(&self, group: u32) -> Vec<u32> {
+        let chains = self.chains();
+        self.groups.iter().map(|g| g.id).filter(|id| *id != group && chains.get(id).is_some_and(|c| c.contains(&group))).collect()
+    }
+
+    /// How many levels a group and its subgroups take: 1 without subgroups.
+    fn group_height(&self, group: u32) -> usize {
+        self.chains().values().filter_map(|c| c.iter().position(|g| *g == group)).max().map_or(1, |p| p + 1)
+    }
+
+    /// The layers and groups directly in `parent` (`None`: the top level), as the Layers pane
+    /// lists them: in drawing order, top first, then the groups with no layers.
+    pub fn outline(&self, parent: Option<u32>) -> Vec<Outline> {
+        let chains = self.layer_chains();
+        let mut out: Vec<Outline> = Vec::new();
+        let mut seen: std::collections::HashSet<Outline> = std::collections::HashSet::new();
+        for l in &self.layers {
+            let chain = chains.get(&l.id).map_or(&[][..], Vec::as_slice);
+            let item = match parent {
+                None => chain.last().map_or(Outline::Layer(l.id), |g| Outline::Group(*g)),
+                Some(p) => match chain.iter().position(|g| *g == p) {
+                    Some(0) => Outline::Layer(l.id),
+                    Some(k) => match chain.get(k - 1) {
+                        Some(g) => Outline::Group(*g),
+                        None => continue,
+                    },
+                    None => continue,
+                },
+            };
+            if seen.insert(item) {
+                out.push(item);
+            }
+        }
+        let tops = self.chains();
+        for g in &self.groups {
+            // At the top level, a group whose chain ends at it (a missing parent leaves it there).
+            let here = match parent {
+                None => tops.get(&g.id).and_then(|c| c.last()) == Some(&g.id),
+                Some(p) => g.parent == Some(p) && g.id != p,
+            };
+            if here && seen.insert(Outline::Group(g.id)) {
+                out.push(Outline::Group(g.id));
+            }
+        }
+        out
+    }
+
+    /// Whether a layer is shown: its own box ticked, and every group's it is in.
     pub fn shows(&self, l: &Layer) -> bool {
-        l.visible && self.group_of(l.id).is_none_or(|g| g.visible)
+        l.visible && self.groups_of(l.id).iter().all(|g| g.visible)
     }
 
     /// Whether a layer draws at a scale denominator: shown, and within its own scale range and
-    /// its group's.
+    /// its groups'.
     pub fn draws_at(&self, l: &Layer, scale: f64) -> bool {
-        l.visible && l.in_scale_range(scale) && self.group_of(l.id).is_none_or(|g| g.visible && g.in_scale_range(scale))
+        l.visible && l.in_scale_range(scale) && self.groups_of(l.id).iter().all(|g| g.visible && g.in_scale_range(scale))
     }
 
-    /// Whether a layer is within its own scale range and its group's.
+    /// Whether a layer is within its own scale range and its groups'.
     pub fn in_scale_range(&self, l: &Layer, scale: f64) -> bool {
-        l.in_scale_range(scale) && self.group_of(l.id).is_none_or(|g| g.in_scale_range(scale))
+        l.in_scale_range(scale) && self.groups_of(l.id).iter().all(|g| g.in_scale_range(scale))
     }
 
-    /// A layer's opacity with its group's applied.
+    /// A layer's opacity with its groups' applied.
     pub fn layer_opacity(&self, l: &Layer) -> f32 {
-        l.opacity() * self.group_of(l.id).map_or(1.0, LayerGroup::opacity)
+        l.opacity() * self.groups_of(l.id).iter().map(|g| g.opacity()).product::<f32>()
     }
 
-    /// Ids of the layers whose group keeps them from drawing at a scale denominator (hidden, or
-    /// out of its scale range): for loops that change the layers as they go.
+    /// The opacity the groups give each layer in a see-through one (all its groups' multiplied),
+    /// by layer id; a layer left out is opaque as far as its groups go.
+    pub fn group_opacities(&self) -> std::collections::HashMap<u32, f32> {
+        if !self.groups.iter().any(|g| g.transparency > 0.0) {
+            return std::collections::HashMap::new();
+        }
+        let opacity: std::collections::HashMap<u32, f32> = self.groups.iter().map(|g| (g.id, g.opacity())).collect();
+        self.layer_chains()
+            .into_iter()
+            .map(|(l, c)| (l, c.iter().map(|g| opacity.get(g).copied().unwrap_or(1.0)).product::<f32>()))
+            .filter(|(_, o)| *o < 1.0)
+            .collect()
+    }
+
+    /// Ids of the layers whose groups keep them from drawing at a scale denominator (one hidden,
+    /// or out of its scale range): for loops that change the layers as they go.
     pub fn held_by_group(&self, scale: f64) -> std::collections::HashSet<u32> {
-        self.groups.iter().filter(|g| !g.visible || !g.in_scale_range(scale)).flat_map(|g| g.children.iter().copied()).collect()
+        let held: std::collections::HashSet<u32> =
+            self.groups.iter().filter(|g| !g.visible || !g.in_scale_range(scale)).map(|g| g.id).collect();
+        if held.is_empty() {
+            return std::collections::HashSet::new();
+        }
+        // Every group listing a layer counts (a hand-edited file may list it twice).
+        let chains = self.chains();
+        self.groups
+            .iter()
+            .filter(|g| chains.get(&g.id).is_some_and(|c| c.iter().any(|x| held.contains(x))))
+            .flat_map(|g| g.children.iter().copied())
+            .collect()
     }
 
-    /// Folds each group's visibility, transparency and scale range into its children and drops
-    /// the groups: for exports that know only layers.
+    /// Folds each group's visibility, transparency and scale range into its layers (its
+    /// subgroups' too) and drops the groups: for exports that know only layers.
     pub fn bake_groups(&mut self) {
         self.settle_tiles();
-        for g in std::mem::take(&mut self.groups) {
-            for l in self.layers.iter_mut().filter(|l| g.children.contains(&l.id)) {
+        let chains = self.layer_chains();
+        let groups = std::mem::take(&mut self.groups);
+        for l in &mut self.layers {
+            let Some(chain) = chains.get(&l.id) else { continue };
+            for g in chain.iter().filter_map(|id| groups.iter().find(|g| g.id == *id)) {
                 l.visible &= g.visible;
                 l.transparency = 100.0 * (1.0 - l.opacity() * g.opacity());
                 l.min_scale = match (l.min_scale, g.min_scale) {
@@ -1331,31 +1512,63 @@ impl Map {
         }
     }
 
-    /// Puts a layer in a group (out of any other), next to the group's other children in the
-    /// drawing order; `None` takes it out of its group (above the group when it was between two
-    /// of its layers).
+    /// Puts a layer in a group (out of any other), next to the group's other layers in the
+    /// drawing order (at its end nearer to the layer); `None` takes it out of its group (above
+    /// the outermost group when it was between two of its layers).
     pub fn set_group(&mut self, layer: u32, group: Option<u32>) {
         if group.is_some() && self.group_of(layer).map(|g| g.id) == group {
+            return;
+        }
+        if let Some(gid) = group
+            && let Some(before) = self.nearest_end(gid, &[layer])
+        {
+            // (Checked: the layer and the group exist, and `before` is one of its layers.)
+            let _ = self.place_layer(layer, group, before);
             return;
         }
         self.settle_tiles();
         for g in &mut self.groups {
             g.children.retain(|c| *c != layer);
         }
-        self.lift_out(layer);
+        let inside = self.chain_ids(group);
+        self.lift_out(&[layer], &inside);
         if let Some(gid) = group
             && let Some(g) = self.groups.iter_mut().find(|g| g.id == gid)
         {
             g.children.push(layer);
-            self.gather_group(gid);
+            self.gather_chain(gid);
         }
         self.settle_tiles();
     }
 
+    /// Where layers `moving` (together in the drawing order) join a group at its end nearer to
+    /// them: above its topmost other layer (`Some(Some(id))`) when they are above it, else at its
+    /// end (`Some(None)`). `None` when the group has no other layers, or they sit among them
+    /// already (in a subgroup): they stay there.
+    fn nearest_end(&self, group: u32, moving: &[u32]) -> Option<Option<u32>> {
+        let others: Vec<u32> = self.group_layers(group).into_iter().filter(|id| !moving.contains(id)).collect();
+        let (first, last) = (self.layer_index(*others.first()?)?, self.layer_index(*others.last()?)?);
+        let at = self.layers.iter().position(|l| moving.contains(&l.id))?;
+        match at {
+            a if a < first => Some(others.first().copied()),
+            a if a > last => Some(None),
+            _ => None,
+        }
+    }
+
+    /// Below the lowest layer of the first group of `chain` (innermost first) that has any: the
+    /// end of a group, or of the nearest group holding it when it has no layers.
+    fn end_of(&self, chain: &[u32]) -> Option<usize> {
+        chain.iter().find_map(|g| {
+            let members = self.group_layers(*g);
+            self.layers.iter().rposition(|l| members.contains(&l.id)).map(|i| i + 1)
+        })
+    }
+
     /// Puts a layer in a group, or out of any (`None`), and in the drawing order just above the
-    /// layer `before` (`None`: below the group's other layers, or at the bottom out of a group).
-    /// In a group, `before` must be one of its layers; out of one, a place between two layers of a
-    /// group moves up past that group.
+    /// layer `before` (`None`: below the group's other layers, its subgroups' too, or at the
+    /// bottom out of a group). In a group, `before` must be one of its layers or its subgroups';
+    /// a place inside a group the layer isn't going in moves up past that group.
     pub fn place_layer(&mut self, layer: u32, group: Option<u32>, before: Option<u32>) -> Result<(), String> {
         if self.layer_index(layer).is_none() {
             return Err("no such layer".into());
@@ -1364,7 +1577,10 @@ impl Map {
             return Err("the layer can't go before itself".into());
         }
         let others: Vec<u32> = match group {
-            Some(g) => self.group(g).ok_or("no such group")?.children.iter().copied().filter(|c| *c != layer).collect(),
+            Some(g) => {
+                self.group(g).ok_or("no such group")?;
+                self.group_layers(g).into_iter().filter(|c| *c != layer).collect()
+            }
             None => Vec::new(),
         };
         if let Some(b) = before {
@@ -1375,6 +1591,7 @@ impl Map {
                 return Err("the layer to go before isn't in the group".into());
             }
         }
+        let inside = self.chain_ids(group);
         let places = self.pin_tile_places();
         self.release_tiles(&[layer]);
         for g in &mut self.groups {
@@ -1384,14 +1601,13 @@ impl Map {
         let l = self.layers.remove(from);
         let mut at = match (before, group) {
             (Some(b), _) => self.layer_index(b).unwrap_or(self.layers.len()),
-            // Below the group's lowest layer; alone in it, where it was.
-            (None, Some(_)) => self.layers.iter().rposition(|x| others.contains(&x.id)).map_or(from.min(self.layers.len()), |i| i + 1),
+            // Below the group's lowest layer; in a group with none, at the end of the nearest one
+            // holding it that has some, or where it was.
+            (None, Some(_)) => self.end_of(&inside).unwrap_or(from.min(self.layers.len())),
             (None, None) => self.layers.len(),
         };
-        if group.is_none() {
-            while at > 0 && self.splits_group(at) {
-                at -= 1;
-            }
+        while at > 0 && self.splits(at, &inside) {
+            at -= 1;
         }
         let at = at.min(self.layers.len());
         self.layers.insert(at, l);
@@ -1404,10 +1620,13 @@ impl Map {
         Ok(())
     }
 
-    /// Moves a group's layers, together, to position `to` among the other layers (past the end,
-    /// the bottom); a position inside another group's run moves up above that group.
+    /// Moves a group's layers (its subgroups' too), together, to position `to` among the other
+    /// layers (past the end, the bottom); a position inside another group's run moves up above
+    /// that group. A subgroup stays in its group: at most to its top or its bottom.
     pub fn move_group(&mut self, group: u32, to: usize) -> Result<(), String> {
-        let children = self.group(group).ok_or("no such group")?.children.clone();
+        let parent = self.group(group).ok_or("no such group")?.parent;
+        let children = self.group_layers(group);
+        let inside = self.chain_ids(parent);
         let places = self.pin_tile_places();
         // Where the group's layers are now: put back at the start of their run, unbroken, they
         // haven't moved.
@@ -1420,7 +1639,17 @@ impl Map {
             return Err("the group has no layers to move".into());
         }
         let mut at = to.min(self.layers.len());
-        while at > 0 && self.splits_group(at) {
+        if let Some(p) = parent {
+            let siblings = self.group_layers(p);
+            let lo = self.layers.iter().position(|l| siblings.contains(&l.id));
+            let hi = self.layers.iter().rposition(|l| siblings.contains(&l.id));
+            at = match (lo, hi) {
+                (Some(lo), Some(hi)) => at.clamp(lo, hi + 1),
+                // Alone in its group: it moves with the group, not in it.
+                _ => run.first().copied().unwrap_or(at).min(self.layers.len()),
+            };
+        }
+        while at > 0 && self.splits(at, &inside) {
             at -= 1;
         }
         let tail = self.layers.split_off(at);
@@ -1431,25 +1660,183 @@ impl Map {
         Ok(())
     }
 
-    /// Moves a group's children together in the drawing order, at its topmost child, keeping
-    /// their order; children with no layer are dropped.
+    /// Whether `group` can go in `parent` (`None`: the top level): not in itself or one of its
+    /// subgroups, and no deeper than [`MAX_GROUP_DEPTH`] levels.
+    fn can_nest(&self, group: u32, parent: Option<u32>) -> Result<(), String> {
+        self.group(group).ok_or("no such group")?;
+        let Some(p) = parent else { return Ok(()) };
+        self.group(p).ok_or("no such group to go in")?;
+        if self.group_chain(p).iter().any(|g| g.id == group) {
+            return Err("a group can't go in itself or one of its subgroups".into());
+        }
+        if self.group_depth(p).saturating_add(self.group_height(group)) > MAX_GROUP_DEPTH {
+            return Err(format!("groups nest at most {MAX_GROUP_DEPTH} levels deep"));
+        }
+        Ok(())
+    }
+
+    fn set_parent_of(&mut self, group: u32, parent: Option<u32>) {
+        if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
+            g.parent = parent;
+        }
+    }
+
+    /// Puts a group, with its layers and subgroups, in another group or at the top level
+    /// (`None`), in the drawing order just above the layer `before` (`None`: below the other
+    /// group's layers, or at the bottom at the top level). In a group, `before` must be one of
+    /// its layers or its subgroups'; a place inside a group it isn't going in moves up past that
+    /// group.
+    pub fn place_group(&mut self, group: u32, parent: Option<u32>, before: Option<u32>) -> Result<(), String> {
+        self.can_nest(group, parent)?;
+        let members = self.group_layers(group);
+        if let Some(b) = before {
+            if self.layer_index(b).is_none() {
+                return Err("no layer to go before".into());
+            }
+            if members.contains(&b) {
+                return Err("the group can't go before one of its own layers".into());
+            }
+            if parent.is_some_and(|p| !self.layer_in(b, p)) {
+                return Err("the layer to go before isn't in the group".into());
+            }
+        }
+        if members.is_empty() {
+            // Nothing to place: a group with no layers lists at the end of its level, in the
+            // order of the map's groups; at the end (`before` none), after the others there.
+            self.set_parent_of(group, parent);
+            if before.is_none()
+                && let Some(i) = self.groups.iter().position(|g| g.id == group)
+            {
+                let g = self.groups.remove(i);
+                self.groups.push(g);
+            }
+            return Ok(());
+        }
+        let places = self.pin_tile_places();
+        let run: Vec<usize> = self.layers.iter().enumerate().filter(|(_, l)| members.contains(&l.id)).map(|(i, _)| i).collect();
+        let start = run.first().copied().filter(|s| run.iter().enumerate().all(|(k, i)| *i == s + k));
+        self.release_tiles(&members);
+        self.set_parent_of(group, parent);
+        let inside = self.chain_ids(parent);
+        let (moving, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.layers).into_iter().partition(|l| members.contains(&l.id));
+        self.layers = rest;
+        let mut at = match (before, parent) {
+            (Some(b), _) => self.layer_index(b).unwrap_or(self.layers.len()),
+            (None, Some(_)) => self.end_of(&inside).unwrap_or_else(|| run.first().copied().unwrap_or(self.layers.len())),
+            (None, None) => self.layers.len(),
+        };
+        at = at.min(self.layers.len());
+        while at > 0 && self.splits(at, &inside) {
+            at -= 1;
+        }
+        let tail = self.layers.split_off(at);
+        self.layers.extend(moving);
+        self.layers.extend(tail);
+        self.keep_tiles_if_unmoved(start == Some(at), places);
+        self.settle_tiles();
+        Ok(())
+    }
+
+    /// Puts a group, with its layers and subgroups, in another group or at the top level
+    /// (`None`), next to that group's other layers (at the end nearer to where it is), or where
+    /// it is at the top level (above the group it was inside).
+    pub fn set_group_parent(&mut self, group: u32, parent: Option<u32>) -> Result<(), String> {
+        self.can_nest(group, parent)?;
+        if self.group(group).is_some_and(|g| g.parent == parent) {
+            return Ok(());
+        }
+        let members = self.group_layers(group);
+        if let Some(p) = parent
+            && let Some(before) = self.nearest_end(p, &members)
+        {
+            return self.place_group(group, parent, before);
+        }
+        self.settle_tiles();
+        self.set_parent_of(group, parent);
+        let inside = self.chain_ids(parent);
+        self.lift_out(&members, &inside);
+        if let Some(p) = parent {
+            self.gather_chain(p);
+        }
+        self.settle_tiles();
+        Ok(())
+    }
+
+    /// Dissolves a group: its layers and subgroups go up one level, where they are.
+    pub fn ungroup(&mut self, group: u32) -> Result<(), String> {
+        let g = self.group(group).ok_or("no such group")?;
+        let (parent, children) = (g.parent.filter(|p| *p != group), g.children.clone());
+        // The tile layers over the group stay over its layers, where they were.
+        self.settle_tiles();
+        for x in &mut self.groups {
+            if Some(x.id) == parent {
+                x.children.extend(children.iter().copied());
+            }
+            if x.parent == Some(group) {
+                x.parent = parent;
+            }
+        }
+        self.groups.retain(|x| x.id != group);
+        Ok(())
+    }
+
+    /// Gathers a group's layers, and those of every group holding it, the outermost first.
+    fn gather_chain(&mut self, group: u32) {
+        for id in self.chain_ids(Some(group)).into_iter().rev() {
+            self.gather_group(id);
+        }
+    }
+
+    /// Moves a group's layers, its subgroups' too, together in the drawing order at the topmost,
+    /// keeping their order; children with no layer are dropped.
     pub fn gather_group(&mut self, group: u32) {
         let ids: std::collections::HashSet<u32> = self.layers.iter().map(|l| l.id).collect();
         let Some(g) = self.groups.iter_mut().find(|g| g.id == group) else { return };
         g.children.retain(|c| ids.contains(c));
-        let children = g.children.clone();
-        let Some(top) = self.layers.iter().position(|l| children.contains(&l.id)) else { return };
-        let mut members = Vec::new();
+        let members: std::collections::HashSet<u32> = self.group_layers(group).into_iter().collect();
+        let Some(top) = self.layers.iter().position(|l| members.contains(&l.id)) else { return };
+        let mut inner = Vec::new();
         let mut rest = Vec::new();
         for l in std::mem::take(&mut self.layers) {
-            if children.contains(&l.id) { members.push(l) } else { rest.push(l) }
+            if members.contains(&l.id) { inner.push(l) } else { rest.push(l) }
         }
         // Layers above the topmost child stay above.
         let tail = rest.split_off(top.min(rest.len()));
-        rest.extend(members);
+        rest.extend(inner);
         rest.extend(tail);
         self.layers = rest;
         self.settle_tiles();
+    }
+
+    /// Makes a project file's groups whole (#836): a parent that is the group itself, missing,
+    /// in a loop or past [`MAX_GROUP_DEPTH`] levels is dropped (the group goes to the top
+    /// level), and each group's layers are gathered together, the outermost groups first.
+    pub fn tidy_groups(&mut self) {
+        let ids: std::collections::HashSet<u32> = self.groups.iter().map(|g| g.id).collect();
+        for g in &mut self.groups {
+            if g.parent.is_some_and(|p| p == g.id || !ids.contains(&p)) {
+                g.parent = None;
+            }
+        }
+        let mut parent: std::collections::HashMap<u32, Option<u32>> = self.groups.iter().map(|g| (g.id, g.parent)).collect();
+        for g in &mut self.groups {
+            let mut seen = vec![g.id];
+            let mut next = g.parent;
+            while let Some(p) = next {
+                if seen.contains(&p) || seen.len() >= MAX_GROUP_DEPTH {
+                    g.parent = None;
+                    parent.insert(g.id, None);
+                    break;
+                }
+                seen.push(p);
+                next = parent.get(&p).copied().flatten();
+            }
+        }
+        let mut order: Vec<(usize, u32)> = self.groups.iter().map(|g| (self.group_depth(g.id), g.id)).collect();
+        order.sort_by_key(|(depth, _)| *depth);
+        for (_, id) in order {
+            self.gather_group(id);
+        }
     }
 
     /// The map's layers as they stand (their ids in order, and the next id), cheap to take before
@@ -1472,11 +1859,12 @@ impl Map {
         self.layers.insert(0, layer);
     }
 
-    /// The map's layers as the Layers pane lists them, top first: each layer outside a group
-    /// alone, each group's layers together (in order), service groups aside.
+    /// The map's layers as the Layers pane lists them at the top level, top first: each layer
+    /// outside a group alone, each top-level group's layers together (its subgroups' too, in
+    /// order), service groups aside.
     fn units(&self) -> Vec<Vec<u32>> {
         let group: std::collections::HashMap<u32, u32> =
-            self.groups.iter().flat_map(|g| g.children.iter().map(move |c| (*c, g.id))).collect();
+            self.layer_chains().into_iter().filter_map(|(l, c)| c.last().map(|top| (l, *top))).collect();
         let mut units: Vec<Vec<u32>> = Vec::new();
         // A group's unit, by group.
         let mut at: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
@@ -1681,23 +2069,33 @@ impl Map {
         }
     }
 
-    /// Whether a layer put at `pos` in the drawing order would sit between two layers of one group.
-    fn splits_group(&self, pos: usize) -> bool {
-        let (Some(above), Some(below)) = (pos.checked_sub(1).and_then(|i| self.layers.get(i)), self.layers.get(pos)) else {
-            return false;
-        };
-        self.group_of(above.id).is_some_and(|g| g.children.contains(&below.id))
+    /// Whether a layer (or a group's layers) put at `pos` in the drawing order would sit inside a
+    /// group other than those of `inside` (the groups it is going in, innermost first): between
+    /// two of that group's layers.
+    fn splits(&self, pos: usize, inside: &[u32]) -> bool {
+        let above = pos.checked_sub(1).and_then(|i| self.layers.get(i)).map(|l| l.id);
+        self.splits_between(above, self.layers.get(pos).map(|l| l.id), inside)
+    }
+
+    /// Whether layers `above` and `below` share a group that isn't one of `inside`.
+    fn splits_between(&self, above: Option<u32>, below: Option<u32>, inside: &[u32]) -> bool {
+        let (Some(above), Some(below)) = (above, below) else { return false };
+        let below = self.groups_of(below);
+        self.groups_of(above).iter().any(|g| !inside.contains(&g.id) && below.iter().any(|b| b.id == g.id))
     }
 
     /// Moves the layer at index `from` to index `to` in the drawing order, keeping groups
-    /// together: a group's layer moves only among its group's, and another layer moving into a
-    /// group's run goes past it (above moving up, below moving down).
+    /// together: a group's layer moves only among its group's (its subgroups' included), and a
+    /// layer moving into the run of a group it isn't in goes past it (above moving up, below
+    /// moving down).
     pub fn move_layer(&mut self, from: usize, to: usize) -> Result<(), String> {
         let id = self.layers.get(from).map(|l| l.id).ok_or("no such layer")?;
         let to = to.min(self.layers.len().saturating_sub(1));
-        if let Some(g) = self.group_of(id) {
-            let run: Vec<usize> = self.layers.iter().enumerate().filter(|(_, l)| g.children.contains(&l.id)).map(|(i, _)| i).collect();
-            let (lo, hi) = (run.first().copied().unwrap_or(from), run.last().copied().unwrap_or(from));
+        let inside: Vec<u32> = self.groups_of(id).iter().map(|g| g.id).collect();
+        if let Some(g) = inside.first() {
+            let members = self.group_layers(*g);
+            let lo = self.layers.iter().position(|l| members.contains(&l.id)).unwrap_or(from);
+            let hi = self.layers.iter().rposition(|l| members.contains(&l.id)).unwrap_or(from);
             if to < lo || to > hi {
                 return Err("the layer can't move out of its group (take it out of the group first)".into());
             }
@@ -1708,11 +2106,9 @@ impl Map {
         self.release_tiles(&[id]);
         let l = self.layers.remove(from);
         let mut to = to;
-        if self.group_of(id).is_none() {
-            // `to` is now the index the layer goes in at, among the others.
-            while to > 0 && to < self.layers.len() && self.splits_group(to) {
-                if to < from { to -= 1 } else { to += 1 }
-            }
+        // `to` is now the index the layer goes in at, among the others.
+        while to > 0 && to < self.layers.len() && self.splits(to, &inside) {
+            if to < from { to -= 1 } else { to += 1 }
         }
         self.layers.insert(to.min(self.layers.len()), l);
         Ok(())

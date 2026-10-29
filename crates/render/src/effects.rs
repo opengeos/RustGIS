@@ -660,8 +660,15 @@ mod spool_tests {
             camera: rustgis_map::Camera::new(rustgis_geom::Coord::new(0.0, 0.0), 1.0),
             sky: false,
         };
-        let ctx =
-            Ctx { view: &view, ppp: 1.0, wireframe: false, cull: rustgis_geom::Extent::EMPTY, globe: None, sprites: Default::default() };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: rustgis_geom::Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
         let geom = Geometry::Polygon(vec![vec![vec![
             rustgis_geom::Coord::new(0.0, -2e38),
             rustgis_geom::Coord::new(1.0, -2e38),

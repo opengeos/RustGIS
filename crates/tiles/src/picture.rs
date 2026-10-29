@@ -518,6 +518,7 @@ mod tests {
             attribution: String::new(),
             layers: Vec::new(),
             style_layers: style.into(),
+            hidden_layers: Vec::new(),
         };
         (spec, dir)
     }

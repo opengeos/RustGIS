@@ -144,6 +144,10 @@ pub struct TileLayer {
     /// the tiles' own. Empty for the default look.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub style_layers: String,
+    /// Vector tiles' source layers switched off in the Layers pane (`roads`, `pois`): the style
+    /// layers drawing them are left out, so they neither draw nor answer identify.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_source_layers")]
+    pub hidden_layers: Vec<String>,
     /// A URL with date placeholders (`{date:YYYY-MM-DD}`), filled from the time slider into
     /// `url` at each step.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -171,7 +175,7 @@ pub struct TileLayer {
     /// Pro's Contents pane does. Web addresses only, at most [`MAX_LEGENDS`](rustgis_data::ogc::MAX_LEGENDS).
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_legends")]
     pub legends: Vec<rustgis_data::ogc::Legend>,
-    /// Expanded in the Layers pane, its legend showing.
+    /// Expanded in the Layers pane, its legend and source layers showing.
     #[serde(default, skip_serializing_if = "is_false")]
     pub expanded: bool,
     /// Picked in the Layers pane (`map.selectTiles`), for the session only: it holds while no
@@ -254,6 +258,29 @@ pub fn checked_style_layers(text: &str) -> Result<String, String> {
     }
 }
 
+/// The most source layers a tile layer lists or hides.
+pub const MAX_SOURCE_LAYERS: usize = rustgis_data::source_layers::MAX;
+
+/// Source layer names as a tile layer keeps them: as
+/// [`source_layers::distinct`](rustgis_data::source_layers::distinct) keeps an archive's, sorted
+/// so the same set is the same list.
+pub fn checked_source_layers<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut kept = rustgis_data::source_layers::distinct(names);
+    kept.sort_unstable();
+    kept.into_iter().map(str::to_string).collect()
+}
+
+/// A project's hidden source layers, checked; a name that isn't text is left out, and a value
+/// that isn't a list is none, so a damaged entry doesn't make the project unreadable.
+fn lenient_source_layers<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    let list = match &value {
+        serde_json::Value::Array(list) => list.as_slice(),
+        _ => &[],
+    };
+    Ok(checked_source_layers(list.iter().filter_map(serde_json::Value::as_str)))
+}
+
 fn max_zoom() -> u8 {
     19
 }
@@ -303,6 +330,7 @@ impl TileLayer {
             id: String::new(),
             layers: Vec::new(),
             style_layers: String::new(),
+            hidden_layers: Vec::new(),
             time_url: None,
             time_at: 0.0,
             time_urls: Vec::new(),

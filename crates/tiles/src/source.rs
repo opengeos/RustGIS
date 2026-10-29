@@ -46,12 +46,15 @@ pub struct Spec {
     /// MapLibre style layers (a JSON array) drawing vector tiles instead of their own colours,
     /// each from the tiles' source; empty for the default look.
     pub style_layers: String,
+    /// Source layers left out (`roads`, `pois`): the style layers drawing them are dropped, so
+    /// they neither draw nor are picked.
+    pub hidden_layers: Vec<String>,
 }
 
 impl Spec {
     fn key(&self) -> String {
         format!(
-            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.kind,
             self.url,
             self.subdomains.join(","),
@@ -62,7 +65,8 @@ impl Spec {
             self.attribution,
             // Each name with its length, so ["a,b"] and ["a", "b"] differ.
             self.layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>(),
-            self.style_layers
+            self.style_layers,
+            self.hidden_layers.iter().map(|l| format!("{}:{l}", l.len())).collect::<String>()
         )
     }
 }
@@ -138,7 +142,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
                     min_zoom: info.min_zoom,
                     max_zoom: info.max_zoom,
                     attribution: info.attribution(),
-                    layers: info.vector_layers(),
+                    layers: info.vector_layers().to_vec(),
                 };
                 match archive_style(spec, archive) {
                     Some(d) => d,
@@ -174,7 +178,7 @@ pub fn resolve(spec: &Spec) -> Resolve {
                     min_zoom: info.min_zoom,
                     max_zoom: info.max_zoom,
                     attribution: info.attribution.clone(),
-                    layers: info.vector_layers(),
+                    layers: info.vector_layers().to_vec(),
                 };
                 match archive_style(spec, archive) {
                     Some(d) => d,
@@ -188,6 +192,9 @@ pub fn resolve(spec: &Spec) -> Resolve {
         Ok(s) => s,
         Err(e) => return Resolve::Failed(format!("{}: {e}", spec.url)),
     };
+    if !spec.hidden_layers.is_empty() {
+        style.layers.retain(|l| l.source_layer.as_ref().is_none_or(|s| !spec.hidden_layers.contains(s)));
+    }
     // Sources given by a TileJSON address.
     let base = spec.url.clone();
     let mut pending = false;
@@ -291,6 +298,19 @@ pub fn resolve(spec: &Spec) -> Resolve {
     }
     all.insert(key, r.clone());
     Resolve::Ready(r)
+}
+
+/// A vector archive's source layers, as its metadata lists them (`vector_layers`) and
+/// [`source_layers::of_metadata`](rustgis_data::source_layers::of_metadata) keeps them: the same
+/// names its default look draws from. `None` for other layers, an archive that can't be read,
+/// and while a PMTiles header is on its way (asking for it starts reading it in the background;
+/// an MBTiles file's metadata is read here, the first time it is asked for).
+pub fn source_layers(kind: Kind, url: &str) -> Option<Vec<String>> {
+    match kind {
+        Kind::PmTiles => pmtiles::info(url).ok().flatten().filter(|i| i.tile_type.is_vector()).map(|i| i.vector_layers().to_vec()),
+        Kind::MbTiles => mbtiles::info(url).ok().filter(|i| i.format.is_vector()).map(|i| i.vector_layers().to_vec()),
+        _ => None,
+    }
 }
 
 /// The document at `url`: `Ok(None)` while it is on its way.
@@ -491,6 +511,7 @@ mod tests {
             attribution: "&copy; <a href=\"x\">OSM</a>".into(),
             layers: Vec::new(),
             style_layers: String::new(),
+            hidden_layers: Vec::new(),
         }
     }
 
