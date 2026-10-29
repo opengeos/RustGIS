@@ -72,10 +72,18 @@ pub(crate) struct TiltDrape {
     /// change it is for.
     #[cfg(not(target_arch = "wasm32"))]
     job: Option<(DrapeKey, std::sync::mpsc::Receiver<(Drawn, Map)>)>,
+    /// A job let go (its map change is past) whose worker may still be drawing: no other starts
+    /// until it ends, so one worker draws at a time.
+    #[cfg(not(target_arch = "wasm32"))]
+    let_go: Option<std::sync::mpsc::Receiver<(Drawn, Map)>>,
     /// The map change whose drape couldn't be drawn off the UI thread (it panicked): the last one
     /// is drawn on the UI thread until the map changes.
     #[cfg(not(target_arch = "wasm32"))]
     failed: Option<DrapeKey>,
+    /// The map change whose drape couldn't be drawn on the UI thread either: the last drape
+    /// stays until the map changes.
+    #[cfg(not(target_arch = "wasm32"))]
+    broken: Option<DrapeKey>,
 }
 
 impl TiltDrape {
@@ -84,8 +92,28 @@ impl TiltDrape {
         self.drape = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.job = None;
+            self.let_job_go();
+            // A let-go worker already done needn't hold its map copy until the map tilts again.
+            self.let_go_running();
         }
+    }
+
+    /// Lets go of the drape being drawn; its worker draws on to the end (see the `let_go` field).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn let_job_go(&mut self) {
+        if let Some((_, rx)) = self.job.take() {
+            self.let_go = Some(rx);
+        }
+    }
+
+    /// Whether the worker of a job let go is still drawing.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn let_go_running(&mut self) -> bool {
+        let running = self.let_go.as_ref().is_some_and(|rx| matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        if !running {
+            self.let_go = None;
+        }
+        running
     }
 
     /// Whether the next drape is being drawn.
@@ -189,18 +217,19 @@ impl TiltDrape {
             && drawn.key == key
             && drawn.ppp == drape_ppp
         {
-            // Nothing to drape: as a drape drawn here would say, without drawing it again.
             if drawn.patches.is_empty() {
+                // Nothing to drape where the view was when it started; it may have moved on to
+                // ground since, so the drape is drawn here for where it is now.
                 self.drape = None;
-                return false;
+            } else {
+                self.show(ctx, drawn);
             }
-            self.show(ctx, drawn);
         }
         // A job for an earlier map change (an edit while it ran) isn't waited for: its drape
         // would be thrown away.
         #[cfg(not(target_arch = "wasm32"))]
         if self.job.as_ref().is_some_and(|(k, _)| *k != key) {
-            self.job = None;
+            self.let_job_go();
         }
         let same_map = |d: &Drape| d.key == key && d.ppp == drape_ppp;
         let fresh = self.drape.as_ref().is_some_and(|d| {
@@ -218,7 +247,7 @@ impl TiltDrape {
         // that couldn't be drawn off the UI thread is drawn here.
         #[cfg(not(target_arch = "wasm32"))]
         if self.drape.as_ref().is_some_and(same_map) && self.failed != Some(key) {
-            if self.busy() {
+            if self.busy() || self.let_go_running() {
                 return true;
             }
             // Read what the view shows into the map itself, as the settled frame does.
@@ -227,6 +256,27 @@ impl TiltDrape {
                 return true;
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let drawn = if self.failed == Some(key) {
+            if self.broken == Some(key) {
+                return self.drape.is_some();
+            }
+            // On a copy, the panic caught: one from the map's own data comes again here.
+            let mut copy = map.clone();
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw(&mut copy, &view, max_side, key, tiles, time))) {
+                Ok(drawn) => {
+                    map.adopt_caches(&copy);
+                    drawn
+                }
+                Err(_) => {
+                    self.broken = Some(key);
+                    return self.drape.is_some();
+                }
+            }
+        } else {
+            draw(map, &view, max_side, key, tiles, time)
+        };
+        #[cfg(target_arch = "wasm32")]
         let drawn = draw(map, &view, max_side, key, tiles, time);
         if drawn.patches.is_empty() {
             self.drape = None;
@@ -723,19 +773,80 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(d.failed == Some(key));
-        // A job for an earlier map change isn't waited for: a change made while it runs starts
-        // its own once the view moves on.
+        // A job for an earlier map change isn't waited for: the next prepare lets it go.
         let other = DrapeKey { rev: 7, sources: 0 };
-        assert!(d.start_with(&ctx, other, || {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        assert!(d.start_with(&ctx, other, move || {
+            let _ = held.recv();
             panic!("stale")
         }));
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.15));
         assert!(!d.job.as_ref().is_some_and(|(k, _)| *k == other), "the stale job is let go");
+        // Its worker still draws: none other starts beside it, the last drape stays meanwhile.
+        d.failed = None;
+        m.camera.pan_px(5_000.0, 0.0);
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.16));
+        assert!(d.job.is_none() && d.let_go.is_some(), "one worker at a time");
+        drop(release);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while d.let_go_running() {
+            assert!(std::time::Instant::now() < end, "the let-go worker never ended");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        d.failed = Some(key);
         // Panning far away draws the next drape at once, covering the view.
         m.camera.pan_px(5_000.0, 0.0);
         assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.2));
         assert!(!d.busy());
+        assert!(covers(&m.camera, 800.0, 600.0, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()));
+    }
+
+    /// A drape that can't be drawn on the UI thread either keeps the last one: the panic doesn't
+    /// take the app down, and it isn't tried again until the map changes.
+    #[test]
+    fn a_drape_that_cant_be_drawn_at_all_keeps_the_last() {
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(60.0);
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        d.failed = Some(key);
+        d.broken = Some(key);
+        m.camera.pan_px(5_000.0, 0.0);
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.1), "the last drape stays");
+        assert!(!d.busy());
+        let next = DrapeKey { rev: 1, sources: 0 };
+        assert!(d.prepare(&ctx, &mut m, next, 0, 800.0, 600.0, 1.0, 0.2));
+        assert!(covers(&m.camera, 800.0, 600.0, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()), "a change draws again");
+    }
+
+    /// An empty drape drawn off the UI thread is for where the view was: the one for where it is
+    /// is drawn at once.
+    #[test]
+    fn an_empty_drape_from_the_worker_is_drawn_again_for_the_view() {
+        let ctx = egui::Context::default();
+        let key = DrapeKey { rev: 0, sources: 0 };
+        let mut m = tilted(60.0);
+        let mut d = TiltDrape::default();
+        assert!(d.prepare(&ctx, &mut m, key, 0, 800.0, 600.0, 1.0, 0.0));
+        let copy = m.clone();
+        let res = m.camera.res;
+        assert!(d.start_with(&ctx, key, move || {
+            let drawn = Drawn {
+                key,
+                ppp: 1.0,
+                res,
+                tiles: 0,
+                built: 0.0,
+                patches: Vec::new(),
+                relief: None,
+                shapes: Vec::new(),
+                markers: Vec::new(),
+            };
+            (drawn, copy)
+        }));
+        wait(&mut d, &ctx, &mut m, key, 0.1);
+        assert!(d.failed.is_none());
         assert!(covers(&m.camera, 800.0, 600.0, d.drape.as_ref().map(|d| &d.bands[..]).unwrap_or_default()));
     }
 
