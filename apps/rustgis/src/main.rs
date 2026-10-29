@@ -25,6 +25,8 @@ struct Menus {
     bar: Option<menu::MenuBar>,
     /// What the last build was for: a failed one is tried again only when that changes.
     tried: Option<menu::Signature>,
+    /// The language and keymap the signature was last taken for: it's taken again only then.
+    seen: Option<(rustgis_ui_egui::i18n::Lang, u64)>,
     chosen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pending: Vec<menu::Action>,
 }
@@ -334,12 +336,17 @@ impl App {
     /// greyed out as their commands are; the commands chosen from it run, unless a dialog (Save
     /// changes?) has the keys, as the keymap's do.
     fn menus(&mut self, ctx: &egui::Context) {
-        let now = menu::signature(&self.0);
-        if self.2.bar.as_ref().is_none_or(|b| *b.built_for() != now) && self.2.tried.as_ref() != Some(&now) {
-            self.2.tried = Some(now);
-            match menu::MenuBar::new(&self.0, self.2.chosen.clone()) {
-                Ok(bar) => self.2.bar = Some(bar),
-                Err(e) => log::warn!("menu bar: {e}"),
+        // The shortcuts shown can only change with the language or the keymap.
+        let seen = (self.0.chosen_lang(), self.0.shortcuts_fingerprint());
+        if self.2.seen != Some(seen) {
+            self.2.seen = Some(seen);
+            let now = menu::signature(&self.0);
+            if self.2.bar.as_ref().is_none_or(|b| *b.built_for() != now) && self.2.tried.as_ref() != Some(&now) {
+                self.2.tried = Some(now);
+                match menu::MenuBar::new(&self.0, self.2.chosen.clone()) {
+                    Ok(bar) => self.2.bar = Some(bar),
+                    Err(e) => log::warn!("menu bar: {e}"),
+                }
             }
         }
         // While the shortcut editor records, the items stay on: their keys go to it (raw_input_hook).
