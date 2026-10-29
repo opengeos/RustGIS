@@ -259,8 +259,8 @@ WMTS layer whose tile matrix set is in one, is listed and added like any other (
 - **Axis order.** A WMS 1.3.0 bounding box and a WMTS `TopLeftCorner` are in the order of the
   system's axes as EPSG defines them, as the standards ask: latitude first in EPSG:4326 and other
   longitude/latitude systems (not in CRS:84), north first in EPSG:3035 (LAEA Europe), the German
-  Gauss-Krüger zones, SWEREF99 TM, Poland's CS92 and Austria's Lambert, east first in Web
-  Mercator, UTM and LV95. RustGIS carries that order for the systems it knows (from the EPSG
+  Gauss-Krüger zones, SWEREF99 TM, Poland's CS92, Austria's Lambert and the ETRS89 "UTM (N-E)"
+  codes (EPSG:3040 and its neighbours), east first in Web Mercator, the other UTM codes and LV95. RustGIS carries that order for the systems it knows (from the EPSG
   dataset); for a system newer than its table, the layer's own `BoundingBox` is read the way that
   holds the layer, and a WMTS corner the way its matrix covers the layer. A longitude/latitude
   corner whose first number can't be a latitude is read longitude first.

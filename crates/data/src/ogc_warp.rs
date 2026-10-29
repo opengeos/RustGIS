@@ -519,7 +519,13 @@ pub fn corner_north_first(pair: (f64, f64), span: (f64, f64), area: Option<[f64;
         if dx > 0.0 && dy > 0.0 { dx * dy } else { 0.0 }
     };
     let (east, north) = (covered(pair.0, pair.1), covered(pair.1, pair.0));
-    (north != east).then_some(north > east)
+    if north > east {
+        Some(true)
+    } else if east > north {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
