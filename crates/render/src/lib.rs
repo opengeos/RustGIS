@@ -23,6 +23,7 @@ mod picture;
 mod point_marks;
 pub mod post;
 mod raster;
+pub mod raster_export;
 pub mod report;
 mod stroke_paths;
 pub mod svg;
@@ -935,6 +936,98 @@ impl Ctx<'_> {
         true
     }
 
+    /// Draw a near-rectangular filled polygon up to 1.5 px (a rectangle up to 2 px) by coverage.
+    /// Other shapes keep their paths: an extent is not a substitute for a hole or an inset.
+    fn small_polygon(&self, pm: &mut Pixmap, e: &Extent, g: &Geometry, s: &Symbol) -> bool {
+        let Geometry::Polygon(polys) = g else { return false };
+        if self.wireframe
+            || self.globe.is_some()
+            || self.view.camera.bearing != 0.0
+            || self.view.camera.pitch != 0.0
+            || s.fill.a() != 255
+            || s.stroke.a() != 255
+            || !self.ppp.is_finite()
+            || self.ppp <= 0.0
+            || !self.view.camera.res.is_finite()
+            || self.view.camera.res <= 0.0
+            || e.is_empty()
+        {
+            return false;
+        }
+        let k = self.view.pixels_per_point / self.view.camera.res.max(1e-12);
+        let (sx, sy) = (e.width() * k, e.height() * k);
+        let width = s.stroke_width.max(0.0) * self.ppp;
+        // Hairlines use a different rasterizer; unoutlined shapes already draw cheaply.
+        if !(sx.is_finite() && sy.is_finite() && width.is_finite())
+            // `emit_run` can drop an edge this short; use the real path in that case.
+            || sx <= 0.35
+            || sy <= 0.35
+            || sx > 2.0
+            || sy > 2.0
+            || width <= 1.0
+            || width > 2.0
+        {
+            return false;
+        }
+        if !antialiased() {
+            return false;
+        }
+        let [rings] = polys.as_slice() else { return false };
+        let [ring] = rings.as_slice() else { return false };
+        let Some(first) = ring.first().copied() else { return false };
+        if ring.len() < 4 || ring.last() != Some(&first) {
+            return false;
+        }
+        // Work relative to one vertex: small rings in projected coordinates can be far from zero.
+        let (mut twice_area, mut perimeter, mut on_box) = (0.0, 0.0, true);
+        let (mut left, mut right, mut bottom, mut top) = (false, false, false, false);
+        // Each segment must stay near one box edge, including short diagonals from thinning.
+        let margin = e.width().min(e.height()) * 0.15;
+        let inside = |p: Coord| p.x >= e.min_x && p.x <= e.max_x && p.y >= e.min_y && p.y <= e.max_y;
+        for pair in ring.windows(2) {
+            let [a, b] = pair else { continue };
+            if !a.is_finite() || !b.is_finite() {
+                return false;
+            }
+            let shares_edge = (a.x - e.min_x <= margin && b.x - e.min_x <= margin)
+                || (e.max_x - a.x <= margin && e.max_x - b.x <= margin)
+                || (a.y - e.min_y <= margin && b.y - e.min_y <= margin)
+                || (e.max_y - a.y <= margin && e.max_y - b.y <= margin);
+            if !inside(*a) || !inside(*b) || !shares_edge {
+                return false;
+            }
+            let (l, r, bot, t) = (a.x == e.min_x, a.x == e.max_x, a.y == e.min_y, a.y == e.max_y);
+            left |= l;
+            right |= r;
+            bottom |= bot;
+            top |= t;
+            on_box &= l || r || bot || t;
+            twice_area += (a.x - first.x) * (b.y - first.y) - (b.x - first.x) * (a.y - first.y);
+            perimeter += (a.x - b.x).abs() + (a.y - b.y).abs();
+        }
+        let box_area = e.width() * e.height();
+        let share = twice_area.abs() / (2.0 * box_area);
+        // Extents come from the unthinned geometry; don't draw a box bigger than this ring.
+        if !(left && right && bottom && top) {
+            return false;
+        }
+        // Keep at least 80% of the box's area and at most 20% extra perimeter.
+        if !share.is_finite() || !(0.8..=1.0).contains(&share) || perimeter > 2.4 * (e.width() + e.height()) {
+            return false;
+        }
+        // At the larger size, an inset in an outline can be visible: use a full box only.
+        if (sx > 1.5 || sy > 1.5) && (!on_box || share < 1.0 - 1e-10) {
+            return false;
+        }
+        let (x0, y0) = self.px(Coord::new(e.min_x, e.max_y));
+        let (x1, y1) = self.px(Coord::new(e.max_x, e.min_y));
+        if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+            return false;
+        }
+        small_polygon_pixels(pm, [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)], width, s.fill, s.stroke, share as f32);
+        true
+    }
+
     /// A point's marks, or its marker turned ([`point_marks::draw`]), unless it lies off the picture.
     fn marks(&self, pm: &mut Pixmap, c: Coord, s: &Symbol, strokes: &[LineStroke], turn: f32, halo: Option<Rgba>) {
         let (x, y) = self.px(c);
@@ -1296,6 +1389,45 @@ fn splat_color(pm: &mut Pixmap, cx: f32, cy: f32, color: Rgba, coverage: f32) {
             *dc = ((sc as u16 * a + *dc as u16 * inv + 127) / 255) as u8;
         }
         d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
+    }
+}
+
+/// Coverage of a tiny box and its mitred outline in each touched device pixel.
+fn small_polygon_pixels(pm: &mut Pixmap, b: [f32; 4], width: f32, fill: Rgba, stroke: Rgba, share: f32) {
+    if b[2] + width < 0.0 || b[3] + width < 0.0 || b[0] - width >= pm.width() as f32 || b[1] - width >= pm.height() as f32 {
+        return;
+    }
+    // tiny-skia's path rasterizer samples at quarter-pixel intervals.
+    fn snap(b: [f32; 4]) -> [f32; 4] {
+        b.map(|n| (n * 4.0).round() / 4.0)
+    }
+    fn coverage(b: [f32; 4], x: f32, y: f32) -> f32 {
+        (b[2].min(x + 1.0) - b[0].max(x)).max(0.0) * (b[3].min(y + 1.0) - b[1].max(y)).max(0.0)
+    }
+    fn blend(d: &mut [u8], color: Rgba, coverage: f32) {
+        let a = (color.a() as f32 * coverage.clamp(0.0, 1.0)).round() as u16;
+        let inv = 255 - a;
+        for (dc, sc) in d.iter_mut().zip([color.r(), color.g(), color.b()]) {
+            *dc = ((sc as u16 * a + *dc as u16 * inv + 127) / 255) as u8;
+        }
+        d[3] = (a + (d[3] as u16 * inv + 127) / 255).min(255) as u8;
+    }
+    let hw = width / 2.0;
+    let outer = snap([b[0] - hw, b[1] - hw, b[2] + hw, b[3] + hw]);
+    let inner = snap([b[0] + hw, b[1] + hw, b[2] - hw, b[3] - hw]);
+    let b = snap(b);
+    let (w, h) = (pm.width() as i64, pm.height() as i64);
+    let (x0, y0) = ((outer[0].floor() as i64).clamp(0, w), (outer[1].floor() as i64).clamp(0, h));
+    let (x1, y1) = ((outer[2].ceil() as i64).clamp(0, w), (outer[3].ceil() as i64).clamp(0, h));
+    let data = pm.data_mut();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * w + x) * 4) as usize;
+            let Some(d) = data.get_mut(i..i + 4) else { continue };
+            let (x, y) = (x as f32, y as f32);
+            blend(d, fill, coverage(b, x, y) * share);
+            blend(d, stroke, coverage(outer, x, y) - coverage(inner, x, y));
+        }
     }
 }
 
@@ -3249,7 +3381,8 @@ fn render_frame(map: &mut Map, view: &View, full_res_rasters: bool, backend: Bac
                             && !layer.graphics
                             && strokes.is_empty()
                             && let Some(e) = extents.get(row)
-                            && ctx.splat(dest, e, g, &splat_sym)
+                            && (ctx.splat(dest, e, g, &splat_sym)
+                                || (!gpu && direct && fills.is_empty() && ctx.small_polygon(dest, e, g, &sym)))
                         {
                             continue;
                         }
@@ -6085,6 +6218,378 @@ mod tests {
         // A 3 pt outline at 2× is 6 px wide: drawn as a ring, not a dot.
         let thick = Symbol { stroke_width: 3.0, ..thin };
         assert!(!ctx.splat(&mut pm, &g.extent(), &g, &thick));
+    }
+
+    #[test]
+    fn small_polygons_preserve_rectangular_coverage_and_refuse_complex_shapes() {
+        let view = View {
+            width: 40.0,
+            height: 40.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let polygon = |x: f64, y: f64, width: f64, height: f64| {
+            Geometry::Polygon(vec![vec![vec![
+                Coord::new(x, y),
+                Coord::new(x + width, y),
+                Coord::new(x + width, y + height),
+                Coord::new(x, y + height),
+                Coord::new(x, y),
+            ]]])
+        };
+        for (width_px, height_px) in [(1.1, 1.1), (1.5, 1.5), (2.0, 2.0), (0.4, 1.9), (1.9, 0.4)] {
+            for offset in [0.0, 0.13, 0.49, 0.87] {
+                for (fill, stroke, width) in
+                    [(Rgba::rgb(200, 120, 0), Rgba::rgb(30, 30, 30), 1.4), (Rgba::rgb(200, 120, 0), Rgba::rgb(30, 30, 30), 2.0)]
+                {
+                    let g = polygon(offset, offset, width_px, height_px);
+                    let sym = Symbol { fill, stroke, stroke_width: width, size: 0.0, marker: Marker::Circle };
+                    for white in [false, true] {
+                        let mut actual = Pixmap::new(40, 40).unwrap();
+                        if white {
+                            actual.fill(tiny_skia::Color::WHITE);
+                        }
+                        let mut expected = actual.clone();
+                        ctx.feature(&mut expected, &g, &sym);
+                        assert!(ctx.small_polygon(&mut actual, &g.extent(), &g, &sym));
+                        let max = actual.data().iter().zip(expected.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                        assert!(
+                            max <= 8,
+                            "size {width_px}x{height_px}, offset {offset}, width {width}, white {white}: largest difference {max}"
+                        );
+                    }
+                }
+            }
+        }
+        let sym =
+            Symbol { fill: Rgba::rgb(200, 120, 0), stroke: Rgba::rgb(30, 30, 30), stroke_width: 1.4, size: 0.0, marker: Marker::Circle };
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        let square = polygon(0.0, 0.0, 1.5, 1.5);
+        let hole = Geometry::Polygon(vec![vec![
+            vec![Coord::new(0.0, 0.0), Coord::new(1.5, 0.0), Coord::new(1.5, 1.5), Coord::new(0.0, 1.5), Coord::new(0.0, 0.0)],
+            vec![Coord::new(0.4, 0.4), Coord::new(1.1, 0.4), Coord::new(1.1, 1.1), Coord::new(0.4, 1.1), Coord::new(0.4, 0.4)],
+        ]]);
+        let triangle =
+            Geometry::Polygon(vec![vec![vec![Coord::new(0.0, 0.0), Coord::new(1.5, 0.0), Coord::new(0.0, 1.5), Coord::new(0.0, 0.0)]]]);
+        let multi = Geometry::Polygon(vec![
+            vec![vec![
+                Coord::new(0.0, 0.0),
+                Coord::new(1.5, 0.0),
+                Coord::new(1.5, 1.5),
+                Coord::new(0.0, 1.5),
+                Coord::new(0.0, 0.0),
+            ]];
+            2
+        ]);
+        let line = Geometry::Line(vec![vec![Coord::new(0.0, 0.0), Coord::new(1.5, 1.5)]]);
+        let inset = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.8, 0.0),
+            Coord::new(0.8, 0.05),
+            Coord::new(1.2, 0.05),
+            Coord::new(1.2, 0.0),
+            Coord::new(1.75, 0.0),
+            Coord::new(1.75, 1.75),
+            Coord::new(0.0, 1.75),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        let deep_inset = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.4, 0.0),
+            Coord::new(0.4, 0.45),
+            Coord::new(1.1, 0.45),
+            Coord::new(1.1, 0.0),
+            Coord::new(1.5, 0.0),
+            Coord::new(1.5, 1.5),
+            Coord::new(0.0, 1.5),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        let chamfer = Geometry::Polygon(vec![vec![vec![
+            Coord::new(0.0, 0.0),
+            Coord::new(0.8, 0.0),
+            Coord::new(1.5, 0.7),
+            Coord::new(1.5, 1.5),
+            Coord::new(0.0, 1.5),
+            Coord::new(0.0, 0.0),
+        ]]]);
+        for g in [hole, triangle, multi, line, inset, deep_inset, chamfer, polygon(0.0, 0.0, 2.01, 2.01), polygon(0.0, 0.0, 0.2, 1.5)] {
+            assert!(!ctx.small_polygon(&mut pm, &g.extent(), &g, &sym));
+        }
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 2.1, ..sym }));
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 0.0, ..sym }),
+            "unoutlined fills keep their paths"
+        );
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke: Rgba::new(0, 0, 0, 0), ..sym }));
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { fill: Rgba::new(200, 120, 0, 120), ..sym }));
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke: Rgba::new(30, 30, 30, 170), ..sym }));
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 0.7, ..sym }),
+            "hairlines keep their rasterizer"
+        );
+        assert!(
+            !ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { stroke_width: 1.0, ..sym }),
+            "one pixel is still a hairline"
+        );
+        let smaller = polygon(0.0, 0.0, 1.1, 1.1);
+        let original_extent = Extent::new(-0.02, -0.02, 1.1, 1.1);
+        assert!(!ctx.small_polygon(&mut pm, &original_extent, &smaller, &sym), "a thinned ring must not fill its old extent");
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &Symbol { fill: Rgba::new(0, 0, 0, 0), ..sym }));
+        let turned = View { camera: Camera { bearing: 15.0, ..view.camera }, ..view };
+        let turned_ctx = Ctx {
+            view: &turned,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!turned_ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let wire = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: true,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!wire.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let invalid = View { camera: Camera { res: -1.0, ..view.camera }, ..view };
+        let invalid_ctx = Ctx {
+            view: &invalid,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        assert!(!invalid_ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+        let far = View { camera: Camera { center: Coord::new(10_000_000.0, 10_000_000.0), ..view.camera }, ..view };
+        let far_ctx = Ctx {
+            view: &far,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let far_square = polygon(10_000_000.13, 10_000_000.13, 1.5, 1.5);
+        let mut actual = Pixmap::new(40, 40).unwrap();
+        actual.fill(tiny_skia::Color::WHITE);
+        let mut expected = actual.clone();
+        far_ctx.feature(&mut expected, &far_square, &sym);
+        assert!(far_ctx.small_polygon(&mut actual, &far_square.extent(), &far_square, &sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let hidpi = View { pixels_per_point: 2.0, ..view };
+        let hidpi_ctx = Ctx {
+            view: &hidpi,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let small = polygon(0.13, 0.13, 0.75, 0.75);
+        let hidpi_sym = Symbol { stroke_width: 0.7, ..sym };
+        let mut actual = Pixmap::new(80, 80).unwrap();
+        let mut expected = actual.clone();
+        hidpi_ctx.feature(&mut expected, &small, &hidpi_sym);
+        assert!(hidpi_ctx.small_polygon(&mut actual, &small.extent(), &small, &hidpi_sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let edge = polygon(19.6, 0.13, 1.4, 1.4);
+        let mut actual = Pixmap::new(40, 40).unwrap();
+        let mut expected = actual.clone();
+        ctx.feature(&mut expected, &edge, &sym);
+        assert!(ctx.small_polygon(&mut actual, &edge.extent(), &edge, &sym));
+        assert!(actual.data().iter().zip(expected.data()).all(|(a, b)| a.abs_diff(*b) <= 8));
+        let _antialias = Antialias::set(false);
+        assert!(!ctx.small_polygon(&mut pm, &square.extent(), &square, &sym));
+    }
+
+    #[test]
+    fn small_polygon_shortcut_matches_land_cover_tone() {
+        let view = View {
+            width: 100.0,
+            height: 100.0,
+            pixels_per_point: 1.0,
+            camera: Camera { center: Coord::new(0.0, 0.0), res: 1.0, bearing: 0.0, pitch: 0.0 },
+            sky: false,
+        };
+        let ctx = Ctx {
+            view: &view,
+            ppp: 1.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let colors = [Rgba::rgb(49, 130, 72), Rgba::rgb(219, 177, 80), Rgba::rgb(65, 120, 180), Rgba::rgb(200, 90, 55)];
+        for (size, gap, stroke_width, thinned, alpha) in [
+            (1.1, 0.18, 0.0, false, 255),
+            (1.1, 0.18, 1.4, false, 255),
+            (1.5, 0.2, 0.0, false, 255),
+            (1.5, 0.2, 1.4, false, 255),
+            (1.1, 0.18, 1.4, true, 255),
+            (1.5, 0.2, 1.4, true, 255),
+            (1.1, 0.18, 1.4, true, 128),
+            (1.5, 0.2, 1.4, true, 128),
+        ] {
+            let features: Vec<_> = (0..40)
+                .flat_map(|i| (0..40).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    let (x, y, step) = (-44.0 + i as f64 * (size + gap), -44.0 + j as f64 * (size + gap), size / 7.0);
+                    let inset = |t: usize| if (i * 31 + j * 17 + t).is_multiple_of(3) { step * 0.3 } else { 0.0 };
+                    let mut ring = Vec::new();
+                    for t in 0..7 {
+                        ring.push(Coord::new(x + t as f64 * step, y + inset(t)));
+                        let end = if t == 6 { x + size } else { x + (t + 1) as f64 * step };
+                        ring.push(Coord::new(end, y + inset(t)));
+                    }
+                    ring.push(Coord::new(x + size, y + size));
+                    for t in (1..=7).rev() {
+                        let start = if t == 7 { x + size } else { x + t as f64 * step };
+                        ring.push(Coord::new(start, y + size - inset(t + 7)));
+                        ring.push(Coord::new(x + (t - 1) as f64 * step, y + size - inset(t + 7)));
+                    }
+                    ring.push(Coord::new(x, y + inset(0)));
+                    let symbol = Symbol {
+                        fill: colors[(i * 31 + j * 17) % colors.len()].with_alpha(alpha),
+                        stroke: Rgba::rgb(30, 30, 30).with_alpha(alpha),
+                        stroke_width,
+                        size: 0.0,
+                        marker: Marker::Circle,
+                    };
+                    let original = Geometry::Polygon(vec![vec![ring]]);
+                    let extent = original.extent();
+                    let geometry = if thinned { rustgis_map::lod::thin(&original, 0.25) } else { original };
+                    (geometry, extent, symbol)
+                })
+                .collect();
+            let draw = |fast: bool| {
+                let mut pm = Pixmap::new(100, 100).unwrap();
+                if alpha == 255 {
+                    pm.fill(tiny_skia::Color::WHITE);
+                }
+                let mut used = 0;
+                for (g, extent, sym) in &features {
+                    if fast && ctx.small_polygon(&mut pm, extent, g, sym) {
+                        used += 1;
+                    } else {
+                        ctx.feature(&mut pm, g, sym);
+                    }
+                }
+                (pm, used)
+            };
+            let ((reference, _), (fast, used)) = (draw(false), draw(true));
+            let difference =
+                reference.data().iter().zip(fast.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / reference.data().len() as f64;
+            let maximum = reference.data().iter().zip(fast.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(
+                difference < 0.6 && maximum <= 100,
+                "{size} px, stroke {stroke_width}, thinned {thinned}, alpha {alpha}: mean {difference}, max {maximum}"
+            );
+            if stroke_width > 0.0 && alpha == 255 {
+                assert!(used >= features.len() * 95 / 100, "{size} px, thinned {thinned}: only {used} eligible");
+            } else {
+                assert_eq!(used, 0, "unoutlined or translucent styles keep their paths");
+            }
+        }
+    }
+
+    #[test]
+    fn small_polygons_draw_like_the_path_in_a_thinned_map() {
+        let mut ds = Dataset::new(
+            "land cover",
+            GeometryType::Polygon,
+            vec![Field::new("fill", FieldType::Text), Field::new("outline", FieldType::Text), Field::new("width", FieldType::Double)],
+        );
+        let size = 0.0002;
+        let step = size / 7.0;
+        for i in 0usize..100 {
+            for j in 0usize..80 {
+                let (x, y) = (i as f64 * size * 1.1, j as f64 * size * 1.1);
+                let inset = |t: usize| if (i * 31 + j * 17 + t).is_multiple_of(3) { step * 0.3 } else { 0.0 };
+                let mut ring = Vec::new();
+                for t in 0..7 {
+                    ring.push(Coord::new(x + t as f64 * step, y + inset(t)));
+                    let end = if t == 6 { x + size } else { x + (t + 1) as f64 * step };
+                    ring.push(Coord::new(end, y + inset(t)));
+                }
+                ring.push(Coord::new(x + size, y + size));
+                for t in (1..=7).rev() {
+                    let start = if t == 7 { x + size } else { x + t as f64 * step };
+                    ring.push(Coord::new(start, y + size - inset(t + 7)));
+                    ring.push(Coord::new(x + (t - 1) as f64 * step, y + size - inset(t + 7)));
+                }
+                ring.push(Coord::new(x, y + inset(0)));
+                ds.push_next(
+                    Some(Geometry::Polygon(vec![vec![ring]])),
+                    vec![Value::Text("#4A90D9".into()), Value::Text("#1F4E8C".into()), Value::Float(0.7)],
+                );
+            }
+        }
+        let mut map = Map::new("Map");
+        map.basemap = rustgis_map::Basemap::Blank;
+        map.graticule = false;
+        let id = map.add_dataset(ds);
+        let sym = Symbol {
+            fill: Rgba::rgb(0x4A, 0x90, 0xD9),
+            stroke: Rgba::rgb(0x1F, 0x4E, 0x8C),
+            stroke_width: 0.7,
+            size: 10.0,
+            marker: Marker::Circle,
+        };
+        map.layer_mut(id).unwrap().renderer = rustgis_map::Renderer::Single(sym);
+        let mut baseline = map.clone();
+        baseline.layer_mut(id).unwrap().graphics = true; // The same symbol, but no splat shortcut.
+        assert_eq!(baseline.layer(id).unwrap().symbol(0), sym);
+        let camera = Camera { center: lonlat_to_merc(Coord::new(0.011, 0.0088)), res: 40.0, bearing: 0.0, pitch: 0.0 };
+        let view = View { width: 100.0, height: 100.0, pixels_per_point: 2.0, camera, sky: false };
+        let before = render(&mut baseline, &view).unwrap().pixmap;
+        let after = render(&mut map, &view).unwrap().pixmap;
+        let difference =
+            before.data().iter().zip(after.data()).map(|(a, b)| a.abs_diff(*b) as f64).sum::<f64>() / before.data().len() as f64;
+        let maximum = before.data().iter().zip(after.data()).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(difference < 0.6 && maximum <= 100, "map: mean {difference}, max {maximum}");
+        let layer = map.layer(id).unwrap();
+        let drawn = layer.thinned_cache(view.camera.res / view.pixels_per_point * rustgis_map::lod::THIN_PX);
+        let extents = layer.projected_extents();
+        let vertices = |geometries: &[Option<Geometry>]| geometries.iter().flatten().map(rustgis_map::lod::vertices).sum::<usize>();
+        assert!(vertices(drawn) < vertices(layer.projected_cache()), "the map should use simplified geometry");
+        let ctx = Ctx {
+            view: &view,
+            ppp: 2.0,
+            wireframe: false,
+            cull: Extent::EMPTY,
+            globe: None,
+            sprites: Default::default(),
+            bursts: Default::default(),
+        };
+        let mut scratch = Pixmap::new(200, 200).unwrap();
+        let eligible =
+            drawn.iter().zip(extents).filter(|(g, e)| g.as_ref().is_some_and(|g| ctx.small_polygon(&mut scratch, e, g, &sym))).count();
+        assert!(eligible >= 2_400, "only {eligible} of {} projected features use the shortcut", drawn.len());
+        map.layer_mut(id).unwrap().transparency = 50.0;
+        baseline.layer_mut(id).unwrap().transparency = 50.0;
+        let before = render(&mut baseline, &view).unwrap().pixmap;
+        let after = render(&mut map, &view).unwrap().pixmap;
+        assert_eq!(before.data(), after.data(), "transparent layers keep the original rendering path");
     }
 
     /// A filled polygon a few pixels across has its 1.4 px outline mitred, which covers nearly the

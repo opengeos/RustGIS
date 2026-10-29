@@ -1112,8 +1112,13 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
     // backend only serves flat maps, so the globe's drape never meets it.
     // Not under the tilted map's drape: a flat GPU frame from before the tilt would cover it.
     if let (Some(gf), Some(gr)) = (app.map.gpu_frame.as_ref().filter(|_| !tilt_draped), &app.map.gpu_renderer) {
+        // A scene with pictures (or drawn for another size, a pane being dragged) is shown as a
+        // picture of itself, shifted and scaled until it is drawn again.
+        let picture = gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && (gf.has_images || gf.size != [w, h]);
         // Live tile layers, placed for this frame's camera; drawn again while tiles are uploaded.
-        let (live_frame, live_pending) = match gf.live_frame(cam) {
+        // In a picture, for the camera it was drawn for: the picture moves them with the rest (a
+        // basemap zoomed in past what f32 holds is such a picture, under the tiles).
+        let (live_frame, live_pending) = match gf.live_frame(if picture { app.map.tex_camera } else { cam }) {
             Some((f, pending, declined)) => {
                 // A layer no longer drawn live (its style turned out to draw more than raster
                 // tiles): the map is drawn again, as tiles arriving would draw it.
@@ -1139,8 +1144,7 @@ fn main_view(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
                 renderer: gr.clone(),
                 buffers: gf.clone(),
                 target: app.map.gpu_target.clone(),
-                // A scene drawn for another size (a pane being dragged) is placed as a picture too.
-                uv: if gpu_ok && cam.bearing == 0.0 && cam.pitch == 0.0 && (gf.has_images || gf.size != [w, h]) {
+                uv: if picture {
                     Rect::from_min_max(
                         ((rect.min - tex_rect.min) / tex_rect.size()).to_pos2(),
                         ((rect.max - tex_rect.min) / tex_rect.size()).to_pos2(),

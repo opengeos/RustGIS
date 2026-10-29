@@ -168,7 +168,8 @@ _GeoLibre: docs/features.md › Processing and analysis; docs/user-guide/process
 model-builder.md, segmentation.md, obia.md_
 
 - [x] **Spatial join, intersect, union** ([#959](https://github.com/opengeos/RustGIS/issues/959)):
-  spatial join, clip, erase, intersect, identity, union and near are built in.
+  spatial join, clip, erase, split, intersect, identity, union, symmetrical difference, update
+  and near are built in.
 - [ ] **More built-in vector tools**: attribute join, extract vertices, points along lines,
   fix/check geometry, random extract, buffer options. Partial: Merge (append layers) and extract vertices are built in,
   as Merge and Feature Vertices To Points (_Roadmap: solid ground_).
