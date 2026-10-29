@@ -506,9 +506,12 @@ GetFeatureInfo requests too, so identify answers for that time; `time.export` an
   where the service lets a layer take several times at once (`multipleValues`), a list
   (`1990,2000`) or an interval (`1990/2020`, `1990/2020/P10Y`) can be asked for too, otherwise one
   time.
-- **A time named, not dated**: a layer whose only time is a name (OGC's `current`, or `default`),
-  whose times are one period finer than the slider's hour (`…/PT30M`), or whose list of times would
-  take more than the slider's 20,000 steps, isn't stepped through: it is added at its default.
+- **One time only**: a layer whose dimension lists a single time, a name (OGC's `current`, as most
+  of swisstopo's WMTS layers list) or one date (`1946`), has no other to show: it is listed as a
+  plain "map", without the dialogs' **Follow the time slider**, and added at that time.
+- **A time named, not dated**: a layer whose times are only names (`current`, `default`), whose
+  times are one period finer than the slider's hour (`…/PT30M`), or whose list of times would take
+  more than the slider's 20,000 steps, isn't stepped through: it is added at its default.
 
 With commands, `service.add` follows the slider when `"time"` is left out (or is `"slider"`, or
 `true`); a time of the layer's draws it at that time, and `"default"` (or `false`) at the service's

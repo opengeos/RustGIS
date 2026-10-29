@@ -144,10 +144,23 @@ impl SliderTime {
 }
 
 impl LayerTime {
-    /// Its times on the time slider; `None` when they aren't dates it can step to (`current`
-    /// alone, or written in no format of [`DATE_FORMATS`]).
+    /// Whether it lists more than one time (several, or a range): one that lists a single time
+    /// (swisstopo's maps, most of them `current` alone) has no other to show and is a plain map.
+    pub fn changes(&self) -> bool {
+        match self.values.as_slice() {
+            [] => false,
+            [one] => one.contains('/'),
+            _ => true,
+        }
+    }
+
+    /// Its times on the time slider; `None` when they aren't dates it can step to (one time, as
+    /// `current` alone, or written in no format of [`DATE_FORMATS`]).
     pub fn slider(&self) -> Option<SliderTime> {
         use crate::time::Unit;
+        if !self.changes() {
+            return None;
+        }
         // The format: the first time listed (or a range's start) that reads as a date in one.
         let first =
             self.values.iter().flat_map(|v| v.split('/').take(2)).find(|v| DATE_FORMATS.iter().any(|f| written_as(v, f).is_some()))?;
@@ -3752,8 +3765,11 @@ mod tests {
         let all: Vec<String> = (0..1500).map(|i| format!("{}", 1000 + i)).collect();
         let listed = layer_time(None, all, checked_wms_time, false).unwrap();
         assert_eq!((listed.default.as_str(), listed.values.len(), listed.values[0].as_str()), ("2499", MAX_TIME_VALUES, "1500"));
-        // No dates to step to.
+        // No dates to step to: one time (a name, a date), or none listed.
         assert_eq!(lt("current", &["current"]).slider(), None);
+        assert_eq!(lt("1946", &["1946"]).slider(), None);
+        assert!(!lt("current", &["current"]).changes() && !lt("1946", &["1946"]).changes() && !lt("2024", &[]).changes());
+        assert!(lt("2026", &["1952/2026/P1Y"]).changes() && lt("current", &["current", "2025"]).changes());
         assert_eq!(lt("2024", &[]).slider(), None);
         assert_eq!(lt("2024", &["2024/2020"]).slider(), None);
         assert_eq!(period_step("PT6H"), Some((Unit::Hour, 6)));
