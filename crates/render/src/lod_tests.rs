@@ -53,6 +53,30 @@ fn difference(a: &Pixmap, b: &Pixmap) -> (f64, u8) {
     (deltas.iter().map(|&d| f64::from(d)).sum::<f64>() / deltas.len() as f64, deltas.into_iter().max().unwrap_or(0))
 }
 
+/// Largest mean RGBA difference in a 16-by-16 device-pixel region. Local means tolerate
+/// antialiased edges while detecting a missing cell that a whole-frame mean can hide.
+fn local_difference(a: &Pixmap, b: &Pixmap) -> f64 {
+    assert_eq!((a.width(), a.height()), (b.width(), b.height()));
+    let (w, h) = (a.width() as usize, a.height() as usize);
+    let mut worst = 0.0f64;
+    for y in (0..h).step_by(16) {
+        for x in (0..w).step_by(16) {
+            let mut total = 0u64;
+            let end_x = (x + 16).min(w);
+            let end_y = (y + 16).min(h);
+            for row in y..end_y {
+                let start = (row * w + x) * 4;
+                let end = (row * w + end_x) * 4;
+                total += a.data()[start..end].iter().zip(&b.data()[start..end]).map(|(a, b)| u64::from(a.abs_diff(*b))).sum::<u64>();
+            }
+            worst = worst.max(total as f64 / ((end_x - x) * (end_y - y) * 4) as f64);
+        }
+    }
+    worst
+}
+
+/// Compares full and thinned images at six scales, including a deliberate missing-cell control.
+
 #[test]
 fn lod_landcover_matches_full_geometry_at_several_zooms_and_densities() {
     let base = landcover(84); // 211,680 vertices: above the whole-layer threshold.
@@ -75,7 +99,17 @@ fn lod_landcover_matches_full_geometry_at_several_zooms_and_densities() {
             let background = &expected.pixmap.data()[..4];
             assert!(expected.pixmap.data().as_chunks::<4>().0.iter().any(|p| p != background), "comparison must contain rendered polygons");
             let (mean, max) = difference(&expected.pixmap, &got.pixmap);
-            eprintln!("LOD comparison: {across}px, density {ppp}: mean {mean:.4}/255, max {max}");
+            let local = local_difference(&expected.pixmap, &got.pixmap);
+            eprintln!("LOD comparison: {across}px, density {ppp}: mean {mean:.4}/255, max {max}, local {local:.4}");
+            assert!(local < 12.0, "local channel difference {local} at {across}px, density {ppp}");
+            if across == 30.0 && ppp == 1.0 {
+                let mut omitted = base.clone();
+                omitted.layers[0].dataset.features[42 * 84 + 42].geometry = None;
+                let missing = render(&mut unthinned(&omitted), &view).unwrap();
+                let local = local_difference(&expected.pixmap, &missing.pixmap);
+                eprintln!("Missing-cell control: local {local:.4}");
+                assert!(local > 12.0, "localized comparison must detect an omitted central cell");
+            }
             assert!(mean < 3.0, "mean channel difference {mean} at {across}px, density {ppp}");
             if across == 3.0 {
                 assert!(map.layers[0].projected_cache().is_empty(), "plain drawing must leave full projection lazy");
@@ -94,8 +128,9 @@ fn lod_landcover_matches_full_geometry_at_several_zooms_and_densities() {
     }
 }
 
+/// Times cold and warm complete renders for a 210,681-cell layer without import costs.
 #[test]
-#[ignore = "manual whole-frame benchmark; run through the host queue"]
+#[ignore = "manual benchmark: cargo test --release -p rustgis-render lod_landcover_whole_frame_benchmark -- --ignored --nocapture"]
 fn lod_landcover_whole_frame_benchmark() {
     let base = landcover(459);
     let view = View {

@@ -161,7 +161,7 @@ pub struct View {
 }
 
 impl View {
-    /// Display error budget in map units, with one physical pixel independent of device density.
+    /// Display error budget in map units, with one device pixel independent of device density.
     fn lod_tolerance(&self) -> f64 {
         self.camera.res / self.pixels_per_point.max(0.01) * rustgis_map::lod::THIN_PX
     }
@@ -2199,7 +2199,8 @@ pub fn extruded_shapes(map: &mut Map, view: &View) -> Vec<ExtrudedShape> {
     let (flat, key) = (map.flat(), map.projection.code());
     // Extrusion heights are metres on the map's body.
     let body = map.body().ratio();
-    let tol = view.lod_tolerance();
+    // Preserve the tighter footprint tolerance used for extruded walls and roofs.
+    let tol = view.camera.res * 0.3;
     let mut order: Vec<usize> = (0..map.layers.len()).rev().collect();
     order.sort_by_key(|i| map.layers.get(*i).map_or(0, |l| l.priority));
     let mut out = Vec::new();

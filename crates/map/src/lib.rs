@@ -196,11 +196,14 @@ pub struct Layer {
     /// Shared, like the features: an undo snapshot or other copy of the layer doesn't copy it.
     #[serde(skip)]
     projected: std::sync::Arc<Vec<Option<Geometry>>>,
-    /// The last Mercator display level; full projection stays lazy for interaction.
+    /// The active Mercator display level; full projection stays lazy for interaction.
     #[serde(skip)]
     display: Option<std::sync::Arc<lod::Display>>,
     #[serde(skip)]
-    display_rejected: Option<lod::Rejected>,
+    display_rejected: Vec<lod::Rejected>,
+    /// Recent display levels, shared by snapshots and bounded together with `thinned`.
+    #[serde(skip)]
+    display_levels: Vec<std::sync::Arc<lod::Display>>,
     /// Each projected geometry's extent, for culling without walking its vertices.
     #[serde(skip)]
     projected_extents: std::sync::Arc<Vec<Extent>>,
@@ -373,7 +376,8 @@ impl Layer {
             gpkg: None,
             projected: Default::default(),
             display: None,
-            display_rejected: None,
+            display_rejected: Vec::new(),
+            display_levels: Vec::new(),
             projected_extents: Default::default(),
             projected_vertices: 0,
             thinned: Default::default(),
@@ -521,7 +525,7 @@ impl Layer {
     pub fn view_cache_bytes(&self) -> usize {
         self.view_memory
             .total(&self.dataset.features, &self.projected, &self.projected_extents, &self.thinned)
-            .saturating_add(self.display.as_ref().map_or(0, |d| d.bytes))
+            .saturating_add(self.display_levels.iter().map(|d| d.bytes).sum::<usize>())
     }
 
     /// Every feature of a streamed layer's source (up to the read limit), for tools and for
@@ -659,6 +663,7 @@ impl Layer {
     pub fn projected_in(&mut self, flat: &projection::Flat, key: &str) -> &[Option<Geometry>] {
         if self.projected_rev != self.geometry_rev || self.projected.len() != self.dataset.features.len() || self.projected_for != key {
             self.display = None;
+            self.display_levels.clear();
             let projected: Vec<Option<Geometry>> =
                 self.dataset.features.iter().map(|ft| ft.geometry.as_ref().map(|g| flat.project(g))).collect();
             self.projected_extents =
@@ -683,13 +688,6 @@ impl Layer {
     /// Returns false for unsupported projections, small layers, weak savings or a full budget.
     pub fn prepare_display(&mut self, flat: &projection::Flat, tol: f64, whole_layer_eligible: bool) -> bool {
         let Some(level) = lod::level(tol).filter(|_| matches!(flat, projection::Flat::Mercator)) else { return false };
-        if self
-            .display
-            .as_ref()
-            .is_some_and(|d| d.revision == self.geometry_rev && d.level == level && d.geometries.len() == self.dataset.features.len())
-        {
-            return true;
-        }
         self.display = None;
         let used: usize = self.thinned.iter().filter_map(|(_, c)| c.as_ref()).map(|c| lod::cache_bytes(c)).sum();
         let budget = self
@@ -701,14 +699,46 @@ impl Layer {
                     .min(lod::CACHE_BYTES)
             })
             .saturating_sub(used);
+        // Retain recent levels only while their combined storage fits today's budget.
+        let mut bytes = 0usize;
+        self.display_levels.retain(|d| {
+            let valid = d.revision == self.geometry_rev && d.geometries.len() == self.dataset.features.len();
+            if !valid || bytes.saturating_add(d.bytes) > budget {
+                return false;
+            }
+            bytes += d.bytes;
+            true
+        });
+        if let Some(i) = self.display_levels.iter().position(|d| d.level == level && d.whole_layer_eligible == whole_layer_eligible) {
+            let hit = self.display_levels.remove(i);
+            self.display = Some(hit.clone());
+            self.display_levels.insert(0, hit);
+            return true;
+        }
         let attempt = lod::Rejected { revision: self.geometry_rev, level, rows: self.dataset.features.len(), budget, whole_layer_eligible };
-        if self.display_rejected == Some(attempt) {
+        if let Some(i) = self.display_rejected.iter().position(|a| *a == attempt) {
+            let hit = self.display_rejected.remove(i);
+            self.display_rejected.insert(0, hit);
             return false;
         }
-        self.display =
-            lod::display(&self.dataset.features, self.geometry_rev, level, budget, whole_layer_eligible).map(std::sync::Arc::new);
-        self.display_rejected = self.display.is_none().then_some(attempt);
-        self.display.is_some()
+        let Some(display) = lod::display(&self.dataset.features, self.geometry_rev, level, budget, whole_layer_eligible) else {
+            self.display_rejected.insert(0, attempt);
+            self.display_rejected.truncate(lod::LEVELS_KEPT);
+            return false;
+        };
+        let display = std::sync::Arc::new(display);
+        self.display_levels.insert(0, display.clone());
+        self.display_levels.truncate(lod::LEVELS_KEPT);
+        let mut bytes = 0usize;
+        self.display_levels.retain(|d| {
+            if bytes.saturating_add(d.bytes) > budget {
+                return false;
+            }
+            bytes += d.bytes;
+            true
+        });
+        self.display = Some(display);
+        true
     }
 
     /// The copy and original extents from a successful `prepare_display`, row for row.
@@ -724,6 +754,7 @@ impl Layer {
     /// geometry itself for a small layer. Read it back with [`Layer::thinned_cache`].
     pub fn thinned_in(&mut self, flat: &projection::Flat, key: &str, tol: f64) -> &[Option<Geometry>] {
         self.display = None;
+        self.display_levels.clear();
         self.projected_in(flat, key);
         let budget = self.source.as_ref().map_or(lod::CACHE_BYTES, |s| {
             let base = self.view_memory.base(&self.dataset.features, &self.projected, &self.projected_extents);
@@ -739,7 +770,7 @@ impl Layer {
             None => {
                 let t = lod::tolerance(level);
                 let copy = if matches!(flat, projection::Flat::Mercator) {
-                    lod::display(&self.dataset.features, self.geometry_rev, level, budget, true).map(|d| d.geometries)
+                    lod::project_budgeted(&self.dataset.features, level, budget)
                 } else {
                     lod::thin_budgeted(&self.projected, t, budget)
                 };
@@ -789,7 +820,8 @@ impl Layer {
     /// Drops the projected geometry cache (the feature cache).
     pub fn clear_cache(&mut self) {
         self.display = None;
-        self.display_rejected = None;
+        self.display_levels.clear();
+        self.display_rejected.clear();
         self.projected = Default::default();
         self.projected_extents = Default::default();
         self.projected_vertices = 0;
@@ -813,7 +845,8 @@ impl Layer {
             });
         if fits {
             self.display = other.display.clone();
-            self.display_rejected = other.display_rejected;
+            self.display_rejected = other.display_rejected.clone();
+            self.display_levels = other.display_levels.clone();
             self.projected = other.projected.clone();
             self.projected_extents = other.projected_extents.clone();
             self.projected_vertices = other.projected_vertices;
@@ -2808,6 +2841,93 @@ mod tests {
     }
 
     #[test]
+    fn streamed_display_uses_whole_layer_eligibility_and_respects_remaining_budget() {
+        let flat = projection::Flat::Mercator;
+        let mut chunk = long_line(100);
+        assert!(!chunk.prepare_display(&flat, 1e6, false));
+        // The complete source is detailed even though this chunk alone is small.
+        assert!(chunk.prepare_display(&flat, 1e6, true));
+        assert!(chunk.projected_cache().is_empty());
+        let (g, extents) = chunk.display_cache().unwrap();
+        assert!(lod::vertices(g[0].as_ref().unwrap()) < 100);
+        assert_eq!(extents[0], flat.project(chunk.dataset.features[0].geometry.as_ref().unwrap()).extent());
+        assert!(!chunk.prepare_display(&flat, 1e6, false), "chunk eligibility must not leak into ordinary drawing");
+        assert!(chunk.prepare_display(&flat, 1e6, true));
+        chunk.clear_cache();
+        let mut source = source::SourceLayer::default();
+        source.byte_budget = 1;
+        chunk.source = Some(source);
+        assert!(!chunk.prepare_display(&flat, 1e6, true));
+        assert!(chunk.display_cache().is_none());
+        // Budget exhaustion falls back to the original, fully projected geometry.
+        let full = flat.project(chunk.dataset.features[0].geometry.as_ref().unwrap());
+        assert_eq!(chunk.thinned_in(&flat, "mercator", 1e6), &[Some(full)]);
+    }
+
+    #[test]
+    fn geometry_only_lod_does_not_charge_for_unused_extents() {
+        let l = long_line(100);
+        let copy = lod::project_budgeted(&l.dataset.features, 20, usize::MAX).unwrap();
+        let budget = lod::cache_bytes(&copy);
+        assert_eq!(lod::project_budgeted(&l.dataset.features, 20, budget).unwrap(), copy);
+        assert!(lod::display(&l.dataset.features, 0, 20, budget, true).is_none());
+    }
+
+    /// Tilted bands and zoom reversals reuse bounded display levels shared by snapshots.
+    #[test]
+    fn display_levels_are_reused_across_bands_and_bounded_together() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        let tolerances = [12_000.0, 24_000.0, 48_000.0];
+        let before = lod::DISPLAY_BUILDS.get();
+        let mut pointers = Vec::new();
+        for tol in tolerances {
+            assert!(l.prepare_display(&flat, tol, false));
+            pointers.push(l.display_cache().unwrap().0.as_ptr());
+        }
+        let mut copy = l.clone();
+        for _ in 0..3 {
+            for (tol, pointer) in tolerances.into_iter().zip(&pointers) {
+                assert!(copy.prepare_display(&flat, tol, false));
+                assert_eq!(copy.display_cache().unwrap().0.as_ptr(), *pointer);
+            }
+        }
+        assert_eq!(lod::DISPLAY_BUILDS.get(), before + 3);
+        assert!(copy.projected_cache().is_empty());
+        let available = copy.display_levels.iter().map(|d| d.bytes).min().unwrap();
+        let base = copy.view_memory.base(&copy.dataset.features, &copy.projected, &copy.projected_extents);
+        let mut source = source::SourceLayer::default();
+        source.byte_budget = base + available;
+        copy.source = Some(source);
+        assert!(copy.prepare_display(&flat, 48_000.0, false));
+        assert!(copy.display_levels.iter().map(|d| d.bytes).sum::<usize>() <= available);
+        assert_eq!(copy.display_levels.len(), 1);
+        copy.touch_geometry();
+        assert!(copy.prepare_display(&flat, 48_000.0, false));
+        assert_eq!(lod::DISPLAY_BUILDS.get(), before + 4);
+        copy.clear_cache();
+        assert!(copy.display_levels.is_empty());
+    }
+
+    /// Alternating failed zoom levels must not repeatedly walk all source vertices.
+    #[test]
+    fn several_rejected_display_levels_are_memoized() {
+        let flat = projection::Flat::Mercator;
+        let mut l = long_line(lod::THIN_ABOVE + 1000);
+        let before = lod::DISPLAY_BUILDS.get();
+        for _ in 0..3 {
+            for tol in [0.001, 0.002, 0.004] {
+                assert!(!l.prepare_display(&flat, tol, false));
+            }
+        }
+        assert_eq!(lod::DISPLAY_BUILDS.get(), before + 3);
+        assert_eq!(l.display_rejected.len(), lod::LEVELS_KEPT);
+        l.touch_geometry();
+        assert!(!l.prepare_display(&flat, 0.001, false));
+        assert_eq!(lod::DISPLAY_BUILDS.get(), before + 4);
+    }
+
+    #[test]
     fn rejected_display_levels_are_not_rebuilt_on_unchanged_frames() {
         let flat = projection::Flat::Mercator;
         let mut l = long_line(lod::THIN_ABOVE + 1000);
@@ -2815,13 +2935,13 @@ mod tests {
         let built = lod::DISPLAY_BUILDS.get();
         l.thinned_in(&flat, "mercator", 0.001);
         assert!(!l.prepare_display(&flat, 0.001, false));
-        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 1, "only thinned_in's first cache attempt runs");
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built, "thinned_in builds geometry only");
         l.thinned_in(&flat, "mercator", 0.001);
         assert!(!l.prepare_display(&flat, 0.001, false));
-        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 1);
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built);
         l.touch_geometry();
         assert!(!l.prepare_display(&flat, 0.001, false));
-        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 2, "a changed geometry must retry");
+        assert_eq!(lod::DISPLAY_BUILDS.get(), built + 1, "a changed geometry must retry");
     }
 
     #[test]

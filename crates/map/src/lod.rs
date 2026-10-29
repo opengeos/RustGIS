@@ -45,13 +45,14 @@ thread_local! {
 pub(crate) struct Display {
     pub revision: u64,
     pub level: i32,
+    pub whole_layer_eligible: bool,
     pub geometries: Vec<Option<Geometry>>,
     pub extents: Vec<rustgis_geom::Extent>,
     pub bytes: usize,
 }
 
 /// A display copy projected only after thinning. Mercator's largest derivative over the
-/// geometry bounds converts the tolerance to degrees conservatively, including polar clamping.
+/// bounds of each line or ring converts the tolerance to degrees, including polar clamping.
 /// Other projections retain projected-space thinning: sampled scales cannot bound their seams
 /// or singularities. Non-finite vertices survive thinning and still break paths after projection.
 pub fn project_thinned(g: &Geometry, flat: &crate::projection::Flat, tol: f64) -> Geometry {
@@ -61,11 +62,12 @@ pub fn project_thinned(g: &Geometry, flat: &crate::projection::Flat, tol: f64) -
     if !matches!(flat, crate::projection::Flat::Mercator) {
         return thin(&flat.project(g), tol);
     }
-    let e = g.extent();
-    let latitude = e.min_y.abs().max(e.max_y.abs()).min(rustgis_geom::MAX_LAT);
-    // |dx| + |dy| in degrees times this derivative bounds projected Euclidean distance.
-    let per_degree = rustgis_geom::MERCATOR_R * std::f64::consts::PI / 180.0 / latitude.to_radians().cos();
-    flat.project(&thin(g, tol / per_degree))
+    flat.project(&thin_with(g, |run| {
+        let latitude = run.iter().filter(|c| c.is_finite()).fold(0.0f64, |lat, c| lat.max(c.y.abs().min(rustgis_geom::MAX_LAT)));
+        // |dx| + |dy| in degrees times this derivative bounds projected Euclidean distance.
+        let per_degree = rustgis_geom::MERCATOR_R * std::f64::consts::PI / 180.0 / latitude.to_radians().cos();
+        thin_run(run, tol / per_degree)
+    }))
 }
 
 /// Builds a Mercator display level without ever constructing the full projected geometry.
@@ -84,39 +86,49 @@ pub(crate) fn display(
     if !whole_layer_eligible && eligible <= THIN_ABOVE {
         return None;
     }
-    let mut bytes = features.len().checked_mul(std::mem::size_of::<Option<Geometry>>() + std::mem::size_of::<rustgis_geom::Extent>())?;
+    let extent_bytes = features.len().checked_mul(std::mem::size_of::<rustgis_geom::Extent>())?;
+    let geometries = project_budgeted(features, level, budget.checked_sub(extent_bytes)?)?;
+    let all: usize = features.iter().filter_map(|f| f.geometry.as_ref()).map(vertices).sum();
+    let kept: usize = geometries.iter().flatten().map(vertices).sum();
+    if !whole_layer_eligible && kept as f64 > all as f64 * (1.0 - MIN_SAVING) {
+        return None;
+    }
+    // Mercator is monotone in both axes; two opposite corners bound every source vertex.
+    let extents = features
+        .iter()
+        .map(|f| {
+            let e = f.geometry.as_ref().map_or(rustgis_geom::Extent::EMPTY, Geometry::extent);
+            if e.is_empty() {
+                e
+            } else {
+                rustgis_geom::Extent::from_points(
+                    rustgis_geom::lonlat_to_merc(Coord::new(e.min_x, e.min_y)),
+                    rustgis_geom::lonlat_to_merc(Coord::new(e.max_x, e.max_y)),
+                )
+            }
+        })
+        .collect();
+    let bytes = cache_bytes(&geometries).checked_add(extent_bytes)?;
+    Some(Display { revision, level, whole_layer_eligible, geometries, extents, bytes })
+}
+
+/// Builds only Mercator display geometry within `budget`. Callers apply their own eligibility
+/// and saving rules; exact consumers already have extents and need no second extent table.
+pub(crate) fn project_budgeted(features: &[rustgis_data::Feature], level: i32, budget: usize) -> Option<Vec<Option<Geometry>>> {
+    let mut bytes = features.len().checked_mul(std::mem::size_of::<Option<Geometry>>())?;
     if bytes > budget {
         return None;
     }
     let mut geometries = Vec::with_capacity(features.len());
-    let mut extents = Vec::with_capacity(features.len());
-    let (mut all, mut kept) = (0usize, 0usize);
     for f in features {
-        let g = f.geometry.as_ref().map(|g| {
-            all = all.saturating_add(vertices(g));
-            project_thinned(g, &crate::projection::Flat::Mercator, tolerance(level))
-        });
-        kept = kept.saturating_add(g.as_ref().map_or(0, vertices));
+        let g = f.geometry.as_ref().map(|g| project_thinned(g, &crate::projection::Flat::Mercator, tolerance(level)));
         bytes = bytes.checked_add(g.as_ref().map_or(0, heap_bytes))?;
         if bytes > budget {
             return None;
         }
-        // Mercator is monotone in both axes; two opposite corners bound every source vertex.
-        let e = f.geometry.as_ref().map_or(rustgis_geom::Extent::EMPTY, Geometry::extent);
-        extents.push(if e.is_empty() {
-            e
-        } else {
-            rustgis_geom::Extent::from_points(
-                rustgis_geom::lonlat_to_merc(Coord::new(e.min_x, e.min_y)),
-                rustgis_geom::lonlat_to_merc(Coord::new(e.max_x, e.max_y)),
-            )
-        });
         geometries.push(g);
     }
-    if !whole_layer_eligible && kept as f64 > all as f64 * (1.0 - MIN_SAVING) {
-        return None;
-    }
-    Some(Display { revision, level, geometries, extents, bytes })
+    Some(geometries)
 }
 
 /// Heap allocation held by a geometry's vectors (the enum itself is in its containing array).
@@ -165,9 +177,14 @@ pub fn tolerance(level: i32) -> f64 {
 /// |dx| + |dy|) from the last vertex kept, and always each one's first and last. A ring that
 /// would keep fewer than four vertices stays whole, so a small polygon still has an area to fill.
 pub fn thin(g: &Geometry, tol: f64) -> Geometry {
+    thin_with(g, |run| thin_run(run, tol))
+}
+
+/// Applies a run-specific thinning rule while preserving points and rings with too few kept vertices.
+fn thin_with(g: &Geometry, run: impl Fn(&[Coord]) -> Vec<Coord>) -> Geometry {
     match g {
         Geometry::Point(_) | Geometry::MultiPoint(_) => g.clone(),
-        Geometry::Line(parts) => Geometry::Line(parts.iter().map(|p| thin_run(p, tol)).collect()),
+        Geometry::Line(parts) => Geometry::Line(parts.iter().map(|p| run(p)).collect()),
         Geometry::Polygon(polys) => Geometry::Polygon(
             polys
                 .iter()
@@ -175,7 +192,7 @@ pub fn thin(g: &Geometry, tol: f64) -> Geometry {
                     rings
                         .iter()
                         .map(|r| {
-                            let kept = thin_run(r, tol);
+                            let kept = run(r);
                             if kept.len() < 4 { r.clone() } else { kept }
                         })
                         .collect()
@@ -241,7 +258,8 @@ mod tests {
             let original = Geometry::Line(vec![run]);
             let Geometry::Line(full) = flat.project(&original) else { panic!("line") };
             let Geometry::Line(kept) = project_thinned(&original, &flat, 10_000.0) else { panic!("line") };
-            // A geometry spanning all latitudes may need every vertex under the polar bound.
+            // Require savings only near the equator; a pole-spanning geometry may keep every
+            // vertex under the larger polar bound. All runs must satisfy the error bound.
             if south == -1.5 {
                 assert!(kept[0].len() < full[0].len() / 10);
             }
@@ -257,6 +275,19 @@ mod tests {
                 assert!((c.x - anchor.x).hypot(c.y - anchor.y) <= 10_000.0 + 1e-6);
             }
         }
+    }
+
+    /// A polar part must not force unrelated equatorial parts to retain their dense vertices.
+    #[test]
+    fn multipart_mercator_thinning_uses_each_runs_latitude_bound() {
+        let equator: Vec<_> = (0..10_000).map(|i| Coord::new(i as f64 * 0.00001, 0.0)).collect();
+        let polar = vec![Coord::new(1.0, 85.0), Coord::new(1.01, 85.0)];
+        let flat = crate::projection::Flat::Mercator;
+        let single = project_thinned(&Geometry::Line(vec![equator.clone()]), &flat, 100.0);
+        let mixed = project_thinned(&Geometry::Line(vec![equator, polar]), &flat, 100.0);
+        let (Geometry::Line(single), Geometry::Line(mixed)) = (single, mixed) else { panic!("lines") };
+        assert_eq!(single[0], mixed[0]);
+        assert!(mixed[0].len() < 200);
     }
 
     #[test]
