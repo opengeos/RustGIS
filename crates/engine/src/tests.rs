@@ -13432,7 +13432,9 @@ fn connections_commands() {
     assert!(s3::connection("conn-test-s3").is_none());
     s.run("connection.new", &json!({"kind":"wms","name":"Closed","address":"http://127.0.0.1:9/wms"})).unwrap();
     assert!(s.run("connection.test", &json!({"id":"Closed"})).unwrap_err().contains("127.0.0.1:9"));
-    assert!(s.run("connection.login", &json!({"id":"Closed"})).unwrap_err().contains("don't log in"));
+    // A service without a login method logs in to nothing: it is only chosen for its address.
+    assert_eq!(s.run("connection.login", &json!({"id":"Closed"})).unwrap()["loggedIn"], false);
+    assert!(s.run("connection.login", &json!({"id":"Closed","apiKey":"k"})).unwrap_err().contains("no login method"));
     s.run("connection.edit", &json!({"id":"Closed","kind":" wms "})).unwrap();
     let default = s.run("connection.new", &json!({"kind":"wms","address":"https://a.example/wms"})).unwrap();
     let renamed = s.run("connection.edit", &json!({"id":"B","name":""})).unwrap();
@@ -13636,7 +13638,7 @@ fn connection_browse_levels_and_adds() {
     assert_eq!(v["children"][0]["what"], "item");
     assert_eq!(
         v["children"][0]["children"][0]["add"],
-        json!({"command": "stac.addAsset", "params": {"url": self_link, "asset": "visual", "name": "i1 visual"}})
+        json!({"command": "stac.addAsset", "params": {"url": self_link, "asset": "visual", "name": "i1 visual", "connection": v["connection"]}})
     );
     assert!(v.get("truncated").is_none());
 
@@ -13666,7 +13668,7 @@ fn connection_browse_levels_and_adds() {
     let v = s.run("connection.browse", &json!({"id": "Static", "node": item_node, "answer": item.to_string()})).unwrap();
     assert_eq!(
         v["children"][0]["add"],
-        json!({"command": "stac.addAsset", "params": {"url": "https://s.example/static/c1/i1/i1.json", "asset": "visual", "name": "i1 visual"}})
+        json!({"command": "stac.addAsset", "params": {"url": "https://s.example/static/c1/i1/i1.json", "asset": "visual", "name": "i1 visual", "connection": v["connection"]}})
     );
     // An asset's key names its item, so the same file under two items is two rows.
     assert_eq!(v["children"][0]["key"], "https://s.example/static/c1/i1/i1.json#visual");

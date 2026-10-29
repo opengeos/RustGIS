@@ -776,9 +776,9 @@ has no login yet asks for one, and a layer whose recorded connection isn't on th
 to make one for its address. `connection.list` reports these as `loginRequests` with the `origin`.
 The command line and Python use remembered logins with `--use-saved-secrets` /
 `use_saved_secrets=True`, as they do database passwords and S3 keys. ArcGIS sign-in and tokens
-keep their own [ArcGIS sign-in](#web-data). A login belongs to the session that made it and ends
-with it; like the Earthdata and ArcGIS tokens, it goes with every request the process makes to its
-origin while it lasts, so two Python sessions reading the same origin share the active one.
+keep their own [ArcGIS sign-in](#web-data). A login ends with the session that made it, but while
+it lasts it goes with every request the process makes to its origin, as the Earthdata and ArcGIS
+tokens do: two Python sessions reading the same origin both send the active one.
 
 ## Large files
 
