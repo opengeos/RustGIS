@@ -1,6 +1,6 @@
 ---
 name: geoprocessing
-description: Run geoprocessing tools and chain them — buffer, clip, erase, split, dissolve, select by location or attributes, summarize within, summary statistics, simplify, export features. Use for "within N km of", "inside", "merge by", "count per", "overlay", or any multi-step analysis.
+description: Run geoprocessing tools and chain them — buffer, clip, erase, split, dissolve, select by location or attributes, summarize within, summary statistics, simplify, export features, kernel density. Use for "within N km of", "inside", "merge by", "count per", "overlay", "density surface", or any multi-step analysis.
 ---
 
 # Geoprocessing
@@ -8,7 +8,7 @@ description: Run geoprocessing tools and chain them — buffer, clip, erase, spl
 Based on the RustGIS user guide, Analysis › Geoprocessing tools
 (`read_doc` `{"page": "user-guide/analysis.md", "section": "Geoprocessing tools"}`).
 
-1. **Find the tool:** `search_tools` with words ("buffer", "overlay", "count points"), then
+1. **Find the tool:** `search_tools` with words ("buffer", "overlay", "count points", "density"), then
    `describe_tool` for its parameters. Never guess parameter names. The built-in tools are:
    - proximity: `buffer` (`input`, `distance`, `units`, `dissolve`), `near` (`input`, `near`,
      `distance`, `units`: adds the nearest feature's id, its distance and the nearest point)
@@ -27,6 +27,7 @@ Based on the RustGIS user guide, Analysis › Geoprocessing tools
    - statistics: `countPoints` (Summarize Within: `polygons`, `points`), `summaryStatistics`
      (`input`, `statistics`, `case`), `pivotTable` (`input`, `fields`, `pivot`, `value`, `statistic`)
    - conversion: `exportFeatures` (`input`, `where`)
+   - density: `kernelDensity` (`input`, `field`, `radius`, `pixelSize`, `kernel`, `crs`)
 2. **Run it:** use `run_tool` with layers named in `params`. The output is usually one new layer,
    and the result names it: use that name as the next step's input. Give `output` a clear name
    when the chain is long. A tool with several outputs (`split`, one layer per split area) lists

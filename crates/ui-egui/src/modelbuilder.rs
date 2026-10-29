@@ -1424,10 +1424,14 @@ fn tool_settings(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens, i: usize, n: &Mo
         if let Some(input) = crate::fieldlists::input(p.kind) {
             let name = source_input(app, n, input);
             let fields = name.as_deref().and_then(|name| crate::panes::input_dataset(&app.session, name)).map(|d| d.fields.clone());
-            if let Some(value) =
-                ui.push_id(("mb_list", &n.id, p.name), |ui| crate::fieldlists::show(ui, p.kind, &cur, fields.as_deref())).inner
+            let edit = ui.push_id(("mb_list", &n.id, p.name), |ui| crate::fieldlists::show(ui, p.kind, &cur, fields.as_deref())).inner;
+            if edit.checkpoint {
+                app.mb.edit();
+            }
+            if let Some(value) = edit.value
+                && let Some(node) = app.mb.graph.nodes.get_mut(i)
             {
-                set = Some((p.name, value));
+                set_param(node, p.name, value);
             }
             ui.add_space(4.0);
             continue;

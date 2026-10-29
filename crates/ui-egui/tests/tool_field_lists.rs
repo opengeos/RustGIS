@@ -134,7 +134,9 @@ fn model_lists_accept_future_fields_and_undo_the_edit() {
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Field").focus();
     h.step();
-    h.event(egui::Event::Text("future_amount".into()));
+    h.event(egui::Event::Text("future_".into()));
+    h.run_steps(3);
+    h.event(egui::Event::Text("amount".into()));
     h.run_steps(3);
     choose(&mut h, "Statistic", "P90");
     assert_eq!(h.state().mb.graph.nodes[0].params["statistics"], json!([{"field":"future_amount","statistic":"P90"}]));
@@ -145,6 +147,18 @@ fn model_lists_accept_future_fields_and_undo_the_edit() {
     h.event(egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     h.run_steps(3);
     assert_eq!(h.state().mb.graph.nodes[0].params["statistics"], json!([{"field":"future_amount","statistic":"P90"}]));
+    // Undo the statistic selection, then the entire multi-frame typing gesture.
+    for _ in 0..2 {
+        h.event(egui::Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        h.run_steps(3);
+    }
+    assert_eq!(h.state().mb.graph.nodes[0].params["statistics"], json!([{"field":"","statistic":""}]));
 }
 
 #[test]
@@ -220,4 +234,109 @@ fn saved_percentile_alias_is_available_and_cannot_be_added_twice() {
     h.run_steps(2);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "P1").is_none());
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "P2").is_some());
+}
+
+/// Parseable intermediate JSON must keep its formatting and cursor while the shape is repaired.
+#[test]
+fn json_repair_keeps_formatted_non_list_drafts() {
+    let original = json!({"invalid":true});
+    let mut h = harness("pivotTable", json!({"input":"Records", "fields":original}));
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JSON value").focus();
+    h.step();
+    for draft in ["{\n  \"invalid\": false\n}", "[ 2020 ]", "2020"] {
+        h.event(egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        h.event(egui::Event::Text(draft.into()));
+        h.run_steps(3);
+        assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "JSON value").value().as_deref(), Some(draft));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().gp.values["fields"]).unwrap(), original);
+    }
+    h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.event(egui::Event::Text("[\"region\"]".into()));
+    h.run_steps(3);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&h.state().gp.values["fields"]).unwrap(), json!(["region"]));
+}
+
+/// Exact case-variant fields are distinct to merge execution and retain their own type choices.
+#[test]
+fn merge_picker_resolves_case_variants_and_duplicate_headers_like_execution() {
+    let mut h = harness("spatialJoin", json!({"target":"Target", "join":"Records", "merge":[{"field":"region","rule":"join"}]}));
+    h.state_mut().session.project.tables[0].dataset.fields.push(Field::new("REGION", FieldType::Double));
+    h.state_mut().session.project.tables[0].dataset.fields.push(Field::new("region", FieldType::Double));
+    h.run_steps(3);
+    // Exact duplicate headers resolve to the first field, which is text, not the later Double.
+    choose(&mut h, "Rule", "join");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Rule").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "sum").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "join").click_accesskit();
+    h.run_steps(2);
+    h.get_by_label("Add rule").click();
+    h.run_steps(3);
+    h.get_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Field").nth(1).unwrap().click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "region").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "REGION").click();
+    h.run_steps(2);
+    h.get_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Rule").nth(1).unwrap().click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "sum").click();
+    h.run_steps(2);
+    let rules: serde_json::Value = serde_json::from_str(&h.state().gp.values["merge"]).unwrap();
+    assert_eq!(rules, json!([{"field":"region","rule":"join"},{"field":"REGION","rule":"sum"}]));
+}
+
+/// An unrun tool's output schema is unknown while editing, but the typed field must execute.
+#[test]
+fn model_typed_statistic_runs_on_an_unrun_tools_new_field() {
+    use rustgis_engine::project::{ModelEdge, ModelNode, ModelNodeKind};
+    use rustgis_engine::{data::Geometry, geom::Coord};
+    let mut h = harness("summaryStatistics", json!({}));
+    h.state_mut().session.map_mut().layers[0]
+        .dataset
+        .push(Some(Geometry::Point(Coord::new(10.0, 20.0))), vec![Value::Text("point".into())]);
+    h.state_mut().run("ui.pane.geoprocessing", json!({})).unwrap();
+    h.state_mut().run("ui.modelBuilder", json!({})).unwrap();
+    h.state_mut().mb.graph.nodes.extend([
+        ModelNode {
+            id: "producer".into(),
+            kind: ModelNodeKind::Tool,
+            tool: Some("featureVerticesToPoints".into()),
+            params: json!({"input":"Target"}),
+            ..Default::default()
+        },
+        ModelNode {
+            id: "consumer".into(),
+            kind: ModelNodeKind::Tool,
+            tool: Some("summaryStatistics".into()),
+            params: json!({}),
+            ..Default::default()
+        },
+    ]);
+    h.state_mut().mb.graph.edges.push(ModelEdge {
+        from: "producer".into(),
+        from_port: "out".into(),
+        to: "consumer".into(),
+        to_port: "input".into(),
+    });
+    h.state_mut().mb.selected = Some("consumer".into());
+    h.run_steps(3);
+    h.get_by_label("Add statistic").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Field").focus();
+    h.step();
+    h.event(egui::Event::Text("orig_fid".into()));
+    h.run_steps(3);
+    choose(&mut h, "Statistic", "COUNT");
+    let graph = h.state().mb.graph.clone();
+    h.state_mut().run("model.run", json!({"graph":graph})).unwrap();
+    assert!(h.state().session.model_run.as_ref().unwrap().ok);
+    let ds = &h.state().session.project.tables.last().unwrap().dataset;
+    let column = ds.field_index("COUNT_orig_fid").unwrap();
+    assert_eq!(ds.value(0, column).as_f64(), Some(1.0));
 }

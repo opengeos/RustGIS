@@ -3369,6 +3369,7 @@ fn geoprocessing(app: &mut RustGisApp, ui: &mut Ui, t: &Tokens) {
             if let Some(value) = ui
                 .push_id(("gp_list", p.name), |ui| crate::fieldlists::show(ui, p.kind, &value, dataset.map(|d| d.fields.as_slice())))
                 .inner
+                .value
             {
                 app.gp.values.insert(p.name, value.to_string());
             }

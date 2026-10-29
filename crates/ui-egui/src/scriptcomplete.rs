@@ -205,6 +205,8 @@ struct Scan {
     nested: Option<Nested>,
     value: Option<(usize, String, bool)>,
     values: Vec<(String, String, bool)>,
+    // Top-level strings and numeric table IDs, in order; command value_of stays string-only.
+    inputs: Vec<(String, serde_json::Value)>,
 }
 
 /// A second-level object: the value of a top-level key (`"add": {…}`), or one of the objects in
@@ -223,11 +225,12 @@ fn scan(text: &str) -> Scan {
     let (mut depth, mut q, mut entry, mut start) = (0usize, Quotes::default(), false, None);
     // The top-level key just read, the one whose colon was just read (its value comes next),
     // where the key being read starts, and the top-level value being read.
-    let (mut named, mut valued, mut from, mut value) = (None::<String>, None::<String>, None, None);
+    let (mut named, mut valued, mut from, mut value) = (None::<String>, None::<String>, None, None::<(usize, String, bool)>);
     // The key whose array the text is in (an array of objects), and the second-level object the
     // text is in, with its depth: anywhere in it, deeper levels included.
     let (mut array, mut nested) = (None::<String>, None::<(Nested, usize)>);
     let mut values = Vec::new();
+    let mut inputs = Vec::new();
     for (i, &c) in chars.iter().enumerate() {
         let was_quoted = q.quoted();
         q.read(c);
@@ -235,7 +238,11 @@ fn scan(text: &str) -> Scan {
             // Its closing quote.
             if !q.quoted() {
                 if let Some((v, key, listed)) = value.take() {
-                    values.push((key, chars.get(v..i).unwrap_or_default().iter().collect(), listed));
+                    let text: String = chars.get(v..i).unwrap_or_default().iter().collect();
+                    if !listed {
+                        inputs.push((key.clone(), serde_json::Value::String(text.clone())));
+                    }
+                    values.push((key, text, listed));
                 }
                 start = None;
                 named = from.take().and_then(|f| chars.get(f..i)).map(|k| k.iter().collect());
@@ -285,7 +292,19 @@ fn scan(text: &str) -> Scan {
             ',' => entry = top,
             ':' => (valued, entry) = (named.take().filter(|_| depth == 1), false),
             c if c.is_whitespace() => {}
-            _ => entry = false,
+            _ => {
+                if depth == 1
+                    && c.is_ascii_digit()
+                    && let Some(key) = valued.as_ref()
+                {
+                    let token: String =
+                        chars.get(i..).unwrap_or_default().iter().take_while(|c| !c.is_whitespace() && !matches!(c, ',' | '}')).collect();
+                    if let Ok(id) = serde_json::from_str::<u32>(&token) {
+                        inputs.push((key.clone(), serde_json::json!(id)));
+                    }
+                }
+                entry = false;
+            }
         }
         // A key's name lasts up to its colon, and from there up to its value.
         if !c.is_whitespace() {
@@ -297,7 +316,7 @@ fn scan(text: &str) -> Scan {
             }
         }
     }
-    Scan { start, nested: nested.map(|(n, _)| n), value, values }
+    Scan { start, nested: nested.map(|(n, _)| n), value, values, inputs }
 }
 
 /// The line's object from its `{` up to the cursor at char `at` of `script`, read (`scan`), with
@@ -621,10 +640,30 @@ fn tool_value(script: &str, at: usize, session: &rustgis_engine::Session) -> Opt
         K::Field | K::NumericField | K::CoordinateField | K::Fields { .. } => {
             let after = object_rest(script.get(byte_at(script, at)?..)?.split('\n').next()?, in_array);
             let source = crate::fieldlists::input(p.kind).or_else(|| crate::panes::first_layer(tool).map(|p| p.name))?;
-            let input = value_of(&format!("{text}{after}"), source)?;
-            let d = crate::panes::input_dataset(session, &input)?;
-            let names = d.fields.iter().enumerate().filter(|(i, _)| takes_field(p.kind, d, *i)).map(|(_, f)| f.name.as_str());
-            value_ids(start, at, &word, names, Of::ToolFields(input))
+            let whole = format!("{text}{after}");
+            let input = scan(&whole).inputs.into_iter().rev().find(|(key, _)| key == source)?.1;
+            let (d, of) = match input {
+                serde_json::Value::String(name) if !name.contains('\\') => {
+                    (crate::panes::input_dataset(session, &name)?, Of::ToolFields(name))
+                }
+                serde_json::Value::Number(id) => {
+                    let id = u32::try_from(id.as_u64()?).ok()?;
+                    (&session.project.table(id)?.dataset, Of::TableFields(id))
+                }
+                _ => return None,
+            };
+            let without_word = format!("{}{after}", script.get(byte_at(script, brace)?..byte_at(script, start)?)?);
+            let given = scan(&without_word).values;
+            let names = d
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(i, f)| {
+                    takes_field(p.kind, d, *i)
+                        && (!in_array || !given.iter().any(|(k, v, listed)| *listed && k == &key && v.trim().eq_ignore_ascii_case(&f.name)))
+                })
+                .map(|(_, f)| f.name.as_str());
+            value_ids(start, at, &word, names, of)
         }
         K::Choice(choices) => value_ids(start, at, &word, choices.iter().copied(), Of::Choices),
         _ => None,
@@ -2692,6 +2731,22 @@ mod tests {
         assert_eq!(o.items, fields, "field-list array values");
         let o = offer(&app, r#"gp.run {"tool": "pivotTable", "params": {"input": "Cities", "fields": [""#).unwrap();
         assert_eq!(o.items, fields, "pivot row fields");
+        let o = offer(&app, r#"gp.run {"tool":"summaryStatistics","params":{"input":"Cities","case":[" NAME ",""#).unwrap();
+        assert!(
+            !o.items.iter().any(|f| f.eq_ignore_ascii_case("name")),
+            "previous array entry excluded with execution's trimming and casing"
+        );
+        let before = r#"gp.run {"tool":"pivotTable","params":{"input":"Cities","fields":[""#;
+        let o = super::offer_at(&format!(r#"{before}","name"]}}}}"#), before.chars().count(), &[], &app.session).unwrap();
+        assert!(!o.items.iter().any(|f| f.eq_ignore_ascii_case("name")), "later array entry excluded");
+        let id = app.session.project.tables[0].id;
+        let before = r#"gp.run {"tool":"summaryStatistics","params":{"case":[""#;
+        let o = super::offer_at(&format!(r#"{before}"],"input":{id}}}}}"#), before.chars().count(), &[], &app.session).unwrap();
+        assert_eq!(
+            (o.items, o.of),
+            (["total".to_string()].to_vec(), Some(super::Of::TableFields(id))),
+            "numeric standalone table ID after array"
+        );
         let s = r#"gp.run {"tool": "summaryStatistics", "params": {"case": [""#;
         let o = super::offer_at(&format!(r#"{s}"], "input": "Cities"}}}}"#), s.chars().count(), &[], &app.session).unwrap();
         assert_eq!(o.items, fields, "the input after a field array");
