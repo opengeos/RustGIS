@@ -217,6 +217,11 @@ pub(crate) fn show(ui: &mut Ui, kind: ParamKind, value: &Value, fields: Option<&
                     if !stat.is_empty() && !choices.iter().any(|choice| picked.as_ref() == Some(*choice)) {
                         ui.label(if s == StatisticList::Merge {
                             tl!("Rule is not available for this field.")
+                        } else if choice_cache
+                            .iter()
+                            .any(|(cached, available)| *cached == ty && picked.as_ref().is_some_and(|p| available.contains(p)))
+                        {
+                            tl!("Statistic is already listed for this field.")
                         } else {
                             tl!("Statistic is not available for this field.")
                         });

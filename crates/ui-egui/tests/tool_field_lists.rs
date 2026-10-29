@@ -427,4 +427,30 @@ fn summary_picker_excludes_case_variant_output_collisions() {
     let output = &h.state().session.project.tables.last().unwrap().dataset;
     assert_eq!(output.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["FREQUENCY", "COUNT_region", "SUM_REGION"]);
     assert_eq!(output.value(0, 2).as_f64(), Some(5.0));
+    h.state_mut()
+        .run(
+            "ui.gp.open",
+            json!({"tool":"summaryStatistics","values":{"input":"Records","statistics":[{"field":"region","statistic":"COUNT"},{"field":"amount","statistic":"COUNT"}]}}),
+        )
+        .unwrap();
+    h.run_steps(3);
+    h.get_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Statistic").nth(1).unwrap().click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, "COUNT").is_some(), "an unrelated field still offers COUNT");
+}
+
+#[test]
+fn saved_duplicate_statistics_explain_how_to_repair_them() {
+    let statistics = json!([{"field":"amount","statistic":"SUM"},{"field":"amount","statistic":"SUM"}]);
+    let mut h = harness("summaryStatistics", json!({"input":"Records","statistics":statistics}));
+    assert_eq!(h.query_all_by_label("Statistic is already listed for this field.").count(), 2);
+    assert!(h.query_by_label("Statistic is not available for this field.").is_none());
+    h.get_all_by_role_and_label(egui::accesskit::Role::Button, "Remove").nth(1).unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Statistic is already listed for this field.").is_none());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Run").click();
+    h.run_steps(3);
+    assert!(h.state().gp.last.as_ref().unwrap().0);
+    let output = &h.state().session.project.tables.last().unwrap().dataset;
+    assert_eq!(output.value(0, 1).as_f64(), Some(16.3));
 }
